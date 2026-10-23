@@ -16,10 +16,10 @@ Archon builds this from parts that already exist:
 | Step | Archon primitive |
 |------|------------------|
 | Something happens | A [trigger binding](/guides/workflow-triggers/) starts a run from a GitHub webhook or a schedule |
-| Decide whether it matters | A `prompt:` node on the `small` [model tier](/guides/authoring-workflows/#portable-model-references) with an [`output_format`](/guides/authoring-workflows/#output_format-for-structured-json) |
-| Stop when it does not | A [`when:`](/guides/authoring-workflows/#when-condition-syntax) condition on that output |
+| Decide whether it matters | A `prompt:` node on the `small` [model tier](/reference/workflow-language/#portable-model-references) with an [`output_format`](/reference/workflow-language/#output_format-for-structured-json) |
+| Stop when it does not | A [`when:`](/reference/workflow-language/#when-condition-syntax) condition on that output |
 | Do the work | A `prompt:` node on the default model |
-| Ask for approval | A [`wait:` node with the `approval` form](/guides/authoring-workflows/#attention-waits) |
+| Ask for approval | A [`wait:` node with the `approval` form](/reference/workflow-language/#attention-waits) |
 | Stop on reject | A `cancel:` node with a `when:` condition on the answer |
 | Act | A node that runs only when the answer is `approve` |
 
@@ -35,7 +35,7 @@ When an issue opens, it runs these nodes:
 4. **`drop`** runs only when `$review.output.decision == 'reject'`. It is a `cancel:` node, so a rejected draft cancels the run and nothing is posted.
 5. **`post`** runs only when `$review.output.decision == 'approve'` and sends the draft with `gh issue comment`. It is a `bash:` node rather than an agent because the review approved that exact text, and an agent could reword it after approval.
 
-The workflow declares `repository` and `issue_number` as required [inputs](/guides/authoring-workflows/#workflow-signature-inputs-returns-and-inputs), so the trigger binding supplies them. The `review` node needs no extra declaration: a triggered run that reaches it pauses in the attention queue and continues once someone answers.
+The workflow declares `repository` and `issue_number` as required [inputs](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs), so the trigger binding supplies them. The `review` node needs no extra declaration: a triggered run that reaches it pauses in the attention queue and continues once someone answers.
 
 Every agent node returns a small typed object. Nodes never parse another node's prose, and the `when:` condition compares an enum field, not free text.
 
@@ -75,7 +75,7 @@ A run waiting at `review` is `paused`, and it gives its resource slot back while
 
 The run uses the provider configuration and credentials of `runAsUserId`. The `gh` CLI must be authenticated for that user on the execution host, because both agents and the `post` node call it.
 
-To run the same pattern on a timer instead, use a [schedule binding](/guides/workflow-triggers/#configure-a-native-macos-schedule). A schedule has no event to map from, so the workflow's first node has to find its own work, such as listing issues opened since the last run. Keep that cursor in a [durable state document](/guides/authoring-workflows/#durable-state-documents) and update it from a `bash:` or `script:` node, so the next run starts where this one stopped.
+To run the same pattern on a timer instead, use a [schedule binding](/guides/workflow-triggers/#configure-a-native-macos-schedule). A schedule has no event to map from, so the workflow's first node has to find its own work, such as listing issues opened since the last run. Keep that cursor in a [durable state document](/reference/workflow-language/#durable-state-documents) and update it from a `bash:` or `script:` node, so the next run starts where this one stopped.
 
 ## Review the draft
 

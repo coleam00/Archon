@@ -8,9 +8,9 @@ The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/
 
 - The item's work item: `$INPUTS.record`. It holds triage's verdict and five fields under `facts.triage`, and under `facts.build` every round the queue ran on it and every decision it made, with any maintainer's answer. Null means no queue has recorded it.
 - The brief the last decision left for this launch: `$INPUTS.brief`. Empty means the item has not been launched yet, or a re-triage started it over.
-- The SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `build.md` and `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default.
+- The SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `build.md` and `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins.
 - The project's direction document, where it has one, only when whether the item is in scope depends on it.
-- The item's pull request as the forge reports it now: `$INPUTS.pull_request`. It is the latest round's that recorded one, or the one triage routed it to continue; null means no round recorded one and triage named none. An open one whose head is in the item's repository is continued: the round finishes it and pushes onto its head, so the same pull request updates. Ask when it is closed or merged, or its head lives in another repository, unless a dated scope section or a maintainer's recorded answer already rules on it.
+- The item's pull request as the forge reports it now: `$INPUTS.pull_request`. It is the latest round's that recorded one, or the one triage routed it to continue; null means no round recorded one and triage named none. `$INPUTS.continues` is its number when it is open and its head is in the item's repository, else null: the one pull request this round may continue. Continue it unless the contract supersedes it: a dated scope section or a maintainer's recorded answer that says not to continue it, to replan, or to open a new pull request. Continuing means the round finishes it and pushes onto its head, so the same pull request updates. Ask when it is closed or merged, or its head lives in another repository, unless a dated scope section or a maintainer's recorded answer already rules on it.
 
 ## Decide
 
@@ -18,6 +18,7 @@ The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/
 2. **A bug is proved first.** When triage typed the item `bug` and it has not been launched yet, reproduce the symptom on the current checkout before launching: run the smallest probe that shows it, writing any probe file under `$ARTIFACTS_DIR/build/repro/`, never in the checkout. When the bug is in a browser surface, use the playwright-cli skill: invoke it as `$playwright-cli` where skills are invoked that way, and otherwise run the `playwright-cli` command, reading the skill's `SKILL.md` from the project's or your own skills directory for its usage. When you cannot reproduce it, launch only if you hold other concrete evidence of it, such as a failing test, a log or a recorded run, and name it. Otherwise ask.
 3. **Is the work already done?** When the item's open pull request already meets the policy's Done at its current head and CI is green at that head, so only its draft state is left, declare `ready` instead of launching a round to do nothing. Set `ready_head` to that full head SHA, `brief` to one line saying so, and give the review and CI evidence in `reason`. On launch or ask, `ready_head` is null.
 4. **Launch, or ask.** Launch a clear case. Ask when the policy says the case is unclear.
+5. **Which pull request the round continues.** On launch, declare `continues`: `$INPUTS.continues` to continue the candidate, or null to start fresh. Null when the contract supersedes the candidate. A fresh round starts from the current base on a new branch and opens a new pull request; the checkout never carries the superseded pull request's head. Declare no other number; on ask and ready, `continues` is null.
 
 ## The brief
 
@@ -25,6 +26,7 @@ The brief is the target of `archon-ship`: one message another run starts from co
 
 - for a continuation, the brief you were given, which records why the last round stopped and what was decided;
 - an open pull request the work continues, by URL and branch;
+- when the round starts fresh because the contract supersedes the candidate: that pull request by URL, the ruling that supersedes it, that the work does not continue or push onto it, and that once the replacement pull request opens the old one is closed as superseded by it;
 - the reproduction, with its command and observed output, or the other evidence;
 - a contract element a maintainer's comment supplied, with the comment's URL.
 

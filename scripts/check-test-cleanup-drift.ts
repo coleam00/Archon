@@ -412,7 +412,6 @@ export function buildLedger(entries: readonly (readonly [string, number])[]): Ma
  * hole it was recording.
  */
 export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger([
-  ['packages/cli/src/commands/doctor.test.ts', 2],
   ['packages/cli/src/commands/telemetry.test.ts', 2],
   ['packages/cli/src/commands/validate.test.ts', 1],
   ['packages/core/src/config/run-config.test.ts', 1],
@@ -422,7 +421,7 @@ export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger
   ['packages/paths/src/env-integration.test.ts', 2],
   ['packages/paths/src/env-loader.test.ts', 1],
   ['packages/paths/src/strip-cwd-env.test.ts', 3],
-  ['packages/paths/src/telemetry.test.ts', 5],
+  ['packages/paths/src/telemetry.test.ts', 2],
   ['packages/paths/src/tier-notice.test.ts', 1],
   ['packages/providers/src/community/opencode/provider.test.ts', 1],
   ['packages/providers/src/community/pi/model-store.integration.test.ts', 1],
@@ -432,7 +431,6 @@ export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger
   ['packages/workflows/src/load-command-prompt.test.ts', 3],
   ['packages/workflows/src/logger.test.ts', 1],
   ['packages/workflows/src/script-node-deps.test.ts', 1],
-  ['packages/workflows/src/state-migration.test.ts', 2],
   ['packages/workflows/src/validator.test.ts', 5],
   ['packages/workflows/src/workflow-discovery-command-scan.test.ts', 1],
   ['packages/workflows/src/workflow-source.test.ts', 1],

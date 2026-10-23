@@ -228,31 +228,36 @@ can fail before either write.
 
 ## `isolation list` Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ archon isolation list                                           │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ isolation.ts:19-57  isolationListCommand()                      │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ @archon/core isolationDb.listAllActiveWithCodebase()            │
-│ - Joins isolation_environments with codebases                   │
-│ - Returns: path, branch, workflow_type, codebase_name,          │
-│            platform, days_since_activity                        │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ isolation.ts:30-55  Group by codebase, print table              │
-└─────────────────────────────────────────────────────────────────┘
+```text
+archon isolation list → isolationListCommand()
+  │
+  ├─ @archon/core listEnvironments()
+  │    ├─ isolationDb.listAllActiveWithCodebase()
+  │    ├─ For each codebase: isolationDb.listByCodebaseWithAge()
+  │    │    └─ Reconcile missing worktrees, preserving live-run ownership
+  │    └─ Return environments grouped by codebase and reconciliation totals
+  │
+  ├─ Print worktree details and totals (return early if no codebases)
+  │
+  ├─ @archon/core listContainerEnvironments()
+  │    ├─ isolationDb.listActiveContainerEnvironments()
+  │    ├─ getRunByIsolationEnvId() for each container
+  │    │    └─ Return matched run or null; throw on query/status errors
+  │    └─ Build summaries; catch lookup errors and set runStatus: lookup-failed
+  │
+  └─ Print container details and totals: run status, no run (orphan),
+     or run lookup failed
 ```
 
-**Code:** `packages/cli/src/commands/isolation.ts:19-57`
+**Code:** `packages/cli/src/commands/isolation.ts` (`isolationListCommand`),
+`packages/core/src/operations/isolation-operations.ts`
+(`listEnvironments`), `packages/core/src/services/cleanup/containers.ts`
+(`listContainerEnvironments`), `packages/core/src/db/workflow-run-reads.ts`
+(`getRunByIsolationEnvId`).
+
+The container listing matches `metadata.isolation_env_id`; no match does not
+establish that cleanup can remove the container. Cleanup checks wider live
+ownership. A failed lookup is logged and displayed as `run lookup failed`.
 
 ---
 
@@ -323,9 +328,16 @@ archon isolation cleanup [days] (default: 7)
 │ Guard checks: no uncommitted changes, no run lock (checkRemoval │
 │ → getCleanupRunLock; a failed run's lock is released by the     │
 │ verdict, running/pending/paused runs always lock)               │
-│ provider.destroy() → remove worktree + delete remote branch     │
+│ provider.destroy() → remove worktree and local branch           │
+│ → commit registration retirement; retain remote branch         │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+Completion and merged cleanup retain remote branches, including with force,
+because registration ownership cannot be proved after retirement. Retention is
+logged as a warning and displayed in both completion and merged-cleanup reports.
+Enable GitHub's **Automatically delete head branches** setting for
+merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
 
 Signals are evaluated in order — the first positive match short-circuits to avoid
 unnecessary `gh` API calls. The `gh` CLI is a soft dependency: when it is not installed or
@@ -348,7 +360,7 @@ fetched by SHA from the branch's remote first; if that fetch fails, the check fa
 the worktree is kept, with the fetch error in the reason. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
 both paths agree on what counts as merged.
 
-**Code:** `packages/core/src/services/cleanup-service.ts` — `judgeBranchForRemoval()`, `cleanupMergedWorktrees()`, `runScheduledCleanup()`, `getCleanupRunLock()`
+**Code:** `packages/core/src/services/cleanup/` — `judgeBranchForRemoval()` in `merge-verdict.ts`, `cleanupMergedWorktrees()` in `merged-sweep.ts`, `getCleanupRunLock()` in `run-lock.ts`; `runScheduledCleanup()` in `packages/core/src/services/cleanup-service.ts`
 **Code:** `packages/isolation/src/pr-state.ts` — `getPrState()`
 **Code:** `packages/git/src/branch.ts` — `isPatchEquivalent()`, `localBranchExists()`
 

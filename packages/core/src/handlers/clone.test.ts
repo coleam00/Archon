@@ -276,7 +276,7 @@ function makeResolverDeps(
 ): CodebaseCheckoutResolverDeps {
   return {
     findCodebaseByDefaultCwd: async () => null,
-    listCodebases: async () => [],
+    listCodebaseClaims: async () => [],
     getCanonicalRepoPath: async path => path,
     getGitCheckoutIdentity: async path => ({
       gitDir: `${path}/.git`,
@@ -305,7 +305,7 @@ describe('findCodebaseForCheckoutPath', () => {
     const folder = makeCodebase({ kind: 'folder', default_cwd: resolve('/repo') });
     const deps = {
       findCodebaseByDefaultCwd: async (cwd: string) => (cwd === folder.default_cwd ? folder : null),
-      listCodebases: async () => [folder],
+      listCodebaseClaims: async () => [folder],
       getCanonicalRepoPath: async () => folder.default_cwd,
     };
     expect(await findCodebaseForCheckoutPath(folder.default_cwd, deps)).toBe(folder);
@@ -347,7 +347,7 @@ describe('findCodebaseForCheckoutPath', () => {
       getCanonicalRepoPath: async () => {
         throw externalLinkedError();
       },
-      listCodebases: async () => [registered, separateClone],
+      listCodebaseClaims: async () => [registered, separateClone],
       getGitCheckoutIdentity: async path => ({
         gitDir: path === cwd ? `${commonGitDir}/worktrees/linked` : `${path}/.git`,
         commonGitDir:
@@ -383,7 +383,7 @@ describe('findCodebaseForCheckoutPath', () => {
       getCanonicalRepoPath: async () => {
         throw externalLinkedError();
       },
-      listCodebases: async () => [registered],
+      listCodebaseClaims: async () => [registered],
       getGitCheckoutIdentity: async path => ({
         gitDir: path === cwd ? `${commonGitDir}/worktrees/linked` : '/other/clone/.git',
         commonGitDir: path === cwd ? commonGitDir : '/other/clone/.git',
@@ -401,7 +401,7 @@ describe('findCodebaseForCheckoutPath', () => {
       getCanonicalRepoPath: async () => {
         throw externalLinkedError();
       },
-      listCodebases: async () => [first, second],
+      listCodebaseClaims: async () => [first, second],
       getGitCheckoutIdentity: async path => ({
         gitDir: path === cwd ? `${commonGitDir}/worktrees/linked` : commonGitDir,
         commonGitDir,

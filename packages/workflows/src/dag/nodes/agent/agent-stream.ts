@@ -1,6 +1,7 @@
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import type {
   IAgentProvider,
+  MessageChunk,
   ProviderCapabilities,
   ResolvedModel,
   ResultChunk,
@@ -16,6 +17,8 @@ import {
 } from '../../../provider-events';
 import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../../logger';
 import { withIdleTimeout } from '../../../utils/idle-timeout';
+import { withStaleResumeRetry } from '../../../stale-resume';
+import { isEndTurnRequested } from '../../../end-turn-request';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumTokenUsage } from '../../usage';
@@ -29,6 +32,7 @@ import {
 } from '../../run-control';
 import type { NodeMcpResolution } from '../../provider-resolution';
 import {
+  type TurnCutOff,
   type WatchdogReset,
   type structuredOutputPass,
   providerReportedFailure,
@@ -56,6 +60,8 @@ export interface AgentPassContext {
   /** The throttle key of `lastNodeCancelCheck` and `lastNodeActivityUpdate`. */
   nodeKey: string;
   nodeStartTime: number;
+  /** False for a named resume, which never falls back to a fresh session. */
+  staleResumeRetry: boolean;
 }
 
 /**
@@ -78,11 +84,12 @@ export interface AgentAttemptState {
   outputText: string;
   structuredOutput: unknown;
   batchMessages: string[];
-  idleTimedOut: boolean;
+  /** What cut the last pass off before it settled, if anything did. */
+  cutOff: TurnCutOff | undefined;
   lastWatchdogReset: WatchdogReset | undefined;
   watchdogResets: WatchdogResetRecorder;
   /**
-   * Task ids still live when the stream ended abnormally (idle timeout / subprocess death),
+   * Task ids still live when the stream ended abnormally (idle timeout / operator cutoff / subprocess death),
    * recorded on the node_completed event so an incomplete node never masquerades as a clean
    * success (#2083).
    */
@@ -106,7 +113,7 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
     outputText: '',
     structuredOutput: undefined,
     batchMessages: [],
-    idleTimedOut: false,
+    cutOff: undefined,
     lastWatchdogReset: undefined,
     watchdogResets: createWatchdogResetRecorder(ctx.logDir, ctx.workflowRun.id, nodeId),
     backgroundTasksIncomplete: [],
@@ -114,9 +121,22 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
   };
 }
 
+function passChunks(
+  pc: AgentPassContext,
+  prompt: string,
+  resumeSessionId: string | undefined
+): AsyncGenerator<MessageChunk> {
+  const send = (id: string | undefined): AsyncGenerator<MessageChunk> =>
+    pc.aiClient.sendQuery(prompt, pc.ctx.cwd, id, pc.queryOptions);
+  if (!pc.staleResumeRetry) return send(resumeSessionId);
+  return withStaleResumeRetry(send, resumeSessionId, {
+    logContext: { workflowRunId: pc.ctx.workflowRun.id, nodeId: pc.node.id },
+  });
+}
+
 /**
  * One sendQuery stream pass. Resets the per-pass state first, so a prior reask pass's output,
- * batch buffer, cost and idle-timeout flag never leak into this one, then streams. Throws on an
+ * batch buffer, cost and cutoff cause never leak into this one, then streams. Throws on an
  * SDK error or the budget cap; those failures are never reasked.
  */
 export async function runStreamPass(
@@ -127,14 +147,12 @@ export async function runStreamPass(
 ): Promise<void> {
   resetPass(pc, state, pass);
   const providerEvents = createPassEventHandler(pc, state);
-  const shouldStopStream = stopCheck(pc, providerEvents);
+  const shouldStopStream = stopCheck(pc, state, providerEvents);
   try {
     for await (const msg of withIdleTimeout(
-      pc.aiClient.sendQuery(prompt, pc.ctx.cwd, pass.resumeSessionId, pc.queryOptions),
+      passChunks(pc, prompt, pass.resumeSessionId),
       pc.idleTimeoutMs,
-      () => {
-        onIdleTimeout(pc, state);
-      },
+      () => onIdleTimeout(pc, state),
       (msg, resetAt) => {
         const type = msg.type;
         state.lastWatchdogReset = { type, at: resetAt };
@@ -148,27 +166,27 @@ export async function runStreamPass(
     )) {
       const tickNow = Date.now();
 
-      if (await shouldStopStream()) break;
+      if (msg.type === 'result') recordResult(pc, state, pass, msg);
+      else if (msg.type !== 'settled') await providerEvents.handle(msg);
+      const stopped = await shouldStopStream();
+      if (msg.type === 'result' && (!stopped || state.cutOff)) throwOnResultError(pc, msg);
+      if (stopped) break;
 
       await heartbeat(pc, tickNow);
 
-      if (msg.type === 'result') {
-        recordResult(pc, state, pass, msg);
-      } else if (msg.type === 'settled') {
+      if (msg.type === 'settled') {
         state.settled =
           pc.capabilities.backgroundWork !== 'reported' ||
           providerEvents.liveSubtaskIds().length === 0;
         break;
-      } else {
-        await providerEvents.handle(msg);
       }
     }
   } finally {
     await providerEvents.clearAttention();
   }
 
-  // Stream ended with subtasks still live: the SDK subprocess died or the idle
-  // timeout fired mid-wait, so the tasks' artifacts may be missing (#2083).
+  // Stream ended with subtasks still live: the SDK subprocess died, the idle
+  // timeout fired mid-wait, or the operator ended the turn, so the tasks' artifacts may be missing (#2083).
   // Record them for the audit trail. The operator hears about it once, from the
   // node's failure: a stream that produced output and never settled fails the node
   // and names these tasks (see unsettledTurnError).
@@ -178,8 +196,8 @@ export async function runStreamPass(
       {
         nodeId: pc.node.id,
         taskIds: state.backgroundTasksIncomplete,
-        idleTimedOut: state.idleTimedOut,
-        cancelled: pc.abortController.signal.aborted && !state.idleTimedOut,
+        cutOff: state.cutOff,
+        cancelled: pc.abortController.signal.aborted && !state.cutOff,
       },
       'dag.node_stream_ended_with_live_background_tasks'
     );
@@ -201,9 +219,9 @@ function resetPass(
   state.costUsd = undefined;
   state.passSawResult = false;
   state.tokens = undefined;
-  state.idleTimedOut = false;
-  state.settled = false;
+  state.cutOff = undefined;
   state.lastWatchdogReset = undefined;
+  state.settled = false;
   state.watchdogResets = createWatchdogResetRecorder(
     pc.ctx.logDir,
     pc.ctx.workflowRun.id,
@@ -265,9 +283,13 @@ function createPassEventHandler(
   });
 }
 
-/** Refreshes tool attention and, throttled, aborts the stream once the run is no longer running. */
+/**
+ * Refreshes tool attention and, throttled, aborts the stream once the run is no longer
+ * streaming or the operator ended this stream's stalled turn.
+ */
 function stopCheck(
   pc: AgentPassContext,
+  state: AgentAttemptState,
   providerEvents: ProviderEventHandler
 ): () => Promise<boolean> {
   const { ctx, node, nodeKey } = pc;
@@ -291,6 +313,11 @@ function stopCheck(
           pc.abortController.abort();
           return true;
         }
+        if (await operatorEndedTurn(pc, providerEvents)) {
+          state.cutOff = { kind: 'operator' };
+          pc.abortController.abort();
+          return true;
+        }
       } catch (cancelCheckErr) {
         getLog().warn(
           { err: cancelCheckErr as Error, workflowRunId: ctx.workflowRun.id, nodeId: node.id },
@@ -304,7 +331,11 @@ function stopCheck(
 }
 
 function onIdleTimeout(pc: AgentPassContext, state: AgentAttemptState): void {
-  state.idleTimedOut = true;
+  state.cutOff = {
+    kind: 'idle_timeout',
+    timeoutMs: pc.idleTimeoutMs,
+    lastReset: state.lastWatchdogReset,
+  };
   const lastReset = state.lastWatchdogReset;
   getLog().warn(
     {
@@ -317,6 +348,19 @@ function onIdleTimeout(pc: AgentPassContext, state: AgentAttemptState): void {
     'dag_node_idle_timeout_reached'
   );
   pc.abortController.abort();
+}
+
+/** Whether the operator ended this pass's turn while it had stalled calls raised. */
+async function operatorEndedTurn(
+  pc: AgentPassContext,
+  providerEvents: ProviderEventHandler
+): Promise<boolean> {
+  const stall = providerEvents.stall();
+  if (stall === undefined) return false;
+  const runId = pc.ctx.workflowRun.id;
+  if (!(await isEndTurnRequested(pc.ctx.deps.store, runId, stall))) return false;
+  getLog().warn({ workflowRunId: runId, nodeId: pc.node.id }, 'dag.turn_ended_by_operator');
+  return true;
 }
 
 /** Activity heartbeat, throttled to every 60s; only stale/zombie detection reads it. */
@@ -357,7 +401,6 @@ function recordResult(
     state.batchMessages.splice(0, state.batchMessages.length, msg.text);
   }
   state.structuredOutput = msg.structuredOutput;
-  throwOnResultError(pc, msg);
 }
 
 function recordResultUsage(nodeId: string, state: AgentAttemptState, msg: ResultChunk): void {

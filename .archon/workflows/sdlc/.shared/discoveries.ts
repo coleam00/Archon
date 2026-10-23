@@ -13,6 +13,7 @@
  */
 
 import type { QualifiedPr } from './forge.ts';
+import type { fetchDefaultBranch } from './remote.ts';
 import type { DiscoveryRecord } from './report.ts';
 import { isObject } from './typed.ts';
 
@@ -121,7 +122,7 @@ export interface QueuedRun {
 }
 
 export interface Queue {
-  readonly base: { readonly branch: string; readonly sha: string };
+  readonly base: ReturnType<typeof fetchDefaultBranch>;
   readonly runs: readonly QueuedRun[];
 }
 

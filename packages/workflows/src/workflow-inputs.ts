@@ -21,7 +21,7 @@
  * `required` input, and rejects a caller key the workflow does not declare.
  */
 import type { WorkflowDefinition } from './schemas/workflow';
-import { INPUT_NAME_PATTERN } from './schemas/dag-node';
+import { INPUT_NAME_PATTERN } from './schemas/node-bindings';
 import type { JsonValue } from './output-ref';
 
 /** A workflow's declared `inputs:` block, or undefined when it declares none. */

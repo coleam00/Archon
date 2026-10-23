@@ -30,7 +30,7 @@ When a prior report is provided, treat its claims like any inherited analysis: v
 
 Design calls are judged against the project's own guidance. For each design call, open, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — and any other document the steering files point to that bears on the call, such as design rules for a language, API, or configuration surface, and read the section that rules on it rather than the whole file. A call those documents already rule on is settled by them, not by your preference.
 
-When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout to spike against? Add a scratch worktree under `$ARTIFACTS_DIR/spike/` and remove it when you are done. Never spike in this checkout.
+When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout or a dependency install to spike against? Put it under `$ARTIFACTS_DIR/.archon/scratch/plan/`, never in `spike/`, and remove a worktree with `git worktree remove` when you are done; the engine deletes that directory when the run ends. Never spike in this checkout.
 
 ## Decide, don't defer
 
@@ -38,7 +38,7 @@ Name the design decisions the work actually contains, choose, and record why —
 
 ## Calls that belong to a person
 
-Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
+Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
 
 A call is a person's only when one of these holds, and you name which:
 

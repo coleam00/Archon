@@ -1,7 +1,12 @@
 // @archon-test-isolated
 import { finishNodeExecution, startNodeExecution, newNodeInvocation } from './node-execution';
-import { readNodeRecordEvent, readDeferredNodeUsageEvent } from './node-record-reader';
+import {
+  isExecNodeRecord,
+  readNodeRecordEvent,
+  readDeferredNodeUsageEvent,
+} from './node-record-reader';
 import { describe, expect, it } from 'bun:test';
+import { execNodeSchema } from './schemas/exec-node';
 import {
   nodeCostScope,
   serializeNodeEmitter,
@@ -65,6 +70,44 @@ const record = (): NodeExecutionRecord => ({
 });
 
 describe('node record serializers', () => {
+  it('persists and reads every schema-owned metadata field', () => {
+    const source = record();
+    const durable = serializeNodeStateRecord(source);
+    const restored = readNodeRecordEvent({ ...durable, data: JSON.stringify(durable.data) });
+    for (const key of nodeExecutionMetadataSchema.keyof().options) {
+      expect(Object.hasOwn(source, key)).toBe(true);
+      expect(restored?.metadata?.[key]).toEqual(source[key]);
+      if (key === 'runId' || key === 'path' || key === 'lifecycle') {
+        expect(durable.data).not.toHaveProperty(key);
+      } else {
+        expect(Object.hasOwn(durable.data, key)).toBe(true);
+        expect(durable.data[key]).toEqual(source[key]);
+        expect(restored?.data[key]).toEqual(source[key]);
+      }
+    }
+  });
+
+  it('classifies current and metadata-free exec records using the persisted writer vocabulary', () => {
+    for (const runtime of execNodeSchema.shape.runtime.options) {
+      const source: NodeExecutionRecord = {
+        ...record(),
+        node: { id: 'exec', kind: 'exec', runtime },
+      };
+      const event = serializeNodeStateRecord(source);
+      expect(event.data.type).toBe(runtime === 'sh' ? 'bash' : 'script');
+      for (const data of [event.data, { type: event.data.type }]) {
+        const restored = readNodeRecordEvent({ ...event, data });
+        expect(restored).toBeDefined();
+        expect(restored && isExecNodeRecord(restored)).toBe(true);
+      }
+    }
+    const event = serializeNodeStateRecord(record());
+    for (const data of [event.data, { type: event.data.type }, {}]) {
+      const restored = readNodeRecordEvent({ ...event, data });
+      expect(restored && isExecNodeRecord(restored)).toBe(false);
+    }
+  });
+
   it('projects deferred usage without lifecycle, output or provider binding', () => {
     const source = {
       ...record(),

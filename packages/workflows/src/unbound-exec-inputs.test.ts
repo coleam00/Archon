@@ -139,6 +139,29 @@ nodes:
     expect(ignored.error?.error).toContain("bash nodes do not support node-local 'with:'");
   });
 
+  test.each([
+    '    bash: echo "$INPUTS_PROJECT_SETTING"',
+    '    script: console.log(process.env.INPUTS_PROJECT_SETTING)\n    runtime: bun',
+    '    script: print(os.environ["INPUTS_PROJECT_SETTING"])\n    runtime: uv',
+  ])('accepts configured INPUTS_* reads in inline nodes: %s', body => {
+    const result = parseWorkflow(
+      `name: configured-input-prefix
+description: Configured names are independent of generated inputs
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+${body}
+`,
+      'configured-input-prefix.yaml',
+      providerRegistry,
+      new Set(['INPUTS_PROJECT_SETTING'])
+    );
+    expect(result.error).toBeNull();
+    expect(result.workflow).not.toBeNull();
+    expect(result.warnings ?? []).toEqual([]);
+  });
+
   test('warns for other static env reads with stable source and available-name details', () => {
     const result = parseWorkflow(
       `name: advisory-read
@@ -331,13 +354,13 @@ nodes:
       );
       await writeFile(
         join(root, '.archon', 'scripts', 'verify.ts'),
-        'console.log(process.env.NAME)\n'
+        'console.log(process.env.NAME, process.env.INPUTS_PROJECT_SETTING)\n'
       );
 
       const result = await discoverWorkflows(root, {
         providers: providerRegistry,
         loadDefaults: false,
-        envVarNames: ['NAME'],
+        envVarNames: ['NAME', 'INPUTS_PROJECT_SETTING'],
       });
 
       expect(result.errors).toEqual([]);

@@ -17,14 +17,12 @@ import {
   type IssueFacts,
   mirrorLabels,
   newWorkItem,
-  parseOrder,
-  parseTrustInput,
   parseWorkItem,
+  PICKUP_ORDER,
   RANKS,
   sortCandidates,
   TRUSTS,
   type TriageFacts,
-  type TrustInput,
   updateClaimed,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
@@ -80,8 +78,8 @@ function issue(overrides: Partial<IssueFacts> = {}): IssueFacts {
   return { author: 'stranger', labels: [], state: 'open', digest: DIGEST, ...overrides };
 }
 
-const decide = (doc: WorkItem, facts: IssueFacts, trustInput?: TrustInput) =>
-  decideIntake(doc, facts, MAINTAINERS, AT, 'run', trustInput);
+const decide = (doc: WorkItem, facts: IssueFacts) =>
+  decideIntake(doc, facts, MAINTAINERS, AT, 'run');
 
 describe('the intake decision', () => {
   test('an outside item gets archon-needs-maintainer and no agent node', () => {
@@ -224,38 +222,6 @@ describe('the intake decision', () => {
     expect(decision.notes[0]).toMatchObject({ outcome: 'void' });
   });
 
-  test("trust: outside decides a maintainer's new item as outside, without reading its author", () => {
-    for (const author of ['Maintainer', undefined]) {
-      expect(decide(item(), issue({ author }), 'outside')).toMatchObject({
-        path: 'outside',
-        trust: 'outside',
-        stage: 'needs_maintainer',
-      });
-    }
-  });
-
-  test('trust: outside never rewrites recorded trust, and a maintainer can still promote', () => {
-    expect(() => decide(item({ trust: 'maintainer' }), issue(), 'outside')).toThrow(
-      'decided once'
-    );
-    const outside = item({ trust: 'outside', stage: 'needs_maintainer' }, [
-      labelRequest('archon-triage', 'maintainer'),
-    ]);
-    expect(decide(outside, issue({ labels: ['archon-triage'] }), 'outside')).toMatchObject({
-      path: 'triage',
-      trust: 'outside',
-      promoted: { by: 'maintainer' },
-    });
-  });
-
-  test('trust accepts only its own values; empty is the default', () => {
-    expect(parseTrustInput('')).toBe('auto');
-    expect(parseTrustInput('outside')).toBe('outside');
-    expect(() => parseTrustInput('maintainer')).toThrow(
-      'trust must be one of auto, outside, not "maintainer"'
-    );
-  });
-
   test('the outcome refuses to add a request label to an outside item no maintainer promoted', () => {
     const outside = item({
       trust: 'outside',
@@ -272,17 +238,6 @@ describe('the intake decision', () => {
 });
 
 describe('pickup', () => {
-  test('order accepts the default and refuses unknown keys and directions', () => {
-    expect(parseOrder('')).toEqual([
-      { key: 'urgency', direction: 'desc' },
-      { key: 'importance', direction: 'desc' },
-      { key: 'size', direction: 'asc' },
-      { key: 'created', direction: 'asc' },
-    ]);
-    expect(() => parseOrder('["age desc"]')).toThrow('is not');
-    expect(() => parseOrder('["size up"]')).toThrow('is not');
-  });
-
   test('candidates sort by the keys, untriaged after triaged and oldest first, then by number', () => {
     const at = (number: number, created: string, triage?: TriageFacts) => ({
       doc: { ...newWorkItem({ repo: PR.repo, number }, created), facts: triage ? { triage } : {} },
@@ -300,7 +255,7 @@ describe('pickup', () => {
         ),
         at(0, '2026-01-01', undefined),
       ],
-      parseOrder('')
+      PICKUP_ORDER
     );
     expect(sorted.map(entry => entry.doc.subject.number)).toEqual([4, 5, 3, 0, 2, 1]);
   });
@@ -369,7 +324,7 @@ describe('pickup', () => {
     const order = (docs: WorkItem[]) =>
       sortCandidates(
         docs.map(doc => ({ doc })),
-        parseOrder('')
+        PICKUP_ORDER
       ).map(entry => entry.doc.subject.number);
     expect(order([released, fresh])).toEqual([2, 1]);
     // A decision recorded after the release means the item's last attempt finished.
@@ -483,7 +438,6 @@ function run(
       INPUTS_ACTION: event.action ?? 'opened',
       INPUTS_LABEL: event.label ?? '',
       INPUTS_LABEL_ACTOR: event.actor ?? '',
-      INPUTS_ORDER: '',
       ...inputs,
     },
   });
@@ -1241,22 +1195,5 @@ describe('the intake scripts', () => {
     expect(late.stderr).toContain('no longer claimed by this run');
     expect(late.gh.filter(call => call.startsWith('issue edit'))).toEqual([]);
     expect(stored(at).value).toMatchObject({ stage: 'new', claim: { run_id: 'run-2' } });
-  }, 60_000);
-});
-
-describe('trust: outside in live', () => {
-  test('refuses an item whose trust is recorded as maintainer, and leaves it recorded', () => {
-    const at = install();
-    const decided = facts(at, { runId: 'run-1' }).output;
-    expect(outcome(at, { runId: 'run-1' }, decided, READY_VERDICT).code).toBe(0);
-    const edited = run(
-      at,
-      'facts',
-      { runId: 'run-2', action: 'edited', statuses: { 'run-1': 'completed' } },
-      { INPUTS_TRUST: 'outside' }
-    );
-    expect(edited.code).not.toBe(0);
-    expect(edited.stderr).toContain('decided once');
-    expect(stored(at).value.trust).toBe('maintainer');
   }, 60_000);
 });

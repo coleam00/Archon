@@ -97,7 +97,7 @@ import {
   CancelRefusedError,
   ChildRunRedirectError,
 } from '../operations/workflow-operations';
-const mockCancel = mock((_id: string) =>
+const mockCancel = mock<WorkflowOperations['cancelWorkflow']>((_id: string) =>
   Promise.resolve({
     kind: 'stopped' as const,
     pid: 4242,
@@ -261,6 +261,17 @@ describe('manage_run — progressive disclosure', () => {
 });
 
 describe('manage_run — reads', () => {
+  test('resolves an undashed full UUID within the selected project', async () => {
+    const id = 'abcdef00-1111-2222-3333-444455556666';
+    mockFindByPrefix.mockImplementation(async (prefix, codebaseId) =>
+      codebaseId === CODEBASE_ID && id.startsWith(prefix.toLowerCase()) ? [makeRun({ id })] : []
+    );
+    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: id.replaceAll('-', '').toUpperCase() });
+    expect(out).toContain('Run abcdef00');
+    expect(mockFindByPrefix).toHaveBeenLastCalledWith(id, CODEBASE_ID);
+  });
+
   test('list renders runs scoped to the project', async () => {
     mockListDashboardRuns.mockResolvedValue({
       total: 1,
@@ -336,8 +347,12 @@ describe('manage_run — reads', () => {
     ]);
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
-    expect(out).toContain('status: completed');
-    expect(out).toContain('finished:');
+    expect(out).toBe(
+      'Run r1abcdef · archon-investigate\n' +
+        'status: completed\n' +
+        'started: 2026-06-01T00:00:00.000Z\n' +
+        'finished: 2026-06-01T01:00:00.000Z'
+    );
   });
 
   test('get renders a succeeded authored outcome beside paused status', async () => {
@@ -394,8 +409,18 @@ describe('manage_run — reads', () => {
     const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
 
-    expect(out).toContain('occurrence: pause-1');
-    expect(out).toContain('form: select');
+    expect(out).toBe(
+      'Run r1abcdef · archon-investigate\n' +
+        'status: paused\n' +
+        'started: 2026-06-01T00:00:00.000Z\n' +
+        'occurrence: pause-1\n' +
+        'needs attention: Which base?\n' +
+        'form: select\n' +
+        'options: use-main, use-dev\n' +
+        'labels: ci=other\n' +
+        'revision: 3\n' +
+        '-> answer with action=respond, decision=<one of the options>, optionally with message=<text>.'
+    );
     expect(out).toContain('options: use-main, use-dev');
     expect(out).toContain('labels: ci=other');
     expect(out).toContain('revision: 3');
@@ -787,6 +812,15 @@ describe('manage_run — destructive confirmation gate', () => {
     });
     expect(out).toContain('Rejected and cancelled');
     expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'no', operator, { via: 'manage_run' });
+  });
+
+  test('reject that cancels reports cleanup warnings', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    mockReject.mockResolvedValue(rejectionResult({ cleanupWarnings: ['container env-a remains'] }));
+    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'reject', runId: 'r1abcdef', confirm: true });
+    expect(out).toContain('Rejected and cancelled');
+    expect(out).toContain('Warning: container env-a remains');
   });
 
   test('reject with no message leaves the default reason to rejectWorkflow', async () => {
@@ -1307,6 +1341,7 @@ describe('manage_run authorization refusal', () => {
           getRunAncestry: async () => [],
           listWorkflowRuns: async () => ({ runs: [], total: 0, counts }),
           findWorkflowRunsByIdPrefix: async () => [run],
+          persistWorkflowEvent: unexpected,
           cancelWorkflowRun: unexpected,
           resolveApprovalGate: unexpected,
           resolveAndCancelApprovalGate: unexpected,
@@ -1324,6 +1359,9 @@ describe('manage_run authorization refusal', () => {
             listActive: unexpected,
             create: unexpected,
             updateStatus: unexpected,
+            withWorktreeRegistration: async () => {
+              throw new Error('Unexpected worktree removal');
+            },
             markWorktreeDestroyed: unexpected,
             updateMetadata: unexpected,
             countActiveByCodebase: unexpected,
@@ -1344,4 +1382,17 @@ describe('manage_run authorization refusal', () => {
       expect(out).toContain('Only the user who started this run or an admin');
     });
   }
+});
+
+test('cooperative cancel exposes cleanup warnings from the supplied operation', async () => {
+  mockFindByPrefix.mockResolvedValue([makeRun({ status: 'running' })]);
+  mockCancel.mockResolvedValueOnce({
+    kind: 'cooperative',
+    run: makeRun(),
+    cancelled: true,
+    cleanupWarnings: ['Exited host commands may have left untracked background work.'],
+  });
+  const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+  const out = await tool.handler({ action: 'cancel', runId: 'r1abcdef', confirm: true });
+  expect(out).toContain('Warning: Exited host commands');
 });

@@ -382,6 +382,38 @@ describe('executeDagWorkflow -- bash nodes', () => {
     expect(failed?.data?.error).not.toContain('permission denied (check cwd permissions)');
   });
 
+  it.each(['ENOENT', 'ENOTDIR'] as const)(
+    'reports the attempted Bash path and configuration hint for host %s',
+    async code => {
+      const deps = createMockDeps();
+      const bashPath = git.resolveBashPath();
+      const execSpy = spyOnNodeExec().mockRejectedValue(
+        Object.assign(new Error(`spawn ${bashPath} ${code}`), { code })
+      );
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps,
+            cwd: testDir,
+            workflow: {
+              name: 'host-bash-spawn',
+              nodes: [{ id: 'shell', kind: 'exec', runtime: 'sh', script: 'echo unreachable' }],
+            },
+            workflowRun: makeWorkflowRun('host-bash-spawn-run'),
+          })
+        );
+        expect(execSpy).toHaveBeenCalledWith(bashPath, expect.any(Array), expect.any(Object));
+        const failed = persistedEvents(deps.store).find(
+          event => event.event_type === 'node_failed' && event.step_name === 'shell'
+        );
+        expect(failed?.data?.error).toContain(`bash executable not found at '${bashPath}'`);
+        expect(failed?.data?.error).toContain('Set ARCHON_BASH_PATH');
+      } finally {
+        execSpy.mockRestore();
+      }
+    }
+  );
+
   it('variable substitution works in bash scripts', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

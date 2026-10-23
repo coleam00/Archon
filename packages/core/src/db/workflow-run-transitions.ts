@@ -6,6 +6,7 @@
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
   sourceReleaseMetadata,
+  DETACHED_LAUNCH_METADATA_KEY,
   EXECUTION_CLAIM_METADATA_KEY,
   sourceReleasedEvent,
   type FanOutCancelReason,
@@ -14,7 +15,6 @@ import {
 } from '@archon/workflows/store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
-import type { RunExitReason, RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
@@ -22,6 +22,7 @@ import {
   workflowRunOriginSchema,
   validateWorkflowWaitMetadata,
   type WorkflowRun,
+  type WorkflowRunOrigin,
 } from '@archon/workflows/schemas/workflow-run';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
@@ -42,36 +43,7 @@ export async function insertWorkflowRun(
   data: WorkflowRunInsert
 ): Promise<WorkflowRun> {
   validateWorkflowWaitMetadata(data.metadata);
-  // Serialize metadata with validation to catch circular references early
-  let metadataJson: string;
-  try {
-    metadataJson = JSON.stringify(data.metadata ?? {});
-  } catch (serializeError) {
-    const err = serializeError as Error;
-
-    // Losing launch policy would silently change execution on the next resume.
-    if (
-      data.metadata &&
-      ('github_context' in data.metadata || RUN_AI_CONFIGURATION_METADATA_KEY in data.metadata)
-    ) {
-      getLog().error(
-        { err, metadataKeys: Object.keys(data.metadata) },
-        'db.workflow_run_metadata_serialize_failed'
-      );
-      throw new Error(
-        `Failed to serialize workflow metadata: ${err.message}. ` +
-          'Metadata contains required workflow context or AI configuration.'
-      );
-    }
-
-    // Non-critical metadata: fall back to empty object and log warning
-    getLog().warn(
-      { err, metadataKeys: data.metadata ? Object.keys(data.metadata) : [] },
-      'db.workflow_run_metadata_serialize_fallback'
-    );
-    metadataJson = '{}';
-  }
-
+  const metadataJson = serializeRunMetadata(data.metadata);
   const origin = workflowRunOriginSchema.parse(data.origin ?? {});
   if (origin.conversationId) assertPublicConversation(origin.conversationId);
   if (origin.parentConversationId) assertPublicConversation(origin.parentConversationId);
@@ -84,41 +56,83 @@ export async function insertWorkflowRun(
       ...(origin.conversationId ? [origin.conversationId] : []),
       ...(origin.parentConversationId ? [origin.parentConversationId] : []),
     ]);
-    const result = await query<WorkflowRunRow>(
-      data.id === undefined
-        ? `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING *, CAST(origin AS TEXT) AS origin`
-        : `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       RETURNING *, CAST(origin AS TEXT) AS origin`,
-      [
-        data.workflow_name,
-        physicalConversationId,
-        data.codebase_id ?? null,
-        data.user_message,
-        metadataJson,
-        data.working_path ?? null,
-        origin.parentConversationId ?? null,
-        origin.userId ?? null,
-        data.parent_run_id ?? null,
-        data.adopted_from_run_id ?? null,
-        JSON.stringify(origin),
-        ...(data.id === undefined ? [] : [data.id]),
-      ]
-    );
-    const row = result.rows[0];
-    if (!row) {
-      throw new Error(
-        `Failed to create workflow run: INSERT returned no rows (workflow: ${data.workflow_name})`
-      );
-    }
+    const row = await insertRunRow(query, data, metadataJson, physicalConversationId, origin);
     return normalizeWorkflowRun(row);
   } catch (error) {
     throw new Error(`Failed to create workflow run: ${(error as Error).message}`);
   }
+}
+
+/** Serializes run metadata, refusing only when it carries launch policy a resume needs. */
+function serializeRunMetadata(metadata: WorkflowRunInsert['metadata']): string {
+  try {
+    return JSON.stringify(metadata ?? {});
+  } catch (serializeError) {
+    const err = serializeError as Error;
+
+    // Losing launch policy would silently change execution on the next resume.
+    if (
+      metadata &&
+      ('github_context' in metadata || RUN_AI_CONFIGURATION_METADATA_KEY in metadata)
+    ) {
+      getLog().error(
+        { err, metadataKeys: Object.keys(metadata) },
+        'db.workflow_run_metadata_serialize_failed'
+      );
+      throw new Error(
+        `Failed to serialize workflow metadata: ${err.message}. ` +
+          'Metadata contains required workflow context or AI configuration.'
+      );
+    }
+
+    // Non-critical metadata: fall back to empty object and log warning
+    getLog().warn(
+      { err, metadataKeys: metadata ? Object.keys(metadata) : [] },
+      'db.workflow_run_metadata_serialize_fallback'
+    );
+    return '{}';
+  }
+}
+
+async function insertRunRow(
+  query: TransactionQuery,
+  data: WorkflowRunInsert,
+  metadataJson: string,
+  physicalConversationId: string,
+  origin: WorkflowRunOrigin
+): Promise<WorkflowRunRow> {
+  const result = await query<WorkflowRunRow>(
+    data.id === undefined
+      ? `INSERT INTO remote_agent_workflow_runs
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *, CAST(origin AS TEXT) AS origin`
+      : `INSERT INTO remote_agent_workflow_runs
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *, CAST(origin AS TEXT) AS origin`,
+    [
+      data.workflow_name,
+      physicalConversationId,
+      data.codebase_id ?? null,
+      data.user_message,
+      metadataJson,
+      data.working_path ?? null,
+      origin.parentConversationId ?? null,
+      origin.userId ?? null,
+      data.parent_run_id ?? null,
+      data.adopted_from_run_id ?? null,
+      JSON.stringify(origin),
+      ...(data.id === undefined ? [] : [data.id]),
+    ]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error(
+      `Failed to create workflow run: INSERT returned no rows (workflow: ${data.workflow_name})`
+    );
+  }
+  return row;
 }
 
 export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
@@ -325,9 +339,9 @@ export async function completeWorkflowRun(
 export async function failWorkflowRun(
   id: string,
   error: string,
-  options: { exitReason?: RunExitReason; signal?: RunStopSignal } = {}
+  options: NonNullable<Parameters<IWorkflowStore['failWorkflowRun']>[2]> = {}
 ): Promise<{ failed: boolean }> {
-  const { exitReason, signal } = options;
+  const { exitReason, signal, pendingLaunchToken, expectedExecutionClaim } = options;
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
@@ -343,13 +357,25 @@ export async function failWorkflowRun(
     RUN_STOP_REASON_METADATA_KEY,
     PAUSE_CAUSE_METADATA_KEY
   );
+  const claimPredicate =
+    expectedExecutionClaim === undefined
+      ? ''
+      : ` AND status = 'running' AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${
+          expectedExecutionClaim === null
+            ? 'IS NULL'
+            : `= $${pendingLaunchToken !== undefined ? 4 : 3}`
+        }`;
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge(metadataWithoutPriorFailure, 2)}
-         WHERE id = $1 AND status IN ('running', 'pending')`,
+         WHERE id = $1 AND ${
+           pendingLaunchToken !== undefined
+             ? `status = 'pending' AND ${dialect.jsonText('metadata', DETACHED_LAUNCH_METADATA_KEY)} = $3`
+             : "status IN ('running', 'pending')"
+         }${claimPredicate}`,
         [
           id,
           JSON.stringify({
@@ -363,6 +389,8 @@ export async function failWorkflowRun(
                 }
               : {}),
           }),
+          ...(pendingLaunchToken !== undefined ? [pendingLaunchToken] : []),
+          ...(typeof expectedExecutionClaim === 'string' ? [expectedExecutionClaim] : []),
         ]
       );
       if ((update.rowCount ?? 0) > 0) {
@@ -380,6 +408,8 @@ export async function failWorkflowRun(
     throw new Error(`Failed to fail workflow run: ${err.message}`);
   }
   if (result.rowCount === 0) {
+    if (pendingLaunchToken !== undefined || expectedExecutionClaim !== undefined)
+      return { failed: false };
     const status = await getWorkflowRunStatus(id);
     if (TERMINAL_WORKFLOW_STATUSES.some(terminal => terminal === status)) return { failed: false };
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');
@@ -404,14 +434,12 @@ export async function cancelWorkflowRun(
         [id, ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {
+        const { step_name, ...data } = event ?? {};
         await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
-          step_name: event?.step_name,
-          data: {
-            ...(event?.reason === undefined ? {} : { reason: event.reason }),
-            ...(event?.cancel_reason === undefined ? {} : { cancel_reason: event.cancel_reason }),
-          },
+          step_name,
+          data,
         });
       }
       return update;
@@ -475,7 +503,8 @@ export async function cancelFanOutRun(
 /** Release a running run whose source this host could not read (see `IWorkflowStore`). */
 export async function releaseRunForUnreadableSource(
   id: string,
-  release: SourceReleaseWrite
+  release: SourceReleaseWrite,
+  beforePublish?: () => Promise<void>
 ): Promise<{ released: boolean }> {
   const dialect = getDialect();
   try {
@@ -493,6 +522,7 @@ export async function releaseRunForUnreadableSource(
         ]
       );
       if ((result.rowCount ?? 0) === 0) return { released: false };
+      await beforePublish?.();
       await insertWorkflowEvent(query, sourceReleasedEvent(id, release));
       return { released: true };
     });

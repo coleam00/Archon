@@ -98,7 +98,7 @@ Two slash commands give the team an alternative to @mention:
 
 | Command | What it does |
 | --- | --- |
-| `/archon <message>` | Talks to Archon in the current channel. Equivalent to `@archon <message>`. |
+| `/archon <message>` | Starts a new thread in the current channel. To continue an existing thread, post `@archon <message>` in that thread. |
 | `/archon-workflow <subcommand>` | Direct workflow control. Supports `list`, `status`, `get <id>`, `run <name> <args>`, `approve <id> [comment]`, `reject <id> [reason]`, `respond <id> <decision> [text]`, `abandon <id>`, `resume <id>`. |
 
 For each command:
@@ -145,7 +145,7 @@ archon plugin add coleam00/Archon/plugins/chat-slack
 
 In a source checkout, run `bun run cli plugin add coleam00/Archon/plugins/chat-slack`.
 
-In Docker, restart the container with its tokens configured. The image-provided release installs offline before the server starts, writes a verified receipt to `/.archon/plugins`, and logs why it was provisioned. No manual install is needed. A valid installed Slack plugin is retained at its current version. See [Docker plugins](/deployment/docker/#plugins) for release pins and build args.
+In Docker, restart the container with its tokens configured. The image-provided release installs offline before the server starts, writes a verified receipt to `/.archon/plugins`, and logs why it was provisioned. No manual install is needed. A valid installed Slack plugin is retained at its current version. See [Building the image](/deployment/docker/#building-the-image) for the release pin and build args.
 
 Without a tag, manual `plugin add` installs the latest release. Restart the server; Slack appears in `/api/health` once the plugin connects. Keep the plugin current with `archon plugin update coleam00/Archon/plugins/chat-slack`, and remove it with `archon plugin remove coleam00/Archon/plugins/chat-slack`. In Docker, remove Slack tokens from every effective env source as well, or the image plugin is reinstalled on restart. Outside Docker, removal followed by a restart keeps Slack off. See [`archon plugin`](/reference/cli/#plugin).
 
@@ -176,6 +176,12 @@ SLACK_STREAMING_MODE=batch  # batch (default) | stream
 For streaming mode details, see [Configuration](/getting-started/configuration/).
 
 ## Usage
+
+Select a registered project by posting `@your-bot /setproject <name>` in the target thread. To register a local directory first, post `@your-bot /register-project [--folder] <name> <path>`, then select it; registration alone does not bind the conversation. Projectless questions still work. Selection applies to that conversation, not every channel.
+
+Slack registers `/archon` and `/archon-workflow`, not raw `/setproject` or `/register-project` slash commands. `/archon <message>` creates a new thread; use an @mention in the existing thread to scope that conversation.
+
+Once scoped, the assistant launches and manages runs through its native tools (Claude, Codex, Pi) or the existing CLI (Copilot/OpenCode). CLI launches are detached and headless, use CLI identity and return a run ID for inspection; they do not deliver progress or results to the originating chat. See [Deprecated providers](/getting-started/ai-assistants/#deprecated-providers).
 
 ### @Mention in Channels
 

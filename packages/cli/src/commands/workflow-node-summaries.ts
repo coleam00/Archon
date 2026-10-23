@@ -1,7 +1,16 @@
 import { formatDuration } from '@archon/paths/duration';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import {
+  readNodeRecordData,
+  readNodeRecordEvent,
+  type ReadNodeRecordEvent,
+} from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
+import {
+  describeUnfinishedFanOut,
+  fanOutSlotOutcomeLabel,
+  type FanOutOutcome,
+} from '@archon/workflows/schemas/fan-out-outcome';
 import type { NodeState } from '@archon/workflows/schemas/node-state';
 import {
   NODE_STATE_EVENT_TYPES,
@@ -29,6 +38,45 @@ export interface NodeSummary {
   execution?: NodeExecutionMetadata;
   /** Every provider session id the node's attempts and loop iterations recorded, in order. */
   sessionIds?: string[];
+  /** A `workflow:` fan-out node's per-slot record. */
+  fanOutOutcome?: FanOutOutcome;
+}
+
+function fanOutFields(outcome: FanOutOutcome | undefined): Pick<NodeSummary, 'fanOutOutcome'> {
+  return outcome === undefined ? {} : { fanOutOutcome: outcome };
+}
+
+/** Non-completed slots shown under a fan-out node; the tally still counts every slot. */
+const FAN_OUT_SLOT_DISPLAY_LIMIT = 10;
+
+/**
+ * Lines describing a fan-out node's unfinished child work, or none when every slot
+ * completed. The "more" count comes from the stored tally, never from the shown list.
+ */
+export function formatFanOutOutcome(outcome: FanOutOutcome | undefined): string[] {
+  if (outcome === undefined) return [];
+  const { tally } = outcome;
+  const unfinished = tally.total - tally.completed;
+  if (unfinished === 0) return [];
+  const shown = outcome.slots
+    .filter(slot => slot.outcome !== 'completed')
+    .slice(0, FAN_OUT_SLOT_DISPLAY_LIMIT)
+    .map(slot => {
+      const reason =
+        'cancel_reason' in slot && slot.cancel_reason ? ` (${slot.cancel_reason})` : '';
+      const parts = [
+        `item ${String(slot.index)}: ${fanOutSlotOutcomeLabel(slot.outcome)}${reason}`,
+        ...('child_run_id' in slot ? [`run ${slot.child_run_id}`] : []),
+        ...('error' in slot && slot.error !== undefined ? [slot.error] : []),
+      ];
+      return `  ${parts.join(' — ')}`;
+    });
+  const more = unfinished - shown.length;
+  return [
+    `Fan-out work: ${describeUnfinishedFanOut(tally)}`,
+    ...shown,
+    ...(more > 0 ? [`  … and ${String(more)} more (see --json)`] : []),
+  ];
 }
 
 export function formatSkipCause(cause: SkipCause): string {
@@ -74,125 +122,171 @@ export const NODE_SUMMARY_EVENT_TYPES = [
  * to pending, as the run's terminal record does.
  */
 export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
-  const startTimes = new Map<string, number>();
-  const summaries = new Map<string, NodeSummary>();
-  // Kept apart from `summaries`, which a retry's node_started resets: earlier attempts'
-  // sessions stay listed.
-  const sessionIds = new Map<string, string[]>();
-  const recordSession = (nodeId: string, sessionId: unknown): void => {
-    if (typeof sessionId !== 'string') return;
-    const ids = sessionIds.get(nodeId) ?? [];
-    if (!ids.includes(sessionId)) sessionIds.set(nodeId, [...ids, sessionId]);
+  const fold: NodeSummaryFold = {
+    startTimes: new Map(),
+    summaries: new Map(),
+    sessionIds: new Map(),
   };
-
-  for (const event of events) {
-    const nodeId = event.step_name;
-    if (!nodeId) continue;
-    if (event.event_type === 'loop_iteration_completed') {
-      recordSession(nodeId, readNodeRecordData(event.data).session_id);
-      continue;
-    }
-    const record = readNodeRecordEvent(event);
-    if (!record) continue;
-    recordSession(nodeId, record.data.session_id);
-    const execution = record.metadata;
-
-    switch (record.eventType) {
-      case 'node_started': {
-        startTimes.set(nodeId, new Date(event.created_at).getTime());
-        // A retry is a new active attempt, so stale terminal details must not
-        // leak into the compact current-state summary.
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'running',
-          startedAt: event.created_at,
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_always_run_reset':
-      case 'node_prior_cache_invalidated': {
-        startTimes.delete(nodeId);
-        summaries.set(nodeId, { nodeId, state: 'pending' });
-        break;
-      }
-      case 'node_suspended': {
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'running',
-          startedAt: summaries.get(nodeId)?.startedAt,
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_completed': {
-        const started = startTimes.get(nodeId);
-        const endTime = new Date(event.created_at).getTime();
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'completed',
-          startedAt: summaries.get(nodeId)?.startedAt,
-          durationMs:
-            execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
-          outputPreview: outputPreviewOf(record.data.node_output),
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_failed': {
-        const started = startTimes.get(nodeId);
-        const endTime = new Date(event.created_at).getTime();
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'failed',
-          startedAt: summaries.get(nodeId)?.startedAt,
-          durationMs:
-            execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
-          error: record.data.error ?? 'Unknown error',
-          ...(record.data.blocked_on_child_run_id === undefined
-            ? {}
-            : { blockedOnChildRunId: record.data.blocked_on_child_run_id }),
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_skipped': {
-        const parsedCause = skipCauseSchema.safeParse(record.data.cause);
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'skipped',
-          ...(parsedCause.success ? { cause: parsedCause.data } : {}),
-          ...(execution === undefined ? {} : { execution }),
-        });
-        break;
-      }
-      case 'node_skipped_prior_success': {
-        // The opposite of node_skipped: the node ran and succeeded on an earlier
-        // pass, and this resume declined to re-run it. The engine re-emits one per
-        // resume pass — including its own durable-wait continuation — so folding
-        // these into `skipped` reported completed work as never run, and the last
-        // write erased the original duration and output (#2973). The earlier
-        // node_completed summary is the truth about the run, so never overwrite it.
-        // A reset left nothing to keep: the prior attempt's details went with it.
-        const existing = summaries.get(nodeId);
-        if (existing !== undefined && existing.state !== 'pending') break;
-        // The original node_completed is not in this log or was reset. The
-        // replay still carries the prior output, so report the success it
-        // describes; there is no start time to derive a duration from.
-        summaries.set(nodeId, {
-          nodeId,
-          state: 'completed',
-          outputPreview: outputPreviewOf(record.data.node_output),
-        });
-        break;
-      }
-    }
-  }
-
-  return [...summaries.values()].map(summary => {
-    const ids = sessionIds.get(summary.nodeId);
+  for (const event of events) foldNodeEvent(fold, event);
+  return [...fold.summaries.values()].map(summary => {
+    const ids = fold.sessionIds.get(summary.nodeId);
     return ids === undefined ? summary : { ...summary, sessionIds: ids };
   });
+}
+
+interface NodeSummaryFold {
+  startTimes: Map<string, number>;
+  summaries: Map<string, NodeSummary>;
+  /**
+   * Kept apart from `summaries`, which a retry's node_started resets: earlier attempts'
+   * sessions stay listed.
+   */
+  sessionIds: Map<string, string[]>;
+}
+
+function foldNodeEvent(fold: NodeSummaryFold, event: WorkflowEventRow): void {
+  const nodeId = event.step_name;
+  if (!nodeId) return;
+  if (event.event_type === 'loop_iteration_completed') {
+    recordSession(fold, nodeId, readNodeRecordData(event.data).session_id);
+    return;
+  }
+  const record = readNodeRecordEvent(event);
+  if (!record) return;
+  recordSession(fold, nodeId, record.data.session_id);
+  if (record.eventType === 'node_started') {
+    fold.startTimes.set(nodeId, new Date(event.created_at).getTime());
+  } else if (isResumeReset(record)) {
+    fold.startTimes.delete(nodeId);
+  }
+  const next = nextNodeSummary(
+    nodeId,
+    record,
+    event.created_at,
+    fold.summaries.get(nodeId),
+    fold.startTimes.get(nodeId)
+  );
+  if (next !== undefined) fold.summaries.set(nodeId, next);
+}
+
+function recordSession(fold: NodeSummaryFold, nodeId: string, sessionId: unknown): void {
+  if (typeof sessionId !== 'string') return;
+  const ids = fold.sessionIds.get(nodeId) ?? [];
+  if (!ids.includes(sessionId)) fold.sessionIds.set(nodeId, [...ids, sessionId]);
+}
+
+function isResumeReset(record: ReadNodeRecordEvent): boolean {
+  return (
+    record.eventType === 'node_always_run_reset' ||
+    record.eventType === 'node_prior_cache_invalidated'
+  );
+}
+
+/** The node's summary after this record, or undefined to keep the current one. */
+function nextNodeSummary(
+  nodeId: string,
+  record: ReadNodeRecordEvent,
+  createdAt: string,
+  existing: NodeSummary | undefined,
+  startTime: number | undefined
+): NodeSummary | undefined {
+  const execution = record.metadata;
+  switch (record.eventType) {
+    case 'node_started':
+      // A retry is a new active attempt, so stale terminal details must not
+      // leak into the compact current-state summary.
+      return { nodeId, state: 'running', startedAt: createdAt, ...executionFields(execution) };
+    case 'node_always_run_reset':
+    case 'node_prior_cache_invalidated':
+      return { nodeId, state: 'pending' };
+    case 'node_suspended':
+      return {
+        nodeId,
+        state: 'running',
+        startedAt: existing?.startedAt,
+        ...executionFields(execution),
+      };
+    case 'node_completed':
+      return {
+        nodeId,
+        state: 'completed',
+        startedAt: existing?.startedAt,
+        durationMs: nodeDurationMs(record, createdAt, startTime),
+        outputPreview: outputPreviewOf(record.data.node_output),
+        ...fanOutFields(record.data.fan_out_outcome),
+        ...executionFields(execution),
+      };
+    case 'node_failed':
+      return failedNodeSummary(nodeId, record, createdAt, existing, startTime);
+    case 'node_skipped': {
+      const parsedCause = skipCauseSchema.safeParse(record.data.cause);
+      return {
+        nodeId,
+        state: 'skipped',
+        ...(parsedCause.success ? { cause: parsedCause.data } : {}),
+        ...executionFields(execution),
+      };
+    }
+    case 'node_skipped_prior_success':
+      return priorSuccessSummary(nodeId, record, existing);
+  }
+}
+
+function failedNodeSummary(
+  nodeId: string,
+  record: ReadNodeRecordEvent,
+  createdAt: string,
+  existing: NodeSummary | undefined,
+  startTime: number | undefined
+): NodeSummary {
+  const { data } = record;
+  return {
+    nodeId,
+    state: 'failed',
+    startedAt: existing?.startedAt,
+    durationMs: nodeDurationMs(record, createdAt, startTime),
+    error: data.error ?? 'Unknown error',
+    ...(data.blocked_on_child_run_id === undefined
+      ? {}
+      : { blockedOnChildRunId: data.blocked_on_child_run_id }),
+    ...fanOutFields(data.fan_out_outcome),
+    ...executionFields(record.metadata),
+  };
+}
+
+/**
+ * The opposite of node_skipped: the node ran and succeeded on an earlier pass, and this
+ * resume declined to re-run it. The engine re-emits one per resume pass — including its
+ * own durable-wait continuation — so folding these into `skipped` reported completed
+ * work as never run, and the last write erased the original duration and output (#2973).
+ * The earlier node_completed summary is the truth about the run, so never overwrite it.
+ * A reset left nothing to keep: the prior attempt's details went with it.
+ */
+function priorSuccessSummary(
+  nodeId: string,
+  record: ReadNodeRecordEvent,
+  existing: NodeSummary | undefined
+): NodeSummary | undefined {
+  if (existing !== undefined && existing.state !== 'pending') return undefined;
+  // The original node_completed is not in this log or was reset. The
+  // replay still carries the prior output, so report the success it
+  // describes; there is no start time to derive a duration from.
+  return { nodeId, state: 'completed', outputPreview: outputPreviewOf(record.data.node_output) };
+}
+
+function nodeDurationMs(
+  record: ReadNodeRecordEvent,
+  createdAt: string,
+  startTime: number | undefined
+): number | undefined {
+  const derived = startTime !== undefined ? new Date(createdAt).getTime() - startTime : undefined;
+  return record.metadata?.timing.durationMs ?? derived;
+}
+
+function executionFields(
+  execution: NodeExecutionMetadata | undefined
+): Pick<NodeSummary, 'execution'> {
+  return execution === undefined ? {} : { execution };
 }
 
 /**
@@ -255,11 +349,8 @@ export async function withRunDetail<
 }
 
 /**
- * Fetch a run's events for `--verbose` rendering. A failed event query must not
- * abort the command (the run summary itself is still useful), but it must NOT be
- * indistinguishable from "this run has no events" — so log a warn and flag the
- * failure to the caller, which prints a visible note. (In `--json` mode logs are
- * silenced; an empty derived/raw payload is the documented signal there.)
+ * Keep query failure distinct from an empty history: human output can retain the
+ * run summary with a warning, while JSON callers must fail the request.
  */
 export async function fetchVerboseEvents(
   host: WorkflowHost,
@@ -303,6 +394,7 @@ export function printVerboseNodes(events: WorkflowEventRow[]): void {
     if (node.error !== undefined) {
       console.log(`        Error:  ${node.error}`);
     }
+    formatFanOutOutcome(node.fanOutOutcome).forEach(line => console.log(`        ${line}`));
     if (node.sessionIds !== undefined) {
       const label = node.sessionIds.length === 1 ? 'Session' : 'Sessions';
       console.log(`        ${label}: ${node.sessionIds.join(', ')}`);

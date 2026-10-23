@@ -1,8 +1,8 @@
 # Build queue policy
 
-This is the SDLC pack's default policy for the build queue. A project replaces it whole
-with its own `.archon/sdlc/policy/build.md`, which may be nothing more than a pointer to
-documents the project already has.
+This is the SDLC pack's default policy for the build queue. A project adds to it with
+its own `.archon/sdlc/policy/build.md`: the queue reads this default first and the
+project's file after it, and where the two conflict, the project's line wins.
 
 The queue acts on its own when the case is clear, and asks a maintainer when it is not.
 

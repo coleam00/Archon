@@ -1,9 +1,10 @@
 import { readSubrunMetadata, type WorkflowNode, type WorkflowRun } from '../schemas';
-import type { TokenUsage } from '@archon/provider-contract';
+import { parseRunUsage } from '../schemas/run-usage';
+import type { RunUsageFigures } from '../schemas/run-usage';
 import type { DeclaredOutputPaths, JsonValue } from '../output-ref';
 
 /** Terminal (or paused) outcome of a child sub-run, as consumed by a `workflow:` node. */
-export interface ChildWorkflowOutcome {
+export interface ChildWorkflowOutcome extends RunUsageFigures {
   childRunId: string;
   status: 'completed' | 'paused' | 'failed' | 'cancelled';
   /** Child's terminal output (its first sink node's output), threaded as `$<id>.output`. */
@@ -22,10 +23,6 @@ export interface ChildWorkflowOutcome {
    * Absent for schemaless children and pre-#2453 rows — those carry no contract at all.
    */
   declaredOutputPaths?: DeclaredOutputPaths;
-  /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
-  costUsd?: number;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
   error?: string;
 }
 
@@ -105,24 +102,6 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     );
   }
   const md: Record<string, unknown> = run.metadata ?? {};
-  const input = typeof md.total_tokens_in === 'number' ? md.total_tokens_in : undefined;
-  const output = typeof md.total_tokens_out === 'number' ? md.total_tokens_out : undefined;
-  const cacheRead =
-    typeof md.total_cache_read_tokens === 'number' ? md.total_cache_read_tokens : undefined;
-  const cacheWrite =
-    typeof md.total_cache_write_tokens === 'number' ? md.total_cache_write_tokens : undefined;
-  const tokens =
-    input !== undefined || output !== undefined
-      ? {
-          input: input ?? 0,
-          output: output ?? 0,
-          ...(cacheRead !== undefined ? { cacheRead } : {}),
-          ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-          // Persisted by persistRunUsage; without it a child's floor would contribute to
-          // the parent as though it were an exact total.
-          ...(md.total_cache_partial === true ? { cachePartial: true as const } : {}),
-        }
-      : undefined;
   // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
   // reading through readSubrunMetadata's summaryValue keeps them distinguishable
   // from "not stamped".
@@ -138,8 +117,14 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     ...(summaryDeclaredOutputPaths !== undefined
       ? { declaredOutputPaths: summaryDeclaredOutputPaths }
       : {}),
-    costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
-    ...(md.total_tokens_unknown === true ? { tokensUnknown: true } : { tokens }),
+    ...childRunUsage(run),
     error: typeof md.error === 'string' ? md.error : undefined,
   };
+}
+
+/** Usage is available while a child is unresolved as well as after it settles. */
+export function childRunUsage(
+  run: WorkflowRun
+): Pick<ChildWorkflowOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> {
+  return parseRunUsage(run.metadata);
 }

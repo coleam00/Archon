@@ -3,6 +3,8 @@ import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import { resolveDryRunEnvironment } from './workflow-dry-run';
+import { createCliWorkflowHost } from '../utils/workflow-host';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
@@ -23,11 +25,16 @@ import {
   buildNodeSummaries,
   fetchVerboseEvents,
   listRunEvents,
-  printVerboseNodes,
   withRunDetail,
 } from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { formatAge, getLog, resolveRunIdArg, resolveRunTranscriptPath } from './workflow-shared';
+import {
+  formatAge,
+  getLog,
+  inheritedWorkflowCodebase,
+  resolveRunIdArg,
+  resolveRunTranscriptPath,
+} from './workflow-shared';
 import {
   TRANSCRIPT_POLL_INTERVAL_MS,
   type TranscriptFormat,
@@ -38,8 +45,7 @@ import {
   transcriptUnavailableMessage,
 } from './workflow-transcript';
 import {
-  usageLimitWaitLine,
-  formatToolAttention,
+  printStatusRun,
   formatWaitOutcome,
   announceWaitAttached,
   type LeaveBehind,
@@ -96,31 +102,14 @@ export async function workflowTestCommand(
       cwd,
       targetCwd: invokingCwd,
       sourceConfig: workflowSourceConfigFrom(config),
+      config,
+      resolveExecConfig: async () =>
+        resolveDryRunEnvironment(await createCliWorkflowHost(), invokingCwd, config),
       ...(target !== undefined ? { target } : {}),
     });
   } catch (error) {
     if (errors.length === 0) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    if (options.json) {
-      await writeJsonLine({
-        ok: false,
-        error: message,
-        errors: errors.map(e => ({
-          filename: e.filename,
-          error: e.error,
-          errorType: e.errorType,
-        })),
-      });
-    } else {
-      let output = `Error: ${message}\n`;
-      if (errors.length > 0) {
-        output += `\n${errors.length} workflow(s) failed to load:\n\n`;
-        for (const loadError of errors) {
-          output += `  ${loadError.filename}: ${loadError.error}\n`;
-        }
-      }
-      await writeStdout(output);
-    }
+    await writeFixtureFailure(error, errors, options.json);
     return 1;
   }
 
@@ -134,21 +123,10 @@ export async function workflowTestCommand(
       })),
       passed: report.passed,
       failed: report.failed,
-      errors: errors.map(e => ({
-        filename: e.filename,
-        error: e.error,
-        errorType: e.errorType,
-      })),
+      errors: workflowLoadErrorsJson(errors),
     });
   } else {
-    let output = `${formatFixtureReport(report)}\n`;
-    if (errors.length > 0) {
-      output += `\n${errors.length} workflow(s) failed to load:\n\n`;
-      for (const error of errors) {
-        output += `  ${error.filename}: ${error.error}\n`;
-      }
-    }
-    await writeStdout(output);
+    await writeStdout(`${formatFixtureReport(report)}\n${formatFixtureLoadErrors(errors)}`);
   }
 
   if (
@@ -161,20 +139,40 @@ export async function workflowTestCommand(
   return 0;
 }
 
-/**
- * List available workflows in the current directory
- */
-export async function workflowListCommand(
-  cwd: string,
-  options: WorkflowListOptions = {}
+function workflowLoadErrorsJson(errors: readonly WorkflowLoadError[]) {
+  return errors.map(e => ({ filename: e.filename, error: e.error, errorType: e.errorType }));
+}
+
+function formatFixtureLoadErrors(errors: readonly WorkflowLoadError[]): string {
+  if (errors.length === 0) return '';
+  return `\n${errors.length} workflow(s) failed to load:\n\n${errors
+    .map(error => `  ${error.filename}: ${error.error}\n`)
+    .join('')}`;
+}
+
+async function writeFixtureFailure(
+  error: unknown,
+  errors: readonly WorkflowLoadError[],
+  json: boolean | undefined
 ): Promise<void> {
-  const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
-  let listedEntries = workflowEntries;
-  if (options.name !== undefined) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (json) {
+    await writeJsonLine({ ok: false, error: message, errors: workflowLoadErrorsJson(errors) });
+  } else {
+    await writeStdout(`Error: ${message}\n${formatFixtureLoadErrors(errors)}`);
+  }
+}
+
+function selectWorkflowEntries(
+  workflowEntries: readonly WorkflowWithSource[],
+  errors: readonly WorkflowLoadError[],
+  name: string | undefined
+): readonly WorkflowWithSource[] {
+  if (name !== undefined) {
     let workflow: WorkflowWithSource['workflow'] | undefined;
     try {
       workflow = resolveWorkflowName(
-        options.name,
+        name,
         workflowEntries.map(entry => entry.workflow)
       );
     } catch (error) {
@@ -186,12 +184,61 @@ export async function workflowListCommand(
         .map(entry => `  - ${entry.workflow.name}`)
         .join('\n');
       throw new WorkflowListLookupError(
-        `Workflow '${options.name}' not found.\n\nAvailable workflows:\n${availableWorkflows || '  (none)'}`,
+        `Workflow '${name}' not found.\n\nAvailable workflows:\n${availableWorkflows || '  (none)'}`,
         errors
       );
     }
-    listedEntries = workflowEntries.filter(entry => entry.workflow.name === workflow.name);
+    return workflowEntries.filter(entry => entry.workflow.name === workflow.name);
   }
+
+  return workflowEntries;
+}
+
+function workflowJsonEntry(
+  { workflow: w, parseWarnings, declared }: WorkflowWithSource,
+  full: boolean
+): WorkflowJsonEntry {
+  const description = projectWorkflowDescription(w.description, full);
+  const entry: WorkflowJsonEntry = {
+    name: w.name,
+    description: description.description,
+    descriptionTruncated: description.truncated,
+  };
+  if (declared?.provider !== undefined) entry.provider = declared.provider;
+  if (declared?.model !== undefined) entry.model = declared.model;
+  if (declared?.effort !== undefined) entry.effort = declared.effort;
+  if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
+  if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
+  return entry;
+}
+
+function printWorkflowEntry(
+  { workflow, parseWarnings, declared }: WorkflowWithSource,
+  full: boolean
+): void {
+  const description = projectWorkflowDescription(workflow.description, full);
+  console.log(`  ${workflow.name}`);
+  console.log(
+    `    ${description.description}${description.truncated ? WORKFLOW_DESCRIPTION_TRUNCATION_MARKER : ''}`
+  );
+  if (declared?.provider) {
+    console.log(`    Provider: ${declared.provider}`);
+  }
+  for (const warning of parseWarnings ?? []) {
+    console.log(`    Warning: ${warning}`);
+  }
+  console.log('');
+}
+
+/**
+ * List available workflows in the current directory
+ */
+export async function workflowListCommand(
+  cwd: string,
+  options: WorkflowListOptions = {}
+): Promise<void> {
+  const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
+  const listedEntries = selectWorkflowEntries(workflowEntries, errors, options.name);
 
   if (options.json) {
     const output = {
@@ -199,27 +246,8 @@ export async function workflowListCommand(
       // onto the nodes and removes them (#1764), so the listing reports what the author
       // wrote. `webSearchMode` is the one that stays on the definition — it has no
       // per-node form to collapse onto.
-      workflows: listedEntries.map(
-        ({ workflow: w, parseWarnings, declared }): WorkflowJsonEntry => {
-          const description = projectWorkflowDescription(w.description, options.full === true);
-          const entry: WorkflowJsonEntry = {
-            name: w.name,
-            description: description.description,
-            descriptionTruncated: description.truncated,
-          };
-          if (declared?.provider !== undefined) entry.provider = declared.provider;
-          if (declared?.model !== undefined) entry.model = declared.model;
-          if (declared?.effort !== undefined) entry.effort = declared.effort;
-          if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
-          if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
-          return entry;
-        }
-      ),
-      errors: errors.map(e => ({
-        filename: e.filename,
-        error: e.error,
-        errorType: e.errorType,
-      })),
+      workflows: listedEntries.map(entry => workflowJsonEntry(entry, options.full === true)),
+      errors: workflowLoadErrorsJson(errors),
     };
     await writeJsonLine(output);
     return;
@@ -236,20 +264,7 @@ export async function workflowListCommand(
   if (listedEntries.length > 0) {
     console.log(`\nFound ${listedEntries.length} workflow(s):\n`);
 
-    for (const { workflow, parseWarnings, declared } of listedEntries) {
-      const description = projectWorkflowDescription(workflow.description, options.full === true);
-      console.log(`  ${workflow.name}`);
-      console.log(
-        `    ${description.description}${description.truncated ? WORKFLOW_DESCRIPTION_TRUNCATION_MARKER : ''}`
-      );
-      if (declared?.provider) {
-        console.log(`    Provider: ${declared.provider}`);
-      }
-      for (const warning of parseWarnings ?? []) {
-        console.log(`    Warning: ${warning}`);
-      }
-      console.log('');
-    }
+    for (const entry of listedEntries) printWorkflowEntry(entry, options.full === true);
   }
 
   if (errors.length > 0) {
@@ -261,28 +276,51 @@ export async function workflowListCommand(
   }
 }
 
+async function verboseStatusRuns(
+  host: WorkflowHost,
+  runs: DashboardWorkflowRun[],
+  rawEvents = false
+) {
+  const fetchedPerRun = await Promise.all(
+    runs.map(run => fetchVerboseEvents(host, run.id, rawEvents))
+  );
+  if (fetchedPerRun.some(result => result.failed)) {
+    throw new Error('Failed to fetch workflow events for verbose status.');
+  }
+  return runs.map((run, i) => {
+    const runEvents = fetchedPerRun[i]?.events ?? [];
+    return rawEvents
+      ? { ...run, attention: runAttention(run), events: runEvents }
+      : { ...run, attention: runAttention(run), nodes: buildNodeSummaries(runEvents) };
+  });
+}
+
+async function resolveStatusCodebase(host: WorkflowHost, cwd: string, all: boolean | undefined) {
+  try {
+    const codebase = await inheritedWorkflowCodebase(host, all);
+    if (codebase === undefined && !all) {
+      return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
+    }
+    return codebase;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_status_codebase_lookup_failed');
+    throw new Error(`Failed to resolve workflow status project: ${err.message}`, { cause: err });
+  }
+}
+
 /** Show active workflow runs for the current project, or every project with `--all`. */
 export async function workflowStatusCommand(
   host: WorkflowHost,
   cwd: string,
   opts: { json?: boolean; verbose?: boolean; rawEvents?: boolean; all?: boolean } = {}
 ): Promise<void> {
-  const { getWorkflowStatus } = host.operations;
-
-  let codebase = null;
-  if (!opts.all) {
-    try {
-      codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, cwd }, 'cli.workflow_status_codebase_lookup_failed');
-      throw new Error(`Failed to resolve workflow status project: ${err.message}`, { cause: err });
-    }
-  }
-
+  const codebase = await resolveStatusCodebase(host, cwd, opts.all);
   let runs: DashboardWorkflowRun[];
   try {
-    const result = await getWorkflowStatus(codebase ? { codebaseId: codebase.id } : undefined);
+    const result = await host.operations.getWorkflowStatus(
+      codebase ? { codebaseId: codebase.id } : undefined
+    );
     runs = result.runs;
   } catch (error) {
     const err = error as Error;
@@ -301,15 +339,7 @@ export async function workflowStatusCommand(
       return;
     }
 
-    const fetchedPerRun = await Promise.all(
-      runs.map(run => fetchVerboseEvents(host, run.id, opts.rawEvents ?? false))
-    );
-    const runsOutput = runs.map((run, i) => {
-      const runEvents = fetchedPerRun[i]?.events ?? [];
-      return opts.rawEvents
-        ? { ...run, attention: runAttention(run), events: runEvents }
-        : { ...run, attention: runAttention(run), nodes: buildNodeSummaries(runEvents) };
-    });
+    const runsOutput = await verboseStatusRuns(host, runs, opts.rawEvents);
     await writeJsonLine({ runs: runsOutput, scopeFallback });
     return;
   }
@@ -325,32 +355,7 @@ export async function workflowStatusCommand(
 
   console.log(`\nActive workflows (${runs.length}):\n`);
   for (const run of runs) {
-    const age = formatAge(run.started_at);
-    console.log(`  ID:     ${run.id}`);
-    console.log(`  Name:   ${run.workflow_name}`);
-    console.log(`  Path:   ${run.working_path ?? '(none)'}`);
-    console.log(`  Status: ${run.status}`);
-    const attention = runAttention(run);
-    if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
-    if (attention?.kind === 'usage_limit')
-      console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
-    if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
-    console.log(`  Age:    ${age}`);
-    if (run.active_nodes.length > 0) {
-      console.log(
-        `  Active node${run.active_nodes.length === 1 ? '' : 's'}: ${run.active_nodes.join(', ')}`
-      );
-    }
-
-    if (opts.verbose) {
-      const { events, failed } = await fetchVerboseEvents(host, run.id, false);
-      if (failed) {
-        console.log('  (node events unavailable — see logs)');
-      }
-      printVerboseNodes(events);
-    }
-
-    console.log('');
+    await printStatusRun(host, run, opts.verbose);
   }
 }
 
@@ -570,38 +575,58 @@ export async function workflowGetCommand(
   }
 
   if (json) {
-    if (!verbose) {
-      await writeJsonLine({
-        ...run,
-        transcript_path: transcriptPath,
-        terminal_record: terminalRecord,
-        ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
-      });
-      return 0;
-    }
-
-    const parseWarnings = readParseWarningEvents(events);
-    const output = rawEvents
-      ? {
-          ...run,
-          transcript_path: transcriptPath,
-          terminal_record: terminalRecord,
-          events,
-        }
-      : {
-          ...run,
-          transcript_path: transcriptPath,
-          terminal_record: terminalRecord,
-          nodes: buildNodeSummaries(events),
-          // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
-          // named field rather than leaving the caller to scan raw events.
-          ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
-        };
-    await writeJsonLine(output);
-    return 0;
+    return writeWorkflowGetJson(
+      run,
+      transcriptPath,
+      terminalRecord,
+      leaveBehind,
+      events,
+      verbose,
+      rawEvents
+    );
   }
 
   printRunDetail(run, { transcriptPath, terminalRecord, leaveBehind, events, verbose });
+  return 0;
+}
+
+async function writeWorkflowGetJson(
+  run: WorkflowRun,
+  transcriptPath: string | null,
+  terminalRecord: ReturnType<typeof getTerminalRecord>,
+  leaveBehind: LeaveBehind | undefined,
+  events: WorkflowEventRow[],
+  verbose?: boolean,
+  rawEvents?: boolean
+): Promise<number> {
+  if (!verbose) {
+    await writeJsonLine({
+      ...run,
+      transcript_path: transcriptPath,
+      terminal_record: terminalRecord,
+      ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
+    });
+    return 0;
+  }
+
+  const parseWarnings = readParseWarningEvents(events);
+  const output = rawEvents
+    ? {
+        ...run,
+        transcript_path: transcriptPath,
+        terminal_record: terminalRecord,
+        events,
+      }
+    : {
+        ...run,
+        transcript_path: transcriptPath,
+        terminal_record: terminalRecord,
+        nodes: buildNodeSummaries(events),
+        // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
+        // named field rather than leaving the caller to scan raw events.
+        ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
+      };
+  await writeJsonLine(output);
   return 0;
 }
 
@@ -610,141 +635,144 @@ export async function workflowGetCommand(
  *
  * Complements `status` (active-only): resolves the codebase from `cwd` the same
  * way `workflow run` does, then lists that project's recent runs of every
- * status. `--all` drops the project scope (lists across all projects);
+ * status. Outside chat, `--all` lists across all projects;
  * `--status` filters to one status; `--limit` caps the count (default 20).
  * `--json --verbose` adds each run's `nodes` and `attention` (see `withRunDetail`).
  */
 export async function workflowRunsCommand(
   host: WorkflowHost,
   cwd: string,
-  opts: {
-    json?: boolean;
-    all?: boolean;
-    status?: string;
-    limit?: number;
-    open?: boolean;
-    verbose?: boolean;
-  } = {}
+  opts: RunsOptions = {}
 ): Promise<number> {
-  // Open-work inbox (#2747): terminal failed runs nothing has adopted or
-  // superseded — the operator's "what ended with work on the table" query.
-  // Status-derived v1 semantics; --status/--open are mutually exclusive shapes.
-  if (opts.open) {
-    if (opts.status) {
-      const msg = '--open and --status are mutually exclusive: the inbox is failed runs only.';
-      if (opts.json) {
-        await writeJsonLine({ ok: false, error: msg });
-        return 1;
-      }
-      throw new Error(msg);
-    }
-    let codebase = null;
-    if (!opts.all) {
-      try {
-        codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-      } catch (error) {
-        getLog().warn({ err: error as Error, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
-      }
-    }
-    const runs = await host.deps.store.findOpenWorkRuns({
-      codebaseId: opts.all ? undefined : (codebase?.id ?? undefined),
-      limit: opts.limit ?? 20,
+  if (opts.open && opts.status) {
+    return refuseRuns(
+      opts,
+      new Error('--open and --status are mutually exclusive: the inbox is failed runs only.')
+    );
+  }
+  const statusFilter = parseRunsStatus(opts.status);
+  if (statusFilter instanceof Error) return refuseRuns(opts, statusFilter);
+  const codebase = await findRunsCodebase(host, cwd, opts);
+  if (codebase instanceof Error) return refuseRuns(opts, codebase);
+  // The open-work inbox contains terminal failed runs with no adopter or successor.
+  if (opts.open) return listOpenWorkRuns(host, opts, codebase);
+  return listRecentRuns(host, cwd, opts, codebase, statusFilter);
+}
+
+interface RunsOptions {
+  json?: boolean;
+  all?: boolean;
+  status?: string;
+  limit?: number;
+  open?: boolean;
+  verbose?: boolean;
+}
+type RunsCodebase = Awaited<ReturnType<typeof findCodebaseForCheckoutPath>> | undefined;
+
+/** --json never throws — emit one parseable {ok:false} line (write-command contract). */
+async function refuseRuns(
+  opts: RunsOptions,
+  error: Error,
+  jsonMessage = error.message
+): Promise<number> {
+  if (!opts.json) throw error;
+  await writeJsonLine({ ok: false, error: jsonMessage });
+  return 1;
+}
+
+function parseRunsStatus(status: string | undefined): WorkflowRunStatus | undefined | Error {
+  if (!status) return undefined;
+  const parsed = workflowRunStatusSchema.safeParse(status);
+  if (parsed.success) return parsed.data;
+  return new Error(
+    `Invalid --status '${status}'. Valid: ${workflowRunStatusSchema.options.join(', ')}.`
+  );
+}
+
+async function findRunsCodebase(
+  host: WorkflowHost,
+  cwd: string,
+  opts: RunsOptions
+): Promise<RunsCodebase | Error> {
+  try {
+    const inherited = await inheritedWorkflowCodebase(host, opts.all);
+    if (inherited !== undefined || opts.all) return inherited;
+    return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
+    return new Error(`Failed to resolve workflow runs project: ${err.message}`, { cause: err });
+  }
+}
+
+async function listOpenWorkRuns(
+  host: WorkflowHost,
+  opts: RunsOptions,
+  codebase: RunsCodebase
+): Promise<number> {
+  const runs = await host.deps.store.findOpenWorkRuns({
+    codebaseId: codebase?.id,
+    limit: opts.limit ?? 20,
+  });
+  if (opts.json) {
+    await writeJsonLine({
+      runs: opts.verbose ? await withRunDetail(host, runs) : runs,
+      total: runs.length,
+      scopeFallback: !opts.all && !codebase,
     });
-    if (opts.json) {
-      await writeJsonLine({
-        runs: opts.verbose ? await withRunDetail(host, runs) : runs,
-        total: runs.length,
-        scopeFallback: !opts.all && !codebase,
-      });
-      return 0;
-    }
-    if (runs.length === 0) {
-      console.log('No open workflow runs — nothing ended with work on the table.');
-      return 0;
-    }
-    console.log(`\nOpen work (${String(runs.length)}):\n`);
-    for (const run of runs) {
-      const outcome = run.outcome ? ` · authored outcome: ${run.outcome}` : '';
-      console.log(
-        `  ${run.id.slice(0, 8)}  ${run.workflow_name}${outcome}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
-      );
-    }
-    console.log('');
     return 0;
   }
-
-  let statusFilter: WorkflowRunStatus | undefined;
-  if (opts.status) {
-    const parsed = workflowRunStatusSchema.safeParse(opts.status);
-    if (!parsed.success) {
-      const msg = `Invalid --status '${opts.status}'. Valid: ${workflowRunStatusSchema.options.join(', ')}.`;
-      // --json never throws — emit one parseable {ok:false} line (write-command contract).
-      if (opts.json) {
-        await writeJsonLine({ ok: false, error: msg });
-        return 1;
-      }
-      throw new Error(msg);
-    }
-    statusFilter = parsed.data;
+  if (runs.length === 0) {
+    console.log('No open workflow runs — nothing ended with work on the table.');
+    return 0;
   }
-
-  // Scope to this project by exact registration first, then through the
-  // checkout's canonical repository path. This preserves an explicitly
-  // registered linked worktree while allowing another linked worktree to share
-  // its registered primary checkout. Ordinary clones remain unchanged (#2613).
-  // --all opts out of scoping. A lookup failure or an unregistered cwd both
-  // fall back to the global list — never a silent wrong-scope (the human path
-  // prints an explicit note below).
-  let codebase = null;
-  if (!opts.all) {
-    try {
-      codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-    } catch (error) {
-      getLog().warn({ err: error as Error, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
-    }
+  console.log(`\nOpen work (${String(runs.length)}):\n`);
+  for (const run of runs) {
+    console.log(
+      `  ${run.id.slice(0, 8)}  ${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
+    );
   }
-  // listDashboardRuns ignores undefined filters (truthy-guarded WHERE clauses),
-  // so pass codebaseId/status straight through — no conditional spread needed.
-  const codebaseId = opts.all ? undefined : codebase?.id;
+  console.log('');
+  return 0;
+}
 
+async function listRecentRuns(
+  host: WorkflowHost,
+  cwd: string,
+  opts: RunsOptions,
+  codebase: RunsCodebase,
+  statusFilter: WorkflowRunStatus | undefined
+): Promise<number> {
   let result;
   try {
+    // listDashboardRuns ignores undefined filters (truthy-guarded WHERE clauses),
+    // so pass codebaseId/status straight through — no conditional spread needed.
     result = await host.deps.store.listWorkflowRuns({
-      codebaseId,
+      codebaseId: codebase?.id,
       status: statusFilter,
       limit: opts.limit ?? 20,
     });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cwd }, 'cli.workflow_runs_failed');
-    if (opts.json) {
-      await writeJsonLine({ ok: false, error: err.message });
-      return 1;
-    }
-    throw new Error(`Failed to list workflow runs: ${err.message}`);
+    return refuseRuns(opts, new Error(`Failed to list workflow runs: ${err.message}`), err.message);
   }
 
   // True when project scoping was requested but fell back to the global list
-  // (unregistered cwd or a lookup failure). The human path prints a note below;
+  // (unregistered cwd). The human path prints a note below;
   // surface the same signal in --json so an agent isn't handed a global result
   // it silently mistakes for a project-scoped one.
   const scopeFallback = !opts.all && !codebase;
 
   if (opts.json) {
-    if (!opts.verbose) {
-      await writeJsonLine({ ...result, scopeFallback });
-      return 0;
-    }
     // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
     // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
-    await writeJsonLine({ ...result, runs: await withRunDetail(host, result.runs), scopeFallback });
+    const runs = opts.verbose ? await withRunDetail(host, result.runs) : result.runs;
+    await writeJsonLine({ ...result, runs, scopeFallback });
     return 0;
   }
 
-  if (scopeFallback) {
-    console.log('(not a registered project — showing all runs)');
-  }
-
+  if (scopeFallback) console.log('(not a registered project — showing all runs)');
   if (result.runs.length === 0) {
     console.log('No workflow runs found.');
     return 0;
@@ -754,11 +782,14 @@ export async function workflowRunsCommand(
   for (const run of result.runs) {
     const activeNodes =
       run.active_nodes.length > 0 ? ` · active node(s): ${run.active_nodes.join(', ')}` : '';
-    const outcome = run.outcome ? ` · authored outcome: ${run.outcome}` : '';
     console.log(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${outcome}  (${formatAge(run.started_at)})`
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
     );
   }
   console.log('');
   return 0;
+}
+
+function authoredOutcome(run: { outcome?: string | null }): string {
+  return run.outcome ? ` · authored outcome: ${run.outcome}` : '';
 }

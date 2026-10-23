@@ -16,11 +16,7 @@ import {
   type ResolvedWorkflow,
   type WorkflowRun,
 } from './schemas';
-import {
-  maybeWarnLegacyArtifactsPath,
-  maybeWarnLegacyStatePath,
-  maybeWarnLegacyCwdStoragePath,
-} from './state-migration';
+import { maybeWarnLegacyCwdStoragePath } from './state-migration';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -91,8 +87,8 @@ export interface ResolvedProjectPaths {
  *  1. A persisted `output_root` (from the run row) wins outright — a run that
  *     already recorded where its output lives must never re-derive it, or a
  *     renamed codebase (#1192) would orphan its artifacts mid-run.
- *  2. Otherwise look the codebase up once and delegate to the single shared
- *     identity→paths resolver in `@archon/paths`, which handles repo,
+ *  2. Otherwise look the codebase up (retrying once on failure) and delegate to
+ *     the shared identity→paths resolver in `@archon/paths`, which handles repo,
  *     `_local`, and folder projects.
  *  3. With no codebase (or a lookup failure, or an unresolvable identity) the
  *     run falls back to the `@cwd/<basename>-<digest>` pseudo-project — still UNDER
@@ -132,70 +128,62 @@ export async function resolveProjectPaths(
     );
   }
 
-  let key: archonPaths.ProjectStorageKey | undefined;
-  let identityResolution: 'resolved' | 'unregistered' | 'faulted' | undefined;
-  if (codebaseId) {
-    // Retried once (#2304). A failing lookup drops the run onto the `@cwd/<basename>-<digest>`
-    // pseudo-project. The fallback itself stays — a registry blip must not kill a run.
-    // What changed is what happens to the row afterwards: a faulted run no longer
-    // has its fault-derived location PERSISTED as `output_root` (so the rename hazard
-    // #1192 protects stays scoped to rows with real roots), and the run carries
-    // `metadata.identity_unresolved = true` so "unregistered" and "we could not tell"
-    // are distinguishable after the fact. See the persistence block in `executeWorkflow`
-    // and `ResolvedProjectPaths.identityResolution`.
-    //
-    // The retry is for Postgres: a stale or broken pooled connection is exactly the
-    // fault an immediate retry clears by drawing a fresh one, so zero delay is correct.
-    // SQLite never surfaces SQLITE_BUSY here: its adapter waits out busy locks itself.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const codebase = await deps.store.getCodebase(codebaseId);
-        if (codebase) {
-          key = archonPaths.resolveProjectStorageKey(codebase, cwd);
-          identityResolution = key.kind === 'cwd' ? 'unregistered' : 'resolved';
-          if (key.kind === 'cwd') {
-            // The codebase exists but neither an owner/repo nor a _local identity
-            // could be derived from it — the run still gets external storage, but
-            // keyed on the working directory rather than the project. NOT a fault;
-            // the persistence block writes the cwd fallback as `output_root` here.
-            getLog().warn(
-              { codebaseName: codebase.name, cwd: codebase.default_cwd },
-              'codebase_project_identity_unresolved'
-            );
-          }
-        }
-        break;
-      } catch (error) {
-        if (attempt === 0) {
-          getLog().warn(
-            { err: error as Error, codebaseId, cwd },
-            'workflow.project_paths_lookup_retrying'
-          );
-          continue;
-        }
-        identityResolution = 'faulted';
-        getLog().error(
-          { err: error as Error, codebaseId, cwd },
-          'project_paths_resolve_failed_using_fallback'
-        );
-      }
-    }
-  }
-
-  // When the lookup returned null (no codebase row) or no `codebaseId` was provided,
-  // `key` is undefined and the cwd fallback is used. Both are legitimate — neither is
-  // a fault — so they read as `'unregistered'`. A `'faulted'` outcome overrides this.
-  if (identityResolution === undefined) {
-    identityResolution = 'unregistered';
-  }
-
-  key ??= archonPaths.resolveProjectStorageKey(null, cwd);
+  const identity = codebaseId
+    ? await lookupProjectIdentity(deps.store, cwd, codebaseId)
+    : { key: undefined, identityResolution: 'unregistered' as const };
+  const key = identity.key ?? archonPaths.resolveProjectStorageKey(null, cwd);
   const storage = archonPaths.getProjectStoragePaths(key);
   if (key.kind === 'cwd') await maybeWarnLegacyCwdStoragePath(key.cwd, storage.root);
   return {
     ...composeRunPaths(storage, workflowRunId),
-    identityResolution,
+    identityResolution: identity.identityResolution,
   };
+}
+
+async function lookupProjectIdentity(
+  store: Pick<WorkflowDeps['store'], 'getCodebase'>,
+  cwd: string,
+  codebaseId: string
+) {
+  let key: archonPaths.ProjectStorageKey | undefined;
+  let identityResolution: ResolvedProjectPaths['identityResolution'];
+  // A registry outage must not kill a run, but its fallback must not become the
+  // persisted output_root. The faulted identity tells persistRunOutputRoot to leave
+  // that pointer unset and flag metadata.identity_unresolved instead (#2304).
+  // Retry immediately: PostgreSQL can draw a fresh pooled connection; SQLite
+  // already waits out busy locks in its adapter.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const codebase = await store.getCodebase(codebaseId);
+      if (codebase) {
+        key = archonPaths.resolveProjectStorageKey(codebase, cwd);
+        identityResolution = key.kind === 'cwd' ? 'unregistered' : 'resolved';
+        if (key.kind === 'cwd') {
+          // An existing row without a project identity is unregistered, not faulted;
+          // unlike a failed lookup, its cwd fallback may be persisted.
+          getLog().warn(
+            { codebaseName: codebase.name, cwd: codebase.default_cwd },
+            'codebase_project_identity_unresolved'
+          );
+        }
+      }
+      break;
+    } catch (error) {
+      if (attempt === 0) {
+        getLog().warn(
+          { err: error as Error, codebaseId, cwd },
+          'workflow.project_paths_lookup_retrying'
+        );
+        continue;
+      }
+      identityResolution = 'faulted';
+      getLog().error(
+        { err: error as Error, codebaseId, cwd },
+        'project_paths_resolve_failed_using_fallback'
+      );
+    }
+  }
+  return { key, identityResolution: identityResolution ?? 'unregistered' };
 }
 
 /** Project-level roots → the run-scoped view the executor threads downstream. */
@@ -244,9 +232,8 @@ export interface PreparedRunPaths {
 }
 
 /**
- * Resolve the run's output directories, record its output root, warn about legacy
- * repo-local output, and create the directories its nodes write to. A directory that
- * cannot be created fails the run.
+ * Resolve the run's output directories, record its output root, and create the
+ * directories its nodes write to. A directory that cannot be created fails the run.
  */
 export async function prepareRunPaths(
   deps: WorkflowDeps,
@@ -272,21 +259,6 @@ export async function prepareRunPaths(
   });
 
   await persistRunOutputRoot(deps, workflowRun, outputRoot, identityResolution);
-
-  // Detect (never move) legacy repo-local `.archon/` output directories. State was a
-  // prompt convention; artifacts/logs the engine wrote itself on the unregistered-cwd
-  // fallback (#2311) — the case Archon caused must not be the quieter of the two.
-  // The run's ACTUAL posture, not the workflow's declared policy. `worktree.enabled`
-  // is only one input to the real decision (`pinnedEnabled ?? (!resume && !noWorktree)`,
-  // resolved in the CLI), so a workflow that leaves `worktree` unset and is run with
-  // `--no-worktree` executes IN PLACE while the declared policy still reads as isolated.
-  // That is the one case where this warning is actionable — the legacy files are sitting
-  // in the user's real repository — and it is exactly the case the declared policy gets
-  // backwards. A managed worktree always lives under ARCHON_HOME; an in-place checkout
-  // never does, so the cwd answers the question the policy cannot.
-  const isolated = archonPaths.isInsideArchonHome(cwd);
-  await maybeWarnLegacyStatePath(cwd, stateDir, isolated);
-  await maybeWarnLegacyArtifactsPath(cwd, artifactsRoot, isolated);
 
   // Stable cross-invocation artifact scope (#1846): only for persist_session
   // workflows, keyed like the session store. Undefined otherwise — zero new dirs.

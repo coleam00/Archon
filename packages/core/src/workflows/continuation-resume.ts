@@ -15,6 +15,7 @@ import type {
   IWorkflowEngine,
   WorkflowResumeAdmission,
   WorkflowResumeOptions,
+  WorkflowResumeInput,
 } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
@@ -80,7 +81,10 @@ export async function resumeRunContinuation(
   runId: string,
   resolveContext: (run: WorkflowRun) => Promise<ContinuationContext>,
   cursor?: WorkflowResumeCursor,
-  options: { actorUserId?: string; resolveProject?: ResolveProject } = {}
+  options: { actorUserId?: string; resolveProject?: ResolveProject } & Pick<
+    WorkflowResumeOptions,
+    'deferScratchCleanup'
+  > = {}
 ): Promise<ContinuationAdmission> {
   const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) return { kind: 'unavailable', reason: 'run no longer exists' };
@@ -99,7 +103,7 @@ export async function resumeRunContinuation(
   if (isContainerRun(run)) {
     return { kind: 'unavailable', reason: 'container isolation requires manual workflow resume' };
   }
-  const { resolveProject } = options;
+  const { resolveProject, actorUserId, ...executionOptions } = options;
   if (run.codebase_id && !resolveProject) {
     return {
       kind: 'unavailable',
@@ -108,41 +112,48 @@ export async function resumeRunContinuation(
   }
   const context = await resolveContext(run);
   if (context.kind === 'unavailable') return context;
-  const userId = options.actorUserId ?? run.user_id ?? undefined;
+  const userId = actorUserId ?? run.user_id ?? undefined;
   const project: ResolvedProject = resolveProject
     ? await resolveProject(run, { platform: context.platform, userId })
     : { sourceCwd: getArchonWorkspacesPath(), options: {} };
   const source = await resolveRunWorkflow(host.deps, run, project.sourceCwd, context.platform);
   if (!source.ok)
     return { kind: 'unavailable', reason: source.message, sourceError: source.sourceError };
+  return resumeWithLiveOwner(host.engine, {
+    platform: context.platform,
+    conversationId: context.conversationId,
+    cwd: run.working_path,
+    legacyWorkflow: source.workflow,
+    userMessage: run.user_message ?? '',
+    origin: run.origin ?? undefined,
+    run,
+    cursor,
+    options: { ...project.options, ...executionOptions },
+  });
+}
+
+async function resumeWithLiveOwner(
+  engine: IWorkflowEngine,
+  input: WorkflowResumeInput
+): Promise<ContinuationAdmission> {
   try {
-    const owner = await startRunLiveOwner(run.id);
+    const owner = await startRunLiveOwner(input.run.id);
     let closing: Promise<void> | undefined;
     const close = (): Promise<void> => {
       closing ??= owner.close().catch((error: unknown) => {
-        log.error({ err: error, runId: run.id }, 'workflow_continuation_owner_close_failed');
+        log.error({ err: error, runId: input.run.id }, 'workflow_continuation_owner_close_failed');
       });
       return closing;
     };
     let accepted = false;
     try {
-      const admission = await host.engine.resume({
-        platform: context.platform,
-        conversationId: context.conversationId,
-        cwd: run.working_path,
-        legacyWorkflow: source.workflow,
-        userMessage: run.user_message ?? '',
-        origin: run.origin ?? undefined,
-        run,
-        cursor,
-        options: project.options,
-      });
+      const admission = await engine.resume(input);
       if (!admission.accepted) return { kind: 'not-accepted' };
       accepted = true;
       const settled = admission.settled.finally(close);
       // Hosts may attach their settlement handler after other admissions finish.
       void settled.catch(() => undefined);
-      return { kind: 'accepted', run, settled };
+      return { kind: 'accepted', run: input.run, settled };
     } finally {
       if (!accepted) await close();
     }

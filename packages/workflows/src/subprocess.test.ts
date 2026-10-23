@@ -1,9 +1,11 @@
 // @archon-test-isolated
 import { describe, expect, it, spyOn, test } from 'bun:test';
+import * as childProcess from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from '@archon/git';
+import * as processTools from '@archon/paths/plugin-process';
 import { bashInvocation } from './bash-invocation';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
@@ -17,6 +19,131 @@ import {
 
 const trackTempRoot = trackTempRoots();
 const posixOnly = process.platform === 'win32' ? test.skip : test;
+
+test.each([
+  { exit: 'running', terminationFails: false },
+  { exit: 'code', terminationFails: false },
+  { exit: 'running', terminationFails: true },
+  { exit: 'code', terminationFails: true },
+  { exit: 'signal', terminationFails: false },
+  { exit: 'signal', terminationFails: true },
+])('ending Windows node trees: %j', async ({ exit, terminationFails }) => {
+  const exited = exit !== 'running';
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  const child = Object.defineProperties(new childProcess.ChildProcess(), {
+    pid: { value: 424242 },
+    stdin: { value: null },
+    stdout: { value: null },
+    stderr: { value: null },
+  });
+  const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
+  const terminate = spyOn(processTools, 'terminateTree').mockImplementation(async () => {
+    if (terminationFails) throw new Error('termination failed');
+  });
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const trees = recordNodeProcessTrees();
+  const run = () =>
+    runSubprocess({ kind: 'host' }, 'mock-node', [], {
+      cwd: import.meta.dir,
+      env: {},
+      retention: { standalone: true },
+    });
+  const pending = run();
+  try {
+    if (exited) {
+      Object.defineProperty(child, exit === 'code' ? 'exitCode' : 'signalCode', {
+        value: exit === 'code' ? 0 : 'SIGTERM',
+      });
+      child.emit('exit', child.exitCode, child.signalCode);
+    }
+
+    if (exited) {
+      await expect(trees.end()).rejects.toThrow(
+        'could not end node process trees: 424242 (root exited before output closed; descendants may still be running)'
+      );
+    } else if (terminationFails) {
+      await expect(trees.end()).rejects.toThrow(
+        'could not end node process trees: 424242 (termination failed)'
+      );
+    } else {
+      await trees.end();
+    }
+    if (exited) {
+      expect(terminate).not.toHaveBeenCalled();
+      child.emit('close', 0, null);
+      await pending;
+      await trees.end();
+      expect(terminate).not.toHaveBeenCalled();
+    } else expect(terminate).toHaveBeenCalledWith(424242);
+
+    await expect(run()).rejects.toThrow(
+      'The run owner is terminating; node subprocess not started'
+    );
+    expect(spawn).toHaveBeenCalledTimes(1);
+  } finally {
+    child.emit('close', 0, null);
+    await pending;
+    trees.release();
+    Object.defineProperty(process, 'platform', platform);
+    terminate.mockRestore();
+    spawn.mockRestore();
+  }
+});
+
+test.each([false, true])(
+  'ending a live Windows root after an older root with the same PID closes (termination fails: %j)',
+  async terminationFails => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const children = Array.from({ length: 2 }, () =>
+      Object.defineProperties(new childProcess.ChildProcess(), {
+        pid: { value: 424242 },
+        stdin: { value: null },
+        stdout: { value: null },
+        stderr: { value: null },
+      })
+    );
+    const [older, live] = children;
+    const spawn = spyOn(childProcess, 'spawn').mockReturnValueOnce(older).mockReturnValueOnce(live);
+    const terminate = spyOn(processTools, 'terminateTree').mockImplementation(async () => {
+      if (terminationFails) throw new Error('termination failed');
+    });
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const trees = recordNodeProcessTrees();
+    const pending: ReturnType<typeof runSubprocess>[] = [];
+    const run = () =>
+      runSubprocess({ kind: 'host' }, 'mock-node', [], {
+        cwd: import.meta.dir,
+        env: {},
+        retention: { standalone: true },
+      });
+    try {
+      pending.push(run());
+      Object.defineProperty(older, 'exitCode', { value: 0 });
+      older.emit('exit', 0, null);
+      pending.push(run());
+      older.emit('close', 0, null);
+      await pending[0];
+      expect(spawn).toHaveBeenCalledTimes(2);
+
+      if (terminationFails) {
+        await expect(trees.end()).rejects.toThrow(
+          'could not end node process trees: 424242 (termination failed)'
+        );
+      } else {
+        await trees.end();
+      }
+      expect(terminate).toHaveBeenCalledTimes(1);
+      expect(terminate).toHaveBeenCalledWith(424242);
+    } finally {
+      for (const child of children) child.emit('close', 0, null);
+      await Promise.all(pending);
+      trees.release();
+      Object.defineProperty(process, 'platform', platform);
+      terminate.mockRestore();
+      spawn.mockRestore();
+    }
+  }
+);
 
 function runHostBash(script: string, timeout?: number): ReturnType<typeof runSubprocess> {
   const invocation = bashInvocation(script);
@@ -361,6 +488,20 @@ test.skipIf(process.platform === 'win32')(
     expect(result.stderr).toBe('');
   }
 );
+
+posixOnly('an owned group that overflows its output buffer is ended and rejected', async () => {
+  const started = Date.now();
+  const failure = (await runSubprocess(
+    { kind: 'host' },
+    '/bin/bash',
+    ['-c', 'head -c 2097152 /dev/zero; /bin/sleep 30'],
+    { cwd: import.meta.dir, env: {}, ownProcessGroup: true, retention: { standalone: true } }
+  ).catch((error: unknown) => error)) as RawSubprocessRejection;
+
+  expect(failure.code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
+  expect(failure.stdout).toHaveLength(1024 * 1024);
+  expect(Date.now() - started).toBeLessThan(10_000);
+});
 
 posixOnly('evidence keeps no GitHub App token a command obtained after it started', async () => {
   // Stands in for the App-mode gh shim: the token is minted inside the child, so it is

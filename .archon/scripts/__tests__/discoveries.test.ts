@@ -253,6 +253,20 @@ const fileIt = (key: string) => (refs: string[]): AgentDecision[] => [
 describe('the discoveries scripts', () => {
   test('a live pass files the issue with its marker, records the decided refs on the run, and a second pass finds nothing to do', () => {
     const at = install();
+    const writer = track(mkdtempSync(join(tmpdir(), 'archon-discoveries-writer-')));
+    const git = (cwd: string, ...args: string[]): string => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+      if (result.status !== 0) throw new Error(result.stderr);
+      return result.stdout.trim();
+    };
+    git(writer, 'clone', '-q', git(at.checkout, 'remote', 'get-url', 'upstream'), '.');
+    git(writer, 'config', 'user.email', 'test@example.com');
+    git(writer, 'config', 'user.name', 'Test');
+    git(writer, 'commit', '-q', '--allow-empty', '-m', 'remote advanced');
+    git(writer, 'push', '-q', 'origin', 'dev');
+    const fresh = git(writer, 'rev-parse', 'HEAD');
+    expect(git(at.checkout, 'rev-parse', 'HEAD')).not.toBe(fresh);
+    expect(git(at.checkout, 'rev-parse', 'refs/remotes/upstream/dev')).not.toBe(fresh);
     runArtifacts(at.outputRoot, RUN, { verdict: [record('new'), record('covered'), record('fixed')] });
     const { facts, outcome } = decide(at, { runId: 'pass-1', runs: [RUN] }, refs => [
       { outcome: 'file', key: 'new-defect', refs: [refs[0] as string], title: 'A new defect', body: 'The brief.', reason: 'real' },
@@ -260,10 +274,14 @@ describe('the discoveries scripts', () => {
       { outcome: 'drop', key: 'fixed-defect', refs: [refs[2] as string], title: 'Fixed', reason: 'fixed at the base' },
     ]);
     expect(queued(facts)).toEqual([`${RUN}:review#0`, `${RUN}:review#1`, `${RUN}:review#2`]);
+    expect(ok(facts).base).toEqual({ branch: 'dev', sha: fresh });
+    const queue = JSON.parse(readFileSync(join(facts.artifacts, 'drain/queue.json'), 'utf8'));
+    expect(queue.base).toEqual({ branch: 'dev', sha: fresh });
     const applied = ok(outcome);
     expect(outcome.createdIssues).toEqual([
       expect.objectContaining({ title: 'A new defect', body: expect.stringMatching(/^<!-- archon-discovery new-defect -->\nThe brief\./) }),
     ]);
+    expect(outcome.createdIssues[0]?.body).toContain(`verified at ${fresh} by the archon-discoveries workflow`);
     expect(outcome.comments).toEqual([{ issue: 7, body: '<!-- archon-discovery covered-defect -->\nA new reproduction.' }]);
     expect(applied.dropped).toEqual([{ key: 'fixed-defect', reason: 'fixed at the base' }]);
     expect(state(at, `discoveries/runs/${RUN}`)).toEqual({

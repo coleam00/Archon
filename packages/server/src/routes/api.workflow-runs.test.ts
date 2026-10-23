@@ -23,6 +23,7 @@ import {
   terminalRecordSchema,
 } from '@archon/workflows/schemas/terminal-record';
 import { buildTerminalRecord } from '@archon/workflows/terminal-record';
+import { fanOutOutcome as fanOutOutcomeOf } from '@archon/workflows/schemas/fan-out-outcome';
 import {
   nodeExecutionMetadataSchema,
   type NodeCostScope,
@@ -459,6 +460,32 @@ describe('GET /api/workflows/runs/:runId', () => {
         state: 'failed',
         error: 'prepare failed',
       });
+    });
+
+    test("serves a fan-out node's slot record on the node and in the terminal record", async () => {
+      const fanOutOutcome = fanOutOutcomeOf([
+        { index: 0, outcome: 'completed', child_run_id: 'child-a' },
+        { index: 1, outcome: 'failed', child_run_id: 'child-b', error: 'exit 1' },
+      ]);
+      const events = [
+        event('node_started', 'flaky'),
+        event('node_completed', 'flaky', {
+          node_output: '[]',
+          fan_out: true,
+          fan_out_outcome: fanOutOutcome,
+        }),
+      ];
+      const record = await buildTerminalRecord({ run: graphRun, events });
+      const run = await getNodes(graphRun, [
+        ...events,
+        event('workflow_failed', null, { terminal_record: record }),
+      ]);
+      expect(run.nodes).toContainEqual({
+        node_id: 'flaky',
+        state: 'completed',
+        fan_out_outcome: fanOutOutcome,
+      });
+      expect(run.terminal_record?.nodes).toEqual(run.nodes);
     });
 
     test('a run recorded before terminal records still lists its nodes', async () => {

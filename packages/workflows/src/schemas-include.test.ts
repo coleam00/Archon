@@ -127,7 +127,8 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
     );
     expect(error.issues).toHaveLength(1);
     const message = error.issues.map(i => i.message).join(' | ');
-    expect(message).toContain(`'${field}' is not supported on an include node`);
+    expect(error.issues[0]?.path).toEqual([field]);
+    expect(message).toContain('is not supported on an include node');
     expect(message).toContain("'workflow:' node");
   });
 

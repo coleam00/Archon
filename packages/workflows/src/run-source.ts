@@ -1,9 +1,11 @@
+import type { RunExecutionMode } from './container-context';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import { randomUUID } from 'crypto';
 import { mkdir, readdir, rename, rm, stat } from 'fs/promises';
 import { dirname, join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
+import { releaseUnreadableRunSource } from './source-release';
 import { sourceReleaseNotice } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import { safeSendMessage, sendCriticalMessage } from './platform-messages';
@@ -14,6 +16,7 @@ import {
   readWorkflowSourceState,
   type ResolvedWorkflow,
   type WorkflowLoadError,
+  type WorkflowExecutionResult,
   type WorkflowRun,
   type WorkflowSourceMetadata,
   type WorkflowWithSource,
@@ -424,7 +427,8 @@ export async function establishAdoptedRunSource(
     | 'preparedSource'
     | 'capturedSourceOwner'
   >,
-  isContinuation: boolean
+  isContinuation: boolean,
+  execution: RunExecutionMode
 ): Promise<
   RunPhase<{
     adoptedRunDir: () => string | undefined;
@@ -449,7 +453,8 @@ export async function establishAdoptedRunSource(
     conversationId,
     workflowRun,
     workflowSourceDir,
-    opts
+    opts,
+    execution
   );
   if (sourced.stopped) return sourced;
   return {
@@ -484,207 +489,274 @@ export async function establishRunSource(
   opts: Pick<
     ExecuteWorkflowOptions,
     'priorCompletedNodes' | 'preparedSource' | 'capturedSourceOwner'
-  >
+  >,
+  execution: RunExecutionMode
 ): Promise<RunPhase<WorkflowSourceRoots | undefined>> {
+  const run: SourceRun = { deps, platform, conversationId, workflowRun, execution };
   const recordedSourceState = readWorkflowSourceState(workflowRun.metadata);
-  const isResume = opts.priorCompletedNodes !== undefined;
-  const { preparedSource } = opts;
-  let workflowSourceRoots: WorkflowSourceRoots | undefined;
-
-  const failRunOnSource = async (message: string): Promise<RunPhase<never>> => {
-    getLog().error({ workflowRunId: workflowRun.id, message }, 'workflow.source_unavailable');
-    await sendCriticalMessage(platform, conversationId, `❌ **Workflow failed**: ${message}`);
-    await requireTerminalStatusWrite(
-      deps.store.failWorkflowRun(workflowRun.id, message, { exitReason: 'source_unavailable' }),
-      {
-        workflowRunId: workflowRun.id,
-        site: 'workflow.source_fail_db_record_failed',
-      }
-    );
-    return {
-      stopped: true,
-      result: { success: false, workflowRunId: workflowRun.id, error: message },
-    };
-  };
-
   if (recordedSourceState.kind === 'unreadable') {
     // The run recorded SOMETHING this build cannot parse. Not the legacy case: treating
     // it as one would resume against whatever is on disk now.
     return await failRunOnSource(
+      run,
       "This run's workflow source record cannot be read by this build " +
         `(${recordedSourceState.detail}). It may have been written by a newer Archon. ` +
         'Start a fresh run to execute the current workflow.'
     );
-  } else if (recordedSourceState.kind === 'recorded') {
-    const recordedSource = recordedSourceState.record;
-    // Verifies the digest against the one the RUN recorded — not merely that the
-    // directory exists, and not merely that the capture agrees with itself.
-    let loaded: WorkflowSourceCapture;
-    try {
-      const capture = await resolveRunSourceCapture(workflowRun.metadata);
-      if (!capture) throw new Error('workflow source record disappeared during resolution');
-      loaded = capture;
-    } catch (error) {
-      if (isSourceReadFailure(error)) {
-        const path =
-          error instanceof WorkflowSourceUnavailableError ? error.path : recordedSource.root;
-        getLog().warn(
-          { workflowRunId: workflowRun.id, path, err: error },
-          'workflow.source_restore_unreadable'
-        );
-        const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
-          claimId: executionClaim(workflowRun.metadata),
-          nodeId: 'workflow-source',
-          path,
-          error: error instanceof Error ? error.message : String(error),
-          retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
-        });
-        if (released) {
-          await safeSendMessage(
-            platform,
-            conversationId,
-            sourceReleaseNotice(platform, workflowRun.id, {
-              path,
-              container: isContainerRun(workflowRun),
-            })
-          );
-          return {
-            stopped: true,
-            result: { success: true, paused: true, workflowRunId: workflowRun.id },
-          };
-        }
-        const current = await deps.store.getWorkflowRun(workflowRun.id);
-        if (current?.status === 'paused') {
-          return {
-            stopped: true,
-            result: { success: true, paused: true, workflowRunId: workflowRun.id },
-          };
-        }
-        if (current?.status === 'completed') {
-          return { stopped: true, result: { success: true, workflowRunId: workflowRun.id } };
-        }
-        return {
-          stopped: true,
-          result: {
-            success: false,
-            workflowRunId: workflowRun.id,
-            error: 'Workflow status changed before source release',
-          },
-        };
-      }
-      return await failRunOnSource(
-        `This run's captured workflow source at ${recordedSource.root} is missing or altered ` +
-          `(${(error as Error).message}). The run cannot be resumed against different source; ` +
-          'start a fresh run to execute the current workflow.'
-      );
-    }
-    workflowSourceRoots = capturedSourceRoots(loaded.anchor);
-    getLog().debug(
-      { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
-      'workflow.source_restored'
+  }
+  if (recordedSourceState.kind === 'recorded') {
+    return await restoreRecordedSource(run, recordedSourceState.record);
+  }
+  if (opts.priorCompletedNodes !== undefined) {
+    await resumeLegacyRunLive(run);
+    return { stopped: false, value: undefined };
+  }
+  if (opts.preparedSource) {
+    return await adoptPreparedSource(
+      run,
+      opts.preparedSource,
+      workflowSourceDir,
+      opts.capturedSourceOwner
     );
-    if (recordedSource.source_config === undefined) {
-      // A run from before the row carried `source_config`. The manifest sits outside
-      // the digest, so nothing can prove these settings are the ones the run started
-      // with; what pinning them now buys is closing the window. From here on they are
-      // held beside the digest, and a later edit to the manifest is refused like any
-      // other drift instead of being re-read on every resume for the life of the run.
-      const pinned = { ...recordedSource, source_config: loaded.anchor.config };
-      workflowRun.metadata = { ...workflowRun.metadata, [WORKFLOW_SOURCE_METADATA_KEY]: pinned };
-      await deps.store.updateWorkflowRun(workflowRun.id, {
-        metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: pinned },
-      });
-      getLog().warn(
-        { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
-        'workflow.source_config_pinned_from_manifest'
-      );
+  }
+  // A fresh run whose caller did not prepare a capture. In-process callers that hand
+  // the executor a definition they built themselves (tests, programmatic embedders)
+  // land here; they have no on-disk source to freeze, so there is nothing to record
+  // and nothing that can drift. Resolution stays live under `cwd`, unchanged.
+  getLog().debug({ workflowRunId: workflowRun.id }, 'workflow.source_unprepared_live');
+  return { stopped: false, value: undefined };
+}
+
+/** The run whose source is being established, and where to report on it. */
+interface SourceRun {
+  deps: WorkflowDeps;
+  platform: IWorkflowPlatform;
+  conversationId: string;
+  workflowRun: WorkflowRun;
+  execution: RunExecutionMode;
+}
+
+async function failRunOnSource(run: SourceRun, message: string): Promise<RunPhase<never>> {
+  const { deps, platform, conversationId, workflowRun } = run;
+  getLog().error({ workflowRunId: workflowRun.id, message }, 'workflow.source_unavailable');
+  await sendCriticalMessage(platform, conversationId, `❌ **Workflow failed**: ${message}`);
+  await requireTerminalStatusWrite(
+    deps.store.failWorkflowRun(workflowRun.id, message, { exitReason: 'source_unavailable' }),
+    {
+      workflowRunId: workflowRun.id,
+      site: 'workflow.source_fail_db_record_failed',
     }
-  } else if (isResume) {
-    // Created before source capture existed. Its original bytes were never recorded and
-    // cannot be reconstructed, so it resumes the way it always did — against live source.
-    // This is the ONLY warning-and-continue path, and it retires with those runs.
-    getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.source_legacy_live');
+  );
+  return {
+    stopped: true,
+    result: { success: false, workflowRunId: workflowRun.id, error: message },
+  };
+}
+
+async function restoreRecordedSource(
+  run: SourceRun,
+  recordedSource: WorkflowSourceMetadata
+): Promise<RunPhase<WorkflowSourceRoots>> {
+  const { workflowRun } = run;
+  // Verifies the digest against the one the RUN recorded — not merely that the
+  // directory exists, and not merely that the capture agrees with itself.
+  let loaded: WorkflowSourceCapture;
+  try {
+    const capture = await resolveRunSourceCapture(workflowRun.metadata);
+    if (!capture) throw new Error('workflow source record disappeared during resolution');
+    loaded = capture;
+  } catch (error) {
+    if (isSourceReadFailure(error))
+      return await releaseUnreadableSource(run, recordedSource, error);
+    return await failRunOnSource(
+      run,
+      `This run's captured workflow source at ${recordedSource.root} is missing or altered ` +
+        `(${(error as Error).message}). The run cannot be resumed against different source; ` +
+        'start a fresh run to execute the current workflow.'
+    );
+  }
+  getLog().debug(
+    { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
+    'workflow.source_restored'
+  );
+  if (recordedSource.source_config === undefined) {
+    await pinSourceConfig(run, recordedSource, loaded);
+  }
+  return { stopped: false, value: capturedSourceRoots(loaded.anchor) };
+}
+
+async function releaseUnreadableSource(
+  run: SourceRun,
+  recordedSource: WorkflowSourceMetadata,
+  error: unknown
+): Promise<RunPhase<never>> {
+  const { deps, platform, conversationId, workflowRun } = run;
+  const path = error instanceof WorkflowSourceUnavailableError ? error.path : recordedSource.root;
+  getLog().warn(
+    { workflowRunId: workflowRun.id, path, err: error },
+    'workflow.source_restore_unreadable'
+  );
+  const { released } = await releaseUnreadableRunSource(
+    deps,
+    platform,
+    conversationId,
+    workflowRun.id,
+    {
+      claimId: executionClaim(workflowRun.metadata),
+      nodeId: 'workflow-source',
+      path,
+      error: error instanceof Error ? error.message : String(error),
+      retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+    },
+    run.execution
+  );
+  if (released) {
     await safeSendMessage(
       platform,
       conversationId,
-      '⚠️ This run started before Archon captured workflow source, so there is nothing ' +
-        'recorded to resume from. Continuing against the current source on disk, which may ' +
-        'differ from what the run originally executed.'
+      sourceReleaseNotice(platform, workflowRun.id, {
+        path,
+        container: isContainerRun(workflowRun),
+      })
     );
-  } else if (preparedSource) {
-    // The normal fresh path: the caller captured BEFORE selecting a workflow and
-    // discovered from that capture, so the YAML being executed and the commands and
-    // scripts beside it are one consistent set of bytes.
-    //
-    // Move the staged capture to this run's own source directory, so it stops
-    // accumulating in a staging directory nothing reclaims. That directory sits BESIDE
-    // the run's artifacts, not inside them: `$ARTIFACTS_DIR` is handed to every node and
-    // listed as the run's output, and the frozen pack is neither an output nor something
-    // a node should reach by that path. Same filesystem, so this is a rename.
-    const finalCaptureRoot = workflowSourceDir;
-    try {
-      if (preparedSource.anchor.root !== finalCaptureRoot) {
-        // Unlike `artifactsDir`, nothing earlier in the run creates this parent.
-        await mkdir(dirname(finalCaptureRoot), { recursive: true });
-        await rm(finalCaptureRoot, { recursive: true, force: true });
-        await rename(preparedSource.anchor.root, finalCaptureRoot);
-      }
-      // The staged capture is now at the run's own source path — the run owns the
-      // bytes from this point on. Adopting here (not earlier, at the call site) is
-      // what closes the race in #2690: a rename failure above returns without reaching
-      // this line, so the wrap's `finally` reclaims the staged directory instead of
-      // leaving it to the hourly age-based sweep.
-      opts.capturedSourceOwner?.adopt();
-    } catch (error) {
-      return await failRunOnSource(
-        `Could not move this run's captured workflow source into place: ${(error as Error).message}`
-      );
-    }
-    const sourceAnchor = { ...preparedSource.anchor, root: finalCaptureRoot };
-    workflowSourceRoots = capturedSourceRoots(sourceAnchor);
-    const sourceRecord = preparedWorkflowSourceRecord({
-      ...preparedSource,
-      anchor: sourceAnchor,
-    });
-    // Mirror the record onto the IN-MEMORY run as well as the row. `workflowRun` is what
-    // gets handed to child, fan-out, and `workflow:` dispatch, and those read the record
-    // to find the parent's authoring origin — a stale in-memory copy sends them to the
-    // target `cwd`, where the authoring workflows may not exist at all. Mutated rather
-    // than reassigned so the row object stays one identity for the rest of the run; the
-    // value written here is the same one the row is about to receive.
-    workflowRun.metadata = {
-      ...workflowRun.metadata,
-      [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord,
+    return {
+      stopped: true,
+      result: { success: true, paused: true, workflowRunId: workflowRun.id },
     };
-    try {
-      await deps.store.updateWorkflowRun(workflowRun.id, {
-        metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord },
-      });
-    } catch (error) {
-      // Without the pointer the run is unresumable in the only way that matters: a later
-      // resume would find no record and fall through the legacy branch, executing live
-      // source. Fail now, while the failure is attributable.
-      return await failRunOnSource(
-        `Could not record this run's workflow source: ${(error as Error).message}`
-      );
-    }
-    getLog().info(
-      {
-        workflowRunId: workflowRun.id,
-        origin: preparedSource.origin,
-        captureRoot: finalCaptureRoot,
-        digest: preparedSource.manifest.digest.slice(0, 12),
-        fileCount: preparedSource.manifest.file_count,
-        byteCount: preparedSource.manifest.byte_count,
-      },
-      'workflow.source_captured'
-    );
-  } else {
-    // A fresh run whose caller did not prepare a capture. In-process callers that hand
-    // the executor a definition they built themselves (tests, programmatic embedders)
-    // land here; they have no on-disk source to freeze, so there is nothing to record
-    // and nothing that can drift. Resolution stays live under `cwd`, unchanged.
-    getLog().debug({ workflowRunId: workflowRun.id }, 'workflow.source_unprepared_live');
   }
-  return { stopped: false, value: workflowSourceRoots };
+  return { stopped: true, result: await unreleasedSourceResult(deps, workflowRun.id) };
+}
+
+/** The run's outcome when another owner settled it before its source could be released. */
+async function unreleasedSourceResult(
+  deps: WorkflowDeps,
+  workflowRunId: string
+): Promise<WorkflowExecutionResult> {
+  const current = await deps.store.getWorkflowRun(workflowRunId);
+  if (current?.status === 'paused') return { success: true, paused: true, workflowRunId };
+  if (current?.status === 'completed') return { success: true, workflowRunId };
+  return {
+    success: false,
+    workflowRunId,
+    error: 'Workflow status changed before source release',
+  };
+}
+
+/**
+ * A run from before the row carried `source_config`. The manifest sits outside the digest,
+ * so nothing can prove these settings are the ones the run started with; what pinning them
+ * now buys is closing the window. From here on they are held beside the digest, and a later
+ * edit to the manifest is refused like any other drift instead of being re-read on every
+ * resume for the life of the run.
+ */
+async function pinSourceConfig(
+  run: SourceRun,
+  recordedSource: WorkflowSourceMetadata,
+  loaded: WorkflowSourceCapture
+): Promise<void> {
+  const { deps, workflowRun } = run;
+  const pinned = { ...recordedSource, source_config: loaded.anchor.config };
+  workflowRun.metadata = { ...workflowRun.metadata, [WORKFLOW_SOURCE_METADATA_KEY]: pinned };
+  await deps.store.updateWorkflowRun(workflowRun.id, {
+    metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: pinned },
+  });
+  getLog().warn(
+    { workflowRunId: workflowRun.id, captureRoot: recordedSource.root },
+    'workflow.source_config_pinned_from_manifest'
+  );
+}
+
+/**
+ * Created before source capture existed. Its original bytes were never recorded and
+ * cannot be reconstructed, so it resumes the way it always did — against live source.
+ * This is the ONLY warning-and-continue path, and it retires with those runs.
+ */
+async function resumeLegacyRunLive(run: SourceRun): Promise<void> {
+  getLog().warn({ workflowRunId: run.workflowRun.id }, 'workflow.source_legacy_live');
+  await safeSendMessage(
+    run.platform,
+    run.conversationId,
+    '⚠️ This run started before Archon captured workflow source, so there is nothing ' +
+      'recorded to resume from. Continuing against the current source on disk, which may ' +
+      'differ from what the run originally executed.'
+  );
+}
+
+/**
+ * The normal fresh path: the caller captured BEFORE selecting a workflow and discovered
+ * from that capture, so the YAML being executed and the commands and scripts beside it
+ * are one consistent set of bytes.
+ *
+ * Move the staged capture to this run's own source directory, so it stops accumulating in
+ * a staging directory nothing reclaims. That directory sits BESIDE the run's artifacts,
+ * not inside them: `$ARTIFACTS_DIR` is handed to every node and listed as the run's
+ * output, and the frozen pack is neither an output nor something a node should reach by
+ * that path. Same filesystem, so this is a rename.
+ */
+async function adoptPreparedSource(
+  run: SourceRun,
+  preparedSource: PreparedWorkflowSource,
+  finalCaptureRoot: string,
+  capturedSourceOwner: CapturedSourceOwner | undefined
+): Promise<RunPhase<WorkflowSourceRoots>> {
+  const { deps, workflowRun } = run;
+  try {
+    if (preparedSource.anchor.root !== finalCaptureRoot) {
+      // Unlike `artifactsDir`, nothing earlier in the run creates this parent.
+      await mkdir(dirname(finalCaptureRoot), { recursive: true });
+      await rm(finalCaptureRoot, { recursive: true, force: true });
+      await rename(preparedSource.anchor.root, finalCaptureRoot);
+    }
+    // The staged capture is now at the run's own source path — the run owns the
+    // bytes from this point on. Adopting here (not earlier, at the call site) is
+    // what closes the race in #2690: a rename failure above returns without reaching
+    // this line, so the wrap's `finally` reclaims the staged directory instead of
+    // leaving it to the hourly age-based sweep.
+    capturedSourceOwner?.adopt();
+  } catch (error) {
+    return await failRunOnSource(
+      run,
+      `Could not move this run's captured workflow source into place: ${(error as Error).message}`
+    );
+  }
+  const sourceAnchor = { ...preparedSource.anchor, root: finalCaptureRoot };
+  const sourceRecord = preparedWorkflowSourceRecord({
+    ...preparedSource,
+    anchor: sourceAnchor,
+  });
+  // Mirror the record onto the IN-MEMORY run as well as the row. `workflowRun` is what
+  // gets handed to child, fan-out, and `workflow:` dispatch, and those read the record
+  // to find the parent's authoring origin — a stale in-memory copy sends them to the
+  // target `cwd`, where the authoring workflows may not exist at all. Mutated rather
+  // than reassigned so the row object stays one identity for the rest of the run; the
+  // value written here is the same one the row is about to receive.
+  workflowRun.metadata = {
+    ...workflowRun.metadata,
+    [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord,
+  };
+  try {
+    await deps.store.updateWorkflowRun(workflowRun.id, {
+      metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord },
+    });
+  } catch (error) {
+    // Without the pointer the run is unresumable in the only way that matters: a later
+    // resume would find no record and fall through the legacy branch, executing live
+    // source. Fail now, while the failure is attributable.
+    return await failRunOnSource(
+      run,
+      `Could not record this run's workflow source: ${(error as Error).message}`
+    );
+  }
+  getLog().info(
+    {
+      workflowRunId: workflowRun.id,
+      origin: preparedSource.origin,
+      captureRoot: finalCaptureRoot,
+      digest: preparedSource.manifest.digest.slice(0, 12),
+      fileCount: preparedSource.manifest.file_count,
+      byteCount: preparedSource.manifest.byte_count,
+    },
+    'workflow.source_captured'
+  );
+  return { stopped: false, value: capturedSourceRoots(sourceAnchor) };
 }

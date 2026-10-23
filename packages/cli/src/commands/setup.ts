@@ -64,7 +64,12 @@ import {
   collectSlackConfig,
   collectTelegramConfig,
 } from './setup-platforms';
-import { spawnTerminalWithSetup } from './setup-spawn';
+import { setupLaunchCommand, spawnTerminalWithSetup } from './setup-spawn';
+import {
+  createPlatformSelection,
+  platformNames,
+  SETUP_PLATFORMS,
+} from './setup-platform-selection';
 
 // =============================================================================
 // File Generation and Writing
@@ -146,7 +151,7 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
 
 async function runSetup(options: SetupOptions): Promise<void> {
   if (options.spawn) {
-    openSetupTerminal(options);
+    await openSetupTerminal(options);
     return;
   }
 
@@ -191,23 +196,30 @@ async function runSetup(options: SetupOptions): Promise<void> {
   await finishSetup();
 }
 
-function openSetupTerminal(options: SetupOptions): void {
+async function openSetupTerminal(options: SetupOptions): Promise<void> {
   console.log('Opening setup wizard in a new terminal window...');
-  const result = spawnTerminalWithSetup(options.repoPath, options.providers);
+  const result = await spawnTerminalWithSetup(options);
 
   if (result.success) {
     console.log('Setup wizard opened. Complete the setup in the new terminal window.');
   } else {
-    console.log('');
-    console.log('Next step: run the setup wizard in a separate terminal.');
+    const changeDirectory =
+      process.platform === 'win32'
+        ? `cd /d "${options.repoPath}"`
+        : `cd '${options.repoPath.replaceAll("'", "'\"'\"'")}'`;
     console.log('');
     console.log(
-      `    cd ${options.repoPath} && archon setup${options.providers === undefined ? '' : ` --providers=${options.providers.join(',')}`}`
+      process.platform === 'win32'
+        ? 'Next step: run the setup wizard in Command Prompt (cmd.exe).'
+        : 'Next step: run the setup wizard in a separate terminal.'
     );
+    console.log('');
+    console.log(`    ${changeDirectory} && ${setupLaunchCommand(options)}`);
     console.log('');
     console.log(
       'Come back here and let me know when you finish so I can verify your configuration.'
     );
+    exitSetup(1);
   }
 }
 
@@ -258,14 +270,6 @@ async function selectSetupMode(existing: ExistingConfig, force: boolean): Promis
   return modeChoice;
 }
 
-function platformNames(platforms: SetupConfig['platforms']): string[] {
-  const names: string[] = [];
-  if (platforms.github) names.push('GitHub');
-  if (platforms.telegram) names.push('Telegram');
-  if (platforms.slack) names.push('Slack');
-  return names;
-}
-
 async function collectAdditionalConfig(
   ai: SetupConfig['ai'],
   existing: ExistingConfig,
@@ -274,36 +278,29 @@ async function collectAdditionalConfig(
 ): Promise<SetupConfig> {
   s.start('Loading existing configuration...');
 
-  const config: SetupConfig = {
-    ai,
-    platforms: {
-      github: existing?.platforms.github ?? false,
-      telegram: existing?.platforms.telegram ?? false,
-      slack: existing?.platforms.slack ?? false,
-    },
-    botDisplayName: 'Archon',
-  };
-
   s.stop('Existing configuration loaded');
 
   log.info('Select additional platforms to configure');
   const newPlatforms = await collectPlatforms();
 
-  config.platforms = {
-    github: config.platforms.github || newPlatforms.github,
-    telegram: config.platforms.telegram || newPlatforms.telegram,
-    slack: config.platforms.slack || newPlatforms.slack,
+  const config: SetupConfig = {
+    ai,
+    platforms: createPlatformSelection(
+      platform => (existing?.platforms[platform] ?? false) || newPlatforms[platform]
+    ),
+    botDisplayName: 'Archon',
   };
 
   if (force) {
     log.info('--force replaces the env file. Re-enter credentials for all configured platforms.');
   }
 
-  await collectPlatformCredentials(config, {
-    github: config.platforms.github && (force || !existing?.platforms.github),
-    telegram: config.platforms.telegram && (force || !existing?.platforms.telegram),
-    slack: config.platforms.slack && (force || !existing?.platforms.slack),
-  });
+  await collectPlatformCredentials(
+    config,
+    createPlatformSelection(
+      platform => config.platforms[platform] && (force || !existing?.platforms[platform])
+    )
+  );
   return config;
 }
 
@@ -311,9 +308,21 @@ async function collectPlatformCredentials(
   config: SetupConfig,
   platforms: SetupConfig['platforms']
 ): Promise<void> {
-  if (platforms.github) config.github = await collectGitHubConfig();
-  if (platforms.telegram) config.telegram = await collectTelegramConfig();
-  if (platforms.slack) config.slack = await collectSlackConfig();
+  const collectors = {
+    github: async () => {
+      config.github = await collectGitHubConfig();
+    },
+    telegram: async () => {
+      config.telegram = await collectTelegramConfig();
+    },
+    slack: async () => {
+      config.slack = await collectSlackConfig();
+    },
+  } satisfies Record<keyof SetupConfig['platforms'], () => Promise<void>>;
+
+  for (const { value } of SETUP_PLATFORMS) {
+    if (platforms[value]) await collectors[value]();
+  }
 }
 
 async function writeConfiguration(

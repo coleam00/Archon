@@ -178,6 +178,30 @@ export async function discoverPlugins(
 ): Promise<PluginDiscovery> {
   const config = forgePluginConfigSchema.parse(options.config ?? {});
   const env = options.env ?? process.env;
+  const candidates = await discoverCandidates(config, env, options);
+  const { plugins, unavailable } = await discoverCandidateMetadata(
+    candidates,
+    config,
+    env,
+    options
+  );
+  const { byHost, hostConfig } = bindPluginHosts(plugins, config);
+  const pluginTokenEnv = new Map(
+    config.plugins.flatMap(plugin =>
+      plugin.token_env ? ([[plugin.plugin, plugin.token_env]] as const) : []
+    )
+  );
+  return { plugins, unavailable, byHost, hostConfig, pluginTokenEnv };
+}
+
+type DiscoveryOptions = NonNullable<Parameters<typeof discoverPlugins>[0]>;
+type ParsedPluginConfig = ReturnType<typeof forgePluginConfigSchema.parse>;
+
+async function discoverCandidates(
+  config: ParsedPluginConfig,
+  env: NodeJS.ProcessEnv,
+  options: DiscoveryOptions
+): Promise<PluginCandidate[]> {
   const dirs = [
     ...(options.pluginsDir !== undefined ? [options.pluginsDir] : []),
     ...config.pluginDirs,
@@ -191,7 +215,7 @@ export async function discoverPlugins(
       )
     )
   ).flat();
-  const candidates = [...configuredCandidates(config), ...scanned].filter(
+  return [...configuredCandidates(config), ...scanned].filter(
     (candidate, index, all) =>
       all.findIndex(
         other =>
@@ -199,6 +223,14 @@ export async function discoverPlugins(
           JSON.stringify(other.args) === JSON.stringify(candidate.args)
       ) === index
   );
+}
+
+async function discoverCandidateMetadata(
+  candidates: readonly PluginCandidate[],
+  config: ParsedPluginConfig,
+  env: NodeJS.ProcessEnv,
+  options: DiscoveryOptions
+): Promise<Pick<PluginDiscovery, 'plugins' | 'unavailable'>> {
   const plugins: DiscoveredPlugin[] = [];
   const names = new Set<string>();
   const unavailable: PluginDiscoveryError[] = [];
@@ -232,13 +264,19 @@ export async function discoverPlugins(
     plugins.push({ ...candidate, metadata });
   }
 
-  for (const name of unavailableNames) {
-    if (names.has(name))
-      throw new PluginDiscoveryError(
-        'duplicate_host',
-        `forge plugin ${name} has both available and failed candidates`
-      );
-  }
+  const failedDuplicate = [...unavailableNames].find(name => names.has(name));
+  if (failedDuplicate !== undefined)
+    throw new PluginDiscoveryError(
+      'duplicate_host',
+      `forge plugin ${failedDuplicate} has both available and failed candidates`
+    );
+  return { plugins, unavailable };
+}
+
+function bindPluginHosts(
+  plugins: readonly DiscoveredPlugin[],
+  config: ParsedPluginConfig
+): Pick<PluginDiscovery, 'byHost' | 'hostConfig'> {
   const byName = new Map(plugins.map(plugin => [plugin.metadata.name, plugin]));
   const byHost = new Map<string, DiscoveredPlugin>();
   const claim = (host: string, plugin: DiscoveredPlugin): void => {
@@ -254,11 +292,6 @@ export async function discoverPlugins(
   for (const plugin of plugins) for (const host of plugin.metadata.hosts) claim(host, plugin);
 
   const hostConfig = new Map<string, Exclude<ForgeHostPlugin, string>>();
-  const pluginTokenEnv = new Map(
-    config.plugins.flatMap(plugin =>
-      plugin.token_env ? ([[plugin.plugin, plugin.token_env]] as const) : []
-    )
-  );
   for (const [host, raw] of Object.entries(config.hosts)) {
     const value = typeof raw === 'string' ? { plugin: raw, args: [] } : raw;
     const plugin = byName.get(value.plugin);
@@ -270,5 +303,5 @@ export async function discoverPlugins(
     claim(host, plugin);
     hostConfig.set(normalizeHost(host), value);
   }
-  return { plugins, unavailable, byHost, hostConfig, pluginTokenEnv };
+  return { byHost, hostConfig };
 }

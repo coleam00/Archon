@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import {
+  attentionItemRunContextFields,
   attentionQueueItemForRun,
   attentionQueueItemSchema,
   isInAttentionScope,
@@ -53,7 +54,8 @@ import {
   type WorkflowEventCursor,
   type WorkflowEventPage,
 } from './store';
-import { getTerminalRecord } from './terminal-record';
+import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
+import { firstFailedNodeEvent, getTerminalRecord, recordedFailureKind } from './terminal-record';
 
 function getLog(): ReturnType<typeof createLogger> {
   return createLogger('workflow.attention_watch');
@@ -66,13 +68,21 @@ const RUNNING_PAGE_LIMIT = 100;
 const cursorSchema = z.custom<WorkflowEventCursor>(
   value => typeof value === 'string' && value.length > 0
 );
-const lineBase = { cursor: cursorSchema, project: projectRefSchema.nullable(), runId: z.string() };
+/** What a run is part of, from its row; both null when the stream could not read the row. */
+const runContextFields = { workflow: z.string().nullable(), parentRunId: z.string().nullable() };
+const lineBase = {
+  cursor: cursorSchema,
+  project: projectRefSchema.nullable(),
+  runId: z.string(),
+  ...runContextFields,
+};
 
 /**
  * One line of the stream. `cursor` is the feed position the line was produced at;
  * `--after` it replays later readable feed events, excluding every line at that cursor.
  * `attention` carries the queue item exactly as the snapshot and
- * `workflow attention <run>` build it.
+ * `workflow attention <run>` build it. Every run line carries the run's `workflow` and
+ * `parentRunId` (null for a top-level run), so a consumer can filter on them.
  */
 export const attentionStreamLineSchema = z.discriminatedUnion('type', [
   z.object({
@@ -81,6 +91,7 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     /** True for the open items sent before `ready`. */
     snapshot: z.boolean(),
     project: projectRefSchema.nullable(),
+    ...attentionItemRunContextFields,
     item: attentionQueueItemSchema,
   }),
   z.discriminatedUnion('reason', [
@@ -113,6 +124,12 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     ...lineBase,
     status: terminalWorkflowRunStatusSchema,
     outcome: workflowRunOutcomeSchema.nullable(),
+    /**
+     * Where a failed run failed: its terminal record's first failed node and the failure
+     * kind that node's `node_failed` event recorded (null when it recorded none). Null
+     * for any other status and when the record names no failed node or there is no record.
+     */
+    cause: z.object({ node: z.string(), errorClass: nodeFailureKindSchema.nullable() }).nullable(),
   }),
   z.object({ type: z.literal('resumed'), ...lineBase, status: z.literal('running') }),
   z.object({ type: z.literal('owner_lost'), ...lineBase, observedStatus: workflowRunStatusSchema }),
@@ -156,6 +173,7 @@ export type AttentionWatchStore = Pick<
   | 'getWorkflowRun'
   | 'getCodebase'
   | 'listWorkflowRuns'
+  | 'listEventsForRuns'
 >;
 
 /** The occurrence an answer resolves; null for an item nobody answers. */
@@ -218,12 +236,42 @@ interface RunView {
   project: ProjectRef | null;
 }
 
-function terminalOutcome(
+interface RunContext {
+  workflow: string | null;
+  parentRunId: string | null;
+}
+
+function runContext(run: WorkflowRun | null): RunContext {
+  return { workflow: run?.workflow_name ?? null, parentRunId: run?.parent_run_id ?? null };
+}
+
+/** The fields of a line about the delivered event's run, from the row the stream read. */
+function lifecycleFields(
+  { cursor, event }: WorkflowRunDelivery,
+  view: RunView | null
+): { cursor: WorkflowEventCursor; project: ProjectRef | null; runId: string } & RunContext {
+  return {
+    cursor,
+    project: view?.project ?? null,
+    runId: event.workflow_run_id,
+    ...runContext(view?.run ?? null),
+  };
+}
+
+function itemContext(
+  item: AttentionQueueItem
+): Pick<AttentionQueueItem, 'workflow' | 'parentRunId'> {
+  return { workflow: item.workflow, parentRunId: item.parentRunId };
+}
+
+/** What the terminal record riding on `event` says, or nulls when it cannot be read. */
+function terminalFacts(
   event: WorkflowEventRow,
   status: RunTerminalStatus
-): 'succeeded' | 'failed' | null {
+): { outcome: 'succeeded' | 'failed' | null; firstFailedNode: string | null } {
   try {
-    return getTerminalRecord(status, [event])?.outcome ?? null;
+    const record = getTerminalRecord(status, [event]);
+    return { outcome: record?.outcome ?? null, firstFailedNode: record?.first_failed_node ?? null };
   } catch (error) {
     // A malformed record must not stall the stream on one row; the line still reports
     // the status, and `workflow get` remains the full read.
@@ -231,13 +279,14 @@ function terminalOutcome(
       { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
       'workflow.attention_watch_terminal_record_unreadable'
     );
-    return null;
+    return { outcome: null, firstFailedNode: null };
   }
 }
 
 /**
  * Start a watch: snapshot the open items in scope, emit `ready`, then follow the feed.
- * Resolves once the snapshot and `ready` were delivered. Rejects with
+ * Resolves once the snapshot and `ready` were accepted by the listener; an initial
+ * listener failure rejects startup with its cause before background watches start. Rejects with
  * `WorkflowEventCursorError` before any line when `after` cannot be read; a tail that
  * later cannot read its cursor ends the stream with an `error` line.
  */
@@ -326,6 +375,7 @@ export async function watchAttentionQueue(
         cursor: position(),
         project,
         runId,
+        ...runContext(run),
         observedStatus: result.observedStatus,
       });
     })();
@@ -354,10 +404,16 @@ export async function watchAttentionQueue(
   });
   for (const item of snapshot) {
     open.set(item.runId, item);
-    emit({ type: 'attention', cursor: start, snapshot: true, project: item.project, item });
+    await emit({
+      type: 'attention',
+      cursor: start,
+      snapshot: true,
+      project: item.project,
+      ...itemContext(item),
+      item,
+    });
   }
-  emit({ type: 'ready', cursor: start });
-  await chain;
+  await emit({ type: 'ready', cursor: start });
 
   // 2. Arm liveness for every run already running in scope.
   const armRunning = async (): Promise<void> => {
@@ -488,6 +544,7 @@ export async function watchAttentionQueue(
       cursor,
       project: prev.project,
       runId,
+      ...itemContext(prev),
       occurrence,
       ...resolution,
     });
@@ -505,7 +562,14 @@ export async function watchAttentionQueue(
       const replaced = prev !== undefined && occurrenceOf(prev) !== occurrence;
       if (replaced) await resolve(runId, prev, cursor, view?.run ?? null);
       if (prev === undefined || !isDeepStrictEqual(prev, item))
-        await emit({ type: 'attention', cursor, snapshot: false, project: item.project, item });
+        await emit({
+          type: 'attention',
+          cursor,
+          snapshot: false,
+          project: item.project,
+          ...itemContext(item),
+          item,
+        });
       open.set(runId, item);
       return;
     }
@@ -515,6 +579,28 @@ export async function watchAttentionQueue(
     if (item === null || occurrenceOf(item) !== occurrenceOf(prev))
       await resolve(runId, prev, cursor, view?.run ?? null);
     open.delete(runId);
+  };
+
+  // Only the events before the delivered terminal event count, so a replayed line keeps
+  // its cause after the run resumed and failed again. A read failure fails the delivery,
+  // which the follower retries.
+  const failureCause = async (
+    event: WorkflowEventRow,
+    node: string | null
+  ): Promise<{ node: string; errorClass: NodeFailureKind | null } | null> => {
+    if (node === null) return null;
+    const runId = event.workflow_run_id;
+    const rows =
+      (await store.listEventsForRuns([runId], ['node_failed', 'workflow_failed'])).get(runId) ?? [];
+    const end = rows.findIndex(row => row.id === event.id);
+    const failed = firstFailedNodeEvent(
+      { first_failed_node: node },
+      end === -1 ? rows : rows.slice(0, end)
+    );
+    return {
+      node,
+      errorClass: failed === undefined ? null : (recordedFailureKind(failed) ?? null),
+    };
   };
 
   const handle = async (delivery: WorkflowRunDelivery): Promise<void> => {
@@ -543,29 +629,24 @@ export async function watchAttentionQueue(
           cursor,
           project: item.project,
           runId,
+          ...itemContext(item),
           occurrence,
           revision: item.revision,
         });
     }
     const status = terminalRunStatusForEventType(event.event_type);
     if (status !== undefined && inScope) {
+      const { outcome, firstFailedNode } = terminalFacts(event, status);
       await emit({
         type: 'terminal',
-        cursor,
-        project: view?.project ?? null,
-        runId,
+        ...lifecycleFields(delivery, view),
         status,
-        outcome: terminalOutcome(event, status),
+        outcome,
+        cause: status === 'failed' ? await failureCause(event, firstFailedNode) : null,
       });
     }
     if (event.event_type === 'workflow_resumed' && inScope)
-      await emit({
-        type: 'resumed',
-        cursor,
-        project: view?.project ?? null,
-        runId,
-        status: 'running',
-      });
+      await emit({ type: 'resumed', ...lifecycleFields(delivery, view), status: 'running' });
     if (view?.run.status === 'running' && inScope) arm(view.run, view.project);
   };
 

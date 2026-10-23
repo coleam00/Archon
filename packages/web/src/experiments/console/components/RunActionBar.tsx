@@ -7,6 +7,8 @@ import { K } from '../store/keys';
 import type { Run } from '../primitives/run';
 import { isLegacyAttention } from './AttentionAnswerPanel';
 
+type RunAction = 'cancel' | 'resume' | 'abandon';
+
 interface RunActionBarProps {
   run: Run;
 }
@@ -32,26 +34,12 @@ function offersRunningAbandon(run: Run, cancelRefused: boolean): boolean {
  * Demo runs short-circuit the backend calls.
  */
 export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
-  const navigate = useNavigate();
-  const [busy, setBusy] = useState<'cancel' | 'resume' | 'abandon' | null>(null);
+  const [busy, setBusy] = useState<RunAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cancelRefused, setCancelRefused] = useState(false);
   const isDemo = run.id.startsWith('demo-');
 
-  const canRerun =
-    run.projectId !== null &&
-    run.workflow !== '' &&
-    !isDemo &&
-    (run.status === 'completed' || run.status === 'cancelled');
-
-  const onRerun = (): void => {
-    if (!canRerun || run.projectId === null) return;
-    const params = new URLSearchParams({ rerun: '1', workflow: run.workflow });
-    if (run.userMessage !== '') params.set('message', run.userMessage);
-    navigate(`/console/p/${run.projectId}?${params.toString()}`);
-  };
-
-  const call = async (action: 'cancel' | 'resume' | 'abandon'): Promise<void> => {
+  const call = async (action: RunAction): Promise<void> => {
     setBusy(action);
     setError(null);
     try {
@@ -66,13 +54,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
       if (action === 'cancel' && e instanceof HttpError && e.status === 409) {
         setCancelRefused(true);
       }
-      setError(
-        e instanceof HttpError && e.serverError !== undefined
-          ? e.serverError
-          : e instanceof Error
-            ? e.message
-            : 'Action failed.'
-      );
+      setError(actionErrorMessage(e));
     } finally {
       setBusy(null);
     }
@@ -83,10 +65,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
   if (run.status === 'paused' && !abandonableWait) return null;
   // An attention wait is answered in its own panel; only one paused before answers
   // existed still continues with a bare resume.
-  const canResume =
-    run.status === 'failed' ||
-    run.attention?.kind === 'usage_limit' ||
-    (run.attention?.kind === 'attention' && isLegacyAttention(run.attention));
+  const canResume = offersResume(run);
 
   return (
     <div className="sticky bottom-0 border-t border-border bg-surface px-[30px] py-3.5">
@@ -103,15 +82,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
         ) : null}
 
         {offersRunningAbandon(run, cancelRefused) ? (
-          <button
-            type="button"
-            onClick={() => void call('abandon')}
-            disabled={busy !== null}
-            className="rounded-[9px] border bg-surface-elevated px-[18px] py-2.5 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
-            style={{ borderColor: 'var(--border-bright)' }}
-          >
-            {busy === 'abandon' ? 'Abandoning…' : 'Abandon'}
-          </button>
+          <AbandonButton busy={busy} onClick={() => void call('abandon')} />
         ) : null}
 
         {run.status === 'failed' || abandonableWait ? (
@@ -126,39 +97,86 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
                 {busy === 'resume' ? 'Resuming…' : 'Resume'}
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={() => void call('abandon')}
-              disabled={busy !== null}
-              className="rounded-[9px] border bg-surface-elevated px-[18px] py-2.5 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
-              // Inline because the console scope's wildcard border-color rule
-              // repaints Tailwind border utilities (see theme.css).
-              style={{ borderColor: 'var(--border-bright)' }}
-            >
-              {busy === 'abandon' ? 'Abandoning…' : 'Abandon'}
-            </button>
+            <AbandonButton busy={busy} onClick={() => void call('abandon')} />
           </>
         ) : null}
 
-        {canRerun ? (
-          <button
-            type="button"
-            onClick={onRerun}
-            className="rounded-[9px] border bg-surface-elevated px-[18px] py-2.5 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-            style={{ borderColor: 'var(--border-bright)' }}
-          >
-            Re-run
-          </button>
-        ) : run.status === 'completed' || run.status === 'cancelled' ? (
-          <span className="text-[12px] text-text-tertiary">
-            This run is {run.status}. Choose a project to start a new run.
-          </span>
-        ) : null}
+        <RerunAction run={run} />
 
         {error !== null ? (
           <span className="ml-2 whitespace-pre-line font-mono text-[11px] text-error">{error}</span>
         ) : null}
       </div>
     </div>
+  );
+}
+
+function offersResume(run: Run): boolean {
+  return (
+    run.status === 'failed' ||
+    run.attention?.kind === 'usage_limit' ||
+    (run.attention?.kind === 'attention' && isLegacyAttention(run.attention))
+  );
+}
+
+function RerunAction({ run }: RunActionBarProps): ReactElement | null {
+  const navigate = useNavigate();
+  const isDemo = run.id.startsWith('demo-');
+  const canRerun =
+    run.projectId !== null &&
+    run.workflow !== '' &&
+    !isDemo &&
+    (run.status === 'completed' || run.status === 'cancelled');
+
+  const onRerun = (): void => {
+    if (!canRerun || run.projectId === null) return;
+    const params = new URLSearchParams({ rerun: '1', workflow: run.workflow });
+    if (run.userMessage !== '') params.set('message', run.userMessage);
+    navigate(`/console/p/${run.projectId}?${params.toString()}`);
+  };
+
+  return canRerun ? (
+    <button
+      type="button"
+      onClick={onRerun}
+      className="rounded-[9px] border bg-surface-elevated px-[18px] py-2.5 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+      style={{ borderColor: 'var(--border-bright)' }}
+    >
+      Re-run
+    </button>
+  ) : run.status === 'completed' || run.status === 'cancelled' ? (
+    <span className="text-[12px] text-text-tertiary">
+      This run is {run.status}. Choose a project to start a new run.
+    </span>
+  ) : null;
+}
+
+function actionErrorMessage(error: unknown): string {
+  return error instanceof HttpError && error.serverError !== undefined
+    ? error.serverError
+    : error instanceof Error
+      ? error.message
+      : 'Action failed.';
+}
+
+function AbandonButton({
+  busy,
+  onClick,
+}: {
+  busy: RunAction | null;
+  onClick: () => void;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy !== null}
+      className="rounded-[9px] border bg-surface-elevated px-[18px] py-2.5 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+      // Inline because the console scope's wildcard border-color rule
+      // repaints Tailwind border utilities (see theme.css).
+      style={{ borderColor: 'var(--border-bright)' }}
+    >
+      {busy === 'abandon' ? 'Abandoning…' : 'Abandon'}
+    </button>
   );
 }

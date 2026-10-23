@@ -133,15 +133,57 @@ describe('workflowRunsCommand', () => {
         linkedWorktree: false,
       });
     (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (codebaseDb.listCodebases as ReturnType<typeof mock>).mockResolvedValueOnce([registered]);
+    (codebaseDb.listCodebaseClaims as ReturnType<typeof mock>).mockResolvedValueOnce([registered]);
     const listSpy = workflowDb.listDashboardRuns as ReturnType<typeof mock>;
+    listSpy.mockClear();
     listSpy.mockResolvedValueOnce({ runs: [], total: 0, counts: EMPTY_COUNTS });
 
     await workflowRunsCommand(createTestWorkflowHost(), cwd, {});
 
+    expect(listSpy).toHaveBeenCalledTimes(1);
     expect(listSpy).toHaveBeenCalledWith(
       expect.objectContaining({ codebaseId: 'cb-external', limit: 20 })
     );
+  });
+
+  it.each([
+    { open: false, json: false },
+    { open: false, json: true },
+    { open: true, json: false },
+    { open: true, json: true },
+  ])('refuses to widen scope after a claims lookup failure (%j)', async opts => {
+    const git = await import('@archon/git');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const host = createTestWorkflowHost();
+    const listRuns = spyOn(host.deps.store, 'listWorkflowRuns');
+    const listOpen = spyOn(host.deps.store, 'findOpenWorkRuns');
+    listRuns.mockClear();
+    listOpen.mockClear();
+    const failure = new Error('registration storage unavailable');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (git.getCanonicalRepoPath as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new git.CanonicalRepoPathUnavailableError('/workspace/linked', '/metadata/repository')
+    );
+    (codebaseDb.listCodebaseClaims as ReturnType<typeof mock>).mockRejectedValueOnce(failure);
+
+    try {
+      const result = workflowRunsCommand(host, '/workspace/linked', opts);
+      if (opts.json) {
+        expect(await result).toBe(1);
+        expect(JSON.parse(firstJsonPayload(stdoutSpy))).toEqual({
+          ok: false,
+          error: 'Failed to resolve workflow runs project: registration storage unavailable',
+        });
+      } else {
+        await expect(result).rejects.toThrow('Failed to resolve workflow runs project');
+        expect(stdoutSpy).not.toHaveBeenCalled();
+      }
+      expect(listRuns).not.toHaveBeenCalled();
+      expect(listOpen).not.toHaveBeenCalled();
+    } finally {
+      listRuns.mockRestore();
+      listOpen.mockRestore();
+    }
   });
 
   it('prints the unregistered-cwd note and lists globally when no codebase resolves', async () => {
@@ -437,6 +479,24 @@ describe('workflowRunsCommand', () => {
         JSON.stringify({ ...listed, scopeFallback: true }, null, 2)
       );
     });
+  });
+
+  it('reports a run-listing failure as the raw error in --json and a prefixed error otherwise', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const listSpy = workflowDb.listDashboardRuns as ReturnType<typeof mock>;
+    listSpy.mockRejectedValueOnce(new Error('db down'));
+    listSpy.mockRejectedValueOnce(new Error('db down'));
+
+    const exitCode = await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+      all: true,
+      json: true,
+    });
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toEqual({ ok: false, error: 'db down' });
+
+    await expect(
+      workflowRunsCommand(createTestWorkflowHost(), '/test/path', { all: true })
+    ).rejects.toThrow('Failed to list workflow runs: db down');
   });
 
   it('emits {ok:false} JSON (never throws) on an invalid --status in --json mode', async () => {

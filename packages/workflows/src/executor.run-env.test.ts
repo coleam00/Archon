@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import {
   configWith,
+  containerBackend,
   cwdPath,
   dagCall,
   makeDeps,
@@ -378,7 +379,10 @@ describe('credential preflight lifecycle', () => {
     const result = await startWorkflow({
       deps: { ...makeDeps(store), getAgentProvider },
       cwd: '/tmp/run-checkout',
-      options: { execContext },
+      options: {
+        execContext,
+        container: { envId: 'env-x', writeBack: 'approve', backend: containerBackend() },
+      },
     });
     if (result.success) throw new Error('Expected credential refusal');
     expect(result.error).toStartWith("Credential preflight failed for provider 'claude'");

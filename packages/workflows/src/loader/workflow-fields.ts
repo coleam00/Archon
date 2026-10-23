@@ -1,11 +1,7 @@
 import type { z } from 'zod';
 import type { DagNode, IncludeDirective } from '../schemas';
-import {
-  effortLevelSchema,
-  betasSchema,
-  INPUT_NAME_PATTERN,
-  inputEnvKey,
-} from '../schemas/dag-node';
+import { effortLevelSchema, betasSchema } from '../schemas/dag-node';
+import { INPUT_NAME_PATTERN, inputEnvKey } from '../schemas/node-bindings';
 import type { EffortLevel } from '../schemas/effort';
 import { modelRefSchema, type WorkflowModelRef } from '../schemas/model-binding';
 import {
@@ -14,6 +10,7 @@ import {
   workflowRunBudgetSchema,
   workflowDeprecationSchema,
   workflowInputSpecSchema,
+  workflowContainerPolicySchema,
 } from '../schemas/workflow';
 import type {
   WorkflowRequirement,
@@ -84,32 +81,34 @@ export function parseWorktreePolicy(
 /**
  * Parse workflow-level container policy (folder-project container backend).
  * Same warn-and-ignore pattern as `worktree`. `enabled` pins the container
- * backend on without `--container`; `write_back` ('approve' | 'auto') chooses
+ * backend on without `--container`; `write_back` chooses
  * whether the finished run's overlay diff pauses for review or applies directly.
  */
 export function parseContainerPolicy(
   raw: unknown,
   filename: string
-): { enabled?: boolean; write_back?: 'approve' | 'auto' } | undefined {
+): z.infer<typeof workflowContainerPolicySchema> | undefined {
   if (raw === undefined) return undefined;
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     getLog().warn({ filename, value: raw }, 'invalid_container_block_ignored');
     return undefined;
   }
   const rawContainer = raw as Record<string, unknown>;
-  const rawEnabled = rawContainer.enabled;
-  const rawWriteBack = rawContainer.write_back;
-  const policy: { enabled?: boolean; write_back?: 'approve' | 'auto' } = {};
-  if (typeof rawEnabled === 'boolean') {
-    policy.enabled = rawEnabled;
-  } else if (rawEnabled !== undefined) {
-    getLog().warn({ filename, value: rawEnabled }, 'invalid_container_enabled_value_ignored');
-  }
-  if (rawWriteBack === 'approve' || rawWriteBack === 'auto') {
-    policy.write_back = rawWriteBack;
-  } else if (rawWriteBack !== undefined) {
-    getLog().warn({ filename, value: rawWriteBack }, 'invalid_container_write_back_value_ignored');
-  }
+  const enabled = parseOptionalField(
+    rawContainer.enabled,
+    workflowContainerPolicySchema.shape.enabled,
+    filename,
+    'invalid_container_enabled_value_ignored'
+  );
+  const writeBack = parseOptionalField(
+    rawContainer.write_back,
+    workflowContainerPolicySchema.shape.write_back,
+    filename,
+    'invalid_container_write_back_value_ignored'
+  );
+  const policy: z.infer<typeof workflowContainerPolicySchema> = {};
+  if (enabled !== undefined) policy.enabled = enabled;
+  if (writeBack !== undefined) policy.write_back = writeBack;
   return policy.enabled !== undefined || policy.write_back !== undefined ? policy : undefined;
 }
 

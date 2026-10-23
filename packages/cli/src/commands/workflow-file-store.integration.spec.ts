@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import * as processTools from '@archon/paths/plugin-process';
 import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import {
@@ -11,7 +13,7 @@ import {
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
-import { expect, test, setSystemTime } from 'bun:test';
+import { afterEach, beforeEach, expect, test, setSystemTime, spyOn } from 'bun:test';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { readdir } from 'node:fs/promises';
 import {
@@ -26,10 +28,52 @@ import {
 import { join } from 'node:path';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { tmpdir, hostname } from 'node:os';
-import { trackTempRoots } from '@archon/paths/test-utils';
-const roots = trackTempRoots();
+import { CliTestScope } from '../test-support/cli-test-scope';
+import { getLogLevel, setLogLevel } from '@archon/paths';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
+import {
+  clearPlatformPolicies,
+  getRegisteredPlatformPolicies,
+  setPlatformPolicies,
+} from '@archon/core/platforms/registry';
+import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
+import { triggerCommand } from './trigger';
+import * as workflowCommands from './workflow';
+import {
+  runWorkflowAnswer,
+  runWorkflowRespond,
+  runWorkflowApprove,
+  runWorkflowReject,
+} from '../routes/workflow';
+import { workflowContinuationCommand } from './workflow-continuations';
+const scopes: CliTestScope[] = [];
+let originalEnv: NodeJS.ProcessEnv;
+let originalLogLevel: ReturnType<typeof getLogLevel>;
+beforeEach(() => {
+  originalEnv = { ...process.env };
+  originalLogLevel = getLogLevel();
+});
+afterEach(closeFixtures);
+async function closeFixtures(): Promise<void> {
+  const errors: unknown[] = [];
+  try {
+    for (const scope of scopes.splice(0)) {
+      try {
+        await scope.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  } finally {
+    process.env = originalEnv;
+    setLogLevel(originalLogLevel);
+    clearPlatformPolicies();
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'CLI fixture cleanup failed');
+}
 const repo = join(import.meta.dir, '../../../..');
 interface Fixture {
+  scope: CliTestScope;
   root: string;
   project: string;
   home: string;
@@ -41,7 +85,9 @@ function fixture(
   config = 'store: files\n',
   nativeStatus?: 'usable' | 'not_connected' | 'real'
 ): Fixture {
-  const root = roots(mkdtempSync(join(tmpdir(), 'cli-file-store-')));
+  const root = mkdtempSync(join(tmpdir(), 'cli-file-store-'));
+  const scope = new CliTestScope(root);
+  scopes.push(scope);
   const project = join(root, 'project'),
     home = join(root, 'home'),
     entry = join(root, 'entry.ts'),
@@ -75,6 +121,14 @@ nodes:
     entry,
     `import {mock} from 'bun:test';
 import {appendFileSync} from 'node:fs';
+const childProcess = await import('node:child_process');
+const spawn = childProcess.spawn;
+// Detached owners and bash nodes lead separate process groups; teardown needs both.
+mock.module('node:child_process', () => ({...childProcess, spawn: (...args) => {
+  const child = spawn(...args);
+  if (args[2]?.detached && child.pid) appendFileSync(${JSON.stringify(scope.detachedPids)}, child.pid + String.fromCharCode(10));
+  return child;
+}}));
 const fail=() => {appendFileSync(${JSON.stringify(trap)},'open\\n');throw new Error('SQL open trap');};
 const connection=await import(${src('packages/core/src/db/connection.ts')});
 mock.module(${src('packages/core/src/db/connection.ts')},()=>({...connection,getDatabase:fail,getDialect:fail,pool:{query:fail,connect:fail}}));
@@ -103,7 +157,7 @@ await import(${src('packages/cli/src/cli.ts')});`
     WORKFLOW_ID: '',
     ARCHON_NODE_EXECUTION: '',
   };
-  return { root, project, home, entry, trap, env };
+  return { scope, root, project, home, entry, trap, env };
 }
 async function cli(
   f: ReturnType<typeof fixture>,
@@ -112,21 +166,291 @@ async function cli(
   input = '',
   launchCwd = f.project
 ): Promise<{ output: string; error: string; code: number }> {
-  const child = Bun.spawn([process.execPath, f.entry, ...args], {
-    cwd: launchCwd,
-    env,
-    stdin: 'pipe',
-    stdout: 'pipe',
-    stderr: 'pipe',
+  return f.scope.run([process.execPath, f.entry, ...args], launchCwd, env, input);
+}
+async function commandResult(command: () => Promise<number | void>) {
+  let output = '';
+  const log = spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+    output += `${args.join(' ')}\n`;
   });
-  child.stdin.write(input);
-  child.stdin.end();
-  const [output, error, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  return { output, error, code };
+  const stdout = spyOn(process.stdout, 'write').mockImplementation((...args: unknown[]) => {
+    output += String(args[0]);
+    const callback = args.find(arg => typeof arg === 'function');
+    if (typeof callback === 'function') callback();
+    return true;
+  });
+  try {
+    const code = (await command()) ?? 0;
+    return { code, output, error: '' };
+  } catch (error) {
+    return { code: 1, output, error: String(error) };
+  } finally {
+    log.mockRestore();
+    stdout.mockRestore();
+  }
+}
+test('a timed-out CLI child settles before its fixture is removed', async () => {
+  const f = fixture();
+  const childRoot = join(f.root, 'timed-out');
+  mkdirSync(childRoot);
+  const pidFile = join(f.root, 'child.pid');
+  const proof = join(f.root, 'closed');
+  const continued = join(f.root, 'continued');
+  const spec = join(f.root, 'timeout.test.ts');
+  writeFileSync(
+    spec,
+    `
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
+import * as cleanup from ${JSON.stringify(join(repo, 'packages/paths/src/test-utils.ts'))};
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
+const scope = new CliTestScope(${JSON.stringify(childRoot)});
+afterEach(async () => {
+  expect(existsSync(scope.root)).toBe(true);
+  const pid = Number(readFileSync(${JSON.stringify(pidFile)}, 'utf8'));
+  const removeTempTree = cleanup.removeTempTree;
+  const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
+    expect(() => process.kill(pid, 0)).toThrow();
+    await removeTempTree(root);
+  });
+  try {
+    await scope.close();
+  } finally {
+    removal.mockRestore();
+  }
+  expect(existsSync(scope.root)).toBe(false);
+  expect(() => process.kill(pid, 0)).toThrow();
+  await expect(scope.run([process.execPath, '-e', ''], scope.root, process.env)).rejects.toThrow('scope is closed');
+  writeFileSync(${JSON.stringify(proof)}, 'closed');
+});
+let running: ReturnType<CliTestScope['run']>;
+beforeEach(async () => {
+  running = scope.run([process.execPath, '-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 1500);`)}], scope.root, process.env);
+  while (!existsSync(${JSON.stringify(pidFile)})) await Bun.sleep(10);
+});
+test('forced timeout', async () => {
+  await running;
+  writeFileSync(${JSON.stringify(continued)}, 'continued after timeout');
+}, 1000);
+`
+  );
+  const result = await f.scope.run([process.execPath, 'test', spec], repo, f.env);
+  expect(result.code).toBe(1);
+  expect(result.output + result.error).toContain('timed out');
+  expect(readFileSync(proof, 'utf8')).toBe('closed');
+  expect(existsSync(continued)).toBe(false);
+  expect(existsSync(childRoot)).toBe(false);
+});
+test('failed fixture closes still clean other scopes and restore shared state', async () => {
+  const first = fixture();
+  const second = fixture();
+  const third = fixture();
+  writeFileSync(first.scope.detachedPids, '0');
+  writeFileSync(third.scope.detachedPids, '0');
+  process.env = { ...first.env };
+  setLogLevel(originalLogLevel === 'error' ? 'silent' : 'error');
+  setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+  try {
+    const error = await closeFixtures().catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) throw error;
+    expect(error.errors).toHaveLength(2);
+    for (const failure of error.errors) {
+      expect(failure).toMatchObject({ message: 'Invalid detached test PID' });
+    }
+    expect(existsSync(first.root)).toBe(true);
+    expect(existsSync(second.root)).toBe(false);
+    expect(existsSync(third.root)).toBe(true);
+    expect(process.env).toEqual(originalEnv);
+    expect(getLogLevel()).toBe(originalLogLevel);
+    expect(getRegisteredPlatformPolicies).toThrow('Platform policies are not configured');
+  } finally {
+    unlinkSync(first.scope.detachedPids);
+    unlinkSync(third.scope.detachedPids);
+    await first.scope.close();
+    await second.scope.close();
+    await third.scope.close();
+  }
+});
+test('invalid detached process records preserve the fixture', async () => {
+  const f = fixture();
+  writeFileSync(f.scope.detachedPids, '0');
+  await expect(f.scope.close()).rejects.toThrow('Invalid detached test PID');
+  expect(existsSync(f.root)).toBe(true);
+  unlinkSync(f.scope.detachedPids);
+});
+test('a refused detached group signal requires proof that the group is gone', async () => {
+  const f = fixture();
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  if (!child.pid) throw new Error('Missing detached child PID');
+  writeFileSync(f.scope.detachedPids, String(child.pid));
+  const refusedSignal = spyOn(processTools, 'terminateTree').mockRejectedValue(
+    Object.assign(new Error('Signal refused'), { code: 'EPERM' })
+  );
+  try {
+    await expect(f.scope.close()).rejects.toThrow(
+      process.platform === 'win32' ? 'Signal refused' : 'Process groups still running'
+    );
+    expect(existsSync(f.root)).toBe(true);
+    child.kill('SIGKILL');
+    await exited;
+    if (process.platform === 'win32') refusedSignal.mockRestore();
+    await f.scope.close();
+    expect(existsSync(f.root)).toBe(false);
+  } finally {
+    refusedSignal.mockRestore();
+    child.kill('SIGKILL');
+    await exited;
+  }
+});
+for (const launch of ['workflow', 'fire', 'drain'] as const) {
+  test(`a timed-out ${launch} launcher stops its detached execution before removal`, async () => {
+    setLogLevel('error');
+    const outer = fixture();
+    const f = fixture();
+    const nodePid = join(f.project, 'node.pid');
+    writeFileSync(
+      join(f.project, 'hold.ts'),
+      `import { writeFileSync } from 'node:fs';
+writeFileSync('node.pid', String(process.pid));
+setInterval(() => {}, 1000);
+`
+    );
+    const executable = "'" + process.execPath.replaceAll("'", "'\\''") + "'";
+    writeFileSync(
+      join(f.project, '.archon/workflows/hold.yaml'),
+      `name: hold
+description: hold for teardown proof
+worktree:
+  enabled: false
+nodes:
+  - id: hold
+    bash: exec ${executable} hold.ts
+`
+    );
+    let args = ['workflow', 'run', 'hold', '--folder', '--no-worktree', '--detach'];
+    if (launch !== 'workflow') {
+      process.env = { ...f.env };
+      registerBuiltinProviders();
+      setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+      const host = await createFileWorkflowHost(join(f.home, 'store'));
+      await host.records.codebases.createCodebase({
+        name: 'timeout-test',
+        default_cwd: realpathSync(f.project),
+        kind: 'folder',
+      });
+      const user = await host.records.users.findOrCreateUserByPlatformIdentity(
+        'cli',
+        'file-operator'
+      );
+      if (!user) throw new Error('Missing test user');
+      const config = join(f.root, 'trigger.json');
+      writeFileSync(
+        config,
+        JSON.stringify({
+          version: 1,
+          sourceInstanceId: 'timeout-test',
+          schedule: { intervalSeconds: 60, runAtLoad: false },
+          binding: {
+            bindingId: 'timeout-test',
+            bindingRevision: null,
+            hostId: 'timeout-test',
+            runAsUserId: user.id,
+            resource: 'timeout-test',
+            capacity: 1,
+            overlap: 'queue',
+            launch: {
+              cwd: f.project,
+              workflowName: 'hold',
+              inputs: {},
+              isolation: { kind: 'in-place' },
+            },
+          },
+        })
+      );
+      args = ['trigger', 'fire', '--config', config];
+      if (launch === 'drain') {
+        const blocker = randomUUID();
+        await host.deps.store.admitResourceStart({
+          resource: 'timeout-test',
+          capacity: 1,
+          hostId: 'timeout-test',
+          overlap: 'queue',
+          launch: {
+            version: 2,
+            run: {
+              id: blocker,
+              workflow_name: 'holder',
+              codebase_id: 'holder',
+              user_message: '',
+              metadata: {},
+            },
+            execution: {
+              cwd: join(f.root, 'holder'),
+              conversationId: blocker,
+              isolation: { kind: 'in-place' },
+            },
+          },
+        });
+        await host.deps.store.claimPendingWorkflowRun(blocker);
+        const queued = await commandResult(() => triggerCommand(host, 'fire', [], { config }));
+        expect(queued.code).toBe(0);
+        expect(JSON.parse(queued.output).bindings[0].disposition.status).toBe('queued');
+        await host.deps.store.completeWorkflowRun(blocker, { duration_ms: 1 });
+        args = ['trigger', 'drain', '--host', 'timeout-test'];
+      }
+    }
+    const proof = join(outer.root, 'closed');
+    const spec = join(outer.root, 'detached-timeout.test.ts');
+    writeFileSync(
+      spec,
+      `
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
+import * as cleanup from ${JSON.stringify(join(repo, 'packages/paths/src/test-utils.ts'))};
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
+const scope = new CliTestScope(${JSON.stringify(f.root)});
+let owners;
+let node;
+beforeEach(async () => {
+  const result = await scope.run(${JSON.stringify([process.execPath, f.entry, ...args])}, ${JSON.stringify(f.project)}, { ...process.env, ARCHON_HOME: ${JSON.stringify(f.home)}, LOG_LEVEL: 'silent' });
+  expect(result, result.output + result.error).toMatchObject({ code: 0 });
+  while (!existsSync(${JSON.stringify(nodePid)})) await Bun.sleep(10);
+  owners = readFileSync(scope.detachedPids, 'utf8').trim().split(String.fromCharCode(10)).map(Number);
+  node = Number(readFileSync(${JSON.stringify(nodePid)}, 'utf8').trim());
+  for (const owner of owners) process.kill(owner, 0);
+  process.kill(node, 0);
+});
+afterEach(async () => {
+  const removeTempTree = cleanup.removeTempTree;
+  const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
+    expect(existsSync(root)).toBe(true);
+    for (const owner of owners) expect(() => process.kill(owner, 0)).toThrow();
+    expect(() => process.kill(node, 0)).toThrow();
+    await removeTempTree(root);
+  });
+  try { await scope.close(); } finally { removal.mockRestore(); }
+  expect(existsSync(scope.root)).toBe(false);
+  writeFileSync(${JSON.stringify(proof)}, 'closed');
+});
+test('forced detached timeout', async () => { await Bun.sleep(60000); }, 50);
+`
+    );
+    const result = await outer.scope.run([process.execPath, 'test', spec], repo, f.env);
+    expect(result.code).toBe(1);
+    expect(result.output + result.error).toContain('timed out');
+    expect(existsSync(proof), result.output + result.error).toBe(true);
+    expect(readFileSync(proof, 'utf8')).toBe('closed');
+    expect(existsSync(f.root)).toBe(false);
+  }, 15000);
 }
 /** A Claude environment with no login, so only project settings can supply one. */
 function withoutClaudeLogin(f: Fixture, claudeConfig: string): NodeJS.ProcessEnv {
@@ -515,17 +839,7 @@ mock.module(${JSON.stringify(join(repo, 'packages/core/src/db/connection.ts'))},
 const {startServer}=await import(${JSON.stringify(join(repo, 'packages/server/src/index.ts'))});
 try {await startServer();process.exit(1);}catch(error){console.log(error.name+': '+error.message);process.exit(0);}`
   );
-  const child = Bun.spawn([process.execPath, entry], {
-    cwd: f.project,
-    env: f.env,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const [output, error, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
+  const { output, error, code } = await f.scope.run([process.execPath, entry], f.project, f.env);
   expect(code).toBe(0);
   expect(error).not.toContain('SQL open trap');
   expect(output).toContain('FileStoreUnsupportedError');
@@ -872,7 +1186,7 @@ nodes:
     });
   }, 30000);
 
-  test(`${action} accepts an answer at capacity and refuses stale answers in both modes`, async () => {
+  test(`${action} accepts an answer at capacity and refuses stale answers in supported modes`, async () => {
     const f = fixture();
     f.env.LOG_LEVEL = 'error';
     writeFileSync(
@@ -895,21 +1209,21 @@ nodes:
     bash: echo finished >> result.txt
 `
     );
-    writeFileSync(
-      join(f.project, '.archon/workflows/register.yaml'),
-      'name: register\ndescription: register project\nnodes:\n  - id: ready\n    bash: echo ready\n'
+    setLogLevel('error');
+    registerBuiltinProviders();
+    setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+    process.env = { ...f.env };
+    const host = await createFileWorkflowHost(join(f.home, 'store'));
+    await host.records.codebases.createCodebase({
+      name: 'capacity-test',
+      default_cwd: realpathSync(f.project),
+      kind: 'folder',
+    });
+    const user = await host.records.users.findOrCreateUserByPlatformIdentity(
+      'cli',
+      'file-operator'
     );
-    const registered = await cli(f, [
-      'workflow',
-      'run',
-      'register',
-      '--folder',
-      '--no-worktree',
-      '--quiet',
-    ]);
-    expect(registered, registered.output + registered.error).toMatchObject({ code: 0 });
-    const identity = await cli(f, ['trigger', 'whoami']);
-    expect(identity, identity.output + identity.error).toMatchObject({ code: 0 });
+    if (!user) throw new Error('Missing test user');
     const config = join(f.root, 'trigger.json');
     writeFileSync(
       config,
@@ -921,7 +1235,7 @@ nodes:
           bindingId: 'answer-test',
           bindingRevision: null,
           hostId: 'answer-test',
-          runAsUserId: JSON.parse(identity.output).runAsUserId,
+          runAsUserId: user.id,
           resource: 'answer-test',
           capacity: 1,
           overlap: 'queue',
@@ -934,23 +1248,16 @@ nodes:
         },
       })
     );
-    const fired = await cli(f, ['trigger', 'fire', '--config', config]);
+    const fired = await commandResult(() => triggerCommand(host, 'fire', [], { config }));
     expect(fired, fired.output + fired.error).toMatchObject({ code: 0 });
-    const disposition = resourceStartDispositionSchema.parse(
-      JSON.parse(fired.output).bindings[0].disposition
-    );
-    if (disposition.status !== 'admitted') throw new Error('Run not admitted');
-    const id = disposition.runId;
-    const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
-    const deadline = Date.now() + 15_000;
-    let run = await store.getWorkflowRun(id);
-    while (run?.status !== 'paused' && Date.now() < deadline) {
-      expect(run?.status, JSON.stringify(run)).not.toBeOneOf(['failed', 'cancelled']);
-      await Bun.sleep(25);
-      run = await store.getWorkflowRun(id);
-    }
-    expect(run?.status).toBe('paused');
-    const attention = run && runAttention(run);
+    const store = host.deps.store;
+    const {
+      runs: [run],
+    } = await store.listWorkflowRuns();
+    if (!run) throw new Error('Missing resource run');
+    const id = run.id;
+    expect(run.status).toBe('paused');
+    const attention = runAttention(run);
     if (attention?.kind !== 'attention') throw new Error('Run not awaiting answer');
     const args = (occurrence: string): string[] => [
       'workflow',
@@ -960,17 +1267,47 @@ nodes:
       '--occurrence',
       occurrence,
     ];
+    const answer = (occurrence: string, flags: string[] = []) =>
+      commandResult(() => {
+        const json = flags.includes('--json');
+        const detach = flags.includes('--detach');
+        const route = {
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', action, id, ...(action === 'respond' ? ['retry'] : [])],
+          values: { occurrence, json, detach, choose: ['approve'] },
+          command: 'workflow',
+          subcommand: action,
+          cwd: f.project,
+          effectiveCwd: f.project,
+          json,
+          detachedRunConfig: undefined,
+          inheritedEnv: f.env,
+          forgeTrustedEnv: f.env,
+        };
+        const routes = {
+          answer: runWorkflowAnswer,
+          respond: runWorkflowRespond,
+          approve: runWorkflowApprove,
+          reject: runWorkflowReject,
+        };
+        return routes[action](route);
+      });
+    const unchangedRun = await store.getWorkflowRun(id);
+    const unchangedEvents = await store.listWorkflowEvents(id);
     for (const flags of [
       [],
       ['--json'],
       ...(action === 'answer' ? [] : [['--detach'], ['--detach', '--json']]),
     ]) {
-      const refused = await cli(f, [...args('stale'), ...flags]);
+      const refused = await answer('stale', flags);
       expect(refused, refused.output + refused.error).toMatchObject({ code: 1 });
       if (flags.includes('--json')) expect(JSON.parse(refused.output)).toMatchObject({ ok: false });
       expect(refused.output + refused.error).toContain(
         `awaiting occurrence '${attention.occurrence}'`
       );
+      expect(await store.getWorkflowRun(id)).toEqual(unchangedRun);
+      expect(await store.listWorkflowEvents(id)).toEqual(unchangedEvents);
     }
     const blocker = randomUUID();
     expect(
@@ -997,7 +1334,10 @@ nodes:
       })
     ).toMatchObject({ status: 'admitted' });
     await store.claimPendingWorkflowRun(blocker);
-    const answered = await cli(f, args(attention.occurrence));
+    const answered =
+      action === 'answer'
+        ? await cli(f, args(attention.occurrence))
+        : await answer(attention.occurrence);
     expect(answered, answered.output + answered.error).toMatchObject({ code: 0 });
     expect(answered.output).toContain('answer was recorded');
     expect(answered.output).toContain('waiting for capacity');
@@ -1012,7 +1352,10 @@ nodes:
     expect(waiting?.metadata.capacity_wait).toMatchObject({ since: expect.any(String) });
     expect(waiting && answeredPauseContinuation(waiting)).toBeDefined();
     await store.completeWorkflowRun(blocker, { duration_ms: 1 });
-    const woken = await cli(f, ['workflow', 'wake', '--json']);
+    const woken =
+      action === 'answer'
+        ? await cli(f, ['workflow', 'wake', '--json'])
+        : await commandResult(() => workflowContinuationCommand(host, 'wake', [], { json: true }));
     expect(woken, woken.output + woken.error).toMatchObject({ code: 0 });
     expect(JSON.parse(woken.output)).toMatchObject({
       outcomes: [{ runId: id, kind: 'accepted', status: 'completed' }],

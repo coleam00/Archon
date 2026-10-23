@@ -1,3 +1,4 @@
+import * as chatScope from '../workflow-scope';
 import {
   mockLogger,
   mockRunLiveOwnerClose,
@@ -19,6 +20,8 @@ import {
   resolveContainerBackendConfig,
   hasUnresolvedWriteback,
 } from './workflow-isolation';
+
+const scopeSpy = spyOn(chatScope, 'readChatProjectScope');
 
 const git = await import('@archon/git');
 const codebases = await import('@archon/core/db/codebases');
@@ -69,6 +72,20 @@ describe('folderRunsInContainer', () => {
     expect(folderRunsInContainer({}, {}, configOn, containerRun)).toBe(true);
     expect(folderRunsInContainer({}, {}, undefined, containerRun)).toBe(false);
   });
+
+  it.each([null, undefined, { metadata: {} }])(
+    'a resume without recorded isolation stays on the host: %j',
+    resumable => {
+      expect(
+        folderRunsInContainer(
+          { resume: true, container: true },
+          { container: { enabled: true } },
+          configOn,
+          resumable
+        )
+      ).toBe(false);
+    }
+  );
 });
 
 describe('resolveContainerBackendConfig', () => {
@@ -174,6 +191,198 @@ describe('run codebase resolution', () => {
       (executor.executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1)?.[7]
     ).toMatchObject({ codebaseId: child.id });
   }
+
+  it.each([
+    { noWorktree: true },
+    { detach: true },
+    { noWorktree: true, codebaseId: child.id },
+    { detach: true, codebaseId: child.id },
+    { noWorktree: true, folder: true },
+  ])('refuses foreign chat launches before registration or execution (%j)', async options => {
+    scopeSpy.mockReturnValue(parent.id);
+    (codebases.getCodebase as ReturnType<typeof mock>).mockImplementation(async (id: string) =>
+      id === parent.id ? parent : child
+    );
+    (core.registerRepository as ReturnType<typeof mock>).mockClear();
+    (core.registerFolder as ReturnType<typeof mock>).mockClear();
+    try {
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', options)
+      ).rejects.toThrow('/setproject');
+      expect(core.registerRepository).not.toHaveBeenCalled();
+      expect(core.registerFolder).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(executor.executeWorkflow).not.toHaveBeenCalled();
+    } finally {
+      scopeSpy.mockReturnValue(undefined);
+    }
+  });
+
+  it.each([
+    { detach: false, pinned: false },
+    { detach: true, pinned: false },
+    { detach: false, pinned: true },
+    { detach: true, pinned: true },
+  ])(
+    'refuses a selected project ID executing in a foreign checkout (%j)',
+    async ({ detach, pinned }) => {
+      scopeSpy.mockReturnValue(child.id);
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(parent);
+      if (pinned) {
+        mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+          workflows: [makeTestWorkflowWithSource({ name: 'probe', worktree: { enabled: false } })],
+          errors: [],
+        });
+      }
+      try {
+        await expect(
+          workflowRunCommand(createTestWorkflowHost(), '/parent', 'probe', 'go', {
+            codebaseId: child.id,
+            noWorktree: !pinned,
+            detach,
+          })
+        ).rejects.toThrow('/setproject');
+        expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+        expect(executor.executeWorkflow).not.toHaveBeenCalled();
+      } finally {
+        scopeSpy.mockReturnValue(undefined);
+      }
+    }
+  );
+
+  it.each(['reuse-worktree', 'checkout-branch', 'foreign-worktree'] as const)(
+    'checks the resolved detached adoption checkout (%s)',
+    async laneKind => {
+      const { resolveWorkflowAdoption } = await import('@archon/core/operations/workflow-adoption');
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+        { id: 'run-adopted' },
+      ]);
+      scopeSpy.mockReturnValue(child.id);
+      const workingPath = laneKind === 'foreign-worktree' ? '/parent' : `${childRoot}/worktree`;
+      (git.findRepoRoot as ReturnType<typeof mock>).mockImplementation(async (path: string) =>
+        path === '/parent' ? '/parent' : childRoot
+      );
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockImplementation(
+        async (path: string) => (path === childRoot ? child : path === '/parent' ? parent : null)
+      );
+      mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+        workflows: [makeTestWorkflowWithSource({ name: 'probe', worktree: { enabled: false } })],
+        errors: [],
+      });
+      (resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
+        adoptedRun: { id: 'run-adopted', status: 'completed', codebase_id: child.id },
+        lane:
+          laneKind === 'checkout-branch'
+            ? { kind: 'checkout-branch', taskBranch: { kind: 'existing', branch: 'feature/adopt' } }
+            : {
+                kind: 'reuse-worktree',
+                environment: { id: 'env-adopted', working_path: workingPath },
+              },
+      });
+      const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(createDetachedChildFixture().child);
+      jest.useFakeTimers();
+      try {
+        const command = workflowRunCommand(createTestWorkflowHost(), '/parent', 'probe', 'go', {
+          codebaseId: child.id,
+          adoptRunId: 'run-adopted',
+          detach: true,
+        });
+        if (laneKind === 'foreign-worktree') {
+          await expect(command).rejects.toThrow('/setproject');
+          expect(spawnSpy).not.toHaveBeenCalled();
+          expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+        } else {
+          await finishStartupWindow(command, spawnSpy);
+          expect(spawnSpy).toHaveBeenCalledTimes(1);
+          expect(mockCreateWorkflowRun).toHaveBeenCalledWith(
+            expect.objectContaining({ codebase_id: child.id, adopted_from_run_id: 'run-adopted' })
+          );
+        }
+        expect(resolveWorkflowAdoption).toHaveBeenCalledWith(
+          expect.objectContaining({ adoptedRunId: 'run-adopted', codebaseId: child.id })
+        );
+        expect(executor.executeWorkflow).not.toHaveBeenCalled();
+      } finally {
+        scopeSpy.mockReturnValue(undefined);
+        jest.useRealTimers();
+        spawnSpy.mockRestore();
+        (resolveWorkflowAdoption as ReturnType<typeof mock>)
+          .mockReset()
+          .mockRejectedValue(new Error('adoption not expected'));
+      }
+    }
+  );
+
+  it.each([undefined, child.id])(
+    'allows a launch in the selected chat checkout (id=%s)',
+    async codebaseId => {
+      scopeSpy.mockReturnValue(child.id);
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(child);
+      try {
+        await workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+          codebaseId,
+          noWorktree: true,
+        });
+        expectChildExecution();
+      } finally {
+        scopeSpy.mockReturnValue(undefined);
+      }
+    }
+  );
+
+  it('allows a detached explicit project launch in the selected chat checkout', async () => {
+    scopeSpy.mockReturnValue(child.id);
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(child);
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(createDetachedChildFixture().child);
+    jest.useFakeTimers();
+    try {
+      const command = workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+        codebaseId: child.id,
+        noWorktree: true,
+        detach: true,
+      });
+      await finishStartupWindow(command, spawnSpy);
+      expect(mockCreateWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({ codebase_id: child.id })
+      );
+    } finally {
+      jest.useRealTimers();
+      spawnSpy.mockRestore();
+      scopeSpy.mockReturnValue(undefined);
+    }
+  });
+
+  it.each([false, true])(
+    'refuses foreign name-based resume before reading its source (detach=%s)',
+    async detach => {
+      scopeSpy.mockReturnValue(child.id);
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'foreign-run',
+        codebase_id: parent.id,
+        workflow_name: 'probe',
+        status: 'paused',
+      });
+      const { mockResolveContinuationWorkflow } = await import(
+        '../test-support/workflow-command-harness'
+      );
+      mockResolveContinuationWorkflow.mockClear();
+      try {
+        await expect(
+          workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {
+            resume: true,
+            detach,
+          })
+        ).rejects.toThrow('/setproject');
+        expect(mockResolveContinuationWorkflow).not.toHaveBeenCalled();
+        expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+        expect(executor.executeWorkflow).not.toHaveBeenCalled();
+      } finally {
+        scopeSpy.mockReturnValue(undefined);
+      }
+    }
+  );
 
   it('passes the registration choice while leaving this run base unset', async () => {
     await workflowRunCommand(createTestWorkflowHost(), childRoot, 'probe', 'go', {

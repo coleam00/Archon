@@ -7,6 +7,7 @@ import {
 } from '@archon/chat-contract';
 import { formatCostFooter } from './blocks';
 import { logFailure } from './log';
+import { descriptor } from './descriptor';
 
 const MAX_MARKDOWN_BLOCK_LENGTH = 12000;
 
@@ -201,8 +202,11 @@ export class SlackAdapter {
         thread_ts: 'thread_ts' in event ? event.thread_ts : undefined,
       });
     });
-    for (const kind of ['archon', 'archon-workflow'] as const) {
-      this.app.command(`/${kind}`, async ({ command, ack, respond }) => {
+    for (const [kind, name] of [
+      ['archon', '/archon'],
+      ['workflow', descriptor.workflowCommand.prefix.trimEnd()],
+    ] as const) {
+      this.app.command(name, async ({ command, ack, respond }) => {
         await ack();
         await this.slashCommand(command, respond, kind);
       });
@@ -218,7 +222,7 @@ export class SlackAdapter {
   private async slashCommand(
     command: SlashCommand,
     respond: (message: { response_type: 'ephemeral'; text: string }) => Promise<unknown>,
-    kind: 'archon' | 'archon-workflow'
+    kind: 'archon' | 'workflow'
   ): Promise<void> {
     const raw = command.text.trim();
     if (!raw) {
@@ -227,7 +231,7 @@ export class SlackAdapter {
         text:
           kind === 'archon'
             ? 'Usage: `/archon <message>` — talk to Archon in this channel.'
-            : 'Usage: `/archon-workflow <subcommand>` — e.g. `list`, `status`, `get <id>`, `run <name> <args>`, `approve <id>`, `reject <id> <reason>`, `abandon <id>`.',
+            : `Usage: \`${descriptor.workflowCommand.prefix}<subcommand>\` — e.g. \`list\`, \`status\`, \`get <id>\`, \`run <name> <args>\`, \`approve <id>\`, \`reject <id> <reason>\`, \`abandon <id>\`.`,
       });
       return;
     }
@@ -246,7 +250,7 @@ export class SlackAdapter {
         text:
           kind === 'archon'
             ? `<@${command.user_id}> via /archon: ${raw}`
-            : `<@${command.user_id}> ran \`/archon-workflow ${raw}\``,
+            : `<@${command.user_id}> ran \`${descriptor.workflowCommand.prefix}${raw}\``,
       });
       seedTs = seed.ts;
     } catch (err) {
@@ -261,7 +265,7 @@ export class SlackAdapter {
     }
     await respond({
       response_type: 'ephemeral',
-      text: `Running \`${kind === 'archon' ? raw : `/archon-workflow ${raw}`}\` — see thread for output.`,
+      text: `Running \`${kind === 'archon' ? raw : `${descriptor.workflowCommand.prefix}${raw}`}\` — see thread for output.`,
     });
     await this.receive({
       channel: command.channel_id,

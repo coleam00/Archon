@@ -4,7 +4,6 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
@@ -12,7 +11,11 @@ import { capturedSourceRoots, loadWorkflowSource } from '@archon/workflows/workf
 import { loadCommandPrompt } from '@archon/workflows/load-command-prompt';
 import { workflowRunCommand } from './workflow-run-owned';
 import { captureWorkflowCommand } from '../test-support/command';
-import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+import {
+  stopDetachedTestOwner,
+  waitForDetachedTestOwnerExit,
+} from '../test-support/detached-owner';
+import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 
 mock.module('@archon/core/services/title-generator', () => ({
   generateAndSetTitle: async (): Promise<void> => undefined,
@@ -20,15 +23,19 @@ mock.module('@archon/core/services/title-generator', () => ({
 
 const CLI_ENTRY = join(import.meta.dir, 'fixtures', 'workflow-cli-without-title.ts');
 const roots: string[] = [];
-const activeRuns = new Set<string>();
+const activeRuns = new Map<string, { home: string; pidFile: string }>();
 const observers = new Map<string, Database>();
 
 afterEach(async () => {
-  for (const id of activeRuns) {
-    if (await canConnectToRunLiveOwner(runLiveOwnerPath(id))) {
-      const owner = await requestDetachedRunStop(id);
-      await owner.stop();
+  const savedHome = process.env.ARCHON_HOME;
+  try {
+    for (const [id, owner] of activeRuns) {
+      process.env.ARCHON_HOME = owner.home;
+      await stopDetachedTestOwner(id, owner.pidFile);
     }
+  } finally {
+    if (savedHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = savedHome;
   }
   activeRuns.clear();
   for (const db of observers.values()) db.close();
@@ -43,6 +50,8 @@ interface Fixture {
   source: string;
   home: string;
   priorId: string;
+  entry: string;
+  ownerPidFile: string;
 }
 
 interface RunRow {
@@ -79,7 +88,7 @@ function readRun(fixture: Fixture, id: string): RunRow {
 }
 
 function runCli(fixture: Fixture, args: string[]): { status: number | null; output: string } {
-  const result = spawnSync(process.execPath, [CLI_ENTRY, ...args], {
+  const result = spawnSync(process.execPath, [fixture.entry, ...args], {
     cwd: fixture.root,
     encoding: 'utf8',
     timeout: 30_000,
@@ -127,6 +136,16 @@ if (!existsSync('allow-finish')) process.exit(23);
 async function makeFixture(): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), 'archon-adopt-source-'));
   roots.push(root);
+  const entry = join(root, 'entry.ts');
+  const ownerPidFile = join(root, 'owner.pid');
+  writeFileSync(
+    entry,
+    `
+import { writeFileSync } from 'node:fs';
+if (process.env[${JSON.stringify(DETACHED_RUN_OWNER_ENV)}] === '1') writeFileSync(${JSON.stringify(ownerPidFile)}, String(process.pid));
+await import(${JSON.stringify(CLI_ENTRY)});
+`
+  );
   const repo = join(root, 'repo');
   const target = join(root, 'target');
   const source = join(root, 'source');
@@ -153,6 +172,8 @@ async function makeFixture(): Promise<Fixture> {
   writePack(source, 'old source');
   const fixture: Fixture = {
     root,
+    entry,
+    ownerPidFile,
     repo: await canonicalizeProjectPath(repo),
     target: await canonicalizeProjectPath(target),
     source: await canonicalizeProjectPath(source),
@@ -231,14 +252,12 @@ async function adopt(fixture: Fixture, detached: boolean, explicit: boolean): Pr
     expect(result.status).toBe(0);
     const ack = JSON.parse(result.output) as { runId: string };
     id = ack.runId;
-    activeRuns.add(id);
+    activeRuns.set(id, { home: fixture.home, pidFile: fixture.ownerPidFile });
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
       const row = readRun(fixture, id);
-      if (
-        ['completed', 'failed'].includes(row.status) &&
-        !(await canConnectToRunLiveOwner(runLiveOwnerPath(id)))
-      ) {
+      if (['completed', 'failed'].includes(row.status)) {
+        await waitForDetachedTestOwnerExit(fixture.ownerPidFile);
         activeRuns.delete(id);
         break;
       }

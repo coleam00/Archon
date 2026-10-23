@@ -5,13 +5,13 @@
 facts:
   path: sweep
   base: { branch: dev, head: "2222222", checks: { state: green, failing: [], pending: [] } }
+  base_error: ""
   items:
     - item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
       pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
       url: "https://github.com/example/repo/pull/42"
       facts: { state: open, head_revision: "1111111", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
       record: null
-      prior_report: "/stub/merge/42/review/report.md"
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
   policy_defaults: "/stub/policy"
@@ -21,7 +21,6 @@ sweep:
       action: ask
       class: unclear
       head: "1111111"
-      synced: false
       reran: false
       reason: "stub: a pack change; the gate passes"
       brief: "stub: rework PR 42 under the ruling"
@@ -34,9 +33,7 @@ sweep:
           - { id: park, label: "stub: park it", does: "stub: stops working it", effect: park, ruling: "" }
         if_unanswered: "stub: it waits"
         links: ["https://github.com/example/repo/pull/42"]
-  review_url: ""
-  review_prior: ""
-  dev: { state: unchecked, rerun: none, summary: "stub: nothing merged", attention: null }
+  base: { summary: "stub: dev is green", reran: false, attention: null }
   summary: "stub: asked about PR 42"
 record:
   merged: []
@@ -50,8 +47,11 @@ ruling:
   decision: merge
   section: ""
   summary: "stub: PR 42: the maintainer chose merge"
+retriage:
+  retriaged: []
+  summary: "stub: Sent 0 of 0 merged issue(s) back to intake."
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
-  reached: [facts, sweep, record, ask, ruling]
+  reached: [facts, sweep, record, retriage, ask, ruling]
 exec-code: true

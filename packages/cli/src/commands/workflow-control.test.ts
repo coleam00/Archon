@@ -934,6 +934,7 @@ describe('workflowAbandonCommand', () => {
       pid: 42,
       stop: async () => {
         order.push('terminate');
+        return { warnings: [] };
       },
       release: mockDetachedTargetRelease,
     }));
@@ -1008,7 +1009,7 @@ describe('workflowCancelCommand', () => {
       release: mockDetachedTargetRelease,
     });
     mockDetachedTargetStop.mockReset();
-    mockDetachedTargetStop.mockResolvedValue();
+    mockDetachedTargetStop.mockResolvedValue({ warnings: [] });
     mockDetachedTargetRelease.mockClear();
     mockReclaimContainerEnv.mockReset();
     mockReclaimContainerEnv.mockResolvedValue();
@@ -1042,6 +1043,7 @@ describe('workflowCancelCommand', () => {
         pid: 4242,
         stop: async () => {
           order.push('terminate');
+          return { warnings: [] };
         },
         release: mockDetachedTargetRelease,
       };
@@ -1055,9 +1057,7 @@ describe('workflowCancelCommand', () => {
 
     expect(order).toEqual(['owner', 'terminate', 'cancel-state']);
     expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      'Host process tree stopped before run state was changed.'
-    );
+    expect(consoleSpy).toHaveBeenCalledWith('Run owner stopped before run state was changed.');
   });
 
   it('leaves run state unchanged when no live detached owner answers', async () => {
@@ -1119,8 +1119,9 @@ describe('workflowCancelCommand', () => {
       id: 'container-env-1',
       provider: 'container',
     });
-    mockDetachedTargetStop.mockImplementation(async (): Promise<void> => {
+    mockDetachedTargetStop.mockImplementation(async () => {
       order.push('terminate-owner');
+      return { warnings: [] };
     });
     mockReclaimContainerEnv.mockImplementation(async (): Promise<void> => {
       order.push('reclaim-container');
@@ -1286,31 +1287,41 @@ describe('workflowCancelCommand', () => {
     expect(error).toContain(`Abandon it: archon workflow abandon ${runId}`);
   });
 
-  it("cancels cooperatively a sub-run with no owner of its own whose root's owner answers", async () => {
-    const workflowDb = require('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
-      id: runId,
-      workflow_name: 'implement',
-      status: 'running',
-      parent_run_id: 'root-run',
-    });
-    (workflowDb.getRunAncestry as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: 'root-run', status: 'running', parent_run_id: null },
-    ]);
-    mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
-    mockIsRunOwnerAnswering.mockResolvedValueOnce(true);
+  it.each([true, false])(
+    'cooperative sub-run cancellation preserves warnings (json=%s)',
+    async json => {
+      const workflowDb = require('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
+        id: runId,
+        workflow_name: 'implement',
+        status: 'running',
+        parent_run_id: 'root-run',
+      });
+      (workflowDb.getRunAncestry as ReturnType<typeof mock>).mockResolvedValueOnce([
+        { id: 'root-run', status: 'running', parent_run_id: null },
+      ]);
+      mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
+      mockIsRunOwnerAnswering.mockResolvedValueOnce(true);
 
-    await workflowCancelCommand(createTestWorkflowHost(), runId, true);
+      await workflowCancelCommand(createTestWorkflowHost(), runId, json);
 
-    expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
-    expect(mockIsRunOwnerAnswering).toHaveBeenCalledWith('root-run');
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
-    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
-      ok: true,
-      status: 'cancelled',
-      processStopped: false,
-    });
-  });
+      expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
+      expect(mockIsRunOwnerAnswering).toHaveBeenCalledWith('root-run');
+      // Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+      const posixHost = process.platform !== 'win32';
+      if (json) {
+        const payload = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
+        expect(payload).toMatchObject({ ok: true, status: 'cancelled', processStopped: false });
+        expect(payload.cleanupWarnings).toEqual(
+          posixHost ? [expect.stringContaining('untracked background work')] : undefined
+        );
+      } else {
+        expect(consoleSpy.mock.calls.flat().join(' ').includes('untracked background work')).toBe(
+          posixHost
+        );
+      }
+    }
+  );
 });
 
 describe('workflowRejectCommand', () => {
@@ -1386,6 +1397,41 @@ describe('workflowRejectCommand', () => {
     );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
+
+  for (const json of [false, true]) {
+    it(`reports a failed container reclaim after a cancelling reject in ${json ? 'JSON' : 'text'} output`, async () => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-plain',
+        workflow_name: 'plain-wf',
+        status: 'paused',
+        working_path: '/repo',
+        metadata: {
+          approval: { type: 'approval', nodeId: 'gate', message: 'Approve?' },
+          isolation: 'container',
+          isolation_env_id: 'env-a',
+          execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
+        },
+      });
+      mockReclaimContainerEnv.mockRejectedValueOnce(new Error('docker down'));
+      const stdout = spyOnJsonStdout();
+      try {
+        await workflowRejectCommand(createTestWorkflowHost(), 'run-plain', 'not good', json);
+        const output = json
+          ? stdout.mock.calls.map((call: unknown[]) => String(call[0])).join('')
+          : consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+        expect(output).toContain('Could not reclaim container environment env-a');
+        if (json) {
+          expect(JSON.parse(output)).toMatchObject({ ok: true, cancelled: true });
+          expect(JSON.parse(output).cleanupWarnings).toHaveLength(1);
+        } else {
+          expect(output).toContain('Rejected and cancelled: plain-wf');
+        }
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  }
 
   it('plain mode: rejecting with no reason defaults structured output text to "Rejected" (#2740)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');

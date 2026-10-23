@@ -562,7 +562,7 @@ describe('detached run control integration', () => {
       await listen(server, path);
       try {
         const stop = await requestDetachedRunStop(runId);
-        const error = await rejectedError(async (): Promise<void> => stop.stop());
+        const error = await rejectedError(async () => stop.stop());
         expect(error.message).toContain('Could not confirm');
         expect(error.message).toContain('reported no job object');
         expect(processExists(targetPid)).toBe(true);
@@ -593,7 +593,7 @@ describe('detached run control integration', () => {
       await listen(server, path);
       try {
         const stop = await requestDetachedRunStop(runId);
-        const error = await rejectedError(async (): Promise<void> => stop.stop());
+        const error = await rejectedError(async () => stop.stop());
         expect(error.message).toContain('Could not confirm');
         expect(error.message).toContain('its job object could not be opened');
         expect(processExists(targetPid)).toBe(true);
@@ -629,7 +629,7 @@ describe('detached run control integration', () => {
     await listen(server, path);
     try {
       const target = await requestDetachedRunStop(runId);
-      const error = await rejectedError(async (): Promise<void> => target.stop());
+      const error = await rejectedError(async () => target.stop());
       expect(error.message).toContain('does not own process group');
       expect(processExists(survivorPid)).toBe(true);
     } finally {

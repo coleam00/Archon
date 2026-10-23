@@ -20,8 +20,110 @@ mock.module('@archon/paths', () => ({
 }));
 
 import { substituteWorkflowVariables, buildPromptWithContext } from './workflow-variables';
+import { buildExecNodeEnvironment, EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
+import {
+  USER_CONTROLLED_VARIABLES,
+  type UserControlledVariableContext,
+} from './user-controlled-variables';
+
+describe('user-controlled runtime variable delivery', () => {
+  for (const populated of [true, false]) {
+    it(`preserves every declared variable across prompt and env delivery with ${populated ? 'populated' : 'absent optional'} values`, () => {
+      const literal = '\n"\' $USER_MESSAGE $CONTEXT $INPUTS.plan $& $$ $(echo inert); `echo inert`';
+      const value = (prefix: string): string => (populated ? `${prefix}${literal}` : '');
+      const values: UserControlledVariableContext = populated
+        ? {
+            userMessage: `message${literal}`,
+            loopUserInput: `feedback${literal}`,
+            rejectionReason: `rejection${literal}`,
+            loopPrevOutput: `previous${literal}`,
+            issueContext: `issue${literal}`,
+          }
+        : { userMessage: '' };
+      const env = buildExecNodeEnvironment({
+        artifactsDir: '/artifacts',
+        stateDir: '/state',
+        logDir: '/logs',
+        workflowId: 'run-1',
+        baseBranch: 'dev',
+        ...values,
+        loopUserInput: values.loopUserInput ?? '',
+        rejectionReason: values.rejectionReason ?? '',
+        loopPrevOutput: values.loopPrevOutput ?? '',
+        typedArtifactsFile: '/listing.json',
+        nodeExecution: null,
+        inputEnvKeys: [],
+      });
+      const names = USER_CONTROLLED_VARIABLES.flatMap(group => group.names);
+      const template = names.map(name => `$${name}`).join(' | ');
+      const substitute = (shellSafe: boolean) =>
+        substituteWorkflowVariables(
+          template,
+          'run-1',
+          values.userMessage,
+          '/artifacts',
+          'dev',
+          'docs/',
+          values.issueContext,
+          values.loopUserInput,
+          values.rejectionReason,
+          values.loopPrevOutput,
+          { shellSafe }
+        );
+
+      for (const group of USER_CONTROLLED_VARIABLES) {
+        for (const name of group.names) {
+          expect(env[name]).toBe(values[group.source] ?? '');
+          expect(EXEC_NODE_ENVIRONMENT_NAMES.has(name)).toBe(true);
+        }
+      }
+      expect(substitute(false)).toEqual({
+        prompt: names.map(name => env[name]).join(' | '),
+        contextSubstituted: populated,
+      });
+      expect(substitute(true)).toEqual({ prompt: template, contextSubstituted: populated });
+      expect(env).toEqual({
+        ARTIFACTS_DIR: '/artifacts',
+        STATE_DIR: '/state',
+        LOG_DIR: '/logs',
+        ADOPTED_RUN_DIR: '',
+        WORKFLOW_ID: 'run-1',
+        BASE_BRANCH: 'dev',
+        USER_MESSAGE: value('message'),
+        ARGUMENTS: value('message'),
+        LOOP_USER_INPUT: value('feedback'),
+        REJECTION_REASON: value('rejection'),
+        LOOP_PREV_OUTPUT: value('previous'),
+        CONTEXT: value('issue'),
+        EXTERNAL_CONTEXT: value('issue'),
+        ISSUE_CONTEXT: value('issue'),
+        TYPED_ARTIFACTS_FILE: '/listing.json',
+        ARCHON_NODE_EXECUTION: '',
+        ARCHON_RUN_ENV_KEYS: JSON.stringify([...EXEC_NODE_ENVIRONMENT_NAMES]),
+      });
+    });
+  }
+});
 
 describe('substituteWorkflowVariables', () => {
+  it('retains prefix matching for ordinary user variables', () => {
+    const { prompt } = substituteWorkflowVariables(
+      '$USER_MESSAGE_SUFFIX $ARGUMENTS_SUFFIX $LOOP_USER_INPUT_SUFFIX $REJECTION_REASON_SUFFIX $LOOP_PREV_OUTPUT_SUFFIX',
+      'run-1',
+      'message',
+      '/tmp',
+      'main',
+      'docs/',
+      undefined,
+      'feedback',
+      'rejection',
+      'previous'
+    );
+    expect(prompt).toBe(
+      'message_SUFFIX message_SUFFIX feedback_SUFFIX rejection_SUFFIX previous_SUFFIX'
+    );
+  });
+
   it('replaces $WORKFLOW_ID with the run ID', () => {
     const { prompt } = substituteWorkflowVariables(
       'Run ID: $WORKFLOW_ID',

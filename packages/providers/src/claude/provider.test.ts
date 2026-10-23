@@ -1,4 +1,5 @@
 import * as containerSpawnModule from './container-spawn';
+import * as sessionSpendReader from './session-spend-reader';
 import { overStreams } from '../test/plugin';
 import { createProvider, descriptor } from './index';
 import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
@@ -1869,6 +1870,78 @@ describe('cost of a resumed or forked session is the query’s own spend', () =>
 
     resultFor('10000000-0000-4000-8000-000000000006', 0.004, 20);
     expect(await costOf('10000000-0000-4000-8000-000000000006')).toBeUndefined();
+  });
+
+  describe('a rejected resume of a missing session', () => {
+    const staleId = '30000000-0000-4000-8000-000000000001';
+    // The shape a resume of a missing session produced on SDK 0.3.302.
+    const rejection = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: ['vendor evidence'],
+      session_id: staleId,
+      total_cost_usd: 0,
+    };
+
+    test('is marked sessionNotFound when no transcript exists, keeping its failure', async () => {
+      sdkYields(rejection);
+      const [result] = await resultsOf(staleId);
+      expect(result?.sessionNotFound).toBe(true);
+      expect(result?.failure).toEqual({
+        class: 'unknown',
+        evidence: 'error_during_execution: vendor evidence',
+      });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { sessionIdPreview: '30000000' },
+        'claude.resume_session_not_found'
+      );
+    });
+
+    test('is not marked when the transcript exists', async () => {
+      writeFileSync(join(configRoot, 'projects', 'arbitrary-slug', staleId + '.jsonl'), '');
+      sdkYields(rejection);
+      const [result] = await resultsOf(staleId);
+      expect(result).not.toHaveProperty('sessionNotFound');
+    });
+
+    test('is not marked in a container run, whose transcripts the host cannot see', async () => {
+      const baseline = spyOn(sessionSpendReader, 'readSessionSpendBaseline').mockResolvedValue({
+        kind: 'unknown',
+      });
+      const hostLookup = spyOn(sessionSpendReader, 'claudeSessionTranscriptMissing');
+      try {
+        sdkYields(rejection);
+        const chunks = await chunksOf('test', '/workspace', staleId, {
+          env: { CLAUDE_CONFIG_DIR: configRoot },
+          execContext: { kind: 'container', containerId: 'c-1' },
+        });
+        const result = chunks.find(chunk => chunk.type === 'result');
+        expect(result?.isError).toBe(true);
+        expect(result).not.toHaveProperty('sessionNotFound');
+        expect(baseline).toHaveBeenCalledWith(
+          staleId,
+          expect.objectContaining({ execContext: { kind: 'container', containerId: 'c-1' } })
+        );
+        expect(hostLookup).not.toHaveBeenCalled();
+      } finally {
+        baseline.mockRestore();
+        hostLookup.mockRestore();
+      }
+    });
+
+    test.each([
+      [
+        'a spend-limit result',
+        { ...rejection, subtype: 'error_max_budget_usd', errors: ['Reached maximum budget'] },
+      ],
+      ['an API error result', { ...apiErrorResult('API Error: x'), session_id: staleId }],
+    ])('is not inferred from %s on a missing transcript', async (_name, result) => {
+      sdkYields(result);
+      const [reported] = await resultsOf(staleId);
+      expect(reported?.isError).toBe(true);
+      expect(reported).not.toHaveProperty('sessionNotFound');
+    });
   });
 });
 

@@ -115,6 +115,38 @@ describe('MessagePersistence', () => {
     });
   });
 
+  test.each([1, 2])(
+    'stops after persistence write %s fails and warns without retrying',
+    async failAt => {
+      const emitEvent = mock(async (_conversationId: string, _event: string) => {});
+      persistence = new MessagePersistence(emitEvent);
+      persistence.setConversationDbId('conv-1', 'db-uuid-1');
+      persistence.appendText('conv-1', 'first');
+      persistence.appendText('conv-1', 'second', { segment: 'new' });
+      persistence.appendText('conv-1', 'third', { segment: 'new' });
+      if (failAt === 2) mockAddMessage.mockResolvedValueOnce(undefined);
+      mockAddMessage.mockRejectedValueOnce(new Error('write rejected'));
+
+      await persistence.flush('conv-1');
+
+      expect(mockAddMessage.mock.calls.map(call => call[2])).toEqual(
+        failAt === 1 ? ['first'] : ['first', 'second']
+      );
+      expect(emitEvent).toHaveBeenCalledTimes(1);
+      expect(emitEvent.mock.calls[0]?.[0]).toBe('conv-1');
+      expect(JSON.parse(emitEvent.mock.calls[0]?.[1] ?? '{}')).toEqual({
+        type: 'warning',
+        message: 'Assistant response could not be saved to history',
+        timestamp: expect.any(Number),
+      });
+      await persistence.flush('conv-1');
+      expect(mockAddMessage).toHaveBeenCalledTimes(failAt);
+      persistence.appendText('conv-1', 'new response');
+      await persistence.flush('conv-1');
+      expect(mockAddMessage.mock.calls.at(-1)?.[2]).toBe('new response');
+    }
+  );
+
   describe('startPeriodicFlush / stopPeriodicFlush', () => {
     test('startPeriodicFlush is idempotent (double call does not create two timers)', () => {
       persistence.startPeriodicFlush();

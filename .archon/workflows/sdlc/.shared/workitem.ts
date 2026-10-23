@@ -47,27 +47,6 @@ export type Trust = (typeof TRUSTS)[number];
 export const INTAKE_PATHS = ['quiet', 'closed', 'outside', 'triage'] as const;
 export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added'] as const;
 export type RequestAction = (typeof REQUEST_ACTIONS)[number];
-/** The `trust` input. No value is `maintainer`, so no input can raise trust. */
-export const TRUST_INPUTS = ['auto', 'outside'] as const;
-export type TrustInput = (typeof TRUST_INPUTS)[number];
-
-function oneOf<const Values extends readonly string[]>(
-  name: string,
-  values: Values,
-  text: string
-): Values[number] {
-  const value = text.trim() === '' ? values[0] : text.trim();
-  if (!values.includes(value)) {
-    throw new Error(`${name} must be one of ${values.join(', ')}, not "${value}"`);
-  }
-  return value as Values[number];
-}
-
-/** The `trust` input; empty means `auto`. */
-export function parseTrustInput(text: string): TrustInput {
-  return oneOf('trust', TRUST_INPUTS, text);
-}
-
 /** One event intake has not yet processed. A label request carries who added the label. */
 export interface IntakeRequest {
   readonly at: string;
@@ -284,31 +263,16 @@ export interface OrderKey {
   readonly direction: 'asc' | 'desc';
 }
 
-export const DEFAULT_ORDER = '["urgency desc","importance desc","size asc","created asc"]';
-
-/** The `order` input: a JSON array of `"<key> <asc|desc>"`. Anything else refuses. */
-export function parseOrder(text: string): OrderKey[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.trim() === '' ? DEFAULT_ORDER : text);
-  } catch {
-    throw new Error('order is not a JSON array');
-  }
-  if (!Array.isArray(parsed)) throw new Error('order is not a JSON array');
-  return parsed.map(entry => {
-    const [key, direction, ...rest] = typeof entry === 'string' ? entry.split(' ') : [];
-    if (
-      rest.length > 0 ||
-      !(key === 'created' || Object.hasOwn(RANKS, key ?? '')) ||
-      (direction !== 'asc' && direction !== 'desc')
-    ) {
-      throw new Error(
-        `order entry ${JSON.stringify(entry)} is not "<urgency|importance|size|complexity|created> <asc|desc>"`
-      );
-    }
-    return { key: key as OrderKey['key'], direction };
-  });
-}
+/**
+ * The order every queue claims items in: most urgent, then most important, then
+ * smallest, then oldest.
+ */
+export const PICKUP_ORDER: readonly OrderKey[] = [
+  { key: 'urgency', direction: 'desc' },
+  { key: 'importance', direction: 'desc' },
+  { key: 'size', direction: 'asc' },
+  { key: 'created', direction: 'asc' },
+];
 
 function sortValue(doc: WorkItem, key: OrderKey['key']): number | string | undefined {
   if (key === 'created') return doc.created_at;
@@ -415,18 +379,13 @@ export function isMaintainer(login: string | null, maintainers: ReadonlySet<stri
 /**
  * Decide what the claimed item needs, from the document, its claimed requests and
  * the live issue. Pure: the outcome node applies the result.
- *
- * `trustInput: 'outside'` decides an item with no recorded trust as outside without
- * reading its author. It never rewrites recorded trust, so it refuses an item already
- * recorded as a maintainer's. Label actors are still checked against the real list.
  */
 export function decideIntake(
   doc: WorkItem,
   issue: IssueFacts,
   maintainers: ReadonlySet<string>,
   at: string,
-  runId: string,
-  trustInput: TrustInput = 'auto'
+  runId: string
 ): IntakeDecision {
   let trust = doc.trust;
   let promoted = doc.promoted;
@@ -462,14 +421,7 @@ export function decideIntake(
     noted('closed', 'the issue is closed; intake changes nothing on it');
     return { ...quiet(), path: 'closed' };
   }
-  if (trustInput === 'outside' && trust === 'maintainer') {
-    throw new Error(
-      "trust: outside cannot lower trust this item already recorded as maintainer; a work item's trust is decided once"
-    );
-  }
-  if (trust === null && trustInput === 'outside') {
-    trust = 'outside';
-  } else if (trust === null) {
+  if (trust === null) {
     if (issue.author === undefined) {
       throw new Error(
         'the selected forge source does not report issue authors, so trust cannot be decided'
@@ -741,12 +693,11 @@ export function claimable(item: Read | undefined, pickup: Pickup): item is Read 
 
 /**
  * Read every work item in one state call, release terminal claims, then claim the
- * first waiting item in `order` with a conditional write. A conflict re-reads the
+ * first waiting item in `PICKUP_ORDER` with a conditional write. A conflict re-reads the
  * item once and claims it only if it still waits unclaimed; otherwise the next
  * candidate is tried.
  */
 export function claimNext(
-  order: readonly OrderKey[],
   at: string,
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
@@ -756,7 +707,7 @@ export function claimNext(
     .filter((item): item is Read => item !== undefined)
     .map(item => releaseIfTerminal(item, at, runId, pickup));
   const waiting = items.filter((item): item is Read => claimable(item, pickup));
-  for (const candidate of sortCandidates(waiting, order)) {
+  for (const candidate of sortCandidates(waiting, PICKUP_ORDER)) {
     const won = claimItem(candidate, at, runId, pickup);
     if (won !== null) return won;
   }

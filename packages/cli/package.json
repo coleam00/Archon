@@ -9,7 +9,7 @@
   "scripts": {
     "cli": "bun src/cli.ts",
     "test": "bun run ../../scripts/package-tests.ts",
-    "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/utils/setup-owner-stop.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-adopt-source.integration.spec.ts && bun test src/commands/workflow-resume-conversation.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-attention-watch.integration.spec.ts && bun test src/commands/workflow-interrupt.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts && bun test src/commands/workflow-wake.integration.spec.ts && bun test src/commands/workflow-codebase-resolution.integration.spec.ts && bun test src/commands/workflow-launch-config.integration.spec.ts",
+    "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/utils/setup-owner-stop.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-adopt-source.integration.spec.ts && bun test src/commands/workflow-container-resume.integration.spec.ts && bun test src/commands/workflow-resume-conversation.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-attention-watch.integration.spec.ts && bun test src/commands/workflow-interrupt.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts && bun test src/commands/workflow-wake.integration.spec.ts && bun test src/commands/workflow-codebase-resolution.integration.spec.ts && bun test src/commands/workflow-launch-config.integration.spec.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -35,6 +35,9 @@
   "testConcurrency": 3,
   "testGroups": [
     [
+      "src/routes/workflow-run.test.ts"
+    ],
+    [
       "src/commands/image-chat-plugin.test.ts"
     ],
     [
@@ -58,6 +61,15 @@
       "src/commands/setup-provider-auth.test.ts",
       "src/commands/skill.test.ts",
       "src/commands/doctor.test.ts",
+      "src/commands/doctor-assistant-login.test.ts",
+      "src/commands/doctor-config.test.ts",
+      "src/commands/doctor-connected-providers.test.ts",
+      "src/commands/doctor-database.test.ts",
+      "src/commands/doctor-folder-project.test.ts",
+      "src/commands/doctor-install.test.ts",
+      "src/commands/doctor-platforms.test.ts",
+      "src/commands/doctor-providers.test.ts",
+      "src/commands/doctor-skill.test.ts",
       "src/commands/doctor-process-provider.test.ts",
       "src/commands/telemetry.test.ts"
     ],
@@ -84,6 +96,9 @@
     ],
     [
       "src/commands/workflow-inspect.test.ts"
+    ],
+    [
+      "src/commands/workflow-end-turn.test.ts"
     ],
     [
       "src/commands/workflow-runs.test.ts"
@@ -114,13 +129,22 @@
       "src/commands/setup-exit.test.ts"
     ],
     [
+      "src/commands/setup-spawn.test.ts"
+    ],
+    [
       "src/commands/isolation.test.ts"
+    ],
+    [
+      "src/commands/isolation-completion-registration.test.ts"
     ],
     [
       "src/commands/chat.test.ts"
     ],
     [
       "src/commands/serve.test.ts"
+    ],
+    [
+      "src/commands/serve-web-archive.test.ts"
     ],
     [
       "src/commands/serve-binary.test.ts"
@@ -142,6 +166,7 @@
     ],
     [
       "src/cli.test.ts",
+      "src/workflow-scope-boot.test.ts",
       "src/help.test.ts",
       "src/default-cwd-canonicalization.test.ts",
       "src/utils/stdout.test.ts",
@@ -164,6 +189,12 @@
       "src/utils/owned-run-termination.test.ts"
     ],
     [
+      "src/utils/owned-run-lease.test.ts"
+    ],
+    [
+      "src/utils/detached-node-cli.integration.spec.ts"
+    ],
+    [
       "src/telemetry-exit.integration.spec.ts"
     ],
     [
@@ -174,6 +205,9 @@
     ],
     [
       "src/commands/workflow-adopt-source.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-container-resume.integration.spec.ts"
     ],
     [
       "src/commands/workflow-resume-conversation.integration.spec.ts"
@@ -248,6 +282,9 @@
     ],
     [
       "src/test-support/workflow-store.conformance.test.ts"
+    ],
+    [
+      "src/test-support/detached-owner.integration.spec.ts"
     ],
     [
       "src/commands/workflow-launch-config.integration.spec.ts"

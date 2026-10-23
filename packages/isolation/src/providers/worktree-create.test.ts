@@ -75,6 +75,9 @@ const failingStore = (message: string): IIsolationStore => ({
   },
   updateStatus: async () => undefined,
   updateMetadata: async () => undefined,
+  withWorktreeRegistration: async () => {
+    throw new Error('Unexpected worktree removal');
+  },
   markWorktreeDestroyed: async () => undefined,
   countActiveByCodebase: async () => 0,
 });

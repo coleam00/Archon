@@ -54,35 +54,7 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     ? captureDetachedInstallContext()
     : undefined;
 
-  // --- Pass 1: CWD .env files ---
-  const cwdKeys = new Set<string>();
-  const strippedFiles: string[] = [];
-
-  for (const filename of BUN_AUTO_LOADED_ENV_FILES) {
-    const filepath = resolve(cwd, filename);
-    // dotenv.config with processEnv:{} parses without writing to process.env.
-    // quiet:true suppresses dotenv's `[dotenv@...] injecting env …` tip line —
-    // which always reports (0) here because processEnv:{} is a throwaway object
-    // and would mislead operators into thinking the file was empty (see #1302).
-    const result = config({ path: filepath, processEnv: {}, quiet: true });
-    if (result.error) {
-      // ENOENT is expected (file simply doesn't exist) — all others are unexpected
-      const code = (result.error as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT') {
-        process.stderr.write(
-          `[archon] Warning: could not parse ${filepath} for CWD env stripping: ${result.error.message}\n`
-        );
-      }
-    } else if (result.parsed) {
-      const parsedKeys = Object.keys(result.parsed);
-      if (parsedKeys.length > 0) {
-        strippedFiles.push(filename);
-        for (const key of parsedKeys) {
-          cwdKeys.add(key);
-        }
-      }
-    }
-  }
+  const { cwdKeys, strippedFiles } = collectCwdEnvKeys(cwd);
 
   for (const key of cwdKeys) {
     Reflect.deleteProperty(process.env, key);
@@ -103,7 +75,11 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     );
   }
 
-  // --- Pass 2: Nested Claude Code session markers ---
+  stripNestedSessionMarkers();
+  stripDebuggerEnv();
+}
+
+function stripNestedSessionMarkers(): void {
   // Pattern-matched (not hardcoded) so new CLAUDE_CODE_* markers added by
   // future Claude Code versions are automatically handled.
   if (process.env.CLAUDECODE) {
@@ -114,7 +90,9 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
       Reflect.deleteProperty(process.env, key);
     }
   }
+}
 
+function stripDebuggerEnv(): void {
   // Strip debugger vars that crash Claude Code subprocesses
   // See: https://github.com/anthropics/claude-code/issues/4619
   Reflect.deleteProperty(process.env, 'NODE_OPTIONS');
@@ -130,4 +108,32 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
       Reflect.deleteProperty(process.env, key);
     }
   }
+}
+
+function collectCwdEnvKeys(cwd: string): { cwdKeys: Set<string>; strippedFiles: string[] } {
+  const cwdKeys = new Set<string>();
+  const strippedFiles: string[] = [];
+  for (const filename of BUN_AUTO_LOADED_ENV_FILES) {
+    const filepath = resolve(cwd, filename);
+    // dotenv.config with processEnv:{} parses without writing to process.env.
+    // quiet:true suppresses dotenv's `[dotenv@...] injecting env …` tip line —
+    // which always reports (0) here because processEnv:{} is a throwaway object
+    // and would mislead operators into thinking the file was empty (see #1302).
+    const result = config({ path: filepath, processEnv: {}, quiet: true });
+    if (result.error) {
+      // ENOENT is expected (file simply doesn't exist) — all others are unexpected
+      const code = (result.error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        process.stderr.write(
+          `[archon] Warning: could not parse ${filepath} for CWD env stripping: ${result.error.message}\n`
+        );
+      }
+      continue;
+    }
+    const parsedKeys = Object.keys(result.parsed ?? {});
+    if (parsedKeys.length === 0) continue;
+    strippedFiles.push(filename);
+    for (const key of parsedKeys) cwdKeys.add(key);
+  }
+  return { cwdKeys, strippedFiles };
 }

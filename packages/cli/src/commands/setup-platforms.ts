@@ -9,6 +9,7 @@ import {
   type SlackConfig,
   type TelegramConfig,
 } from './setup-shared';
+import { createPlatformSelection, SETUP_PLATFORMS } from './setup-platform-selection';
 
 /**
  * Collect platform selection
@@ -17,21 +18,13 @@ export async function collectPlatforms(): Promise<SetupConfig['platforms']> {
   const platforms = await multiselect({
     message:
       'Which chat adapters do you want to connect? (all optional — Archon works as CLI + skill without any)\n(↑↓ navigate, space select, enter confirm)',
-    options: [
-      { value: 'github', label: 'GitHub', hint: 'Respond to issues/PRs via webhooks' },
-      { value: 'telegram', label: 'Telegram', hint: 'Chat bot via BotFather' },
-      { value: 'slack', label: 'Slack', hint: 'Workspace app with Socket Mode' },
-    ],
+    options: [...SETUP_PLATFORMS],
     required: false,
   });
 
   if (isCancel(platforms)) cancelSetup();
 
-  return {
-    github: platforms.includes('github'),
-    telegram: platforms.includes('telegram'),
-    slack: platforms.includes('slack'),
-  };
+  return createPlatformSelection(platform => platforms.includes(platform));
 }
 
 /**

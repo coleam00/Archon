@@ -1,3 +1,4 @@
+import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
   getArchonHome,
@@ -25,7 +26,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
-import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
+import { DETACHED_LAUNCH_TOKEN_ENV, DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
 import {
   destinationCorrelationId,
@@ -177,24 +178,18 @@ export function resolveDetachedRunEncryptionEnv(
   };
 }
 
-export async function spawnDetachedWorkflowRun(
-  cwd: string,
-  conversationId: string,
-  extraArgs: string[],
-  runConfigPayload?: string,
-  confirmResume = false
-): Promise<string | null> {
-  const cmd = buildDetachedRunCmd(
-    BUNDLED_IS_BINARY,
-    process.execPath,
-    process.argv,
-    cwd,
-    runConfigPayload
-      ? [...extraArgs, '--internal-detached-run-config', runConfigPayload]
-      : extraArgs,
-    process.execArgv
-  );
+function closeDetachedRunLog(logFd: number | undefined): void {
+  if (logFd !== undefined) {
+    try {
+      closeSync(logFd);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'EBADF') return;
+      getLog().warn({ err: error }, 'cli.detached_run_log_close_failed');
+    }
+  }
+}
 
+function openDetachedRunLog(conversationId: string) {
   let logPath: string | null = null;
   let logFd: number | undefined;
   try {
@@ -207,17 +202,54 @@ export async function spawnDetachedWorkflowRun(
       `\n--- detached workflow invocation: ${conversationId} at ${new Date().toISOString()} ---\n`
     );
   } catch (error) {
-    if (logFd !== undefined) {
-      try {
-        closeSync(logFd);
-      } catch {
-        /* fd already closed/invalid — nothing to clean up */
-      }
-    }
+    closeDetachedRunLog(logFd);
     getLog().warn({ err: error as Error }, 'cli.detached_run_log_open_failed');
     logPath = null;
     logFd = undefined;
   }
+  return { logPath, logFd };
+}
+
+async function confirmDetachedResume(child: ChildProcess, logPath: string | null): Promise<void> {
+  const pipe = child.stdio[DETACHED_RESUME_RECEIPT_FD];
+  if (!pipe || !('readable' in pipe)) {
+    child.unref();
+    throw new Error('Detached resume acceptance pipe was not created.');
+  }
+  try {
+    await waitForDetachedResumeReceipt(child, pipe, (code, signal) =>
+      detachedStartupExitError(code, signal, null)
+    );
+  } catch (error) {
+    const tail = logPath ? readDetachedLogTail(logPath) : null;
+    throw new Error(
+      `Detached resume acceptance was not confirmed. ${error instanceof Error ? error.message : String(error)}` +
+        (logPath ? `\nChild output (${logPath}):\n${tail ?? '(no output recorded)'}` : ''),
+      { cause: error }
+    );
+  }
+}
+
+export async function spawnDetachedWorkflowRun(
+  cwd: string,
+  conversationId: string,
+  extraArgs: string[],
+  runConfigPayload?: string,
+  confirmResume = false,
+  launchToken = ''
+): Promise<string | null> {
+  const cmd = buildDetachedRunCmd(
+    BUNDLED_IS_BINARY,
+    process.execPath,
+    process.argv,
+    cwd,
+    runConfigPayload
+      ? [...extraArgs, '--internal-detached-run-config', runConfigPayload]
+      : extraArgs,
+    process.execArgv
+  );
+
+  const { logPath, logFd } = openDetachedRunLog(conversationId);
 
   try {
     // Node's spawn with `detached: true` puts the child in its own process
@@ -232,6 +264,7 @@ export async function spawnDetachedWorkflowRun(
       env: {
         ...process.env,
         [DETACHED_RUN_OWNER_ENV]: '1',
+        [DETACHED_LAUNCH_TOKEN_ENV]: launchToken,
         [DETACHED_RESUME_RECEIPT_ENV]: confirmResume ? '1' : '',
         ...(runConfigPayload
           ? {
@@ -265,36 +298,14 @@ export async function spawnDetachedWorkflowRun(
       throw new Error(`Failed to start detached workflow child (executable: ${cmd[0]})`);
     }
     if (confirmResume) {
-      const pipe = child.stdio[DETACHED_RESUME_RECEIPT_FD];
-      if (!pipe || !('readable' in pipe)) {
-        child.unref();
-        throw new Error('Detached resume acceptance pipe was not created.');
-      }
-      try {
-        await waitForDetachedResumeReceipt(child, pipe, (code, signal) =>
-          detachedStartupExitError(code, signal, null)
-        );
-      } catch (error) {
-        const tail = logPath ? readDetachedLogTail(logPath) : null;
-        throw new Error(
-          `Detached resume acceptance was not confirmed. ${error instanceof Error ? error.message : String(error)}` +
-            (logPath ? `\nChild output (${logPath}):\n${tail ?? '(no output recorded)'}` : ''),
-          { cause: error }
-        );
-      }
+      await confirmDetachedResume(child, logPath);
     } else {
       await waitForDetachedStartup(child, logPath, cmd[0], conversationId);
     }
   } finally {
     // The child inherits its own dup of the log fd; close the parent's copy so a
     // synchronous spawn failure (bad execPath, invalid cwd) doesn't leak it.
-    if (logFd !== undefined) {
-      try {
-        closeSync(logFd);
-      } catch {
-        /* fd already closed/invalid — nothing to clean up */
-      }
-    }
+    closeDetachedRunLog(logFd);
   }
   return logPath;
 }
@@ -308,24 +319,26 @@ export async function spawnDetachedWorkflowRun(
  * the row sits `pending` forever while the reason exists only in the child's log: the
  * same silent failure this issue closed at launch, moved one process later.
  *
- * `pending` is the whole guard, and it is what keeps this from guessing at a lifecycle
- * it does not own: the executor flips the row to `running` before any node executes, so
- * a row still `pending` here is one no execution ever claimed. Anything else belongs to
- * the run and is left alone — `failWorkflowRun`'s own status CAS closes the race.
+ * The launch token binds the row even when process-container setup or admission threw.
+ * Only pending rows belong to startup; running and terminal rows belong to the
+ * executor and are left alone.
  */
 export async function recordDetachedChildStartupFailure(
   host: WorkflowHost,
-  detachedRunId: string | undefined,
+  request: {
+    detachedRunId: string | undefined;
+    detachedProcessOwner: boolean;
+    launchToken: string | undefined;
+  },
   error: Error
 ): Promise<void> {
-  if (detachedRunId === undefined) return;
+  const { detachedRunId, detachedProcessOwner, launchToken } = request;
+  if (detachedRunId === undefined || !detachedProcessOwner || !launchToken) return;
   try {
-    const status = await host.deps.store.getWorkflowRunStatus(detachedRunId);
-    if (status !== 'pending') return;
     await host.deps.store.failWorkflowRun(
       detachedRunId,
       `Detached run failed to start: ${error.message}`,
-      { exitReason: 'launch_failed' }
+      { exitReason: 'launch_failed', pendingLaunchToken: launchToken }
     );
   } catch (dbError) {
     getLog().error(
@@ -447,6 +460,7 @@ interface DetachedRunClaim {
    * A continuation's row belongs to its own run.
    */
   launchedRunId?: string;
+  launchToken?: string;
 }
 
 /**
@@ -467,7 +481,9 @@ export async function launchDetachedRun(launch: DetachedLaunch): Promise<void> {
       cwd,
       destinationCorrelationId(childDestination),
       extraArgs,
-      runConfigPayload
+      runConfigPayload,
+      false,
+      claim.launchToken
     );
   } catch (error) {
     // The child never took the run — it failed to spawn, or died inside the startup
@@ -527,6 +543,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     // No reserved id: this process's own capture is discarded on the way out, and
     // reusing its id would point the child's capture at a directory this process is
     // about to reclaim. The row's generated id is what the child files under.
+    const launchToken = crypto.randomUUID();
     const created = await host.deps.store.createWorkflowRun({
       workflow_name: workflow.name,
       origin: {
@@ -535,6 +552,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
       ...(detachCodebase ? { codebase_id: detachCodebase.id } : {}),
       user_message: userMessage,
       metadata: {
+        [DETACHED_LAUNCH_METADATA_KEY]: launchToken,
         [RUN_AI_CONFIGURATION_METADATA_KEY]: detachedPrepared.aiConfigurationSnapshot,
         ...(detachedPrepared.runConfigMetadata
           ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: detachedPrepared.runConfigMetadata }
@@ -550,7 +568,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
       },
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
     });
-    return { detachedRunId: created.id, launchedRunId: created.id };
+    return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
   } catch (error) {
     throw new Error(
       `Failed to create the workflow run: ${(error as Error).message}\nNothing was started.`
@@ -575,6 +593,10 @@ function buildDetachedChildArgs(
   const supersededRunId = declaration?.mode === 'supersede' ? declaration.runId : undefined;
   const extraArgs: string[] = [];
   let pinnedBranch: string | undefined;
+  // Pin identity after name resolution so a rename cannot redirect the child.
+  if (!launch.isContinuation && options.codebaseId && launch.codebase) {
+    extraArgs.push('--project', launch.codebase.id);
+  }
   // Pin a generated branch only when isolating AND the caller didn't pass
   // --branch (an explicit --branch is already in argv). Without this, the child
   // would generate its own timestamped branch and fork a second worktree.

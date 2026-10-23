@@ -1,5 +1,12 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeEach } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { enterRunExecution } from '@archon/workflows/run-scratch';
 import {
   operator,
   mockGetWorkflowRun,
@@ -7,9 +14,14 @@ import {
   mockResolveApprovalGate,
   mockResolveAndCancelApprovalGate,
   mockCaptureApprovalResolved,
+  mockReclaimContainerEnv,
+  isolationStore,
   makePausedRun,
+  makeRunWithScratch,
   rejectWorkflow,
 } from './test-harness';
+
+const trackTempRoot = trackTempRoots();
 
 describe('rejectWorkflow', () => {
   beforeEach(() => {
@@ -18,6 +30,7 @@ describe('rejectWorkflow', () => {
     mockCancelWorkflowRun.mockClear();
     mockResolveApprovalGate.mockClear();
     mockResolveAndCancelApprovalGate.mockClear();
+    mockReclaimContainerEnv.mockClear();
   });
 
   test('rejects with onRejectPrompt under max attempts — stays paused with staged rework', async () => {
@@ -338,6 +351,107 @@ describe('rejectWorkflow', () => {
     expect(nodeCompleted).toMatchObject({ step_name: 'grp.check' });
     const approvalReceived = casEvents.find(e => e.event_type === 'approval_received');
     expect(approvalReceived).toMatchObject({ step_name: 'grp' });
+  });
+
+  // A paused run may still be executing a gate's sibling nodes, and a parent resumed in
+  // its child's process publishes no owner endpoint. The reject tears down its container
+  // and scratch only once its recorded owner process cannot be executing it.
+  const containerApproval = {
+    approval: { nodeId: 'review', message: 'Please review', type: 'approval' as const },
+    isolation: 'container',
+    isolation_env_id: 'env-9',
+    execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
+  };
+
+  test('a cancelling reject with no executor left reclaims a container run’s env', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ metadata: containerApproval }));
+
+    const result = await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
+
+    expect(result.cancelled).toBe(true);
+    expect(result.cleanupWarnings).toBeUndefined();
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
+    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('env-9', isolationStore);
+  });
+
+  test('a cancelling reject whose container reclaim fails stays cancelled and reports it', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ metadata: containerApproval }));
+    mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
+
+    const result = await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
+
+    expect(result.cancelled).toBe(true);
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
+    expect(result.cleanupWarnings).toHaveLength(1);
+    expect(result.cleanupWarnings?.[0]).toContain('env-9');
+    expect(result.cleanupWarnings?.[0]).toContain('resources may remain allocated');
+  });
+
+  test('a cancelling reject leaves a live owner’s container to its executor', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          ...containerApproval,
+          execution_owner: { ...containerApproval.execution_owner, pid: process.ppid },
+        },
+      })
+    );
+
+    await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
+
+    expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['is this process, not executing it', process.pid, false, false],
+    ['is a live process', process.ppid, false, true],
+    ['is this process, still executing it', process.pid, true, true],
+  ] as const)(
+    'a cancelling reject of a run whose owner %s keeps its scratch: %p',
+    async (_case, pid, executing, kept) => {
+      const { run, checkout } = makeRunWithScratch(
+        trackTempRoot(join(getArchonWorkspacesPath(), '_cwd', `reject-${randomUUID()}`)),
+        {
+          id: `reject-${randomUUID()}`,
+          metadata: { execution_owner: { host: hostname(), pid, uid: process.getuid?.() } },
+        }
+      );
+      mockGetWorkflowRun.mockResolvedValueOnce(run);
+      const leave = executing ? enterRunExecution(run.id) : undefined;
+      try {
+        await rejectWorkflow(run.id, 'no good', operator, { via: 'cli' });
+      } finally {
+        leave?.();
+      }
+
+      expect(existsSync(checkout)).toBe(kept);
+    }
+  );
+
+  test('a reject that stages rework keeps the container run’s env', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        metadata: {
+          ...containerApproval,
+          approval: { ...containerApproval.approval, onRejectPrompt: 'Fix it' },
+        },
+      })
+    );
+
+    const result = await rejectWorkflow('run-1', 'no good', operator, { via: 'cli' });
+
+    expect(result.cancelled).toBe(false);
+    expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
+  });
+
+  test('a reject that loses the cancel CAS does not reclaim the container', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ metadata: containerApproval }));
+    mockResolveAndCancelApprovalGate.mockResolvedValueOnce({ resolved: false });
+
+    await expect(rejectWorkflow('run-1', 'no good', operator, { via: 'cli' })).rejects.toThrow(
+      'already resolved'
+    );
+    expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
   });
 
   test('terminal reject concurrent loser (CAS miss) writes NO event or telemetry (#2113)', async () => {

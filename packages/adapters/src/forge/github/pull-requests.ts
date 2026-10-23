@@ -62,7 +62,7 @@ export function prRecord(repo: RepoRef, pull: Pull): ForgePrRecord {
     state: pull.merged ? 'merged' : pull.state,
     // A head branch lives in the same GitHub instance, so it inherits the host
     // and differs only in repository path.
-    head_repo: pull.head.repo ? { host: repo.host, path: pull.head.repo.full_name } : null,
+    head_repo: pull.head.repo ? { ...repo, path: pull.head.repo.full_name } : null,
     head_revision: pull.head.sha,
     base_revision: pull.base.sha,
     maintainer_can_modify: pull.maintainer_can_modify ?? null,

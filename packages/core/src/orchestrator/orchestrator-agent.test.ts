@@ -17,6 +17,7 @@ import {
   makeSession,
   mockAddMessage,
   mockCaptureApprovalResolved,
+  mockCaptureWorkflowNoMatch,
   mockCreateWorkflowEvent,
   mockDiscoverWorkflowsWithConfig,
   mockDispatchBackgroundWorkflow,
@@ -483,7 +484,7 @@ describe('typed chat tools', () => {
   const launch = { workflow: 'test-workflow', project: 'test-repo', prompt: task };
 
   test.each(['stream', 'batch'] as const)(
-    'Codex launches through item/tool/call after the turn; prose cannot launch (%s)',
+    'escaped quotes in model --prompt prose cannot truncate typed Codex dispatch (%s)',
     async mode => {
       const { CodexProvider } = await import('@archon/providers/codex/provider');
       const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
@@ -491,8 +492,8 @@ describe('typed chat tools', () => {
         '../../../providers/src/test/codex-app-server-fake'
       );
       capsMock.mockReturnValue(CODEX_CAPABILITIES);
-      const prose =
-        '/invoke-workflow test-workflow --project test-repo --prompt "prose must not launch"';
+      const prose = String.raw`/invoke-workflow test-workflow --project test-repo --prompt "Fix the \"login\" bug and add tests"`;
+      expect(prose).toContain(String.raw`\"login\"`);
       const server = createFakeAppServer(() => ({
         toolCalls: [
           {
@@ -541,6 +542,64 @@ describe('typed chat tools', () => {
       expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     }
   );
+
+  for (const mode of ['stream', 'batch'] as const) {
+    for (const toolName of ['invoke_workflow', 'register_project']) {
+      test(`Codex reports an unanswered ${toolName} exception (${mode})`, async () => {
+        const { CodexProvider } = await import('@archon/providers/codex/provider');
+        const { CODEX_CAPABILITIES } = await import('../../../providers/src/codex/capabilities');
+        const { createFakeAppServer, THREAD_ID, TURN_ID, itemCompleted } = await import(
+          '../../../providers/src/test/codex-app-server-fake'
+        );
+        capsMock.mockReturnValue(CODEX_CAPABILITIES);
+        const server = createFakeAppServer(() => ({
+          toolCalls: [
+            {
+              threadId: THREAD_ID,
+              turnId: TURN_ID,
+              callId: 'failure',
+              namespace: null,
+              tool: toolName,
+              arguments:
+                toolName === 'invoke_workflow' ? launch : { name: 'demo', path: '/', folder: true },
+            },
+          ],
+          notifications: [
+            itemCompleted({
+              type: 'dynamicToolCall',
+              id: 'failure',
+              tool: toolName,
+              namespace: null,
+              arguments: {},
+              status: 'failed',
+              success: false,
+              contentItems: [],
+              durationMs: 1,
+            }),
+          ],
+        }));
+        const provider = new CodexProvider(server, 1);
+        mockGetOrCreateConversation.mockResolvedValueOnce(
+          makeConversation({ ai_assistant_type: 'codex' })
+        );
+        mockSendQuery.mockImplementationOnce(async function* (...args) {
+          if (toolName === 'invoke_workflow')
+            mockListCodebases.mockRejectedValueOnce(new Error('registry unavailable'));
+          else mockRegisterFolder.mockRejectedValueOnce(new Error('disk full'));
+          yield* provider.sendQuery(...args);
+        });
+        const platform = makePlatform();
+        platform.getStreamingMode.mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'launch or register', { actor: operator });
+        expect(server.processes[0].toolResponses[0].result.success).toBe(false);
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'conv-1',
+          expect.stringContaining('A tool failed or was cancelled')
+        );
+        expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+      });
+    }
+  }
 
   test('a legacy Codex chat visibly asks for a new chat before invoking a model', async () => {
     const { CodexProvider } = await import('@archon/providers/codex/provider');
@@ -633,14 +692,44 @@ describe('typed chat tools', () => {
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
   });
 
+  test('a typed no-match decision emits one distinct event; ordinary replies emit none', async () => {
+    mockCaptureWorkflowNoMatch.mockClear();
+    await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
+    expect(mockCaptureWorkflowNoMatch).not.toHaveBeenCalled();
+    mockSendQuery.mockImplementationOnce(async function* () {
+      const options = mockSendQuery.mock.calls.at(-1)?.[3] as { nativeTools: NativeTool[] };
+      const report = options.nativeTools.find(tool => tool.name === 'report_workflow_no_match')!;
+      await report.handler({});
+      await report.handler({});
+      yield {
+        type: 'agent_message_chunk' as const,
+        text: 'No workflow fits. Here are the alternatives.',
+      };
+      yield { type: 'result' as const, sessionId: 'session-1' };
+    });
+    await handleMessage(makePlatform(), 'conv-1', 'please do this work', { actor: operator });
+    expect(mockCaptureWorkflowNoMatch).toHaveBeenCalledTimes(1);
+    expect(mockCaptureWorkflowNoMatch).toHaveBeenCalledWith('native_tool');
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   test('every chat gets invoke_workflow and register_project; scoped chats also get manage_run', async () => {
     await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
-    expect(turnToolNames()).toEqual(['invoke_workflow', 'register_project']);
+    expect(turnToolNames()).toEqual([
+      'invoke_workflow',
+      'register_project',
+      'report_workflow_no_match',
+    ]);
 
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
     mockGetCodebase.mockResolvedValueOnce(makeCodebase());
     await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
-    expect(turnToolNames()).toEqual(['invoke_workflow', 'register_project', 'manage_run']);
+    expect(turnToolNames()).toEqual([
+      'invoke_workflow',
+      'register_project',
+      'report_workflow_no_match',
+      'manage_run',
+    ]);
   });
 
   test('a background surface dispatches the typed prompt verbatim after the turn', async () => {
@@ -743,7 +832,7 @@ describe('typed chat tools', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test('the command scan is off: a /invoke-workflow line in the reply is plain text', async () => {
+  test('a /invoke-workflow line in the reply is plain text', async () => {
     const reply = '/invoke-workflow test-workflow --project test-repo --prompt "x"\n';
     agentInvokes([], [], reply);
     const platform = makePlatform();
@@ -950,6 +1039,7 @@ describe('paused approval gate routing', () => {
 
     await handleMessage(makePlatform(), 'conv-1', 'what would that change?', { actor: operator });
 
+    expect(mockGetPausedWorkflowRun).toHaveBeenCalledWith('conv-1-db', 'codebase-1');
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
     expect(prompt).toContain('run-1');
@@ -1243,6 +1333,7 @@ describe('paused approval gate routing', () => {
 
     await handleMessage(makePlatform(), 'conv-1', 'looks good', { actor: operator });
 
+    expect(mockGetPausedWorkflowRun).toHaveBeenCalledWith('conv-1-db', undefined);
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
     expect(prompt).toContain('no project is attached');

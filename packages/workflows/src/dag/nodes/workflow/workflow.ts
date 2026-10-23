@@ -1,11 +1,13 @@
-import { pauseGateRespectingExternalTransition } from '../../pause';
+import { reportedChildUsage, unreportedChildUsage } from '../../child-usage';
+import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
+import { runOrStagePause, pauseGateRespectingExternalTransition } from '../../pause';
 import { finishNodeExecution } from '../../../node-execution';
 import {
   serializeNodeStateRecord,
   serializeNodeOutput,
   type NodeExecutionResult,
 } from '../../../node-record-serialization';
-import { type NodeFailureKind } from '../../../schemas/node-execution';
+import { type ExecutionDiagnostics, type NodeFailureKind } from '../../../schemas/node-execution';
 import {
   NodeEventWriteError,
   recordDerivedExecution,
@@ -15,9 +17,12 @@ import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import type { WorkflowCommandSurface } from '../../../deps';
 import { spellWorkflowCommand } from '../../../deps';
 import type { TokenUsage } from '@archon/provider-contract';
-import type { WorkflowNode, WorkflowRun } from '../../../schemas';
+import type { WorkflowNode, WorkflowRun, WorkflowRunStatus } from '../../../schemas';
+import {
+  workflowRunStatusSchema,
+  terminalWorkflowRunStatusSchema,
+} from '../../../schemas/run-status';
 import { readSubrunMetadata } from '../../../schemas';
-import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { type JsonValue } from '../../../output-ref';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
@@ -32,6 +37,10 @@ import {
   type ShellInputContext,
   resolveWorkflowValue,
 } from '../../references';
+
+const LIVE_CHILD_STATUSES: readonly WorkflowRunStatus[] = workflowRunStatusSchema.exclude(
+  terminalWorkflowRunStatusSchema.options
+).options;
 
 /**
  * Execute a `workflow:` (sub-run) node (#2121 Phase 2). Starts — or, on parent
@@ -55,6 +64,8 @@ export async function executeWorkflowNode(
   const executionNodeId = ctx.stepNamePrefix + node.id;
   const execution = beginExecution(ctx, node);
   await recordNodeState({ store: deps.store, logDir: ctx.logDir }, execution);
+
+  let childUsage: ExecutionDiagnostics['childUsage'];
 
   // Build the failed result AND persist a node_failed event with the reason. Unlike
   // command/prompt/bash/script nodes (which write their own node_failed inside their
@@ -81,10 +92,18 @@ export async function executeWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
+          diagnostics: { childUsage },
         }
       )
     );
   };
+
+  if (ctx.unattributedChildUsagePaths?.has(executionNodeId)) {
+    return failResult(
+      `Cannot re-execute workflow node '${executionNodeId}': historical child usage lacks unambiguous attribution; cumulative child totals would count earlier spend again.`,
+      'config'
+    );
+  }
 
   if (!ctx.runChildWorkflow) {
     // Fail fast: executor.ts MUST inject the closure. A missing one means a caller
@@ -200,7 +219,7 @@ export async function executeWorkflowNode(
           costUsd: outcome.costUsd,
           tokens: outcome.tokens,
           tokensUnknown: outcome.tokensUnknown,
-          diagnostics: { childRunId: outcome.childRunId },
+          diagnostics: { childRunId: outcome.childRunId, childUsage },
         }
       )
     );
@@ -225,24 +244,40 @@ export async function executeWorkflowNode(
       { status: 'suspended', point: 'child_workflow' },
       { output: { text: '' }, diagnostics: { childRunId } }
     );
-    const paused = await pauseGateRespectingExternalTransition(
-      deps,
-      parentRun.id,
-      { message: blocked.trimEnd(), nodeId: executionNodeId, type: 'child_workflow', childRunId },
-      { event: serializeNodeStateRecord(suspended) }
+    return runOrStagePause(
+      ctx,
+      async () => {
+        const paused = await pauseGateRespectingExternalTransition(
+          deps,
+          parentRun.id,
+          {
+            message: blocked.trimEnd(),
+            nodeId: executionNodeId,
+            type: 'child_workflow',
+            childRunId,
+          },
+          { event: serializeNodeStateRecord(suspended), boundary: ctx.containerPause }
+        );
+        if (!paused) return serializeNodeOutput(execution);
+        await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+        await safeSendMessage(
+          platform,
+          conversationId,
+          `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
+          msgContext
+        );
+        return serializeNodeOutput(suspended);
+      },
+      () => serializeNodeOutput(execution)
     );
-    if (!paused) return serializeNodeOutput(execution);
-    await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
-    await safeSendMessage(
-      platform,
-      conversationId,
-      `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
-      msgContext
-    );
-    return serializeNodeOutput(suspended);
   };
 
   const interpret = async (outcome: ChildWorkflowOutcome): Promise<NodeExecutionResult> => {
+    childUsage = [reportedChildUsage(outcome)];
+    outcome = {
+      ...outcome,
+      ...unreportedChildUsage(outcome, ctx.reportedChildUsage, outcome.childRunId),
+    };
     switch (outcome.status) {
       case 'completed':
         return await asCompleted(outcome);
@@ -317,11 +352,7 @@ export async function executeWorkflowNode(
         await ctx.runChildWorkflow({ ...childArgs, resumeChild: { kind: 'failed', run: existing } })
       );
     }
-    if (
-      existing.status === 'paused' ||
-      existing.status === 'running' ||
-      existing.status === 'pending'
-    ) {
+    if (LIVE_CHILD_STATUSES.includes(existing.status)) {
       // Still in progress (awaiting a human or a concurrent run). Re-pause the
       // parent; NEVER resume a paused child.
       return await pauseParentOnChild(existing.id);
@@ -330,7 +361,7 @@ export async function executeWorkflowNode(
     // freshly-run child uses (interpret handles both).
     return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError || err instanceof NodeEventWriteError) throw err;
+    if (isWorkflowExecutionInterruption(err) || err instanceof NodeEventWriteError) throw err;
 
     // Only a read of the parent's source releases the parent; a child's fault stays the
     // child's, so the launch types those reads (see runChildWorkflow).

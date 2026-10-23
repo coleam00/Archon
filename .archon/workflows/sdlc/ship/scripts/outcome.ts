@@ -21,9 +21,9 @@
  *   deliver's `ready`, `summary`, `reason` and `pr_url`, or "null" when the deliver
  *   branch was skipped.
  *
- * A failed delivery arrives as deliver's `ready: false, reason: failed` report and is
- * relayed like any other not-ready delivery. A failure before delivery skips this
- * node; the workflow's `report` node answers then.
+ * A failed delivery arrives as deliver's `ready: false` report, reason `failed` or
+ * `pr_create_unresolved`, and is relayed like any other not-ready delivery. A failure
+ * before delivery skips this node; the workflow's `report` node answers then.
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';

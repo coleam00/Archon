@@ -14,6 +14,7 @@ import type {
   ArtifactEvent,
   SystemEvent,
   ErrorEvent,
+  TextEvent,
 } from '../primitives/event';
 import type { ProviderEvent, ProviderEventRecord, RunProviderEvents } from '../lib/provider-events';
 import { StreamCard } from './StreamCard';
@@ -70,6 +71,7 @@ type TimelineEntry =
       timestamp: string;
       nodeId: string;
     }
+  | { kind: 'text'; key: string; at: number; event: TextEvent }
   | { kind: 'artifact'; key: string; at: number; event: ArtifactEvent }
   | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent }
   | { kind: 'system_row'; key: string; at: number; row: SystemRow };
@@ -97,37 +99,53 @@ export function pairProviderToolCalls(providerEvents: RunProviderEvents): Paired
       const { event } = record;
       const key = JSON.stringify([record.attemptId, 'toolCallId' in event ? event.toolCallId : '']);
       if (event.type === 'tool_call') {
-        const entry: PairedToolCall = {
-          record,
-          id: `${stepName}:${key}`,
-          timestamp: record.observedAt,
-          nodeId: stepName,
-          call: {
-            name: event.title || event.name,
-            input: event.rawInput === undefined ? {} : event.rawInput,
-          },
-        };
+        const entry = openedToolCall(record, event, stepName, key);
         byId.set(key, entry);
         paired.push(entry);
       } else if (event.type === 'tool_call_update') {
         const entry = byId.get(key);
-        if (entry === undefined) continue;
-        entry.call = {
-          ...entry.call,
-          status: event.status,
-          ...(event.output !== undefined ? { output: event.output } : {}),
-          ...(event.outputTruncated === true ? { outputTruncated: true } : {}),
-          ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
-          // A translated legacy row's time is its row's `created_at`, 1 s apart on
-          // SQLite, so it cannot time a call.
-          ...(record.attemptId !== null
-            ? { durationMs: Date.parse(record.observedAt) - Date.parse(entry.timestamp) }
-            : {}),
-        };
+        if (entry !== undefined) entry.call = completedToolCall(entry, record, event);
       }
     }
   }
   return paired;
+}
+
+function openedToolCall(
+  record: ProviderEventRecord,
+  event: Extract<ProviderEvent, { type: 'tool_call' }>,
+  stepName: string,
+  key: string
+): PairedToolCall {
+  return {
+    record,
+    id: `${stepName}:${key}`,
+    timestamp: record.observedAt,
+    nodeId: stepName,
+    call: {
+      name: event.title || event.name,
+      input: event.rawInput === undefined ? {} : event.rawInput,
+    },
+  };
+}
+
+function completedToolCall(
+  entry: PairedToolCall,
+  record: ProviderEventRecord,
+  event: Extract<ProviderEvent, { type: 'tool_call_update' }>
+): InlineToolCall {
+  return {
+    ...entry.call,
+    status: event.status,
+    ...(event.output !== undefined ? { output: event.output } : {}),
+    ...(event.outputTruncated === true ? { outputTruncated: true } : {}),
+    ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+    // A translated legacy row's time is its row's `created_at`, 1 s apart on
+    // SQLite, so it cannot time a call.
+    ...(record.attemptId !== null
+      ? { durationMs: Date.parse(record.observedAt) - Date.parse(entry.timestamp) }
+      : {}),
+  };
 }
 
 /**
@@ -148,6 +166,118 @@ export function runToolCalls(
       ? messages.reduce((acc, m) => acc + m.toolCalls.length, 0)
       : fromProviderEvents.length,
   };
+}
+
+function messageEntries(messages: readonly Message[], showInline: boolean): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+  for (const m of messages) {
+    const base = new Date(m.timestamp).getTime();
+    const meaningful = isMeaningful(m);
+    const isSystemy = isSystemCategory(m.category) || m.role === 'system';
+
+    if (isSystemy) {
+      // Framework chatter — surface as a compact system row instead of
+      // rendering as agent prose. Dispatch metadata gets its own row when
+      // present so the workflow name shows up explicitly.
+      if (m.dispatch !== null) {
+        entries.push({
+          kind: 'system_row',
+          key: `sm:dispatch:${m.id}`,
+          at: base,
+          row: {
+            label: 'Workflow dispatch',
+            detail: m.dispatch.workflowName,
+            timestamp: m.timestamp,
+          },
+        });
+      } else {
+        entries.push({
+          kind: 'system_row',
+          key: `sm:${m.id}`,
+          at: base,
+          row: {
+            label: m.category ?? 'System',
+            detail: m.content.split('\n')[0]?.slice(0, 160) ?? '',
+            timestamp: m.timestamp,
+          },
+        });
+      }
+      continue;
+    }
+
+    if (!meaningful) {
+      // Empty / no-signal messages — usually plumbing the SDK emits. Hide
+      // by default; behind System the user gets a noise row to see the
+      // gap that would otherwise be invisible.
+      entries.push({
+        kind: 'system_row',
+        key: `sm:noise:${m.id}`,
+        at: base,
+        row: {
+          label: 'Noise',
+          detail: `${m.role} · no content`,
+          timestamp: m.timestamp,
+        },
+      });
+      continue;
+    }
+
+    entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
+    if (!showInline) continue;
+    m.toolCalls.forEach((call, idx) => {
+      entries.push({
+        kind: 'tool',
+        key: `t:${m.id}:${idx.toString()}`,
+        // Place tool calls just after the parent message so they appear right
+        // below it but don't collide across sibling messages.
+        at: base + idx + 1,
+        call,
+        timestamp: m.timestamp,
+        // Message-inline tools are node-blind — messages carry no step.
+        nodeId: null,
+      });
+    });
+  }
+  return entries;
+}
+
+function providerEntries(
+  providerEvents: RunProviderEvents,
+  nodeRuns: readonly NodeRun[],
+  toolCalls: readonly PairedToolCall[]
+): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+
+  const nodeStatus = new Map(nodeRuns.map(r => [r.nodeId, r.status]));
+  const pairedTools = new Map(toolCalls.map(t => [t.record, t]));
+  for (const [stepName, records] of providerEvents) {
+    for (const record of records) {
+      const t = pairedTools.get(record);
+      if (t !== undefined) {
+        const status = nodeStatus.get(t.nodeId);
+        const unrecorded =
+          t.call.status === undefined && status !== undefined && status !== 'running';
+        entries.push({
+          kind: 'tool',
+          key: `pt:${t.id}`,
+          at: Date.parse(t.timestamp),
+          call: unrecorded ? { ...t.call, outcomeUnrecorded: true } : t.call,
+          timestamp: t.timestamp,
+          nodeId: t.nodeId,
+        });
+      } else if (record.event.type === 'hook') {
+        entries.push({
+          kind: 'hook',
+          key: `ph:${JSON.stringify([stepName, record.attemptId, record.seq])}`,
+          at: Date.parse(record.observedAt),
+          event: record.event,
+          timestamp: record.observedAt,
+          nodeId: stepName,
+        });
+      }
+    }
+  }
+  return entries;
 }
 
 /**
@@ -178,105 +308,10 @@ export function RunStream({
   );
 
   const timeline = useMemo<TimelineEntry[]>(() => {
-    const entries: TimelineEntry[] = [];
-    for (const m of messages) {
-      const base = new Date(m.timestamp).getTime();
-      const meaningful = isMeaningful(m);
-      const isSystemy = isSystemCategory(m.category) || m.role === 'system';
-
-      if (isSystemy) {
-        // Framework chatter — surface as a compact system row instead of
-        // rendering as agent prose. Dispatch metadata gets its own row when
-        // present so the workflow name shows up explicitly.
-        if (m.dispatch !== null) {
-          entries.push({
-            kind: 'system_row',
-            key: `sm:dispatch:${m.id}`,
-            at: base,
-            row: {
-              label: 'Workflow dispatch',
-              detail: m.dispatch.workflowName,
-              timestamp: m.timestamp,
-            },
-          });
-        } else {
-          entries.push({
-            kind: 'system_row',
-            key: `sm:${m.id}`,
-            at: base,
-            row: {
-              label: m.category ?? 'System',
-              detail: m.content.split('\n')[0]?.slice(0, 160) ?? '',
-              timestamp: m.timestamp,
-            },
-          });
-        }
-        continue;
-      }
-
-      if (!meaningful) {
-        // Empty / no-signal messages — usually plumbing the SDK emits. Hide
-        // by default; behind System the user gets a noise row to see the
-        // gap that would otherwise be invisible.
-        entries.push({
-          kind: 'system_row',
-          key: `sm:noise:${m.id}`,
-          at: base,
-          row: {
-            label: 'Noise',
-            detail: `${m.role} · no content`,
-            timestamp: m.timestamp,
-          },
-        });
-        continue;
-      }
-
-      entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
-      if (!toolCalls.showInline) continue;
-      m.toolCalls.forEach((call, idx) => {
-        entries.push({
-          kind: 'tool',
-          key: `t:${m.id}:${idx.toString()}`,
-          // Place tool calls just after the parent message so they appear right
-          // below it but don't collide across sibling messages.
-          at: base + idx + 1,
-          call,
-          timestamp: m.timestamp,
-          // Message-inline tools are node-blind — messages carry no step.
-          nodeId: null,
-        });
-      });
-    }
-
-    const nodeStatus = new Map(nodeRuns.map(r => [r.nodeId, r.status]));
-    const pairedTools = new Map(toolCalls.fromProviderEvents.map(t => [t.record, t]));
-    for (const [stepName, records] of providerEvents) {
-      for (const record of records) {
-        const t = pairedTools.get(record);
-        if (t !== undefined) {
-          const status = nodeStatus.get(t.nodeId);
-          const unrecorded =
-            t.call.status === undefined && status !== undefined && status !== 'running';
-          entries.push({
-            kind: 'tool',
-            key: `pt:${t.id}`,
-            at: Date.parse(t.timestamp),
-            call: unrecorded ? { ...t.call, outcomeUnrecorded: true } : t.call,
-            timestamp: t.timestamp,
-            nodeId: t.nodeId,
-          });
-        } else if (record.event.type === 'hook') {
-          entries.push({
-            kind: 'hook',
-            key: `ph:${JSON.stringify([stepName, record.attemptId, record.seq])}`,
-            at: Date.parse(record.observedAt),
-            event: record.event,
-            timestamp: record.observedAt,
-            nodeId: stepName,
-          });
-        }
-      }
-    }
+    const entries: TimelineEntry[] = [
+      ...messageEntries(messages, toolCalls.showInline),
+      ...providerEntries(providerEvents, nodeRuns, toolCalls.fromProviderEvents),
+    ];
 
     // One divider per node, positioned at its first transition so it heads that
     // node's events in the stream.
@@ -290,14 +325,7 @@ export function RunStream({
       });
     }
 
-    for (const e of events) {
-      const at = new Date(e.timestamp).getTime();
-      if (e.kind === 'artifact') {
-        entries.push({ kind: 'artifact', key: `a:${e.id}`, at, event: e });
-      } else if (e.kind === 'system' || e.kind === 'error') {
-        entries.push({ kind: 'system', key: `s:${e.id}`, at, event: e });
-      }
-    }
+    entries.push(...runEventEntries(events));
     entries.sort((a, b) => a.at - b.at);
     return entries;
   }, [messages, events, nodeRuns, toolCalls, providerEvents, showSystem]);
@@ -375,6 +403,7 @@ export function RunStream({
               stopReason={entry.node.stopReason}
               skipReason={entry.node.skipReason}
               skipExpr={entry.node.skipExpr}
+              fanOutOutcome={entry.node.fanOutOutcome}
               showDetail={entry.showDetail}
             />
           );
@@ -423,10 +452,33 @@ export function RunStream({
         }
         return (
           <div key={entry.key} className="py-1">
-            <ArtifactItem event={entry.event} />
+            <ContentEventItem event={entry.event} />
           </div>
         );
       })}
     </div>
+  );
+}
+
+function runEventEntries(events: RunEvent[]): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+  for (const e of events) {
+    const at = new Date(e.timestamp).getTime();
+    if (e.kind === 'artifact') {
+      entries.push({ kind: 'artifact', key: `a:${e.id}`, at, event: e });
+    } else if (e.kind === 'text') {
+      entries.push({ kind: 'text', key: `text:${e.id}`, at, event: e });
+    } else if (e.kind === 'system' || e.kind === 'error') {
+      entries.push({ kind: 'system', key: `s:${e.id}`, at, event: e });
+    }
+  }
+  return entries;
+}
+
+function ContentEventItem({ event }: { event: TextEvent | ArtifactEvent }): ReactElement {
+  return event.kind === 'text' ? (
+    <div className="whitespace-pre-wrap py-4 text-sm text-text-primary">{event.content}</div>
+  ) : (
+    <ArtifactItem event={event} />
   );
 }

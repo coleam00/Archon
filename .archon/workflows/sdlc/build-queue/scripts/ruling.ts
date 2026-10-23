@@ -6,17 +6,18 @@
  * into the issue body as one dated "Current scope" section and read back, so the next
  * run and its review read the ruling as the contract. Then the answer is recorded on the
  * work item, which says what happens next, and the claim is released. A `continue` then
- * starts the item's next build-queue run at once, on the run config this run started
- * with; if that launch fails, the item waits for the next queue run as before.
+ * starts the item's next build-queue run at once, on the run config and input selections
+ * this run started with; if that launch fails, the item waits for the next queue run as before.
  *
  * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE
- * and INPUTS_TEXT, the attention answer.
+ * and INPUTS_TEXT, the attention answer; INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT,
+ * the workflow's inputs.
  */
 
 import { type AskedBy, type BuildAttention, withBuild } from '../../.shared/build.ts';
 import { parseQualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { launchNextRound } from '../../.shared/launch.ts';
+import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { chosen, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
@@ -42,6 +43,10 @@ function main(): void {
   const choice = chosen(asked.attention, trimmed(process.env.INPUTS_CHOICE));
   const words = trimmed(process.env.INPUTS_TEXT);
   const at = new Date().toISOString();
+  const selections: BuildQueueSelections = {
+    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
+    round_limit: text(process.env.INPUTS_ROUND_LIMIT),
+  };
 
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')
@@ -74,7 +79,7 @@ function main(): void {
   emit({
     decision: choice.effect,
     section: heading,
-    summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${choice.effect === 'continue' ? launchNextRound(item, runId) : 'the queue stops working it until a re-triage'}.`,
+    summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${choice.effect === 'continue' ? launchNextRound(item, runId, selections) : 'the queue stops working it until a re-triage'}.`,
   });
 }
 

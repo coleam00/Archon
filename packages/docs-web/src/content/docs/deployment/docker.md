@@ -1,6 +1,6 @@
 ---
 title: Docker Guide
-description: Deploy Archon with Docker, including automatic HTTPS, PostgreSQL, and the Web UI.
+description: Run Archon with Docker Compose, locally or on a server with PostgreSQL and automatic HTTPS.
 category: deployment
 area: infra
 audience: [operator]
@@ -9,311 +9,195 @@ sidebar:
   order: 2
 ---
 
-Deploy Archon on a server with Docker. Includes automatic HTTPS, PostgreSQL, and the Web UI.
+This page installs and runs Archon with Docker Compose: on your own machine, or on a server with PostgreSQL and Caddy for automatic HTTPS. To prepare a VPS first (a user, SSH, the firewall and DNS), see [Cloud Deployment](/deployment/cloud/).
 
-> **Claude Code is pre-installed in the image.** The official `ghcr.io/coleam00/archon` image
-> ships with Claude Code installed via npm and `CLAUDE_BIN_PATH` pre-set — no extra configuration
-> required. If you build a custom image that omits the npm install, set `CLAUDE_BIN_PATH` yourself
-> to point at a mounted `cli.js` (see [AI Assistants → Binary path configuration](/getting-started/ai-assistants/#binary-path-configuration-compiled-binaries-only)).
+The image includes the Claude Code binary from the Claude Agent SDK. On start, the entrypoint points `CLAUDE_BIN_PATH` at it unless you set `CLAUDE_BIN_PATH` yourself.
 
----
+## Cloud-init (fastest setup)
 
-## Cloud-Init (Fastest Setup)
+`deploy/cloud-init.yml` prepares a new VPS when it first boots. Paste its contents into the provider's User Data field when you create the server (Ubuntu 22.04+ or Debian 12+), add your SSH key, and point your domain's A record at the server's IP.
 
-The fastest way to deploy. Paste the cloud-init config into your VPS provider's **User Data** field when creating a server — it installs everything automatically.
+| Provider | Where to paste it |
+|---|---|
+| DigitalOcean | Create Droplet, Advanced Options, User Data |
+| AWS EC2 | Launch Instance, Advanced Details, User Data |
+| Linode | Create Linode, Add Tags, Metadata (User Data) |
+| Hetzner | Create Server, Cloud config, User Data |
+| Vultr | Deploy, Additional Features, Cloud-Init User-Data |
 
-**File:** `deploy/cloud-init.yml`
+The script installs Docker, opens ports 22, 80 and 443 (TCP, plus UDP 443 for HTTP/3), adds a 2 GB swapfile, clones the repository to `/opt/archon`, copies `.env.example` to `.env` and `Caddyfile.example` to `Caddyfile`, and builds the image. It also creates an `archon` user with Docker access but no sudo, and copies your SSH key to it. Use the default cloud user or root for system maintenance.
 
-### How to use
-
-1. **Create a VPS** (Ubuntu 22.04+ recommended) at DigitalOcean, AWS, Linode, Hetzner, etc.
-2. **Paste** the contents of `deploy/cloud-init.yml` into the "User Data" / "Cloud-Init" field
-3. **Add your SSH key** via the provider's UI
-4. **Create the server** and wait ~5-8 minutes for setup to complete
-
-### What it installs
-
-- Docker + Docker Compose
-- UFW firewall (ports 22, 80, 443)
-- Clones the repo to `/opt/archon`
-- Copies `.env.example` -> `.env` and `Caddyfile.example` -> `Caddyfile`
-- Pre-pulls PostgreSQL and Caddy images
-- Builds the Archon Docker image
-
-### After boot
-
-SSH into the server and finish configuration:
+Setup takes 5 to 8 minutes and writes `/opt/archon/SETUP_COMPLETE` when it finishes. Then:
 
 ```bash
-# Check setup completed
-cat /opt/archon/SETUP_COMPLETE
-
-# Edit credentials and domain
-nano /opt/archon/.env
-
-# Set at minimum:
-#   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
-#   DOMAIN=archon.example.com
-#   DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
-
-# (Optional) Basic Auth: see Authentication (Optional Basic Auth) below.
-# Uncomment the whole assignment in .env; replace admin and paste the complete hash:
-# docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
-# CADDY_BASIC_AUTH='basic_auth @protected {
-#   admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
-# }'
-
-# Start
+ssh archon@your-server-ip
+nano /opt/archon/.env          # see "Configure .env" below
 cd /opt/archon
 docker compose --profile with-db --profile cloud up -d
 ```
 
-See [Authentication (Optional Basic Auth)](#authentication-optional-basic-auth) for the complete recipe.
+## Local Docker Desktop (Windows and macOS)
 
-> **Don't forget DNS**: Before starting, point your domain's A record to the server's IP.
-
-### Provider-specific notes
-
-| Provider | Where to paste cloud-init |
-|----------|--------------------------|
-| **DigitalOcean** | Create Droplet -> Advanced Options -> User Data |
-| **AWS EC2** | Launch Instance -> Advanced Details -> User Data |
-| **Linode** | Create Linode -> Add Tags -> Metadata (User Data) |
-| **Hetzner** | Create Server -> Cloud config -> User Data |
-| **Vultr** | Deploy -> Additional Features -> Cloud-Init User-Data |
-
----
-
-## Local Docker Desktop (Windows / macOS)
-
-Run Archon locally with Docker Desktop — no domain, no VPS required. Uses SQLite and the Web UI only.
-
-### Quick start
+Run Archon on your own machine with SQLite and the Web UI. No domain or VPS is needed.
 
 ```bash
 git clone https://github.com/coleam00/Archon.git
 cd Archon
-cp .env.example .env
-# Edit .env: set CLAUDE_CODE_OAUTH_TOKEN or CLAUDE_API_KEY
+cp .env.example .env           # set a Claude or Codex credential
 docker compose up -d
 ```
 
-Access the Web UI at **http://localhost:3000**.
+Open `http://localhost:3000`. Add `--profile with-db` to use the PostgreSQL container instead of SQLite (see [Profiles](#profiles)).
 
-### Windows-specific notes
+On Windows, build from a WSL terminal (for example in `/mnt/c/Users/YourName/path/to/Archon`), not PowerShell. Docker Desktop cannot follow Bun workspace symlinks from a Windows build context and fails with `The file cannot be accessed by the system`. If the container fails with `exec docker-entrypoint.sh: no such file or directory`, the checkout has CRLF line endings. `.gitattributes` forces LF for shell scripts, so re-clone the repository.
 
-**Build from WSL, not PowerShell.** Docker Desktop on Windows cannot follow Bun workspace symlinks during the build context transfer. If you see `The file cannot be accessed by the system`, open a WSL terminal:
+## Manual server setup
+
+Use this instead of cloud-init when you want each step under your control. Prepare the server with [Cloud Deployment](/deployment/cloud/) first.
+
+1. Install Docker, then log out and back in so the group change applies:
+
+   ```bash
+   curl -fsSL https://get.docker.com | sh
+   sudo usermod -aG docker $USER
+   ```
+
+2. Clone the repository and create the config files:
+
+   ```bash
+   git clone https://github.com/coleam00/Archon.git
+   cd Archon
+   cp .env.example .env
+   cp Caddyfile.example Caddyfile
+   ```
+
+3. Edit `.env` as described in [Configure .env](#configure-env).
+
+4. Start the app, PostgreSQL and Caddy:
+
+   ```bash
+   docker compose --profile with-db --profile cloud up -d
+   ```
+
+5. Check it:
+
+   ```bash
+   docker compose --profile with-db --profile cloud ps
+   docker compose logs -f app
+   curl https://archon.example.com/api/health    # from your machine
+   ```
+
+## Pre-built image
+
+To run `ghcr.io/coleam00/archon:latest` without building from source:
 
 ```bash
-cd /mnt/c/Users/YourName/path/to/Archon
+mkdir archon && cd archon
+curl -O https://raw.githubusercontent.com/coleam00/Archon/main/deploy/docker-compose.yml
+curl -O https://raw.githubusercontent.com/coleam00/Archon/main/.env.example
+cp .env.example .env           # see "Configure .env" below
 docker compose up -d
 ```
 
-**Line endings:** The repo uses `.gitattributes` to force LF endings for shell scripts. If you cloned before this was added and see `exec docker-entrypoint.sh: no such file or directory`, re-clone or run:
+This compose file has only the app service. To add PostgreSQL, uncomment the `postgres` service and the `postgres_data` volume, and set `DATABASE_URL`. It has no Caddy service.
+
+### Verify image attestations
+
+Published images carry BuildKit provenance and SPDX SBOM attestations. Resolve the tag to a digest, then inspect that digest so the image cannot change between inspection and deployment:
 
 ```bash
-git rm --cached -r .
-git reset --hard
+docker buildx imagetools inspect ghcr.io/coleam00/archon:latest
+# Copy the top-level Digest, not a platform manifest's digest.
+image='ghcr.io/coleam00/archon@sha256:<digest>'
+docker buildx imagetools inspect "$image" --format '{{ json .Provenance }}'
+docker buildx imagetools inspect "$image" --format '{{ json .SBOM }}'
 ```
 
-### What you get
+Both results must be non-empty: each platform has a `SLSA` provenance object and an `SPDX` SBOM object. In the provenance, check three things:
 
-| Feature | Status |
-|---------|--------|
-| Web UI | http://localhost:3000 |
-| Database | SQLite (automatic, zero setup) |
-| HTTPS / Caddy | Not needed locally |
-| Auth | None (single-user, localhost only) |
-| Platform adapters | Optional (Telegram, Slack, etc.) |
+- The source is `https://github.com/coleam00/Archon` and the revision is the release commit you intend to run. Current releases record them in `buildDefinition.externalParameters.request.args` as `label:org.opencontainers.image.source` and `label:org.opencontainers.image.revision`. Older BuildKit versions use `invocation.configSource` and `invocation.environment`.
+- The workflow ref in `buildDefinition.internalParameters.github_workflow_ref` names `.github/workflows/publish.yml` at the expected ref.
+- The builder ID (`builder.id` or `runDetails.builder.id`) links to the GitHub Actions run.
 
-### Using PostgreSQL locally (optional)
+The package inventory is under `SPDX.packages`. The `unknown/unknown` entries in the manifest list are the attestation manifests. The attestations are unsigned metadata, so they do not authenticate the publisher by themselves. See [Docker's provenance documentation](https://docs.docker.com/build/metadata/attestations/slsa-provenance/).
 
-```bash
-docker compose --profile with-db up -d
-```
+## Configure .env
 
-Then add to `.env`:
-```ini
-DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
-```
+Docker Compose reads the repository's `.env`. Edit it directly. Don't run `archon setup` for a Docker install: the wizard writes Archon's CLI env files, not this one. `.env.example` documents every variable.
 
----
+### AI credentials
 
-## Manual Server Setup
-
-Step-by-step alternative if you prefer not to use cloud-init, or need more control.
-
-### 1. Install Docker
-
-```bash
-# On Ubuntu/Debian
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-
-# Log out and back in for group change to take effect
-exit
-# ssh back in
-
-# Verify
-docker --version
-docker compose version
-```
-
-### 2. Clone the repo
-
-```bash
-git clone https://github.com/coleam00/Archon.git
-cd Archon
-```
-
-### 3. Configure environment
-
-```bash
-cp .env.example .env
-cp Caddyfile.example Caddyfile
-nano .env
-```
-
-Set these values in `.env`:
+Set at least one provider:
 
 ```ini
-# AI Assistant — at least one is required
-# Option A: Claude OAuth token (run `claude setup-token` on your local machine to get one)
+# Claude: an OAuth token from `claude setup-token` on your own machine
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxxxx
-# Option B: Claude API key (from console.anthropic.com/settings/keys)
+# or an API key from console.anthropic.com
 # CLAUDE_API_KEY=sk-ant-xxxxx
 
-# Domain — your domain or subdomain pointing to this server
-DOMAIN=archon.example.com
+# Codex: values from ~/.codex/auth.json after `codex login`
+# ARCHON_CODEX_ID_TOKEN=eyJhbGc...
+# ARCHON_CODEX_ACCESS_TOKEN=eyJhbGc...
+# ARCHON_CODEX_REFRESH_TOKEN=rt_...
+# ARCHON_CODEX_ACCOUNT_ID=6a6a7ba6-...
+```
 
-# Database — connect to the Docker PostgreSQL container
-# Without this, the app uses SQLite (fine for getting started, but PostgreSQL recommended)
+`.env.example` sets `CLAUDE_USE_GLOBAL_AUTH=true`. That flag only satisfies the server's startup check: it tells Archon to rely on a `claude /login` session, and a fresh container has none. Set a token or key. When one is set, Archon uses it whatever the flag says. See [AI Assistants](/getting-started/ai-assistants/) for every provider.
+
+### Server, domain and database
+
+| Variable | Default in Docker | Purpose |
+|---|---|---|
+| `PORT` | `3000` | App port, published on the host. Local development defaults to 3090. |
+| `DOMAIN` | none | Public hostname. Required for `--profile cloud`. |
+| `DATABASE_URL` | unset (SQLite) | PostgreSQL connection string. |
+| `POSTGRES_PORT` | `5432` | Host port for the PostgreSQL container, bound to `127.0.0.1`. |
+| `LOG_LEVEL` | `info` | `fatal`, `error`, `warn`, `info`, `debug` or `trace`. |
+
+For the PostgreSQL container, use the service name as the host:
+
+```ini
 DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
-
-# Basic Auth (optional) — protects Web UI when exposed to the internet
-# Skip if using IP-based firewall rules instead.
-# See Authentication (Optional Basic Auth) below for the complete steps.
-# Uncomment the whole assignment; replace admin and paste the complete hash unchanged.
-# Generate hash: docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
-# CADDY_BASIC_AUTH='basic_auth @protected {
-#   admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
-# }'
-
-# Platform tokens (set the ones you use)
-# TELEGRAM_BOT_TOKEN=123456789:ABCdef...
-# SLACK_BOT_TOKEN=xoxb-...
-# SLACK_APP_TOKEN=xapp-...
-# GH_TOKEN=ghp_...
-# GITHUB_TOKEN=ghp_...
 ```
 
-> **Docker does not support `CLAUDE_USE_GLOBAL_AUTH=true`** — there is no local `claude` CLI inside the container. You must provide either `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY` explicitly.
->
-> **If you use `--profile with-db` without setting `DATABASE_URL`**, the app will fall back to SQLite and log a warning. The PostgreSQL container runs but is unused.
-
-### 4. Point your domain to the server
-
-Create a DNS **A record** at your domain registrar:
-
-| Type | Name | Value |
-|------|------|-------|
-| A | `archon` (or `@` for root domain) | Your server's public IP |
-
-Wait for DNS propagation (usually 5-60 minutes). Verify with `dig archon.example.com`.
-
-### 5. Open firewall ports
-
-```bash
-sudo ufw allow 22/tcp
-sudo ufw allow 80/tcp
-sudo ufw allow 443
-sudo ufw --force enable
-```
-
-### 6. Start
-
-```bash
-docker compose --profile with-db --profile cloud up -d
-```
-
-This starts three containers:
-- **app** — Archon server + Web UI
-- **postgres** — PostgreSQL 17 database (auto-initialized)
-- **caddy** — Reverse proxy with automatic HTTPS (Let's Encrypt)
-
-### 7. Verify
-
-```bash
-# Check all containers are running
-docker compose --profile with-db --profile cloud ps
-
-# Watch logs
-docker compose logs -f app
-docker compose logs -f caddy
-
-# Test HTTPS (from your local machine)
-curl https://archon.example.com/api/health
-```
-
-Open **https://archon.example.com** in your browser — you should see the Archon Web UI.
-
----
+Platform tokens (`TELEGRAM_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `GH_TOKEN`, `WEBHOOK_SECRET` and so on) are covered in each adapter's page under [Adapters](/adapters/). For a GitHub webhook, the payload URL is `https://archon.example.com/webhooks/github`; see [GitHub](/adapters/github/).
 
 ## Profiles
 
-Archon uses Docker Compose profiles to optionally add PostgreSQL and/or HTTPS. Mix and match:
+Compose profiles add PostgreSQL, HTTPS or form login to the base app service:
 
 | Command | What runs |
-|---------|-----------|
+|---|---|
 | `docker compose up -d` | App with SQLite |
-| `docker compose --profile with-db up -d` | App + PostgreSQL |
-| `docker compose --profile cloud up -d` | App + Caddy (HTTPS) |
-| `docker compose --profile with-db --profile cloud up -d` | App + PostgreSQL + Caddy |
+| `docker compose --profile with-db up -d` | App and PostgreSQL 17 |
+| `docker compose --profile cloud up -d` | App and Caddy |
+| `docker compose --profile with-db --profile cloud up -d` | App, PostgreSQL and Caddy |
 
-:::note
-There is no `external-db` profile. When using an external PostgreSQL database (Supabase, Neon, etc.), just set `DATABASE_URL` in `.env` and run `docker compose up -d` without any profile. The base `app` service always starts.
-:::
+Add `--profile auth` for the [form login sidecar](#form-login-sidecar). For an external database such as Supabase or Neon, set `DATABASE_URL` and use no database profile. There is no `external-db` profile.
 
-### No profile (SQLite)
+- **No profile:** SQLite, stored in the data volume at `/.archon/archon.db`.
+- **`with-db`:** a PostgreSQL 17 container. The app creates and upgrades the schema on every start. If you start this profile without setting `DATABASE_URL`, the app logs a warning and uses SQLite, and the container sits unused.
+- **`cloud`:** [Caddy](https://caddyserver.com/) in front of the app, with Let's Encrypt certificates, HTTP to HTTPS redirects, HTTP/3 and unbuffered `/api/stream/*` for live updates. It needs a `Caddyfile` (copied from `Caddyfile.example`), `DOMAIN` set, the DNS A record in place, and ports 80 and 443 open. Caddy waits for the app's health check before it starts.
 
-Zero-config default. No database container needed — SQLite file is stored in the `archon_data` volume.
+## Protect the Web UI
 
-### `--profile with-db` (PostgreSQL)
+A Web UI on a public domain needs a login. Choose one of these:
 
-Starts a PostgreSQL 17 container. Set the connection URL in `.env`:
+- **Better Auth** (PostgreSQL only, recommended): per-user accounts, and the server rejects every `/api/*` request without a session. Set `BETTER_AUTH_SECRET`; see [Web UI login](/reference/configuration/#web-ui-login-better-auth-optional). Signup is closed by default: invite people with `ARCHON_AUTH_ALLOWED_EMAILS`, or open it with `ARCHON_AUTH_OPEN_SIGNUP=true`. With Better Auth on, you don't need either Caddy option below; the [Security reference](/reference/security/#adapter-authorization) explains how to retire them.
+- **Caddy basic auth:** the browser's own login prompt, with no extra container.
+- **Form login sidecar:** a styled login page and a session cookie, served by the `auth-service` container.
 
-```ini
-DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
-```
+Use one Caddy option at a time, not both. Caddy always leaves `/webhooks/*` and `/api/health` open, and webhooks verify their own signatures. Caddy answers `/internal/*` with a 404 and never forwards it.
 
-The schema is auto-initialized on first startup. PostgreSQL is exposed on `${POSTGRES_PORT:-5432}` for external tools.
+### Caddy basic auth
 
-### `--profile cloud` (Caddy HTTPS)
-
-Adds a [Caddy](https://caddyserver.com/) reverse proxy with automatic TLS certificates from Let's Encrypt.
-
-**Requires before starting:**
-
-1. `Caddyfile` created: `cp Caddyfile.example Caddyfile`
-2. `DOMAIN` set in `.env`
-3. DNS A record pointing to your server's IP
-4. Ports 80 and 443 open
-
-Caddy handles HTTPS certificates, HTTP->HTTPS redirect, HTTP/3, and SSE streaming.
-
-### Authentication (Optional Basic Auth)
-
-Caddy can enforce HTTP Basic Auth on routes matched by `@protected`, which excludes `/internal/*`, `/webhooks/*`, and `/api/health`. This is optional — skip it if you use IP-based firewall rules or other network-level access control.
-
-**To enable:**
-
-1. Generate a bcrypt password hash:
+1. Generate a bcrypt hash. Never put a plaintext password in `.env`.
 
    ```bash
    docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
    ```
 
-2. Set `CADDY_BASIC_AUTH` in the Compose `.env`. Replace `admin` with your username and paste the command's complete hash output unchanged:
+2. Set `CADDY_BASIC_AUTH` in `.env`. Replace `admin` with your username and paste the complete hash unchanged:
 
    ```ini
    CADDY_BASIC_AUTH='basic_auth @protected {
@@ -321,428 +205,174 @@ Caddy can enforce HTTP Basic Auth on routes matched by `@protected`, which exclu
    }'
    ```
 
-   This is a single-quoted multiline Compose dotenv value: real newlines and literal `$` characters are preserved. Do not double the dollars or source this assignment as a shell command. See [Compose interpolation](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/) and [Caddy Basic Auth syntax](https://caddyserver.com/docs/caddyfile/directives/basic_auth).
+   This is a single-quoted multiline Compose value, so newlines and `$` characters survive as written. Don't double the dollar signs, and don't source the file in a shell. See [Compose interpolation](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/) and [Caddy's basic_auth](https://caddyserver.com/docs/caddyfile/directives/basic_auth).
 
-3. Recreate Caddy to apply the changed container environment: `docker compose --profile cloud up -d --force-recreate caddy`
+3. Recreate Caddy so it reads the new value:
 
-Your browser will prompt for username/password when accessing the Archon URL. The protected matcher excludes `/internal/*`, `/webhooks/*`, and `/api/health`; webhook endpoints use HMAC signature verification.
+   ```bash
+   docker compose --profile cloud up -d --force-recreate caddy
+   ```
 
-To disable, leave `CADDY_BASIC_AUTH` empty or unset — the Caddyfile expands it to nothing.
+To turn it off, leave `CADDY_BASIC_AUTH` empty or unset.
 
-> **Important:** Always use the `docker run --rm caddy caddy hash-password` command to generate hashes — never put plaintext passwords in `.env`.
+### Form login sidecar
 
-### Form-Based Authentication (HTML Login Page)
-
-> **PostgreSQL deployments:** prefer native [Web UI login via Better Auth](/reference/configuration/#web-ui-login-better-auth-optional) (`BETTER_AUTH_SECRET`), which supersedes this single-user `auth-service` sidecar with real per-user accounts. Self-serve signup is **disabled by default** — invite teammates with `ARCHON_AUTH_ALLOWED_EMAILS` (an allowlist) or open it explicitly with `ARCHON_AUTH_OPEN_SIGNUP=true`. When enabled, Better Auth also **gates the API server-side** (every `/api/*` request needs a session or gets `401`), so it can fully replace this `forward_auth` sidecar — see the sidecar-retirement runbook in the [Security reference](/reference/security/#adapter-authorization). The sidecar below still works (and remains the option for SQLite/solo installs) but is no longer the recommended path on Postgres.
-
-An alternative to basic auth that serves a styled HTML login form instead of the browser's credential popup. Uses a lightweight `auth-service` sidecar and Caddy's `forward_auth` directive.
-
-**When to use form auth vs basic auth:**
-- **Form auth**: Styled dark-mode login page, 24h session cookie, logout support. Requires an extra container.
-- **Basic auth**: Zero extra containers, simpler setup. Browser shows a native credential dialog.
-
-**Setup:**
-
-1. Generate a bcrypt password hash:
+1. Generate a bcrypt hash. The first run builds the `auth-service` image.
 
    ```bash
    docker compose --profile auth run --rm auth-service \
      node -e "require('bcryptjs').hash('YOUR_PASSWORD', 12).then(h => console.log(h))"
    ```
 
-   > First run builds the auth-service image. Save the output hash (starts with `$2b$12$...`).
-
-2. Generate a random cookie signing secret:
+2. Generate a cookie signing secret:
 
    ```bash
    docker run --rm node:22-alpine \
      node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
    ```
 
-3. Set the following in `.env`:
+3. Set them in `.env`, writing every `$` in the hash as `$$` so Compose does not interpolate it:
 
    ```ini
    AUTH_USERNAME=admin
    AUTH_PASSWORD_HASH=$$2b$$12$$REPLACE_WITH_YOUR_HASH
    COOKIE_SECRET=REPLACE_WITH_64_HEX_CHARS
+   # COOKIE_MAX_AGE=86400   # session length in seconds
    ```
 
-   Escape every `$` in the bcrypt hash as `$$`; otherwise Docker Compose treats it as variable interpolation.
+4. In `Caddyfile`, uncomment the Option A block (`handle /login`, `handle /logout` and the `forward_auth` handle), and comment out the "No auth" `handle` block below it.
 
-4. Update `Caddyfile` (copy from `Caddyfile.example` if not done yet):
-
-   - **Uncomment** the "Option A" form auth block (the `handle /login`, `handle /logout`, and `handle { forward_auth ... }` blocks)
-   - **Comment out** the "No auth" default `handle` block (the last `handle { ... }` block near the bottom of the site block)
-
-5. Start with both `cloud` and `auth` profiles:
+5. Start with the `auth` profile:
 
    ```bash
    docker compose --profile with-db --profile cloud --profile auth up -d
    ```
 
-6. Visit your domain — you should be redirected to `/login`.
+Your domain now redirects to `/login`. Visit `/logout` to end the session.
 
-**Logout:** Navigate to `/logout` to clear the session cookie and return to the login form.
+## Data and home volumes
 
-**Session duration:** Defaults to 24 hours (`COOKIE_MAX_AGE=86400`). Override in `.env`:
-```ini
-COOKIE_MAX_AGE=3600  # 1 hour
-```
+The container keeps Archon's data in `/.archon`: workspaces, worktrees, artifacts, logs, plugins and the SQLite database. The user's home, `/home/appuser`, holds provider and tool state:
 
-> **Note:** Do not use form auth and basic auth simultaneously. Choose one method and leave the other disabled (either empty `CADDY_BASIC_AUTH` or remove the basic auth `@protected` block from your Caddyfile).
+| Path | What it holds |
+|---|---|
+| `~/.claude/` | Claude Code skills, commands, agents, hooks, MCP config, sessions, memory and OAuth state |
+| `~/.codex/` | Codex `auth.json` from `codex login`. With the `ARCHON_CODEX_*` variables set, startup overwrites it each time. |
+| `~/.pi/agent/` | Pi `auth.json` from `pi /login`, `models.json`, `settings.json` and sessions |
+| `~/.gitconfig` | Git identity, signing config, aliases and `safe.directory` entries |
+| `~/.config/gh/` | GitHub CLI login from `gh auth login` |
+| `~/.bash_history` | Shell history from `docker compose exec app bash` |
 
----
-
-## Configuration
-
-### Port Defaults
-
-:::caution
-Docker defaults to port **3000** (`${PORT:-3000}` in docker-compose.yml), while local development defaults to **3090**. Set `PORT` in `.env` to change the Docker port.
-:::
-
-The Docker healthcheck uses `/api/health` (not `/health`):
+Both are Docker named volumes by default (`archon_data` and `archon_user_home`), so they survive restarts and rebuilds. To keep them at a host path instead, set `ARCHON_DATA` or `ARCHON_USER_HOME` in `.env`, and make the directory writable by UID 1001, the container user:
 
 ```bash
-# Inside Docker
-curl http://localhost:3000/api/health
-
-# Local development (both work)
-curl http://localhost:3090/health
-curl http://localhost:3090/api/health
+sudo mkdir -p /opt/archon-data /opt/archon-user-home
+sudo chown -R 1001:1001 /opt/archon-data /opt/archon-user-home
 ```
 
-### AI Credentials (required)
-
-Docker containers cannot use `CLAUDE_USE_GLOBAL_AUTH=true` — there is no local `claude` CLI inside the container. You must set credentials explicitly in `.env`:
-
-**Claude (choose one):**
-
 ```ini
-# OAuth token — run `claude setup-token` on your local machine, copy the token
-CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xxxxx
-
-# Or API key — from console.anthropic.com/settings/keys
-CLAUDE_API_KEY=sk-ant-xxxxx
-```
-
-**Codex (alternative):**
-
-```ini
-ARCHON_CODEX_ID_TOKEN=eyJhbGc...
-ARCHON_CODEX_ACCESS_TOKEN=eyJhbGc...
-ARCHON_CODEX_REFRESH_TOKEN=rt_...
-ARCHON_CODEX_ACCOUNT_ID=6a6a7ba6-...
-```
-
-### Platform Tokens (optional)
-
-```ini
-TELEGRAM_BOT_TOKEN=123456789:ABCdef...
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-DISCORD_BOT_TOKEN=...
-GH_TOKEN=ghp_...
-GITHUB_TOKEN=ghp_...
-WEBHOOK_SECRET=...
-```
-
-### Server Settings (optional)
-
-```ini
-PORT=3000                          # Default: 3000
-DOMAIN=archon.example.com          # Required for --profile cloud
-LOG_LEVEL=info                     # fatal|error|warn|info|debug|trace
-MAX_CONCURRENT_CONVERSATIONS=10
-```
-
-See `.env.example` for the full list with documentation.
-
-### Data Directory
-
-The container stores all data at `/.archon/` (workspaces, worktrees, artifacts, logs, SQLite DB).
-
-By default this is a Docker-managed volume. To store data at a specific location on the host, set `ARCHON_DATA` in `.env`:
-
-```ini
-# Store Archon data at a specific host path
 ARCHON_DATA=/opt/archon-data
-```
-
-:::note
-`ARCHON_HOME` from `.env.example` is **ignored inside Docker** — the container always uses `/.archon`. Use `ARCHON_DATA` (host-side bind-mount source) to control *where on the host* `/.archon` lives. Both `ARCHON_HOME` and `ARCHON_DATA` leak into the container env via `env_file: .env`, which is harmless but expected.
-:::
-
-The directory is created automatically. Make sure the path is writable by UID 1001 (the container user):
-
-```bash
-mkdir -p /opt/archon-data
-sudo chown -R 1001:1001 /opt/archon-data
-```
-
-If `ARCHON_DATA` is not set, Docker manages the volume automatically (`archon_data`) — data persists across restarts and rebuilds but lives inside Docker's storage.
-
-### User Home Directory (Persisted)
-
-The container runs as `appuser` with `$HOME=/home/appuser`. The base compose mounts `/home/appuser` as a named volume (`archon_user_home`) by default, so user-specific state survives container rebuilds without any operator action:
-
-| Path | What it persists |
-|------|------------------|
-| `~/.claude/` | Claude Code skills, commands, agents, hooks, MCP config, projects (conversation history), memory, OAuth state, keybindings, file-history |
-| `~/.codex/` | Codex auth (`auth.json` from interactive `codex login`; the env-var path via `setup-auth` overwrites this on every container start) |
-| `~/.pi/agent/` | Pi `auth.json` from interactive `pi /login`, plus `models.json`, global settings (`~/.pi/agent/settings.json`), and sessions (Archon's Pi adapter reads `auth.json` and `settings.json` on every request) |
-| `~/.gitconfig` | Author identity, signing config, custom aliases, plus `safe.directory` entries from the image and runtime setup |
-| `~/.bash_history` | Shell history when you `docker compose exec app bash` |
-| `~/.config/gh/` | GitHub CLI auth from interactive `gh auth login` (the `GH_TOKEN` env-var path works without it) |
-
-To bind-mount a host path instead of the default named volume, set `ARCHON_USER_HOME` in `.env`:
-
-```ini
 ARCHON_USER_HOME=/opt/archon-user-home
 ```
 
-The host path must be writable by UID 1001 — chown it once before first start:
+On every start the entrypoint fixes ownership of both paths, touching only files with the wrong owner.
 
-```bash
-mkdir -p /opt/archon-user-home
-sudo chown -R 1001:1001 /opt/archon-user-home
-```
+- `ARCHON_HOME` has no effect inside the container, which always uses `/.archon`. Use `ARCHON_DATA` to choose where that lives on the host.
+- A bind-mounted home starts with an empty `~/.gitconfig`, because Docker copies image content into new named volumes but never into bind mounts. The entrypoint still adds the `safe.directory` entries Archon needs. Set your Git identity with `git config --global` inside the container.
+- `safe.directory` entries added at runtime stay in the home volume, even after the checkout is gone. Archon never removes them, because concurrent setup may rely on the same entry. See [Git directory trust](/reference/security/#git-directory-trust).
+- To keep Pi's data on the data volume, set `PI_CODING_AGENT_DIR=/.archon/pi` before the container starts.
+- To wipe the home volume: `docker compose down && docker volume rm archon_archon_user_home`.
 
-The entrypoint fixes ownership on every container start, touching only files whose owner is wrong, so startup stays fast even on large volumes. Subsequent rebuilds work without re-running `chown`.
+### Root fallback for macOS bind mounts
 
-:::caution
-Bind-mount paths do **not** inherit the image's baked `~/.gitconfig` (Docker only copies image content into named volumes on first creation, never into bind mounts). The entrypoint still registers git `safe.directory` entries for `/.archon/workspaces` and `/.archon/worktrees` repos at runtime, so functionality is preserved — but a bind-mounted `~/.gitconfig` starts empty and any author identity / signing config you want must be set explicitly with `git config --global` inside the container.
-:::
+On a macOS bind mount (VirtioFS), the ownership fix always fails: the host will not remap files to UID 1001. The entrypoint prints the `chown` error and exits 1, so the container restarts in a loop. Read-only mounts and SELinux or AppArmor denials on Linux fail the same way.
 
-Runtime `safe.directory` grants also persist in this home volume across restarts and rebuilds. A grant remains if clone or worktree setup fails, adoption is rejected, or the checkout is removed; Git will still trust a later checkout at that path. Archon leaves removal to the operator because concurrent setup may rely on the same grant. See [Git directory trust](/reference/security/#git-directory-trust).
-
-If `ARCHON_USER_HOME` is not set, Docker manages the volume automatically (`archon_user_home`) — config persists across restarts and rebuilds but lives inside Docker's storage. To wipe it: `docker compose down && docker volume rm archon_archon_user_home`.
-
-#### Relocating Pi data to the ARCHON_DATA volume (optional)
-
-By default Pi's data directory (`~/.pi/agent/`) is persisted via the `archon_user_home` volume above. If you'd rather keep Pi data alongside the rest of `/.archon/` (e.g. to back it up with the same volume), set `PI_CODING_AGENT_DIR` in `.env` to redirect it:
-
-```ini
-# Optional — only needed if you want Pi data on the ARCHON_DATA volume instead
-PI_CODING_AGENT_DIR=/.archon/pi
-```
-
-This must be set before the container starts; the Pi SDK reads the variable on each file path lookup.
-
-### Root fallback for macOS bind mounts (opt-in)
-
-On every start the entrypoint fixes ownership of `/.archon` and `/home/appuser` so they are writable by `appuser` (UID 1001), then drops privileges. On **macOS bind mounts (VirtioFS)** this ownership fix always fails — the host controls file ownership and refuses to remap host UIDs to the container's UID 1001 — so the container exits 1 and crash-loops. Read-only mounts and SELinux/AppArmor denials on Linux fail the same way.
-
-`ARCHON_ALLOW_ROOT_FALLBACK` is the explicit escape hatch for this case:
-
-```ini
-# .env — opt in to running as root when the ownership fix fails
-ARCHON_ALLOW_ROOT_FALLBACK=1
-```
-
-| Value | Behavior when the ownership fix fails |
-|-------|----------------------------------------|
-| unset / anything but `1` (default) | Print the underlying `chown` error and exit 1 (fail loud — unchanged) |
-| `1` | Print a warning, `export IS_SANDBOX=1`, and continue running as **root** (privileges are not dropped to `appuser`) |
-
-The variable has **no effect** when the ownership fix succeeds — Linux setups with correct volume ownership are untouched.
+`ARCHON_ALLOW_ROOT_FALLBACK=1` in `.env` makes the entrypoint print a warning and keep running as root instead. Any other value, or none, keeps the exit. The variable does nothing when the ownership fix succeeds.
 
 :::caution
-This is a deliberate security tradeoff and is **never auto-enabled**. Running as root also sets `IS_SANDBOX=1`, which bypasses the Claude provider's UID-0 safety guard (it otherwise refuses `bypassPermissions` as root) — so AI subprocesses run as root inside the container. That is acceptable on a single-operator macOS dev machine where the bind mount already scopes what the container can touch; it is the wrong fix on Linux, where the failure means the volume ownership is actually broken — run `sudo chown -R 1001:1001 <path>` on the host instead of opting in.
+Running as root also sets `IS_SANDBOX=1`, which disables the Claude provider's refusal to run `bypassPermissions` as root, so AI subprocesses run as root in the container. That is acceptable on a single-operator Mac where the bind mount already limits what the container can reach. On Linux the failure means the volume ownership is wrong: run `sudo chown -R 1001:1001 <path>` on the host instead.
 :::
 
-### Folder-project container isolation (`--container`) is unavailable in Docker
+## GitHub credentials
 
-The folder-project **container backend** (`archon workflow run … --container`) launches a
-sibling Docker container per run to isolate a workflow's writes. It shells out to the
-`docker` CLI, which needs both the Docker CLI binary and access to the host Docker daemon
-socket (`/var/run/docker.sock`).
-
-**When Archon itself runs inside Docker (this compose stack), `--container` does not work:**
-the app image ships no `docker` CLI and the compose stack deliberately does **not** mount
-`/var/run/docker.sock`. A `--container` run fails fast at preflight with a
-"Cannot connect to the Docker daemon" error. The logged error keeps the CLI failure
-and explains that the `--container` backend is unavailable when Archon runs inside Docker.
-Worktree isolation (the default for git repos) and in-place folder runs are unaffected —
-only the `--container` backend requires the daemon.
-
-:::caution
-Mounting the Docker socket into the app container to enable `--container` is a serious
-security tradeoff and is **not** part of the supported compose stack. The socket is
-**root-equivalent**: any process that can reach it can start a privileged container and
-take over the host. Combined with the `native`-overlay CAP_SYS_ADMIN escape, this widens
-the blast radius well beyond a single run. If you accept that tradeoff on a single-tenant,
-operator-trusted host, read `packages/isolation/docker/SECURITY.md` first — it documents
-the full threat model for the container backend. To use `--container` without exposing the
-socket, run Archon **directly on the host** (non-Docker install) with a local Docker daemon
-instead.
-:::
-
-### GitHub CLI Authentication
-
-`GH_TOKEN` from `.env` is picked up automatically. Alternatively, log in inside the container for `gh` and `git`. The forge opt-in also reads this login after trying `GH_TOKEN` and `GITHUB_TOKEN`:
+The container uses `GH_TOKEN` from `.env`. You can also log in inside the container, and the login lands on the home volume:
 
 ```bash
 docker compose exec -u appuser -e HOME=/home/appuser app gh auth login
 ```
 
-The server and this command use `/home/appuser`; its `.config/gh` login is on the persisted user-home volume.
+- With `GH_TOKEN` set and GitHub App mode off, every start resets Git's `https://github.com` credential helper to one that uses `GH_TOKEN`. A helper written by `gh auth login` applies only without `GH_TOKEN`.
+- In [GitHub App mode](/adapters/github-app-setup/) (`GITHUB_APP_ID`, a private key and `WEBHOOK_SECRET` set, `GITHUB_TOKEN` unset), startup removes only the PAT helper that the entrypoint wrote earlier. An incomplete App configuration leaves it in place. Other helpers are yours and stay.
+- The entrypoint reads these variables from the container environment, not from `/.archon/.env`. Keep `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, `WEBHOOK_SECRET`, `GITHUB_TOKEN` and `GH_TOKEN` in the compose `.env`. If they are only in `/.archon/.env`, the server runs in App mode while clones keep using the old PAT.
+- With `ARCHON_SDLC_FORGE=gh`, delete an empty `GH_TOKEN=` line. The SDLC workflows refuse an empty `GH_TOKEN` when `GITHUB_TOKEN` is unset, rather than let `gh` fall back to the stored login.
 
-With `ARCHON_SDLC_FORGE=gh`, remove the empty `GH_TOKEN=` line from `.env`: the SDLC workflows refuse an empty `GH_TOKEN` with no `GITHUB_TOKEN` set rather than let `gh` act as the stored login, because per-user GitHub mode empties it for a user who has not connected.
+## Plugins
 
-Outside GitHub App mode, when `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
-
-In GitHub App mode (`GITHUB_APP_ID`, a private key and `WEBHOOK_SECRET` set, `GITHUB_TOKEN` unset), startup removes only the exact PAT helper previously written by the entrypoint, even if `GH_TOKEN` remains set. An incomplete App configuration leaves the PAT helper in place. Other Git credential helpers are preserved and remain operator-owned. The GitHub CLI can still use `GH_TOKEN` from its environment.
-
-The entrypoint decides the mode from the container environment (`env_file: .env` or `environment:` in compose), not from `/.archon/.env`, which the Git credential setup does not load. Keep `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, `WEBHOOK_SECRET`, `GITHUB_TOKEN` and `GH_TOKEN` in the container environment. If they are set only in `/.archon/.env`, the server and the entrypoint disagree on the mode: in App mode the PAT helper stays and clones keep using the old PAT.
-
-### Plugins
-
-Install plugins inside the running container. The GitHub forge plugin:
+Install plugins inside the running container, as `appuser` so the server owns the files:
 
 ```bash
 docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/forge-github
-```
-
-The image ships a verified Slack chat plugin outside the data volume. A nonempty `SLACK_BOT_TOKEN` in the container environment or an effective Archon env file (`/.archon/.env`, then `/app/packages/server/.archon/.env`) declares installation. Before starting the server, the entrypoint provisions it offline into `/.archon/plugins` and logs the release and commit without printing tokens. Existing token-configured deployments need no manual plugin-add step after upgrading. Both `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` are still required to connect to Slack (see [Slack](/adapters/slack/)).
-
-A verified installed Slack plugin is retained, including an operator's pinned release from another source, even if the image-provided plugin's receipt is broken. The image does not automatically update it. A broken image-provided Slack receipt blocks a required new installation. Missing or changed installed Slack executables and ownership conflicts also stop provisioning with an error; inspect the boot logs and repair the installation before restarting.
-
-**Turning Slack off:** remove its tokens from every effective source, remove the plugin with `docker compose exec -u appuser app bun run cli plugin remove coleam00/Archon/plugins/chat-slack` (use the actual installed id if different), then restart. Removing the plugin while `SLACK_BOT_TOKEN` remains configured reinstalls the image-provided release on the next boot. Removing tokens alone leaves the receipt installed; the plugin will report missing credentials.
-
-A workflow pack, from a public GitHub repository that publishes one:
-
-```bash
 docker compose exec -u appuser app bun run cli plugin add Wirasm/archon-video
 ```
 
-The bundled SDLC workflows (`archon-ship`, `archon-deliver`, `archon-upkeep`, `archon-pr`) use `gh` by default. To opt into this plugin, set `ARCHON_SDLC_FORGE=forge` and install a release supporting every pack operation (v0.12.1 or later; parts of the pack still need `gh`). Configure a credential inside the container: the host tries `GH_TOKEN`, then `GITHUB_TOKEN`, then the container's `gh` login. Prefer `GH_TOKEN` in the compose `.env`, or [GitHub App mode](/adapters/github-app-setup/). The host machine's `gh` login is not shared automatically. To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
+`plugin update`, `plugin remove` and `plugin list` work the same way. Plugins live in `/.archon/plugins` on the data volume, so they survive restarts and rebuilds. See [Forge operations](/reference/forge/#install-the-github-plugin) and [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs).
 
-All of them land in `/.archon/plugins`, which is on the `archon_data` volume (or your `ARCHON_DATA` bind mount), so they survive restarts and image rebuilds. `-u appuser` keeps the files owned by the user the server runs as. Update, remove and list the same way with `plugin update`, `plugin remove` and `plugin list`. See [Forge operations](/reference/forge/#install-the-github-plugin) and [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs).
+The bundled SDLC workflows use `gh` by default. To use the forge plugin instead, set `ARCHON_SDLC_FORGE=forge` and install forge-github v0.12.1 or later; some pack steps still need `gh`. The plugin looks for `GH_TOKEN`, then `GITHUB_TOKEN`, then the container's `gh` login. Your host's `gh` login is not visible inside the container. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
-The image has `git` and Bun, but not `uv`, Python, or the tools a pack's own scripts call (such as ffmpeg). Add those in [`Dockerfile.user`](#customizing-the-image).
+The image includes a verified Slack plugin outside the data volume. When `SLACK_BOT_TOKEN` is set, in the container environment or in `/.archon/.env`, the entrypoint installs it offline into `/.archon/plugins` before the server starts, and logs the release and commit. You don't run `plugin add` for Slack. Slack still needs both `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` to connect; see [Slack](/adapters/slack/).
 
----
+- An installed, verified Slack plugin stays as it is, including a release you pinned from another source. The image does not update it.
+- Missing or changed Slack executables, ownership conflicts, or a broken image receipt when a new install is needed stop provisioning with an error in the boot logs. Repair the install before restarting.
+- To turn Slack off, remove its tokens from every env source, run `docker compose exec -u appuser app bun run cli plugin remove coleam00/Archon/plugins/chat-slack`, and restart. Removing only the plugin reinstalls it on the next start. Removing only the tokens leaves it installed and reporting missing credentials.
 
-## GitHub Webhooks
+The image has `git` and Bun, but not `uv`, Python, or tools a pack's scripts call, such as ffmpeg. Add them with [Dockerfile.user](#customizing-the-image).
 
-After the server is reachable via HTTPS:
+## Container isolation is unavailable
 
-1. Go to `https://github.com/<owner>/<repo>/settings/hooks`
-2. Add webhook:
-   - **Payload URL**: `https://archon.example.com/webhooks/github`
-   - **Content type**: `application/json`
-   - **Secret**: Your `WEBHOOK_SECRET` from `.env`
-   - **Events**: Issues, Issue comments, Pull requests
+`archon workflow run ... --container` starts a sibling Docker container for each run. Inside this compose stack it fails at preflight with "Cannot connect to the Docker daemon": the image has no `docker` CLI, and the stack does not mount `/var/run/docker.sock`. Worktree isolation and in-place folder runs work normally.
 
----
+:::caution
+Mounting the Docker socket into the app container is not part of the supported stack. The socket is root-equivalent: anything that can reach it can start a privileged container and take over the host. If you accept that on a single-operator host, read `packages/isolation/docker/SECURITY.md` first. To use `--container` without that risk, run Archon directly on a host with a local Docker daemon.
+:::
 
-## Pre-built Image
-
-For users who don't need to build from source:
-
-```bash
-mkdir archon && cd archon
-curl -O https://raw.githubusercontent.com/coleam00/Archon/main/deploy/docker-compose.yml
-curl -O https://raw.githubusercontent.com/coleam00/Archon/main/.env.example
-
-cp .env.example .env
-# Edit .env — set AI credentials, DOMAIN, etc.
-
-docker compose up -d
-```
-
-Uses `ghcr.io/coleam00/archon:latest`. To add PostgreSQL, uncomment the `postgres` service in the compose file and set `DATABASE_URL` in `.env`.
-
-To layer custom tools on top of the pre-built image, see [Customizing the Image](#customizing-the-image).
-
-### Verifying image attestations
-
-Published images include BuildKit provenance and SPDX SBOM attestations. With Docker
-Buildx installed, resolve the tag you plan to deploy to a digest, then inspect that
-immutable image reference:
-
-```bash
-docker buildx imagetools inspect ghcr.io/coleam00/archon:latest
-# Copy the top-level Digest above, not a platform manifest's digest.
-image='ghcr.io/coleam00/archon@sha256:<digest>'
-docker buildx imagetools inspect "$image" --format '{{ json .Provenance }}'
-docker buildx imagetools inspect "$image" --format '{{ json .SBOM }}'
-```
-
-Both results must be non-empty. For multi-platform images, each platform's
-provenance has a non-empty `SLSA` object and its SBOM has a non-empty `SPDX` object.
-In the provenance, check the source repository is `https://github.com/coleam00/Archon`,
-the commit SHA matches the release you intend to run, and the workflow ref identifies
-`.github/workflows/publish.yml` at the expected ref. Current releases record the
-source and revision in `buildDefinition.externalParameters.request.args`
-(`label:org.opencontainers.image.source` and `label:org.opencontainers.image.revision`),
-and the workflow ref in `buildDefinition.internalParameters.github_workflow_ref`.
-Older BuildKit versions may use `invocation.configSource` and `invocation.environment`.
-The builder ID links to the GitHub Actions run (`builder.id` or `runDetails.builder.id`).
-Inspect the SBOM's package inventory under `SPDX.packages`.
-
-The `unknown/unknown` entries in the manifest list are expected attestation
-manifests. These BuildKit attestations are unsigned metadata; their presence
-alone does not cryptographically authenticate the publisher. See
-[Docker's provenance documentation](https://docs.docker.com/build/metadata/attestations/slsa-provenance/)
-for the metadata format. Deploy the same digest you inspected to avoid a tag
-changing between inspection and deployment.
-
----
-
-## Building the Image
-
-The Dockerfile uses four main stages, fed by two helper stages (**manifests** and **sources**) that derive the workspace layout from `packages/`, so adding a package needs no Dockerfile edit:
-
-1. **deps** — Installs all dependencies (including devDependencies for the web build)
-2. **image-plugins** — Downloads a pinned Slack release, checks its resolved commit and checksum, initializes it and records its verified receipt
-3. **web-build** — Builds the React web UI with Vite
-4. **production** — Production image with only production dependencies + pre-built web assets
+## Building the image
 
 ```bash
 docker build -t archon .
 docker run --env-file .env -e ARCHON_DOCKER=true -p 3000:3000 archon
 ```
 
-The image's Slack release is pinned independently of the Archon source version. Build args `SLACK_PLUGIN_TAG` (default `v0.12.1`) and `SLACK_PLUGIN_COMMIT` (default `5f2b4841aaca38180c0abbd32bc6345593292019`) must name the same published release. Override both to ship another release; the build rejects a tag resolving to a different commit. Release downloads happen only during the build. Once built, provisioning needs no network; connecting to Slack still does.
+The Dockerfile builds in these stages:
 
-**What's in the image:**
+1. `manifests` and `sources` derive the workspace layout from `packages/`, so a new package needs no Dockerfile edit.
+2. `deps` installs all dependencies, including the dev dependencies the web build needs.
+3. `image-plugins` downloads the pinned Slack release, checks its commit and checksum, and records a verified receipt.
+4. `web-build` builds the Web UI with Vite.
+5. `production` keeps production dependencies and the built Web UI.
 
-- **Runtime**: Bun (runs TypeScript directly, no compile step)
-- **System deps**: git, curl, gh (GitHub CLI), postgresql-client, Chromium
-- **Browser tooling**: [agent-browser](https://github.com/vercel-labs/agent-browser) (Vercel Labs) — enables E2E testing workflows via CDP. Uses system Chromium (`AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`)
-- **App**: Source of every workspace package except `docs-web` (deployed separately), `web` (only the pre-built UI ships), and `chat-slack` (its verified release executable and receipt ship separately under `/opt/archon/image-plugins`). The `sources` stage lists the exclusions.
-- **User**: Non-root `appuser` (UID 1001) — required by Claude Code SDK
-- **Archon dirs**: `/.archon/workspaces`, `/.archon/worktrees`
+The production image runs Bun as the non-root `appuser` (UID 1001), which Claude Code requires. It includes `git`, `curl`, `gh`, `postgresql-client`, `ripgrep`, `jq`, Chromium and [agent-browser](https://github.com/vercel-labs/agent-browser), which drives the system Chromium for browser testing. It ships the source of every workspace package except `docs-web`, `web` (only the built UI ships) and `chat-slack` (shipped as the verified release under `/opt/archon/image-plugins`).
 
-The multi-stage build keeps the image lean — no devDependencies, test files, docs, or `.git/`.
+The Slack release is pinned separately from Archon's version by the build args `SLACK_PLUGIN_TAG` (default `v0.12.1`) and `SLACK_PLUGIN_COMMIT` (default `5f2b4841aaca38180c0abbd32bc6345593292019`). Override both together; the build rejects a tag that resolves to a different commit. Downloads happen only at build time.
 
-### Customizing the Image
+### Customizing the image
 
-To add extra tools without modifying the tracked Dockerfile:
+To add tools without editing the tracked Dockerfile:
 
-1. Copy the example:
-   - **Local/dev**: `cp Dockerfile.user.example Dockerfile.user`
-   - **Server/deploy**: `cp deploy/Dockerfile.user.example Dockerfile.user`
-2. Edit `Dockerfile.user` — uncomment and extend the examples as needed.
-3. Copy the override file:
-   - **Local/dev**: `cp docker-compose.override.example.yml docker-compose.override.yml`
-   - **Server/deploy**: `cp deploy/docker-compose.override.example.yml docker-compose.override.yml`
-4. Run `docker compose up -d` — Compose merges the override automatically.
+1. Copy `Dockerfile.user.example` to `Dockerfile.user` (use `deploy/Dockerfile.user.example` for a server deploy) and edit it.
+2. Copy `docker-compose.override.example.yml` to `docker-compose.override.yml` (or `deploy/docker-compose.override.example.yml`).
+3. Run `docker compose up -d`. Compose merges the override file automatically.
 
-`Dockerfile.user` and `docker-compose.override.yml` are gitignored so your customizations stay local.
-
----
+Both files are gitignored, so your changes stay local.
 
 ## Maintenance
 
-### View Logs
-
 ```bash
-docker compose logs -f              # All services
-docker compose logs -f app          # App only
-docker compose logs --tail=100 app  # Last 100 lines
+docker compose logs -f app            # follow app logs
+docker compose logs --tail=100 app    # last 100 lines
+docker compose restart app
+docker compose down                   # stop, keep data
+docker compose down -v                # stop and delete volumes, including data
+docker system df                      # Docker disk usage
 ```
 
 ### Update
@@ -752,50 +382,21 @@ git pull
 docker compose --profile with-db --profile cloud up -d --build
 ```
 
-### Restart
-
-```bash
-docker compose restart         # All
-docker compose restart app     # App only
-```
-
-### Stop
-
-```bash
-docker compose down            # Stop containers (data preserved)
-docker compose down -v         # Stop + delete volumes (destructive!)
-```
-
-### Database Migrations (PostgreSQL)
-
-The app converges the schema on every startup by running the idempotent `migrations/000_combined.sql` inside an advisory-lock transaction. Both fresh installs and version upgrades are handled automatically — no manual `psql` step is required after pulling a new image. The `migrations/` mount on the postgres container is retained only as a no-op for fresh volumes.
-
-### Clean Up Docker Resources
-
-```bash
-docker system prune -a         # Remove unused images/containers
-docker volume prune            # Remove unused volumes (caution!)
-docker system df               # Check disk usage
-```
-
----
+Use the same profiles you deployed with. The app applies schema changes on startup: it runs the idempotent `migrations/000_combined.sql` under a PostgreSQL advisory lock, so there is no manual migration step.
 
 ## Troubleshooting
 
-### App won't start: "no_ai_credentials"
+### App exits with `no_ai_credentials`
 
-No AI assistant configured. Docker does not support `CLAUDE_USE_GLOBAL_AUTH=true`. Set one of these in `.env`:
-- `CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...` (run `claude setup-token` locally to get one)
-- `CLAUDE_API_KEY=sk-ant-...` (from console.anthropic.com)
-- Or Codex credentials (`ARCHON_CODEX_ID_TOKEN`, `ARCHON_CODEX_ACCESS_TOKEN`, etc.)
+The server found no Claude credential and no Codex credential. Set `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_API_KEY`, or `ARCHON_CODEX_ID_TOKEN` with `ARCHON_CODEX_ACCESS_TOKEN`. See [AI credentials](#ai-credentials).
 
-### Caddy fails to start: "not a directory"
+### Caddy fails with "not a directory"
 
 ```
 error mounting "Caddyfile": not a directory
 ```
 
-The `Caddyfile` doesn't exist — Docker created a directory in its place. Fix:
+`Caddyfile` did not exist, so Docker created a directory in its place:
 
 ```bash
 rm -rf Caddyfile
@@ -803,26 +404,13 @@ cp Caddyfile.example Caddyfile
 docker compose --profile cloud up -d
 ```
 
-### Caddy not getting SSL certificate
+### Caddy gets no certificate
 
-```bash
-# Check DNS propagation
-dig archon.example.com
-# Should return your server IP
+Check that `dig archon.example.com` returns the server's IP, that `sudo ufw status` shows 80 and 443 open, and that `DOMAIN` in `.env` is spelled right. Then read `docker compose logs caddy`. DNS changes can take up to an hour to propagate.
 
-# Check Caddy logs
-docker compose logs caddy
+### Health check fails
 
-# Check firewall
-sudo ufw status
-# Ports 80 and 443 must be open
-```
-
-Common causes: DNS not propagated (wait 5-60min), firewall blocking 80/443, domain typo in `.env`.
-
-### Health check failing
-
-The Docker healthcheck uses `/api/health` (not `/health`):
+The container health check calls `/api/health` on `PORT`, not `/health`:
 
 ```bash
 curl http://localhost:3000/api/health
@@ -830,40 +418,16 @@ curl http://localhost:3000/api/health
 
 ### PostgreSQL connection refused
 
-When using `--profile with-db`, ensure:
+With `--profile with-db`, `DATABASE_URL` must use the service name `postgres` as the host, not `localhost`. Check the container with `docker compose ps postgres`.
 
-1. `DATABASE_URL` uses `postgres` as hostname (Docker service name), not `localhost`:
-   ```ini
-   DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
-   ```
-2. The postgres container is healthy: `docker compose ps postgres`
-3. Migrations ran: check `docker compose logs postgres` for init script output
+### Permission errors in `/.archon`
 
-### Permission errors in `/.archon/`
+The entrypoint exits 1 with the `chown` error when it cannot give `/.archon` or `/home/appuser` to UID 1001. On Linux with a bind mount, run `sudo chown -R 1001:1001 /path/to/archon-data` on the host. On a macOS bind mount, `chown` on the host does not help; see [Root fallback for macOS bind mounts](#root-fallback-for-macos-bind-mounts).
 
-The container runs as `appuser` (UID 1001). The entrypoint tries to fix ownership of `/.archon` and `/home/appuser` on every start and exits 1 (with the underlying `chown` error) when it can't.
+### Port already in use
 
-**On Linux** with bind mounts instead of Docker volumes, fix the ownership on the host:
-
-```bash
-sudo chown -R 1001:1001 /path/to/archon-data
-```
-
-**On macOS** (Docker Desktop / VirtioFS bind mounts), host `chown` does **not** help — the host refuses to remap ownership to the container's UID 1001 no matter what the files are owned by on the host. For that case (and other failures `chown` can't fix, like read-only mounts or SELinux/AppArmor denials), see [Root fallback for macOS bind mounts (opt-in)](#root-fallback-for-macos-bind-mounts-opt-in).
-
-### Port conflicts
-
-Default Docker port is 3000 (local dev is 3090). Change in `.env`:
-
-```ini
-PORT=3001
-```
+Set another `PORT` in `.env`, such as `PORT=3001`.
 
 ### Container keeps restarting
 
-```bash
-docker compose ps
-docker compose logs --tail=50 app
-```
-
-Common causes: missing `.env` file, invalid credentials, database unreachable.
+Run `docker compose ps` and `docker compose logs --tail=50 app`. The usual causes are a missing `.env`, an invalid credential or an unreachable database.

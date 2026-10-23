@@ -18,6 +18,7 @@ import {
   makeWorkflowRun,
   expectLoopGateEvidence,
 } from '../../test-utils';
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { executeDagWorkflow } from '../../../dag-executor';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowStore } from '../../../store';
@@ -58,61 +59,76 @@ describe('interactive loop_group gate and resume', () => {
         }
         return 'running';
       });
-      const iterations = await failedLoopIterations('grp', () =>
-        executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(store),
-            platform: createMockPlatform(),
-            cwd: testDir,
-            workflowRun: makeWorkflowRun('group-pre-start-throw', {
-              ...(prior > 0
-                ? {
-                    metadata: {
-                      approval: {
-                        type: 'interactive_loop',
-                        nodeId: 'grp',
-                        iteration: prior,
-                        message: 'Review.',
-                        completionSignaled: false,
-                        signaledOutput: null,
-                      },
-                      loop_feedback_given: true,
-                      loop_user_input: 'Continue.',
-                    },
-                  }
-                : {}),
-            }),
-            workflow: {
-              name: 'group-pre-start-throw',
-              nodes: [
-                {
-                  id: 'grp',
-                  kind: 'loop_group',
-                  loop_group: {
-                    until: 'DONE',
-                    max_iterations: 3,
-                    fresh_context: true,
-                    nodes: [
-                      { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } },
-                    ],
+      const options = dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('group-pre-start-throw', {
+          ...(prior > 0
+            ? {
+                metadata: {
+                  approval: {
+                    type: 'interactive_loop',
+                    nodeId: 'grp',
+                    iteration: prior,
+                    message: 'Review.',
+                    completionSignaled: false,
+                    signaledOutput: null,
                   },
+                  loop_feedback_given: true,
+                  loop_user_input: 'Continue.',
                 },
-              ],
+              }
+            : {}),
+        }),
+        workflow: {
+          name: 'group-pre-start-throw',
+          nodes: [
+            {
+              id: 'grp',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                fresh_context: true,
+                nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work.' } }],
+              },
             },
-          })
-        )
-      );
-      expect(iterations).toBe(prior);
+          ],
+        },
+      });
+      const interruption = await executeDagWorkflow(options).catch((cause: unknown) => cause);
+      expect(interruption).toBeInstanceOf(ParentStatusReadError);
+      expect(interruption).toMatchObject({
+        workflowRunId: options.workflowRun.id,
+        nodeId: 'grp',
+        cause: error,
+      });
       expect(mockSendQueryDag).not.toHaveBeenCalled();
       expect(
         persistedEvents(store).filter(event => event.event_type === 'loop_iteration_started')
       ).toEqual([]);
-      expect(
-        persistedEvents(store).find(event => event.event_type === 'node_failed')?.data
-      ).toMatchObject({
-        error: error.message,
-        failure_kind: 'unknown',
+      expect(persistedEvents(store).filter(event => event.event_type === 'node_failed')).toEqual(
+        []
+      );
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+      if (prior > 0) {
+        expect(options.workflowRun.metadata.approval).toMatchObject({ iteration: prior });
+        expect(options.workflowRun.metadata.loop_user_input).toBe('Continue.');
+      }
+
+      mockSendQueryDag.mockImplementationOnce(async function* () {
+        yield { type: 'agent_message_chunk', text: 'DONE' };
+        yield { type: 'result', sessionId: 'group-recovered' };
       });
+      await executeDagWorkflow(options);
+      expect(
+        persistedEvents(store)
+          .filter(event => event.event_type === 'loop_iteration_started')
+          .map(event => event.data?.iteration)
+      ).toEqual([prior + 1]);
     }
   );
 

@@ -38,7 +38,7 @@ export interface IIsolationStore {
   /** With an observation, restore only that retired worktree without replacing an active workflow. */
   updateStatus(
     id: string,
-    status: 'active' | 'destroyed',
+    status: IsolationEnvironmentRow['status'],
     observed?: IsolationEnvironmentRow
   ): Promise<void>;
   /**
@@ -47,6 +47,11 @@ export interface IIsolationStore {
    * if it was replaced. An upsert keeps the row id, so a write by id is unsafe.
    */
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;
+  /** Validate and exclude replacement until removal ends; retire using the supplied callback. */
+  withWorktreeRegistration<T>(
+    observed: IsolationEnvironmentRow,
+    remove: (markDestroyed: () => Promise<void>) => Promise<T>
+  ): Promise<T>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
 }
 

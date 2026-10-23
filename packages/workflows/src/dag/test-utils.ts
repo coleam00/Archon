@@ -1,3 +1,4 @@
+import { inMemoryEventRows } from '../test-utils';
 import { afterEach, expect, mock, spyOn, type Mock } from 'bun:test';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -75,7 +76,6 @@ mock.module('@archon/paths', () => ({
   getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
   getBundledWorkflowsPath: () => '/nonexistent/defaults/workflows',
   getHomeWorkflowsPath: () => mockWorkflowHome,
-  getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
   getArchonHome: () => '/nonexistent/home',
   // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
   // containment rules are exercised rather than stubbed away.
@@ -235,7 +235,8 @@ export function createMockStore(): MockWorkflowStore {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
     releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(
-      async () => {
+      async (_id, _release, beforePublish) => {
+        await beforePublish?.();
         getWorkflowRunStatus.mockImplementation(async () => 'paused');
         return { released: true };
       }
@@ -278,9 +279,11 @@ export function createMockStore(): MockWorkflowStore {
     deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
-    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
-      throw new Error('Not used by this test');
-    }),
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId =>
+      inMemoryEventRows(createWorkflowEvent.mock.calls.map(([event]) => event)).filter(
+        event => event.workflow_run_id === runId
+      )
+    ),
     listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
@@ -307,6 +310,9 @@ export function createMockStore(): MockWorkflowStore {
     resumeWorkflowRun: mock<IWorkflowStore['resumeWorkflowRun']>(async _id => mockWorkflowRun()),
     recoverCancelledFanOutRun: mock<IWorkflowStore['recoverCancelledFanOutRun']>(async _id =>
       mockWorkflowRun()
+    ),
+    updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
+      async () => true
     ),
     updateWorkflowRun: mock<IWorkflowStore['updateWorkflowRun']>(
       async (_id, _updates) => undefined

@@ -10,6 +10,8 @@
 // Must be the very first import — strips Bun-auto-loaded CWD .env keys before
 // any module reads process.env at init time (e.g. @archon/paths/logger reads LOG_LEVEL).
 import '@archon/paths/strip-cwd-env-boot';
+// Capture explicit chat scope before loading Archon env or command modules.
+import './workflow-scope';
 // Load Archon env before command imports. loadCliEnv preserves inherited workflow
 // identity and prevents repository env from redirecting the user's stored gh login.
 import { loadCliEnv } from './load-cli-env';
@@ -250,7 +252,7 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   // parsed positionals so `archon <command> [--subcommand] --help` shows only
   // the matching slice instead of the full index.
   if (values.help) {
-    await printUsageFor(command, subcommand);
+    await printUsageFor(positionals);
     await shutdownTelemetry();
     return 0;
   }
@@ -355,22 +357,19 @@ async function decodeDetachedRunConfig({
 /** Routes the commands that run before the project gate, then gates and routes the rest. */
 async function dispatchCommand(base: CliRouteContext): Promise<number> {
   const { command, subcommand, values } = base;
-  await assertFileStoreIfNeeded(base);
-  const ctx = { ...base, detachedRunConfig: await decodeDetachedRunConfig(base) };
-
-  if (command === 'forge') return await routes.runForge(ctx);
-  if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
-    return await workflowRoutes.runWorkflowContinuation(ctx, subcommand);
-  }
   const configOutsideRun = rejectConfigOutsideRun(
     command,
     subcommand,
     values.config,
     values['config-from-run']
   );
-  if (configOutsideRun) {
-    console.error(configOutsideRun);
-    return 1;
+  if (configOutsideRun) return await fail(base.json, configOutsideRun);
+  await assertFileStoreIfNeeded(base);
+  const ctx = { ...base, detachedRunConfig: await decodeDetachedRunConfig(base) };
+
+  if (command === 'forge') return await routes.runForge(ctx);
+  if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
+    return await workflowRoutes.runWorkflowContinuation(ctx, subcommand);
   }
   if (command === 'continue') return await routes.runRemovedContinue(ctx);
   if (command === 'provider') return await routes.runProvider(ctx);
@@ -512,6 +511,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowResume(route);
         case 'abandon':
           return await workflowRoutes.runWorkflowAbandon(route);
+        case 'end-turn':
+          return await workflowRoutes.runWorkflowEndTurn(route);
         case 'cancel':
           return await workflowRoutes.runWorkflowCancel(route);
         case 'approve':

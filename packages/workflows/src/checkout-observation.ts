@@ -183,51 +183,69 @@ const BRANCH_OID_HEADER = '# branch.oid ';
 function parseStatus(output: Buffer): Status {
   const entries: StatusEntry[] = [];
   let commit: string | null | undefined;
+  for (const record of nulTerminatedRecords(output)) {
+    const kind = String.fromCharCode(record[0] ?? 0);
+    if (kind !== '#') {
+      entries.push(parseStatusEntry(kind, record));
+      continue;
+    }
+    const oid = branchOid(record);
+    if (oid !== undefined) commit = oid;
+  }
+  return { commit, entries };
+}
+
+function* nulTerminatedRecords(output: Buffer): Generator<Buffer> {
   let start = 0;
   while (start < output.length) {
     const end = output.indexOf(0, start);
-    const record = output.subarray(start, end === -1 ? output.length : end);
-    start = end === -1 ? output.length : end + 1;
-    if (record.length === 0) continue;
-    const kind = String.fromCharCode(record[0] ?? 0);
-    if (kind === '#') {
-      const header = record.toString('latin1');
-      if (header.startsWith(BRANCH_OID_HEADER)) {
-        const oid = header.slice(BRANCH_OID_HEADER.length);
-        commit = oid === '(initial)' ? null : oid;
-      }
-      continue;
-    }
-    if (kind === '?') {
-      entries.push({ raw: record.subarray(2), staged: false, unstaged: false, untracked: true });
-      continue;
-    }
-    // Space-separated header fields precede the path, counting the record type: 8 for an
-    // ordinary record (`1 XY sub mH mI mW hH hI`), 10 for an unmerged one
-    // (`u XY sub m1 m2 m3 mW h1 h2 h3`). `mW` is the worktree mode in both.
-    const fieldCount = kind === '1' ? 8 : kind === 'u' ? 10 : -1;
-    if (fieldCount === -1) {
-      throw new Error(`unexpected git status record type '${kind}'`);
-    }
-    let offset = 0;
-    const fields: string[] = [];
-    for (let i = 0; i < fieldCount; i++) {
-      const space = record.indexOf(0x20, offset);
-      if (space === -1) throw new Error('truncated git status record');
-      fields.push(record.subarray(offset, space).toString('latin1'));
-      offset = space + 1;
-    }
-    const xy = fields[1] ?? '..';
-    entries.push({
-      raw: record.subarray(offset),
-      worktreeMode: kind === '1' ? fields[5] : fields[6],
-      submodule: fields[2],
-      staged: !xy.startsWith('.'),
-      unstaged: xy.charAt(1) !== '.',
-      untracked: false,
-    });
+    const stop = end === -1 ? output.length : end;
+    if (stop > start) yield output.subarray(start, stop);
+    start = stop + 1;
   }
-  return { commit, entries };
+}
+
+/** The commit a `# branch.oid` header names, null when unborn; undefined for other headers. */
+function branchOid(header: Buffer): string | null | undefined {
+  const text = header.toString('latin1');
+  if (!text.startsWith(BRANCH_OID_HEADER)) return undefined;
+  const oid = text.slice(BRANCH_OID_HEADER.length);
+  return oid === '(initial)' ? null : oid;
+}
+
+function parseStatusEntry(kind: string, record: Buffer): StatusEntry {
+  if (kind === '?') {
+    return { raw: record.subarray(2), staged: false, unstaged: false, untracked: true };
+  }
+  // Space-separated header fields precede the path, counting the record type: 8 for an
+  // ordinary record (`1 XY sub mH mI mW hH hI`), 10 for an unmerged one
+  // (`u XY sub m1 m2 m3 mW h1 h2 h3`). `mW` is the worktree mode in both.
+  const fieldCount = kind === '1' ? 8 : kind === 'u' ? 10 : undefined;
+  if (fieldCount === undefined) {
+    throw new Error(`unexpected git status record type '${kind}'`);
+  }
+  const { fields, path } = splitHeaderFields(record, fieldCount);
+  const xy = fields[1] ?? '..';
+  return {
+    raw: path,
+    worktreeMode: kind === '1' ? fields[5] : fields[6],
+    submodule: fields[2],
+    staged: !xy.startsWith('.'),
+    unstaged: xy.charAt(1) !== '.',
+    untracked: false,
+  };
+}
+
+function splitHeaderFields(record: Buffer, count: number): { fields: string[]; path: Buffer } {
+  let offset = 0;
+  const fields: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const space = record.indexOf(0x20, offset);
+    if (space === -1) throw new Error('truncated git status record');
+    fields.push(record.subarray(offset, space).toString('latin1'));
+    offset = space + 1;
+  }
+  return { fields, path: record.subarray(offset) };
 }
 
 type ObjectFormat = CheckoutManifest['objectFormat'];
@@ -389,50 +407,112 @@ export async function sampleCheckout(
  * read.
  */
 async function sampleGit(cwd: string, sampledAt: string): Promise<CheckoutSample | 'head_moved'> {
-  const head = await readHead(cwd);
-  if (head === undefined) return FAILED(sampledAt);
+  const read = await readStatusAtHead(cwd);
+  if (read === 'head_moved') return read;
+  if (read === 'failed') return FAILED(sampledAt);
+  const { head, tree, statusOutput, status } = read;
   const { top, objectFormat, commit } = head;
+  const observation = { kind: 'git' as const, sampledAt, commit, tree };
+  if (status.entries.length === 0) return { observation, worktree: { status: 'clean' } };
+
+  const entries = await classifyEntries(top, objectFormat, status.entries);
+  if (!(await markChangedWhileObserving(top, statusOutput, entries))) return FAILED(sampledAt);
+  entries.sort((a, b) => Buffer.compare(checkoutPathBytes(a.path), checkoutPathBytes(b.path)));
+  return {
+    observation,
+    worktree: {
+      status: 'dirty',
+      ...countChanges(status.entries),
+      manifest: {
+        version: CHECKOUT_MANIFEST_VERSION,
+        objectFormat,
+        commit,
+        entries,
+      },
+    },
+  };
+}
+
+interface StatusAtHead {
+  head: Head;
+  /** The commit's tree, or null on an unborn branch. */
+  tree: string | null;
+  statusOutput: Buffer;
+  status: Status;
+}
+
+/** Read HEAD, its tree, and a status that provably compared against that same commit. */
+async function readStatusAtHead(cwd: string): Promise<StatusAtHead | 'failed' | 'head_moved'> {
+  const head = await readHead(cwd);
+  if (head === undefined) return 'failed';
+  const { top, commit } = head;
   // The tree is read from the commit id, not from HEAD, so it cannot belong to another
   // commit. It runs alongside status.
   const treeRead =
     commit === null ? undefined : runGit(top, ['rev-parse', '-q', '--verify', `${commit}^{tree}`]);
-  const before = await runGit(top, STATUS_ARGS);
+  const statusRead = await runGit(top, STATUS_ARGS);
   const treeResult = await treeRead;
-  if (before.code !== 0) return FAILED(sampledAt);
+  if (statusRead.code !== 0) return 'failed';
   let status: Status;
   try {
-    status = parseStatus(before.stdout);
+    status = parseStatus(statusRead.stdout);
   } catch {
-    return FAILED(sampledAt);
+    return 'failed';
   }
-  if (status.commit === undefined) return FAILED(sampledAt);
+  if (status.commit === undefined) return 'failed';
   // Status diffs the index against HEAD as it reads HEAD itself, and a concurrent commit,
   // reset, or checkout can move HEAD after `rev-parse` read it. Its header names the
   // commit it read; labelling its records with any other commit is a false observation.
   // Git resolves HEAD for the header and for the diff separately inside the one status
   // process, so a move in that window is not caught here.
   if (status.commit !== commit) return 'head_moved';
-  let tree: string | null = null;
-  if (commit !== null) {
-    if (treeResult?.code !== 0) return FAILED(sampledAt);
-    tree = text(treeResult.stdout);
-  }
-  const statusEntries = status.entries;
-  const observation = { kind: 'git' as const, sampledAt, commit, tree };
-  if (statusEntries.length === 0) return { observation, worktree: { status: 'clean' } };
+  if (commit === null) return { head, tree: null, statusOutput: statusRead.stdout, status };
+  if (treeResult?.code !== 0) return 'failed';
+  return { head, tree: text(treeResult.stdout), statusOutput: statusRead.stdout, status };
+}
 
-  // `core.fileMode` decides only an untracked file's mode, so a checkout without untracked
-  // files never reads it.
-  let honorsExecutableBit = true;
-  if (statusEntries.some(entry => entry.untracked)) {
-    const fileMode = await runGit(top, ['config', '--type=bool', '--get', 'core.fileMode']);
-    honorsExecutableBit = fileMode.code !== 0 || text(fileMode.stdout) !== 'false';
-  }
+type FileMode = '100644' | '100755';
 
-  // One entry per path. `git rm --cached` yields two records for one file: a tracked
-  // record whose worktree mode is 000000 (the index no longer tracks it) and an untracked
-  // record (it is still on disk). The file exists, so the untracked record describes it;
-  // otherwise the tracked record's worktree mode is the authority.
+/** A regular file whose content id comes from `git hash-object`. */
+interface HashCandidate {
+  entry: StatusEntry;
+  mode: FileMode;
+  signature: StatSignature;
+}
+
+/** One manifest entry per changed path, in status order, then the hashed files. */
+async function classifyEntries(
+  top: string,
+  objectFormat: ObjectFormat,
+  statusEntries: StatusEntry[]
+): Promise<CheckoutManifestEntry[]> {
+  const executableBit = await honorsExecutableBit(top, statusEntries);
+  const entries: CheckoutManifestEntry[] = [];
+  const toHash: HashCandidate[] = [];
+  for (const entry of onePerPath(statusEntries)) {
+    const classified = await classifyEntry(top, objectFormat, entry, executableBit);
+    if ('signature' in classified) toHash.push(classified);
+    else entries.push(classified);
+  }
+  entries.push(...(await hashFiles(top, toHash)));
+  return entries;
+}
+
+// `core.fileMode` decides only an untracked file's mode, so a checkout without untracked
+// files never reads it.
+async function honorsExecutableBit(top: string, statusEntries: StatusEntry[]): Promise<boolean> {
+  if (!statusEntries.some(entry => entry.untracked)) return true;
+  const fileMode = await runGit(top, ['config', '--type=bool', '--get', 'core.fileMode']);
+  return fileMode.code !== 0 || text(fileMode.stdout) !== 'false';
+}
+
+/**
+ * One entry per path. `git rm --cached` yields two records for one file: a tracked
+ * record whose worktree mode is 000000 (the index no longer tracks it) and an untracked
+ * record (it is still on disk). The file exists, so the untracked record describes it;
+ * otherwise the tracked record's worktree mode is the authority.
+ */
+function onePerPath(statusEntries: StatusEntry[]): Iterable<StatusEntry> {
   const byPath = new Map<string, StatusEntry>();
   const authority = (entry: StatusEntry): number =>
     entry.untracked ? 1 : entry.worktreeMode === '000000' ? 0 : 2;
@@ -441,100 +521,117 @@ async function sampleGit(cwd: string, sampledAt: string): Promise<CheckoutSample
     const existing = byPath.get(key);
     if (existing === undefined || authority(entry) > authority(existing)) byPath.set(key, entry);
   }
+  return byPath.values();
+}
 
+async function classifyEntry(
+  top: string,
+  objectFormat: ObjectFormat,
+  entry: StatusEntry,
+  executableBit: boolean
+): Promise<CheckoutManifestEntry | HashCandidate> {
+  const path = encodePath(entry.raw);
+  const absolute = join(top, entry.raw.toString('utf8'));
+  // The path reaches `lstat` and `hash-object` as text, which cannot carry non-UTF-8
+  // bytes faithfully.
+  if (typeof path !== 'string') return { path, kind: 'incomplete', reason: 'unreadable' };
+  if (entry.worktreeMode === '000000') return { path, kind: 'absent' };
+  if (entry.worktreeMode === '160000' || entry.submodule?.startsWith('S') === true) {
+    return classifySubmodule(path, absolute, entry);
+  }
+  let stats: Awaited<ReturnType<typeof lstat>>;
+  try {
+    stats = await lstat(absolute);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return {
+      path,
+      kind: 'incomplete',
+      reason: code === 'ENOENT' ? 'changed_while_observing' : 'unreadable',
+    };
+  }
+  const signature = { ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs, mode: stats.mode };
+  if (entry.worktreeMode === '120000' || (entry.untracked && stats.isSymbolicLink())) {
+    return classifySymlink(path, absolute, objectFormat, signature);
+  }
+  if (!stats.isFile()) return { path, kind: 'incomplete', reason: 'special_file' };
+  return { entry, mode: fileMode(entry, stats.mode, executableBit), signature };
+}
+
+async function classifySubmodule(
+  path: string,
+  absolute: string,
+  entry: StatusEntry
+): Promise<CheckoutManifestEntry> {
+  const flags = entry.submodule ?? 'S...';
+  if (flags[2] === 'M' || flags[3] === 'U') {
+    return { path, kind: 'incomplete', reason: 'dirty_submodule' };
+  }
+  // An unpopulated submodule directory has no `.git`, so discovery from it finds the
+  // superproject. An empty prefix proves the directory is its own repository's top.
+  const prefix = await runGit(absolute, ['rev-parse', '--show-prefix']);
+  const sub =
+    prefix.code === 0 && text(prefix.stdout) === ''
+      ? await runGit(absolute, ['rev-parse', '-q', '--verify', 'HEAD^{commit}'])
+      : undefined;
+  return sub?.code === 0
+    ? { path, kind: 'gitlink', mode: '160000', commit: text(sub.stdout) }
+    : { path, kind: 'incomplete', reason: 'unreadable' };
+}
+
+async function classifySymlink(
+  path: string,
+  absolute: string,
+  objectFormat: ObjectFormat,
+  signature: StatSignature
+): Promise<CheckoutManifestEntry> {
+  try {
+    const target = await readlink(absolute, { encoding: 'buffer' });
+    if (!sameSignature(signature, await statSignature(absolute))) {
+      return { path, kind: 'incomplete', reason: 'changed_while_observing' };
+    }
+    return { path, kind: 'symlink', mode: '120000', blob: blobId(objectFormat, target) };
+  } catch {
+    return { path, kind: 'incomplete', reason: 'unreadable' };
+  }
+}
+
+/** A tracked file keeps its index mode; an untracked one takes the executable bit on disk. */
+function fileMode(entry: StatusEntry, statMode: number, executableBit: boolean): FileMode {
+  if (!entry.untracked) return entry.worktreeMode === '100755' ? '100755' : '100644';
+  return executableBit && (statMode & 0o111) !== 0 ? '100755' : '100644';
+}
+
+/** Content ids for regular files, each confirmed unchanged since its first `lstat`. */
+async function hashFiles(top: string, toHash: HashCandidate[]): Promise<CheckoutManifestEntry[]> {
+  const names = toHash.map(item => item.entry.raw.toString('utf8'));
+  const ids = await hashObjectIds(top, names);
   const entries: CheckoutManifestEntry[] = [];
-  const toHash: { entry: StatusEntry; mode: '100644' | '100755'; signature: StatSignature }[] = [];
-  for (const entry of byPath.values()) {
-    const path = encodePath(entry.raw);
-    const absolute = join(top, entry.raw.toString('utf8'));
-    if (typeof path !== 'string') {
-      // The path reaches `lstat` and `hash-object` as text, which cannot carry non-UTF-8
-      // bytes faithfully.
+  for (const [index, item] of toHash.entries()) {
+    const path = names[index] ?? '';
+    const id = ids[index];
+    if (id === undefined) {
       entries.push({ path, kind: 'incomplete', reason: 'unreadable' });
       continue;
     }
-    if (entry.worktreeMode === '000000') {
-      entries.push({ path, kind: 'absent' });
-      continue;
-    }
-    if (entry.worktreeMode === '160000' || entry.submodule?.startsWith('S') === true) {
-      const flags = entry.submodule ?? 'S...';
-      if (flags[2] === 'M' || flags[3] === 'U') {
-        entries.push({ path, kind: 'incomplete', reason: 'dirty_submodule' });
-        continue;
-      }
-      // An unpopulated submodule directory has no `.git`, so discovery from it finds the
-      // superproject. An empty prefix proves the directory is its own repository's top.
-      const prefix = await runGit(absolute, ['rev-parse', '--show-prefix']);
-      const sub =
-        prefix.code === 0 && text(prefix.stdout) === ''
-          ? await runGit(absolute, ['rev-parse', '-q', '--verify', 'HEAD^{commit}'])
-          : undefined;
-      entries.push(
-        sub?.code === 0
-          ? { path, kind: 'gitlink', mode: '160000', commit: text(sub.stdout) }
-          : { path, kind: 'incomplete', reason: 'unreadable' }
-      );
-      continue;
-    }
-    let stats: Awaited<ReturnType<typeof lstat>>;
-    try {
-      stats = await lstat(absolute);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      entries.push({
-        path,
-        kind: 'incomplete',
-        reason: code === 'ENOENT' ? 'changed_while_observing' : 'unreadable',
-      });
-      continue;
-    }
-    const signature = {
-      ino: stats.ino,
-      size: stats.size,
-      mtimeMs: stats.mtimeMs,
-      mode: stats.mode,
-    };
-    const isSymlink =
-      entry.worktreeMode === '120000' || (entry.untracked && stats.isSymbolicLink());
-    if (isSymlink) {
-      try {
-        const target = await readlink(absolute, { encoding: 'buffer' });
-        if (!sameSignature(signature, await statSignature(absolute))) {
-          entries.push({ path, kind: 'incomplete', reason: 'changed_while_observing' });
-        } else {
-          entries.push({
-            path,
-            kind: 'symlink',
-            mode: '120000',
-            blob: blobId(objectFormat, target),
-          });
-        }
-      } catch {
-        entries.push({ path, kind: 'incomplete', reason: 'unreadable' });
-      }
-      continue;
-    }
-    if (!stats.isFile()) {
-      entries.push({ path, kind: 'incomplete', reason: 'special_file' });
-      continue;
-    }
-    const mode: '100644' | '100755' = entry.untracked
-      ? honorsExecutableBit && (stats.mode & 0o111) !== 0
-        ? '100755'
-        : '100644'
-      : entry.worktreeMode === '100755'
-        ? '100755'
-        : '100644';
-    toHash.push({ entry, mode, signature });
+    const unchanged = sameSignature(item.signature, await statSignature(join(top, path)));
+    entries.push(
+      unchanged
+        ? { path, kind: 'file', mode: item.mode, blob: id }
+        : { path, kind: 'incomplete', reason: 'changed_while_observing' }
+    );
   }
+  return entries;
+}
 
-  // `hash-object` applies each path's clean filter and CRLF conversion, so the id equals
-  // the blob Git would commit for these bytes. Paths go through stdin, which has no length
-  // limit. Git prints ids in input order and exits at the first path it cannot read, so
-  // that path is the one after the printed ids; it is named unreadable and the rest are
-  // hashed again. Output that cannot be matched to paths identifies none of them.
-  const names = toHash.map(item => item.entry.raw.toString('utf8'));
+/**
+ * `hash-object` applies each path's clean filter and CRLF conversion, so the id equals
+ * the blob Git would commit for these bytes. Paths go through stdin, which has no length
+ * limit. Git prints ids in input order and exits at the first path it cannot read, so
+ * that path is the one after the printed ids; it is named unreadable and the rest are
+ * hashed again. Output that cannot be matched to paths identifies none of them.
+ */
+async function hashObjectIds(top: string, names: string[]): Promise<(string | undefined)[]> {
   const ids: (string | undefined)[] = [];
   while (ids.length < names.length) {
     const pending = names.slice(ids.length);
@@ -552,59 +649,67 @@ async function sampleGit(cwd: string, sampledAt: string): Promise<CheckoutSample
       break;
     }
   }
-  for (const [index, item] of toHash.entries()) {
-    const path = names[index] ?? '';
-    const id = ids[index];
-    if (id === undefined) {
-      entries.push({ path, kind: 'incomplete', reason: 'unreadable' });
-      continue;
-    }
-    const unchanged = sameSignature(item.signature, await statSignature(join(top, path)));
-    entries.push(
-      unchanged
-        ? { path, kind: 'file', mode: item.mode, blob: id }
-        : { path, kind: 'incomplete', reason: 'changed_while_observing' }
-    );
-  }
+  return ids;
+}
 
-  // A checkout that changed while it was being read cannot be described as one instant.
+/**
+ * A checkout that changed while it was being read cannot be described as one instant:
+ * every path whose status record changed since `before` becomes `changed_while_observing`.
+ * False when the second status cannot be read.
+ */
+async function markChangedWhileObserving(
+  top: string,
+  before: Buffer,
+  entries: CheckoutManifestEntry[]
+): Promise<boolean> {
   const after = await runGit(top, STATUS_ARGS);
-  if (after.code !== 0) return FAILED(sampledAt);
-  if (!after.stdout.equals(before.stdout)) {
-    const beforeRecords = new Set(splitRecords(before.stdout));
-    const afterRecords = new Set(splitRecords(after.stdout));
-    const moved = [
-      ...[...beforeRecords].filter(record => !afterRecords.has(record)),
-      ...[...afterRecords].filter(record => !beforeRecords.has(record)),
-    ];
-    let changedEntries: StatusEntry[];
-    try {
-      changedEntries = parseStatus(
-        Buffer.concat(moved.flatMap(record => [Buffer.from(record, 'base64'), Buffer.from([0])]))
-      ).entries;
-    } catch {
-      return FAILED(sampledAt);
-    }
-    const changed = new Set(changedEntries.map(entry => entry.raw.toString('base64')));
-    for (const [index, existing] of entries.entries()) {
-      if (changed.delete(checkoutPathBytes(existing.path).toString('base64'))) {
-        entries[index] = {
-          path: existing.path,
-          kind: 'incomplete',
-          reason: 'changed_while_observing',
-        };
-      }
-    }
-    for (const key of changed) {
-      entries.push({
-        path: encodePath(Buffer.from(key, 'base64')),
+  if (after.code !== 0) return false;
+  if (after.stdout.equals(before)) return true;
+  const changed = changedPaths(before, after.stdout);
+  if (changed === undefined) return false;
+  for (const [index, existing] of entries.entries()) {
+    if (changed.delete(checkoutPathBytes(existing.path).toString('base64'))) {
+      entries[index] = {
+        path: existing.path,
         kind: 'incomplete',
         reason: 'changed_while_observing',
-      });
+      };
     }
   }
+  for (const key of changed) {
+    entries.push({
+      path: encodePath(Buffer.from(key, 'base64')),
+      kind: 'incomplete',
+      reason: 'changed_while_observing',
+    });
+  }
+  return true;
+}
 
-  entries.sort((a, b) => Buffer.compare(checkoutPathBytes(a.path), checkoutPathBytes(b.path)));
+/** Base64 path keys of the records in only one of two status outputs. */
+function changedPaths(before: Buffer, after: Buffer): Set<string> | undefined {
+  const beforeRecords = new Set(splitRecords(before));
+  const afterRecords = new Set(splitRecords(after));
+  const moved = [
+    ...[...beforeRecords].filter(record => !afterRecords.has(record)),
+    ...[...afterRecords].filter(record => !beforeRecords.has(record)),
+  ];
+  let changedEntries: StatusEntry[];
+  try {
+    changedEntries = parseStatus(
+      Buffer.concat(moved.flatMap(record => [Buffer.from(record, 'base64'), Buffer.from([0])]))
+    ).entries;
+  } catch {
+    return undefined;
+  }
+  return new Set(changedEntries.map(entry => entry.raw.toString('base64')));
+}
+
+function countChanges(statusEntries: StatusEntry[]): {
+  staged: number;
+  unstaged: number;
+  untracked: number;
+} {
   let staged = 0;
   let unstaged = 0;
   let untracked = 0;
@@ -613,21 +718,7 @@ async function sampleGit(cwd: string, sampledAt: string): Promise<CheckoutSample
     if (entry.unstaged) unstaged++;
     if (entry.untracked) untracked++;
   }
-  return {
-    observation,
-    worktree: {
-      status: 'dirty',
-      staged,
-      unstaged,
-      untracked,
-      manifest: {
-        version: CHECKOUT_MANIFEST_VERSION,
-        objectFormat,
-        commit,
-        entries,
-      },
-    },
-  };
+  return { staged, unstaged, untracked };
 }
 
 function splitRecords(output: Buffer): string[] {

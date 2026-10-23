@@ -1,3 +1,4 @@
+import type { ContainerPauseBoundary } from './pause';
 import type { InteractionAdmission } from '../interaction-admission';
 import { newNodeInvocation, startNodeExecution } from '../node-execution';
 import { observeCheckout } from '../checkout-observation';
@@ -112,6 +113,7 @@ export interface RunInputs {
 
 /** Run-level values derived exactly once at the DAG boundary, never supplied by callers. */
 export interface RunDerived {
+  containerPause?: ContainerPauseBoundary;
   toolAttention: ReturnType<typeof createRunToolCallAttention>;
   /**
    * The roots nodes READ executable source from — command files and named scripts.
@@ -177,6 +179,9 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   guardedLayerSnapshots?: Set<string>;
   bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
+  /** Each workflow path dispatches once per segment; prior events are the fixed accounting baseline. */
+  reportedChildUsage?: DagResumeSnapshot['reportedChildUsage'];
+  unattributedChildUsagePaths?: DagResumeSnapshot['unattributedChildUsagePaths'];
   /** The run budget's live ledger; set only when the workflow declares `budget:`. */
   runBudget?: RunBudgetLedger;
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---

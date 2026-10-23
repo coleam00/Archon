@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { hostname } from 'node:os';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { handleCommand } from '../command-handler';
@@ -10,6 +11,7 @@ import {
   resumeRequest,
   mockGetWorkflowRun,
   mockFindWorkflowRunsByIdPrefix,
+  mockReclaimContainerEnv,
   spyDiscoverWorkflows,
   restoreSpies,
   approveConversation,
@@ -113,6 +115,32 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('rejected and cancelled');
         expect(result.workflow).toBeUndefined();
+      });
+
+      test('reject that cancels a container run reports a failed reclaim', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          pausedRun({
+            metadata: {
+              approval: { type: 'approval', nodeId: 'review', message: 'Approve?' },
+              isolation: 'container',
+              isolation_env_id: 'env-a',
+              execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
+            },
+          })
+        );
+        mockReclaimContainerEnv.mockImplementationOnce(() =>
+          Promise.reject(new Error('docker down'))
+        );
+
+        const result = await handleCommand(
+          approveConversation,
+          '/workflow reject run-gate no thanks',
+          operator
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('rejected and cancelled');
+        expect(result.message).toContain('Could not reclaim container environment env-a');
       });
 
       // Refusal messages print the 8-character short id; every run-id verb accepts it.

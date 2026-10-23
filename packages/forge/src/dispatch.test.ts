@@ -2,8 +2,122 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { discoverPlugins } from './discovery';
 import { dispatchForge } from './dispatch';
+import { repoRefSchema, type RepoRef } from './identity';
 
 const fixture = join(import.meta.dir, 'fixtures', 'test-plugin.ts');
+
+test.each(['github.com', 'ghes.example.test'])(
+  'retains HTTPS :443 authority from a released normalized resolver on %s',
+  async host => {
+    const discovery = await discoverPlugins({
+      config: {
+        ...config('normalized-resolve'),
+        hosts: { [host]: 'test', [`${host}:443`]: 'test' },
+      },
+      env: {},
+    });
+    const plugin = discovery.plugins[0];
+    for (const claims of [[host], [`${host}:443`], [host, `${host}:443`]]) {
+      const selected = {
+        ...discovery,
+        byHost: new Map(claims.map(claim => [claim, plugin])),
+      };
+      const result = await dispatchForge(
+        { operationId: 'compat', op: 'resolve', remote: `https://${host}:443/team/repo.git` },
+        { discovery: selected, env: {} }
+      );
+      const repo: RepoRef = {
+        host: `${host}:443`,
+        path: 'team/repo',
+        ...(claims.includes(`${host}:443`) ? {} : { hostClaim: true }),
+      };
+      expect(result.response).toMatchObject({
+        ok: true,
+        result: { op: 'resolve', value: { kind: 'resolved', repo } },
+      });
+      if (
+        !result.response.ok ||
+        result.response.result.op !== 'resolve' ||
+        result.response.result.value.kind !== 'resolved'
+      )
+        throw new Error('Expected repository');
+      expect(result.response.result.value.repo).toEqual(repo);
+      const qualified = await dispatchForge(
+        {
+          operationId: 'qualified-compat',
+          op: 'repo.labels.list',
+          repo: JSON.parse(JSON.stringify(result.response.result.value.repo)),
+        },
+        { discovery: selected, env: {} }
+      );
+      expect(qualified.response).toMatchObject({
+        ok: true,
+        result: { op: 'repo.labels.list', value: { repo, labels: [] } },
+      });
+    }
+  }
+);
+
+test('qualified operations use the retained HTTPS claim and its credential configuration', async () => {
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [
+        {
+          plugin: 'mutator',
+          command: process.execPath,
+          args: [join(import.meta.dir, 'fixtures', 'mutation-plugin.ts')],
+        },
+      ],
+      hosts: { 'forge.example': { plugin: 'mutator', token_env: 'BARE_TOKEN' } },
+      scanPath: false,
+    },
+    env: {},
+  });
+  const repo = repoRefSchema.parse(
+    JSON.parse(
+      JSON.stringify({
+        host: 'forge.example:443',
+        path: 'team/repo',
+        hostClaim: true,
+      })
+    )
+  );
+  for (const request of [
+    { operationId: 'labels', op: 'repo.labels.list', repo },
+    { operationId: 'threads', op: 'pr.threads', ref: { repo, number: 1 } },
+  ] as const) {
+    const result = await dispatchForge(request, { discovery, env: { BARE_TOKEN: 'fixture' } });
+    expect(result.response.ok).toBe(true);
+    expect(result.credentialSource).toBe('BARE_TOKEN');
+    expect(result.audit.target).toEqual('repo' in request ? repo : request.ref);
+  }
+  const missing = await dispatchForge(
+    { operationId: 'missing', op: 'repo.labels.list', repo },
+    { discovery, env: {} }
+  );
+  expect(missing.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
+});
+
+test.each([
+  'forge.example',
+  'forge.example:8443',
+  'forge.example:443:443',
+  'user@forge.example:443',
+  'forge.example/path:443',
+  'forge.example?query:443',
+  'forge.example#fragment:443',
+])('rejects a host claim marker on invalid authority %s', host => {
+  expect(repoRefSchema.safeParse({ host, path: 'team/repo', hostClaim: true }).success).toBe(false);
+});
+
+test.each([false, 'true', { host: 'forge.example', transport: 'https' }])(
+  'rejects a non-marker host claim %j',
+  hostClaim => {
+    expect(
+      repoRefSchema.safeParse({ host: 'forge.example:443', path: 'team/repo', hostClaim }).success
+    ).toBe(false);
+  }
+);
 function config(mode = 'ok') {
   return {
     plugins: [{ plugin: 'test', command: process.execPath, args: [fixture, '--mode', mode] }],
@@ -170,3 +284,22 @@ test('an older plugin refuses new work-item capability before executing it', asy
     mutation: { outcome: 'refused', target: repo },
   });
 });
+
+test.each([
+  ['github-origin', 'http://ghes.example.test:8080', 'http://ghes.example.test:8080'],
+  ['other-origin', 'http://ghes.example.test:8080', 'absent'],
+  ['other-origin', 'http://user:private@ghes.example.test:8080', 'absent'],
+])(
+  'scopes the configured GitHub origin to selected GitHub operations (%s)',
+  async (mode, origin, expected) => {
+    const result = await dispatchForge(
+      { operationId: 'origin', op: 'resolve', remote: 'https://forge.example/team/repo' },
+      { config: config(mode), env: { GITHUB_URL: origin } }
+    );
+    expect(result.response).toEqual({
+      operationId: 'origin',
+      ok: false,
+      error: { kind: 'forge_error', message: expected },
+    });
+  }
+);

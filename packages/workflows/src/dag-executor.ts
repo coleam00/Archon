@@ -8,11 +8,15 @@
  * (`dag/run-terminal`).
  */
 
+import { serializeRunUsage } from './schemas/run-usage';
+import { readInterruptedRunUsage } from './dag/interrupted-usage';
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { createRunToolCallAttention } from './tool-call-attention';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import { releaseUnreadableRunSource } from './source-release';
 import { sourceReleaseNotice } from './deps';
 import type { ExecutionContext } from '@archon/provider-contract';
-import type { ContainerRunContext } from './container-context';
+import { resolveRunExecutionMode, type ContainerRunContext } from './container-context';
 import type { ResolvedWorkflow, WorkflowRunOutcome, WorkflowRunNodeSession } from './schemas';
 import { CONTINUATION_RETRY_MS, executionClaim } from './store';
 import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from './store';
@@ -36,9 +40,15 @@ import { RunSourceUnreadableError } from './dag/node-source';
 import { type RunInputs, type RunLayersContext } from './dag/run-context';
 import { assertRunCapabilities } from './dag/capability-preflight';
 import { runLayers } from './dag/run-layers';
-import { restoreRunState } from './dag/resume-state';
+import { publishContainerPause, type ContainerPauseReceipt } from './dag/pause';
+import { restoreRunState, type RestoredRunState } from './dag/resume-state';
 import { failRun, finishRun, skipIfStatusChanged } from './dag/run-terminal';
-import { announceContainerRun, suspendContainerForPause } from './dag/container-gate';
+import {
+  announceContainerRun,
+  suspendContainerForPause,
+  reportContainerSuspension,
+  recordContainerSuspendWarning,
+} from './dag/container-gate';
 
 /**
  * Usage a resumed run already consumed in earlier passes, rebuilt from its persisted
@@ -91,77 +101,40 @@ export interface ExecuteDagWorkflowOptions extends RunInputs {
  */
 export async function executeDagWorkflow(
   options: ExecuteDagWorkflowOptions
-): Promise<string | undefined | { kind: 'source_release'; released: boolean }> {
+): Promise<
+  string | undefined | ContainerPauseReceipt | { kind: 'source_release'; released: boolean }
+> {
   const {
     deps,
     platform,
     conversationId,
-    cwd,
     workflow,
     workflowRun,
-    workflowProvider,
-    workflowModel,
-    artifactsDir,
-    stateDir,
     logDir,
-    baseBranch,
-    docsDir,
-    config,
-    configuredCommandFolder,
     issueContext,
     priorCompletedNodes,
-    replayedFailures,
-    aiProfile,
-    workflowPreset,
-    scopeArtifactsDir,
     execContext = { kind: 'host' },
     containerCtx,
-    runChildWorkflow,
-    priorUsage,
     priorNodeSessions,
-    workflowSourceRoots,
   } = options;
   const dagStartTime = Date.now();
 
-  assertRunCapabilities(deps.providers, workflow, workflowProvider, aiProfile, execContext);
+  await preflightRun(options, execContext);
 
-  if (execContext.kind === 'container') {
-    await announceContainerRun(
-      deps,
-      platform,
-      conversationId,
-      workflowRun.id,
-      execContext,
-      containerCtx,
-      priorCompletedNodes !== undefined && priorCompletedNodes.size > 0
-    );
-  }
-
-  const workflowRef = selectModelRef(workflow.model, aiProfile);
-  const workflowTier = workflowRef && isTierName(workflowRef) ? workflowRef : undefined;
-  const workflowLevelOptions = {
-    effort: workflow.effort,
-    fallbackModel: workflow.fallbackModel,
-    betas: workflow.betas,
-    sandbox: workflow.sandbox,
-    webSearchMode: workflow.webSearchMode,
-    workflowTier,
-  };
-  const layers = workflow.plan.layers;
-  const { nodeOutputs, persistScope, namedResumeSourceIds, nodeSessionHandles } = restoreRunState(
+  const restored = restoreRunState(
     deps.store,
     workflow,
     workflowRun,
     priorCompletedNodes,
     priorNodeSessions
   );
-  const workflowPersistSessions = workflow.persist_sessions === true;
+  const { nodeOutputs } = restored;
 
   getLog().info(
     {
       workflowName: workflow.name,
       nodeCount: workflow.nodes.length,
-      layerCount: layers.length,
+      layerCount: workflow.plan.layers.length,
       hasIssueContext: !!issueContext,
       issueContextLength: issueContext?.length ?? 0,
     },
@@ -200,71 +173,8 @@ export async function executeDagWorkflow(
     persistedOutcome = outcome;
   };
 
-  // Run the topological layers. runLayers mutates the context's mutable fields in place
-  // (nodeOutputs, lastSequentialSession, usage accumulators); we read them back below
-  // for the terminal tally. stepNamePrefix is '' for the top-level DAG so node event
-  // step_names are the raw node ids. Fields stay
-  // explicit because spreading options would also copy executor-only state into this
-  // context without an excess-property check.
-  // A budget always seeds from the run's own rows, never from `priorUsage`: a re-driven
-  // run can arrive without prior usage, and a reset ledger would replay spent work.
-  const resumeSnapshot =
-    priorCompletedNodes !== undefined || workflow.budget !== undefined
-      ? await deps.store.getDagResumeSnapshot(workflowRun.id)
-      : undefined;
-  const unfinishedInvocations =
-    priorCompletedNodes === undefined ? undefined : resumeSnapshot?.unfinishedInvocations;
-  const runBudget =
-    workflow.budget !== undefined && resumeSnapshot !== undefined
-      ? createRunBudgetLedger(workflow.budget, resumeSnapshot.budget)
-      : undefined;
-  const runCtx: RunLayersContext = {
-    toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
-    unfinishedInvocations,
-    runBudget,
-    deps,
-    platform,
-    conversationId,
-    cwd,
-    execContext,
-    runChildWorkflow,
-    workflowRun,
-    workflowName: workflow.name,
-    workflowSourceRoots: workflowSourceRoots ?? liveSourceRoots(cwd),
-    config,
-    workflowProvider,
-    workflowModel,
-    workflowLevelOptions,
-    aiProfile,
-    workflowPreset,
-    artifactsDir,
-    stateDir,
-    logDir,
-    baseBranch,
-    docsDir,
-    configuredCommandFolder,
-    issueContext,
-    persistScope,
-    workflowPersistSessions,
-    // Scope-keyed persistence surface: without a scope key there is no durable
-    // scope to mirror into or recover from, so the dir is dropped alongside it.
-    scopeArtifactsDir: persistScope !== undefined ? scopeArtifactsDir : undefined,
-    layers,
-    nodeOutputs,
-    afterLayer: persistAuthoredOutcome,
-    priorCompletedNodes,
-    replayedFailures,
-    nodeSessionHandles,
-    namedResumeSourceIds,
-    lastSequentialSession: undefined,
-    warnedProviderConflicts: new Set<string>(),
-    totalCostUsd: priorUsage?.costUsd,
-    totalTokens: priorUsage?.tokens,
-    totalTokensUnknown: priorUsage?.tokensUnknown,
-    stepNamePrefix: '',
-    loopGroupPath: [],
-    loopBodyScopes: [],
-  };
+  const runCtx = await createRunContext(options, execContext, restored, persistAuthoredOutcome);
+  const { runBudget } = runCtx;
 
   /** Log both figures when the run total and its node events disagree; never fails the run. */
   const reconcileRunUsage = async (): Promise<void> => {
@@ -323,34 +233,11 @@ export async function executeDagWorkflow(
   const persistRunUsage = async (): Promise<void> => {
     const level = getLog().level;
     if (level === 'debug' || level === 'trace') await reconcileRunUsage();
-    const usage = {
-      // No usage stays absent: a bash-only workflow must not read as a free AI run.
-      ...(runCtx.totalCostUsd !== undefined ? { total_cost_usd: runCtx.totalCostUsd } : {}),
-      ...(runCtx.totalTokensUnknown
-        ? {
-            total_tokens_unknown: true,
-            total_tokens_in: null,
-            total_tokens_out: null,
-            total_cache_read_tokens: null,
-            total_cache_write_tokens: null,
-            total_cache_partial: null,
-          }
-        : {}),
-      ...(runCtx.totalTokens !== undefined
-        ? {
-            total_tokens_in: runCtx.totalTokens.input,
-            total_tokens_out: runCtx.totalTokens.output,
-            ...(runCtx.totalTokens.cacheRead !== undefined
-              ? { total_cache_read_tokens: runCtx.totalTokens.cacheRead }
-              : {}),
-            ...(runCtx.totalTokens.cacheWrite !== undefined
-              ? { total_cache_write_tokens: runCtx.totalTokens.cacheWrite }
-              : {}),
-            // Marks the two cache totals above as a floor rather than an exact figure.
-            ...(runCtx.totalTokens.cachePartial ? { total_cache_partial: true } : {}),
-          }
-        : {}),
-    };
+    const usage = serializeRunUsage({
+      costUsd: runCtx.totalCostUsd,
+      tokens: runCtx.totalTokens,
+      tokensUnknown: runCtx.totalTokensUnknown,
+    });
     if (Object.keys(usage).length === 0) return;
     await deps.store
       .updateWorkflowRun(workflowRun.id, { metadata: usage })
@@ -422,13 +309,20 @@ export async function executeDagWorkflow(
       { workflowRunId: workflowRun.id, nodeId: error.nodeId, path: error.path, err: error.cause },
       'dag.run_released_source_unreadable'
     );
-    const { released } = await deps.store.releaseRunForUnreadableSource(workflowRun.id, {
-      claimId: executionClaim(workflowRun.metadata),
-      nodeId: error.nodeId,
-      ...(error.path !== undefined ? { path: error.path } : {}),
-      error: error.message,
-      retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
-    });
+    const { released } = await releaseUnreadableRunSource(
+      deps,
+      platform,
+      conversationId,
+      workflowRun.id,
+      {
+        claimId: executionClaim(workflowRun.metadata),
+        nodeId: error.nodeId,
+        ...(error.path !== undefined ? { path: error.path } : {}),
+        error: error.message,
+        retryAt: new Date(Date.now() + CONTINUATION_RETRY_MS).toISOString(),
+      },
+      resolveRunExecutionMode(execContext, containerCtx, workflowRun.metadata)
+    );
     if (!released) {
       getLog().info({ workflowRunId: workflowRun.id }, 'dag.source_release_skipped_status_changed');
       return false;
@@ -446,51 +340,50 @@ export async function executeDagWorkflow(
     return true;
   };
 
+  /**
+   * runLayers guards almost everything, but a failed durable write (terminal status or
+   * node event) escapes through its layer join. Persist both durable facts before rethrowing that
+   * exact value (including an exotic `throw undefined`). Usage is best-effort. An
+   * outcome write failure is secondary here: record it, but never let it mask the
+   * execution error already in flight. A run-budget refusal also escapes the join; it
+   * fails the run here instead of propagating. An unreadable source escapes it too; the
+   * run is released after persisting the settled usage and outcome, so it is returned.
+   */
+  const unwindRunLayers = async (
+    error: unknown
+  ): Promise<RunSourceUnreadableError | 'budget_failed'> => {
+    if (
+      error instanceof RunBudgetRefusedError ||
+      error instanceof RunSourceUnreadableError ||
+      isWorkflowExecutionInterruption(error)
+    ) {
+      await refreshUsageFromDurableRows(deps.store, workflowRun.id, runCtx, error);
+    }
+    if (error instanceof RunSourceUnreadableError) return error;
+    await persistRunUsage();
+    try {
+      await persistAuthoredOutcome();
+    } catch (outcomeError) {
+      getLog().error(
+        { err: outcomeError as Error, workflowRunId: workflowRun.id },
+        'dag.authored_outcome_persist_failed_during_unwind'
+      );
+    }
+    if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
+      await failRunForBudget(runBudget, error.refusal);
+      return 'budget_failed';
+    }
+    throw error;
+  };
+
   await persistAuthoredOutcome();
   let sourceUnreadable: RunSourceUnreadableError | undefined;
   try {
     await runLayers(runCtx);
   } catch (error) {
-    // runLayers guards almost everything, but a failed durable write (terminal status or
-    // node event) escapes through its layer join. Persist both durable facts before rethrowing that
-    // exact value (including an exotic `throw undefined`). Usage is best-effort. An
-    // outcome write failure is secondary here: record it, but never let it mask the
-    // execution error already in flight. A run-budget refusal also escapes the join; it
-    // fails the run here instead of propagating. An unreadable source escapes it too; the
-    // run is released below after persisting the settled usage and outcome.
-    if (error instanceof RunBudgetRefusedError || error instanceof RunSourceUnreadableError) {
-      // The thunk that threw never reported its spend, nor did its settled siblings, so
-      // the in-memory totals miss it. The durable rows hold all of it.
-      try {
-        const durable = await deps.store.getDagResumeSnapshot(workflowRun.id);
-        runCtx.totalCostUsd = durable.costUsd;
-        runCtx.totalTokens = durable.tokens;
-        runCtx.totalTokensUnknown = durable.tokensUnknown;
-      } catch (readError) {
-        getLog().error(
-          { err: readError as Error, workflowRunId: workflowRun.id },
-          'dag.unwind_usage_refresh_failed'
-        );
-      }
-    }
-    if (error instanceof RunSourceUnreadableError) {
-      sourceUnreadable = error;
-    } else {
-      await persistRunUsage();
-      try {
-        await persistAuthoredOutcome();
-      } catch (outcomeError) {
-        getLog().error(
-          { err: outcomeError as Error, workflowRunId: workflowRun.id },
-          'dag.authored_outcome_persist_failed_during_unwind'
-        );
-      }
-      if (error instanceof RunBudgetRefusedError && runBudget !== undefined) {
-        await failRunForBudget(runBudget, error.refusal);
-        return;
-      }
-      throw error;
-    }
+    const unwound = await unwindRunLayers(error);
+    if (unwound === 'budget_failed') return;
+    sourceUnreadable = unwound;
   } finally {
     await runCtx.toolAttention.refresh();
   }
@@ -500,42 +393,191 @@ export async function executeDagWorkflow(
   // unwind path above; extracting a policy flag would hide which error owns the throw.
   await persistRunUsage();
   await persistAuthoredOutcome();
-  const sourceReleased =
-    sourceUnreadable !== undefined && (await releaseRunForUnreadableSource(sourceUnreadable));
-
-  // Container pause economics (Phase C): if a node paused the run (approval /
-  // interactive gate), suspend the container so a multi-day wait costs ~0 RAM/CPU.
-  // The pause happens BETWEEN layers, after node completion — the #2134 background-
-  // task wait gate has already drained and no `docker exec` is in flight (docker
-  // stop would kill any live exec) — so it is safe to stop here. Resume rediscovers
-  // and restarts. Terminal (failed / cancelled) runs are left for teardown, not
-  // suspended. Only 'paused' triggers this.
-  if (execContext.kind === 'container' && containerCtx) {
-    try {
-      const pausedStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-      if (pausedStatus === 'paused') {
-        await suspendContainerForPause(
-          deps,
-          platform,
-          conversationId,
-          containerCtx,
-          execContext,
-          workflowRun.id
-        );
-        return sourceUnreadable !== undefined
-          ? { kind: 'source_release', released: sourceReleased }
-          : undefined;
-      }
-    } catch (error) {
-      if (sourceUnreadable === undefined) throw error;
-      getLog().error(
-        { err: error, workflowRunId: workflowRun.id },
-        'dag.source_release_container_cleanup_failed'
+  if (sourceUnreadable !== undefined) {
+    return {
+      kind: 'source_release',
+      released: await releaseRunForUnreadableSource(sourceUnreadable),
+    };
+  }
+  const boundary = runCtx.containerPause;
+  if (boundary?.publish !== undefined && execContext.kind === 'container' && containerCtx) {
+    // Active Docker execs and required pass writes have settled; publication hands off ownership.
+    const outcome = await suspendContainerForPause(containerCtx);
+    return publishContainerPause(workflowRun.id, boundary, boundary.publish, async () => {
+      await recordContainerSuspendWarning(deps, workflowRun.id, outcome);
+      await reportContainerSuspension(
+        deps,
+        platform,
+        conversationId,
+        containerCtx,
+        execContext,
+        workflowRun.id,
+        outcome
       );
-    }
+    });
   }
 
-  if (sourceUnreadable !== undefined) return { kind: 'source_release', released: sourceReleased };
-
   return finishRun({ ...runCtx, workflow, containerCtx, startedAt: dagStartTime });
+}
+
+/** Refuses a run no node could work in, then announces a container run. */
+async function preflightRun(
+  options: ExecuteDagWorkflowOptions,
+  execContext: ExecutionContext
+): Promise<void> {
+  const { deps, platform, conversationId, workflow, workflowRun, priorCompletedNodes } = options;
+  assertRunCapabilities(
+    deps.providers,
+    workflow,
+    options.workflowProvider,
+    options.aiProfile,
+    execContext
+  );
+  if (execContext.kind !== 'container') return;
+  await announceContainerRun(
+    deps,
+    platform,
+    conversationId,
+    workflowRun.id,
+    execContext,
+    options.containerCtx,
+    priorCompletedNodes !== undefined && priorCompletedNodes.size > 0
+  );
+}
+
+/**
+ * The context the layers run in, seeded with what earlier passes left: restored node
+ * outputs and sessions, prior usage, unfinished invocations and the run budget's ledger.
+ *
+ * runLayers mutates the context's mutable fields in place (nodeOutputs,
+ * lastSequentialSession, usage accumulators); the executor reads them back for the
+ * terminal tally. stepNamePrefix is '' for the top-level DAG so node event step_names are
+ * the raw node ids. Fields stay explicit because spreading options would also copy
+ * executor-only state into this context without an excess-property check.
+ */
+async function createRunContext(
+  options: ExecuteDagWorkflowOptions,
+  execContext: ExecutionContext,
+  restored: RestoredRunState,
+  afterLayer: () => Promise<void>
+): Promise<RunLayersContext> {
+  const {
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    workflowRun,
+    workflowProvider,
+    workflowModel,
+    artifactsDir,
+    stateDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    config,
+    configuredCommandFolder,
+    issueContext,
+    priorCompletedNodes,
+    replayedFailures,
+    aiProfile,
+    workflowPreset,
+    scopeArtifactsDir,
+    containerCtx,
+    runChildWorkflow,
+    priorUsage,
+    workflowSourceRoots,
+  } = options;
+  const { nodeOutputs, persistScope, namedResumeSourceIds, nodeSessionHandles } = restored;
+  const workflowRef = selectModelRef(workflow.model, aiProfile);
+  const workflowTier = workflowRef && isTierName(workflowRef) ? workflowRef : undefined;
+  // A budget always seeds from the run's own rows, never from `priorUsage`: a re-driven
+  // run can arrive without prior usage, and a reset ledger would replay spent work.
+  const resumeSnapshot =
+    priorCompletedNodes !== undefined || workflow.budget !== undefined
+      ? await deps.store.getDagResumeSnapshot(workflowRun.id)
+      : undefined;
+  const unfinishedInvocations =
+    priorCompletedNodes === undefined ? undefined : resumeSnapshot?.unfinishedInvocations;
+  const runBudget =
+    workflow.budget !== undefined && resumeSnapshot !== undefined
+      ? createRunBudgetLedger(workflow.budget, resumeSnapshot.budget)
+      : undefined;
+  return {
+    containerPause: execContext.kind === 'container' && containerCtx ? {} : undefined,
+    toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
+    unfinishedInvocations,
+    reportedChildUsage: resumeSnapshot?.reportedChildUsage,
+    unattributedChildUsagePaths: resumeSnapshot?.unattributedChildUsagePaths,
+    runBudget,
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    execContext,
+    runChildWorkflow,
+    workflowRun,
+    workflowName: workflow.name,
+    workflowSourceRoots: workflowSourceRoots ?? liveSourceRoots(cwd),
+    config,
+    workflowProvider,
+    workflowModel,
+    workflowLevelOptions: {
+      effort: workflow.effort,
+      fallbackModel: workflow.fallbackModel,
+      betas: workflow.betas,
+      sandbox: workflow.sandbox,
+      webSearchMode: workflow.webSearchMode,
+      workflowTier,
+    },
+    aiProfile,
+    workflowPreset,
+    artifactsDir,
+    stateDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    configuredCommandFolder,
+    issueContext,
+    persistScope,
+    workflowPersistSessions: workflow.persist_sessions === true,
+    // Scope-keyed persistence surface: without a scope key there is no durable
+    // scope to mirror into or recover from, so the dir is dropped alongside it.
+    scopeArtifactsDir: persistScope !== undefined ? scopeArtifactsDir : undefined,
+    layers: workflow.plan.layers,
+    nodeOutputs,
+    afterLayer,
+    priorCompletedNodes,
+    replayedFailures,
+    nodeSessionHandles,
+    namedResumeSourceIds,
+    lastSequentialSession: undefined,
+    warnedProviderConflicts: new Set<string>(),
+    totalCostUsd: priorUsage?.costUsd,
+    totalTokens: priorUsage?.tokens,
+    totalTokensUnknown: priorUsage?.tokensUnknown,
+    stepNamePrefix: '',
+    loopGroupPath: [],
+    loopBodyScopes: [],
+  };
+}
+
+/**
+ * The thunk that threw never reported its spend, nor did its settled siblings, so the
+ * in-memory totals miss it. Rebuild from node events and child run telemetry.
+ */
+async function refreshUsageFromDurableRows(
+  store: ExecuteDagWorkflowOptions['deps']['store'],
+  workflowRunId: string,
+  runCtx: RunLayersContext,
+  error: unknown
+): Promise<void> {
+  try {
+    const durable = await readInterruptedRunUsage(store, workflowRunId, error);
+    runCtx.totalCostUsd = durable.costUsd;
+    runCtx.totalTokens = durable.tokens;
+    runCtx.totalTokensUnknown = durable.tokensUnknown;
+  } catch (readError) {
+    getLog().error({ err: readError as Error, workflowRunId }, 'dag.unwind_usage_refresh_failed');
+  }
 }

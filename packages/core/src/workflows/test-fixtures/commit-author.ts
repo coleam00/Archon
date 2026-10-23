@@ -21,7 +21,7 @@ import { saveUserGithubToken } from '../../db/user-github-token-store';
 import { admitResourceStart } from '../../db/resource-starts';
 import { getDatabase, closeDatabase } from '../../db/connection';
 import { loadConfig } from '../../config/config-loader';
-import { dispatchBackgroundWorkflow } from '../../orchestrator/orchestrator';
+import { dispatchBackgroundWorkflow } from '../../orchestrator/dispatch/background';
 import { setPlatformPolicies } from '../../platforms/registry';
 import type { IPlatformAdapter } from '../../types';
 

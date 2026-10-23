@@ -232,7 +232,9 @@ export async function* streamOpencodeSession(
   model: { providerID: string; modelID: string },
   requestOptions: SendQueryOptions | undefined
 ): AsyncGenerator<MessageChunk> {
+  requestOptions?.abortSignal?.throwIfAborted();
   const events = await client.event.subscribe({ query: { directory: cwd } });
+  requestOptions?.abortSignal?.throwIfAborted();
   const streamController = new AbortController();
   const seenToolCalls = new Set<string>();
   const completedToolCalls = new Set<string>();

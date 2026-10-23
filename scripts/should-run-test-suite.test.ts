@@ -87,7 +87,7 @@ describe('test-suite change decision', () => {
 
   test.each([
     'packages/docs-web/src/content/docs/reference/database.md',
-    'packages/docs-web/src/content/docs/guides/attention-queue.md',
+    'packages/docs-web/src/content/docs/getting-started/operate.md',
     'packages/docs-web/src/content/docs/deployment/docker.md',
     '.archon/architecture.md',
     'packages/providers/src/codex/protocol/README.md',
@@ -399,15 +399,12 @@ describe('diff mode', () => {
 });
 
 describe('inert paths', () => {
-  test.each([
-    '.gitignore',
-    'LICENSE',
-    '.env.example',
-    '.archon/config.example.yaml',
-    'assets/logo.png',
-  ])('skips %s, which no check reads', file => {
-    expect(shouldRunTestSuite([file])).toBe(false);
-  });
+  test.each(['.gitignore', 'LICENSE', '.archon/config.example.yaml', 'assets/logo.png'])(
+    'skips %s, which no check reads',
+    file => {
+      expect(shouldRunTestSuite([file])).toBe(false);
+    }
+  );
 
   test.each([
     ['Dockerfile', 'the docker-build job'],
@@ -418,6 +415,8 @@ describe('inert paths', () => {
     ['.github/workflows/test.yml', 'the gate itself'],
     ['packages/web/public/favicon.png', 'the web build'],
     ['Caddyfile.example', 'reverse-proxy.test.ts and caddy-recipe.test.ts'],
+    ['.env.example', 'caddy-recipe.test.ts'],
+    ['deploy/.env.example', 'caddy-recipe.test.ts'],
     ['.gitattributes', 'every checkout'],
   ])('runs for %s, which is read by %s', file => {
     expect(shouldRunTestSuite([file])).toBe(true);

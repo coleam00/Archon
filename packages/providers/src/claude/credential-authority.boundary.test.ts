@@ -294,9 +294,14 @@ test(
     try {
       const project = join(dir, 'project');
       await mkdir(join(project, '.claude'), { recursive: true });
+      const script = join(dir, 'helper.js');
+      await writeFile(
+        script,
+        "const { existsSync } = require('node:fs');\nif (existsSync('.claude/settings.json')) process.stdout.write('project-key');\n"
+      );
       await writeFile(
         join(project, '.claude/settings.json'),
-        JSON.stringify({ apiKeyHelper: 'test -f .claude/settings.json && printf project-key' })
+        JSON.stringify({ apiKeyHelper: `"${process.execPath}" "${script}"` })
       );
       const env: Record<string, string> = {
         CLAUDE_CONFIG_DIR: dir,

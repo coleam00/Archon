@@ -1,7 +1,9 @@
+import { LOOP_COMPLETION_CHANNELS, type LoopCompletionChannel } from '../../../schemas/loop';
 import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
 import { buildHonestGateMessage, type LoopCompletionCheck } from '../../loop-completion';
 import {
+  runOrStagePause,
   pauseGateRespectingExternalTransition,
   sendPauseNotice,
   snapshotBodySessionCursorAncestry,
@@ -243,65 +245,60 @@ async function checkCompletion(
   const loop = run.node.loop;
   const { reply, structuredText } = iteration;
   const payload = reply.payload;
-  // `until_field` (#2563): the validated payload's declared boolean. Strict
-  // identity — no truthiness, no "true", no 1. The load-time rules guarantee the
-  // property is declared, required and boolean, so a schema-valid payload always
-  // carries a real boolean here and `false` unambiguously means "keep going".
-  const fieldComplete =
-    loop.until_field !== undefined &&
-    payload !== null &&
-    typeof payload === 'object' &&
-    (payload as Record<string, unknown>)[loop.until_field] === true;
-
-  // Check LLM completion signal — the AI decides whether the user approved.
-  // For interactive loops, the AI emits the signal when the user explicitly approves
-  // (e.g., "approved", "looks good"). The prompt instructs the AI on when to emit it.
-  //
-  // `until` is optional (#2563): a loop that declared only `until_bash` has no prose
-  // path at all, so never call detectCompletionSignal with an undefined signal — its
-  // regexes would be built from the empty string and match anything.
-  //
-  // Detection reads the prose AND the serialized payload. With grammar-constrained
-  // decoding the prose is routinely empty, so a loop declaring both `until:` and
-  // `output_format` would otherwise have a signal channel that could never fire —
-  // silently, which is the failure mode this issue exists to remove.
-  //
-  // TWO independent calls, never one concatenated haystack. `detectCompletionSignal`
-  // supports a sentinel on the final standalone line, and that pattern is anchored
-  // with `$` (see executor-shared.ts). Appending the payload moves the end of the
-  // string past the prose, so concatenating would hide a final standalone signal
-  // line for every loop that declares a schema. Checking each haystack separately
-  // preserves each one's own anchor.
-  const signalDetected =
-    loop.until !== undefined &&
-    (detectCompletionSignal(reply.fullOutput, loop.until) ||
-      (structuredText !== undefined && detectCompletionSignal(structuredText, loop.until)));
-
-  // Check deterministic bash condition (if configured). Skipped once a cheaper
-  // channel already completed this iteration: completion is an OR, so the outcome
-  // cannot change, and running a side-effecting script an extra time can. This
-  // matches executeLoopGroupNode's identical guard — the two variants disagreed
-  // until #2563; do not "fix" the asymmetry back.
-  let bashComplete = false;
-  if (loop.until_bash && !signalDetected && !fieldComplete) {
-    const bash = await runUntilBash(run, state, i, loop.until_bash, iteration);
-    if (typeof bash !== 'boolean') return bash;
-    bashComplete = bash;
-  }
-
   const completionChecks: LoopCompletionCheck[] = [];
-  if (loop.until_field !== undefined) {
-    completionChecks.push({
-      channel: 'until_field',
-      field: loop.until_field,
-      completed: fieldComplete,
-    });
+  // Field checks precede signals for gate attribution; bash runs last so a cheaper
+  // completed channel can suppress its potentially side-effecting subprocess.
+  const channels = [
+    ...LOOP_COMPLETION_CHANNELS.filter(({ field }) => field === 'until_field'),
+    ...LOOP_COMPLETION_CHANNELS.filter(({ field }) => field !== 'until_field'),
+  ];
+  async function evaluateChannel(
+    field: LoopCompletionChannel
+  ): Promise<LoopCompletionCheck | IterationFailed | undefined> {
+    switch (field) {
+      case 'until_field':
+        if (loop.until_field === undefined) break;
+        return {
+          channel: field,
+          field: loop.until_field,
+          completed:
+            payload !== null &&
+            typeof payload === 'object' &&
+            (payload as Record<string, unknown>)[loop.until_field] === true,
+        };
+      case 'until':
+        if (loop.until === undefined) break;
+        // Separate haystacks preserve detection of a signal on the final prose
+        // line even when grammar-constrained output also supplies a payload.
+        return {
+          channel: field,
+          signal: loop.until,
+          completed:
+            detectCompletionSignal(reply.fullOutput, loop.until) ||
+            (structuredText !== undefined && detectCompletionSignal(structuredText, loop.until)),
+        };
+      case 'until_bash': {
+        if (loop.until_bash === undefined) break;
+        let completed = false;
+        if (!completionChecks.some(check => check.completed)) {
+          const bash = await runUntilBash(run, state, i, loop.until_bash, iteration);
+          if (typeof bash !== 'boolean') return bash;
+          completed = bash;
+        }
+        return { channel: field, completed };
+      }
+      default: {
+        const unhandled: never = field;
+        return unhandled;
+      }
+    }
+    return undefined;
   }
-  if (loop.until !== undefined) {
-    completionChecks.push({ channel: 'until', signal: loop.until, completed: signalDetected });
-  }
-  if (loop.until_bash !== undefined) {
-    completionChecks.push({ channel: 'until_bash', completed: bashComplete });
+  for (const { field } of channels) {
+    const check = await evaluateChannel(field);
+    if (check === undefined) continue;
+    if ('kind' in check) return check;
+    completionChecks.push(check);
   }
   return completionChecks;
 }
@@ -494,6 +491,7 @@ async function completeLoop(
         tokens: state.tokens,
         tokensUnknown: state.tokensUnknown,
         costUsd: state.costUsd,
+        costPartial: !state.priorCostKnown,
         stopReason: state.stopReason,
         numTurns: state.numTurns,
         resolvedModel: state.resolvedModel?.id,
@@ -521,6 +519,7 @@ async function suppressLoopGate(
     { status: 'skipped', reason: 'trigger_rule', cause: { kind: 'upstream_failed', origin } },
     {
       ...loopSpend(state),
+      costPartial: !state.priorCostKnown,
       stopReason: state.stopReason,
       numTurns: state.numTurns,
       resolvedModel: state.resolvedModel?.id,
@@ -551,6 +550,7 @@ async function pauseAtLoopGate(
       tokens: state.tokens,
       tokensUnknown: state.tokensUnknown,
       costUsd: state.costUsd,
+      costPartial: !state.priorCostKnown,
       stopReason: state.stopReason,
       numTurns: state.numTurns,
       resolvedModel: state.resolvedModel?.id,
@@ -589,44 +589,58 @@ async function pauseAtLoopGate(
     ...(state.tokens !== undefined ? { tokens: state.tokens } : {}),
     ...(state.tokensUnknown ? { tokensUnknown: true } : {}),
   };
-  const paused = await pauseGateRespectingExternalTransition(
-    deps,
-    workflowRun.id,
-    approvalContext,
-    { event: serializeNodeStateRecord(suspended) }
-  );
-  if (!paused) {
-    if (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown) {
-      await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
-    }
-    return deferredLoopOutput;
-  }
-  await recordDerivedExecution({ logDir }, suspended);
-  const gateMsg =
-    `⏸ **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
-    `Run ID: \`${workflowRun.id}\`\n` +
-    `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
-    `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-  await sendPauseNotice(
-    deps,
-    platform,
-    conversationId,
-    workflowRun.id,
-    node.id,
-    gateOccurrence(paused),
-    run.stepName,
-    gateMsg
-  );
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'approval_requested',
-      step_name: run.stepName,
-      data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
-    })
-    .catch((err: Error) => {
-      logIterationEventError(node.id, err, i);
-    });
+  return runOrStagePause(
+    ctx,
+    async () => {
+      const paused = await pauseGateRespectingExternalTransition(
+        deps,
+        workflowRun.id,
+        approvalContext,
+        { event: serializeNodeStateRecord(suspended), boundary: ctx.containerPause }
+      );
+      if (!paused) {
+        if (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown) {
+          await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
+        }
+        return deferredLoopOutput;
+      }
+      await recordDerivedExecution({ logDir }, suspended);
+      const gateMsg =
+        `⏸ **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
+        `Run ID: \`${workflowRun.id}\`\n` +
+        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
+        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
+      await sendPauseNotice(
+        deps,
+        platform,
+        conversationId,
+        workflowRun.id,
+        node.id,
+        gateOccurrence(paused),
+        run.stepName,
+        gateMsg
+      );
+      deps.store
+        .createWorkflowEvent({
+          workflow_run_id: workflowRun.id,
+          event_type: 'approval_requested',
+          step_name: run.stepName,
+          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
+        })
+        .catch((err: Error) => {
+          logIterationEventError(node.id, err, i);
+        });
 
-  return serializeNodeOutput(suspended);
+      return serializeNodeOutput(suspended);
+    },
+    async selected => {
+      if (
+        !selected &&
+        (state.costUsd !== undefined || state.tokens !== undefined || state.tokensUnknown)
+      ) {
+        await persistNodeEvent(deps.store, serializeDeferredNodeUsage(suspended));
+      }
+      return deferredLoopOutput;
+    }
+  );
 }

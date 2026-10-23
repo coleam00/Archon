@@ -165,7 +165,17 @@ test('starter cancel succeeds; another member is forbidden; admins can act', asy
     expect((await getWorkflowRun(started.id))?.status).toBe('running');
     expect(
       await action({ runId: started.id, action: 'cancel', sender: { platformUserId: 'starter' } })
-    ).toEqual({ status: 'done', result: { kind: 'cooperative', cancelled: true } });
+    ).toEqual({
+      status: 'done',
+      result: {
+        kind: 'cooperative',
+        cancelled: true,
+        // Cooperative cancellation reports possible host-command leftovers only on POSIX hosts.
+        ...(process.platform === 'win32'
+          ? {}
+          : { cleanupWarnings: [expect.stringContaining('untracked background work')] }),
+      },
+    });
   } finally {
     await owner.close();
   }
@@ -227,6 +237,23 @@ test('approve and declared response preserve gate occurrence and resume with hos
   expect((await getWorkflowRun(custom.id))?.metadata.approval).toMatchObject({
     answeredVia: descriptor.id,
   });
+});
+
+test('reject cancels an approval gate without resuming the run', async () => {
+  const paused = await run(true);
+  expect(
+    await action({
+      runId: paused.id,
+      action: 'reject',
+      response: { nodeId: 'gate', pauseId: 'pause-1' },
+      sender: { platformUserId: 'starter' },
+    })
+  ).toMatchObject({
+    status: 'done',
+    result: { kind: 'rejected', cancelled: true, resumed: false },
+  });
+  expect((await getWorkflowRun(paused.id))?.status).toBe('cancelled');
+  expect(resume).not.toHaveBeenCalled();
 });
 
 async function waiting(wait: Record<string, unknown>) {

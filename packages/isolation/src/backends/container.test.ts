@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { join } from 'path';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolveBashPath } from '@archon/git';
-import { getArchonHome } from '@archon/paths';
+import { getArchonHome, getRunScratchDir } from '@archon/paths';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { OVERLAY_MODES } from '@archon/workflows/container-context';
 import { ContainerBackend } from './container';
 import * as containerModule from './container';
@@ -71,6 +72,9 @@ function fakeStore(): IIsolationStore & {
     async updateStatus(id, status) {
       const row = rows.get(id);
       if (row) row.status = status;
+    },
+    withWorktreeRegistration: async () => {
+      throw new Error('Unexpected worktree removal');
     },
     async markWorktreeDestroyed() {
       throw new Error('Unexpected worktree retirement');
@@ -785,6 +789,56 @@ function seedContainerRow(
 }
 
 describe('ContainerBackend.suspend', () => {
+  test('refuses to prepare a stop for a different execution container', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    await expect(backend.prepareSuspend('env-c', 'other-container', 2_000)).rejects.toThrow(
+      'does not own execution container'
+    );
+    expect(docker.calls).toEqual([]);
+  });
+
+  test.each(['exec', 'stop', 'container'])(
+    'bounds every Docker call when %s fails during a source release',
+    async failing => {
+      const store = fakeStore();
+      seedContainerRow(store, { artifactsMount: '/artifacts' });
+      const identity = spyOn(containerModule, 'currentHostIdentity').mockReturnValue({
+        uid: 1000,
+        gid: 1000,
+      });
+      const calls: { args: string[]; timeout: number | undefined }[] = [];
+      const docker: DockerRunner = async (args, options) => {
+        calls.push({ args, timeout: options?.timeout });
+        if (args[0] === failing || args[0] === 'stop') throw new Error('Docker timed out');
+        return { stdout: 'cid-orig\tarchon-res-1\trunning\n', stderr: '' };
+      };
+      try {
+        const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+        const stop = await backend.prepareSuspend('env-c', 'cid-orig', 2_000);
+        await expect(stop()).rejects.toThrow('Failed to suspend');
+        expect(calls.map(call => call.args[0])).toEqual(['exec', 'stop', 'container']);
+        expect(calls.map(call => call.timeout)).toEqual([2_000, 2_000, 2_000]);
+        expect(calls[0]?.args).toEqual([
+          'exec',
+          'cid-orig',
+          'chown',
+          '-R',
+          '1000:1000',
+          '/artifacts',
+        ]);
+        expect(calls[1]?.args).toEqual(['stop', '--time', '1', 'cid-orig']);
+        expect(calls.reduce((total, call) => total + (call.timeout ?? 60_000), 0)).toBeLessThan(
+          10_000
+        );
+      } finally {
+        identity.mockRestore();
+      }
+    }
+  );
+
   test('docker stops the container by name', async () => {
     const store = fakeStore();
     seedContainerRow(store);
@@ -793,6 +847,53 @@ describe('ContainerBackend.suspend', () => {
     await backend.suspend('env-c');
     const stop = docker.calls.find(c => c[0] === 'stop');
     expect(stop).toEqual(['stop', 'archon-res-1']);
+  });
+
+  test('keeps the execution ID across replacement and repeats without store access', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const read = spyOn(store, 'getById');
+    const stop = await backend.prepareSuspend('env-c', 'cid-orig');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(docker.calls).toEqual([]);
+    await store.updateMetadata('env-c', { containerId: 'cid-replacement' });
+    read.mockImplementation(async () => {
+      throw new Error('store access inside transition');
+    });
+    try {
+      await stop();
+      await stop();
+      expect(docker.calls.filter(c => c[0] === 'stop')).toEqual([
+        ['stop', 'cid-orig'],
+        ['stop', 'cid-orig'],
+      ]);
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  test('a missing execution container ignores a running replacement under the same name', async () => {
+    const store = fakeStore();
+    seedContainerRow(store);
+    const docker = fakeDocker(args => {
+      if (args[0] === 'container') {
+        return { stdout: 'cid-replacement\tarchon-res-1\trunning\n', stderr: '' };
+      }
+      throw new Error('execution container is gone');
+    });
+    const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+    const stop = await backend.prepareSuspend('env-c', 'cid-orig', 2_000);
+    await store.updateMetadata('env-c', { containerId: 'cid-replacement' });
+    await expect(stop()).resolves.toBeUndefined();
+    expect(docker.calls.find(args => args[0] === 'stop')).toEqual([
+      'stop',
+      '--time',
+      '1',
+      'cid-orig',
+    ]);
   });
 
   test('is idempotent when the container is already gone', async () => {
@@ -1487,6 +1588,34 @@ describe('ContainerBackend artifacts mount', () => {
     const rm = docker.calls.findIndex(c => c[0] === 'rm');
     expect(chown).toBeGreaterThan(-1);
     expect(chown).toBeLessThan(rm);
+  });
+
+  test("removes the run's scratch only after the container, keeping its evidence", async () => {
+    const scratch = join(getRunScratchDir(ARTIFACTS_MOUNT), 'bisect', 'node_modules');
+    const report = join(ARTIFACTS_MOUNT, 'report.md');
+    mkdirSync(scratch, { recursive: true });
+    writeFileSync(report, 'evidence');
+    let scratchAtRm: boolean | undefined;
+    const docker = readyDocker(args => {
+      if (args[0] === 'rm') scratchAtRm = existsSync(scratch);
+      return undefined;
+    });
+    try {
+      const store = fakeStore();
+      const backend = new ContainerBackend({ store, config: CONFIG, dockerRunner: docker });
+      const prepared = await backend.prepare({
+        codebase: FOLDER,
+        artifactsMount: ARTIFACTS_MOUNT,
+      });
+
+      await backend.destroy(prepared.envId!);
+
+      expect(scratchAtRm).toBe(true);
+      expect(existsSync(scratch)).toBe(false);
+      expect(readFileSync(report, 'utf8')).toBe('evidence');
+    } finally {
+      await removeTempTree(ARTIFACTS_MOUNT);
+    }
   });
 
   test('skips the hand-back when the host user is root', async () => {

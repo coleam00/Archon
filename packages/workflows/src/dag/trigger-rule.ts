@@ -1,6 +1,7 @@
 import type { SkipCause, NodeOutput, DagNode, TriggerRule } from '../schemas';
 import type { JsonValue } from '../output-ref';
-import { readComposedMeta } from '../compiled-command';
+import { readComposedMeta, type ComposedBlockBoundary } from '../compiled-command';
+import type { LoopBodyScope } from './loop-scope';
 import { evaluateCondition } from '../condition-evaluator';
 
 export type TriggerRuleDecision = { decision: 'run' } | { decision: 'skip'; cause: SkipCause };
@@ -100,15 +101,18 @@ export function checkComposedBlockBoundaries(
   node: DagNode,
   nodeOutputs: Map<string, NodeOutput>,
   inputs?: Record<string, JsonValue>,
-  evaluateEntryBoundary = false
+  options: {
+    evaluateEntryBoundary?: boolean;
+    loopBodyScopes?: readonly LoopBodyScope[];
+  } = {}
 ): TriggerRuleDecision {
+  const { evaluateEntryBoundary = false } = options;
   for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
     if (boundary.isEntry && !evaluateEntryBoundary) continue;
 
-    const triggerRules =
-      boundary.isEntry && evaluateEntryBoundary
-        ? [boundary.entryTriggerRule]
-        : boundary.entryTriggerRules;
+    const triggerRules = boundary.isEntry
+      ? [boundary.entryTriggerRule]
+      : boundary.entryTriggerRules;
     const triggerDecisions = triggerRules.map(rule =>
       checkTriggerRuleForDependencies(boundary.dependsOn, rule, nodeOutputs)
     );
@@ -116,28 +120,48 @@ export function checkComposedBlockBoundaries(
       return triggerDecisions[0];
     }
 
-    if (boundary.when !== undefined) {
-      try {
-        const condition = evaluateCondition(boundary.when, nodeOutputs, inputs);
-        if (!condition.parsed) {
-          return {
-            decision: 'skip',
-            cause: { kind: 'condition_parse_error', expr: boundary.when },
-          };
-        }
-        if (!condition.result) {
-          return { decision: 'skip', cause: { kind: 'condition', expr: boundary.when } };
-        }
-      } catch (error) {
-        if (boundary.isEntry && evaluateEntryBoundary) throw error;
-        // Entry nodes own the actionable missing-ref error. Descendants only need to stay
-        // inside the failed boundary, without repeating the same failure for every node.
-        return {
-          decision: 'skip',
-          cause: { kind: 'condition_parse_error', expr: boundary.when },
-        };
-      }
+    const conditionDecision = checkBoundaryCondition(
+      boundary,
+      nodeOutputs,
+      inputs,
+      options.loopBodyScopes
+    );
+    if (conditionDecision.decision === 'skip') return conditionDecision;
+  }
+  return { decision: 'run' };
+}
+
+function checkBoundaryCondition(
+  boundary: ComposedBlockBoundary,
+  nodeOutputs: Map<string, NodeOutput>,
+  inputs: Record<string, JsonValue> | undefined,
+  loopBodyScopes: readonly LoopBodyScope[] | undefined
+): TriggerRuleDecision {
+  if (boundary.when === undefined) return { decision: 'run' };
+  try {
+    const depth = boundary.loopDepth ?? 0;
+    const scopeIndex = (loopBodyScopes?.length ?? 0) - 1 - depth;
+    const loopPrevOutputs = loopBodyScopes?.[scopeIndex]?.loopPrevOutputs;
+    const condition = evaluateCondition(boundary.when, nodeOutputs, inputs, {
+      loopPrevOutputs,
+    });
+    if (!condition.parsed) {
+      return {
+        decision: 'skip',
+        cause: { kind: 'condition_parse_error', expr: boundary.when },
+      };
     }
+    if (!condition.result) {
+      return { decision: 'skip', cause: { kind: 'condition', expr: boundary.when } };
+    }
+  } catch (error) {
+    if (boundary.isEntry) throw error;
+    // Entry nodes own the actionable missing-ref error. Descendants only need to stay
+    // inside the failed boundary, without repeating the same failure for every node.
+    return {
+      decision: 'skip',
+      cause: { kind: 'condition_parse_error', expr: boundary.when },
+    };
   }
   return { decision: 'run' };
 }

@@ -1,8 +1,9 @@
 // @archon-test-isolated
 import { mockLogger, parseWorkflow, parseWorkflowYaml } from './test-utils';
 import { describe, it, expect } from 'bun:test';
-import { KNOWN_WORKFLOW_KEYS } from '../schemas/workflow';
+import { KNOWN_WORKFLOW_KEYS, workflowContainerPolicySchema } from '../schemas/workflow';
 import type { WorkflowDefinition } from '../schemas/workflow';
+import { parseContainerPolicy } from './workflow-fields';
 
 // ---------------------------------------------------------------------------
 // Workflow signature: inputs / returns (#2470)
@@ -420,6 +421,63 @@ nodes:
     );
     expect(workflow).toBeNull();
     expect(error?.error).toContain('a model ref string or a preference list');
+  });
+});
+
+describe('container policy', () => {
+  it('preserves every schema field through the container parser', () => {
+    const policy = {
+      enabled: false,
+      write_back: workflowContainerPolicySchema.shape.write_back.unwrap().options[0],
+    } satisfies Required<NonNullable<ReturnType<typeof parseContainerPolicy>>>;
+
+    expect(Object.keys(policy).sort()).toEqual(
+      Object.keys(workflowContainerPolicySchema.shape).sort()
+    );
+    expect(parseContainerPolicy(policy, 'policy.yaml')).toEqual(policy);
+  });
+
+  it.each(workflowContainerPolicySchema.shape.write_back.unwrap().options)(
+    'accepts schema write_back mode %s without adding absent fields',
+    writeBack => {
+      expect(parseContainerPolicy({ write_back: writeBack }, 'policy.yaml')).toEqual({
+        write_back: writeBack,
+      });
+    }
+  );
+
+  it.each<[unknown, ReturnType<typeof parseContainerPolicy>, [unknown, string][]]>([
+    [undefined, undefined, []],
+    [{}, undefined, []],
+    [{ enabled: undefined, write_back: undefined }, undefined, []],
+    [{ enabled: false }, { enabled: false }, []],
+    [null, undefined, [[null, 'invalid_container_block_ignored']]],
+    [[], undefined, [[[], 'invalid_container_block_ignored']]],
+    ['auto', undefined, [['auto', 'invalid_container_block_ignored']]],
+    [
+      { enabled: false, write_back: 'bogus' },
+      { enabled: false },
+      [['bogus', 'invalid_container_write_back_value_ignored']],
+    ],
+    [
+      { enabled: 'yes', write_back: 'approve' },
+      { write_back: 'approve' },
+      [['yes', 'invalid_container_enabled_value_ignored']],
+    ],
+    [
+      { enabled: null, write_back: null },
+      undefined,
+      [
+        [null, 'invalid_container_enabled_value_ignored'],
+        [null, 'invalid_container_write_back_value_ignored'],
+      ],
+    ],
+  ])('parses %j with field-level warnings', (raw, expected, warnings) => {
+    mockLogger.warn.mockClear();
+    expect(parseContainerPolicy(raw, 'policy.yaml')).toEqual(expected);
+    expect(mockLogger.warn.mock.calls).toEqual(
+      warnings.map(([value, event]) => [{ filename: 'policy.yaml', value }, event])
+    );
   });
 });
 

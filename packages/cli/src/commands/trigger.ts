@@ -244,10 +244,7 @@ async function drainReceipt(
     }
     // Other pending work on the host can fail in the same drain; only this receipt's
     // failures are this command's failure.
-    // A failure with no receipt id could be this one, so it counts as ours.
-    const others = error.failures.filter(
-      failure => failure.receiptId !== undefined && failure.receiptId !== receiptId
-    );
+    const others = error.failures.filter(failure => failure.receiptId !== receiptId);
     const own = error.failures.filter(failure => !others.includes(failure));
     if (own.length > 0)
       throw new Error(
@@ -255,7 +252,7 @@ async function drainReceipt(
         { cause: error }
       );
     process.stderr.write(
-      `Warning: ${String(others.length)} other start(s) on this host failed and are not part of receipt ${receiptId}: ${drainFailureReasons(others.map(failure => failure.error))}\n`
+      `Warning: ${String(others.length)} other or unattributed start operation(s) on this host failed while draining receipt ${receiptId}: ${drainFailureReasons(others.map(failure => failure.error))}\n`
     );
   }
 }
@@ -310,7 +307,7 @@ async function triggerExecute(
         store: deps.store,
         ...owned,
         logModule: 'cli.trigger',
-        endNodeProcessTrees: !detachedProcessOwner,
+        detachedProcessOwner,
       }),
     ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
   });
@@ -387,10 +384,9 @@ async function recoverTriggerPreparation(
 
 async function withdrawTrigger(host: WorkflowHost, args: string[]): Promise<void> {
   if (!args[0]) throw new Error('Usage: archon trigger withdraw <queued-request-id>');
-  const request = await host.deps.store.getResourceStartRequest(args[0]);
-  if (!request || !(await host.deps.store.withdrawQueuedResourceStart(args[0])))
-    throw new Error('Only untouched queued requests can be withdrawn.');
-  const source = readWorkflowSourceState(request.launch.run.metadata);
+  const launch = await host.deps.store.withdrawQueuedResourceStart(args[0]);
+  if (!launch) throw new Error('Only untouched queued requests can be withdrawn.');
+  const source = readWorkflowSourceState(launch.run.metadata);
   if (source.kind === 'recorded') await rm(source.record.root, { recursive: true, force: true });
   if (source.kind === 'unreadable')
     throw new Error(

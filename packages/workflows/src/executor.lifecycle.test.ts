@@ -12,12 +12,30 @@ import {
   resetExecutorMocks,
   resumeOf,
   startWorkflow,
+  WS,
 } from './executor/test-utils';
 import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { existsSync, mkdirSync } from 'node:fs';
+import { hostname } from 'node:os';
+import { join } from 'node:path';
+import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { ParentStatusReadError } from './parent-status-read';
 import { NodeEventWriteError } from './node-event-write';
+import * as resume from './run-resume';
+import * as source from './run-source';
+import { liveSourceRoots } from './workflow-source';
 import { hydrateResumableRun } from './run-resume';
+import { noExecutorCanWrite } from './run-scratch';
+import type { ContainerPauseReceipt } from './dag/pause';
 import type { WorkflowRunNodeSession } from './schemas';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
+import {
+  workflowRunStatusSchema,
+  EXECUTION_OWNER_METADATA_KEY,
+  TERMINAL_WORKFLOW_STATUSES,
+} from './schemas/workflow-run';
+import { WorkflowExecutionHandoffError } from './engine-port';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { keepAwake } from './utils/keep-awake';
 
@@ -158,7 +176,8 @@ it.each(['This is the workflow summary', undefined])(
   async summary => {
     mockExecuteDagWorkflow.mockResolvedValueOnce(summary);
     const result = await startWorkflow();
-    if (!result.success || 'paused' in result) throw new Error('Expected completed result');
+    if (!result.success || 'paused' in result || 'handedOff' in result)
+      throw new Error('Expected completed result');
     expect(result.summary).toBe(summary);
   }
 );
@@ -167,6 +186,118 @@ describe('paused exit', () => {
   const pausedAt = (approval: Record<string, unknown>) =>
     makeRun({ status: 'paused', metadata: { approval } });
   const run = (store: IWorkflowStore) => startWorkflow({ store });
+
+  const receipt: ContainerPauseReceipt = {
+    kind: 'container_pause',
+    pause: {
+      kind: 'gate',
+      context: { type: 'approval', nodeId: 'review', message: '', pauseId: 'old-pause' },
+    },
+  };
+
+  it.each([...workflowRunStatusSchema.options, null])(
+    'does not finalize a successor that is %s after a container pause',
+    async status => {
+      mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
+      const releasePausedRunSlot = mock<IWorkflowStore['releasePausedRunSlot']>(async () => ({
+        released: true,
+      }));
+      const store = makeStore({
+        getWorkflowRun: mock(async () =>
+          status === null
+            ? null
+            : makeRun({
+                status,
+                metadata: {
+                  approval: {
+                    type: 'approval',
+                    nodeId: 'review',
+                    message: '',
+                    pauseId: 'successor-pause',
+                  },
+                },
+              })
+        ),
+        getWorkflowRunStatus: mock(async () => status),
+        releasePausedRunSlot,
+      });
+      const result = await run(store);
+      expect(result).toMatchObject({
+        success: status !== 'failed' && status !== 'cancelled',
+        handedOff: true,
+        observedStatus: status,
+      });
+      expect(result).not.toHaveProperty('paused');
+      expect(result).not.toHaveProperty('waitCursor');
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(releasePausedRunSlot).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not release the same wait occurrence under a successor claim', async () => {
+    const context = {
+      kind: 'time' as const,
+      owner: 'node' as const,
+      nodeId: 'delay',
+      pauseId: 'same-wait',
+      waitingSince: '2026-01-01T00:00:00.000Z',
+      resumeAt: '2099-01-02T00:00:00.000Z',
+    };
+    mockExecuteDagWorkflow.mockResolvedValueOnce({
+      kind: 'container_pause',
+      pause: { kind: 'wait', context },
+    });
+    const store = makeStore({
+      getWorkflowRun: mock(async () =>
+        makeRun({ status: 'paused', metadata: { wait: context, execution_claim: 'successor' } })
+      ),
+    });
+    const result = await run(store);
+    expect(result).toMatchObject({ success: true, handedOff: true, observedStatus: 'paused' });
+    expect(result).not.toHaveProperty('waitCursor');
+    expect(store.releasePausedRunSlot).not.toHaveBeenCalled();
+  });
+
+  it('finalizes only the same container pause occurrence', async () => {
+    mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
+    const store = makeStore({ getWorkflowRun: mock(async () => pausedAt(receipt.pause.context)) });
+    expect(await run(store)).toMatchObject({ success: true, paused: true });
+    expect(store.releasePausedRunSlot).toHaveBeenCalledWith('run-123', {
+      kind: 'pause',
+      nodeId: 'review',
+      pauseId: 'old-pause',
+    });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it.each(['read', 'post-publication'] as const)(
+    'surfaces a %s error after publication without failing the successor',
+    async kind => {
+      const error = new Error('required write/read failed');
+      if (kind === 'post-publication') {
+        mockExecuteDagWorkflow.mockRejectedValueOnce(
+          new WorkflowExecutionHandoffError('run-123', error)
+        );
+      } else {
+        mockExecuteDagWorkflow.mockResolvedValueOnce(receipt);
+      }
+      const store = makeStore({
+        getWorkflowRun: mock(async () => {
+          throw error;
+        }),
+        getWorkflowRunStatus: mock(async () => 'running' as const),
+      });
+      await expect(run(store)).rejects.toMatchObject({
+        name: WorkflowExecutionHandoffError.name,
+        workflowRunId: 'run-123',
+        cause: error,
+      });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    }
+  );
 
   for (const kind of ['approval', 'deadline'] as const) {
     it(`gives back the resource slot of a pause the host continues (${kind})`, async () => {
@@ -412,18 +543,74 @@ describe('finally backstop', () => {
       c => typeof c[1] === 'string' && c[1].includes('exited without finalizing')
     );
 
+  it('leaves finalization to the continued fan-out execution after its pause is resumed', async () => {
+    const parent = makeRun({
+      status: 'paused',
+      working_path: '/project',
+      metadata: {
+        approval: {
+          type: 'fan_out',
+          nodeId: 'children',
+          message: '',
+          childRunIds: ['child'],
+        },
+      },
+    });
+    const resolve = spyOn(source, 'resolveContinuationWorkflow').mockResolvedValue({
+      workflow: makeWorkflow(),
+      roots: liveSourceRoots('/project'),
+      workflows: [],
+      errors: [],
+    });
+    const hydrate = spyOn(resume, 'hydrateResumableRun').mockResolvedValue({
+      ...resumeOf(makeRun()),
+      resumeCause: 'continue_after_wait',
+      priorFailedNodes: new Map(),
+      priorUsage: {},
+      priorNodeSessions: [],
+    });
+    const store = makeStore({
+      getWorkflowRun: mock(async () => parent),
+      getWorkflowRunStatus: mock(async () => 'running' as const),
+      findChildRuns: mock(async () => [makeRun({ id: 'child', status: 'completed' })]),
+    });
+    mockExecuteDagWorkflow.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
+      parent.metadata = {
+        execution_claim: 'successor',
+        approval: { type: 'approval', nodeId: 'review', message: '', pauseId: 'next' },
+      };
+      return {
+        kind: 'container_pause',
+        pause: {
+          kind: 'gate',
+          context: {
+            type: 'approval',
+            nodeId: 'review',
+            message: '',
+            pauseId: 'next',
+          },
+        },
+      };
+    });
+    try {
+      const result = await startWorkflow({ store });
+      expect(result).toMatchObject({ success: true, handedOff: true });
+      expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(2);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    } finally {
+      hydrate.mockRestore();
+      resolve.mockRestore();
+    }
+  });
+
   it('source release exits without checking or failing a newly resumed owner', async () => {
     mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released: true });
-    const store = makeStore({
-      getWorkflowRunStatus: mock(async () => 'running' as const),
-      getWorkflowRun: mock(async () => {
-        throw new Error('old owner must not read after release');
-      }),
-    });
+    const store = makeStore({ getWorkflowRunStatus: mock(async () => 'running' as const) });
     const result = await startWorkflow({ store });
     expect(result).toMatchObject({ success: true, paused: true });
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
-    expect(store.getWorkflowRun).not.toHaveBeenCalled();
+    expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -437,6 +624,147 @@ describe('finally backstop', () => {
     });
     await startWorkflow({ store });
     expect(backstopWrites(failSpy)).toHaveLength(writes);
+  });
+});
+
+describe('scratch on exit', () => {
+  const trackTempRoot = trackTempRoots();
+
+  // A cooperative cancel commits while nodes still run; what they write after it is
+  // removed once the executor has stopped them.
+  it.each([
+    ['completed', false, undefined, process.pid],
+    ['failed', false, undefined, process.pid],
+    ['cancelled', false, undefined, process.pid],
+    ['paused', true, undefined, process.pid],
+    // The layer's source release lost to that cancel, so the executor stopped executing.
+    ['cancelled', false, false, process.pid],
+    // Released, then resumed and cancelled by another executor whose nodes may still write.
+    ['cancelled', true, true, process.ppid],
+  ] as const)(
+    'a run that exits %s keeps its scratch: %p (source released: %p)',
+    async (status, kept, released, ownerPid) => {
+      if (released !== undefined)
+        mockExecuteDagWorkflow.mockResolvedValueOnce({ kind: 'source_release', released });
+      // Under the test's mocked ARCHON_HOME, so the run's output_root is trusted.
+      const root = trackTempRoot(join(WS, '_cwd', `exit-scratch-${crypto.randomUUID()}`));
+      const run = makeRun({ status, output_root: root });
+      // Admission stamps this process; a later executor restamps itself.
+      run.metadata = {
+        ...run.metadata,
+        [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: ownerPid },
+      };
+      const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
+      mkdirSync(join(checkout, '.git'), { recursive: true });
+      const store = makeStore({
+        getWorkflowRun: mock(async () => run),
+        getWorkflowRunStatus: mock(async () => status),
+      });
+
+      await startWorkflow({ store });
+
+      expect(existsSync(checkout)).toBe(kept);
+    }
+  );
+
+  it('surfaces a status-read interruption without finalizing or deleting scratch', async () => {
+    const root = trackTempRoot(join(WS, '_cwd', `unknown-parent-${crypto.randomUUID()}`));
+    const run = makeRun({ output_root: root });
+    run.metadata[EXECUTION_OWNER_METADATA_KEY] = { host: hostname(), pid: process.pid };
+    const checkout = join(getRunScratchDir(getRunArtifactsDirForRoot(root, run.id)), 'repro');
+    mkdirSync(join(checkout, '.git'), { recursive: true });
+    const cause = new Error('Unsupported parent status');
+    const interruption = new ParentStatusReadError(run.id, 'fan', cause);
+    mockExecuteDagWorkflow.mockRejectedValueOnce(interruption);
+    const store = makeStore({
+      getWorkflowRun: mock(async () => run),
+      getWorkflowRunStatus: mock<IWorkflowStore['getWorkflowRunStatus']>(async () => 'running'),
+    });
+
+    await expect(startWorkflow({ store })).rejects.toBe(interruption);
+    expect(interruption.cause).toBe(cause);
+
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+    expect(existsSync(checkout)).toBe(true);
+    expect(noExecutorCanWrite(run)).toBe(true);
+    expect(keepAwake.activeCount()).toBe(0);
+    expect(mockEmitter.unregisterRun).toHaveBeenCalledWith(run.id);
+    expect(mockEmitter.emit.mock.calls.some(([event]) => event.type === 'workflow_failed')).toBe(
+      false
+    );
+  });
+
+  it.each([false, true])(
+    'host can report before draining scratch cleanup (failed=%p)',
+    async failed => {
+      const root = trackTempRoot(join(WS, '_cwd', `deferred-scratch-${crypto.randomUUID()}`));
+      const run = makeRun({
+        status: failed ? 'failed' : 'completed',
+        output_root: root,
+        metadata: { [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: process.pid } },
+      });
+      const scratch = getRunScratchDir(getRunArtifactsDirForRoot(root, run.id));
+      mkdirSync(scratch, { recursive: true });
+      if (failed) mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('DAG failed'));
+      const cleanups: (() => Promise<void>)[] = [];
+      const result = await startWorkflow({
+        store: makeStore({
+          getWorkflowRun: mock(async () => run),
+          getWorkflowRunStatus: mock(async () => run.status),
+        }),
+        options: { deferScratchCleanup: cleanup => cleanups.push(cleanup) },
+      });
+      expect(result.success).toBe(!failed);
+      expect(cleanups).toHaveLength(1);
+      expect(existsSync(scratch)).toBe(true);
+      await Promise.all(cleanups.map(cleanup => cleanup()));
+      expect(existsSync(scratch)).toBe(false);
+    }
+  );
+
+  it.each([...TERMINAL_WORKFLOW_STATUSES])(
+    "releases a %s run's scratch despite another run's lifecycle interruption",
+    async status => {
+      const root = trackTempRoot(join(WS, '_cwd', `terminal-child-${crypto.randomUUID()}`));
+      const run = makeRun({
+        status,
+        output_root: root,
+        metadata: { [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: process.pid } },
+      });
+      const scratch = getRunScratchDir(getRunArtifactsDirForRoot(root, run.id));
+      mkdirSync(scratch, { recursive: true });
+      const interruption = new ParentStatusReadError('another-run', 'fan', new Error('unreadable'));
+      mockExecuteDagWorkflow.mockRejectedValueOnce(interruption);
+      const store = makeStore({ getWorkflowRun: mock(async () => run) });
+
+      await expect(startWorkflow({ store })).rejects.toBe(interruption);
+
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.getWorkflowRunStatus).not.toHaveBeenCalled();
+      expect(existsSync(scratch)).toBe(false);
+    }
+  );
+
+  // A parent resumed in its child's process publishes no owner endpoint; a release in
+  // this process must still see it executing.
+  it('holds its run as executing in this process until it exits', async () => {
+    const run = makeRun({ status: 'cancelled' });
+    run.metadata = {
+      ...run.metadata,
+      [EXECUTION_OWNER_METADATA_KEY]: { host: hostname(), pid: process.pid },
+    };
+    let duringExecution: boolean | undefined;
+    mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+      duringExecution = noExecutorCanWrite(run);
+      return undefined;
+    });
+
+    await startWorkflow({ store: makeStore({ getWorkflowRun: mock(async () => run) }) });
+
+    expect(duringExecution).toBe(false);
+    expect(noExecutorCanWrite(run)).toBe(true);
   });
 });
 

@@ -247,7 +247,10 @@ export async function loadPausedGateContext(
   conversation: Conversation,
   conversationId: string
 ): Promise<string | undefined> {
-  const pausedGateRun = await workflowDb.getPausedWorkflowRun(conversation.id);
+  const pausedGateRun = await workflowDb.getPausedWorkflowRun(
+    conversation.id,
+    conversation.codebase_id ?? undefined
+  );
   const pausedGateContext = pausedGateRun
     ? formatPausedGateSection({
         run: pausedGateRun,

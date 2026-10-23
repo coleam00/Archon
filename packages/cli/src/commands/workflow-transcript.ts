@@ -85,6 +85,9 @@ function toolOutputTail(output: string): string | undefined {
     .join('\n');
 }
 
+type ProviderEvent = ProviderEventLine['event'];
+type ProviderEventOf<T extends ProviderEvent['type']> = Extract<ProviderEvent, { type: T }>;
+
 /**
  * One provider event, indented under its node like the node's other activity. Events that
  * only mark progress (a running subtask, a hook that started or succeeded, a connected MCP
@@ -100,55 +103,83 @@ function formatProviderEvent(
       return indentLines(event.text, '  ');
     case 'agent_thought_chunk':
       return `  ${oneLine(`thinking: ${event.text}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    case 'tool_call': {
-      const name = toolCallDisplayName(event);
-      state.toolNames.set(toolCallKey(line.attemptId, event.toolCallId), name);
-      // A title is already what the call does, such as the command a Codex shell runs.
-      const brief =
-        !event.title && event.rawInput !== undefined
-          ? formatToolInputBrief(name, event.rawInput)
-          : null;
-      return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    }
-    case 'tool_call_update': {
-      const key = toolCallKey(line.attemptId, event.toolCallId);
-      const name = state.toolNames.get(key) ?? event.toolCallId;
-      state.toolNames.delete(key);
-      const details = [
-        ...(event.exitCode !== undefined ? [`exit ${String(event.exitCode)}`] : []),
-        ...(event.outputTruncated ? ['output truncated'] : []),
-      ];
-      const outcome = `  ${oneLine(`${event.status}: ${name}`, TRANSCRIPT_TOOL_LINE_MAX / 2)}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
-      const tail = event.output ? toolOutputTail(event.output) : undefined;
-      return tail ? `${outcome}\n${tail}` : outcome;
-    }
+    case 'tool_call':
+      return formatToolCall(event, line.attemptId, state);
+    case 'tool_call_update':
+      return formatToolCallUpdate(event, line.attemptId, state);
     case 'warning':
       return `  ${oneLine(`warning: ${event.message} (${event.code})`, TRANSCRIPT_TOOL_LINE_MAX)}`;
     case 'mcp_server_status':
-      if (event.status === 'connected' || event.status === 'pending') return undefined;
-      return `  ${oneLine(`mcp ${event.server}: ${event.status}${event.error ? ` (${event.error})` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    case 'compaction': {
-      const tokens =
-        event.tokensBefore !== undefined && event.tokensAfter !== undefined
-          ? `: ${String(event.tokensBefore)} -> ${String(event.tokensAfter)} tokens`
-          : '';
-      return `  compaction ${event.phase}${event.trigger ? ` (${event.trigger})` : ''}${tokens}`;
-    }
-    case 'subtask': {
-      if (event.status === 'running') return undefined;
-      const about =
-        event.status === 'started' ? event.description : (event.summary ?? event.description);
-      return `  ${oneLine(`subtask ${event.status}: ${about ?? event.taskId}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    }
+      return formatMcpServerStatus(event);
+    case 'compaction':
+      return formatCompaction(event);
+    case 'subtask':
+      return formatSubtask(event);
     case 'hook':
-      if (event.status === 'started' || event.status === 'succeeded') return undefined;
-      return `  hook ${event.status}: ${event.hookName} (${event.hookEvent}${event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : ''})`;
+      return formatHook(event);
     case 'state_update':
       return event.state === 'requires_action' ? '  waiting on the user' : undefined;
     default:
       typeDecided(event);
       return undefined;
   }
+}
+
+function formatToolCall(
+  event: ProviderEventOf<'tool_call'>,
+  attemptId: string,
+  state: TranscriptRenderState
+): string {
+  const name = toolCallDisplayName(event);
+  state.toolNames.set(toolCallKey(attemptId, event.toolCallId), name);
+  // A title is already what the call does, such as the command a Codex shell runs.
+  const brief =
+    !event.title && event.rawInput !== undefined
+      ? formatToolInputBrief(name, event.rawInput)
+      : null;
+  return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+}
+
+function formatToolCallUpdate(
+  event: ProviderEventOf<'tool_call_update'>,
+  attemptId: string,
+  state: TranscriptRenderState
+): string {
+  const key = toolCallKey(attemptId, event.toolCallId);
+  const name = state.toolNames.get(key) ?? event.toolCallId;
+  state.toolNames.delete(key);
+  const details = [
+    ...(event.exitCode !== undefined ? [`exit ${String(event.exitCode)}`] : []),
+    ...(event.outputTruncated ? ['output truncated'] : []),
+  ];
+  const outcome = `  ${oneLine(`${event.status}: ${name}`, TRANSCRIPT_TOOL_LINE_MAX / 2)}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
+  const tail = event.output ? toolOutputTail(event.output) : undefined;
+  return tail ? `${outcome}\n${tail}` : outcome;
+}
+
+function formatMcpServerStatus(event: ProviderEventOf<'mcp_server_status'>): string | undefined {
+  if (event.status === 'connected' || event.status === 'pending') return undefined;
+  return `  ${oneLine(`mcp ${event.server}: ${event.status}${event.error ? ` (${event.error})` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+}
+
+function formatCompaction(event: ProviderEventOf<'compaction'>): string {
+  const tokens =
+    event.tokensBefore !== undefined && event.tokensAfter !== undefined
+      ? `: ${String(event.tokensBefore)} -> ${String(event.tokensAfter)} tokens`
+      : '';
+  return `  compaction ${event.phase}${event.trigger ? ` (${event.trigger})` : ''}${tokens}`;
+}
+
+function formatSubtask(event: ProviderEventOf<'subtask'>): string | undefined {
+  if (event.status === 'running') return undefined;
+  const about =
+    event.status === 'started' ? event.description : (event.summary ?? event.description);
+  return `  ${oneLine(`subtask ${event.status}: ${about ?? event.taskId}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+}
+
+function formatHook(event: ProviderEventOf<'hook'>): string | undefined {
+  if (event.status === 'started' || event.status === 'succeeded') return undefined;
+  return `  hook ${event.status}: ${event.hookName} (${event.hookEvent}${event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : ''})`;
 }
 
 /**
@@ -172,52 +203,25 @@ function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): 
     case 'workflow_error':
       return `[workflow] Failed: ${row.error ?? ''}`;
     case 'node_start':
-      // `content` is the command a command node runs, or a `<inline>`-style kind marker.
-      return nodeLine.started(
-        step,
-        row.content && !row.content.startsWith('<') ? ` (${row.content})` : ''
-      );
+      return formatNodeStart(row, step);
     case 'node_complete':
       return nodeLine.completed(step, row.duration_ms);
     case 'node_error':
       return nodeLine.failed(step, row.error ?? '');
     case 'node_skipped':
-      return nodeLine.skipped(
-        step,
-        row.cause ? formatSkipCause(row.cause) : (row.content ?? 'skipped')
-      );
+      return formatNodeSkipped(row, step);
     case 'node_suspended':
       return `[${step}] Waiting (${row.content ?? 'wait'})`;
-    case 'gate_decision': {
-      // The comment is the operator's verbatim text and may span lines.
-      const decision = `[${step}] Gate: ${row.decision ?? ''}`;
-      if (!row.content) return decision;
-      return row.content.includes('\n')
-        ? `${decision}\n${indentLines(row.content, '  ')}`
-        : `${decision} (${row.content})`;
-    }
-    case 'provider_event': {
-      // Unlike the rows above, a provider event is read field by field, so a line that
-      // does not match the schema this build knows renders nothing instead of throwing.
-      const parsed = providerEventLineSchema.safeParse(row);
-      if (!parsed.success) return undefined;
-      const text = formatProviderEvent(parsed.data, state);
-      if (text === undefined) return undefined;
-      return parsed.data.step === state.lastStep ? text : `[${parsed.data.step}]\n${text}`;
-    }
+    case 'gate_decision':
+      return formatGateDecision(row, step);
+    case 'provider_event':
+      return formatProviderEventRow(row, state);
     case 'assistant':
       return row.content ? indentLines(row.content, '  ') : undefined;
-    case 'tool': {
-      const name = row.tool_name ?? '?';
-      const brief = row.tool_input ? formatToolInputBrief(name, row.tool_input) : null;
-      return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
-    }
-    case 'exec_output': {
-      const lines = [`[${step}] Output (exit ${String(row.exit_code ?? '?')})`];
-      if (row.stdout_tail) lines.push(indentLines(row.stdout_tail, '  '));
-      if (row.stderr_tail) lines.push('  stderr:', indentLines(row.stderr_tail, '    '));
-      return lines.join('\n');
-    }
+    case 'tool':
+      return formatToolRow(row);
+    case 'exec_output':
+      return formatExecOutput(row, step);
     // Liveness bookkeeping and a historical row: nothing a reader of the run needs.
     case 'watchdog_reset':
     case 'validation':
@@ -228,6 +232,56 @@ function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): 
       typeDecided(row.type);
       return undefined;
   }
+}
+
+function formatNodeStart(row: WorkflowEvent, step: string): string {
+  // `content` is the command a command node runs, or a `<inline>`-style kind marker.
+  return nodeLine.started(
+    step,
+    row.content && !row.content.startsWith('<') ? ` (${row.content})` : ''
+  );
+}
+
+function formatNodeSkipped(row: WorkflowEvent, step: string): string {
+  return nodeLine.skipped(
+    step,
+    row.cause ? formatSkipCause(row.cause) : (row.content ?? 'skipped')
+  );
+}
+
+function formatGateDecision(row: WorkflowEvent, step: string): string {
+  // The comment is the operator's verbatim text and may span lines.
+  const decision = `[${step}] Gate: ${row.decision ?? ''}`;
+  if (!row.content) return decision;
+  return row.content.includes('\n')
+    ? `${decision}\n${indentLines(row.content, '  ')}`
+    : `${decision} (${row.content})`;
+}
+
+function formatProviderEventRow(
+  row: WorkflowEvent,
+  state: TranscriptRenderState
+): string | undefined {
+  // Unlike other rows, a provider event is read field by field, so a line that does not
+  // match the schema this build knows renders nothing instead of throwing.
+  const parsed = providerEventLineSchema.safeParse(row);
+  if (!parsed.success) return undefined;
+  const text = formatProviderEvent(parsed.data, state);
+  if (text === undefined) return undefined;
+  return parsed.data.step === state.lastStep ? text : `[${parsed.data.step}]\n${text}`;
+}
+
+function formatToolRow(row: WorkflowEvent): string {
+  const name = row.tool_name ?? '?';
+  const brief = row.tool_input ? formatToolInputBrief(name, row.tool_input) : null;
+  return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+}
+
+function formatExecOutput(row: WorkflowEvent, step: string): string {
+  const lines = [`[${step}] Output (exit ${String(row.exit_code ?? '?')})`];
+  if (row.stdout_tail) lines.push(indentLines(row.stdout_tail, '  '));
+  if (row.stderr_tail) lines.push('  stderr:', indentLines(row.stderr_tail, '    '));
+  return lines.join('\n');
 }
 
 /**

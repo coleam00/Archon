@@ -183,6 +183,9 @@
       "src/community/pi/provider.integration.test.ts"
     ],
     [
+      "src/community/pi/structured-output-tool.integration.test.ts"
+    ],
+    [
       "src/community/pi/provider-lazy-load.test.ts"
     ],
     [
@@ -232,6 +235,9 @@
     ],
     [
       "src/community/opencode/runtime.test.ts"
+    ],
+    [
+      "src/community/opencode/runtime-cancellation.test.ts"
     ],
     [
       "src/community/opencode/session.test.ts"

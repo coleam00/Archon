@@ -1953,6 +1953,102 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     );
   });
 
+  it('waits when a loop-group body node failed reading the limited node output', async () => {
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    useQuery(quotaExhaustedQuery(resetAt));
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: {
+          name: 'credit-wait-group-reader',
+          nodes: [
+            {
+              id: 'refine',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                nodes: [
+                  { id: 'prep', kind: 'exec', runtime: 'sh', script: 'echo ready' },
+                  {
+                    id: 'work',
+                    kind: 'agent',
+                    source: { kind: 'inline', prompt: 'draft' },
+                    depends_on: ['prep'],
+                  },
+                  {
+                    id: 'join',
+                    kind: 'exec',
+                    runtime: 'sh',
+                    script: 'echo $work.output',
+                    depends_on: ['prep', 'work'],
+                    trigger_rule: 'all_done',
+                  },
+                ],
+              },
+            },
+          ] as DagNode[],
+        },
+        workflowRun: makeWorkflowRun('credit-wait-group-reader-run'),
+        config: quotaConfig(),
+      })
+    );
+
+    expect(persistedEvents(store)).toContainEqual(
+      expect.objectContaining({ event_type: 'node_failed', step_name: 'refine.join' })
+    );
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-wait-group-reader-run',
+      expect.objectContaining({ kind: 'quota', nodeId: 'refine', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'refine' }
+    );
+  });
+
+  it('waits when a node failed reading the limited node output', async () => {
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    useQuery(quotaExhaustedQuery(resetAt));
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: {
+          name: 'credit-wait-reader',
+          nodes: [
+            { id: 'sweep', kind: 'agent', source: { kind: 'inline', prompt: 'sweep' } },
+            {
+              id: 'record',
+              kind: 'exec',
+              runtime: 'sh',
+              script: 'echo $sweep.output',
+              depends_on: ['sweep'],
+              trigger_rule: 'all_done',
+            },
+          ] as DagNode[],
+        },
+        workflowRun: makeWorkflowRun('credit-wait-reader-run'),
+        config: quotaConfig(),
+      })
+    );
+
+    expect(persistedEvents(store)).toContainEqual(
+      expect.objectContaining({ event_type: 'node_failed', step_name: 'record' })
+    );
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'credit-wait-reader-run',
+      expect.objectContaining({ kind: 'quota', nodeId: 'sweep', resumeAt: resetAt }),
+      { kind: 'started', stepName: 'sweep' }
+    );
+  });
+
   it.each([
     ['still ahead', 10 * 60_000],
     ['already passed', -60_000],

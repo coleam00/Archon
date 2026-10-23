@@ -11,9 +11,9 @@
  * `{ kind: 'container', containerId }` execution context; the engine threads
  * that to the Claude provider (spawns its CLI via `docker exec`) and to
  * `bash:`/`script:` nodes (also `docker exec`), so isolation has no host-escape
- * hole. `destroy()` removes the container + volume. The approval-gated
- * write-back of the overlay diff to the live root is Phase C — until then a
- * container run's changes stay in the overlay and are discarded on `destroy()`.
+ * hole. `destroy()` removes the container + volume, then the run's scratch. The
+ * approval-gated write-back of the overlay diff to the live root is Phase C — until then
+ * a container run's changes stay in the overlay and are discarded on `destroy()`.
  *
  * Only Claude runs in-container in v1; the engine fails fast pre-dispatch for
  * any node whose provider lacks the `containerExec` capability.
@@ -29,6 +29,7 @@ import {
   type WriteBackFinalizeResult,
   type WriteBackApplySummary,
 } from '@archon/workflows/container-context';
+import { removeRunScratch } from '@archon/workflows/run-scratch';
 import type {
   BackendPrepareRequest,
   ContainerBackendConfig,
@@ -42,6 +43,7 @@ import {
   dockerPreflight,
   extractDockerError,
   type DockerRunner,
+  type DockerExecOptions,
 } from '../container/docker-exec';
 import { summarizeOverlayChanges, applyOverlayChanges } from '../container/overlay';
 import {
@@ -110,7 +112,8 @@ type ContainerEnvMetadata = {
   /**
    * Host path of the run's artifacts directory, bind-mounted read-write at the SAME
    * absolute path. Persisted for the same reason as `sourceMount`, and so the ownership
-   * hand-back on suspend and destroy knows which host tree the container wrote into.
+   * hand-back on suspend and destroy knows which host tree the container wrote into, and
+   * destroy which run's scratch to remove.
    */
   artifactsMount?: string;
 };
@@ -294,6 +297,12 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
 
+    // The run's scratch waits for this point: until the container is gone, code in it can
+    // still write into, or plant links in, the artifacts directory it mounts.
+    if (meta.artifactsMount !== undefined) {
+      await removeRunScratch(meta.artifactsMount, { envId });
+    }
+
     await this.store.updateStatus(envId, 'destroyed');
 
     log.info({ envId, containerName, volume }, 'isolation.container_destroy_completed');
@@ -307,32 +316,56 @@ export class ContainerBackend implements IIsolationBackend {
    * container we couldn't stop is still consuming resources and the caller must know.
    */
   async suspend(envId: string): Promise<void> {
+    const suspend = await this.prepareSuspend(envId);
+    await suspend();
+  }
+
+  /** Resolve store metadata before entering a workflow store transition. */
+  async prepareSuspend(
+    envId: string,
+    expectedContainerId?: string,
+    dockerTimeoutMs?: number
+  ): Promise<() => Promise<void>> {
     const meta = await this.loadMetadata(envId);
-    const handle = meta.containerName ?? meta.containerId;
-    if (!handle) {
-      log.warn({ envId }, 'isolation.container_suspend_no_handle');
-      return;
-    }
-    if (meta.artifactsMount !== undefined) {
-      await this.restoreHostOwnership(envId, handle, meta.artifactsMount);
-    }
-    try {
-      await this.docker(['stop', handle]);
-      log.info({ envId, handle }, 'isolation.container_suspended');
-    } catch (err) {
-      const detail = extractDockerError(err);
-      const state = await this.describeContainer(handle).catch(() => 'unknown' as const);
-      if (state === 'missing' || state === 'stopped') {
-        log.debug({ envId, handle, detail }, 'isolation.container_suspend_already_stopped');
-        return;
-      }
-      log.error({ envId, handle, detail }, 'isolation.container_suspend_failed');
-      throw new IsolationFailure(
-        'unclassified',
-        `Failed to suspend container '${handle}' for env '${envId}': ${detail}`,
-        err
+    if (expectedContainerId !== undefined && meta.containerId !== expectedContainerId) {
+      throw new Error(
+        `Environment '${envId}' does not own execution container '${expectedContainerId}'`
       );
     }
+    return async () => {
+      const handle = expectedContainerId ?? meta.containerName ?? meta.containerId;
+      if (!handle) {
+        log.warn({ envId }, 'isolation.container_suspend_no_handle');
+        return;
+      }
+      if (meta.artifactsMount !== undefined) {
+        await this.restoreHostOwnership(envId, handle, meta.artifactsMount, {
+          timeout: dockerTimeoutMs,
+        });
+      }
+      try {
+        await this.docker(
+          ['stop', ...(dockerTimeoutMs === undefined ? [] : ['--time', '1']), handle],
+          { timeout: dockerTimeoutMs }
+        );
+        log.info({ envId, handle }, 'isolation.container_suspended');
+      } catch (err) {
+        const detail = extractDockerError(err);
+        const state = await this.describeContainer(handle, { timeout: dockerTimeoutMs }).catch(
+          () => 'unknown' as const
+        );
+        if (state === 'missing' || state === 'stopped') {
+          log.debug({ envId, handle, detail }, 'isolation.container_suspend_already_stopped');
+          return;
+        }
+        log.error({ envId, handle, detail }, 'isolation.container_suspend_failed');
+        throw new IsolationFailure(
+          'unclassified',
+          `Failed to suspend container '${handle}' for env '${envId}': ${detail}`,
+          err
+        );
+      }
+    };
   }
 
   /**
@@ -365,42 +398,12 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
     if (presence === 'running' || presence === 'stopped') {
-      const priorMode =
-        meta.overlayMode === undefined
-          ? 'native'
-          : OVERLAY_MODES.find(mode => mode === meta.overlayMode);
-      if (priorMode === undefined) {
-        throw new IsolationFailure(
-          'unclassified',
-          `Cannot resume container env '${envId}': invalid persisted overlay mode ` +
-            `${JSON.stringify(meta.overlayMode)}. Expected one of: ${OVERLAY_MODES.join(', ')}.`
-        );
-      }
-      const containerId = await this.getContainerId(containerName);
-      if (containerId !== meta.containerId) {
-        throw new IsolationFailure(
-          'unclassified',
-          `Cannot resume container env '${envId}': container '${containerName}' ID ` +
-            `'${containerId}' does not match recorded ID '${meta.containerId}'. ` +
-            'Its overlay mode is unknown; remove the unrecorded container before retrying, ' +
-            `preserving overlay volume '${volume}'.`
-        );
-      }
-      const { stdout } = await this.docker(['inspect', '-f', '{{json .Config.Env}}', containerId]);
-      const environment: unknown = JSON.parse(stdout);
-      const modeEntries = Array.isArray(environment)
-        ? environment.filter(
-            (entry: unknown): entry is string =>
-              typeof entry === 'string' && entry.startsWith('ARCHON_OVERLAY_MODE=')
-          )
-        : [];
-      if (modeEntries.length !== 1 || modeEntries[0] !== `ARCHON_OVERLAY_MODE=${priorMode}`) {
-        throw new IsolationFailure(
-          'unclassified',
-          `Cannot resume container env '${envId}': container '${containerId}' overlay mode ` +
-            `${JSON.stringify(modeEntries)} does not match recorded overlay mode '${priorMode}'.`
-        );
-      }
+      const { containerId, mode: priorMode } = await this.verifyRecordedContainer(
+        envId,
+        containerName,
+        volume,
+        meta
+      );
       if (presence === 'stopped') {
         await this.docker(['start', containerId]);
         await waitForReady(this.docker, containerId);
@@ -445,6 +448,17 @@ export class ContainerBackend implements IIsolationBackend {
       codebaseId,
       mounts,
     });
+    await this.recordRecreatedContainer(envId, containerId, mode, volume);
+    log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
+    return this.preparedEnvFor(containerId, workspacePath, envId, mode);
+  }
+
+  private async recordRecreatedContainer(
+    envId: string,
+    containerId: string,
+    mode: OverlayMode,
+    volume: string
+  ): Promise<void> {
     try {
       await this.store.updateMetadata(envId, {
         containerId,
@@ -468,8 +482,51 @@ export class ContainerBackend implements IIsolationBackend {
       }
       throw error;
     }
-    log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
-    return this.preparedEnvFor(containerId, workspacePath, envId, mode);
+  }
+
+  private async verifyRecordedContainer(
+    envId: string,
+    containerName: string,
+    volume: string,
+    meta: Awaited<ReturnType<ContainerBackend['loadMetadata']>>
+  ): Promise<{ containerId: string; mode: OverlayMode }> {
+    const priorMode =
+      meta.overlayMode === undefined
+        ? 'native'
+        : OVERLAY_MODES.find(mode => mode === meta.overlayMode);
+    if (priorMode === undefined) {
+      throw new IsolationFailure(
+        'unclassified',
+        `Cannot resume container env '${envId}': invalid persisted overlay mode ` +
+          `${JSON.stringify(meta.overlayMode)}. Expected one of: ${OVERLAY_MODES.join(', ')}.`
+      );
+    }
+    const containerId = await this.getContainerId(containerName);
+    if (containerId !== meta.containerId) {
+      throw new IsolationFailure(
+        'unclassified',
+        `Cannot resume container env '${envId}': container '${containerName}' ID ` +
+          `'${containerId}' does not match recorded ID '${meta.containerId}'. ` +
+          'Its overlay mode is unknown; remove the unrecorded container before retrying, ' +
+          `preserving overlay volume '${volume}'.`
+      );
+    }
+    const { stdout } = await this.docker(['inspect', '-f', '{{json .Config.Env}}', containerId]);
+    const environment: unknown = JSON.parse(stdout);
+    const modeEntries = Array.isArray(environment)
+      ? environment.filter(
+          (entry: unknown): entry is string =>
+            typeof entry === 'string' && entry.startsWith('ARCHON_OVERLAY_MODE=')
+        )
+      : [];
+    if (modeEntries.length !== 1 || modeEntries[0] !== `ARCHON_OVERLAY_MODE=${priorMode}`) {
+      throw new IsolationFailure(
+        'unclassified',
+        `Cannot resume container env '${envId}': container '${containerId}' overlay mode ` +
+          `${JSON.stringify(modeEntries)} does not match recorded overlay mode '${priorMode}'.`
+      );
+    }
+    return { containerId, mode: priorMode };
   }
 
   /**
@@ -546,13 +603,14 @@ export class ContainerBackend implements IIsolationBackend {
   private async restoreHostOwnership(
     envId: string,
     handle: string,
-    artifactsMount: string
+    artifactsMount: string,
+    options?: DockerExecOptions
   ): Promise<void> {
     const identity = currentHostIdentity();
     if (identity === undefined || identity.uid === 0) return;
     const owner = `${String(identity.uid)}:${String(identity.gid)}`;
     try {
-      await this.docker(['exec', handle, 'chown', '-R', owner, artifactsMount]);
+      await this.docker(['exec', handle, 'chown', '-R', owner, artifactsMount], options);
       log.debug({ envId, handle, artifactsMount, owner }, 'isolation.container_artifacts_owned');
     } catch (err) {
       const detail = extractDockerError(err);
@@ -594,16 +652,13 @@ export class ContainerBackend implements IIsolationBackend {
    * "gone" (→ recreate over the volume) apart from "stopped" (→ start).
    */
   private async describeContainer(
-    nameOrId: string
+    nameOrId: string,
+    options?: DockerExecOptions
   ): Promise<'running' | 'paused' | 'restarting' | 'stopped' | 'missing'> {
-    const { stdout } = await this.docker([
-      'container',
-      'ls',
-      '--all',
-      '--no-trunc',
-      '--format',
-      '{{.ID}}\t{{.Names}}\t{{.State}}',
-    ]);
+    const { stdout } = await this.docker(
+      ['container', 'ls', '--all', '--no-trunc', '--format', '{{.ID}}\t{{.Names}}\t{{.State}}'],
+      options
+    );
     const match = stdout
       .trim()
       .split('\n')

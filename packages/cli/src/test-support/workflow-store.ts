@@ -116,6 +116,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
       getById: unsupported,
       create: unsupported,
       updateStatus: unsupported,
+      withWorktreeRegistration: unsupported,
       markWorktreeDestroyed: unsupported,
       updateMetadata: unsupported,
       countActiveByCodebase: unsupported,
@@ -187,7 +188,16 @@ export function createInMemoryWorkflowStore(
     serialize(() => apply(call));
   const admission = createInMemoryResourceStartStore(
     input => apply(view => view.createWorkflowRun(input)),
-    async id => structuredClone(runs.get(id) ?? null)
+    async id => structuredClone(runs.get(id) ?? null),
+    () => [...runs.values()],
+    async () =>
+      (await records.isolation.listActive())
+        .filter(row => row.workflow_type === 'task')
+        .map(row => ({
+          codebaseId: row.codebase_id,
+          branch: row.workflow_id,
+          workingPath: row.working_path,
+        }))
   );
   const admit =
     <Args extends unknown[], Result>(
@@ -234,6 +244,8 @@ export function createInMemoryWorkflowStore(
     getWorkflowRunStatus: id => write(view => view.getWorkflowRunStatus(id)),
     claimPendingWorkflowRun: (id, path) => write(view => view.claimPendingWorkflowRun(id, path)),
     updateWorkflowRun: (id, updates) => write(view => view.updateWorkflowRun(id, updates)),
+    updateWorkflowRunMetadataIfRunning: (id, metadata) =>
+      write(view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
     updateWorkflowActivity: id => write(view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write(view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
@@ -244,7 +256,8 @@ export function createInMemoryWorkflowStore(
         const blocker = await admission.resume(run);
         if (!blocker) return view.resumeWorkflowRun(id, cursor);
         const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
-        if (busy.refusal !== 'waiting' || !view.recordCapacityWait(id)) throw busy;
+        if (busy.refusal !== 'waiting') throw busy;
+        view.recordCapacityWait(id);
         return busy;
       });
       if (outcome instanceof WorkflowResourceBusyError) throw outcome;
@@ -263,8 +276,8 @@ export function createInMemoryWorkflowStore(
       write(view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
-    releaseRunForUnreadableSource: (id, release) =>
-      write(view => view.releaseRunForUnreadableSource(id, release)),
+    releaseRunForUnreadableSource: (id, release, beforePublish) =>
+      write(view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write(view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, gateEvents, expected) =>

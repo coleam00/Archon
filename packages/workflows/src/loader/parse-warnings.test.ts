@@ -81,7 +81,7 @@ nodes:
       expect(advisories[0]).toContain("Node 'join'");
       expect(advisories[0]).toContain("'a'");
       expect(advisories[0]).toContain('all_done');
-      expect(advisories[0]).toContain('/guides/authoring-workflows/#trigger_rule-values');
+      expect(advisories[0]).toContain('/reference/workflow-language/#trigger_rule-values');
     }
   });
 
@@ -226,8 +226,8 @@ describe('unknown key warnings (#2213)', () => {
       parseError(
         workflowLines(['nodes:', '  - id: plan', '    prompt: plan it', '    runtime: bun'])
       )
-    ).toContain(
-      "Node 'plan': 'runtime' 'runtime' is only supported on script nodes, not on prompt node 'plan'."
+    ).toBe(
+      "DAG node validation failed: Node 'plan': 'runtime' is only supported on script nodes, not on prompt nodes."
     );
   });
 

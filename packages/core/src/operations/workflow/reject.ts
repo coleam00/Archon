@@ -1,4 +1,5 @@
 import { captureApprovalResolved } from '@archon/paths';
+import { noExecutorCanWrite, releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
   isApprovalContext,
   isGateResolved,
@@ -29,6 +30,7 @@ import {
   gateCompletionEvent,
   publishGateExecution,
 } from './gate-publishing';
+import { reclaimCancelledRunContainer } from './teardown';
 
 export interface RejectionOperationResult {
   workflowName: string;
@@ -63,6 +65,11 @@ export interface RejectionOperationResult {
    * workflow's own `when:` wiring" from "a rework prompt is about to run."
    */
   newMode: boolean;
+  /**
+   * Present only when the rejection cancelled the run but could not reclaim its
+   * container. The run stays cancelled; these tell the operator what was left behind.
+   */
+  cleanupWarnings?: string[];
 }
 
 /**
@@ -343,6 +350,15 @@ async function rejectGate(
     completedGateEvent === undefined ? [rejectionEvent] : [completedGateEvent, rejectionEvent]
   );
 
+  const cancelled = !plan.willStageRework && !plan.willResolveNewMode;
+  // The container backend removes a container run's scratch only with its container, so
+  // the container is reclaimed only once no executor can still run in it.
+  const cleanupWarnings: string[] = [];
+  if (cancelled && noExecutorCanWrite(run)) {
+    cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));
+    await releaseRunScratch(run);
+  }
+
   // Won the CAS — resolution/status + audit event already committed atomically.
   // Anonymous telemetry: binary resolution only — no ids/reasons/names.
   captureApprovalResolved({ resolution: 'rejected' });
@@ -353,10 +369,11 @@ async function rejectGate(
     userMessage: run.user_message,
     codebaseId: run.codebase_id,
     conversationId: run.conversation_id,
-    cancelled: !plan.willStageRework && !plan.willResolveNewMode,
+    cancelled,
     maxAttemptsReached: plan.maxAttemptsReached,
     writeBack: false,
     newMode: plan.willResolveNewMode,
+    ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
   };
 }
 

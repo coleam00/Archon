@@ -6,13 +6,16 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
-import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+import {
+  stopDetachedTestOwner,
+  waitForDetachedTestOwnerExit,
+} from '../test-support/detached-owner';
+import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 
 const repo = resolve(import.meta.dir, '../../../..');
 const roots: string[] = [];
 const children = new Set<Bun.Subprocess>();
-const detachedRuns: { id: string; home: string }[] = [];
+const detachedRuns: { id: string; home: string; pidFile: string }[] = [];
 afterEach(async () => {
   for (const child of children) {
     child.kill();
@@ -23,10 +26,7 @@ afterEach(async () => {
   try {
     for (const run of detachedRuns.splice(0)) {
       process.env.ARCHON_HOME = run.home;
-      if (await canConnectToRunLiveOwner(runLiveOwnerPath(run.id))) {
-        const target = await requestDetachedRunStop(run.id);
-        await target.stop();
-      }
+      await stopDetachedTestOwner(run.id, run.pidFile);
     }
   } finally {
     if (savedHome === undefined) delete process.env.ARCHON_HOME;
@@ -34,6 +34,7 @@ afterEach(async () => {
   }
   for (const root of roots.splice(0)) await removeTempTree(root);
 });
+
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
   .privateKey.export({
     type: 'pkcs1',
@@ -47,6 +48,7 @@ interface Fixture {
   home: string;
   entry: string;
   env: NodeJS.ProcessEnv;
+  ownerPidFile: string;
 }
 interface RunRow {
   id: string;
@@ -106,6 +108,7 @@ async function fixture(
   let project = join(root, 'project');
   const home = join(root, 'home');
   const entry = join(root, 'entry.ts');
+  const ownerPidFile = join(root, 'owner.pid');
   mkdirSync(join(project, '.archon/workflows'), { recursive: true });
   project = await canonicalizeProjectPath(project);
   const marker = join(root, 'marker');
@@ -173,6 +176,7 @@ await serveProvider({
     `
 import { mock } from 'bun:test';
 import { appendFileSync, writeFileSync } from 'node:fs';
+if (process.env[${JSON.stringify(DETACHED_RUN_OWNER_ENV)}] === '1') writeFileSync(${JSON.stringify(ownerPidFile)}, String(process.pid));
 if (process.env.GITHUB_APP_INSTALLATION_ID === '') delete process.env.GITHUB_APP_INSTALLATION_ID;
 let currentToken;
 let minted = 0;
@@ -318,7 +322,7 @@ ${
       Bun.spawnSync(['git', 'push', '-q', '-u', 'origin', 'main'], { cwd: project }).exitCode
     ).toBe(0);
   }
-  const f = { root, project, home, entry, env };
+  const f = { root, project, home, entry, env, ownerPidFile };
   expect((await run(f, ['seed'])).code).toBe(0);
   return f;
 }
@@ -347,23 +351,13 @@ test('a detached child bootstraps App auth independently without minting in the 
   const result = await run(f, [...runArgs, '--detach', '--json']);
   expect(result.code).toBe(0);
   const ack = JSON.parse(result.stdout) as { runId: string; logPath: string | null };
-  detachedRuns.push({ id: ack.runId, home: f.home });
+  detachedRuns.push({ id: ack.runId, home: f.home, pidFile: f.ownerPidFile });
   const deadline = Date.now() + 20000;
   while (row(f)?.status !== 'completed' && Date.now() < deadline) await Bun.sleep(25);
   expect(row(f)?.status).toBe('completed');
   expect(markers(f)).toBe('bash\nscript\nai\n');
   expect(readFileSync(join(f.root, 'mint'), 'utf8')).toBe('minted\n');
-  const savedHome = process.env.ARCHON_HOME;
-  process.env.ARCHON_HOME = f.home;
-  try {
-    while (await canConnectToRunLiveOwner(runLiveOwnerPath(ack.runId))) {
-      if (Date.now() >= deadline) throw new Error('Detached owner did not release its endpoint');
-      await Bun.sleep(25);
-    }
-  } finally {
-    if (savedHome === undefined) delete process.env.ARCHON_HOME;
-    else process.env.ARCHON_HOME = savedHome;
-  }
+  await waitForDetachedTestOwnerExit(f.ownerPidFile);
   detachedRuns.pop();
   if (ack.logPath)
     expect(readFileSync(ack.logPath, 'utf8').includes('stub-installation-')).toBe(false);
@@ -536,7 +530,7 @@ test('trigger execution in a cold child delivers repository-scoped App credentia
   while (!['completed', 'failed'].includes(row(f)?.status ?? '') && Date.now() < deadline)
     await Bun.sleep(25);
   const triggered = row(f);
-  if (triggered) detachedRuns.push({ id: triggered.id, home: f.home });
+  if (triggered) detachedRuns.push({ id: triggered.id, home: f.home, pidFile: f.ownerPidFile });
   expect(triggered?.status).toBe('completed');
   expect(markers(f)).toBe('bash\nscript\nai\n');
   expect(readFileSync(join(f.root, 'scope'), 'utf8')).toBe('scoped\n');

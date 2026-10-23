@@ -1,4 +1,3 @@
-import type { TokenUsage } from '@archon/provider-contract';
 import type { DagNode, NodeOutput, AgentNode, ExecNode, WorkflowRun } from '../schemas';
 import {
   type RetryClass,
@@ -154,9 +153,9 @@ export async function runNodeRetryLoop(
   iteration?: number
 ): Promise<NodeExecutionResult> {
   let output = initialOutput;
-  let accumulatedCostUsd: number | undefined;
-  let accumulatedTokens: TokenUsage | undefined;
-  let accumulatedTokensUnknown = false;
+  let usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
+    tokensUnknown: false,
+  };
   // Once a rate-limited failure is seen, the budget widens to RATE_LIMIT_MAX_RETRIES
   // for the rest of the loop (#2706): load-shedding windows are minutes-scale, so the
   // node's own short maxRetries would exhaust before the provider recovers.
@@ -176,18 +175,7 @@ export async function runNodeRetryLoop(
       }
     }
     output = await run();
-    if (output.costUsd !== undefined) {
-      accumulatedCostUsd = (accumulatedCostUsd ?? 0) + output.costUsd;
-    }
-    accumulatedTokensUnknown ||= output.tokensUnknown === true;
-    if (accumulatedTokensUnknown) {
-      accumulatedTokens = undefined;
-    } else if (output.tokens !== undefined) {
-      accumulatedTokens = sumTokenUsage(
-        [...(accumulatedTokens !== undefined ? [accumulatedTokens] : []), output.tokens],
-        { nodeId: node.id }
-      );
-    }
+    usage = accumulateAttemptUsage(usage, output, node.id);
     if (output.state !== 'failed') break;
 
     const retryClass = retryableFailureClass(output, retryConfig.onError);
@@ -199,6 +187,20 @@ export async function runNodeRetryLoop(
     );
     if (retryClass === undefined || attempt >= effectiveMaxRetries) break;
 
+    await scheduleRetry(retryClass, attempt, effectiveMaxRetries, output.error);
+    attempt++;
+  }
+  output.costUsd = usage.costUsd;
+  output.tokens = usage.tokens;
+  output.tokensUnknown = usage.tokensUnknown;
+  return output;
+
+  async function scheduleRetry(
+    retryClass: RetryClass,
+    attempt: number,
+    effectiveMaxRetries: number,
+    error: string
+  ): Promise<void> {
     const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
     getLog().warn(
       {
@@ -207,7 +209,7 @@ export async function runNodeRetryLoop(
         maxRetries: effectiveMaxRetries,
         retryClass,
         delayMs,
-        error: output.error,
+        error,
       },
       'dag_node_transient_retry'
     );
@@ -239,12 +241,26 @@ export async function runNodeRetryLoop(
       },
     });
     await waitForNodeRetry(store, workflowRun.id, node.id, delayMs);
-    attempt++;
   }
-  output.costUsd = accumulatedCostUsd;
-  output.tokens = accumulatedTokens;
-  output.tokensUnknown = accumulatedTokensUnknown;
-  return output;
+}
+
+function accumulateAttemptUsage(
+  accumulated: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'>,
+  output: NodeExecutionResult,
+  nodeId: string
+): Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'> {
+  const costUsd =
+    output.costUsd === undefined
+      ? accumulated.costUsd
+      : (accumulated.costUsd ?? 0) + output.costUsd;
+  const tokensUnknown = accumulated.tokensUnknown === true || output.tokensUnknown === true;
+  let tokens = accumulated.tokens;
+  if (tokensUnknown) {
+    tokens = undefined;
+  } else if (output.tokens !== undefined) {
+    tokens = sumTokenUsage([...(tokens !== undefined ? [tokens] : []), output.tokens], { nodeId });
+  }
+  return { costUsd, tokens, tokensUnknown };
 }
 
 /**

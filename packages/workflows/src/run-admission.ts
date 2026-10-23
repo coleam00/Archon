@@ -1,3 +1,4 @@
+import { executionClaim } from './store';
 import { formatDuration } from '@archon/paths/duration';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
 import { hostname } from 'os';
@@ -105,7 +106,8 @@ export async function admitWorkflowRun(
       conversationId,
       cwd,
       workflowRun,
-      execContext
+      execContext,
+      opts.onExecutionClaimed
     );
     if (claimed.stopped) return claimed;
     checkoutBaselineSample = claimed.value;
@@ -237,7 +239,8 @@ async function claimPendingRun(
   conversationId: string,
   cwd: string,
   workflowRun: WorkflowRun,
-  execContext: NonNullable<ExecuteWorkflowOptions['execContext']>
+  execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
+  onExecutionClaimed: ExecuteWorkflowOptions['onExecutionClaimed']
 ): Promise<RunPhase<CheckoutSample>> {
   let claimed: WorkflowRun | null;
   try {
@@ -272,6 +275,7 @@ async function claimPendingRun(
       },
     };
   }
+  onExecutionClaimed?.(executionClaim(claimed.metadata));
   workflowRun.status = claimed.status;
   workflowRun.started_at = claimed.started_at;
   // The run's starting checkout is sampled the moment execution ownership is won, with
@@ -398,35 +402,11 @@ async function holdCheckoutPathLock(
   const subrun = readSubrunMetadata(workflowRun.metadata);
   if (workflow.mutates_checkout === false && subrun.childIndex === undefined) return undefined;
   try {
-    const ancestry = workflowRun.parent_run_id
-      ? await deps.store.getRunAncestry(workflowRun.id)
-      : [];
-    const pathLockExclude = ancestry.map(run => run.id);
-    const sharedCheckoutSiblings: WorkflowRun[] = [];
-    for (const branch of [workflowRun, ...ancestry]) {
-      const branchMetadata = readSubrunMetadata(branch.metadata);
-      if (
-        branch.working_path !== cwd ||
-        !branch.parent_run_id ||
-        branchMetadata.parentNodeId === undefined ||
-        branchMetadata.childIndex === undefined
-      ) {
-        continue;
-      }
-      const siblings = (await deps.store.findChildRuns(branch.parent_run_id)).filter(peer => {
-        const peerMetadata = readSubrunMetadata(peer.metadata);
-        return (
-          peer.id !== branch.id &&
-          peer.working_path === cwd &&
-          peerMetadata.parentNodeId === branchMetadata.parentNodeId &&
-          peerMetadata.childIndex !== undefined
-        );
-      });
-      if (branch.id === workflowRun.id) sharedCheckoutSiblings.push(...siblings);
-      for (const sibling of siblings) {
-        pathLockExclude.push(sibling.id, ...(await gatherDescendantRunIds(deps, sibling.id)));
-      }
-    }
+    const { pathLockExclude, sharedCheckoutSiblings } = await findSharedCheckoutRuns(
+      deps,
+      cwd,
+      workflowRun
+    );
     const skipPathLock = workflow.mutates_checkout === false;
     if (!skipPathLock) {
       pathLockExclude.push(...(await gatherDescendantRunIds(deps, workflowRun.id)));
@@ -459,27 +439,13 @@ async function holdCheckoutPathLock(
         error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
       };
     }
-    if (workflowRun.parent_run_id && subrun.parentNodeId !== undefined) {
-      for (const sibling of sharedCheckoutSiblings) {
-        // Append on both runs: the earlier child may already have finished before
-        // this child exists. No read/modify/write metadata race is needed.
-        for (const [runId, siblingId] of [
-          [workflowRun.id, sibling.id],
-          [sibling.id, workflowRun.id],
-        ]) {
-          await deps.store.persistWorkflowEvent({
-            workflow_run_id: runId,
-            event_type: 'workflow.checkout_shared',
-            data: {
-              parent_run_id: workflowRun.parent_run_id,
-              parent_node_id: subrun.parentNodeId,
-              working_path: cwd,
-              sibling_run_id: siblingId,
-            } satisfies CheckoutSharedEventData,
-          });
-        }
-      }
-    }
+    await recordCheckoutSharing(
+      deps,
+      cwd,
+      workflowRun,
+      subrun.parentNodeId,
+      sharedCheckoutSiblings
+    );
   } catch (error) {
     if (error instanceof TerminalStatusWriteError) throw error;
     const err = error as Error;
@@ -510,6 +476,71 @@ async function holdCheckoutPathLock(
   return undefined;
 }
 
+async function findSharedCheckoutRuns(
+  deps: WorkflowDeps,
+  cwd: string,
+  workflowRun: WorkflowRun
+): Promise<{ pathLockExclude: string[]; sharedCheckoutSiblings: WorkflowRun[] }> {
+  const ancestry = workflowRun.parent_run_id ? await deps.store.getRunAncestry(workflowRun.id) : [];
+  const pathLockExclude = ancestry.map(run => run.id);
+  const sharedCheckoutSiblings: WorkflowRun[] = [];
+  for (const branch of [workflowRun, ...ancestry]) {
+    const branchMetadata = readSubrunMetadata(branch.metadata);
+    if (
+      branch.working_path !== cwd ||
+      !branch.parent_run_id ||
+      branchMetadata.parentNodeId === undefined ||
+      branchMetadata.childIndex === undefined
+    ) {
+      continue;
+    }
+    const siblings = (await deps.store.findChildRuns(branch.parent_run_id)).filter(peer => {
+      const peerMetadata = readSubrunMetadata(peer.metadata);
+      return (
+        peer.id !== branch.id &&
+        peer.working_path === cwd &&
+        peerMetadata.parentNodeId === branchMetadata.parentNodeId &&
+        peerMetadata.childIndex !== undefined
+      );
+    });
+    if (branch.id === workflowRun.id) sharedCheckoutSiblings.push(...siblings);
+    for (const sibling of siblings) {
+      pathLockExclude.push(sibling.id, ...(await gatherDescendantRunIds(deps, sibling.id)));
+    }
+  }
+  return { pathLockExclude, sharedCheckoutSiblings };
+}
+
+async function recordCheckoutSharing(
+  deps: WorkflowDeps,
+  cwd: string,
+  workflowRun: WorkflowRun,
+  parentNodeId: string | undefined,
+  sharedCheckoutSiblings: WorkflowRun[]
+): Promise<void> {
+  if (workflowRun.parent_run_id && parentNodeId !== undefined) {
+    for (const sibling of sharedCheckoutSiblings) {
+      // Append on both runs: the earlier child may already have finished before
+      // this child exists. No read/modify/write metadata race is needed.
+      for (const [runId, siblingId] of [
+        [workflowRun.id, sibling.id],
+        [sibling.id, workflowRun.id],
+      ]) {
+        await deps.store.persistWorkflowEvent({
+          workflow_run_id: runId,
+          event_type: 'workflow.checkout_shared',
+          data: {
+            parent_run_id: workflowRun.parent_run_id,
+            parent_node_id: parentNodeId,
+            working_path: cwd,
+            sibling_run_id: siblingId,
+          } satisfies CheckoutSharedEventData,
+        });
+      }
+    }
+  }
+}
+
 /** Spell a workflow action the way the surface rendering the message accepts it. */
 function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId?: string): string {
   return spellWorkflowCommand(platform, shortId ? `${action} ${shortId}` : action);
@@ -524,40 +555,7 @@ function checkoutInUseMessage(platform: IWorkflowPlatform, activeWorkflow: Workf
   let stateLine: string;
   let actionLines: string;
   if (activeWorkflow.status === 'paused') {
-    const attention = runAttention(activeWorkflow);
-    const wait = pendingWorkflowWaitDeadline(activeWorkflow);
-    if (attention?.kind === 'attention') {
-      stateLine = `paused, needs attention (${duration} since started, run \`${shortId}\`)`;
-      actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(platform, attention)
-        .map(line => `• ${line}\n`)
-        .join('')}`;
-    } else if (wait) {
-      const waitingFor =
-        wait.kind === 'event'
-          ? `for event \`${wait.event}\` until`
-          : wait.kind === 'quota'
-            ? 'on a provider usage or rate limit, trying again at'
-            : 'until';
-      stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
-      actionLines =
-        (wait.kind === 'event'
-          ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
-          : '') + `• Wait until ${wait.resumeAt}: \`${formatRunCommand(platform, 'status')}\`\n`;
-    } else if (
-      attention?.kind === 'blocked_on_child' ||
-      attention?.kind === 'blocked_on_children'
-    ) {
-      // The parent takes no answer of its own; it continues when its sub-runs finish.
-      const childRunIds =
-        attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
-      stateLine = `paused waiting on sub-runs (${duration} since started, run \`${shortId}\`)`;
-      actionLines = `• Check sub-runs ${childRunIds.map(id => `\`${id}\``).join(', ')}: \`${formatRunCommand(platform, 'status')}\`\n`;
-    } else {
-      stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
-      actionLines =
-        `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
-        `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n`;
-    }
+    ({ stateLine, actionLines } = pausedCheckoutState(platform, activeWorkflow, duration, shortId));
     actionLines +=
       // Cancel stops live work, and a paused run has none: abandon discards it.
       `• Discard it: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
@@ -580,6 +578,48 @@ function checkoutInUseMessage(platform: IWorkflowPlatform, activeWorkflow: Workf
     `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
     `(${stateLine}).\n${actionLines}`
   );
+}
+
+function pausedCheckoutState(
+  platform: IWorkflowPlatform,
+  activeWorkflow: WorkflowRun,
+  duration: string,
+  shortId: string
+): { stateLine: string; actionLines: string } {
+  let stateLine: string;
+  let actionLines: string;
+  const attention = runAttention(activeWorkflow);
+  const wait = pendingWorkflowWaitDeadline(activeWorkflow);
+  if (attention?.kind === 'attention') {
+    stateLine = `paused, needs attention (${duration} since started, run \`${shortId}\`)`;
+    actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(platform, attention)
+      .map(line => `• ${line}\n`)
+      .join('')}`;
+  } else if (wait) {
+    const waitingFor =
+      wait.kind === 'event'
+        ? `for event \`${wait.event}\` until`
+        : wait.kind === 'quota'
+          ? 'on a provider usage or rate limit, trying again at'
+          : 'until';
+    stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
+    actionLines =
+      (wait.kind === 'event'
+        ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
+        : '') + `• Wait until ${wait.resumeAt}: \`${formatRunCommand(platform, 'status')}\`\n`;
+  } else if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
+    // The parent takes no answer of its own; it continues when its sub-runs finish.
+    const childRunIds =
+      attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
+    stateLine = `paused waiting on sub-runs (${duration} since started, run \`${shortId}\`)`;
+    actionLines = `• Check sub-runs ${childRunIds.map(id => `\`${id}\``).join(', ')}: \`${formatRunCommand(platform, 'status')}\`\n`;
+  } else {
+    stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
+    actionLines =
+      `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
+      `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n`;
+  }
+  return { stateLine, actionLines };
 }
 
 /** Persist the baseline sampled at claim time, now that the run's artifacts directory exists. */

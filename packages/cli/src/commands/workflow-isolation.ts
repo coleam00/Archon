@@ -29,11 +29,16 @@ import {
   type PreparedWorkflowSource,
 } from '@archon/workflows/run-source';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { isContainerRun, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { getArchonHome } from '@archon/paths';
 import { join } from 'node:path';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
-import { getLog, type WorkflowRunOptions } from './workflow-shared';
+import {
+  assertInheritedWorkflowCodebase,
+  inheritedWorkflowCodebase,
+  getLog,
+  type WorkflowRunOptions,
+} from './workflow-shared';
 
 /**
  * Default runner image when `.archon/config.yaml > container.image` is unset.
@@ -244,24 +249,52 @@ export function assertWorkflowNotWorktreePinnedForFolder(
 export async function resolveRunCodebase(
   host: WorkflowHost,
   cwd: string,
-  options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder' | 'registrationBaseBranch'>
+  options: RunCodebaseOptions
 ): Promise<{
   codebase: Codebase | null;
   /** Set only when THIS call registered a new folder project. */
-  registeredFolder?: { name: string; defaultCwd: string };
+  registeredFolder?: RegisteredFolder;
 }> {
-  let codebase: Codebase | null = null;
-  let registeredFolder: { name: string; defaultCwd: string } | undefined;
   cwd = await canonicalizeProjectPath(cwd);
-  let repoRoot: string | null = null;
+  const { codebase, repoRoot } = await findRunCodebase(host, cwd, options);
+  if (options.codebaseId && !codebase)
+    throw new Error(`Project "${options.codebaseId}" no longer exists.`);
+
+  await assertInheritedWorkflowCodebase(host, codebase?.id);
+  assertRegistrationOptions(options, codebase, repoRoot);
+
+  if (codebase || !(options.folder || repoRoot)) return { codebase };
+  return registerRunCodebase(host, cwd, options, repoRoot);
+}
+
+type RunCodebaseOptions = Pick<
+  WorkflowRunOptions,
+  'codebaseId' | 'folder' | 'registrationBaseBranch'
+>;
+interface RegisteredFolder {
+  name: string;
+  defaultCwd: string;
+}
+
+async function findRunCodebase(
+  host: WorkflowHost,
+  cwd: string,
+  options: RunCodebaseOptions
+): Promise<{ codebase: Codebase | null; repoRoot: string | null }> {
   try {
     if (options.codebaseId) {
-      codebase = await host.records.codebases.getCodebase(options.codebaseId);
-    } else if (options.folder) {
-      codebase = await host.records.codebases.findCodebaseByDefaultCwd(cwd);
-    } else {
-      ({ codebase, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases));
+      return {
+        codebase: await host.records.codebases.getCodebase(options.codebaseId),
+        repoRoot: null,
+      };
     }
+    if (options.folder) {
+      return {
+        codebase: await host.records.codebases.findCodebaseByDefaultCwd(cwd),
+        repoRoot: null,
+      };
+    }
+    return await resolveCodebaseForPath(cwd, host.records.codebases);
   } catch (error) {
     if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
     const err = error as Error;
@@ -280,9 +313,13 @@ export async function resolveRunCodebase(
       cause: err,
     });
   }
-  if (options.codebaseId && !codebase)
-    throw new Error(`Project "${options.codebaseId}" no longer exists.`);
+}
 
+function assertRegistrationOptions(
+  options: RunCodebaseOptions,
+  codebase: Codebase | null,
+  repoRoot: string | null
+): void {
   if (options.registrationBaseBranch !== undefined) {
     if (options.folder || (!repoRoot && !codebase) || codebase?.kind === 'folder')
       throw new Error('Folder projects have no base branch; remove --base-branch.');
@@ -291,41 +328,52 @@ export async function resolveRunCodebase(
         '--base-branch applies only to initial registration. This project is already registered; use --base for a run override.'
       );
   }
-
-  if (options.folder) {
-    if (codebase && codebase.kind !== 'folder') {
-      throw new Error(
-        `Project "${codebase.name}" is already registered as a repo; cannot register it as a folder project.`
-      );
-    }
+  if (options.folder && codebase && codebase.kind !== 'folder') {
+    throw new Error(
+      `Project "${codebase.name}" is already registered as a repo; cannot register it as a folder project.`
+    );
   }
+}
 
-  if (!codebase && (options.folder || repoRoot)) {
-    try {
-      const result = options.folder
-        ? await registerFolder(host.records.codebases, cwd)
-        : await registerRepository(host.records.codebases, repoRoot ?? cwd, {
-            baseBranch: options.registrationBaseBranch,
-          });
-      codebase = await host.records.codebases.getCodebase(result.codebaseId);
-      if (!codebase)
-        throw new Error(`Registered project "${result.codebaseId}" could not be read back.`);
-      if (!result.alreadyExisted) {
-        if (options.folder) registeredFolder = { name: result.name, defaultCwd: result.defaultCwd };
-        getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
-      }
-    } catch (error) {
-      if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
-      const err = error as Error;
-      if (options.registrationBaseBranch !== undefined) throw err;
-      // Running unregistered would separate this checkout from the registered project state.
-      throw options.folder
-        ? buildFolderRegistrationFailureError(err)
-        : buildRegistrationFailureError(err);
-    }
+/** Register the unregistered folder or repository the run starts in. */
+async function registerRunCodebase(
+  host: WorkflowHost,
+  cwd: string,
+  options: RunCodebaseOptions,
+  repoRoot: string | null
+): Promise<{ codebase: Codebase; registeredFolder?: RegisteredFolder }> {
+  try {
+    const result = options.folder
+      ? await registerFolder(host.records.codebases, cwd)
+      : await registerRepository(host.records.codebases, repoRoot ?? cwd, {
+          baseBranch: options.registrationBaseBranch,
+        });
+    const codebase = await host.records.codebases.getCodebase(result.codebaseId);
+    if (!codebase)
+      throw new Error(`Registered project "${result.codebaseId}" could not be read back.`);
+    if (result.alreadyExisted) return { codebase };
+    getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
+    return options.folder
+      ? { codebase, registeredFolder: { name: result.name, defaultCwd: result.defaultCwd } }
+      : { codebase };
+  } catch (error) {
+    if (error instanceof InvalidCodebaseDefaultCwdError) throw error;
+    const err = error as Error;
+    if (options.registrationBaseBranch !== undefined) throw err;
+    // Running unregistered would separate this checkout from the registered project state.
+    throw options.folder
+      ? buildFolderRegistrationFailureError(err)
+      : buildRegistrationFailureError(err);
   }
+}
 
-  return { codebase, registeredFolder };
+export async function assertInheritedWorkflowExecutionCwd(
+  host: WorkflowHost,
+  cwd: string
+): Promise<void> {
+  if (!(await inheritedWorkflowCodebase(host))) return;
+  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
+  await assertInheritedWorkflowCodebase(host, codebase?.id);
 }
 
 /**
@@ -383,7 +431,7 @@ export function folderRunsInContainer(
   resumable: Pick<WorkflowRun, 'metadata'> | null | undefined
 ): boolean {
   return options.resume
-    ? resumable?.metadata?.isolation === 'container'
+    ? resumable != null && isContainerRun(resumable)
     : (options.container ??
         workflow.container?.enabled ??
         folderConfig?.container?.enabled ??
@@ -494,7 +542,7 @@ export async function prepareFolderExecution(input: {
  * run metadata at first-run creation. resumeEnv fails LOUD if the volume
  * is gone (un-applied work lost) rather than restarting from empty.
  *
- * Ordering (L3): the container is restarted FIRST (here) even on a
+ * Resume admission precedes this restart, including on a
  * write-back-only resume where no DAG node will re-execute — kept uniform
  * with the mid-DAG-approval resume, which DOES need a live container. The
  * subsequent write-back apply runs in an INDEPENDENT `docker run` helper

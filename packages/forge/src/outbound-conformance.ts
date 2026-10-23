@@ -1,4 +1,4 @@
-import { matchesForgeOperationResponse } from './dispatch';
+import { matchesForgeOperationResponse } from './response-match';
 import {
   forgeResponseSchema,
   mutationTarget,

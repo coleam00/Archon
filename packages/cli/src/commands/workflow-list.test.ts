@@ -7,6 +7,7 @@ import {
 } from '../test-support/workflow-command-harness';
 import { providerRegistry } from '@archon/providers';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import type { RunFixturesOptions } from '@archon/workflows/fixture-runner';
 import { workflowListCommand, workflowTestCommand } from './workflow-query';
 
 describe('workflowListCommand', () => {
@@ -675,9 +676,9 @@ describe('workflowTestCommand', () => {
         workflows: [makeTestWorkflowWithSource({ name: 'plan' }, 'project')],
       })
     );
-    expect(firstJsonPayload(stdoutSpy)).toContain('1 workflow(s) failed to load:');
-    expect(firstJsonPayload(stdoutSpy)).toContain(
-      '  broken.yaml: YAML parse error: unexpected end of document'
+    expect(stdoutSpy).toHaveBeenCalledTimes(1);
+    expect(stdoutSpy.mock.calls[0]?.[0]).toBe(
+      'FIXTURE REPORT\n\n1 workflow(s) failed to load:\n\n  broken.yaml: YAML parse error: unexpected end of document\n'
     );
   });
 
@@ -731,10 +732,9 @@ describe('workflowTestCommand', () => {
     const exit = await workflowTestCommand('/test/path', 'missing');
 
     expect(exit).toBe(1);
-    expect(firstJsonPayload(stdoutSpy)).toContain("Error: No fixtures found for 'missing'.");
-    expect(firstJsonPayload(stdoutSpy)).toContain('1 workflow(s) failed to load:');
-    expect(firstJsonPayload(stdoutSpy)).toContain(
-      '  broken.yaml: YAML parse error: unexpected end of document'
+    expect(stdoutSpy).toHaveBeenCalledTimes(1);
+    expect(stdoutSpy.mock.calls[0]?.[0]).toBe(
+      "Error: No fixtures found for 'missing'.\n\n1 workflow(s) failed to load:\n\n  broken.yaml: YAML parse error: unexpected end of document\n"
     );
   });
 
@@ -765,15 +765,110 @@ describe('workflowTestCommand', () => {
     });
   });
 
+  it('reports no fixtures without consulting an unavailable environment store', async () => {
+    const codebases = await import('@archon/core/db/codebases');
+    const lookup = spyOn(codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
+      id: 'cb-env',
+      name: 'env',
+      kind: 'repo',
+      default_cwd: '/test/path',
+      repository_url: null,
+      default_branch: null,
+      ai_assistant_type: null,
+      commands: {},
+      created_at: new Date(0),
+      updated_at: new Date(0),
+    });
+    const envVars = await import('@archon/core/db/env-vars');
+    const env = spyOn(envVars, 'getCodebaseEnvVars').mockRejectedValue(
+      new Error('store unavailable')
+    );
+    env.mockClear();
+    try {
+      const fixtureRunner = await import('@archon/workflows/fixture-runner');
+      (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValueOnce({
+        results: [],
+        passed: 0,
+        failed: 0,
+      });
+      expect(await workflowTestCommand('/test/path', undefined, { json: true })).toBe(0);
+      expect(env).not.toHaveBeenCalled();
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+        results: [],
+        passed: 0,
+        failed: 0,
+      });
+    } finally {
+      lookup.mockRestore();
+      env.mockRestore();
+    }
+  });
+
+  it('passes registered environment and redaction provenance to executable fixtures', async () => {
+    const codebases = await import('@archon/core/db/codebases');
+    const lookup = spyOn(codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
+      id: 'cb-env',
+      name: 'env',
+      kind: 'repo',
+      default_cwd: '/test/path',
+      repository_url: null,
+      default_branch: null,
+      ai_assistant_type: null,
+      commands: {},
+      created_at: new Date(0),
+      updated_at: new Date(0),
+    });
+    const envVars = await import('@archon/core/db/env-vars');
+    const env = spyOn(envVars, 'getCodebaseEnvVars').mockResolvedValue({
+      ARCHON_DB_DIAGNOSTIC: 'db-value',
+    });
+    try {
+      expect(process.env.ARCHON_DB_DIAGNOSTIC).toBeUndefined();
+      const core = await import('@archon/core');
+      (core.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        assistant: 'claude',
+        assistants: {},
+        commands: {},
+        envVars: { ARCHON_DB_DIAGNOSTIC: 'file-value', FILE_ONLY: 'kept' },
+      });
+      const fixtureRunner = await import('@archon/workflows/fixture-runner');
+      let resolvedConfig:
+        | Awaited<ReturnType<NonNullable<RunFixturesOptions['resolveExecConfig']>>>
+        | undefined;
+      (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockImplementationOnce(
+        async (options: RunFixturesOptions) => {
+          expect(env).not.toHaveBeenCalled();
+          resolvedConfig = await options.resolveExecConfig?.();
+          return { results: [], passed: 0, failed: 0 };
+        }
+      );
+      await workflowTestCommand('/test/path', undefined);
+      expect(env).toHaveBeenCalledWith('cb-env');
+      expect(resolvedConfig).toEqual(
+        expect.objectContaining({
+          envVars: { ARCHON_DB_DIAGNOSTIC: 'db-value', FILE_ONLY: 'kept' },
+          protectedCredentialValues: ['db-value'],
+        })
+      );
+    } finally {
+      lookup.mockRestore();
+      env.mockRestore();
+    }
+  });
+
   it("freezes the repo's own command policy, not the default folders (#2851)", async () => {
     // The capture decides which directories a fixture can resolve a command from, so a
     // repo that moved `commands.folder` must have THAT folder frozen. Reading the value
     // here is the only place it can be read; `runFixtures` cannot load config itself.
     const core = await import('@archon/core');
     const fixtureRunner = await import('@archon/workflows/fixture-runner');
+    expect(process.env.ARCHON_CLI_CONFIGURED_VALUE).toBeUndefined();
     (core.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       commands: { folder: '.archon/prompts' },
       defaults: { loadDefaultCommands: false },
+      envVars: { ARCHON_CLI_CONFIGURED_VALUE: 'configured-value' },
+      protectedEnvKeys: ['ACCOUNT'],
+      protectedCredentialValues: ['synthetic-cli-value'],
     });
     (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
       results: [],
@@ -785,10 +880,16 @@ describe('workflowTestCommand', () => {
 
     expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
       expect.objectContaining({
+        config: expect.objectContaining({
+          envVars: { ARCHON_CLI_CONFIGURED_VALUE: 'configured-value' },
+          protectedEnvKeys: ['ACCOUNT'],
+          protectedCredentialValues: ['synthetic-cli-value'],
+        }),
         sourceConfig: {
           load_default_workflows: true,
           load_default_commands: false,
           command_folder: '.archon/prompts',
+          env_var_names: ['ARCHON_CLI_CONFIGURED_VALUE'],
         },
       })
     );

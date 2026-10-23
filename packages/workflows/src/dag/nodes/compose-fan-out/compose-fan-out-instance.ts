@@ -22,14 +22,15 @@ import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import type { IncludeCommandContent } from '../../../compiled-command';
 import type { FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { logWorkflowEvent } from '../../../logger';
-import { aggregateProviderFailure } from '../../../executor-shared';
+import { aggregateProviderFailure, rootFailures } from '../../../executor-shared';
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { RunSourceUnreadableError } from '../../node-source';
+import { sumReportedCost, sumFanOutTokens, type RunUsageFigures } from '../../usage';
 import { type RunLayersContext } from '../../run-context';
 import { expandComposeInstance } from './compose-fan-out-expansion';
 
-/** One settled composed fan-out instance, reduced into the aggregate (#2512). */
+/** One composed fan-out instance's execution outcome, reduced into the aggregate (#2512). */
 export interface ComposeInstanceOutcome {
   status: 'completed' | 'failed' | 'cancelled' | 'ambiguous';
   output: string;
@@ -61,6 +62,7 @@ interface InstanceRun {
   /** The prefix on every inner node's step name. */
   stepNamePrefix: string;
   execution: NodeExecutionRecord;
+  priorUsage: RunUsageFigures;
 }
 
 /** A previously completed instance, threaded without re-running it. */
@@ -170,6 +172,8 @@ function instanceRunContext(
   return {
     toolAttention: ctx.toolAttention,
     unfinishedInvocations: resumeSnapshot.unfinishedInvocations,
+    reportedChildUsage: resumeSnapshot.reportedChildUsage,
+    unattributedChildUsagePaths: resumeSnapshot.unattributedChildUsagePaths,
     deps: ctx.deps,
     platform: ctx.platform,
     conversationId: ctx.conversationId,
@@ -214,6 +218,29 @@ function instanceRunContext(
   };
 }
 
+async function readOpenInstanceUsage(
+  instance: Pick<InstanceRun, 'scope' | 'scopeName' | 'stepNamePrefix'>
+): Promise<RunUsageFigures> {
+  const { ctx } = instance.scope;
+  const rows = await ctx.deps.store.listWorkflowEvents(ctx.workflowRun.id);
+  let lastTerminal = rows.length - 1;
+  while (lastTerminal >= 0) {
+    const row = rows[lastTerminal];
+    if (
+      row.step_name === instance.scopeName &&
+      (row.event_type === 'node_completed' || row.event_type === 'node_failed')
+    )
+      break;
+    lastTerminal--;
+  }
+  // Earlier instance terminals already own their segment's usage. An unfinished
+  // segment can span multiple starts, so a recovery start must not reset its spend.
+  return foldDagResumeSnapshot(
+    rows.slice(lastTerminal + 1).filter(row => row.step_name?.startsWith(instance.stepNamePrefix)),
+    ctx.workflowRun.id
+  );
+}
+
 function isLifecycleWriteError(error: unknown): boolean {
   return error instanceof NodeEventWriteError || error instanceof TerminalStatusWriteError;
 }
@@ -229,25 +256,14 @@ async function releaseSourceUnreadableInstance(
 ): Promise<void> {
   const { ctx } = instance.scope;
   const parentRunId = ctx.workflowRun.id;
-  const { snapshot, execution, scopeName, stepNamePrefix } = instance;
+  const { snapshot, execution, scopeName } = instance;
   let releasedRecord = finishNodeExecution(
     execution,
     { status: 'failed', error: error.message, failureKind: 'child_failed' },
     { output: { text: '' } }
   );
   try {
-    const rows = await ctx.deps.store.listWorkflowEvents(parentRunId);
-    let start = rows.length - 1;
-    while (
-      start >= 0 &&
-      !(rows[start].step_name === scopeName && rows[start].event_type === 'node_started')
-    ) {
-      start--;
-    }
-    const usage = await foldDagResumeSnapshot(
-      rows.slice(start + 1).filter(row => row.step_name?.startsWith(stepNamePrefix)),
-      parentRunId
-    );
+    const usage = await readOpenInstanceUsage(instance);
     releasedRecord = finishNodeExecution(
       execution,
       { status: 'failed', error: error.message, failureKind: 'child_failed' },
@@ -295,9 +311,9 @@ async function recordInstanceTerminal(
         text: outcome.output,
         ...(outcome.structuredOutput !== undefined ? { structured: outcome.structuredOutput } : {}),
       },
-      costUsd: outcome.costUsd,
-      tokens: outcome.tokens,
-      tokensUnknown: outcome.tokensUnknown,
+      costUsd: sumReportedCost([instance.priorUsage, outcome]),
+      tokens: sumFanOutTokens([instance.priorUsage, outcome]),
+      tokensUnknown: instance.priorUsage.tokensUnknown === true || outcome.tokensUnknown === true,
       diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
     });
     await ctx.deps.store.persistWorkflowEvent(serializeNodeStateRecord(record));
@@ -327,7 +343,9 @@ async function settleInstance(
   const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
   if (failed.length > 0) {
     const providerFailure = aggregateProviderFailure(
-      failed.map(o => o.providerFailure),
+      rootFailures(instanceCtx.layers.flat(), instanceCtx.nodeOutputs).map(
+        ({ output }) => output.providerFailure
+      ),
       Date.now()
     );
     const outcome: ComposeInstanceOutcome = {
@@ -415,12 +433,23 @@ export async function runComposeInstance(
 
   const stepNamePrefix = `${scopeName}__`;
   const threaded = threadCompletedInnerNodes(expanded.nodes, priorOutputs, stepNamePrefix);
+  let priorUsage: RunUsageFigures;
+  try {
+    priorUsage = await readOpenInstanceUsage({ scope, scopeName, stepNamePrefix });
+  } catch (error) {
+    return {
+      status: 'ambiguous',
+      output: '',
+      error: `instance ${snapshot.identity} could not read its prior usage: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
   const instance: InstanceRun = {
     scope,
     snapshot,
     scopeName,
     stepNamePrefix,
     execution: startInstanceExecution(scope, scopeName, snapshot),
+    priorUsage,
   };
   const notStarted = await claimInstanceStart(instance);
   if (notStarted !== undefined) return notStarted;

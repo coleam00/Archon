@@ -1,4 +1,5 @@
-import { pauseGateRespectingExternalTransition } from '../../pause';
+import { reportedChildUsage, unreportedChildUsage } from '../../child-usage';
+import { runOrStagePause, pauseGateRespectingExternalTransition } from '../../pause';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
 import {
@@ -6,7 +7,12 @@ import {
   serializeNodeOutput,
   type NodeExecutionResult,
 } from '../../../node-record-serialization';
-import { type NodeExecutionRecord, type NodeFailureKind } from '../../../schemas/node-execution';
+import {
+  type ExecutionDiagnostics,
+  type NodeExecutionRecord,
+  type NodeFailureKind,
+} from '../../../schemas/node-execution';
+import { describeUnfinishedFanOut, type FanOutOutcome } from '../../../schemas/fan-out-outcome';
 import { recordDerivedExecution, recordNodeState } from '../../../node-event-write';
 import { WorkflowSourceUnavailableError } from '../../../workflow-source';
 import { spellWorkflowCommand } from '../../../deps';
@@ -43,7 +49,8 @@ import {
   unclaimedIndices,
   type FanOutChildState,
 } from './fan-out-children';
-import { joinFanOutOutcomes } from './fan-out-join';
+import { joinAllSuccess, joinFanOutOutcomes } from './fan-out-join';
+import { buildFanOutOutcome } from './fan-out-outcome';
 
 /**
  * Resolve `fan_out.items` → a JSON array. Workflow vars and $node.output refs, exactly as
@@ -208,25 +215,31 @@ async function suspendOnHeldChildren(
     { status: 'suspended', point: 'fan_out' },
     { output: { text: '' }, diagnostics: { fanOut: true } }
   );
-  const paused = await pauseGateRespectingExternalTransition(
-    ctx.deps,
-    ctx.workflowRun.id,
-    {
-      type: 'fan_out',
-      nodeId: stepName,
-      message,
-      childRunIds: held.map(([, id]) => id),
-      unspawnedItems,
+  return runOrStagePause(
+    ctx,
+    async () => {
+      const paused = await pauseGateRespectingExternalTransition(
+        ctx.deps,
+        ctx.workflowRun.id,
+        {
+          type: 'fan_out',
+          nodeId: stepName,
+          message,
+          childRunIds: held.map(([, id]) => id),
+          unspawnedItems,
+        },
+        { event: serializeNodeStateRecord(suspended), boundary: ctx.containerPause }
+      );
+      if (!paused) return serializeNodeOutput(execution);
+      await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
+      await notify(
+        `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +
+          `See them with \`${spellWorkflowCommand(ctx.platform, 'status')}\`.`
+      );
+      return serializeNodeOutput(suspended);
     },
-    { event: serializeNodeStateRecord(suspended) }
+    () => serializeNodeOutput(execution)
   );
-  if (!paused) return serializeNodeOutput(execution);
-  await recordDerivedExecution({ logDir: ctx.logDir }, suspended);
-  await notify(
-    `⏸ **Waiting on sub-runs** (node \`${node.id}\`): ${message} ` +
-      `See them with \`${spellWorkflowCommand(ctx.platform, 'status')}\`.`
-  );
-  return serializeNodeOutput(suspended);
 }
 
 /**
@@ -269,6 +282,7 @@ export async function executeFanOutWorkflowNode(
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const stepName = ctx.stepNamePrefix + node.id;
   let tokensUnknown = false;
+  let childUsage: ExecutionDiagnostics['childUsage'];
 
   // node_failed writer (mirrors executeWorkflowNode.failResult) — a fan-out failure may
   // still carry accumulated cost/tokens so spend over already-run children is tracked.
@@ -277,7 +291,7 @@ export async function executeFanOutWorkflowNode(
     failureKind: NodeFailureKind,
     costUsd?: number,
     tokens?: TokenUsage,
-    blockedOnChildRunId?: string
+    diagnostics: Omit<ExecutionDiagnostics, 'fanOut'> = {}
   ): Promise<NodeExecutionResult> => {
     return recordNodeState(
       { store: deps.store, logDir: ctx.logDir },
@@ -289,10 +303,7 @@ export async function executeFanOutWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
-          diagnostics: {
-            fanOut: true,
-            ...(blockedOnChildRunId !== undefined ? { blockedOnChildRunId } : {}),
-          },
+          diagnostics: { fanOut: true, childUsage, ...diagnostics },
         }
       )
     );
@@ -305,7 +316,8 @@ export async function executeFanOutWorkflowNode(
     output: string,
     costUsd?: number,
     tokens?: TokenUsage,
-    structured?: unknown
+    structured?: unknown,
+    fanOutOutcome?: FanOutOutcome
   ): Promise<NodeExecutionResult> => {
     return recordNodeState(
       { store: deps.store, logDir: ctx.logDir },
@@ -317,7 +329,11 @@ export async function executeFanOutWorkflowNode(
           costUsd,
           tokens,
           tokensUnknown,
-          diagnostics: { fanOut: true },
+          diagnostics: {
+            fanOut: true,
+            childUsage,
+            ...(fanOutOutcome !== undefined ? { fanOutOutcome } : {}),
+          },
         }
       )
     );
@@ -413,7 +429,9 @@ export async function executeFanOutWorkflowNode(
       `⚠️ **Fan-out blocked** (node \`${node.id}\`): ${ambiguous.message} ` +
         `Abandon: \`${spellWorkflowCommand(platform, `abandon ${ambiguous.child.id}`)}\``
     );
-    return failResult(ambiguous.message, 'unknown', undefined, undefined, ambiguous.child.id);
+    return failResult(ambiguous.message, 'unknown', undefined, undefined, {
+      blockedOnChildRunId: ambiguous.child.id,
+    });
   }
   const state = classifyExistingChildren(existingByIndex, continuing);
 
@@ -503,27 +521,93 @@ export async function executeFanOutWorkflowNode(
     return outcome;
   });
 
-  const totalCostUsd = sumReportedCost(outcomes);
-  const totalTokens = sumFanOutTokens(outcomes);
-  tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
+  childUsage = outcomes.map(reportedChildUsage);
+  const unreported = outcomes.map(outcome =>
+    unreportedChildUsage(outcome, ctx.reportedChildUsage, outcome.childRunId)
+  );
+  const usage = {
+    costUsd: sumReportedCost(unreported),
+    tokens: sumFanOutTokens(unreported),
+    tokensUnknown: unreported.some(outcome => outcome.tokensUnknown === true),
+  };
+  const totalCostUsd = usage.costUsd;
+  const totalTokens = usage.tokens;
+  tokensUnknown = usage.tokensUnknown === true;
 
-  // 7. Join.
-  const joined = await joinFanOutOutcomes(
-    deps.store,
-    parentRun.id,
-    node,
-    stepName,
-    fanOut.join,
-    outcomes
-  );
-  if (joined.status === 'failed') {
-    await notify(joined.notice);
-    return failResult(joined.error, joined.failureKind, totalCostUsd, totalTokens);
+  return joinSettledChildren(node, ctx, fanOut.join, stepName, outcomes, {
+    notify,
+    fail: (error, failureKind, diagnostics) =>
+      failResult(error, failureKind, totalCostUsd, totalTokens, diagnostics),
+    complete: (elements, fanOutOutcome) =>
+      writeCompleted(JSON.stringify(elements), totalCostUsd, totalTokens, elements, fanOutOutcome),
+  });
+}
+
+/** How a settled fan-out reports: the node's own writers, bound to its spend. */
+interface SettledFanOutWriters {
+  notify: (text: string) => Promise<void>;
+  fail: (
+    error: string,
+    failureKind: NodeFailureKind,
+    diagnostics?: { fanOutOutcome: FanOutOutcome }
+  ) => Promise<NodeExecutionResult>;
+  complete: (elements: JsonValue[], fanOutOutcome: FanOutOutcome) => Promise<NodeExecutionResult>;
+}
+
+/**
+ * Every child is terminal: classify each slot from its durable child row, reduce through
+ * the join, and write the node's outcome with its slot record. A read failure fails the
+ * node without leaving a live child owned, because no child is live any more.
+ */
+async function joinSettledChildren(
+  node: WorkflowNode,
+  ctx: RunLayersContext,
+  join: FanOutConfig['join'],
+  stepName: string,
+  outcomes: readonly ChildWorkflowOutcome[],
+  writers: SettledFanOutWriters
+): Promise<NodeExecutionResult> {
+  const parentRunId = ctx.workflowRun.id;
+  const built = await buildFanOutOutcome(ctx.deps.store, parentRunId, stepName, outcomes);
+  if ('lookupError' in built) {
+    const msg = `Failed to look up settled fan-out child runs for node '${node.id}': ${(built.lookupError as Error).message}`;
+    // `all_success` names its failing child without the slot record, so a read failure
+    // must not replace that child-attributed failure with an anonymous one.
+    const joined = join === 'all_success' ? joinAllSuccess(parentRunId, node, outcomes) : undefined;
+    if (joined?.status === 'failed') {
+      await writers.notify(joined.notice);
+      return writers.fail(`${joined.error} (${msg})`, joined.failureKind);
+    }
+    await writers.notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return writers.fail(msg, 'unknown');
   }
-  return writeCompleted(
-    JSON.stringify(joined.elements),
-    totalCostUsd,
-    totalTokens,
-    joined.elements
-  );
+  const { outcome: fanOutOutcome } = built;
+  const { tally } = fanOutOutcome;
+
+  const joined = joinFanOutOutcomes(parentRunId, node, join, outcomes, fanOutOutcome.slots);
+  if (joined.status === 'failed') {
+    if (tally.not_started > 0) {
+      getLog().warn(
+        { parentRunId, nodeId: node.id, ...tally },
+        'workflow.fan_out_slots_not_started'
+      );
+    }
+    await writers.notify(joined.notice);
+    return writers.fail(joined.error, joined.failureKind, { fanOutOutcome });
+  }
+  const completed = await writers.complete(joined.elements, fanOutOutcome);
+  // The node completed by its join; the qualification goes out only after that durable
+  // write, through a notifier that never throws, so delivery cannot fail completed work.
+  if (tally.completed < tally.total) {
+    getLog().warn(
+      { parentRunId, nodeId: node.id, ...tally },
+      'workflow.fan_out_completed_with_unfinished_children'
+    );
+    await writers.notify(
+      `⚠️ **Fan-out completed with unfinished children** (node \`${node.id}\`): ` +
+        `${describeUnfinishedFanOut(tally)}. ` +
+        `Each slot's outcome is in the console run view and \`archon workflow get ${parentRunId}\`.`
+    );
+  }
+  return completed;
 }

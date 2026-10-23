@@ -195,7 +195,12 @@ async function admitFromServer(
     void admission.settled
       .then(
         result => {
-          if (!platform || destination?.resultConversationId === undefined || 'paused' in result)
+          if (
+            !platform ||
+            destination?.resultConversationId === undefined ||
+            'paused' in result ||
+            (result.success && 'handedOff' in result)
+          )
             return;
           let message: string;
           let resultRunId: string;

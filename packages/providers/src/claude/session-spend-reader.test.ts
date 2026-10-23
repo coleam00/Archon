@@ -8,7 +8,11 @@ import { dirname, join, resolve } from 'node:path';
 import { getSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { buildDockerExecTranscriptReadArgs } from './container-spawn';
-import { parseSessionSpend, readSessionSpendBaseline } from './session-spend-reader';
+import {
+  claudeSessionTranscriptMissing,
+  parseSessionSpend,
+  readSessionSpendBaseline,
+} from './session-spend-reader';
 
 const track = trackTempRoots();
 const sessionId = '55a9a375-ec0a-40b3-a92d-177efa7a763b';
@@ -153,6 +157,16 @@ test('missing, ambiguous, damaged, and invalid-id lookups remain unknown', async
   writeFileSync(join(root, 'projects', 'duplicate', sessionId + '.jsonl'), fixture);
   expect(await read(root)).toEqual({ kind: 'unknown' });
   expect(await read(join(root, 'missing'))).toEqual({ kind: 'unknown' });
+});
+
+test('transcript existence check distinguishes missing, present, and undetermined', async () => {
+  const { root } = tree();
+  const missing = (id: string, configRoot = root) =>
+    claudeSessionTranscriptMissing(id, { cwd: tmpdir(), env: { CLAUDE_CONFIG_DIR: configRoot } });
+  expect(await missing(sessionId)).toBe(false);
+  expect(await missing('20000000-0000-4000-8000-000000000001')).toBe(true);
+  expect(await missing(sessionId, join(root, 'no-config-here'))).toBe(true);
+  expect(await missing('../escape')).toBeUndefined();
 });
 
 test('container reader uses the session user/env and passes the UUID as an argument', () => {

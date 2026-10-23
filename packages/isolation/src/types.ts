@@ -20,11 +20,14 @@ export type { ExecutionContext, WriteBackFinalizeResult, WriteBackApplySummary }
 
 // --- Provider Types ---
 
-export type IsolationProviderType = 'worktree' | 'container' | 'vm' | 'remote';
+export const ISOLATION_PROVIDER_TYPES = ['worktree', 'container', 'vm', 'remote'] as const;
+export type IsolationProviderType = (typeof ISOLATION_PROVIDER_TYPES)[number];
 
-export type IsolationWorkflowType = 'issue' | 'pr' | 'review' | 'thread' | 'task';
+export const ISOLATION_WORKFLOW_TYPES = ['issue', 'pr', 'review', 'thread', 'task'] as const;
+export type IsolationWorkflowType = (typeof ISOLATION_WORKFLOW_TYPES)[number];
 
-export type EnvironmentStatus = 'active' | 'destroyed';
+export const ENVIRONMENT_STATUSES = ['active', 'destroyed'] as const;
+export type EnvironmentStatus = (typeof ENVIRONMENT_STATUSES)[number];
 
 // --- Isolation Request Types (Discriminated Union) ---
 
@@ -462,6 +465,7 @@ export interface WorktreeStatusBreakdown {
   mergedEnvs: { id: string; branchName: string }[];
   staleEnvs: { id: string; branchName: string; daysInactive: number }[];
   activeEnvs: { id: string; branchName: string; reason?: string }[];
+  inspectionFailedEnvs: { id: string; branchName: string; errors: string[] }[];
 }
 
 // --- Store Types ---

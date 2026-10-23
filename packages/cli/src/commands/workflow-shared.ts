@@ -2,6 +2,9 @@
  * Helpers shared by the `archon workflow` command modules: the logger, run options,
  * run destination, run-id resolution and the CLI's refusal spelling.
  */
+import { findProjectRunsByReference } from '@archon/core/workflows/run-id';
+import { readChatProjectScope } from '../workflow-scope';
+
 import type { Conversation } from '@archon/core/schemas/conversation';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -279,14 +282,36 @@ export function printJsonWriteError(runId: string, action: string, error: unknow
 const FULL_RUN_ID_RE =
   /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
 
+export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {
+  const scope = readChatProjectScope();
+  if (scope === undefined) return undefined;
+  if (all) throw new Error('--all cannot override the selected chat project.');
+  const codebase = scope ? await host.records.codebases.getCodebase(scope) : null;
+  if (!codebase) throw new Error(`--chat-project-id must name a registered project.`);
+  return codebase;
+}
+
+export async function assertInheritedWorkflowCodebase(
+  host: WorkflowHost,
+  codebaseId: string | null | undefined
+): Promise<void> {
+  const selected = await inheritedWorkflowCodebase(host);
+  if (selected && selected.id !== codebaseId) {
+    throw new Error(
+      'This operation is outside the selected chat project. Use /setproject to change projects.'
+    );
+  }
+}
+
 /**
  * Resolve a run-id argument that may be the 8-char short id printed by
  * `workflow runs` into the full run id. Mirrors the chat `manage_run` tool's
  * prefix resolution (getScopedRun): the lookup is scoped to the cwd's
  * codebase, a unique match resolves, and an ambiguous prefix errors.
  *
- * Full UUIDs skip resolution entirely — exact lookup is global, so full ids
- * keep working from any directory. A caller that already resolved a project can
+ * --chat-project-id requires a unique project-scoped match for every ID.
+ * Without that explicit scope, full UUIDs skip resolution entirely: exact lookup
+ * is global, so full ids keep working from any directory. A caller that already resolved a project can
  * provide its id; otherwise project lookup preserves an exact checkout
  * registration, then falls back to a linked worktree's canonical checkout. By
  * default, an omitted or unregistered cwd and an unmatched prefix pass through
@@ -300,6 +325,8 @@ export async function resolveRunIdArg(
   requirePrefixMatch = false,
   codebaseId?: string
 ): Promise<string> {
+  const scope = readChatProjectScope();
+  if (scope !== undefined) return resolveProjectScopedRunId(host, runId, scope);
   if (FULL_RUN_ID_RE.test(runId)) return runId;
   if (cwd === undefined && codebaseId === undefined) {
     if (requirePrefixMatch) {
@@ -318,7 +345,7 @@ export async function resolveRunIdArg(
     }
     return runId;
   }
-  const matches = await host.deps.store.findWorkflowRunsByIdPrefix(runId, resolvedCodebaseId);
+  const matches = await findProjectRunsByReference(host.deps.store, runId, resolvedCodebaseId);
   if (matches.length > 1) {
     const candidates = matches.map(match => `  ${match.id}`).join('\n');
     throw new Error(
@@ -330,6 +357,24 @@ export async function resolveRunIdArg(
       throw new Error(`No workflow run matches prefix '${runId}' in this project.`);
     }
     return runId;
+  }
+  return matches[0].id;
+}
+
+async function resolveProjectScopedRunId(
+  host: WorkflowHost,
+  runId: string,
+  codebaseId: string
+): Promise<string> {
+  if (!codebaseId) throw new Error(`--chat-project-id must name a registered project.`);
+  const fullId = FULL_RUN_ID_RE.test(runId);
+  const matches = await findProjectRunsByReference(host.deps.store, runId, codebaseId);
+  if (
+    matches.length !== 1 ||
+    (fullId &&
+      matches[0]?.id.replaceAll('-', '').toLowerCase() !== runId.replaceAll('-', '').toLowerCase())
+  ) {
+    throw new Error(`Run id '${runId}' does not identify exactly one run in the selected project.`);
   }
   return matches[0].id;
 }

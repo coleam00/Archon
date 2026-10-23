@@ -14,11 +14,14 @@ mock.module('@archon/paths', () => ({ ...actualPaths, createLogger: mock(() => m
 import { hydrateResumableRun, inspectResumableRun, type ResumeStoreDeps } from './run-resume';
 import type { WorkflowRun } from './schemas';
 import type { DagResumeSnapshot } from './store';
+import { foldDagResumeSnapshot } from './dag-resume-snapshot';
+import { fanOutOutcome } from './schemas/fan-out-outcome';
 
 type ResumeStore = ResumeStoreDeps['store'];
 
 function makeStore(overrides: Partial<ResumeStore> = {}): ResumeStore {
   return {
+    listEventsForRuns: mock<ResumeStore['listEventsForRuns']>(async () => new Map()),
     getDagResumeSnapshot: mock<ResumeStore['getDagResumeSnapshot']>(() => {
       throw new Error('Unexpected getDagResumeSnapshot');
     }),
@@ -60,6 +63,38 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
 }
 
 describe('hydrateResumableRun', () => {
+  it('inspects legacy zero-cost fan-out output without per-child attribution', async () => {
+    const candidate = makeRun({ status: 'failed' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async runId =>
+        foldDagResumeSnapshot(
+          [
+            {
+              step_name: 'work',
+              event_type: 'node_completed',
+              data: {
+                type: 'workflow',
+                node_output: '["a","b"]',
+                cost_usd: 0,
+                fan_out_outcome: fanOutOutcome([
+                  { index: 0, outcome: 'completed', child_run_id: 'a' },
+                  { index: 1, outcome: 'completed', child_run_id: 'b' },
+                ]),
+              },
+            },
+          ],
+          runId
+        )
+      ),
+    });
+    const inspection = await inspectResumableRun(makeDeps(store), candidate);
+    expect(inspection?.priorCompletedNodes.get('work')?.output).toBe('["a","b"]');
+    expect(inspection?.priorUsage.costUsd).toBe(0);
+    expect(inspection?.priorUsage.tokens).toBeUndefined();
+    expect(inspection?.priorUsage.tokensUnknown).toBe(false);
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('inspects resumable state without claiming the run', async () => {
     const candidate = makeRun({ id: 'read-only-prior', status: 'paused' });
     const priorNodes = new Map([['n1', { output: 'out1' }]]);
@@ -289,6 +324,48 @@ describe('hydrateResumableRun', () => {
     const result = await hydrateResumableRun(deps, candidate);
     expect(result).toBeNull();
     // Must not transition the run — there is nothing to resume.
+    expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { events: [], resumable: false },
+    { events: ['source_released'], resumable: true },
+    { events: ['node_started', 'source_released'], resumable: true },
+    { events: ['source_released', 'node_started'], resumable: false },
+  ])('inspects failed zero-node source recovery: %j', async ({ events, resumable }) => {
+    const candidate = makeRun({ status: 'failed' });
+    const store = makeStore({
+      getDagResumeSnapshot: mock(async () => ({
+        completedNodeOutputs: new Map(),
+        fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
+        unresolvedNodeStarts: new Set<string>(),
+        budget: { workUnits: 0, spendUsd: 0 },
+        costUsd: 0,
+      })),
+      listEventsForRuns: mock(
+        async () =>
+          new Map([
+            [
+              candidate.id,
+              events.map((event_type, index) => ({
+                id: String(index),
+                workflow_run_id: candidate.id,
+                event_type,
+                step_index: null,
+                step_name: 'first',
+                data: {},
+                created_at: '2026-10-22T10:00:00Z',
+              })),
+            ],
+          ])
+      ),
+    });
+    expect((await inspectResumableRun(makeDeps(store), candidate)) !== null).toBe(resumable);
+    expect(store.listEventsForRuns).toHaveBeenCalledWith(
+      [candidate.id],
+      ['source_released', 'node_started']
+    );
     expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,6 @@
 import { isAbsolute, join } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import type { WorkflowDeps } from '@archon/workflows/deps';
+import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import {
   applyResolvedRunModelOverrides,
   buildAiProfile,
@@ -9,8 +9,13 @@ import {
   type ResolvedAiProfile,
   type RunModelOverrides,
 } from '@archon/workflows/model-validation';
+import { applyRunEnvironment } from '@archon/workflows/run-preflight';
 import { applyWorkflowRunConfigLayer } from '@archon/workflows/run-config';
-import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
+import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
+import type {
+  WorkflowRunConfigInput,
+  WorkflowRunConfigLayer,
+} from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
 import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
@@ -23,6 +28,17 @@ import {
 import { resolveCliUserId } from '../utils/cli-user';
 import { writeJsonLine, writeStdout } from '../utils/stdout';
 import { getLog, type WorkflowRunOptions } from './workflow-shared';
+
+export async function resolveDryRunEnvironment(
+  host: WorkflowHost,
+  cwd: string,
+  fileConfig: WorkflowConfig,
+  layer?: WorkflowRunConfigLayer
+): Promise<WorkflowConfig> {
+  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
+  const dbEnvVars = codebase ? await host.deps.store.getCodebaseEnvVars(codebase.id) : {};
+  return applyRunEnvironment(fileConfig, dbEnvVars, layer);
+}
 
 async function resolveCliDryRunAiPrefs(
   host: WorkflowHost
@@ -159,7 +175,9 @@ export async function runDryRun(
   // script nodes, and running them in the checkout the workflow was merely READ from
   // would mutate the author's tree instead of the one they aimed the dry run at.
   const dryRunFileConfig = await host.deps.loadConfig(cwd);
-  const dryRunConfig = applyWorkflowRunConfigLayer(dryRunFileConfig, runConfig?.layer);
+  const dryRunConfig = options.execCode
+    ? await resolveDryRunEnvironment(host, cwd, dryRunFileConfig, runConfig?.layer)
+    : applyWorkflowRunConfigLayer(dryRunFileConfig, runConfig?.layer);
   const dryRunBaseProfile = await buildDryRunBaseProfile(host, dryRunFileConfig, runConfig);
   const dryRunModelOverrides = resolveRunModelOverrides(
     host.deps.providers,

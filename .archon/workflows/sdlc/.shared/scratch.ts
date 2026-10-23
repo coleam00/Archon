@@ -2,8 +2,9 @@
  * Remove the scratch worktrees reviewers created under this run.
  *
  * Read-only reviewers try mutations in scratch worktrees under
- * `$ARTIFACTS_DIR/scratch/<lens>/`. Cleanup is a workflow step, not a prompt
- * instruction, so a lens that died still has its tree removed. It touches only
+ * `$ARTIFACTS_DIR/.archon/scratch/<lens>/`. Cleanup is a workflow step, not a prompt
+ * instruction, so a lens that died still has its tree removed, and its git
+ * registration with it; the engine deletes the same directory's files once the run ends. It touches only
  * registered worktrees whose real path is under the given scratch directory: never
  * the run's own checkout, another run's worktree, or a user's. It never runs a bare
  * `git worktree prune`, which would also drop unrelated missing registrations.
@@ -50,7 +51,8 @@ export function pruneScratch(scratch: string): string[] {
   return removed;
 }
 
-/** `$ARTIFACTS_DIR/scratch`, or one lens's directory under it. */
+/** `$ARTIFACTS_DIR/.archon/scratch`, the engine's run scratch directory, or one lens's directory under it. */
 export function scratchDir(artifacts: string, lens: string): string {
-  return lens === '' ? join(artifacts, 'scratch') : join(artifacts, 'scratch', lens);
+  const scratch = join(artifacts, '.archon', 'scratch');
+  return lens === '' ? scratch : join(scratch, lens);
 }

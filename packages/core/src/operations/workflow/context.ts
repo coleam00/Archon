@@ -11,7 +11,7 @@ import {
 } from '../run-authorization';
 import type { requestDetachedRunStop } from '../../services/run-owner-stop';
 import type { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../../services/run-live-owner';
-import type { reclaimRunWorktree as ReclaimRunWorktree } from '../../services/cleanup-service';
+import type { reclaimRunWorktree as ReclaimRunWorktree } from '../../services/cleanup/run-worktree';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -31,6 +31,7 @@ export interface WorkflowOperationsDeps {
     | 'getWorkflowRun'
     | 'findChildRuns'
     | 'getRunAncestry'
+    | 'persistWorkflowEvent'
     | 'cancelWorkflowRun'
     | 'resolveApprovalGate'
     | 'resolveAndCancelApprovalGate'

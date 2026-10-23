@@ -1,3 +1,4 @@
+import { resolveRunExecutionMode, type RunExecutionMode } from './container-context';
 import { getDefaultBranch, getDefaultRemote, toRepoPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { requireProvider } from '@archon/provider-contract';
@@ -25,7 +26,7 @@ import {
   readRunDispatchMetadata,
   type RunDispatchMetadata,
 } from './schemas';
-import type { WorkflowRunOrigin } from './schemas/workflow-run';
+import { isContainerRun, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -36,6 +37,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /** What a run executes with, settled before its row is created or claimed. */
 export interface RunDispatch {
+  execution: RunExecutionMode;
   /** The row's owner on a continuation, the invoking user otherwise. */
   executionUserId: string | undefined;
   /** A resume of a run that already started; a pre-created pending row is a fresh dispatch. */
@@ -74,6 +76,11 @@ export async function resolveRunDispatch(
     opts
   );
   if (containerRefusal) return { stopped: true, result: containerRefusal };
+  const execution = resolveRunExecutionMode(
+    opts.execContext,
+    opts.container,
+    isContinuation ? preCreatedRun.metadata : undefined
+  );
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : origin?.userId;
   const prepared = await prepareDispatchAiConfiguration(
@@ -130,6 +137,7 @@ export async function resolveRunDispatch(
   return {
     stopped: false,
     value: {
+      execution,
       executionUserId,
       isContinuation,
       prepared,
@@ -209,7 +217,7 @@ async function refuseContainerResumeWithoutBackend(
   // host-side and SILENTLY skip the write-back apply, losing the approved changes.
   // Fail loudly and point at the CLI instead; the run stays resumable (failed) so
   // the CLI can rediscover the container and apply.
-  if (preCreatedRun?.metadata?.isolation === 'container' && !container) {
+  if (preCreatedRun && isContainerRun(preCreatedRun) && !container) {
     const msg =
       `Run '${preCreatedRun.id}' executed inside an isolation container. Resume it from the ` +
       'CLI in the same project (`archon workflow approve/reject/resume <id>`), where the ' +

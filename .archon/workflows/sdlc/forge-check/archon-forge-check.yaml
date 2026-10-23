@@ -4,7 +4,8 @@ description: |
   default) can act for this checkout, without starting any delivery. It runs
   the check the pack's forge-using workflows run as their first node, with the
   env a run gets. On forge, the installed plugin must advertise every
-  operation the pack uses. On both sources, one repository the checkout's
+  operation the delivery workflows use; the merge queue checks its own when
+  it starts. On both sources, one repository the checkout's
   remotes name must answer an authenticated read. That proves read access,
   not write access. A pass names the credential source used; a refusal says
   what to fix.

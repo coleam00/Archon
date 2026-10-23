@@ -13,6 +13,8 @@ import {
   piModelOptions,
   usablePiBackends,
   type ModelOption,
+  type ModelPickerShape,
+  type PiPickerResult,
 } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { INPUT_CLASS, SELECT_CLASS, SelectShell } from './SettingsFormPrimitives';
@@ -119,52 +121,13 @@ function ModelCombobox({
   // Pi only: include backends without a usable credential in the suggestions.
   const [showAll, setShowAll] = useState(false);
   const shape = modelPickerShape(agentId);
-
-  // OpenCode on-demand backend list. Per-field state by design: the endpoint
-  // is only hit on this field's explicit "Load backend suggestions" click.
-  const [ocPhase, setOcPhase] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
-  const [ocProviders, setOcProviders] = useState<OpencodeCredentialProvider[]>([]);
-  const [ocError, setOcError] = useState<string | null>(null);
-  const cancelledRef = useCancelledRef();
-
-  const loadOpencode = async (): Promise<void> => {
-    setOcPhase('loading');
-    setOcError(null);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const result = await Promise.race([
-        skill.listOpencodeCredentials(),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            reject(new Error('Timed out waiting for the OpenCode runtime — retry.'));
-          }, skill.OPENCODE_LOAD_TIMEOUT_MS);
-        }),
-      ]);
-      if (cancelledRef.current) return;
-      setOcProviders(result);
-      setOcPhase('loaded');
-    } catch (e: unknown) {
-      if (cancelledRef.current) return;
-      setOcError(e instanceof Error ? e.message : 'Failed to load OpenCode backends.');
-      setOcPhase('error');
-    } finally {
-      clearTimeout(timer);
-    }
-  };
+  const opencode = useOpencodeBackends();
 
   // Suggestions per shape; the field's text doubles as the search query.
   const backends = shape === 'pi' ? usablePiBackends(agents) : null;
   const pi =
     shape === 'pi' ? piModelOptions(piModels, value, backends, showAll, PI_SUGGESTION_LIMIT) : null;
-  let options: ModelOption[];
-  if (pi !== null) {
-    options = pi.options;
-  } else if (shape === 'opencode') {
-    options =
-      ocPhase === 'loaded' ? filterModelOptions(opencodeBackendOptions(ocProviders), value) : [];
-  } else {
-    options = filterModelOptions(curatedOptionsForAgent(agentId), value);
-  }
+  const options = comboboxOptions(shape, agentId, value, pi, opencode);
 
   const pick = (o: ModelOption): void => {
     onChange(o.value);
@@ -217,47 +180,24 @@ function ModelCombobox({
           ))}
 
           {pi !== null ? (
-            <>
-              {pi.matchTotal > options.length ? (
-                <p className="px-3 py-1.5 font-mono text-[10.5px] text-text-tertiary">
-                  …{pi.matchTotal - options.length} more — keep typing to narrow.
-                </p>
-              ) : null}
-              {/* Two distinct empty states: an undefined catalog (still
-                  loading, or the fetch failed — all panels read K.piModels
-                  best-effort and drop the error) is NOT "no match". */}
-              {piModels === undefined ? (
-                <p className="px-3 py-2 font-mono text-[11px] text-text-tertiary">
-                  Catalog unavailable — free text is fine.
-                </p>
-              ) : null}
-              {piModels !== undefined && pi.matchTotal === 0 && pi.hiddenByFilter === 0 ? (
-                <p className="px-3 py-2 font-mono text-[11px] text-text-tertiary">
-                  No catalog match — custom models.json refs are fine as free text.
-                </p>
-              ) : null}
-              {backends !== null ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowAll(s => !s);
-                  }}
-                  className={FOOTER_BUTTON_CLASS}
-                >
-                  {showAll
-                    ? 'Show connected backends only'
-                    : `Show all backends${pi.hiddenByFilter > 0 ? ` (${String(pi.hiddenByFilter)} more match)` : ''}`}
-                </button>
-              ) : null}
-            </>
+            <PiDropdownFooter
+              pi={pi}
+              optionCount={options.length}
+              catalogLoaded={piModels !== undefined}
+              filterable={backends !== null}
+              showAll={showAll}
+              onToggleShowAll={() => {
+                setShowAll(s => !s);
+              }}
+            />
           ) : null}
 
           {shape === 'opencode' ? (
             <OpencodeDropdownFooter
-              phase={ocPhase}
-              error={ocError}
+              phase={opencode.phase}
+              error={opencode.error}
               optionCount={options.length}
-              onLoad={() => void loadOpencode()}
+              onLoad={() => void opencode.load()}
             />
           ) : null}
         </div>
@@ -273,6 +213,114 @@ function ModelCombobox({
   );
 }
 
+type OpencodePhase = 'idle' | 'loading' | 'loaded' | 'error';
+
+interface OpencodeBackends {
+  phase: OpencodePhase;
+  providers: OpencodeCredentialProvider[];
+  error: string | null;
+  load: () => Promise<void>;
+}
+
+/**
+ * OpenCode on-demand backend list. Per-field state by design: the endpoint
+ * is only hit on this field's explicit "Load backend suggestions" click.
+ */
+function useOpencodeBackends(): OpencodeBackends {
+  const [phase, setPhase] = useState<OpencodePhase>('idle');
+  const [providers, setProviders] = useState<OpencodeCredentialProvider[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const cancelledRef = useCancelledRef();
+
+  const load = async (): Promise<void> => {
+    setPhase('loading');
+    setError(null);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        skill.listOpencodeCredentials(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error('Timed out waiting for the OpenCode runtime — retry.'));
+          }, skill.OPENCODE_LOAD_TIMEOUT_MS);
+        }),
+      ]);
+      if (cancelledRef.current) return;
+      setProviders(result);
+      setPhase('loaded');
+    } catch (e: unknown) {
+      if (cancelledRef.current) return;
+      setError(e instanceof Error ? e.message : 'Failed to load OpenCode backends.');
+      setPhase('error');
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  return { phase, providers, error, load };
+}
+
+function comboboxOptions(
+  shape: ModelPickerShape,
+  agentId: string,
+  value: string,
+  pi: PiPickerResult | null,
+  opencode: OpencodeBackends
+): ModelOption[] {
+  if (pi !== null) return pi.options;
+  if (shape !== 'opencode') return filterModelOptions(curatedOptionsForAgent(agentId), value);
+  return opencode.phase === 'loaded'
+    ? filterModelOptions(opencodeBackendOptions(opencode.providers), value)
+    : [];
+}
+
+/** Pi dropdown footer: overflow count, the two empty states, and the backend filter toggle. */
+function PiDropdownFooter({
+  pi,
+  optionCount,
+  catalogLoaded,
+  filterable,
+  showAll,
+  onToggleShowAll,
+}: {
+  pi: PiPickerResult;
+  optionCount: number;
+  catalogLoaded: boolean;
+  filterable: boolean;
+  showAll: boolean;
+  onToggleShowAll: () => void;
+}): ReactElement {
+  return (
+    <>
+      {pi.matchTotal > optionCount ? (
+        <p className="px-3 py-1.5 font-mono text-[10.5px] text-text-tertiary">
+          …{pi.matchTotal - optionCount} more — keep typing to narrow.
+        </p>
+      ) : null}
+      {/* Two distinct empty states: an undefined catalog (still
+          loading, or the fetch failed — all panels read K.piModels
+          best-effort and drop the error) is NOT "no match". */}
+      {!catalogLoaded ? (
+        <p className="px-3 py-2 font-mono text-[11px] text-text-tertiary">
+          Catalog unavailable — free text is fine.
+        </p>
+      ) : null}
+      {catalogLoaded && pi.matchTotal === 0 && pi.hiddenByFilter === 0 ? (
+        <p className="px-3 py-2 font-mono text-[11px] text-text-tertiary">
+          No catalog match — custom models.json refs are fine as free text.
+        </p>
+      ) : null}
+      {filterable ? (
+        <button type="button" onClick={onToggleShowAll} className={FOOTER_BUTTON_CLASS}>
+          {showAll
+            ? 'Show connected backends only'
+            : `Show all backends${pi.hiddenByFilter > 0 ? ` (${String(pi.hiddenByFilter)} more match)` : ''}`}
+        </button>
+      ) : null}
+    </>
+  );
+}
+
 /** OpenCode dropdown footer: explicit load affordance + loading/error states. */
 function OpencodeDropdownFooter({
   phase,
@@ -280,7 +328,7 @@ function OpencodeDropdownFooter({
   optionCount,
   onLoad,
 }: {
-  phase: 'idle' | 'loading' | 'loaded' | 'error';
+  phase: OpencodePhase;
   error: string | null;
   optionCount: number;
   onLoad: () => void;

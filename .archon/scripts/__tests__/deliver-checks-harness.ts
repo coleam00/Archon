@@ -152,7 +152,7 @@ export interface ScriptRun {
   readonly comments: readonly { readonly issue: number; readonly body: string }[];
   /** Every issue state change the fake gh received. */
   readonly closes: readonly { readonly number: number; readonly state: string; readonly state_reason: string }[];
-  /** Every issue body the fake gh was asked to write, in order. */
+  /** Every issue or pull request body the fake gh was asked to write, in order. */
   readonly bodies: readonly string[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
@@ -263,7 +263,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (text.startsWith('pr edit')) {
     if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-    if (!fake.writeLost) pr.body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
+    const body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
+    appendFileSync(${JSON.stringify(ghLog)} + '.bodies', JSON.stringify(body) + '\\n');
+    if (!fake.writeLost) pr.body = body;
     return result(0, '');
   }
   if (text.startsWith('pr list')) {
@@ -432,7 +434,7 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
   writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
 
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('INPUTS_'))),
     INPUTS_PR: JSON.stringify(forgePrRecord()),
     INPUTS_EXPECTED: '[]',
     ARTIFACTS_DIR: artifacts,
@@ -485,7 +487,8 @@ else {
     env.ARCHON_CLI_COMMAND = JSON.stringify([process.execPath, cli]);
   }
 
-  const result = spawnSync(process.execPath, ['--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
+  // Parent env files must not reintroduce workflow inputs omitted by the fixture.
+  const result = spawnSync(process.execPath, ['--no-env-file', '--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
     cwd: options.cwd ?? root,
     env,
     encoding: 'utf8',

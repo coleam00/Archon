@@ -8,6 +8,7 @@ import {
   makeWorkflowRun,
   makeIsolationEnvironment,
   mockGetCodebase,
+  mockGetWorktreeStatusBreakdown,
   mockFindCodebaseByDefaultCwd,
   mockGetActiveSession,
   mockGetActiveWorkflowRun,
@@ -53,6 +54,41 @@ describe('CommandHandler', () => {
         // cwd is null → the working directory falls back to the project root
         // (issue #1993: web-created project conversations have null cwd).
         expect(result.message).toContain('Working Directory: /workspace/my-repo');
+      });
+
+      test('shows merge inspection failures and their causes separately from stale worktrees', async () => {
+        mockGetCodebase.mockResolvedValue(makeCodebase());
+        mockGetWorktreeStatusBreakdown.mockResolvedValueOnce({
+          total: 1,
+          merged: 0,
+          stale: 0,
+          active: 0,
+          mergedEnvs: [],
+          staleEnvs: [],
+          activeEnvs: [],
+          inspectionFailedEnvs: [
+            {
+              id: 'env-1',
+              branchName: 'unknown-branch',
+              errors: [
+                'Ancestry: ancestry unavailable',
+                'Patch equivalence: patch comparison unavailable',
+              ],
+            },
+          ],
+        });
+
+        const result = await handleCommand(
+          { ...baseConversation, codebase_id: 'cb-123' },
+          '/status',
+          operator
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('unknown-branch: merge inspection failed');
+        expect(result.message).toContain('Ancestry: ancestry unavailable');
+        expect(result.message).toContain('Patch equivalence: patch comparison unavailable');
+        expect(result.message).not.toContain('stale (');
       });
 
       test('explicit conversation.cwd wins over the codebase default in the working-directory line', async () => {
@@ -195,12 +231,13 @@ describe('CommandHandler', () => {
     });
 
     describe('/status with active workflow', () => {
-      test('should show active workflow info in status', async () => {
+      test.each(['cb-123', null])('shows the active workflow in scope %s', async codebaseId => {
         const startedAt = new Date(Date.now() - 3 * 60 * 1000); // 3 minutes ago
         const lastActivity = new Date(Date.now() - 10 * 1000); // 10 seconds ago
         mockGetActiveWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
             id: 'wf-active-123',
+            codebase_id: 'cb-123',
             workflow_name: 'investigate-issue',
             started_at: startedAt,
             user_message: 'test',
@@ -208,7 +245,11 @@ describe('CommandHandler', () => {
           })
         );
 
-        const result = await handleCommand(baseConversation, '/status', operator);
+        const result = await handleCommand(
+          { ...baseConversation, codebase_id: codebaseId },
+          '/status',
+          operator
+        );
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('Active Workflow: `investigate-issue`');

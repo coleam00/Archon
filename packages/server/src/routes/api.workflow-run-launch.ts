@@ -15,11 +15,11 @@ import { type OrchestratorDispatch, persistUploadedFiles } from './api-message-d
 import { authorizeDispatchConversation } from './api-request-auth';
 import { apiError, getLog, jsonError, openApiRouteRegistrar } from './api-route-kit';
 import { dispatchResponseSchema } from './schemas/conversation.schemas';
+import {
+  workflowRunLaunchJsonSchema,
+  workflowRunLaunchMultipartSchema,
+} from './schemas/workflow-run-launch.schemas';
 
-// Body validation is handled manually below (multipart vs JSON
-// branching), mirroring sendMessageRoute. The OpenAPI spec describes the
-// shapes via the description; declaring `request.body` would force JSON
-// validation to run on multipart payloads and reject them.
 const runWorkflowRoute = createRoute({
   method: 'post',
   path: '/api/workflows/{name}/run',
@@ -43,6 +43,13 @@ const runWorkflowRoute = createRoute({
     '`metadata.continuation.mode: "supersede"` on the new run.',
   request: {
     params: z.object({ name: z.string() }),
+    body: {
+      required: true,
+      content: {
+        'application/json': { schema: workflowRunLaunchJsonSchema },
+        'multipart/form-data': { schema: workflowRunLaunchMultipartSchema },
+      },
+    },
   },
   responses: {
     200: {
@@ -254,14 +261,20 @@ async function parseMultipartRunRequest(
 
   const options = parseMultipartRunOptions(body, workflowName);
   if (!options.ok) return options;
-  const files = Array.isArray(body.files) ? body.files : [body.files];
+  const files =
+    body.files === undefined ? [] : Array.isArray(body.files) ? body.files : [body.files];
+  const fileEntries: File[] = [];
+  for (const file of files) {
+    if (!(file instanceof File)) return { ok: false, error: 'files must contain only file parts' };
+    fileEntries.push(file);
+  }
   return {
     ok: true,
     value: {
       conversationId,
       message,
       ...options.value,
-      fileEntries: files.filter((e): e is File => e instanceof File),
+      fileEntries,
     },
   };
 }
@@ -289,24 +302,18 @@ function parseContinuationFields(body: {
 }
 
 async function parseJsonRunRequest(c: Context): Promise<Parsed<RunLaunchRequest>> {
-  let body: {
-    conversationId?: unknown;
-    message?: unknown;
-    inputs?: unknown;
-    tiers?: unknown;
-    aliases?: unknown;
-    config?: unknown;
-    configPath?: unknown;
-    adopt_run_id?: unknown;
-    supersedes_run_id?: unknown;
-  };
+  let raw: unknown;
   try {
-    body = await c.req.json();
+    raw = await c.req.json();
   } catch (parseErr: unknown) {
     getLog().warn({ err: parseErr }, 'run_workflow.json_parse_failed');
     return { ok: false, error: 'Invalid JSON in request body' };
   }
 
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'Request body must be a JSON object' };
+  }
+  const body = raw as Record<string, unknown>;
   const { conversationId, message } = body;
   if (typeof conversationId !== 'string' || !conversationId) {
     return { ok: false, error: 'conversationId must be a non-empty string' };
@@ -486,16 +493,12 @@ async function launchWorkflowRun(
 export function registerWorkflowRunLaunchRoute(app: OpenAPIHono, deps: RunLaunchDeps): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
 
-  // POST /api/workflows/:name/run - Run a workflow via the orchestrator
-  //
-  // Accepts either:
-  //   - application/json: { conversationId, message, inputs?, tiers?, aliases? }
-  //   - multipart/form-data: those maps JSON-encoded + files[] (≤5, ≤10MB each)
-  //
-  // Multipart matches /api/conversations/:id/message so the console's draft
-  // run input can attach screenshots / stack traces / paste-blobs the same
-  // way a freeform chat message can.
-  registerOpenApiRoute(runWorkflowRoute, async c => {
+  app.openAPIRegistry.registerPath(runWorkflowRoute);
+  // Hono installs validators for both media types when body is required. Keep
+  // manual parsing and its error order, while publishing the complete contract.
+  const { body: _body, ...request } = runWorkflowRoute.request;
+  const runtimeRoute = { ...runWorkflowRoute, request, hide: true };
+  registerOpenApiRoute(runtimeRoute, async c => {
     const workflowName = c.req.param('name') ?? '';
     if (!isValidWorkflowName(workflowName)) {
       return apiError(c, 400, 'Invalid workflow name');

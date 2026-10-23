@@ -1,7 +1,7 @@
 /**
  * Database operations for codebases
  */
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import {
   ActiveContainerEnvironmentsError,
   ActiveWorktreeEnvironmentsError,
@@ -224,7 +224,8 @@ export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Code
 export async function findCodebaseByPathPrefix(cwdPath: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases');
   let best: { row: Codebase; rootLength: number } | null = null;
-  for (const row of result.rows.map(validateCodebase)) {
+  for (const row of result.rows) {
+    if (!isAbsolute(row.default_cwd)) continue;
     if (!isPathInside(row.default_cwd, cwdPath, { includeRoot: true, lexical: true })) continue;
     // Rank on the normalized root: isPathInside matched it, and a stored spelling
     // with trailing separators would otherwise outrank a nested codebase.

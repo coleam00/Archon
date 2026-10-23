@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { mockWorkflowRun } from '../test/mocks/workflow-run';
 
 const mockQuery = createMockQuery();
@@ -17,6 +18,7 @@ mock.module('./connection', () => ({
 import {
   getWorkflowRun,
   getWorkflowRunStatus,
+  WorkflowStatusReadError,
   getActiveWorkflowRun,
   getActiveWorkflowRunByPath,
   findChildRuns,
@@ -52,12 +54,13 @@ describe('workflow run reads', () => {
   });
 
   describe('getWorkflowRunStatus', () => {
-    test('returns status for existing workflow run', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running' }]));
+    test.each(workflowRunStatusSchema.options)('returns stored status %s', async status => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status }]));
 
       const result = await getWorkflowRunStatus('workflow-run-123');
 
-      expect(result).toBe('running');
+      expect(result).toBe(status);
+      expect(mockQuery).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenCalledWith(
         'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
         ['workflow-run-123']
@@ -70,6 +73,19 @@ describe('workflow run reads', () => {
       const result = await getWorkflowRunStatus('non-existent');
 
       expect(result).toBeNull();
+    });
+
+    test.each(['unexpected', ''])('rejects unsupported stored status %j', async status => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ status }]));
+      const read = getWorkflowRunStatus('workflow-run-123');
+      await expect(read).rejects.toBeInstanceOf(WorkflowStatusReadError);
+      await expect(read).rejects.toMatchObject({
+        name: 'WorkflowStatusReadError',
+        workflowRunId: 'workflow-run-123',
+        storedStatus: status,
+        message: `Unsupported workflow run status for run workflow-run-123: ${JSON.stringify(status)}`,
+      });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
     });
 
     test('throws on database error', async () => {

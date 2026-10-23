@@ -3,12 +3,14 @@
  * whether it is replayed from a prior pass, skipped, or dispatched, and folding each
  * layer's results into the shared run context.
  */
+import { ParentStatusReadError } from '../parent-status-read';
+import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { peerAdmissions } from '../interaction-admission';
 import { findFanOutChildRuns } from './nodes/workflow/fan-out-children';
 import { nodeInvocationKey } from '../node-record-reader';
 import { finishNodeExecution, newNodeInvocation, describeExecutionNode } from '../node-execution';
 import { NodeEventWriteError, recordNodeState } from '../node-event-write';
-import type { DagNode, SkipCause } from '../schemas';
+import type { DagNode, SessionCursor, SkipCause } from '../schemas';
 import {
   canSuspend,
   nodeUsesPersistedScope,
@@ -16,6 +18,7 @@ import {
   isNodeContextResume,
 } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
+import type { NodeExecutionResult } from '../node-record-serialization';
 import { RunBudgetRefusedError } from '../run-budget';
 import { TerminalStatusWriteError } from '../terminal-status-write';
 import { evaluateCondition } from '../condition-evaluator';
@@ -67,48 +70,60 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
+    if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
+      break;
     await ctx.toolAttention.refresh();
     const layer = ctx.layers[layerIdx];
-    const isParallelLayer = layer.length > 1;
-
-    if (isParallelLayer) {
-      ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
-    }
-
-    // Build a thunk per node so the layer can run either concurrently or strictly
-    // sequentially within an admission phase. The `mutates_checkout: false` assertion snapshots before and
-    // asserts after a node's own execution, so when a guarded node shares the layer
-    // with any node that isn't checkout-guarded (including loop/loop_group/workflow
-    // siblings whose internal execution would overlap the window), that sibling's
-    // legitimate write would be blamed on the guarded node: such a mixed layer runs
-    // sequentially. A layer of guarded nodes only runs concurrently, since no node in
-    // it may write: the writer still sees its own write and fails, and a sibling
-    // whose window overlapped fails with it, its error naming the siblings.
-    const guardedCount = layer.filter(isCheckoutGuarded).length;
-    const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
-    const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
-    // A nested interaction can persist a pause before its ordinary sibling settles.
-    // Settle ordinary peers first inside loop bodies so admission sees their failures.
-    const phases = ctx.interactionAdmission
-      ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
-      : [layer];
-    for (const phase of phases) {
-      const layerHadFailure = await runLayerPhase(
-        ctx,
-        phase,
-        isParallelLayer,
-        serializeLayer,
-        guardedLayerSnapshots
-      );
-
-      if (layerHadFailure) {
-        getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
-      }
-    }
+    await runLayer(ctx, layer, layerIdx);
 
     await ctx.afterLayer?.();
 
     if (await stopsBetweenLayers(ctx, layerIdx)) break;
+  }
+}
+
+async function runLayer(
+  ctx: RunLayersContext,
+  layer: readonly DagNode[],
+  layerIdx: number
+): Promise<void> {
+  const isParallelLayer = layer.length > 1;
+
+  if (isParallelLayer) {
+    ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
+  }
+
+  // Build a thunk per node so the layer can run either concurrently or strictly
+  // sequentially within an admission phase. The `mutates_checkout: false` assertion snapshots before and
+  // asserts after a node's own execution, so when a guarded node shares the layer
+  // with any node that isn't checkout-guarded (including loop/loop_group/workflow
+  // siblings whose internal execution would overlap the window), that sibling's
+  // legitimate write would be blamed on the guarded node: such a mixed layer runs
+  // sequentially. A layer of guarded nodes only runs concurrently, since no node in
+  // it may write: the writer still sees its own write and fails, and a sibling
+  // whose window overlapped fails with it, its error naming the siblings.
+  const guardedCount = layer.filter(isCheckoutGuarded).length;
+  const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
+  const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
+  // A nested interaction can persist a pause before its ordinary sibling settles.
+  // Settle ordinary peers first inside loop bodies so admission sees their failures.
+  const phases = ctx.interactionAdmission
+    ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
+    : [layer];
+  for (const phase of phases) {
+    if (ctx.containerPause?.publish && ctx.claimedWorkPausePolicy !== 'finish_through_parent_pause')
+      break;
+    const layerHadFailure = await runLayerPhase(
+      ctx,
+      phase,
+      isParallelLayer,
+      serializeLayer,
+      guardedLayerSnapshots
+    );
+
+    if (layerHadFailure) {
+      getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');
+    }
   }
 }
 
@@ -143,6 +158,7 @@ async function runLayerPhase(
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
           return result;
         } catch (error) {
+          if (isWorkflowExecutionInterruption(error)) throw error;
           nodeCtx.interactionAdmission?.failed(node.id);
           return await recordPreExecutionFailure(nodeCtx, node, error);
         } finally {
@@ -210,7 +226,10 @@ async function admitNode(
     node,
     ctx.nodeOutputs,
     resolveRunInputs(ctx.workflowRun),
-    isCachedPriorSuccess
+    {
+      evaluateEntryBoundary: isCachedPriorSuccess,
+      loopBodyScopes: ctx.loopBodyScopes,
+    }
   );
 
   // 0. Skip if this node completed successfully in a prior run (resume path),
@@ -330,165 +349,198 @@ async function replayPriorSuccess(
   priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>,
   composedBoundaryDecision: ReturnType<typeof checkComposedBlockBoundaries>
 ): Promise<LayerNodeResult | undefined> {
-  // Three sites below (always_run reset, cache invalidation, and the
-  // prior-success skip re-emit) all persist THIS node's prior output through
-  // the same bounded-preview+spill helper, keyed by its own step_name (#2726)
-  // — captured once here rather than repeating the lookup at each call site.
-  const formatThisNodesPriorOutput = (
-    stepName: string
-  ): ReturnType<typeof formatPersistedNodeOutput> =>
-    formatPersistedNodeOutput(
-      priorCompletedNodes.get(node.id)?.output ?? '',
-      ctx.artifactsDir,
-      stepName
-    );
   if (node.always_run) {
-    getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
-    const alwaysRunStepName = ctx.stepNamePrefix + node.id;
-    // The prior value being reset can be arbitrarily large — getDagResumeSnapshot
-    // prefers the full spilled text over the bounded preview (#2726), so this
-    // audit row must go through the same bounded-preview+spill helper as the
-    // primary node_completed/node_skipped_prior_success writers, not the raw text.
-    const alwaysRunPriorOutput = formatThisNodesPriorOutput(alwaysRunStepName);
-    await recordNodeState(
-      { store: ctx.deps.store, logDir: ctx.logDir },
-      {
-        runId: ctx.workflowRun.id,
-        path: alwaysRunStepName,
-        node: describeExecutionNode(node),
-        cache: {
-          action: 'reset',
-          prior: persistedExecutionOutput(alwaysRunPriorOutput),
-        },
-      }
-    );
-    // falls through to re-execute the node
-  } else if (
-    composedBoundaryDecision.decision === 'run' &&
-    // A join cached before failure-cascade skips blocked this rule must
-    // satisfy its current eligibility before that success can be reused.
-    (node.trigger_rule !== 'none_failed_min_one_success' ||
-      checkTriggerRule(node, ctx.nodeOutputs).decision === 'run')
-  ) {
-    // #2402 — a cached prior-success skip is only safe when every
-    // dependency's current value still matches the prior snapshot.
-    // If any dep re-ran during this resume (e.g. an `always_run: true`
-    // upstream forced a re-execution, or any dep produced fresh
-    // output), the cached value reflects the OLD dep output and would
-    // otherwise report success over stale synthesis. Invalidate and
-    // fall through to a fresh execution instead.
-    const staleDeps = getStaleCachedDependencies(
-      node,
-      ctx.nodeOutputs,
-      priorCompletedNodes,
-      ctx.replayedFailures
-    );
-    if (staleDeps.length > 0) {
-      const invalidatedStepName = ctx.stepNamePrefix + node.id;
-      // Same rationale as the always_run reset above: prior.output can now be
-      // the full spilled text, so this audit row needs the same bounding (#2726).
-      const invalidatedPriorOutput = formatThisNodesPriorOutput(invalidatedStepName);
-      getLog().info(
-        { nodeId: node.id, invalidatingDeps: staleDeps },
-        'dag.node_prior_cache_invalidated'
-      );
-      await recordNodeState(
-        { store: ctx.deps.store, logDir: ctx.logDir },
-        {
-          runId: ctx.workflowRun.id,
-          path: invalidatedStepName,
-          node: describeExecutionNode(node),
-          cache: {
-            action: 'invalidated',
-            invalidatingDeps: staleDeps,
-            prior: {
-              ...persistedExecutionOutput(invalidatedPriorOutput),
-              structured: priorCompletedNodes.get(node.id)?.structuredOutput,
-            },
-          },
-        }
-      );
-      // falls through to re-execute the node with fresh dep output
-    } else {
-      getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
-      const skipStepName = ctx.stepNamePrefix + node.id;
-      // Preserve incomplete recovery as a preview with its original provenance.
-      // Re-spilling that preview would falsely certify it as the full result.
-      const prior = priorCompletedNodes.get(node.id);
-      const truncation = prior?.outputTruncation;
-      const priorSkipOutput = truncation
-        ? {
-            nodeOutput: prior?.output ?? '',
-            truncated: true,
-            ...(truncation.originalBytes !== null
-              ? { originalBytes: truncation.originalBytes }
-              : {}),
-            ...(truncation.spillPath !== null ? { spillPath: truncation.spillPath } : {}),
-          }
-        : formatThisNodesPriorOutput(skipStepName);
-      // Return the pre-populated output (already in nodeOutputs)
-      const cachedOutput = ctx.nodeOutputs.get(node.id);
-      if (cachedOutput === undefined) {
-        throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
-      }
-      if (node.kind === 'workflow' && node.fan_out !== undefined) {
-        const aggregate: unknown =
-          'structuredOutput' in cachedOutput && cachedOutput.structuredOutput !== undefined
-            ? cachedOutput.structuredOutput
-            : JSON.parse(cachedOutput.output);
-        if (!Array.isArray(aggregate)) {
-          throw new Error(`Cached fan_out node '${node.id}' aggregate is not a JSON array`);
-        }
-        const children = await findFanOutChildRuns(
-          ctx.deps.store,
-          ctx.workflowRun.id,
-          skipStepName
-        );
-        const started = new Set(
-          children
-            .map(child => readSubrunMetadata(child.metadata).childIndex)
-            .filter(
-              (index): index is number =>
-                index !== undefined && index >= 0 && index < aggregate.length
-            )
-        );
-        const refused = aggregate.length - started.size;
-        if (refused > 0) {
-          await safeSendMessage(
-            ctx.platform,
-            ctx.conversationId,
-            `Skipping fan_out node '${node.id}': fan-out previously refused ${String(refused)} of ${String(aggregate.length)} children.`,
-            { workflowId: ctx.workflowRun.id, nodeName: node.id }
-          );
-        }
-      }
-      await recordNodeState(
-        { store: ctx.deps.store, logDir: ctx.logDir },
-        {
-          runId: ctx.workflowRun.id,
-          path: skipStepName,
-          node: describeExecutionNode(node),
-          cache: {
-            action: 'replayed',
-            output: {
-              ...persistedExecutionOutput(priorSkipOutput, prior?.output ?? ''),
-              structured:
-                'structuredOutput' in cachedOutput ? cachedOutput.structuredOutput : undefined,
-              declaredOutputPaths:
-                'declaredOutputPaths' in cachedOutput
-                  ? cachedOutput.declaredOutputPaths
-                  : undefined,
-            },
-          },
-        }
-      );
-      return {
-        nodeId: node.id,
-        output: cachedOutput,
-      };
-    }
+    await recordAlwaysRunReset(ctx, node, priorCompletedNodes);
+    return undefined;
   }
-  return undefined;
+  if (!priorSuccessIsEligible(ctx, node, composedBoundaryDecision)) return undefined;
+  // #2402 — a cached prior-success skip is only safe when every
+  // dependency's current value still matches the prior snapshot.
+  // If any dep re-ran during this resume (e.g. an `always_run: true`
+  // upstream forced a re-execution, or any dep produced fresh
+  // output), the cached value reflects the OLD dep output and would
+  // otherwise report success over stale synthesis. Invalidate and
+  // fall through to a fresh execution instead.
+  const staleDeps = getStaleCachedDependencies(
+    node,
+    ctx.nodeOutputs,
+    priorCompletedNodes,
+    ctx.replayedFailures
+  );
+  if (staleDeps.length > 0) {
+    await recordPriorCacheInvalidated(ctx, node, priorCompletedNodes, staleDeps);
+    return undefined;
+  }
+  return replayCachedSuccess(ctx, node, priorCompletedNodes);
+}
+
+function formatPriorOutput(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>
+): ReturnType<typeof formatPersistedNodeOutput> {
+  return formatPersistedNodeOutput(
+    priorCompletedNodes.get(node.id)?.output ?? '',
+    ctx.artifactsDir
+  );
+}
+
+async function recordAlwaysRunReset(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>
+): Promise<void> {
+  getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
+  // The prior value being reset can be arbitrarily large — getDagResumeSnapshot
+  // prefers the full spilled text over the bounded preview (#2726), so this
+  // audit row must go through the same bounded-preview+spill helper as the
+  // primary node_completed/node_skipped_prior_success writers, not the raw text.
+  const priorOutput = formatPriorOutput(ctx, node, priorCompletedNodes);
+  await recordNodeState(
+    { store: ctx.deps.store, logDir: ctx.logDir },
+    {
+      runId: ctx.workflowRun.id,
+      path: ctx.stepNamePrefix + node.id,
+      node: describeExecutionNode(node),
+      cache: { action: 'reset', prior: persistedExecutionOutput(priorOutput) },
+    }
+  );
+}
+
+function priorSuccessIsEligible(
+  ctx: RunLayersContext,
+  node: DagNode,
+  composedBoundaryDecision: ReturnType<typeof checkComposedBlockBoundaries>
+): boolean {
+  if (composedBoundaryDecision.decision !== 'run') return false;
+  // A join cached before failure-cascade skips blocked this rule must
+  // satisfy its current eligibility before that success can be reused.
+  return (
+    node.trigger_rule !== 'none_failed_min_one_success' ||
+    checkTriggerRule(node, ctx.nodeOutputs).decision === 'run'
+  );
+}
+
+async function recordPriorCacheInvalidated(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>,
+  staleDeps: string[]
+): Promise<void> {
+  // Same rationale as the always_run reset: prior.output can be the full
+  // spilled text, so this audit row needs the same bounding (#2726).
+  const priorOutput = formatPriorOutput(ctx, node, priorCompletedNodes);
+  getLog().info(
+    { nodeId: node.id, invalidatingDeps: staleDeps },
+    'dag.node_prior_cache_invalidated'
+  );
+  await recordNodeState(
+    { store: ctx.deps.store, logDir: ctx.logDir },
+    {
+      runId: ctx.workflowRun.id,
+      path: ctx.stepNamePrefix + node.id,
+      node: describeExecutionNode(node),
+      cache: {
+        action: 'invalidated',
+        invalidatingDeps: staleDeps,
+        prior: {
+          ...persistedExecutionOutput(priorOutput),
+          structured: priorCompletedNodes.get(node.id)?.structuredOutput,
+        },
+      },
+    }
+  );
+}
+
+async function replayCachedSuccess(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>
+): Promise<LayerNodeResult> {
+  getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
+  const skipStepName = ctx.stepNamePrefix + node.id;
+  const prior = priorCompletedNodes.get(node.id);
+  const priorSkipOutput = replayedOutputPreview(ctx, node, priorCompletedNodes);
+  // Return the pre-populated output (already in nodeOutputs)
+  const cachedOutput = ctx.nodeOutputs.get(node.id);
+  if (cachedOutput === undefined) {
+    throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
+  }
+  if (node.kind === 'workflow' && node.fan_out !== undefined) {
+    await reportRefusedFanOutChildren(ctx, node.id, skipStepName, cachedOutput);
+  }
+  await recordNodeState(
+    { store: ctx.deps.store, logDir: ctx.logDir },
+    {
+      runId: ctx.workflowRun.id,
+      path: skipStepName,
+      node: describeExecutionNode(node),
+      cache: {
+        action: 'replayed',
+        output: {
+          ...persistedExecutionOutput(priorSkipOutput, prior?.output ?? ''),
+          structured:
+            'structuredOutput' in cachedOutput ? cachedOutput.structuredOutput : undefined,
+          declaredOutputPaths:
+            'declaredOutputPaths' in cachedOutput ? cachedOutput.declaredOutputPaths : undefined,
+        },
+      },
+    }
+  );
+  return { nodeId: node.id, output: cachedOutput };
+}
+
+/**
+ * Preserve incomplete recovery as a preview with its original provenance.
+ * Re-spilling that preview would falsely certify it as the full result.
+ */
+function replayedOutputPreview(
+  ctx: RunLayersContext,
+  node: DagNode,
+  priorCompletedNodes: ReadonlyMap<string, PersistedNodeOutput>
+): ReturnType<typeof formatPersistedNodeOutput> {
+  const prior = priorCompletedNodes.get(node.id);
+  const truncation = prior?.outputTruncation;
+  if (!truncation) return formatPriorOutput(ctx, node, priorCompletedNodes);
+  return {
+    nodeOutput: prior?.output ?? '',
+    truncated: true,
+    ...(truncation.originalBytes !== null ? { originalBytes: truncation.originalBytes } : {}),
+    ...(truncation.spillPath !== null ? { spillPath: truncation.spillPath } : {}),
+  };
+}
+
+/** Tell the conversation when a replayed fan_out had refused some of its children. */
+async function reportRefusedFanOutChildren(
+  ctx: RunLayersContext,
+  nodeId: string,
+  stepName: string,
+  cachedOutput: NodeExecutionResult
+): Promise<void> {
+  const aggregate: unknown =
+    'structuredOutput' in cachedOutput && cachedOutput.structuredOutput !== undefined
+      ? cachedOutput.structuredOutput
+      : JSON.parse(cachedOutput.output);
+  if (!Array.isArray(aggregate)) {
+    throw new Error(`Cached fan_out node '${nodeId}' aggregate is not a JSON array`);
+  }
+  const children = await findFanOutChildRuns(ctx.deps.store, ctx.workflowRun.id, stepName);
+  const started = new Set(
+    children
+      .map(child => readSubrunMetadata(child.metadata).childIndex)
+      .filter(
+        (index): index is number => index !== undefined && index >= 0 && index < aggregate.length
+      )
+  );
+  const refused = aggregate.length - started.size;
+  if (refused > 0) {
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      `Skipping fan_out node '${nodeId}': fan-out previously refused ${String(refused)} of ${String(aggregate.length)} children.`,
+      { workflowId: ctx.workflowRun.id, nodeName: nodeId }
+    );
+  }
 }
 
 /**
@@ -558,119 +610,131 @@ async function aggregateLayerResults(
   const bodyNodeIds = new Set(ctx.layers.flat().map(n => n.id));
   let layerHadFailure = false;
   for (const result of layerResults) {
-    if (result.status === 'fulfilled') {
-      const { nodeId, output, sessionProvider } = result.value;
-      // SINGLE aggregation point for this segment's run-level usage: the run
-      // row's persisted totals and the transcript. Per-node cost/tokens must be
-      // summed here and ONLY here. Terminal telemetry does not read this: it
-      // folds the persisted node events (getDagResumeSnapshot) across segments.
-      if (output.costUsd !== undefined) {
-        // Same guard as tokens below, and for the same reason: cost comes from
-        // providers (incl. community ones), and one NaN poisons the run total for
-        // every other node — NaN > 0 is false, so the cost is dropped from the run
-        // row with no trace. Exactly the silent loss #2469 exists to
-        // remove. Guarded here, at the single aggregation point, so one bad node
-        // costs only its own contribution.
-        if (Number.isFinite(output.costUsd)) {
-          ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
-        } else {
-          getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
-        }
-      }
-      ctx.totalTokensUnknown ||= output.tokensUnknown === true;
-      if (ctx.totalTokensUnknown) {
-        ctx.totalTokens = undefined;
-      } else if (output.tokens !== undefined) {
-        ctx.totalTokens = sumTokenUsage(
-          [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
-          { nodeId }
-        );
-      }
-      ctx.nodeOutputs.set(nodeId, output);
-      if (
-        ctx.nodeSessionHandles !== undefined &&
-        ctx.namedResumeSourceIds?.has(nodeId) === true &&
-        output.state === 'completed' &&
-        output.sessionId !== undefined &&
-        sessionProvider !== undefined
-      ) {
-        ctx.nodeSessionHandles.set(nodeId, {
-          sessionId: output.sessionId,
-          provider: sessionProvider,
-        });
-      }
-      const ownerNode = nodeById.get(nodeId);
-      if (
-        ownerNode &&
-        ownsBodySessionCursor(ownerNode, bodyNodeIds) &&
-        output.state === 'completed' &&
-        output.sessionId !== undefined &&
-        sessionProvider !== undefined
-      ) {
-        ctx.bodySessionCursors?.set(nodeId, {
-          sessionId: output.sessionId,
-          provider: sessionProvider,
-        });
-      }
-      // Typed artifact: when a node declares `output_type`, persist its output
-      // as a typed sidecar so other nodes and later runs can locate it by type.
-      // The writer keeps top-level node paths stable and qualifies loop body
-      // paths with ctx.loopGroupPath. Best-effort — a metadata write must never
-      // fail an otherwise-successful node.
-      const completedNode = nodeById.get(nodeId);
-      if (output.state === 'completed' && completedNode?.output_type) {
-        const meta = {
-          nodeId,
-          outputType: completedNode.output_type,
-          runId: ctx.workflowRun.id,
-          producedAt: new Date().toISOString(),
-          ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: ctx.loopGroupPath } : {}),
-        };
-        try {
-          await writeNodeArtifact(ctx.artifactsDir, meta, output.output);
-        } catch (err) {
-          getLog().warn(
-            { err: err as Error, nodeId, workflowRunId: ctx.workflowRun.id },
-            'artifacts.write_failed'
-          );
-        }
-        // Scope mirror (#1846): persistence-participating nodes also write their
-        // typed sidecar into the stable `scopes/<workflow>/<scope>/` dir, so the
-        // NEXT invocation can recover this output by reference if its persisted
-        // session comes back cold. Per-node files; concurrent same-scope runs are
-        // last-writer-wins for a given node. Best-effort, like the run-dir write.
-        if (
-          ctx.scopeArtifactsDir &&
-          nodeUsesPersistedScope(completedNode, ctx.workflowPersistSessions)
-        ) {
-          try {
-            await writeNodeArtifact(ctx.scopeArtifactsDir, meta, output.output);
-          } catch (err) {
-            getLog().warn(
-              {
-                err: err as Error,
-                nodeId,
-                workflowRunId: ctx.workflowRun.id,
-                scopeArtifactsDir: ctx.scopeArtifactsDir,
-              },
-              'artifacts.scope_write_failed'
-            );
-          }
-        }
-      }
-      if (output.state === 'completed' && !isParallelLayer && output.sessionId !== undefined) {
-        // Tag the cursor with the provider that created the session (#1992). A session
-        // id from a path that can't attest its provider is never threaded — fail-safe:
-        // a fresh downstream session beats a guaranteed-broken cross-provider resume.
-        ctx.lastSequentialSession =
-          sessionProvider !== undefined
-            ? { sessionId: output.sessionId, provider: sessionProvider }
-            : undefined;
-      }
-      if (output.state === 'failed') layerHadFailure = true;
+    if (result.status !== 'fulfilled') continue;
+    const { nodeId, output } = result.value;
+    const node = nodeById.get(nodeId);
+    addNodeUsage(ctx, result.value);
+    ctx.nodeOutputs.set(nodeId, output);
+    recordSessionCursors(ctx, result.value, node, bodyNodeIds);
+    if (output.state === 'completed' && node?.output_type) {
+      await writeTypedArtifacts(ctx, node, node.output_type, output.output);
     }
+    advanceSequentialSession(ctx, result.value, isParallelLayer);
+    if (output.state === 'failed') layerHadFailure = true;
   }
   return layerHadFailure;
+}
+
+// SINGLE aggregation point for this segment's run-level usage: the run
+// row's persisted totals and the transcript. Per-node cost/tokens must be
+// summed here and ONLY here. Terminal telemetry does not read this: it
+// folds the persisted node events (getDagResumeSnapshot) across segments.
+function addNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult): void {
+  if (output.costUsd !== undefined) {
+    // Same guard as tokens below, and for the same reason: cost comes from
+    // providers (incl. community ones), and one NaN poisons the run total for
+    // every other node — NaN > 0 is false, so the cost is dropped from the run
+    // row with no trace. Exactly the silent loss #2469 exists to
+    // remove. Guarded here, at the single aggregation point, so one bad node
+    // costs only its own contribution.
+    if (Number.isFinite(output.costUsd)) {
+      ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
+    } else {
+      getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
+    }
+  }
+  ctx.totalTokensUnknown ||= output.tokensUnknown === true;
+  if (ctx.totalTokensUnknown) {
+    ctx.totalTokens = undefined;
+  } else if (output.tokens !== undefined) {
+    ctx.totalTokens = sumTokenUsage(
+      [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
+      { nodeId }
+    );
+  }
+}
+
+/** A completed node's session, when its provider attested it. */
+function completedSession({ output, sessionProvider }: LayerNodeResult): SessionCursor | undefined {
+  if (output.state !== 'completed' || output.sessionId === undefined) return undefined;
+  if (sessionProvider === undefined) return undefined;
+  return { sessionId: output.sessionId, provider: sessionProvider };
+}
+
+function recordSessionCursors(
+  ctx: RunLayersContext,
+  result: LayerNodeResult,
+  node: DagNode | undefined,
+  bodyNodeIds: ReadonlySet<string>
+): void {
+  const session = completedSession(result);
+  if (session === undefined) return;
+  if (ctx.nodeSessionHandles !== undefined && ctx.namedResumeSourceIds?.has(result.nodeId)) {
+    ctx.nodeSessionHandles.set(result.nodeId, session);
+  }
+  if (node && ownsBodySessionCursor(node, bodyNodeIds)) {
+    ctx.bodySessionCursors?.set(result.nodeId, session);
+  }
+}
+
+// Typed artifact: when a node declares `output_type`, persist its output
+// as a typed sidecar so other nodes and later runs can locate it by type.
+// The writer keeps top-level node paths stable and qualifies loop body
+// paths with ctx.loopGroupPath. Best-effort — a metadata write must never
+// fail an otherwise-successful node.
+async function writeTypedArtifacts(
+  ctx: RunLayersContext,
+  node: DagNode,
+  outputType: string,
+  content: string
+): Promise<void> {
+  const meta = {
+    nodeId: node.id,
+    outputType,
+    runId: ctx.workflowRun.id,
+    producedAt: new Date().toISOString(),
+    ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: ctx.loopGroupPath } : {}),
+  };
+  try {
+    await writeNodeArtifact(ctx.artifactsDir, meta, content);
+  } catch (err) {
+    getLog().warn(
+      { err: err as Error, nodeId: node.id, workflowRunId: ctx.workflowRun.id },
+      'artifacts.write_failed'
+    );
+  }
+  // Scope mirror (#1846): persistence-participating nodes also write their
+  // typed sidecar into the stable `scopes/<workflow>/<scope>/` dir, so the
+  // NEXT invocation can recover this output by reference if its persisted
+  // session comes back cold. Per-node files; concurrent same-scope runs are
+  // last-writer-wins for a given node. Best-effort, like the run-dir write.
+  if (!ctx.scopeArtifactsDir || !nodeUsesPersistedScope(node, ctx.workflowPersistSessions)) return;
+  try {
+    await writeNodeArtifact(ctx.scopeArtifactsDir, meta, content);
+  } catch (err) {
+    getLog().warn(
+      {
+        err: err as Error,
+        nodeId: node.id,
+        workflowRunId: ctx.workflowRun.id,
+        scopeArtifactsDir: ctx.scopeArtifactsDir,
+      },
+      'artifacts.scope_write_failed'
+    );
+  }
+}
+
+function advanceSequentialSession(
+  ctx: RunLayersContext,
+  result: LayerNodeResult,
+  isParallelLayer: boolean
+): void {
+  const { output } = result;
+  if (output.state !== 'completed' || isParallelLayer || output.sessionId === undefined) return;
+  // Tag the cursor with the provider that created the session (#1992). A session
+  // id from a path that can't attest its provider is never threaded — fail-safe:
+  // a fresh downstream session beats a guaranteed-broken cross-provider resume.
+  ctx.lastSequentialSession = completedSession(result);
 }
 
 /**
@@ -678,47 +742,47 @@ async function aggregateLayerResults(
  * True when the walk stops here.
  */
 async function stopsBetweenLayers(ctx: RunLayersContext, layerIdx: number): Promise<boolean> {
-  // Check for non-running status between DAG layers (cancellation, deletion, pause)
+  let dagStatus;
   try {
-    const dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
-    if (dagStatus === null || dagStatus !== 'running') {
-      const effectiveStatus = dagStatus ?? 'deleted';
-      if (
-        effectiveStatus === 'paused' &&
-        ctx.claimedWorkPausePolicy === 'finish_through_parent_pause'
-      ) {
-        getLog().debug(
-          { workflowRunId: ctx.workflowRun.id, layerIdx, totalLayers: ctx.layers.length },
-          'dag.claimed_work_continues_through_parent_pause'
-        );
-        return false;
-      }
-      getLog().info(
-        {
-          workflowRunId: ctx.workflowRun.id,
-          layerIdx,
-          totalLayers: ctx.layers.length,
-          status: effectiveStatus,
-        },
-        'dag.stop_detected_between_layers'
-      );
-      // Paused is intentional (approval gate) — the approval message was already sent
-      if (effectiveStatus !== 'paused') {
-        await safeSendMessage(
-          ctx.platform,
-          ctx.conversationId,
-          `⚠️ **Workflow stopped** (${effectiveStatus}): DAG execution stopped after layer ${String(layerIdx + 1)}/${String(ctx.layers.length)}`,
-          { workflowId: ctx.workflowRun.id }
-        );
-      }
-      return true;
-    }
+    dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
   } catch (statusErr) {
-    // Non-fatal — status check failure should not crash the workflow
-    getLog().warn(
-      { err: statusErr as Error, workflowRunId: ctx.workflowRun.id },
-      'dag.status_check_failed'
+    throw new ParentStatusReadError(
+      ctx.workflowRun.id,
+      ctx.stepNamePrefix + ctx.layers[layerIdx].map(node => node.id).join(', '),
+      statusErr
     );
+  }
+  if (dagStatus === null || dagStatus !== 'running') {
+    const effectiveStatus = dagStatus ?? 'deleted';
+    if (
+      effectiveStatus === 'paused' &&
+      ctx.claimedWorkPausePolicy === 'finish_through_parent_pause'
+    ) {
+      getLog().debug(
+        { workflowRunId: ctx.workflowRun.id, layerIdx, totalLayers: ctx.layers.length },
+        'dag.claimed_work_continues_through_parent_pause'
+      );
+      return false;
+    }
+    getLog().info(
+      {
+        workflowRunId: ctx.workflowRun.id,
+        layerIdx,
+        totalLayers: ctx.layers.length,
+        status: effectiveStatus,
+      },
+      'dag.stop_detected_between_layers'
+    );
+    // Paused is intentional (approval gate) — the approval message was already sent
+    if (effectiveStatus !== 'paused') {
+      await safeSendMessage(
+        ctx.platform,
+        ctx.conversationId,
+        `⚠️ **Workflow stopped** (${effectiveStatus}): DAG execution stopped after layer ${String(layerIdx + 1)}/${String(ctx.layers.length)}`,
+        { workflowId: ctx.workflowRun.id }
+      );
+    }
+    return true;
   }
   return false;
 }

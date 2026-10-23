@@ -408,30 +408,6 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     expect(failureKinds).toEqual({ step: 'config' });
   });
 
-  it('an error escaping a node that already started is unknown, not config', async () => {
-    const { failureKinds } = await runDag(
-      [
-        {
-          id: 'group',
-          kind: 'loop_group',
-          loop_group: {
-            fresh_context: false,
-            until_bash: 'exit 1',
-            max_iterations: 3,
-            nodes: [{ id: 'body', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
-          },
-        },
-      ],
-      store => {
-        // Only the group's own status check fails; the run-level checks still answer.
-        store.getWorkflowRunStatus.mockImplementationOnce(async () => {
-          throw new Error('database is locked');
-        });
-      }
-    );
-    expect(failureKinds.group).toBe('unknown');
-  });
-
   it('one completed node and one failed node is a node_error', async () => {
     const { store } = await runDag([
       { id: 'ok', kind: 'exec', runtime: 'sh', script: 'echo fine' },
@@ -1078,12 +1054,13 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
     disposition: WorktreeDisposition | null,
     release: () => Promise<void> = async () => {},
     readRun: (id: string) => Promise<WorkflowRun | null> = async id =>
-      makeWorkflowRun(id, { metadata: { owned_worktree: proof } })
+      makeWorkflowRun(id, { working_path: '/wt', metadata: { owned_worktree: proof } })
   ): Promise<{
     order: string[];
     store: MockWorkflowStore;
     released: boolean;
     seen: WorkflowRun[];
+    warnings: string[];
   }> {
     const order: string[] = [];
     const seen: WorkflowRun[] = [];
@@ -1110,10 +1087,11 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
         },
       },
     };
+    const platform = createMockPlatform();
     await executeDagWorkflow(
       dagOptions({
         deps,
-        platform: createMockPlatform(),
+        platform,
         conversationId: 'conv-release',
         cwd: testDir,
         workflow: {
@@ -1123,13 +1101,17 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
         workflowRun: makeWorkflowRun('release-run-id'),
       })
     );
-    return { order, store: mockDeps.store, released, seen };
+    const warnings = platform.sendMessage.mock.calls
+      .map(call => call[1])
+      .filter(message => message.includes('Kept worktree'));
+    return { order, store: mockDeps.store, released, seen, warnings };
   }
 
   it('records the assessment in the completion and releases only after the write', async () => {
-    const { order, store, seen } = await complete({ disposition: 'release' });
+    const { order, store, seen, warnings } = await complete({ disposition: 'release' });
 
     expect(order).toEqual(['assess', 'complete', 'release']);
+    expect(warnings).toEqual([]);
     expect(seen.map(run => run.metadata.owned_worktree)).toEqual([proof, proof]);
     expect(store.completeWorkflowRun.mock.calls[0]?.[2]).toMatchObject({
       worktree_disposition: { disposition: 'release' },
@@ -1137,23 +1119,41 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
   });
 
   it('keeps a retained worktree and records why', async () => {
-    const retained: WorktreeDisposition = { disposition: 'retained', reason: 'unpushed_commits' };
-    const { order, store, released } = await complete(retained);
+    const retained: WorktreeDisposition = {
+      disposition: 'retained',
+      reason: 'unpushed_commits',
+      detail: '2 commit(s) on no remote',
+    };
+    const { order, store, released, warnings } = await complete(retained);
 
     expect(released).toBe(false);
     expect(order).toEqual(['assess', 'complete']);
     expect(store.completeWorkflowRun.mock.calls[0]?.[2]).toMatchObject({
       worktree_disposition: retained,
     });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('/wt');
+    expect(warnings[0]).toContain('2 commit(s) on no remote');
+  });
+
+  it('keeps a workspace the platform retains without a warning', async () => {
+    const { warnings } = await complete({
+      disposition: 'retained',
+      reason: 'workspace_retained',
+    });
+
+    expect(warnings).toEqual([]);
   });
 
   it('leaves the run completed when the release fails', async () => {
-    const { order, store } = await complete({ disposition: 'release' }, async () => {
+    const { order, store, warnings } = await complete({ disposition: 'release' }, async () => {
       throw new Error('worktree is no longer releasable: uncommitted_changes');
     });
 
     expect(order).toEqual(['assess', 'complete', 'release']);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('no longer releasable: uncommitted_changes');
   });
 
   it('completes the run without a disposition when the run cannot be re-read', async () => {

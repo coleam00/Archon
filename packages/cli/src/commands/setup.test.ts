@@ -14,6 +14,43 @@ import * as prompts from '@clack/prompts';
 import * as platformRegistry from '@archon/core/platforms/registry';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { loadRepoConfig } from '@archon/core/config/config-loader';
+import { collectPlatforms } from './setup-platforms';
+
+describe('setup platform selection', () => {
+  it.each(
+    [
+      [],
+      ['github'],
+      ['telegram'],
+      ['slack'],
+      ['github', 'telegram'],
+      ['github', 'slack'],
+      ['telegram', 'slack'],
+      ['github', 'telegram', 'slack'],
+    ].map(selected => ({ selected }))
+  )('collects the selected platforms: %j', async ({ selected }) => {
+    const selection = spyOn(prompts, 'multiselect').mockResolvedValue(selected);
+    try {
+      expect(await collectPlatforms()).toEqual({
+        github: selected.includes('github'),
+        telegram: selected.includes('telegram'),
+        slack: selected.includes('slack'),
+      });
+      expect(selection).toHaveBeenCalledWith({
+        message:
+          'Which chat adapters do you want to connect? (all optional — Archon works as CLI + skill without any)\n(↑↓ navigate, space select, enter confirm)',
+        options: [
+          { value: 'github', label: 'GitHub', hint: 'Respond to issues/PRs via webhooks' },
+          { value: 'telegram', label: 'Telegram', hint: 'Chat bot via BotFather' },
+          { value: 'slack', label: 'Slack', hint: 'Workspace app with Socket Mode' },
+        ],
+        required: false,
+      });
+    } finally {
+      selection.mockRestore();
+    }
+  });
+});
 
 // Test directory for file operations
 const TEST_DIR = join(tmpdir(), 'archon-setup-test-' + Date.now());

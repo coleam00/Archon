@@ -19,7 +19,9 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
-import { readNodeRecordEvent } from './node-record-reader';
+import { readNodeRecordData, readNodeRecordEvent } from './node-record-reader';
+import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
+import type { FanOutOutcome } from './schemas/fan-out-outcome';
 
 export interface TerminalRecordEvent {
   event_type: string;
@@ -29,6 +31,13 @@ export interface TerminalRecordEvent {
 const eventDataSchema = z.record(z.string(), z.unknown());
 function eventData(value: unknown): Record<string, unknown> {
   return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
+}
+
+function withFanOutOutcome(
+  state: RunNodeState,
+  fanOutOutcome: FanOutOutcome | undefined
+): RunNodeState {
+  return fanOutOutcome === undefined ? state : { ...state, fan_out_outcome: fanOutOutcome };
 }
 
 function foldNodeEvents(
@@ -73,18 +82,38 @@ function foldNodeEvents(
         failureOrder.delete(nodeId);
         break;
       case 'node_completed':
+        nodes.set(
+          nodeId,
+          withFanOutOutcome({ node_id: nodeId, state: 'completed' }, record.data.fan_out_outcome)
+        );
+        outputs.set(nodeId, record.data);
+        failureOrder.delete(nodeId);
+        break;
       case 'node_skipped_prior_success':
-        nodes.set(nodeId, { node_id: nodeId, state: 'completed' });
+        // A replayed node keeps the slot record its earlier completion wrote.
+        nodes.set(
+          nodeId,
+          withFanOutOutcome(
+            { node_id: nodeId, state: 'completed' },
+            nodes.get(nodeId)?.fan_out_outcome
+          )
+        );
         outputs.set(nodeId, record.data);
         failureOrder.delete(nodeId);
         break;
       case 'node_failed': {
         const data = record.data;
-        nodes.set(nodeId, {
-          node_id: nodeId,
-          state: 'failed',
-          ...(typeof data.error === 'string' ? { error: data.error } : {}),
-        });
+        nodes.set(
+          nodeId,
+          withFanOutOutcome(
+            {
+              node_id: nodeId,
+              state: 'failed',
+              ...(typeof data.error === 'string' ? { error: data.error } : {}),
+            },
+            data.fan_out_outcome
+          )
+        );
         outputs.delete(nodeId);
         failureOrder.set(nodeId, index);
         break;
@@ -215,4 +244,28 @@ export function getTerminalRecord(
     return record;
   }
   return null;
+}
+
+/**
+ * The `node_failed` event behind a record's `first_failed_node`: the last one for that
+ * node in `events`. Terminal telemetry and the attention stream both read the failure
+ * cause through this, so they agree on which event is the failure.
+ */
+export function firstFailedNodeEvent<E extends TerminalRecordEvent>(
+  record: Pick<TerminalRecord, 'first_failed_node'> | null,
+  events: readonly E[]
+): E | undefined {
+  const node = record?.first_failed_node;
+  if (node == null) return undefined;
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index];
+    if (event?.event_type === 'node_failed' && event.step_name === node) return event;
+  }
+  return undefined;
+}
+
+/** The failure kind a `node_failed` event recorded; undefined when it recorded none. */
+export function recordedFailureKind(event: TerminalRecordEvent): NodeFailureKind | undefined {
+  const kind = nodeFailureKindSchema.safeParse(readNodeRecordData(event.data).failure_kind);
+  return kind.success ? kind.data : undefined;
 }

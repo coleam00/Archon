@@ -1,9 +1,11 @@
+import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
+  type PreparedRunAiConfiguration,
   WorkflowCredentialPreflightError,
 } from '@archon/workflows/run-preflight';
 import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-write';
@@ -39,6 +41,7 @@ import {
 } from '@archon/workflows/run-config';
 import {
   RESOURCE_START_METADATA_KEY,
+  ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
   type PreparedWorkflowLaunch,
   type ResourceStartBindingIntent,
   type ResourceStartDisposition,
@@ -46,6 +49,7 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import {
   findWorkflowLoadError,
+  type ResolvedWorkflow,
   type WorkflowExecutionResult,
 } from '@archon/workflows/schemas/workflow';
 import {
@@ -63,7 +67,7 @@ import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-st
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
-import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
+import { ensureIsolationConfigured } from '../orchestrator/dispatch/isolation-resolver';
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
@@ -93,6 +97,135 @@ async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<
   return registered;
 }
 
+async function selectBindingWorkflow(
+  host: WorkflowHost,
+  workflowName: string,
+  cwd: string,
+  roots: Parameters<typeof discoverWorkflowsWithConfig>[3]
+): Promise<ResolvedWorkflow> {
+  const discovered = await discoverWorkflowsWithConfig(
+    cwd,
+    host.deps.loadConfig,
+    host.deps.providers,
+    roots
+  );
+  const workflow = resolveWorkflowName(
+    workflowName,
+    discovered.workflows.map(entry => entry.workflow)
+  );
+  if (workflow) return workflow;
+  const loadError = findWorkflowLoadError(discovered.errors, workflowName);
+  throw new Error(
+    loadError
+      ? `Workflow '${workflowName}' failed to load: ${loadError.error}`
+      : `Workflow '${workflowName}' not found.`
+  );
+}
+
+async function assertBindingRequirements(
+  host: WorkflowHost,
+  intent: ResourceStartBindingIntent,
+  workflow: ResolvedWorkflow
+): Promise<void> {
+  if (!host.deps.isPerUserGitHubEnabled?.() || !workflow.requires?.length) return;
+  assertWorkflowRequirementsMet(workflow, {
+    githubConnected: Boolean(await host.deps.getUserGithubToken?.(intent.runAsUserId)),
+  });
+}
+
+function quotedList(names: readonly string[]): string {
+  return names.map(name => `'${name}'`).join(', ');
+}
+
+/** The binding's authored and event inputs, checked against the workflow's declared inputs. */
+function resolveBindingInputs(
+  intent: ResourceStartBindingIntent,
+  workflow: ResolvedWorkflow
+): Record<string, JsonValue> {
+  // `resolveDeclaredInputs` passes inputs through to a workflow without `inputs:`, which
+  // operator-written literals rely on. Event inputs carry untrusted source content, so
+  // they reach only a workflow that declares them.
+  const eventInputNames = Object.keys(intent.eventInputs ?? {});
+  if (workflow.inputs === undefined && eventInputNames.length > 0) {
+    throw new Error(
+      `Workflow '${workflow.name}' declares no inputs; a trigger cannot pass event-mapped ` +
+        `input${eventInputNames.length === 1 ? '' : 's'} ` +
+        quotedList(eventInputNames.sort()) +
+        ". Declare them under 'inputs:' in the workflow."
+    );
+  }
+  const inputs = { ...intent.launch.inputs, ...intent.eventInputs };
+  try {
+    resolveDeclaredInputs(inputs, workflow.inputs, `Cannot run workflow '${workflow.name}'`, 'it');
+  } catch (error) {
+    if (error instanceof WorkflowInputContractError && error.missingRequired.length > 0) {
+      throw new Error(
+        `Workflow '${workflow.name}' requires input${error.missingRequired.length === 1 ? '' : 's'} ` +
+          quotedList(error.missingRequired) +
+          '.'
+      );
+    }
+    throw error;
+  }
+  return inputs;
+}
+
+/** Reconcile the requested isolation with the workflow's pin and the project kind. */
+function resolveBindingIsolation(
+  requested: ResourceStartBindingIntent['launch']['isolation'],
+  workflow: ResolvedWorkflow,
+  codebase: Codebase
+): PreparedWorkflowLaunch['execution']['isolation'] {
+  const pinned = workflow.worktree?.enabled;
+  if (requested.kind === 'in-place' && pinned === true) {
+    throw new Error(`Workflow '${workflow.name}' requires worktree isolation.`);
+  }
+  if (requested.kind === 'worktree' && pinned === false) {
+    throw new Error(`Workflow '${workflow.name}' requires in-place execution.`);
+  }
+  const wantsWorktree =
+    requested.kind === 'worktree' ||
+    (requested.kind === 'default' && codebase.kind !== 'folder' && pinned !== false);
+  if (codebase.kind === 'folder' && (wantsWorktree || pinned === true)) {
+    throw new Error(`Folder project '${codebase.name}' does not support worktree isolation.`);
+  }
+  return wantsWorktree
+    ? { ...(requested.kind === 'worktree' ? requested : {}), kind: 'worktree' }
+    : { kind: 'in-place' };
+}
+
+// Persist only authored inputs; defaults stay derived from the frozen workflow.
+function authoredInputsMetadata(inputs: Record<string, JsonValue>): Record<string, JsonValue> {
+  if (Object.keys(inputs).length === 0) return {};
+  return {
+    [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
+      Object.entries(inputs).map(([name, value]) => [name, canonicalValueText(value)])
+    ),
+    ...(Object.values(inputs).some(value => typeof value !== 'string')
+      ? { [SUBRUN_METADATA_KEYS.inputsValues]: inputs }
+      : {}),
+  };
+}
+
+function bindingRunMetadata(
+  workflow: ResolvedWorkflow,
+  sourceRecord: JsonValue,
+  origin: ResourceStartRunMetadata,
+  inputs: Record<string, JsonValue>,
+  preparedAi: PreparedRunAiConfiguration
+): Record<string, JsonValue> {
+  return {
+    [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
+    [WORKFLOW_SOURCE_METADATA_KEY]: sourceRecord,
+    [RESOURCE_START_METADATA_KEY]: { ...origin },
+    [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false,
+    ...authoredInputsMetadata(inputs),
+    ...(preparedAi.runConfigMetadata
+      ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAi.runConfigMetadata }
+      : {}),
+  };
+}
+
 /**
  * Freeze one binding's workflow source, inputs and run configuration, then commit it to
  * admission. The capture is kept only when admission keeps a promise to run it.
@@ -110,90 +243,24 @@ async function prepareBinding(
     let source = await prepareWorkflowSource(host.deps, { sourceRoot });
     owner.hold(source);
 
-    const discovered = await discoverWorkflowsWithConfig(
+    const workflow = await selectBindingWorkflow(
+      host,
+      intent.launch.workflowName,
       cwd,
-      host.deps.loadConfig,
-      host.deps.providers,
       source.roots
     );
-    const workflow = resolveWorkflowName(
-      intent.launch.workflowName,
-      discovered.workflows.map(entry => entry.workflow)
-    );
-    if (!workflow) {
-      const loadError = findWorkflowLoadError(discovered.errors, intent.launch.workflowName);
-      throw new Error(
-        loadError
-          ? `Workflow '${intent.launch.workflowName}' failed to load: ${loadError.error}`
-          : `Workflow '${intent.launch.workflowName}' not found.`
-      );
-    }
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
-
-    if (host.deps.isPerUserGitHubEnabled?.() && workflow.requires?.length) {
-      assertWorkflowRequirementsMet(workflow, {
-        githubConnected: Boolean(await host.deps.getUserGithubToken?.(intent.runAsUserId)),
-      });
-    }
-    // `resolveDeclaredInputs` passes inputs through to a workflow without `inputs:`, which
-    // operator-written literals rely on. Event inputs carry untrusted source content, so
-    // they reach only a workflow that declares them.
-    const eventInputNames = Object.keys(intent.eventInputs ?? {});
-    if (workflow.inputs === undefined && eventInputNames.length > 0) {
-      throw new Error(
-        `Workflow '${workflow.name}' declares no inputs; a trigger cannot pass event-mapped ` +
-          `input${eventInputNames.length === 1 ? '' : 's'} ` +
-          eventInputNames
-            .sort()
-            .map(name => `'${name}'`)
-            .join(', ') +
-          ". Declare them under 'inputs:' in the workflow."
-      );
-    }
-    const inputs = { ...intent.launch.inputs, ...intent.eventInputs };
-    try {
-      resolveDeclaredInputs(
-        inputs,
-        workflow.inputs,
-        `Cannot run workflow '${workflow.name}'`,
-        'it'
-      );
-    } catch (error) {
-      if (error instanceof WorkflowInputContractError && error.missingRequired.length > 0) {
-        throw new Error(
-          `Workflow '${workflow.name}' requires input${error.missingRequired.length === 1 ? '' : 's'} ` +
-            error.missingRequired.map(name => `'${name}'`).join(', ') +
-            '.'
-        );
-      }
-      throw error;
-    }
+    await assertBindingRequirements(host, intent, workflow);
+    const inputs = resolveBindingInputs(intent, workflow);
 
     const codebase = await findOrRegisterCodebase(host, cwd);
-    const requested = intent.launch.isolation;
-    const pinned = workflow.worktree?.enabled;
-    if (requested.kind === 'in-place' && pinned === true) {
-      throw new Error(`Workflow '${workflow.name}' requires worktree isolation.`);
-    }
-    if (requested.kind === 'worktree' && pinned === false) {
-      throw new Error(`Workflow '${workflow.name}' requires in-place execution.`);
-    }
-    const wantsWorktree =
-      requested.kind === 'worktree' ||
-      (requested.kind === 'default' && codebase.kind !== 'folder' && pinned !== false);
-    if (codebase.kind === 'folder' && (wantsWorktree || pinned === true)) {
-      throw new Error(`Folder project '${codebase.name}' does not support worktree isolation.`);
-    }
-    const isolation: PreparedWorkflowLaunch['execution']['isolation'] = wantsWorktree
-      ? { ...(requested.kind === 'worktree' ? requested : {}), kind: 'worktree' }
-      : { kind: 'in-place' };
+    const isolation = resolveBindingIsolation(intent.launch.isolation, workflow, codebase);
 
     source = await finalizeWorkflowSource(host.deps, source, {
       cwd,
       codebaseId: codebase.id,
     });
     owner.hold(source);
-    const conversationId = `trigger-${source.runId}`;
     const origin: ResourceStartRunMetadata = {
       receiptId: identity.receiptId,
       bindingId: identity.bindingId,
@@ -203,25 +270,6 @@ async function prepareBinding(
       userId: intent.runAsUserId,
       runConfig,
     });
-    const metadata: Record<string, JsonValue> = {
-      [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
-      [WORKFLOW_SOURCE_METADATA_KEY]: preparedWorkflowSourceRecord(source),
-      [RESOURCE_START_METADATA_KEY]: { ...origin },
-      // Persist only authored inputs; defaults stay derived from the frozen workflow.
-      ...(Object.keys(inputs).length > 0
-        ? {
-            [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
-              Object.entries(inputs).map(([name, value]) => [name, canonicalValueText(value)])
-            ),
-            ...(Object.values(inputs).some(value => typeof value !== 'string')
-              ? { [SUBRUN_METADATA_KEYS.inputsValues]: inputs }
-              : {}),
-          }
-        : {}),
-      ...(preparedAi.runConfigMetadata
-        ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAi.runConfigMetadata }
-        : {}),
-    };
     const launch: PreparedWorkflowLaunch = {
       version: 2,
       run: {
@@ -231,10 +279,16 @@ async function prepareBinding(
         codebase_id: codebase.id,
         // Provenance is `metadata.resource_start`; a trigger supplies no user message.
         user_message: '',
-        metadata,
+        metadata: bindingRunMetadata(
+          workflow,
+          preparedWorkflowSourceRecord(source),
+          origin,
+          inputs,
+          preparedAi
+        ),
         ...(isolation.kind === 'in-place' ? { working_path: cwd } : {}),
       },
-      execution: { cwd, conversationId, isolation },
+      execution: { cwd, conversationId: `trigger-${source.runId}`, isolation },
     };
 
     const disposition = await host.deps.store.completeStartBindingPreparation({
@@ -296,7 +350,10 @@ export interface ResourceStartHost extends WorkflowHost {
   startAdmitted: (requestId: string) => Promise<void>;
 }
 
-/** One failed start from a drain. `receiptId` is unset for queued work of unknown origin. */
+/**
+ * A preparation, dispatch, resource drain, or damaged receipt failure. Unknown or untrusted
+ * receipt origins omit `receiptId`.
+ */
 export interface ResourceStartDrainFailure {
   receiptId?: string;
   error: unknown;
@@ -310,7 +367,7 @@ export class ResourceStartDrainError extends AggregateError {
   constructor(readonly failures: readonly ResourceStartDrainFailure[]) {
     super(
       failures.map(failure => failure.error),
-      `${String(failures.length)} resource start(s) failed; inspect their receipt records.`
+      `${String(failures.length)} resource start operation(s) failed; inspect their receipts or resources.`
     );
     this.name = 'ResourceStartDrainError';
   }
@@ -325,7 +382,7 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 /**
  * One host pass: prepare this host's pending receipt bindings, then admit its queued
  * requests while their slots have capacity. Every admitted request is handed to the
- * host. Safe to run concurrently with other hosts and processes: preparation and
+ * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run concurrently with other hosts and processes: preparation and
  * admission are claimed atomically by the store.
  */
 export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
@@ -339,6 +396,10 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   };
 
   for (const binding of await host.deps.store.listPendingStartBindings({ hostId: host.hostId })) {
+    if ('document' in binding) {
+      failures.push({ error: binding.error });
+      continue;
+    }
     if (!binding.intent) continue;
     const identity = {
       receiptId: binding.receiptId,
@@ -357,22 +418,55 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
   }
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
-  for (const resource of new Set(queued.map(request => request.resource))) {
-    for (const decision of await host.deps.store.drainResourceStarts({
-      hostId: host.hostId,
-      resource,
-    })) {
+  const drain = async (resource: string): Promise<void> => {
+    let decisions: ResourceStartDisposition[];
+    try {
+      decisions = await host.deps.store.drainResourceStarts({ hostId: host.hostId, resource });
+    } catch (error) {
+      const receiptIds = new Set(
+        queued
+          .filter(request => request.resource === resource)
+          .map(request =>
+            'error' in request ? request.receiptId : receiptIdOfLaunch(request.launch)
+          )
+      );
+      const failure = new Error(
+        `Resource '${resource}' drain failed: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+      for (const receiptId of receiptIds) failures.push({ receiptId, error: failure });
+      return;
+    }
+    for (const decision of decisions) {
       if (decision.status === 'admitted') {
         // A queued request names its receipt in the run metadata written at preparation.
         const request = queued.find(item => item.id === decision.requestId);
-        await start(decision.requestId, receiptIdOfLaunch(request?.launch));
+        const launch = request && !('error' in request) ? request.launch : undefined;
+        await start(decision.requestId, receiptIdOfLaunch(launch));
       }
     }
-  }
+  };
+  for (const resource of queuedDrainResources(queued, failures)) await drain(resource);
 
   if (failures.length > 0) {
     throw new ResourceStartDrainError(failures);
   }
+}
+
+function queuedDrainResources(
+  queued: readonly QueuedResourceStartInspection[],
+  failures: ResourceStartDrainFailure[]
+): string[] {
+  for (const request of queued) {
+    if (!('error' in request)) continue;
+    failures.push({
+      receiptId: request.receiptId,
+      error: new Error(`Queued request '${request.id}' is invalid`, {
+        cause: request.error,
+      }),
+    });
+  }
+  return [...new Set(queued.flatMap(request => ('error' in request ? [] : [request.resource])))];
 }
 
 async function worktreeLane(
@@ -449,7 +543,11 @@ export interface StartAdmittedResourceStartInput {
    * the owned run on a graceful signal here; the server omits it because one process
    * hosts many runs and must not install process-wide handlers per run.
    */
-  guardOwnedRun?: (owned: { runId: string; liveOwner: RunLiveOwner }) => () => void;
+  guardOwnedRun?: (owned: {
+    runId: string;
+    liveOwner: RunLiveOwner;
+    getExecutionClaim: () => string | null | undefined;
+  }) => () => void;
   /**
    * The PID of a detached process that executes only this run and leads its own process
    * group. Registering it lets `archon workflow cancel` terminate that tree. The server
@@ -493,9 +591,14 @@ export async function startAdmittedResourceStart(
   const liveOwner = await startRunLiveOwner(run.id, {
     detachedProcessPid: input.detachedProcessPid,
   });
+  let ownedExecutionClaim: string | null | undefined;
   let releaseGuard: (() => void) | undefined;
   try {
-    releaseGuard = input.guardOwnedRun?.({ runId: run.id, liveOwner });
+    releaseGuard = input.guardOwnedRun?.({
+      runId: run.id,
+      liveOwner,
+      getExecutionClaim: () => ownedExecutionClaim,
+    });
     const deps = host.deps;
     const preparedAiConfiguration = await prepareRunAiConfiguration(
       deps,
@@ -558,6 +661,9 @@ export async function startAdmittedResourceStart(
       origin: run.origin ?? undefined,
       options: {
         preCreatedRun: run,
+        onExecutionClaimed: claim => {
+          ownedExecutionClaim = claim;
+        },
         preparedAiConfiguration,
         codebaseId: codebase.id,
         baseBranch,

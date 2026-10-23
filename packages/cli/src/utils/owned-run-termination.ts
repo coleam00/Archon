@@ -1,6 +1,9 @@
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
 import type { RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
+import { isExecNodeRecord, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
+import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import { createLogger } from '@archon/paths';
 import { exitWithDrain } from './exit-with-drain';
@@ -10,19 +13,21 @@ import { exitWithDrain } from './exit-with-drain';
 type TerminationSignal = RunStopSignal;
 
 export interface OwnedRunTerminationInput {
-  store: Pick<IWorkflowStore, 'getWorkflowRunStatus' | 'failWorkflowRun'>;
+  store: Pick<
+    IWorkflowStore,
+    'failWorkflowRun' | 'getWorkflowRun' | 'listWorkflowEvents' | 'findChildRuns'
+  >;
   /** The one run this process proved it executes. Never a conversation-wide lookup. */
   runId: string;
+  /** The engine supplies this execution's claim; undefined until admission. */
+  getExecutionClaim: () => string | null | undefined;
+  /** A result settled by this process retains resource cleanup authority after the status write. */
+  isExecutionSettled?: () => boolean;
   /** Logger module of the command that owns the run, so its lines name that command. */
   logModule: string;
-  liveOwner: Pick<RunLiveOwner, 'close' | 'isStopRequested'>;
-  /**
-   * End the in-flight node process trees on interrupt, so a resume does not overlap the
-   * interrupted attempt (#3552); a descendant that calls `setsid` still escapes. False for
-   * a detached owner: `archon workflow cancel` ends its nodes by killing the owner's process
-   * group, which a recorded node escapes.
-   */
-  endNodeProcessTrees: boolean;
+  liveOwner: Pick<RunLiveOwner, 'close' | 'isStopRequested' | 'registerTerminationPreparation'>;
+  /** Detached POSIX commands use separate, parent-owned process groups. */
+  detachedProcessOwner: boolean;
   /**
    * Resources the forced exit would otherwise strand, because it skips the caller's
    * `finally`. Report its own failures; a rejection is dropped.
@@ -41,11 +46,47 @@ export interface OwnedRunTerminationInput {
 export function registerOwnedRunTermination(input: OwnedRunTerminationInput): () => void {
   const { runId, liveOwner } = input;
   const log = createLogger(input.logModule);
-  const nodeTrees = input.endNodeProcessTrees ? recordNodeProcessTrees() : undefined;
+  const detached = input.detachedProcessOwner && process.platform !== 'win32';
+  const detachedTrees = detached ? recordNodeProcessTrees({ mode: 'detached-posix' }) : undefined;
+  const nodeTrees =
+    detachedTrees ?? (input.detachedProcessOwner ? undefined : recordNodeProcessTrees());
+  const unregisterPreparation = detachedTrees
+    ? liveOwner.registerTerminationPreparation(() => {
+        const prepared = detachedTrees.prepareTermination();
+        return {
+          ...prepared,
+          ready: Promise.all([prepared.ready, priorHostCommands(runId)]).then(
+            ([warnings, hasPriorCommands]) =>
+              hasPriorCommands && !warnings.includes(COMPLETED_HOST_COMMAND_WARNING)
+                ? [...warnings, COMPLETED_HOST_COMMAND_WARNING]
+                : warnings
+          ),
+        };
+      })
+    : undefined;
+  async function priorHostCommands(id: string): Promise<boolean> {
+    const run = await input.store.getWorkflowRun(id);
+    if (run && !isContainerRun(run)) {
+      const events = await input.store.listWorkflowEvents(id);
+      if (
+        events.some(event => {
+          const record = readNodeRecordEvent(event);
+          return record?.eventType === 'node_started' && isExecNodeRecord(record);
+        })
+      )
+        return true;
+    }
+    for (const child of await input.store.findChildRuns(id)) {
+      if (await priorHostCommands(child.id)) return true;
+    }
+    return false;
+  }
+  let registered = true;
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {
-    if (terminating) return;
+    if (!registered || terminating) return;
     terminating = true;
+    let cleanupAllowed = true;
     log.info({ runId, signal }, 'workflow.process_terminating');
     (async (): Promise<void> => {
       if (liveOwner.isStopRequested()) {
@@ -55,21 +96,20 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
         return;
       }
-      const status = await input.store.getWorkflowRunStatus(runId);
-      if (status !== 'running') {
-        // Externally transitioned (paused at a new gate, completed, cancelled,
-        // failed) or never claimed (still pending) — not this handler's to mutate.
-        log.info({ runId, status, signal }, 'workflow.termination_skip_not_running');
-        return;
-      }
-      // Genuine interrupt of the run this process is driving. failWorkflowRun's
-      // status CAS closes the read-then-write window: if the executor commits a gate
-      // pause between the read above and this write, the CAS misses and the run
-      // stays paused.
-      await input.store.failWorkflowRun(runId, `Process terminated (${signal})`, {
-        exitReason: 'process_terminated',
-        signal,
-      });
+      if (input.isExecutionSettled?.()) return;
+      const expectedExecutionClaim = input.getExecutionClaim();
+      if (expectedExecutionClaim === undefined) return;
+      cleanupAllowed = false;
+      const { failed } = await input.store.failWorkflowRun(
+        runId,
+        `Process terminated (${signal})`,
+        {
+          exitReason: 'process_terminated',
+          signal,
+          expectedExecutionClaim,
+        }
+      );
+      cleanupAllowed = failed;
     })()
       .catch((err: unknown) => {
         const e = err as Error;
@@ -80,13 +120,22 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
       })
       // After the failed status write: ending a tree first lets the executor fail the
       // run through its own path and win the status write, losing stop_reason.
-      .then(() => nodeTrees?.end())
+      .then(() => {
+        if (!registered) return;
+        if (cleanupAllowed) return nodeTrees?.end();
+        return console.error(
+          `\nWARNING: run ${runId} could not be confirmed as owned on ${signal}; ` +
+            'cleanup was skipped, so subprocesses and any isolation container may still be running. ' +
+            `Inspect ownership before stopping them: archon workflow get ${runId}. ` +
+            'Inspect containers with: docker ps -a --filter label=diy.archon.managed=true'
+        );
+      })
       .catch((error: unknown) => {
         console.error(
           `\nWARNING: ${(error as Error).message} on ${signal}. Stop them before resuming this run.`
         );
       })
-      .then(() => input.teardown?.(signal))
+      .then(() => (registered && cleanupAllowed ? input.teardown?.(signal) : undefined))
       .catch(() => undefined)
       .then(async () => {
         // A detached cancel already rang the handoff frame and must keep its lease
@@ -111,8 +160,35 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
   process.once('SIGTERM', sigtermHandler);
   process.once('SIGINT', sigintHandler);
   return () => {
+    registered = false;
     process.off('SIGTERM', sigtermHandler);
     process.off('SIGINT', sigintHandler);
+    unregisterPreparation?.();
     nodeTrees?.release();
+  };
+}
+
+/**
+ * Let in-flight setup settle before failing the run. Exiting or racing setup
+ * would leave Docker work running after the claim becomes available to a successor.
+ */
+export function registerResumePreparationTermination(): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const interrupt = (signal: TerminationSignal): void => {
+    controller.abort(new Error(`Resume preparation interrupted (${signal})`));
+  };
+  const sigint = (): void => interrupt('SIGINT');
+  const sigterm = (): void => interrupt('SIGTERM');
+  process.on('SIGINT', sigint);
+  process.on('SIGTERM', sigterm);
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      process.off('SIGINT', sigint);
+      process.off('SIGTERM', sigterm);
+    },
   };
 }

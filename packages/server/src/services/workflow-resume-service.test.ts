@@ -58,7 +58,11 @@ const mockStartRunLiveOwner = mock<
   typeof import('@archon/core/services/run-live-owner')['startRunLiveOwner']
 >(async runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
-  return { close: mockCloseRunLiveOwner, isStopRequested: () => false };
+  return {
+    close: mockCloseRunLiveOwner,
+    isStopRequested: () => false,
+    registerTerminationPreparation: () => () => undefined,
+  };
 });
 const mockStoreFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({
   failed: true,
@@ -760,6 +764,63 @@ describe('workflow continuation scanner', () => {
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
+
+  test.each(['running', 'completed', 'failed', 'cancelled'] as const)(
+    'resumed background handoff observed as %s reports only failures to its origin',
+    async observedStatus => {
+      const paused = run('wait-web', 'paused', {});
+      mockResumeWorkflow.mockResolvedValueOnce(paused);
+      mockResolveRunWorkflow.mockResolvedValueOnce({
+        ok: true,
+        workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
+      });
+      mockHydrateResumableRun.mockResolvedValueOnce({
+        preCreatedRun: { ...paused, status: 'running' },
+        priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait',
+        priorUsage: { costUsd: 0 },
+        priorNodeSessions: [],
+      });
+      const failed = observedStatus === 'failed' || observedStatus === 'cancelled';
+      mockExecuteWorkflow.mockResolvedValueOnce(
+        failed
+          ? {
+              success: false,
+              handedOff: true,
+              workflowRunId: paused.id,
+              observedStatus,
+              error: `Workflow ${observedStatus} after execution ownership changed`,
+            }
+          : { success: true, handedOff: true, workflowRunId: paused.id, observedStatus }
+      );
+      const platform = {
+        sendMessage: mock(async () => undefined),
+        getStreamingMode: () => 'batch' as const,
+        getPlatformType: () => 'web',
+      } satisfies IWorkflowPlatform;
+      expect(
+        await resumeWorkflowRunFromServer(host, paused, undefined, {
+          kind: 'platform',
+          destination: { platform, conversationId: 'worker', resultConversationId: 'origin' },
+        })
+      ).toEqual({ kind: 'resumed' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (failed) {
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'origin',
+          `Workflow **deliver** failed: Workflow ${observedStatus} after execution ownership changed`,
+          {
+            category: 'workflow_result',
+            segment: 'new',
+            workflowResult: { workflowName: 'deliver', runId: paused.id },
+          }
+        );
+        expect(platform.sendMessage).toHaveBeenCalledTimes(1);
+      } else expect(platform.sendMessage).not.toHaveBeenCalled();
+      expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   test('surfaces a resumed background-web result when owner cleanup fails', async () => {
     const paused = run('wait-web', 'paused', {});

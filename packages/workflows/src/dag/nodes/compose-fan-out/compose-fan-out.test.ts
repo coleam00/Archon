@@ -1,6 +1,8 @@
 // @archon-test-isolated
 import { readNodeRecordEvent } from '../../../node-record-reader';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import { ParentStatusReadError } from '../../../parent-status-read';
+import { workflowRunStatusSchema } from '../../../schemas/workflow-run';
 import { TerminalStatusWriteError } from '../../../terminal-status-write';
 import { NodeEventWriteError } from '../../../node-event-write';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
@@ -62,6 +64,203 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
   afterEach(async () => {
     await removeTempTree(testDir);
   });
+
+  for (const scenario of ['parallel sibling', 'usage read failure', 'usage write failure']) {
+    it(`preserves an unreadable parent after settling work (${scenario})`, async () => {
+      await writeBlock(
+        'name: compose-blk\ndescription: Paid work\nnodes:\n  - id: work\n    prompt: Work.'
+      );
+      const store = createMockStore();
+      const runId = 'unreadable-parent';
+      const cause = Object.assign(new Error('Unsupported workflow status: unsupported'), {
+        name: 'WorkflowStatusReadError',
+        workflowRunId: runId,
+        rawStatus: 'unsupported',
+      });
+      let rejected = false;
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        const instanceSettled = persistedEvents(store).some(
+          event =>
+            event.event_type === 'node_completed' && event.data?.type === 'compose_fan_out_instance'
+        );
+        if (instanceSettled && !rejected) {
+          rejected = true;
+          throw cause;
+        }
+        return 'running';
+      });
+      const bookkeepingError = new Error('usage storage unavailable');
+      store.getDagResumeSnapshot.mockImplementation(async () => {
+        if (rejected && scenario === 'usage read failure') throw bookkeepingError;
+        return foldDagResumeSnapshot(persistedEvents(store), runId);
+      });
+      if (scenario === 'usage write failure') {
+        store.updateWorkflowRun.mockImplementation(async (_id, patch) => {
+          if (patch.metadata?.total_cost_usd !== undefined) throw bookkeepingError;
+        });
+      }
+      mockLogFn.mockClear();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Done.' };
+        yield { type: 'result', sessionId: 'paid', cost: 0.02, tokens: { input: 2, output: 1 } };
+      });
+      const fan: DagNode = {
+        id: 'fan',
+        kind: 'compose_fan_out',
+        include: 'compose-blk',
+        fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
+      };
+      const nodes: DagNode[] = [fan];
+      if (scenario === 'parallel sibling') {
+        nodes.push({ id: 'peer', kind: 'agent', source: { kind: 'inline', prompt: 'Peer work.' } });
+      }
+      const error = await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: { name: 'unreadable-parent', nodes },
+          workflowRun: makeWorkflowRun(runId),
+        })
+      ).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(ParentStatusReadError);
+      if (!(error instanceof ParentStatusReadError))
+        throw new Error('Expected status-read interruption');
+      expect(error.cause).toBe(cause);
+      expect(rejected).toBe(true);
+      const events = persistedEvents(store);
+      expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
+      expect(events.filter(event => event.event_type === 'node_completed')).toHaveLength(
+        scenario === 'parallel sibling' ? 3 : 2
+      );
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+      if (scenario === 'parallel sibling') {
+        expect(runUsageWrites(store).at(-1)).toMatchObject({
+          total_cost_usd: 0.04,
+          total_tokens_in: 4,
+          total_tokens_out: 2,
+        });
+      } else {
+        expect(mockLogFn).toHaveBeenCalledWith(
+          expect.objectContaining({ err: bookkeepingError, workflowRunId: runId }),
+          scenario === 'usage read failure'
+            ? 'dag.unwind_usage_refresh_failed'
+            : 'dag.run_usage_persist_failed'
+        );
+      }
+    });
+  }
+
+  it('keeps a failed child durable when its settled parent status is unreadable', async () => {
+    await writeBlock(
+      'name: compose-blk\ndescription: work\nnodes:\n  - id: work\n    prompt: Work.'
+    );
+    const store = createMockStore();
+    const cause = Object.assign(new Error('Unsupported workflow status: unsupported'), {
+      name: 'WorkflowStatusReadError',
+      rawStatus: 'unsupported',
+    });
+    store.getWorkflowRunStatus.mockImplementation(async () => {
+      if (
+        persistedEvents(store).some(
+          event =>
+            event.event_type === 'node_failed' && event.data?.type === 'compose_fan_out_instance'
+        )
+      )
+        throw cause;
+      return 'running';
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      throw new Error('Child work failed');
+    });
+    const error: unknown = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'unreadable-parent',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('failed-child-unreadable-parent'),
+      })
+    ).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(ParentStatusReadError);
+    if (!(error instanceof ParentStatusReadError))
+      throw new Error('Expected lifecycle interruption');
+    expect(error.cause).toBe(cause);
+    const failures = persistedEvents(store).filter(event => event.event_type === 'node_failed');
+    expect(failures).toHaveLength(2);
+    expect(failures.some(event => event.data?.type === 'compose_fan_out_instance')).toBe(true);
+    expect(failures.some(event => event.data?.error === 'Child work failed')).toBe(true);
+    expect(
+      persistedEvents(store)
+        .filter(event => event.step_name === 'fan')
+        .map(event => event.event_type)
+    ).toEqual(['node_started']);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  for (const status of [...workflowRunStatusSchema.options, null]) {
+    it(`keeps the supported post-instance parent status behavior (${status})`, async () => {
+      await writeBlock(
+        'name: compose-blk\ndescription: Paid work\nnodes:\n  - id: work\n    prompt: Work.'
+      );
+      const store = createMockStore();
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        const settled = persistedEvents(store).some(
+          event =>
+            event.event_type === 'node_completed' && event.data?.type === 'compose_fan_out_instance'
+        );
+        return settled ? status : 'running';
+      });
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Done.' };
+        yield { type: 'result', sessionId: 'paid', cost: 0.02, tokens: { input: 2, output: 1 } };
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'supported-parent',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                fan_out: { items: '[1]', as: 'item', max_parallel: 1, join: 'all_success' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('supported-parent'),
+        })
+      );
+      const aggregate = persistedEvents(store).filter(
+        event => event.step_name === 'fan' && event.event_type !== 'node_started'
+      );
+      expect(aggregate.map(event => event.event_type)).toEqual(
+        status === 'running' ? ['node_completed'] : []
+      );
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(status === 'running' ? 1 : 0);
+      expect(runUsageWrites(store).at(-1)).toMatchObject({
+        total_cost_usd: 0.02,
+        total_tokens_in: 2,
+        total_tokens_out: 1,
+      });
+    });
+  }
 
   for (const kind of ['child', 'compose'] as const) {
     for (const unknownFirst of [true, false]) {
@@ -365,58 +564,78 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
   });
 
-  it('waits on the quota reset when a composed instance node reports quota_exhausted', async () => {
-    await writeBlock(
+  it.each([
+    ['alone', []],
+    [
+      'and an all_done node failed reading its output',
       [
-        'name: compose-blk',
-        'description: test block',
-        'mutates_checkout: false',
-        'nodes:',
-        '  - id: work',
-        "    prompt: 'work on $INPUTS.item'",
-      ].join('\n')
-    );
-    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield {
-        type: 'result',
-        isError: true,
-        failure: { class: 'quota_exhausted', evidence: "You've hit your session limit", resetAt },
-      };
-    });
-    const store = createMockStore();
+        '  - id: record',
+        "    bash: 'echo $work.output'",
+        '    depends_on: [work]',
+        '    trigger_rule: all_done',
+      ],
+    ],
+  ])(
+    'waits on the quota reset when a composed instance node reports quota_exhausted %s',
+    async (_, reader) => {
+      await writeBlock(
+        [
+          'name: compose-blk',
+          'description: test block',
+          'mutates_checkout: false',
+          'nodes:',
+          '  - id: work',
+          "    prompt: 'work on $INPUTS.item'",
+          ...reader,
+        ].join('\n')
+      );
+      const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          failure: { class: 'quota_exhausted', evidence: "You've hit your session limit", resetAt },
+        };
+      });
+      const store = createMockStore();
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        conversationId: 'conv-compose',
-        cwd: testDir,
-        workflow: {
-          name: 'compose-parent',
-          nodes: [
-            { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a"]'` },
-            {
-              id: 'fan',
-              kind: 'compose_fan_out',
-              include: 'compose-blk',
-              depends_on: ['list'],
-              with: { item: 'unused' },
-              fan_out: { items: '$list.output', as: 'item', max_parallel: 1, join: 'all_success' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('compose-quota-run'),
-        config: { ...minimalConfig, workflows: { autoResumeOnQuotaReset: true } },
-      })
-    );
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-compose',
+          cwd: testDir,
+          workflow: {
+            name: 'compose-parent',
+            nodes: [
+              { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a"]'` },
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                depends_on: ['list'],
+                with: { item: 'unused' },
+                fan_out: {
+                  items: '$list.output',
+                  as: 'item',
+                  max_parallel: 1,
+                  join: 'all_success',
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('compose-quota-run'),
+          config: { ...minimalConfig, workflows: { autoResumeOnQuotaReset: true } },
+        })
+      );
 
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
-    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
-      'compose-quota-run',
-      expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
-      { kind: 'started', stepName: 'fan' }
-    );
-  });
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+        'compose-quota-run',
+        expect.objectContaining({ kind: 'quota', nodeId: 'fan', resumeAt: resetAt }),
+        { kind: 'started', stepName: 'fan' }
+      );
+    }
+  );
 
   it('fails a composed instance that failed both on a usage limit and for another reason', async () => {
     await writeBlock(

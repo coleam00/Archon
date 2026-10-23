@@ -72,6 +72,10 @@ Session context is explicit when it matters:
   layer. It is invalid where parallel structure makes that ancestry ambiguous.
 - `context: { resume: plan }` forks the named completed upstream node's session.
   Use it when one exact ancestry matters; the provider must support session forks.
+  Inside a `loop_group` body the source can be an enclosing node, whose session the
+  body continues across iterations, or an upstream node in the same body, whose
+  session of that iteration the consumer forks. The same-body form suits a follow-up that asks the agent to
+  finish a step it skipped.
 
 ### bash — deterministic shell, no AI
 
@@ -80,7 +84,13 @@ Session context is explicit when it matters:
   bash: bun run test
   timeout: 300000            # ms; stdout captured as $test-gate.output
 ```
-Exit code decides pass/fail. The same node shape verifies non-code work:
+Exit code decides pass/fail. On `timeout`, Archon signals a host node's process tree,
+so work behind `bun run` or another wrapper stops too. A process that leaves the node's
+process group (`setsid`) escapes. In a container node, a timeout ends only the local
+`docker exec` client, and the command inside the container may keep running. In a detached run on macOS or Linux, a timeout whose
+cleanup cannot be confirmed fails the node, even with `on_timeout: skip`.
+
+The same node shape verifies non-code work:
 `bash: python3 scripts/reconcile.py --period 2026-08` (totals must balance),
 or a script that checks every imported row has an owner. One-or-two-line glue
 only; anything with branching is a script node.
@@ -143,8 +153,8 @@ with a warning. A schemaless child stays schemaless. Fan-out returns an ordered
 array of item values; consume the whole aggregate, not a field on the array.
 
 For field-access and file-pointer rules, read `variables.md` → Node Output Details and
-Artifact pointers. The repository's `guides/authoring-workflows.md` → Result
-contracts gives the full composition examples.
+Artifact pointers. The docs' `reference/workflow-language.md` → Result contracts
+gives the full composition examples.
 
 ### loop — iterate ONE AI job
 
@@ -243,7 +253,17 @@ The `workflow:` target name is static YAML but resolves when the node executes,
 so a prior node may author the child workflow. `workflow:` also accepts `input:`
 instead of `with:` and can declare `fan_out:`. A plain `include:` resolves and
 expands fully at load time; the directive carries only structural graph fields
-plus `with:` and has no execution surface of its own.
+plus `with:` and has no execution surface of its own. The include's `when:` gates the
+whole block. Inside a `loop_group` it reads `$LOOP_PREV` from the loop that contains
+the include.
+
+On a `workflow:` node, `fan_out.max_parallel` limits unfinished children (default
+`5`). `max_parallel: all` starts every item at once: use it when each child asks an
+independent attention question, because a paused child keeps its slot and a numeric
+window leaves later questions unstarted. Under `join: all_done` the node completes once
+every child is terminal, even when some failed, never started or were cancelled; the run
+records each slot's outcome for operators (`workflow get`), but a downstream node that
+judges the results reads the `archon_failed` markers in `$<id>.output`.
 
 Put `fan_out:` on `include:` when runtime data determines how many copies of a
 static block should run inside the parent run:
@@ -342,9 +362,24 @@ concurrently.
   producer fails the binding
 - `$INPUTS.<name>` — declared workflow inputs, also delivered as
   `INPUTS_<UPPER_SNAKE>` to bash/script
-- `$ARTIFACTS_DIR` — pre-created directory for reports/evidence humans read
-- In bash/script sources, user-controlled values arrive as ENV VARS
-  (`ARGUMENTS`, `INPUTS_*`, ...) — never text-substituted (injection guard).
+- `$ARTIFACTS_DIR` — pre-created directory for reports/evidence humans read.
+  Throwaway checkouts and dependency installs go under `$ARTIFACTS_DIR/.archon/scratch/`
+  (create it with `mkdir -p`), which Archon deletes once the run ends and its nodes have
+  stopped (a container run's when its container is removed); the rest of
+  `$ARTIFACTS_DIR` is kept
+- In `bash:` and `script:` sources, user-controlled variables (`$ARGUMENTS`,
+  `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`,
+  `$CONTEXT`) are **not** spliced as raw text (injection guard); they arrive as
+  environment variables (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`,
+  `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`, `EXTERNAL_CONTEXT`,
+  `ISSUE_CONTEXT`). Read an environment-delivered value in `bash:` as `"$ARGUMENTS"`.
+  In `script:` read it via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']`
+  (uv/python).
+  A `loop_group` body's `bash:` node is the exception: the loop scope splices the
+  reply (`$LOOP_USER_INPUT`) into its source, shell-quoted, so the reply arrives
+  already quoted. Read the spliced reply as an already-quoted value — assign it
+  and quote the variable (`value=$LOOP_USER_INPUT; printf '%s' "$value"`) — rather
+  than as `"$LOOP_USER_INPUT"`.
   `$nodeId.output` refs ARE substituted; give prose producers an `output_format`
   before assigning their output directly in a script.
 

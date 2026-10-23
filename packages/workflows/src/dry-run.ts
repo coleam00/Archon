@@ -21,7 +21,7 @@ import {
   type WorkflowRunOutcome,
 } from './schemas';
 import type { DryRunContext } from './dry-run/context';
-import { dryRunResultSchema, type DryRunResult } from './dry-run/schemas';
+import { dryRunResultSchema, type DryRunResult, type DryRunResolution } from './dry-run/schemas';
 import { isRecord, type DryRunStubs } from './dry-run/stubs';
 import { simulateNodes } from './dry-run/simulate';
 
@@ -76,17 +76,24 @@ function collectCheckoutProducers(
 function resolveDryRunAuthoredOutcome(
   workflow: ResolvedWorkflow,
   outputs: ReadonlyMap<string, NodeOutput>,
-  consumedStubs: ReadonlySet<string>
+  consumedStubs: ReadonlySet<string>,
+  execCode: boolean
 ): WorkflowRunOutcome | null {
   const field = workflow.outcome_field;
   const returns = workflow.returns;
-  if (field === undefined || returns === undefined || !consumedStubs.has(returns)) return null;
+  if (field === undefined || returns === undefined) return null;
+
+  const selectedNode = workflow.nodes.find(node => node.id === returns);
+  if (
+    !consumedStubs.has(returns) &&
+    !(execCode && selectedNode !== undefined && isExecNode(selectedNode))
+  )
+    return null;
 
   const selectedOutput = outputs.get(returns);
   if (selectedOutput?.state !== 'completed' || !('structuredOutput' in selectedOutput)) return null;
 
   const structured = selectedOutput.structuredOutput;
-  const selectedNode = workflow.nodes.find(node => node.id === returns);
   if (
     selectedNode?.output_format === undefined ||
     !validateStructuredOutput(structured, selectedNode.output_format).valid
@@ -132,6 +139,7 @@ export async function dryRunWorkflow(options: {
    * The install's resolved config and AI profile. Supplying them is what makes the
    * per-node provider/model report match what a real run would do; without them the
    * report falls back to the bare default assistant with no tier or alias resolution.
+   * Config also supplies project environment values and protected credential provenance.
    */
   config?: WorkflowConfig;
   aiProfile?: ResolvedAiProfile;
@@ -144,6 +152,9 @@ export async function dryRunWorkflow(options: {
     declaredDefaults || options.inputs ? { ...declaredDefaults, ...options.inputs } : undefined;
   const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
   const ctx: DryRunContext = {
+    envVars: options.config?.envVars,
+    protectedEnvKeys: options.config?.protectedEnvKeys,
+    protectedCredentialValues: options.config?.protectedCredentialValues,
     workflow: options.workflow,
     userMessage: options.userMessage,
     cwd: options.cwd,
@@ -202,7 +213,12 @@ export async function dryRunWorkflow(options: {
   return dryRunResultSchema.parse({
     workflow: options.workflow.name,
     outcome,
-    authoredOutcome: resolveDryRunAuthoredOutcome(options.workflow, outputs, ctx.consumedStubs),
+    authoredOutcome: resolveDryRunAuthoredOutcome(
+      options.workflow,
+      outputs,
+      ctx.consumedStubs,
+      ctx.execCode
+    ),
     trace: ctx.trace,
     missingStubs: [...ctx.missingStubs].sort(),
     toleratedMissingStubs: [...ctx.toleratedMissingStubs].sort(),
@@ -221,21 +237,7 @@ export function formatDryRunTrace(result: DryRunResult): string {
     lines.push(
       `${entry.state.toUpperCase().padEnd(9)} ${entry.nodeId} (${entry.nodeType})${iteration}${suffix}`
     );
-    if (entry.resolution) {
-      const r = entry.resolution;
-      const authored = r.authoredIn ? ` [from ${r.authoredIn}]` : '';
-      const model = r.model ?? '(provider default)';
-      lines.push(
-        `  runs on: ${r.provider} (${r.providerFrom}) / ${model} (${r.modelFrom})${authored}`
-      );
-      if (r.effort) lines.push(`  effort: ${r.effort} (${r.effortFrom})`);
-      if (r.providerConflict) {
-        const c = r.providerConflict;
-        lines.push(
-          `  warning: declares provider '${c.declared}' but model '${c.modelRef}' resolves to '${c.resolved}' — using '${c.resolved}'`
-        );
-      }
-    }
+    if (entry.resolution) lines.push(...formatDryRunResolution(entry.resolution));
     if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
     if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);
   }
@@ -249,4 +251,21 @@ export function formatDryRunTrace(result: DryRunResult): string {
   if (result.unusedStubs.length > 0) lines.push(`Unused stubs: ${result.unusedStubs.join(', ')}`);
   if (result.summary) lines.push(`Summary: ${result.summary}`);
   return lines.join('\n');
+}
+
+function formatDryRunResolution(resolution: DryRunResolution): string[] {
+  const lines: string[] = [];
+  const authored = resolution.authoredIn ? ` [from ${resolution.authoredIn}]` : '';
+  const model = resolution.model ?? '(provider default)';
+  lines.push(
+    `  runs on: ${resolution.provider} (${resolution.providerFrom}) / ${model} (${resolution.modelFrom})${authored}`
+  );
+  if (resolution.effort) lines.push(`  effort: ${resolution.effort} (${resolution.effortFrom})`);
+  if (resolution.providerConflict) {
+    const c = resolution.providerConflict;
+    lines.push(
+      `  warning: declares provider '${c.declared}' but model '${c.modelRef}' resolves to '${c.resolved}' — using '${c.resolved}'`
+    );
+  }
+  return lines;
 }

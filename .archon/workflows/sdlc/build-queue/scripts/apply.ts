@@ -8,19 +8,20 @@
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
  * its claim until the ruling node records the answer. A continue then starts the item's
- * next round at once, on the run config this run started with; if that launch fails,
- * the item waits for the next queue run.
+ * next round at once, on the run config and input selections this run started with; if
+ * that launch fails, the item waits for the next queue run.
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
- * node, "null" when it was skipped; INPUTS_AT_CAP and INPUTS_PULL_REQUEST from facts.
+ * node, "null" when it was skipped; INPUTS_AT_CAP and INPUTS_PULL_REQUEST from facts;
+ * INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
  */
 
 import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
 import { withBuild } from '../../.shared/build.ts';
-import { forgeSource, parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
+import { forgeSource, parseQualifiedPr, type ForgeSource, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { launchNextRound } from '../../.shared/launch.ts';
+import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
@@ -100,9 +101,36 @@ function pushTo(pr: QualifiedPr): string {
   return `pushed ${pushed} to ${view.pr.head}`;
 }
 
+function observedPr(pr: PrRecord): string {
+  return `observed ${pr.state}, draft=${String(pr.is_draft)} at ${String(pr.head_revision)}`;
+}
+
+function rejectChangedHead(after: PrRecord, head: string, source: ForgeSource): never {
+  const mismatch = `${after.url}: route judged ${head}; ready read-back ${observedPr(after)}`;
+  if (after.is_draft) throw new Error(mismatch);
+  const ref = { repo: after.repo, number: after.number };
+  let corrected: PrRecord;
+  try {
+    corrected = setPrDraft(ref, true, source);
+  } catch (error) {
+    const correctionError = error instanceof Error ? error.message : String(error);
+    let latest: string;
+    try {
+      latest = observedPr(viewPr(ref, source).pr);
+    } catch (readError) {
+      latest = `final state unknown: ${readError instanceof Error ? readError.message : String(readError)}`;
+    }
+    throw new Error(
+      `${mismatch}; draft correction failed: ${correctionError}; ${latest}. ` +
+      `Inspect ${after.url}, restore draft if still open and ready, and review its current head before readiness.`
+    );
+  }
+  throw new Error(`${mismatch}; draft correction ${observedPr(corrected)}; readiness failed`);
+}
+
 /**
- * Take the pull request route found already Ready out of draft. Only while its head is
- * still the commit route judged: a push since then needs a new review.
+ * Ready/draft APIs cannot pin a head atomically. Check both sides of readiness and
+ * correct a detected head race to draft once, even if another actor has moved it again.
  */
 function markReady(pr: PrRecord | null, head: string | null | undefined): string {
   if (pr === null) throw new Error('route declared ready with no pull request');
@@ -113,7 +141,8 @@ function markReady(pr: PrRecord | null, head: string | null | undefined): string
   if (now.state !== 'open' || now.head_revision !== head)
     throw new Error(`${now.url} is ${now.state} at ${String(now.head_revision)}; route judged it at ${head}`);
   const after = setPrDraft(ref, false, source);
-  if (after.is_draft || after.head_revision !== head)
+  if (after.head_revision !== head) rejectChangedHead(after, head, source);
+  if (after.is_draft)
     throw new Error(`${after.url} reads back draft=${String(after.is_draft)} at ${String(after.head_revision)}`);
   return `${after.url} marked ready at ${head}`;
 }
@@ -138,9 +167,16 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
 }
 
 /** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
-function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
+function afterWrite(
+  summary: string,
+  wrote: string | null,
+  decision: Decision,
+  item: QualifiedPr,
+  runId: string,
+  selections: BuildQueueSelections
+): string {
   const written = wrote === null ? summary : `${summary} (${wrote})`;
-  return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId)}` : written;
+  return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId, selections)}` : written;
 }
 
 function main(): void {
@@ -212,7 +248,11 @@ function main(): void {
       release: asking === null,
     })
   );
-  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
+  const selections: BuildQueueSelections = {
+    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
+    round_limit: text(process.env.INPUTS_ROUND_LIMIT),
+  };
+  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId, selections) });
 }
 
 try {

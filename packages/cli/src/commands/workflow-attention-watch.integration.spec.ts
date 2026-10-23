@@ -247,7 +247,7 @@ test('the text stream reports a failed run resuming', async () => {
     await until('Ctrl-C stops.');
     const runId = await launchDetached(fixture, 'watch-fail');
     const failed = `Run ${runId} failed`;
-    await until(failed);
+    await until(`${failed}: node fail (exec_failed). Workflow watch-fail.`);
     const resumed = await runCli(fixture, [
       'workflow',
       'resume',
@@ -348,6 +348,7 @@ test('fan-out questions have independent stream identities and resolve second fi
       const item = attentionQueueItemSchema.parse(line.item);
       return item.fanOut?.parentRunId === parentId && item.fanOut.index === index;
     });
+    expect(line).toMatchObject({ workflow: 'question', parentRunId: parentId });
     opened.push(attentionQueueItemSchema.parse(line.item));
   }
   const [first, second] = opened;
@@ -376,7 +377,10 @@ test('fan-out questions have independent stream identities and resolve second fi
   expect(watch.lines.filter(ofRun(first.runId, 'resolved'))).toEqual([]);
   await statusOf(fixture, parentId, 'paused');
   await answer(first, 'accept');
-  await watch.next('parent completed', ofRun(parentId, 'terminal'));
+  expect(await watch.next('parent completed', ofRun(parentId, 'terminal'))).toMatchObject({
+    workflow: 'questions',
+    parentRunId: null,
+  });
   await statusOf(fixture, parentId, 'completed');
   activeRunIds.delete(parentId);
   await watch.stop();

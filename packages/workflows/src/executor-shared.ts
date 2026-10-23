@@ -3,9 +3,11 @@
  * shared by the executors.
  */
 import { escapeRegExp } from '@archon/paths/regexp';
-import type { WorkflowExecutionResult } from './schemas';
+import type { ExecNode, DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
+import { transitiveDepsLookup } from './depends-on';
+import type { hostSpawnFailure, RawSubprocessRejection } from './subprocess';
 
 // ─── Retry Classification ────────────────────────────────────────────────────
 
@@ -61,10 +63,34 @@ export function providerLimitResumeAt(
 }
 
 /**
+ * The failed nodes of one scope that no failure lies upstream of: none of the nodes they
+ * transitively depend on failed, whatever state lies between. A failure downstream of
+ * another is deferred, whatever caused it: the node may have failed only on its upstream's
+ * poisoned output, and nothing typed tells that from a failure of its own. Continuation runs
+ * it again with its upstream, so it cannot hold a run in a provider-limit wait: once the
+ * upstream succeeds, a failure of its own fails the run.
+ */
+export function rootFailures(
+  nodes: readonly Pick<DagNode, 'id' | 'depends_on'>[],
+  outputs: ReadonlyMap<string, NodeOutput>
+): { nodeId: string; output: Extract<NodeOutput, { state: 'failed' }> }[] {
+  const depsOf = transitiveDepsLookup(nodes);
+  const inScope = new Set(nodes.map(node => node.id));
+  const failed = (id: string): boolean => inScope.has(id) && outputs.get(id)?.state === 'failed';
+  return nodes.flatMap(node => {
+    const output = outputs.get(node.id);
+    return output?.state === 'failed' && ![...depsOf(node.id)].some(failed)
+      ? [{ nodeId: node.id, output }]
+      : [];
+  });
+}
+
+/**
  * The typed provider failure an aggregate node (a loop group, a composed fan-out instance,
  * the fan-out itself) reports for its failed descendants; the provider-limit wait reads only
- * the aggregate's. A lone failure is the aggregate's, unchanged. Several are reported only
- * when every one is a provider limit, so the wait never pauses a run beside an unrelated
+ * the aggregate's. Callers pass the {@link rootFailures} of a scope, or the fan-out's sibling
+ * instances. A lone failure is the aggregate's, unchanged. Several are reported only when
+ * every one is a provider limit, so the wait never pauses a run beside an unrelated root
  * failure that each continuation would repeat. Among limits, a usage limit without a reported
  * reset wins because the run cannot wait on it; otherwise the latest
  * {@link providerLimitResumeAt} does, the same deadline the wait ranks top-level nodes by.
@@ -216,21 +242,34 @@ export function retainStreamTail(text: string | undefined): string | undefined {
   )}`;
 }
 
-/**
- * Raw ExecFileException shape from Node's `child_process.execFile`. For inline
- * scripts via `bash -c <body>` / `bun -e <body>` the entire script body is
- * embedded in `err.message`, `err.cmd`, and the first line of `err.stack` —
- * which is why `formatSubprocessFailure` strips the prefix and exposes a
- * controlled `logFields` subset rather than the raw error.
- */
-interface RawSubprocessError {
-  message?: string;
-  stderr?: string;
-  stdout?: string;
-  // Numeric exit code OR errno symbol (e.g. 'ENOENT') — mirrors ExecFileException.
-  code?: number | string | null;
-  killed?: boolean;
-  cmd?: string;
+export function formatHostSpawnFailure(
+  failure: ReturnType<typeof hostSpawnFailure>,
+  runtime: ExecNode['runtime'],
+  command: string,
+  label: string
+): string | undefined {
+  if (runtime === 'sh' && (failure === 'ENOENT' || failure === 'ENOTDIR')) {
+    return (
+      `${label} failed: bash executable not found at '${command}'. ` +
+      'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
+      '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).'
+    );
+  }
+  if (failure === 'ENOENT') return `${label} failed: '${command}' executable not found in PATH`;
+  if (failure === 'EACCES') return `${label} failed: permission denied (check cwd permissions)`;
+  return undefined;
+}
+
+const STDERR_LABEL = '[stderr]\n';
+const STDOUT_LABEL = '\n[stdout]\n';
+
+function subprocessDiagnostic(
+  stderrTail: string | undefined,
+  stdoutTail: string | undefined,
+  fallback: string
+): string {
+  if (stderrTail && stdoutTail) return `${STDERR_LABEL}${stderrTail}${STDOUT_LABEL}${stdoutTail}`;
+  return stderrTail || stdoutTail || fallback;
 }
 
 /**
@@ -245,27 +284,26 @@ interface RawSubprocessError {
  * of the script body (`err.message`, `err.stack`, `err.cmd`).
  */
 export function formatSubprocessFailure(
-  err: RawSubprocessError,
+  err: Partial<
+    Pick<
+      RawSubprocessRejection,
+      'message' | 'stderr' | 'stdout' | 'code' | 'killed' | 'commandFailed'
+    >
+  >,
   label: string
 ): { userMessage: string; logFields: Record<string, unknown> } {
   const stderr = (err.stderr ?? '').trim();
   const stdout = (err.stdout ?? '').trim();
   const rawMessage = (err.message ?? '').trim();
 
-  // The first line of Node's ExecFileException.message is `Command failed: <cmd>`,
-  // and for `bash -c <body>` / `bun -e <body>` that line embeds the full script
-  // body. Strip it so user-facing output never re-leaks the body.
-  const hasCommandFailedPrefix = rawMessage.startsWith('Command failed:');
-  const bodyAfterPrefix = hasCommandFailedPrefix
-    ? rawMessage.split('\n').slice(1).join('\n').trim()
-    : rawMessage;
+  // Node embeds multiline argv in this message, so none of it is safe as a
+  // fallback diagnostic. Actual process output belongs to stdout and stderr.
+  const hasCommandFailedPrefix = err.commandFailed || rawMessage.startsWith('Command failed:');
 
   // Well-behaved scripts print failure context to stdout, so both streams share
   // the cap. stderr keeps budget priority; the leftover goes to stdout, and each
   // stream is labelled only when both are present. The budget accounts for the
   // label overhead so the joined diagnostic never truncates away a label.
-  const STDERR_LABEL = '[stderr]\n';
-  const STDOUT_LABEL = '\n[stdout]\n';
   const bothPresent = stderr.length > 0 && stdout.length > 0;
   const labelsOverhead = bothPresent ? STDERR_LABEL.length + STDOUT_LABEL.length : 0;
   const halfCap = Math.floor(SUBPROCESS_ERROR_MAX_CHARS / 2);
@@ -275,31 +313,30 @@ export function formatSubprocessFailure(
     SUBPROCESS_ERROR_MAX_CHARS - labelsOverhead - (stderrTail?.length ?? 0)
   );
 
-  let diagnostic: string;
-  if (stderrTail && stdoutTail) {
-    diagnostic = `${STDERR_LABEL}${stderrTail}${STDOUT_LABEL}${stdoutTail}`;
-  } else if (stderrTail || stdoutTail) {
-    diagnostic = (stderrTail ?? '') + (stdoutTail ?? '');
-  } else if (bodyAfterPrefix) {
-    diagnostic = bodyAfterPrefix;
-  } else if (hasCommandFailedPrefix) {
-    // Prefix was the entire message — exit code in the suffix is the only signal.
-    diagnostic = 'no diagnostic output';
-  } else {
-    diagnostic = 'unknown error';
-  }
+  const diagnostic = subprocessDiagnostic(
+    stderrTail,
+    stdoutTail,
+    hasCommandFailedPrefix ? 'no diagnostic output' : rawMessage || 'unknown error'
+  );
 
   const truncated =
     diagnostic.length > SUBPROCESS_ERROR_MAX_CHARS
       ? diagnostic.slice(-SUBPROCESS_ERROR_MAX_CHARS) + '\n…[truncated]'
       : diagnostic;
 
-  const exitSuffix = err.code != null ? ` [exit ${String(err.code)}]` : '';
+  const errorCode = typeof err.code === 'string' ? err.code : undefined;
+  const codeSuffix =
+    typeof err.code === 'number'
+      ? ` [exit ${String(err.code)}]`
+      : errorCode
+        ? ` [error ${errorCode}]`
+        : '';
 
   return {
-    userMessage: `${label} failed${exitSuffix}: ${truncated}`,
+    userMessage: `${label} failed${codeSuffix}: ${truncated}`,
     logFields: {
-      exitCode: err.code ?? undefined,
+      exitCode: typeof err.code === 'number' ? err.code : undefined,
+      errorCode,
       killed: err.killed === true,
       stderrTail,
       stdoutTail,

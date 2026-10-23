@@ -2,8 +2,9 @@
  * Database operations for isolation environments
  */
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
-import { pool, getDialect, getDatabaseType } from './connection';
+import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
+  type WorkflowRunStatus,
   TERMINAL_WORKFLOW_STATUSES,
   RESUMABLE_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
@@ -19,6 +20,7 @@ import type {
 } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
+import { readWorkflowRunStatus } from './workflow-run-status';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
 
@@ -215,7 +217,7 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
  */
 export async function updateStatus(
   id: string,
-  status: 'active' | 'destroyed',
+  status: IsolationEnvironmentRow['status'],
   observed?: IsolationEnvironmentRow
 ): Promise<void> {
   const predicate = observed ? observedRegistrationPredicate(observed, 3) : undefined;
@@ -261,8 +263,13 @@ function observedRegistrationPredicate(
   const $ = (offset: number): string => `$${String(first + offset)}`;
   const legacy = typeof observed.metadata[WORKTREE_REGISTRATION_ID] !== 'string';
   const sqlite = getDatabaseType() === 'sqlite';
-  const sql = ` AND provider = 'worktree'
-       AND COALESCE(${getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID)}, '') = ${$(0)}
+  const tokenSql = getDialect().jsonText('metadata', WORKTREE_REGISTRATION_ID);
+  const sql = ` AND provider = 'worktree'${
+    !legacy && !sqlite
+      ? ` AND jsonb_typeof(metadata->'${WORKTREE_REGISTRATION_ID}') = 'string'`
+      : ''
+  }
+       AND ${legacy ? `COALESCE(${tokenSql}, '')` : tokenSql} = ${$(0)}
        AND working_path = ${$(1)}${
          legacy
            ? `
@@ -308,9 +315,12 @@ function observedRegistrationPredicate(
 }
 
 /** Mark only the observed worktree registration destroyed, never a replacement registration. */
-export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void> {
+export async function markWorktreeDestroyed(
+  observed: IsolationEnvironmentRow,
+  query: typeof pool.query = pool.query.bind(pool)
+): Promise<void> {
   const predicate = observedRegistrationPredicate(observed, 2);
-  const result = await pool.query(
+  const result = await query(
     `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
      WHERE id = $1${predicate.sql}`,
     [observed.id, ...predicate.params]
@@ -320,6 +330,30 @@ export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): 
   }
   getLog().debug({ envId: observed.id }, 'db.isolation_env_worktree_destroyed');
 }
+
+/**
+ * The conditional write acquires a PostgreSQL row lock or SQLite write reservation.
+ * Ordinary upserts cannot publish a replacement until destruction and retirement finish.
+ * The callback must use the supplied retirement callback, not the pooled connection.
+ */
+export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration'] = async (
+  observed,
+  remove
+) => {
+  const predicate = observedRegistrationPredicate(observed, 2);
+  return getDatabase().withTransaction(
+    async query => {
+      const locked = await query(
+        `UPDATE remote_agent_isolation_environments SET status = status
+       WHERE id = $1 AND status = 'active'${predicate.sql}`,
+        [observed.id, ...predicate.params]
+      );
+      if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
+      return remove(() => markWorktreeDestroyed(observed, query));
+    },
+    { retryOnBusy: 'first-statement' }
+  );
+};
 
 /**
  * Update environment metadata (merge with existing)
@@ -407,7 +441,7 @@ export async function getLiveRunOwningEnv(
   envId: string,
   release?: FailedRunRelease,
   excludeRunId?: string
-): Promise<{ id: string; status: string } | null> {
+): Promise<{ id: string; status: WorkflowRunStatus } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
   const envIdExtract = dialect.jsonText('r.metadata', 'isolation_env_id');
@@ -455,7 +489,8 @@ export async function getLiveRunOwningEnv(
      LIMIT 1`,
     params
   );
-  return result.rows[0] ?? null;
+  const row = result.rows[0];
+  return row ? { id: row.id, status: readWorkflowRunStatus(row.id, row.status) } : null;
 }
 
 /**
@@ -558,10 +593,9 @@ export async function listByCodebaseWithAge(
 
 /**
  * List active CONTAINER isolation environments (folder-project container backend),
- * newest first, with the codebase name and age in days. Used by `isolation
- * list/cleanup` to surface + reap containers; the run status (which decides
- * whether a container is reapable) is looked up per-row via
- * {@link import('./workflows').getRunByIsolationEnvId}.
+ * newest first, with the codebase name and age in days. This inventory serves
+ * both listing and cleanup. Listing's environment-ID run match is display-only;
+ * cleanup separately checks wider ownership via {@link getLiveRunOwningEnv}.
  */
 export async function listActiveContainerEnvironments(): Promise<
   readonly (IsolationEnvironmentRow & {
@@ -595,6 +629,7 @@ export function createIsolationStore(): IIsolationStore {
     updateStatus,
     updateMetadata,
     markWorktreeDestroyed,
+    withWorktreeRegistration,
     countActiveByCodebase,
   };
 }

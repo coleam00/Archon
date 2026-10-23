@@ -1234,6 +1234,12 @@
             "waitingForCapacity": {
               "type": "boolean",
               "const": true
+            },
+            "cleanupWarnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [
@@ -1294,6 +1300,12 @@
             },
             "cancelled": {
               "type": "boolean"
+            },
+            "cleanupWarnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [

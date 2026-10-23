@@ -32,6 +32,11 @@ const SCHEMA_SQL = readFileSync(
 
 /** The SQLite adapter source, read as text — the twin schema is code, not a file. */
 const SQLITE_ADAPTER = readFileSync(resolve(import.meta.dir, 'adapters/sqlite.ts'), 'utf8');
+/** The SQLite upgrade steps migrateColumns() runs, read as text. */
+const SQLITE_MIGRATIONS = readFileSync(
+  resolve(import.meta.dir, 'adapters/sqlite-migrations.ts'),
+  'utf8'
+);
 
 /** Header of the trailing section that owns every column-referencing statement. */
 const SECTION_HEADER = '-- Indexes and column comments';
@@ -100,14 +105,14 @@ describe('migrations/000_combined.sql — statement ordering', () => {
    */
   test('no index in SQLite createSchema() names a column migrateColumns() adds', () => {
     const addedByMigration = new Map<string, Set<string>>();
-    for (const m of SQLITE_ADAPTER.matchAll(/ALTER TABLE (\w+) ADD COLUMN (\w+)/g)) {
+    for (const m of SQLITE_MIGRATIONS.matchAll(/ALTER TABLE (\w+) ADD COLUMN (\w+)/g)) {
       const [, table, column] = m;
       if (!addedByMigration.has(table)) addedByMigration.set(table, new Set());
       addedByMigration.get(table)!.add(column);
     }
     expect(addedByMigration.size).toBeGreaterThan(0);
 
-    // Everything from createSchema() onward — migrateColumns() sits above it.
+    // Everything from createSchema() onward.
     // This bounds the exec block only because createSchema() is the last method
     // in the class; a method added after it would be scanned too, which fails
     // loudly here rather than letting anything through.

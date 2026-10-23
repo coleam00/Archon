@@ -860,15 +860,8 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     ['records usage and an earlier authored outcome when a store write escapes', false],
     ['preserves the escaping error when the outcome backstop also fails', true],
   ])('%s', async (_label, outcomeWriteFails) => {
-    // The unwind backstop exists for exactly this: a throw that skips every disposition
-    // below and unwinds to executeWorkflow's catch-all, which marks the run FAILED.
-    // Without this case the other three would pass with a plain success-tail call, so a
-    // refactor could drop the backstop silently.
-    //
-    // The reachable path is a terminal status write that fails: a `halt` node's cancel
-    // write rejects, the per-node catch rethrows the TerminalStatusWriteError instead of
-    // recording a node outcome, and the layer join rethrows it OUTSIDE any try — out of
-    // runLayers entirely.
+    // A halt's rejected cancel write interrupts the layer before its usage and authored
+    // outcome reach the run accumulator. Both must survive without a terminal transition.
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'spent before the halt write failed' };
       yield {
@@ -881,6 +874,9 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     });
 
     const store = createMockStore();
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
     let announceNodeFinished: (() => void) | undefined;
     const nodeFinishedSignal = new Promise<void>(resolve => {
       announceNodeFinished = resolve;

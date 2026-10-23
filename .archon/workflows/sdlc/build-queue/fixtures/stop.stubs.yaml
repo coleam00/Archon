@@ -17,15 +17,17 @@ facts:
   pull_request: null
   continues: null
   branch: "build/7-stub-fixture"
+blocked:
   blocked: []
   blocked_count: 0
 route:
   decision: launch
+  continues: null
   ready_head: null
   brief: "stub: continue PR 8"
   reason: "stub: the body is a contract"
   attention: null
-checkout: { head: null }
+checkout: { head: null, pull_request: null }
 ship__forge: { source: forge }
 ship__triage__triage:
   decision: { contract: NEEDS_CONTRACT_WORK, proposed_edits: { title: "stub: title", body: "stub: body" } }

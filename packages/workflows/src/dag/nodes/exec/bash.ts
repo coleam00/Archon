@@ -12,7 +12,7 @@ import { resolveBashPath } from '@archon/git';
 import type { ExecNode } from '../../../schemas';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
-import { formatSubprocessFailure } from '../../../executor-shared';
+import { formatHostSpawnFailure, formatSubprocessFailure } from '../../../executor-shared';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { beginExecution, observeNodeCheckout, type RunLayersContext } from '../../run-context';
@@ -36,7 +36,7 @@ export async function executeBashNode(
   node: ExecNode
 ): Promise<NodeExecutionResult> {
   const { envVars, protectedEnvKeys, protectedCredentialValues } = ctx.config;
-  const { stepNamePrefix, bodyLoopUserInput: loopUserInput = '' } = ctx;
+  const { bodyLoopUserInput: loopUserInput = '' } = ctx;
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
   const {
     deps,
@@ -54,8 +54,6 @@ export async function executeBashNode(
   } = ctx;
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
-  // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
-  const stepName = stepNamePrefix + node.id;
   const execution: NodeExecutionRecord = {
     ...beginExecution(ctx, node, { checkoutStart: await observeNodeCheckout(ctx) }),
     diagnostics: { ...(iteration !== undefined ? { iteration } : {}) },
@@ -154,71 +152,14 @@ export async function executeBashNode(
     certified = certifyExecOutput(node, trimmedStdout, credentialValues);
     await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
   } catch (error) {
-    const err = error as RawSubprocessRejection;
-    // A contract failure (#2453) is Archon's own diagnosis of stdout, not a subprocess
-    // rejection. Report it verbatim and keep it outside subprocess classification.
-    const contractFailure = error instanceof ExecOutputContractError;
-    const isTimeout = !contractFailure && isSubprocessTimeout(err);
-    if (isTimeout && node.on_timeout === 'skip') {
-      return recordExecTimeoutSkip(ctx, execution);
-    }
-    const label = `Bash node '${node.id}'`;
-    // Always run the formatter so logs get sanitized fields regardless of which
-    // user-facing branch we end up in — the timeout message also contains the
-    // full `Command failed: bash -c <body>` line and would otherwise leak.
-    const formatted = formatSubprocessFailure(err, label);
-    const spawnFailure = hostSpawnFailure(execContext, err);
-    let errorMsg: string;
-    if (contractFailure) {
-      errorMsg = err.message;
-    } else if (isTimeout) {
-      errorMsg = `${label} timed out after ${String(node.timeout)}ms`;
-    } else if (err.treeSurvived) {
-      errorMsg = `${label} failed: ${err.message}`;
-    } else if (err.cancelled) {
-      errorMsg = `${label} cancelled`;
-    } else if (spawnFailure === 'ENOENT' || spawnFailure === 'ENOTDIR') {
-      errorMsg =
-        `${label} failed: bash executable not found at '${bashPath}'. ` +
-        'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
-        '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).';
-    } else if (spawnFailure === 'EACCES') {
-      errorMsg = `${label} failed: permission denied (check cwd permissions)`;
-    } else {
-      errorMsg = formatted.userMessage;
-    }
-
-    getLog().error(
-      { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
-      'dag_node_failed'
-    );
-
-    return recordNodeState(
-      { store: deps.store, logDir },
-      finishNodeExecution(
-        execution,
-        {
-          status: 'failed',
-          error: errorMsg,
-          failureKind: contractFailure
-            ? 'output_contract'
-            : err.cancelled
-              ? 'cancelled'
-              : isTimeout
-                ? 'timeout'
-                : 'exec_failed',
-          ...(contractFailure ? { retryable: false as const } : {}),
-        },
-        { output: { text: '' } }
-      )
-    );
+    return recordBashFailure(ctx, node, execution, bashPath, error);
   }
 
   const output = certified.output;
   const duration = Date.now() - nodeStartTime;
   getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
 
-  const persistedOutput = formatPersistedNodeOutput(output, artifactsDir, stepName);
+  const persistedOutput = formatPersistedNodeOutput(output, artifactsDir);
 
   return recordNodeState(
     { store: deps.store, logDir },
@@ -239,6 +180,94 @@ export async function executeBashNode(
           },
         },
       }
+    )
+  );
+}
+
+function bashFailureMessage(
+  err: RawSubprocessRejection,
+  node: ExecNode,
+  contractFailure: boolean,
+  isTimeout: boolean,
+  spawnMessage: string | undefined,
+  fallback: string
+): string {
+  const label = `Bash node '${node.id}'`;
+  if (contractFailure) {
+    return err.message;
+  }
+  if (isTimeout) {
+    return `${label} timed out after ${String(node.timeout)}ms`;
+  }
+  if (err.treeSurvived) {
+    return `${label} failed: ${err.message}`;
+  }
+  if (err.cancelled) {
+    return `${label} cancelled`;
+  }
+  if (spawnMessage !== undefined) {
+    return spawnMessage;
+  }
+  return fallback;
+}
+
+async function recordBashFailure(
+  ctx: RunLayersContext,
+  node: ExecNode,
+  execution: NodeExecutionRecord,
+  bashPath: string,
+  error: unknown
+): Promise<NodeExecutionResult> {
+  const err = error as RawSubprocessRejection;
+  // A contract failure (#2453) is Archon's own diagnosis of stdout, not a subprocess
+  // rejection. Report it verbatim and keep it outside subprocess classification.
+  const contractFailure = error instanceof ExecOutputContractError;
+  const isTimeout = !contractFailure && isSubprocessTimeout(err);
+  if (isTimeout && node.on_timeout === 'skip') {
+    return recordExecTimeoutSkip(ctx, execution);
+  }
+  const label = `Bash node '${node.id}'`;
+  // Always run the formatter so logs get sanitized fields regardless of which
+  // user-facing branch we end up in — the timeout message also contains the
+  // full `Command failed: bash -c <body>` line and would otherwise leak.
+  const formatted = formatSubprocessFailure(err, label);
+  const spawnMessage = formatHostSpawnFailure(
+    hostSpawnFailure(ctx.execContext, err),
+    'sh',
+    bashPath,
+    label
+  );
+  const errorMsg = bashFailureMessage(
+    err,
+    node,
+    contractFailure,
+    isTimeout,
+    spawnMessage,
+    formatted.userMessage
+  );
+
+  getLog().error(
+    { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
+    'dag_node_failed'
+  );
+
+  return recordNodeState(
+    { store: ctx.deps.store, logDir: ctx.logDir },
+    finishNodeExecution(
+      execution,
+      {
+        status: 'failed',
+        error: errorMsg,
+        failureKind: contractFailure
+          ? 'output_contract'
+          : err.cancelled
+            ? 'cancelled'
+            : isTimeout
+              ? 'timeout'
+              : 'exec_failed',
+        ...(contractFailure ? { retryable: false as const } : {}),
+      },
+      { output: { text: '' } }
     )
   );
 }

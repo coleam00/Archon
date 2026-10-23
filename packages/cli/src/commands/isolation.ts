@@ -1,7 +1,8 @@
 /**
  * Isolation commands - list, cleanup, and complete worktrees
  */
-import { sameWorktreeRegistration } from '@archon/isolation/types';
+import type { IsolationEnvironmentRow } from '@archon/isolation/types';
+import { getCodebase } from '@archon/core/db/codebases';
 import * as isolationDb from '@archon/core/db/isolation-environments';
 import { loadRepoConfig } from '@archon/core';
 import { createLogger } from '@archon/paths';
@@ -21,17 +22,17 @@ import {
   readWorktreeBranchCreated,
   readWorktreeCreationId,
 } from '@archon/isolation';
+import { cleanupContainerEnvironments } from '@archon/core/services/cleanup-service';
+import { listContainerEnvironments } from '@archon/core/services/cleanup/containers';
 import {
-  getLiveRunBlocker,
   removeEnvironment,
-  getCleanupRunLock,
-  listContainerEnvironments,
-  cleanupContainerEnvironments,
   type RemoveEnvironmentResult,
-} from '@archon/core/services/cleanup-service';
+} from '@archon/core/services/cleanup/remove-environment';
+import { getCleanupRunLock, getLiveRunBlocker } from '@archon/core/services/cleanup/run-lock';
 import {
   listEnvironments,
   cleanupMergedEnvironments,
+  type MergedCleanupResult,
 } from '@archon/core/operations/isolation-operations';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -86,27 +87,24 @@ export async function isolationListCommand(): Promise<void> {
   // not worktrees — they're labeled Docker containers + upper volumes. A paused
   // run's container shows here (awaiting approve/resume) and is never auto-pruned.
   const containers = await listContainerEnvironments();
-  if (containers.length > 0) {
-    console.log('\nContainer environments (folder projects):');
-    for (const c of containers) {
-      const runPart = c.runId ? `run ${c.runId.slice(0, 8)} (${c.runStatus})` : 'no run (orphan)';
-      console.log(`  ${c.envId.slice(0, 8)} — ${c.codebaseName}`);
-      console.log(`    Path: ${c.workingPath}`);
-      console.log(`    ${runPart} | Age: ${c.ageDays}d`);
+  if (containers.length === 0) return;
+
+  console.log('\nContainer environments (folder projects):');
+  for (const c of containers) {
+    let runPart = 'no run (orphan)';
+    if (c.runStatus === 'lookup-failed') {
+      runPart = 'run lookup failed';
+    } else if (c.runId) {
+      runPart = `run ${c.runId.slice(0, 8)} (${c.runStatus})`;
     }
-    console.log(`\nTotal: ${String(containers.length)} container environment(s)`);
+    console.log(`  ${c.envId.slice(0, 8)} — ${c.codebaseName}`);
+    console.log(`    Path: ${c.workingPath}`);
+    console.log(`    ${runPart} | Age: ${c.ageDays}d`);
   }
+  console.log(`\nTotal: ${String(containers.length)} container environment(s)`);
 }
 
-/**
- * Cleanup stale isolation environments.
- * Note: This command has its own stale-finding logic (per-env worktree destroy)
- * distinct from the cleanup-service's cleanupStaleWorktrees (which uses different
- * criteria). Kept here because the display-heavy flow doesn't map cleanly to
- * the operations layer's batch-oriented API.
- */
-export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
-  // Reconcile ghosts via the operations layer
+async function reportCleanupReconciliation(): Promise<void> {
   const { ghostsReconciled, codebases } = await listEnvironments();
   if (ghostsReconciled > 0) {
     console.log(`Reconciled ${String(ghostsReconciled)} ghost environment(s) (missing from disk).`);
@@ -119,53 +117,42 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
       }
     }
   }
+}
 
-  console.log(`Finding environments with no activity for ${String(daysStale)}+ days...`);
+type StaleEnvironment = Awaited<ReturnType<typeof isolationDb.findStaleEnvironments>>[number];
 
-  const staleEnvs = (await isolationDb.findStaleEnvironments(daysStale)).filter(
-    env => env.provider === 'worktree'
-  );
+async function cleanupStaleWorktree(
+  env: StaleEnvironment,
+  daysStale: number,
+  provider: ReturnType<typeof getIsolationProvider>
+): Promise<'cleaned' | 'skipped' | 'failed'> {
+  console.log(`\nCleaning: ${env.branch_name ?? env.workflow_id}`);
+  console.log(`  Path: ${env.working_path}`);
 
-  if (staleEnvs.length === 0) {
-    console.log('No stale worktree environments found.');
-  } else {
-    console.log(`Found ${String(staleEnvs.length)} stale worktree environment(s):`);
-  }
+  try {
+    // Same lock the cleanup-service sweeps use: a run that can still claim the
+    // environment blocks removal, even when the conversation recency filter
+    // marks the env stale. A failed run past the window no longer does.
+    const lock = await getCleanupRunLock(env, toRepoPath(env.codebase_default_cwd), {
+      kind: 'stale',
+      staleDays: daysStale,
+    });
+    if (lock.kind === 'locked') {
+      const { runId, runStatus, display } = lock.blocker;
+      getLog().info({ envId: env.id, runId, runStatus }, 'skip_stale_live_run');
+      console.log(`  Status: Skipped — ${display}`);
+      return 'skipped';
+    }
+    if (lock.kind === 'unpushed') {
+      getLog().warn(
+        { envId: env.id, ...(lock.runId ? { runId: lock.runId } : {}) },
+        'skip_stale_unpushed_commits'
+      );
+      console.log(`  Status: Skipped — ${lock.display}`);
+      return 'skipped';
+    }
 
-  const provider = getIsolationProvider();
-  let cleaned = 0;
-  let skipped = 0;
-  let failed = 0;
-
-  for (const env of staleEnvs) {
-    console.log(`\nCleaning: ${env.branch_name ?? env.workflow_id}`);
-    console.log(`  Path: ${env.working_path}`);
-
-    try {
-      // Same lock the cleanup-service sweeps use: a run that can still claim the
-      // environment blocks removal, even when the conversation recency filter
-      // marks the env stale. A failed run past the window no longer does.
-      const lock = await getCleanupRunLock(env, toRepoPath(env.codebase_default_cwd), {
-        kind: 'stale',
-        staleDays: daysStale,
-      });
-      if (lock.kind === 'locked') {
-        const { runId, runStatus, display } = lock.blocker;
-        getLog().info({ envId: env.id, runId, runStatus }, 'skip_stale_live_run');
-        console.log(`  Status: Skipped — ${display}`);
-        skipped++;
-        continue;
-      }
-      if (lock.kind === 'unpushed') {
-        getLog().warn(
-          { envId: env.id, ...(lock.runId ? { runId: lock.runId } : {}) },
-          'skip_stale_unpushed_commits'
-        );
-        console.log(`  Status: Skipped — ${lock.display}`);
-        skipped++;
-        continue;
-      }
-
+    const result = await isolationDb.withWorktreeRegistration(env, async markDestroyed => {
       const result = await provider.destroy(env.working_path, {
         // A stale environment's branch is deleted only when the environment created it;
         // an existing branch it checked out may hold commits that exist nowhere else.
@@ -182,28 +169,27 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
           `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
         );
       }
-      await isolationDb.markWorktreeDestroyed(env);
-      console.log(
-        lock.kind === 'released'
-          ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`
-          : '  Status: Cleaned'
-      );
-      cleaned++;
-    } catch (error) {
-      const err = error as Error;
-      getLog().warn({ err, envId: env.id, path: env.working_path }, 'worktree_destroy_failed');
-      console.error(`  Status: Failed - ${err.message}`);
-      failed++;
-    }
+      await markDestroyed();
+      return result;
+    });
+    for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
+    console.log(
+      lock.kind === 'released'
+        ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`
+        : '  Status: Cleaned'
+    );
+    return 'cleaned';
+  } catch (error) {
+    const err = error as Error;
+    getLog().warn({ err, envId: env.id, path: env.working_path }, 'worktree_destroy_failed');
+    console.error(`  Status: Failed - ${err.message}`);
+    return 'failed';
   }
+}
 
-  console.log(
-    `\nCleanup complete: ${String(cleaned)} cleaned, ${String(skipped)} skipped, ${String(failed)} failed`
-  );
-
-  // Reap orphaned container environments (terminal / run-less, older than the
-  // threshold). Paused runs' containers are deliberately skipped (awaited state).
-  const containerReport = await cleanupContainerEnvironments(daysStale);
+function printContainerCleanupReport(
+  containerReport: Awaited<ReturnType<typeof cleanupContainerEnvironments>>
+): void {
   const containerTotal =
     containerReport.removed.length + containerReport.skipped.length + containerReport.errors.length;
   if (containerTotal > 0) {
@@ -226,23 +212,84 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
 }
 
 /**
+ * Cleanup stale isolation environments.
+ * Note: This command has its own stale-finding logic (per-env worktree destroy)
+ * distinct from the cleanup-service's cleanupStaleWorktrees (which uses different
+ * criteria). Kept here because the display-heavy flow doesn't map cleanly to
+ * the operations layer's batch-oriented API.
+ */
+export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
+  await reportCleanupReconciliation();
+
+  console.log(`Finding environments with no activity for ${String(daysStale)}+ days...`);
+
+  const staleEnvs = (await isolationDb.findStaleEnvironments(daysStale)).filter(
+    env => env.provider === 'worktree'
+  );
+
+  if (staleEnvs.length === 0) {
+    console.log('No stale worktree environments found.');
+  } else {
+    console.log(`Found ${String(staleEnvs.length)} stale worktree environment(s):`);
+  }
+
+  const provider = getIsolationProvider();
+  const counts = { cleaned: 0, skipped: 0, failed: 0 };
+  for (const env of staleEnvs) {
+    counts[await cleanupStaleWorktree(env, daysStale, provider)]++;
+  }
+
+  console.log(
+    `\nCleanup complete: ${String(counts.cleaned)} cleaned, ${String(counts.skipped)} skipped, ${String(counts.failed)} failed`
+  );
+
+  // Reap orphaned container environments (terminal / run-less, older than the
+  // threshold). Paused runs' containers are deliberately skipped (awaited state).
+  const containerReport = await cleanupContainerEnvironments(daysStale);
+  printContainerCleanupReport(containerReport);
+  return counts.failed > 0 || containerReport.errors.length > 0 ? 1 : 0;
+}
+
+function printMergedCleanupResult(result: MergedCleanupResult): void {
+  console.log(`  Base: ${result.baseRef}`);
+
+  for (const branch of result.removed) {
+    console.log(`  Cleaned: ${branch}`);
+  }
+  for (const { branchName, runId, reason } of result.releasedFailedRuns) {
+    console.log(`  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}`);
+  }
+  for (const { branchName, message } of result.warnings) {
+    console.log(`  Warning: ${branchName}: ${message}`);
+  }
+  for (const skip of result.skipped) {
+    console.log(`  Skipped: ${skip.branchName} (${skip.reason})`);
+  }
+
+  for (const failure of result.errors) {
+    console.error(`  Failed: ${failure.branchName} (${failure.error})`);
+  }
+}
+
+/**
  * Cleanup merged isolation environments (branches merged into each repo's base branch)
- * Also deletes remote branches for merged environments
+ * Retains remote branches for operator inspection
  */
 export async function isolationCleanupMergedCommand(
   options: { includeClosed?: boolean } = {}
-): Promise<void> {
+): Promise<0 | 1> {
   console.log('Finding environments with branches merged into their base branch...');
 
   const { codebases } = await listEnvironments();
 
   if (codebases.length === 0) {
     console.log('No codebases with active environments found.');
-    return;
+    return 0;
   }
 
   let totalCleaned = 0;
   let totalSkipped = 0;
+  let totalFailed = 0;
 
   for (const codebase of codebases) {
     try {
@@ -254,37 +301,25 @@ export async function isolationCleanupMergedCommand(
         options
       );
 
-      // The base ref comes back from the sweep that compared against it, so the
-      // operator sees the repo's configured base branch rather than an assumed one.
-      console.log(`  Base: ${result.baseRef}`);
-
-      for (const branch of result.removed) {
-        console.log(`  Cleaned: ${branch}`);
-      }
-      for (const { branchName, runId, reason } of result.releasedFailedRuns) {
-        console.log(`  Released failed run ${runId.slice(0, 8)} (${reason}): ${branchName}`);
-      }
-      for (const skip of result.skipped) {
-        console.log(`  Skipped: ${skip.branchName} (${skip.reason})`);
-      }
-
+      printMergedCleanupResult(result);
+      totalFailed += result.errors.length;
       totalCleaned += result.removed.length;
       totalSkipped += result.skipped.length;
     } catch (error) {
       const err = error as Error;
       getLog().warn({ err, codebaseId: codebase.codebaseId }, 'merged_cleanup_failed');
       console.error(`  Error processing codebase: ${err.message}`);
+      totalFailed++;
     }
   }
 
   console.log(
-    `\nMerged cleanup complete: ${String(totalCleaned)} cleaned, ${String(totalSkipped)} skipped`
+    `\nMerged cleanup complete: ${String(totalCleaned)} cleaned, ${String(totalSkipped)} skipped, ${String(totalFailed)} failed`
   );
+  return totalFailed > 0 ? 1 : 0;
 }
 
-type CompletionEnvironment = NonNullable<
-  Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>
->;
+type CompletionEnvironment = IsolationEnvironmentRow & { codebase_default_cwd: string };
 type CompletionOptions = Parameters<typeof isolationCompleteCommand>[1];
 type CompletionOutcome = 'completed' | 'failed' | 'notFound';
 
@@ -335,10 +370,8 @@ async function checkCompletionPullRequests(
       blockers.push(`open PR #${pr.number} — "${pr.title}"`);
     }
   } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    const isNotInstalled = err.code === 'ENOENT' || err.message.includes('command not found');
-    const reason = isNotInstalled ? 'gh CLI not available' : `gh error: ${err.message}`;
-    console.warn(`  Warning: ${reason} — skipping open PR check`);
+    const err = error as Error;
+    console.warn(`  Warning: gh error: ${err.message} — skipping open PR check`);
     getLog().warn({ err, branch }, 'isolation.complete_pr_check_failed');
   }
 }
@@ -550,24 +583,17 @@ async function resolveCompletionEnvironment(branch: string): Promise<CompletionE
   if (selected && selected.provider !== 'worktree') {
     throw new CompletionRefusal('not a worktree environment');
   }
-  const env = selected ? await isolationDb.findActiveByBranchName(branch) : null;
-  // Hydration adds codebase fields; legacy registration identity compares the whole row.
-  const observed = selected && {
-    ...selected,
-    codebase_default_cwd: env?.codebase_default_cwd,
-    codebase_name: env?.codebase_name,
-  };
-  if (env && observed && !sameWorktreeRegistration(env, observed)) {
-    throw new CompletionRefusal('environment changed during lookup; refusing ambiguous deletion');
-  }
-  return env;
+  if (!selected) return null;
+  const codebase = await getCodebase(selected.codebase_id);
+  if (!codebase) throw new CompletionRefusal('environment codebase not found');
+  return { ...selected, codebase_default_cwd: codebase.default_cwd };
 }
 
 async function completeBranch(
   branch: string,
   options: CompletionOptions
 ): Promise<CompletionOutcome> {
-  let env: Awaited<ReturnType<typeof isolationDb.findActiveByBranchName>>;
+  let env: CompletionEnvironment | null;
   try {
     env = await resolveCompletionEnvironment(branch);
   } catch (error) {
@@ -599,7 +625,7 @@ async function completeBranch(
   }
 
   try {
-    const result: RemoveEnvironmentResult = await removeEnvironment(env.id, {
+    const result: RemoveEnvironmentResult = await removeEnvironment(env, {
       force: options.force,
       deleteRemoteBranch: options.deleteRemote ?? true,
     });
@@ -613,7 +639,7 @@ async function completeBranch(
 }
 
 /**
- * Complete branch lifecycle — remove worktree, local branch, remote branch, mark DB as destroyed
+ * Complete branch lifecycle: remove worktree and local branch, then retire the registration
  */
 export async function isolationCompleteCommand(
   branchNames: string[],

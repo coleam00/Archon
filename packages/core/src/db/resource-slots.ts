@@ -1,8 +1,12 @@
+import { z } from 'zod';
+import { activeWorkflowPathHolderCondition } from './workflow-run-reads';
 import {
   ResourceSlotCapacityConflictError,
   capacityWaiters,
   heldCheckouts,
+  type ReusableCheckout,
   type ResourceSlotOccupancy,
+  type QueuedStart,
 } from '@archon/workflows/resource-start-store';
 import {
   preparedWorkflowLaunchSchema,
@@ -32,6 +36,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { parseJsonObject } from './workflow-run-normalization';
+import { getLog } from './workflow-run-shared';
 import {
   isOwnerProvablyGone,
   parseProcessOwner,
@@ -213,46 +218,134 @@ export async function resourceStartOccupancy(
   capacity: number
 ): Promise<ResourceSlotOccupancy> {
   const holders = await liveResourceSlotHolders(query, resource);
-  const holding = new Set(holders.map(holder => holder.id));
+  const holding = new Set(holders.filter(holder => holder.kind === 'run').map(holder => holder.id));
   const live = await query<{
     id: string;
     status: WorkflowRunStatus;
     metadata: unknown;
     working_path: string | null;
     launch: unknown;
+    resource_key: string | null;
+    foreign_membership: boolean | number;
+    holds_path: boolean | number;
   }>(
-    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch FROM remote_agent_workflow_runs w
-       JOIN remote_agent_resource_start_requests q ON q.id = w.id
-      WHERE q.resource_key = $1 AND q.status = 'admitted'
-        AND w.status NOT IN (${terminalList})`,
+    `SELECT w.id, w.status, w.metadata, w.working_path, q.launch, q.resource_key, w.holds_path,
+       EXISTS (
+         SELECT 1 FROM remote_agent_resource_slot_holders h
+          WHERE h.holder_kind = 'run' AND h.holder_id = CAST(w.id AS TEXT)
+            AND h.resource_key <> $1
+       ) AS foreign_membership
+       FROM (
+         SELECT *, ${activeWorkflowPathHolderCondition()} AS holds_path FROM remote_agent_workflow_runs
+       ) w
+       LEFT JOIN remote_agent_resource_start_requests q ON q.id = w.id AND q.status = 'admitted'
+      WHERE w.status NOT IN (${terminalList})
+        AND (q.resource_key = $1 OR w.holds_path OR EXISTS (
+          SELECT 1 FROM remote_agent_resource_slot_holders h
+           WHERE h.resource_key = $1 AND h.holder_kind = 'run' AND h.holder_id = CAST(w.id AS TEXT)
+        ))
+      ORDER BY w.started_at, w.id`,
     [resource]
   );
-  const queued = await query<{ id: string; host_id: string; launch: unknown }>(
-    `SELECT id, host_id, launch FROM remote_agent_resource_start_requests
+  const queued = await query<Record<string, unknown>>(
+    `SELECT id, host_id, resource_key, status, launch FROM remote_agent_resource_start_requests
       WHERE resource_key = $1 AND status = 'queued'
       ORDER BY queue_position${getDialect().rowLock()}`,
     [resource]
   );
-  const liveRuns = live.rows.map(row => ({
-    id: String(row.id),
-    status: row.status,
-    metadata: parseJsonObject(row.metadata) ?? {},
-    working_path: row.working_path,
-    launch: parseLaunch(row.launch),
-  }));
+  const isLocal = (row: (typeof live.rows)[number]) =>
+    holding.has(String(row.id)) || (!row.foreign_membership && row.resource_key === resource);
+  const liveRuns = live.rows.filter(isLocal).map(row => {
+    if (row.resource_key !== resource)
+      throw new Error(`Resource '${resource}' holder '${row.id}' has no matching admitted request`);
+    return {
+      id: String(row.id),
+      status: row.status,
+      metadata: parseJsonObject(row.metadata) ?? {},
+      working_path: row.working_path,
+      launch: parseLaunch(row.launch),
+    };
+  });
+  const reusable = await query<ReusableCheckout>(
+    `SELECT codebase_id AS "codebaseId", workflow_id AS branch, working_path AS "workingPath"
+       FROM remote_agent_isolation_environments WHERE status = 'active' AND workflow_type = 'task'`
+  );
+  let unknownForeignCheckoutHolder: string | undefined;
+  const foreign = live.rows
+    .filter(row => !isLocal(row) && row.holds_path)
+    .map(row => {
+      const run = { id: String(row.id), working_path: row.working_path };
+      if (row.launch === null) {
+        if (row.foreign_membership && !row.working_path) {
+          getLog().error({ runId: run.id }, 'db.foreign_launch_missing_checkout_unknown');
+          unknownForeignCheckoutHolder ??= run.id;
+        }
+        return run;
+      }
+      try {
+        return { ...run, launch: parseLaunch(row.launch) };
+      } catch {
+        // A known execution path still identifies the held checkout and its registered
+        // aliases when a foreign launch is corrupt. Never guess without that path.
+        if (row.working_path) {
+          getLog().error({ runId: run.id }, 'db.foreign_launch_invalid_using_working_path');
+          return run;
+        }
+        getLog().error({ runId: run.id }, 'db.foreign_launch_invalid_checkout_unknown');
+        unknownForeignCheckoutHolder ??= run.id;
+        return run;
+      }
+    });
+  const queue: QueuedStart[] = [];
+  let queueError: Error | undefined;
+  for (const row of queued.rows) {
+    try {
+      queue.push(parseQueuedResourceStart(row, resource));
+    } catch (error) {
+      if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
+      queueError = new Error(`Invalid queued request '${String(row.id)}'`, { cause: error });
+      getLog().error(
+        { requestId: row.id, err: queueError },
+        'db.queued_request_invalid_drain_prefix_only'
+      );
+      break;
+    }
+  }
   return {
     capacity,
+    reusableCheckouts: reusable.rows,
     holders,
     waiters: capacityWaiters(liveRuns.filter(run => !holding.has(run.id))),
-    queue: queued.rows.map(row => ({
-      id: String(row.id),
-      hostId: String(row.host_id),
-      launch: parseLaunch(row.launch),
-    })),
-    heldCheckouts: heldCheckouts(liveRuns),
+    queue,
+    queueError,
+    heldCheckouts: heldCheckouts(liveRuns, reusable.rows),
+    foreignHeldCheckouts: heldCheckouts(foreign, reusable.rows),
+    unknownForeignCheckoutHolder,
   };
 }
 
 function parseLaunch(value: unknown): PreparedWorkflowLaunch {
   return preparedWorkflowLaunchSchema.parse(typeof value === 'string' ? JSON.parse(value) : value);
+}
+
+const queuedResourceStartSchema = z
+  .object({
+    id: z.string().min(1),
+    host_id: z.string().min(1),
+    resource_key: z.string().min(1),
+    status: z.literal('queued'),
+    launch: z.preprocess(
+      value => (typeof value === 'string' ? JSON.parse(value) : value),
+      preparedWorkflowLaunchSchema
+    ),
+  })
+  .refine(row => row.id === row.launch.run.id, {
+    message: 'Queued request and launch run IDs disagree',
+  });
+
+export function parseQueuedResourceStart(value: unknown, resource?: string) {
+  const row = queuedResourceStartSchema.parse(value);
+  if (resource !== undefined && row.resource_key !== resource)
+    throw new Error(`Queued request '${row.id}' does not belong to resource '${resource}'`);
+  return { id: row.id, hostId: row.host_id, launch: row.launch };
 }

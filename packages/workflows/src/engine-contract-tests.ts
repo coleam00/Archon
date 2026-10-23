@@ -1,249 +1,32 @@
 import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
-
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'bun:test';
-import { mkdir, mkdtemp, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { resolveWorkflow } from './graph-plan';
-import { captureWorkflowSource } from './workflow-source';
 import { TerminalStatusWriteError } from './terminal-status-write';
-import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type {
-  IWorkflowEngine,
-  WorkflowEngineSubmitInput,
-  WorkflowResumeInput,
+import type { WorkflowConfig, WorkflowDeps } from './deps';
+import {
+  RESUME_FORBIDDEN_OPTIONS,
+  type IWorkflowEngine,
+  type WorkflowResumeInput,
 } from './engine-port';
-import type { DagResumeSnapshot, IWorkflowStore } from './store';
-import { WorkflowNotResumableError } from './store';
+import { WorkflowNotResumableError, type IWorkflowStore } from './store';
 export { WorkflowNotResumableError } from './store';
-import type { ResolvedWorkflow, WorkflowDefinition, WorkflowRun } from './schemas';
-
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
-  try {
-    await promise;
-    return undefined;
-  } catch (error) {
-    return error;
-  }
-}
-
-function emptySnapshot(): DagResumeSnapshot {
-  return {
-    completedNodeOutputs: new Map(),
-    fanOutSnapshots: new Map(),
-    failedNodes: new Map(),
-    unresolvedNodeStarts: new Set<string>(),
-    budget: { workUnits: 0, spendUsd: 0 },
-    tokens: { input: 0, output: 0 },
-    costUsd: 0,
-  };
-}
-
-function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
-  return {
-    origin: { conversationId: 'conv-1' },
-    id: 'run-123',
-    workflow_name: 'test-workflow',
-    conversation_id: 'conv-1',
-    parent_conversation_id: null,
-    codebase_id: null,
-    status: 'running',
-    outcome: null,
-    user_message: 'test message',
-    metadata: {},
-    started_at: new Date(),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: null,
-    user_id: null,
-    parent_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-    adopted_from_run_id: null,
-    ...overrides,
-  };
-}
-
-function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): ResolvedWorkflow {
-  return resolveWorkflow({
-    name: 'test-workflow',
-    description: 'Test',
-    nodes: [{ id: 'node1', kind: 'agent', source: { kind: 'inline', prompt: 'Do something' } }],
-    ...overrides,
-  });
-}
-
-function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
-  const noop = async (): Promise<void> => undefined;
-  return {
-    getWorkflowEventHead: async () => {
-      throw new Error('Unexpected event feed read');
-    },
-    readWorkflowEventsAfter: async () => {
-      throw new Error('Unexpected event feed read');
-    },
-    getStateDocument: async () => null,
-    listStateRevisions: async () => [],
-    listStateDocuments: async () => [],
-    getStateDocuments: async () => [],
-    putStateDocument: async () => {
-      throw new Error('Unsupported state documents');
-    },
-    patchStateDocument: async () => {
-      throw new Error('Unsupported state documents');
-    },
-    deleteStateDocument: async () => {
-      throw new Error('Unsupported state documents');
-    },
-    pruneStateRevisions: async () => ({ count: 0 }),
-    getActiveWorkflowRunByPath: async () => null,
-    findChildRuns: async () => [],
-    getRunAncestry: async () => [],
-    createWorkflowRun: async () => makeRun(),
-    claimPendingWorkflowRun: async () => makeRun(),
-    recordWorkflowRunCheckoutBaseline: async (_id, baseline) => baseline,
-    updateWorkflowRun: noop,
-    failWorkflowRun: async () => ({ failed: true }),
-    getWorkflowRun: async () => ({ ...makeRun(), status: 'completed' as const }),
-    getWorkflowRunStatus: async () => 'completed' as const,
-    createWorkflowEvent: noop,
-    persistWorkflowEvent: noop,
-    persistWorkflowEventIfRunning: async () => ({ persisted: true }),
-    findResumableRun: async () => null,
-    listProviderEvents: async () => [],
-    getDagResumeSnapshot: async () => emptySnapshot(),
-    resumeWorkflowRun: async () => makeRun(),
-    recoverCancelledFanOutRun: async () => makeRun(),
-    getCodebase: async () => null,
-    getCodebaseEnvVars: async () => ({}),
-    updateWorkflowActivity: noop,
-    completeWorkflowRun: noop,
-    pauseWorkflowRun: noop,
-    pauseWorkflowRunForWait: noop,
-    clearWorkflowWaitContext: async (id, _wait, completion) => ({
-      cleared: true as const,
-      nodeEvent: {
-        workflow_run_id: id,
-        event_type: 'node_completed' as const,
-        step_name: completion.stepName,
-      },
-    }),
-    claimWriteback: async () => ({ claimed: true }),
-    releaseWritebackClaim: noop,
-    cancelWorkflowRun: async () => ({ cancelled: false }),
-    cancelFanOutRun: async () => ({ cancelled: false }),
-    listWorkflowNodeSessions: async () => [],
-    listWorkflowRunNodeSessions: async () => [],
-    upsertWorkflowRunNodeSession: noop,
-    upsertWorkflowNodeSession: noop,
-    ...overrides,
-  } as IWorkflowStore;
-}
-
-function makePlatform(onSendMessage?: (id: string) => void): IWorkflowPlatform {
-  return {
-    sendMessage: async (id: string): Promise<void> => onSendMessage?.(id),
-    getPlatformType: () => 'test' as const,
-  } as unknown as IWorkflowPlatform;
-}
-
-function defaultConfig(): WorkflowConfig {
-  return {
-    assistant: 'claude',
-    assistants: { claude: {}, codex: {} },
-    baseBranch: '',
-    commands: { folder: '' },
-  };
-}
-
-function makeDeps(
-  providers: ProviderRegistry,
-  store: IWorkflowStore = makeStore(),
-  overrides: Partial<WorkflowDeps> = {}
-): WorkflowDeps {
-  return {
-    providers,
-    store,
-    loadConfig: async () => defaultConfig(),
-    getAgentProvider: () => ({
-      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
-      run: async (): Promise<void> => undefined,
-    }),
-    ...overrides,
-  } as WorkflowDeps;
-}
-
-function callInput(): Omit<WorkflowEngineSubmitInput, 'options'> {
-  return {
-    platform: makePlatform(),
-    conversationId: 'conv-1',
-    cwd: '/tmp/ops',
-    workflow: makeWorkflow(),
-    userMessage: 'hello',
-    origin: { conversationId: 'db-conv-1' },
-  };
-}
-
-function resumeCallInput(): Omit<WorkflowResumeInput, 'run' | 'cursor' | 'options'> {
-  const { workflow, ...input } = callInput();
-  return { ...input, legacyWorkflow: workflow };
-}
-
-function resumableStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
-  return makeStore({
-    getDagResumeSnapshot: async () => ({
-      ...emptySnapshot(),
-      completedNodeOutputs: new Map([['node1', { output: 'out1' }]]),
-    }),
-    ...overrides,
-  });
-}
-
-async function capturedRun(
-  trackTempRoot: (root: string) => string,
-  workflowYaml: string,
-  overrides: Partial<WorkflowRun> = {}
-): Promise<WorkflowRun> {
-  const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-engine-capture-')));
-  const source = join(root, 'source');
-  await mkdir(join(source, '.archon', 'workflows'), { recursive: true });
-  await writeFile(join(source, '.archon', 'workflows', 'test.yaml'), workflowYaml);
-  const capture = await captureWorkflowSource({
-    sourceRoot: source,
-    captureRoot: join(root, 'capture'),
-  });
-  return makeRun({
-    status: 'paused',
-    metadata: {
-      workflow_source: {
-        version: 1,
-        root: capture.anchor.root,
-        origin: capture.origin,
-        captured_at: capture.manifest.captured_at,
-        digest: capture.manifest.digest,
-        source_config: capture.manifest.source_config,
-        file_count: capture.manifest.file_count,
-        byte_count: capture.manifest.byte_count,
-      },
-    },
-    ...overrides,
-  });
-}
+import type { ResolvedWorkflow } from './schemas';
+import {
+  emptySnapshot,
+  captureRejection,
+  makeRun,
+  makeWorkflow,
+  makeStore,
+  makePlatform,
+  defaultConfig,
+  makeDeps,
+  callInput,
+  resumeCallInput,
+  resumableStore,
+  capturedRun,
+} from './engine-contract-fixtures';
 
 interface WorkflowEngineContractObservations {
   executedWorkflow: () => ResolvedWorkflow | undefined;
@@ -429,15 +212,131 @@ export function runWorkflowEngineContractTests(
         })
       );
       expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toBe(
+      expect(error instanceof Error ? error.message : String(error)).toBe(
         'Fresh execution requires a pending pre-created run; use resume instead.'
       );
       expect(created).toBe(0);
       expect(configLoads).toBe(0);
     });
 
+    it('prepares the admitted row before execution and uses its returned context', async () => {
+      const resumed = makeRun({ status: 'running' });
+      const entered = Promise.withResolvers<void>();
+      const ready = Promise.withResolvers<void>();
+      let executionCwd: string | undefined;
+      let executionCodebase: string | undefined;
+      const store = resumableStore({
+        getCodebase: async id => {
+          executionCodebase = id;
+          return null;
+        },
+        resumeWorkflowRun: async () => resumed,
+        getWorkflowRun: async () => ({ ...resumed, status: 'completed' }),
+      });
+      const engine = makeEngine(
+        makeDeps(providers, store, {
+          loadConfig: async cwd => {
+            executionCwd = cwd;
+            return defaultConfig();
+          },
+        })
+      );
+      const pending = engine.resume({
+        ...resumeCallInput(),
+        run: makeRun({ status: 'paused' }),
+        options: { codebaseId: 'caller-codebase' },
+        prepareExecution: async run => {
+          expect(run).toEqual(resumed);
+          entered.resolve();
+          await ready.promise;
+          return { cwd: '/prepared', options: { codebaseId: 'prepared-codebase' } };
+        },
+      });
+      await entered.promise;
+      expect(executionCwd).toBeUndefined();
+      ready.resolve();
+      const admission = await pending;
+      if (!admission.accepted) throw new Error('Expected admission');
+      await admission.settled;
+      expect(executionCwd).toBe('/prepared');
+      expect(executionCodebase).toBe('prepared-codebase');
+    });
+
+    it.each(['setup', ...RESUME_FORBIDDEN_OPTIONS])(
+      'fails the admitted run when prepared %s is rejected',
+      async field => {
+        let failure: { id: string; error: string } | undefined;
+        let executed = false;
+        const resumed = makeRun({ status: 'running' });
+        const store = resumableStore({
+          resumeWorkflowRun: async () => resumed,
+          failWorkflowRun: async (id, error) => {
+            failure = { id, error };
+            return { failed: true };
+          },
+        });
+        const engine = makeEngine(
+          makeDeps(providers, store, {
+            loadConfig: async () => {
+              executed = true;
+              return defaultConfig();
+            },
+          })
+        );
+        const error = await captureRejection(
+          engine.resume({
+            ...resumeCallInput(),
+            run: makeRun({ status: 'paused' }),
+            prepareExecution: async () => {
+              if (field === 'setup') throw new Error('setup rejected');
+              return { cwd: '/prepared', options: { [field]: {} } };
+            },
+          })
+        );
+        expect(error).toBeInstanceOf(Error);
+        expect(executed).toBe(false);
+        expect(failure).toEqual({
+          id: resumed.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    );
+
+    it('surfaces a failed terminal write after preparation rejection without executing', async () => {
+      const persistError = new Error('failure write refused');
+      let failureWrites = 0;
+      let executed = false;
+      const store = resumableStore({
+        failWorkflowRun: async () => {
+          failureWrites++;
+          throw persistError;
+        },
+      });
+      const engine = makeEngine(
+        makeDeps(providers, store, {
+          loadConfig: async () => {
+            executed = true;
+            return defaultConfig();
+          },
+        })
+      );
+      const error = await captureRejection(
+        engine.resume({
+          ...resumeCallInput(),
+          run: makeRun({ status: 'paused' }),
+          prepareExecution: async () => {
+            throw new Error('setup rejected');
+          },
+        })
+      );
+      expect(error).toBeInstanceOf(TerminalStatusWriteError);
+      expect(error).toMatchObject({ cause: persistError });
+      expect(failureWrites).toBe(1);
+      expect(executed).toBe(false);
+    });
+
     it('returns admission before execution settles', async () => {
-      const config = deferred<WorkflowConfig>();
+      const config = Promise.withResolvers<WorkflowConfig>();
       const resumed = makeRun({ id: 'accepted-run', status: 'running' });
       const store = resumableStore({
         resumeWorkflowRun: async () => resumed,
@@ -677,7 +576,7 @@ nodes:
 
     it('records a post-claim failure and preserves the execution error', async () => {
       const cause = new Error('config failed');
-      const config = deferred<WorkflowConfig>();
+      const config = Promise.withResolvers<WorkflowConfig>();
       const resumed = makeRun({ id: 'failed-run', status: 'running' });
       const failures: { id: string; message: string }[] = [];
       let durableStatus: import('./schemas').WorkflowRunStatus = 'running';
@@ -704,7 +603,7 @@ nodes:
     });
 
     it('does not retry a failed terminal compensation write', async () => {
-      const config = deferred<WorkflowConfig>();
+      const config = Promise.withResolvers<WorkflowConfig>();
       const writeError = new Error('database unavailable');
       const resumed = makeRun({ id: 'write-failed-run', status: 'running' });
       let writes = 0;

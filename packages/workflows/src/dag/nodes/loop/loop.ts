@@ -36,6 +36,7 @@ import {
   type SessionCheckpoint,
 } from '../../run-context';
 import { getEffectiveNodeRetryConfig } from '../../retry';
+import { attemptSpend } from '../../../run-budget';
 import {
   failLoopNode,
   loopSpend,
@@ -122,8 +123,7 @@ export async function executeLoopNode(
   resolvedEffort?: EffortLevel,
   checkpointSession?: SessionCheckpoint
 ): Promise<NodeExecutionResult> {
-  const { deps, platform, conversationId, workflowRun, logDir } = ctx;
-  const loop = node.loop;
+  const { deps, workflowRun, logDir } = ctx;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name when this loop node runs inside a loop_group body
   // ('' → node.id at top level, #2090). The loop's own per-iteration number lives in
@@ -142,31 +142,7 @@ export async function executeLoopNode(
   });
   const resume = readLoopResume(workflowRun, node, newExecution);
   const { savedExecution } = resume;
-  const resumedExecution = savedExecution ?? newExecution;
-  const state: LoopState = {
-    execution: resumedExecution,
-    lastStartedIteration: resume.startIteration - 1,
-    sessionId: resume.gate?.sessionId ?? undefined,
-    stopReason:
-      resumedExecution.spend.stopReason.source === 'provider'
-        ? resumedExecution.spend.stopReason.value
-        : undefined,
-    numTurns:
-      resumedExecution.spend.numTurns.source === 'provider'
-        ? resumedExecution.spend.numTurns.value
-        : undefined,
-    resolvedModel: undefined,
-    costUsd: resume.costUsd,
-    tokens: resume.tokens,
-    tokensUnknown:
-      savedExecution?.spend.tokens.source === 'unavailable' &&
-      savedExecution.spend.tokens.reason === 'incomplete',
-    // A resumed loop continues from the paused iteration, so its output stays the
-    // previous output for $LOOP_PREV_OUTPUT and until_bash.
-    lastOutput: resume.gate?.iterationOutput ?? '',
-    lastStructuredOutput: undefined,
-    backgroundTasksIncomplete: new Set<string>(),
-  };
+  const state = initialLoopState(resume, newExecution);
   const finalized = await finalizeOnBareApprove(ctx, node, {
     stepName,
     resume,
@@ -192,26 +168,13 @@ export async function executeLoopNode(
     return failLoopNode(ctx, node.id, state, errorMsg, { failureKind: 'config' });
   }
 
-  // A continuation after an interactive gate is the same invocation: it keeps the
-  // invocation (and its checkout start) the paused attempt recorded.
-  if (savedExecution !== undefined) ctx.nodeInvocation = savedExecution.invocation;
-  const execution = beginExecution(ctx, node, {
+  const execution = await beginLoopAttempt(ctx, node, savedExecution, {
     provider: workflowProvider,
     model: resolvedModel,
     tier: resolvedTier,
     effort: resolvedEffort,
     capabilities,
-    checkoutStart: await observeNodeCheckout(ctx),
   });
-  if (savedExecution !== undefined) {
-    execution.timing.startedAt = savedExecution.timing.startedAt;
-    if (
-      savedExecution.spend.tokens.source === 'unavailable' &&
-      savedExecution.spend.tokens.reason === 'incomplete'
-    ) {
-      execution.spend.tokens = savedExecution.spend.tokens;
-    }
-  }
   state.execution = execution;
   ctx.currentExecution = execution;
   const iterationEnv = { ...resolvedOptions?.env, ...aiNodeEnvironment(ctx, execution) };
@@ -224,63 +187,8 @@ export async function executeLoopNode(
     }
   );
 
-  // Resolve the iteration prompt source once per run/node. The interactive gate
-  // persists the resolved template (`commandSnapshot` in the pause context) for
-  // both inline and command-backed loops. Included loops retain their command identity
-  // plus a load-time compiled prompt/error; rediscovery after a pause cannot change their
-  // running prompt because a persisted snapshot takes precedence over that metadata.
-  // The schema guarantees exactly one of prompt/command is defined.
-  let loopPromptTemplate: string;
-  if (typeof resume.gate?.commandSnapshot === 'string') {
-    loopPromptTemplate = resume.gate.commandSnapshot;
-  } else if (typeof loop.command === 'string') {
-    const compiled = (loop as typeof loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND];
-    const hasCompiledError = compiled !== undefined && typeof compiled.error === 'string';
-    const hasCompiledPrompt = compiled !== undefined && typeof compiled.prompt === 'string';
-    if (hasCompiledError && !hasCompiledPrompt) {
-      getLog().error(
-        { nodeId: node.id, command: loop.command, error: compiled.error },
-        'loop_node.command_compilation_failed'
-      );
-      return failLoopNode(ctx, node.id, state, compiled.error, {
-        failureKind: 'config',
-        data: { command: loop.command },
-      });
-    }
-    if (hasCompiledPrompt && !hasCompiledError) {
-      loopPromptTemplate = compiled.prompt;
-    } else if (compiled !== undefined) {
-      const errorMsg = `Loop node '${node.id}' has malformed compiled command metadata for '${loop.command}' — expected exactly one string prompt or error.`;
-      getLog().error(
-        { nodeId: node.id, command: loop.command, compiled },
-        'loop_node.command_compilation_metadata_invalid'
-      );
-      return failLoopNode(ctx, node.id, state, errorMsg, {
-        failureKind: 'config',
-        data: { command: loop.command },
-      });
-    } else {
-      const promptResult = await loadNodeCommandPrompt(ctx, loop.command, stepName);
-      if (!promptResult.success) {
-        getLog().error(
-          { nodeId: node.id, command: loop.command, error: promptResult.message },
-          'loop_node.command_load_failed'
-        );
-        return failLoopNode(ctx, node.id, state, promptResult.message, {
-          failureKind: 'config',
-          data: { command: loop.command },
-        });
-      }
-      loopPromptTemplate = resolveIncludeOutputAliases(node, promptResult.content);
-    }
-  } else if (typeof loop.prompt === 'string') {
-    loopPromptTemplate = loop.prompt;
-  } else {
-    // Unreachable: superRefine on loopNodeConfigSchema enforces exactly-one.
-    throw new Error(
-      `Loop node '${node.id}' has neither 'loop.prompt' nor 'loop.command' — schema invariant violated`
-    );
-  }
+  const loopPromptTemplate = await resolveLoopPromptTemplate(ctx, node, stepName, resume, state);
+  if (typeof loopPromptTemplate !== 'string') return loopPromptTemplate;
 
   const run: LoopRun = {
     ctx,
@@ -298,19 +206,153 @@ export async function executeLoopNode(
     retryConfig: getEffectiveNodeRetryConfig(node),
     checkpointSession,
   };
-  const { startIteration, iterationLimit } = resume;
-  for (let i = startIteration; i <= iterationLimit; i++) {
+  for (let i = resume.startIteration; i <= resume.iterationLimit; i++) {
     const result = await runSettledLoopIteration(run, state, i);
     if (result !== undefined) return result;
   }
 
-  // Max iterations exceeded
-  const errorMsg = `Loop node '${node.id}' exceeded max iterations (${String(iterationLimit)}) ${describeUnmetCompletion(loop)}`;
+  return failOnIterationLimit(run, state);
+}
+
+function initialLoopState(
+  resume: LoopResume & { savedExecution: NodeExecutionRecord | undefined },
+  newExecution: NodeExecutionRecord
+): LoopState {
+  const { savedExecution } = resume;
+  const resumedExecution = savedExecution ?? newExecution;
+  return {
+    execution: resumedExecution,
+    lastStartedIteration: resume.startIteration - 1,
+    sessionId: resume.gate?.sessionId ?? undefined,
+    stopReason:
+      resumedExecution.spend.stopReason.source === 'provider'
+        ? resumedExecution.spend.stopReason.value
+        : undefined,
+    numTurns:
+      resumedExecution.spend.numTurns.source === 'provider'
+        ? resumedExecution.spend.numTurns.value
+        : undefined,
+    resolvedModel: undefined,
+    costUsd: resume.costUsd,
+    priorCostKnown: resume.priorCostKnown,
+    tokens: resume.tokens,
+    tokensUnknown:
+      savedExecution?.spend.tokens.source === 'unavailable' &&
+      savedExecution.spend.tokens.reason === 'incomplete',
+    // A resumed loop continues from the paused iteration, so its output stays the
+    // previous output for $LOOP_PREV_OUTPUT and until_bash.
+    lastOutput: resume.gate?.iterationOutput ?? '',
+    lastStructuredOutput: undefined,
+    backgroundTasksIncomplete: new Set<string>(),
+  };
+}
+
+/**
+ * Begin the execution record the iterations run under. A continuation after an
+ * interactive gate is the same invocation: it keeps the invocation (and its checkout
+ * start), the start time and any incomplete token accounting the paused attempt recorded.
+ */
+async function beginLoopAttempt(
+  ctx: RunLayersContext,
+  node: LoopNode,
+  savedExecution: NodeExecutionRecord | undefined,
+  binding: Omit<Parameters<typeof beginExecution>[2], 'checkoutStart'>
+): Promise<NodeExecutionRecord> {
+  if (savedExecution !== undefined) ctx.nodeInvocation = savedExecution.invocation;
+  const execution = beginExecution(ctx, node, {
+    ...binding,
+    checkoutStart: await observeNodeCheckout(ctx),
+  });
+  if (savedExecution === undefined) return execution;
+  execution.timing.startedAt = savedExecution.timing.startedAt;
+  if (
+    savedExecution.spend.tokens.source === 'unavailable' &&
+    savedExecution.spend.tokens.reason === 'incomplete'
+  ) {
+    execution.spend.tokens = savedExecution.spend.tokens;
+  }
+  return execution;
+}
+
+/**
+ * Resolve the iteration prompt source once per run/node. The interactive gate
+ * persists the resolved template (`commandSnapshot` in the pause context) for
+ * both inline and command-backed loops, so a persisted snapshot takes precedence.
+ * The schema guarantees exactly one of prompt/command is defined.
+ */
+async function resolveLoopPromptTemplate(
+  ctx: RunLayersContext,
+  node: LoopNode,
+  stepName: string,
+  resume: LoopResume,
+  state: LoopState
+): Promise<string | NodeExecutionResult> {
+  const loop = node.loop;
+  if (typeof resume.gate?.commandSnapshot === 'string') return resume.gate.commandSnapshot;
+  if (typeof loop.command === 'string') {
+    return resolveCommandPromptTemplate(ctx, node, loop.command, stepName, state);
+  }
+  if (typeof loop.prompt === 'string') return loop.prompt;
+  // Unreachable: superRefine on loopNodeConfigSchema enforces exactly-one.
+  throw new Error(
+    `Loop node '${node.id}' has neither 'loop.prompt' nor 'loop.command' — schema invariant violated`
+  );
+}
+
+/**
+ * Included loops retain their command identity plus a load-time compiled prompt/error;
+ * rediscovery after a pause cannot change their running prompt. Other command loops load
+ * the command now.
+ */
+async function resolveCommandPromptTemplate(
+  ctx: RunLayersContext,
+  node: LoopNode,
+  command: string,
+  stepName: string,
+  state: LoopState
+): Promise<string | NodeExecutionResult> {
+  const compiled = (node.loop as LoopNode['loop'] & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND];
+  const failConfig = (message: string): Promise<NodeExecutionResult> =>
+    failLoopNode(ctx, node.id, state, message, { failureKind: 'config', data: { command } });
+  const hasCompiledError = compiled !== undefined && typeof compiled.error === 'string';
+  const hasCompiledPrompt = compiled !== undefined && typeof compiled.prompt === 'string';
+  if (hasCompiledError && !hasCompiledPrompt) {
+    getLog().error(
+      { nodeId: node.id, command, error: compiled.error },
+      'loop_node.command_compilation_failed'
+    );
+    return failConfig(compiled.error);
+  }
+  if (hasCompiledPrompt && !hasCompiledError) return compiled.prompt;
+  if (compiled !== undefined) {
+    getLog().error(
+      { nodeId: node.id, command, compiled },
+      'loop_node.command_compilation_metadata_invalid'
+    );
+    return failConfig(
+      `Loop node '${node.id}' has malformed compiled command metadata for '${command}' — expected exactly one string prompt or error.`
+    );
+  }
+  const promptResult = await loadNodeCommandPrompt(ctx, command, stepName);
+  if (!promptResult.success) {
+    getLog().error(
+      { nodeId: node.id, command, error: promptResult.message },
+      'loop_node.command_load_failed'
+    );
+    return failConfig(promptResult.message);
+  }
+  return resolveIncludeOutputAliases(node, promptResult.content);
+}
+
+async function failOnIterationLimit(run: LoopRun, state: LoopState): Promise<NodeExecutionResult> {
+  const { ctx, node, resume } = run;
+  const { startIteration, iterationLimit } = resume;
+  const errorMsg = `Loop node '${node.id}' exceeded max iterations (${String(iterationLimit)}) ${describeUnmetCompletion(node.loop)}`;
   getLog().warn(
-    { nodeId: node.id, maxIterations: iterationLimit, signal: loop.until },
+    { nodeId: node.id, maxIterations: iterationLimit, signal: node.loop.until },
     'loop_node.max_iterations_reached'
   );
-  await safeSendMessage(platform, conversationId, errorMsg, msgContext);
+  await safeSendMessage(ctx.platform, ctx.conversationId, errorMsg, run.msgContext);
   return failLoopNode(ctx, node.id, state, errorMsg, {
     failureKind: 'max_iterations',
     output: state.lastOutput,
@@ -417,6 +459,8 @@ function readLoopResume(
       gate !== undefined
         ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
         : undefined,
+    // A legacy gate has no saved execution, so its carried-in cost is never known complete.
+    priorCostKnown: gate === undefined || attemptSpend(savedExecution).kind === 'known',
     tokens:
       gate !== undefined
         ? readSignaledTokens(gate.signaledTokens, persistedUsageContext)
@@ -465,6 +509,7 @@ async function finalizeOnBareApprove(
     finalizeOutput,
     {
       ...(resume.costUsd !== undefined ? { costUsd: resume.costUsd } : {}),
+      costPartial: !resume.priorCostKnown,
       ...(resume.tokens !== undefined ? { tokens: resume.tokens } : {}),
     },
     finalizeStructured ?? undefined,

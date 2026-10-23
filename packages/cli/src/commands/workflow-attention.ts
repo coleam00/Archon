@@ -5,6 +5,7 @@ import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   attentionProjectForCwd,
+  projectRefForCodebase,
   attentionQueueSource,
   resolveAttentionProject,
 } from '@archon/core/operations/attention-queue';
@@ -15,13 +16,21 @@ import {
   parseAttentionQueueRequest,
   readAttentionQueueItem,
   selectAttentionQueue,
+  type AttentionQueueCounts,
   type AttentionQueueItem,
   type AttentionQueueScope,
+  type AttentionQueueSource,
 } from '@archon/workflows/attention-queue';
 import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { formatAge, getLog, printJsonWriteError, resolveRunIdArg } from './workflow-shared';
+import {
+  formatAge,
+  getLog,
+  inheritedWorkflowCodebase,
+  printJsonWriteError,
+  resolveRunIdArg,
+} from './workflow-shared';
 
 export interface WorkflowAttentionOptions {
   json?: boolean;
@@ -51,12 +60,27 @@ export async function resolveAttentionRunId(
   return resolveRunIdArg(host, runId, undefined, false, codebase?.id);
 }
 
-/** The scope a list or count covers: `--all`, `--project`, or the working directory's project. */
+/** Chat scope takes precedence over the CLI's explicit or working-directory scope. */
 export async function attentionScope(
   host: WorkflowHost,
   cwd: string,
   opts: Pick<WorkflowAttentionOptions, 'project' | 'all'>
 ): Promise<AttentionQueueScope> {
+  const inherited = await inheritedWorkflowCodebase(host, opts.all);
+  if (inherited) {
+    const project = projectRefForCodebase(inherited);
+    if (opts.project !== undefined) {
+      const requested = await resolveAttentionProject(host.records.codebases, opts.project);
+      if (
+        requested.codebaseId !== null
+          ? requested.codebaseId !== inherited.id
+          : requested.key !== project.key
+      ) {
+        throw new Error('--project cannot override the selected chat project.');
+      }
+    }
+    return { kind: 'project', project };
+  }
   if (opts.all) return { kind: 'all' };
   const project =
     opts.project === undefined
@@ -73,6 +97,7 @@ function attentionItemLines(item: AttentionQueueItem): string[] {
   ];
   if (item.fanOut !== null)
     lines.push(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
+  else if (item.parentRunId !== null) lines.push(`    child of run ${item.parentRunId}`);
   const labels = Object.entries(item.labels);
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
@@ -105,6 +130,25 @@ export function printAttentionItem(item: AttentionQueueItem): void {
   for (const line of attentionItemLines(item)) console.log(line);
 }
 
+type RunLine = Extract<AttentionStreamLine, { runId: string }>;
+
+/** What the run is part of, as a trailing sentence; empty when the stream could not read it. */
+function runContextText(line: RunLine): string {
+  if (line.workflow === null) return '';
+  return line.parentRunId === null
+    ? ` Workflow ${line.workflow}.`
+    : ` Workflow ${line.workflow}, child of run ${line.parentRunId}.`;
+}
+
+function terminalText(line: Extract<AttentionStreamLine, { type: 'terminal' }>): string {
+  const outcome = line.outcome === null ? '' : ` (${line.outcome})`;
+  const cause =
+    line.cause === null
+      ? ''
+      : `: node ${line.cause.node} (${line.cause.errorClass ?? 'error class not recorded'})`;
+  return `Run ${line.runId} ${line.status}${outcome}${cause}.`;
+}
+
 /** The text for one stream line; none for a bookmark. */
 function attentionStreamText(
   line: Exclude<AttentionStreamLine, { type: 'error' }>,
@@ -118,22 +162,21 @@ function attentionStreamText(
       ];
     case 'resolved':
       return [
-        line.reason === 'answered'
+        (line.reason === 'answered'
           ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}.`
-          : `Run ${line.runId} no longer needs attention.`,
+          : `Run ${line.runId} no longer needs attention.`) + runContextText(line),
       ];
     case 'unmatched':
-      return [`Run ${line.runId} no longer matches the label filter.`];
+      return [`Run ${line.runId} no longer matches the label filter.${runContextText(line)}`];
     case 'terminal':
-      return [
-        `Run ${line.runId} ${line.status}${line.outcome === null ? '' : ` (${line.outcome})`}.`,
-      ];
+      return [terminalText(line) + runContextText(line)];
     case 'resumed':
-      return [`Run ${line.runId} resumed (${line.status}).`];
+      return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
     case 'owner_lost':
       return [
         `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +
-          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.`,
+          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.` +
+          runContextText(line),
       ];
     case 'ready':
       return [
@@ -230,96 +273,124 @@ export async function workflowAttentionCommand(
   opts: WorkflowAttentionOptions
 ): Promise<number> {
   try {
-    if (opts.after !== undefined && !opts.watch)
-      throw new Error('workflow attention --after needs --watch');
-    if (opts.watch) {
-      if (runId !== undefined || opts.sort !== undefined || opts.countBy !== undefined)
-        throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
-      return await workflowAttentionWatch(host, cwd, opts);
-    }
+    rejectConflictingAttentionOptions(runId, opts);
+    if (opts.watch) return await workflowAttentionWatch(host, cwd, opts);
     const source = attentionQueueSource(host.deps.store, host.records.isolation);
-    if (runId !== undefined) {
-      if (
-        opts.project !== undefined ||
-        opts.all ||
-        opts.labels.length > 0 ||
-        opts.sort !== undefined ||
-        opts.countBy !== undefined
-      )
-        throw new Error(
-          'workflow attention <run-id> takes no --project, --all, --label, --sort or --count-by'
-        );
-      const resolvedId = await resolveAttentionRunId(host, runId, cwd);
-      const item = await readAttentionQueueItem(source, resolvedId);
-      if (item === undefined) {
-        if (opts.json)
-          await writeJsonLine({ ok: false, runId, action: 'attention', error: 'not_found' });
-        else console.log(`Workflow run not found: ${runId}`);
-        return 1;
-      }
-      if (opts.json) {
-        await writeJsonLine({ ok: true, action: 'attention', runId: resolvedId, item });
-      } else if (item === null) {
-        console.log(`Run ${resolvedId} needs no attention now.`);
-      } else {
-        printAttentionItem(item);
-      }
-      return 0;
-    }
+    if (runId !== undefined) return await attentionRunCommand(host, cwd, source, runId, opts.json);
 
     const { labels, order, countBy } = parseAttentionQueueRequest(opts);
     const scope = await attentionScope(host, cwd, opts);
     const items = await listAttentionQueue(source);
-
-    if (countBy !== undefined) {
-      const counts = countAttentionQueue(items, { scope, labels, countBy });
-      if (opts.json) {
-        await writeJsonLine({ ok: true, action: 'attention', scope, counts });
-        return 0;
-      }
-      const rows =
-        counts.by === 'project'
-          ? counts.counts.map(
-              entry => [entry.count, entry.project?.name ?? '(no project)'] as const
-            )
-          : counts.counts.map(
-              entry => [entry.count, entry.value ?? `(no '${counts.key}' label)`] as const
-            );
-      for (const [count, name] of rows) console.log(`  ${String(count).padStart(4)}  ${name}`);
-      if (rows.length === 0) console.log('No runs need attention.');
-      return 0;
-    }
-
-    const selected = selectAttentionQueue(items, { scope, labels, order });
-    if (opts.json) {
-      await writeJsonLine({ ok: true, action: 'attention', scope, items: selected });
-      return 0;
-    }
-    const where = scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`;
-    if (selected.length === 0) {
-      console.log(`No runs need attention in ${where}.`);
-      return 0;
-    }
-    console.log(`\n${String(selected.length)} run(s) need attention in ${where}:\n`);
-    for (const item of selected) {
-      printAttentionItem(item);
-      console.log('');
-    }
-    return 0;
+    if (countBy !== undefined)
+      return await renderAttentionCounts(
+        countAttentionQueue(items, { scope, labels, countBy }),
+        scope,
+        opts.json
+      );
+    return await renderAttentionItems(
+      selectAttentionQueue(items, { scope, labels, order }),
+      scope,
+      opts.json
+    );
   } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, runId }, 'cli.workflow_attention_failed');
-    if (opts.json) {
-      await writeJsonLine({
-        ok: false,
-        ...(runId ? { runId } : {}),
-        action: 'attention',
-        error: err.message,
-      });
-      return 1;
-    }
-    throw new Error(`Failed to read the attention queue: ${err.message}`, { cause: err });
+    return attentionCommandFailure(error, runId, opts.json);
   }
+}
+
+function rejectConflictingAttentionOptions(
+  runId: string | undefined,
+  opts: WorkflowAttentionOptions
+): void {
+  if (opts.after !== undefined && !opts.watch)
+    throw new Error('workflow attention --after needs --watch');
+  const shaped = opts.sort !== undefined || opts.countBy !== undefined;
+  if (opts.watch && (runId !== undefined || shaped))
+    throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
+  const scoped = opts.project !== undefined || opts.all || opts.labels.length > 0;
+  if (runId !== undefined && (scoped || shaped))
+    throw new Error(
+      'workflow attention <run-id> takes no --project, --all, --label, --sort or --count-by'
+    );
+}
+
+/** `workflow attention <run-id>`: the one item the run stands for, null when it needs none. */
+async function attentionRunCommand(
+  host: WorkflowHost,
+  cwd: string,
+  source: AttentionQueueSource,
+  runId: string,
+  json: boolean | undefined
+): Promise<number> {
+  const resolvedId = await resolveAttentionRunId(host, runId, cwd);
+  const item = await readAttentionQueueItem(source, resolvedId);
+  if (item === undefined) {
+    if (json) await writeJsonLine({ ok: false, runId, action: 'attention', error: 'not_found' });
+    else console.log(`Workflow run not found: ${runId}`);
+    return 1;
+  }
+  if (json) await writeJsonLine({ ok: true, action: 'attention', runId: resolvedId, item });
+  else if (item === null) console.log(`Run ${resolvedId} needs no attention now.`);
+  else printAttentionItem(item);
+  return 0;
+}
+
+async function renderAttentionCounts(
+  counts: AttentionQueueCounts,
+  scope: AttentionQueueScope,
+  json: boolean | undefined
+): Promise<number> {
+  if (json) {
+    await writeJsonLine({ ok: true, action: 'attention', scope, counts });
+    return 0;
+  }
+  const rows =
+    counts.by === 'project'
+      ? counts.counts.map(entry => [entry.count, entry.project?.name ?? '(no project)'] as const)
+      : counts.counts.map(
+          entry => [entry.count, entry.value ?? `(no '${counts.key}' label)`] as const
+        );
+  for (const [count, name] of rows) console.log(`  ${String(count).padStart(4)}  ${name}`);
+  if (rows.length === 0) console.log('No runs need attention.');
+  return 0;
+}
+
+async function renderAttentionItems(
+  selected: AttentionQueueItem[],
+  scope: AttentionQueueScope,
+  json: boolean | undefined
+): Promise<number> {
+  if (json) {
+    await writeJsonLine({ ok: true, action: 'attention', scope, items: selected });
+    return 0;
+  }
+  const where = scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`;
+  if (selected.length === 0) {
+    console.log(`No runs need attention in ${where}.`);
+    return 0;
+  }
+  console.log(`\n${String(selected.length)} run(s) need attention in ${where}:\n`);
+  for (const item of selected) {
+    printAttentionItem(item);
+    console.log('');
+  }
+  return 0;
+}
+
+async function attentionCommandFailure(
+  error: unknown,
+  runId: string | undefined,
+  json: boolean | undefined
+): Promise<number> {
+  const err = error as Error;
+  getLog().error({ err, runId }, 'cli.workflow_attention_failed');
+  if (!json) throw new Error(`Failed to read the attention queue: ${err.message}`, { cause: err });
+  await writeJsonLine({
+    ok: false,
+    ...(runId ? { runId } : {}),
+    action: 'attention',
+    error: err.message,
+  });
+  return 1;
 }
 
 /**

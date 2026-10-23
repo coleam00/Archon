@@ -134,45 +134,54 @@ export async function checkBackgroundSettle(
 ): Promise<string[]> {
   if (cases.length === 0) return ['reported provider has no background conformance cases'];
   const violations: string[] = [];
-  for (const turn of cases) {
-    const observed = new Set<string>();
-    let resultWhileLive = false;
-    let settled = false;
-    try {
-      for await (const raw of turn.run()) {
-        const parsed = providerChunkSchema.safeParse(raw);
-        if (!parsed.success) continue;
-        const chunk = parsed.data;
-        if (chunk.type === 'subtask') {
-          observed.add(chunk.taskId);
-          if (
-            TERMINAL_SUBTASK_STATUSES.has(chunk.status) &&
-            turn.runtimeStatus(chunk.taskId) !== chunk.status
-          ) {
-            violations.push(`${turn.name}: invented ${chunk.status} for ${chunk.taskId}`);
-          }
-        } else if (chunk.type === 'result') {
-          resultWhileLive ||= [...observed].some(
-            id => !TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')
-          );
-        } else if (chunk.type === 'settled') {
-          settled = true;
-          for (const id of observed) {
-            if (!TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')) {
-              violations.push(`${turn.name}: runtime still reports ${id} live at settled`);
-            }
+  for (const turn of cases) violations.push(...(await checkBackgroundTurn(turn)));
+  return violations;
+}
+
+async function checkBackgroundTurn(turn: ProviderBackgroundCase): Promise<string[]> {
+  const violations: string[] = [];
+  const observed = new Set<string>();
+  let resultWhileLive = false;
+  let settled = false;
+  const isLive = (id: string): boolean =>
+    !TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '');
+  const observe = (chunk: ProviderChunk): void => {
+    switch (chunk.type) {
+      case 'subtask':
+        observed.add(chunk.taskId);
+        if (
+          TERMINAL_SUBTASK_STATUSES.has(chunk.status) &&
+          turn.runtimeStatus(chunk.taskId) !== chunk.status
+        ) {
+          violations.push(`${turn.name}: invented ${chunk.status} for ${chunk.taskId}`);
+        }
+        break;
+      case 'result':
+        resultWhileLive ||= [...observed].some(isLive);
+        break;
+      case 'settled':
+        settled = true;
+        for (const id of observed) {
+          if (isLive(id)) {
+            violations.push(`${turn.name}: runtime still reports ${id} live at settled`);
           }
         }
-      }
-    } catch (error) {
-      violations.push(
-        `${turn.name}: threw before its background work settled (${(error as Error).message})`
-      );
-      continue;
+        break;
     }
-    if (!settled || observed.size === 0 || !resultWhileLive) {
-      violations.push(`${turn.name}: background case must settle after a result with live work`);
+  };
+  try {
+    for await (const raw of turn.run()) {
+      const parsed = providerChunkSchema.safeParse(raw);
+      if (parsed.success) observe(parsed.data);
     }
+  } catch (error) {
+    violations.push(
+      `${turn.name}: threw before its background work settled (${(error as Error).message})`
+    );
+    return violations;
+  }
+  if (!settled || observed.size === 0 || !resultWhileLive) {
+    violations.push(`${turn.name}: background case must settle after a result with live work`);
   }
   return violations;
 }

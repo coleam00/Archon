@@ -1,12 +1,12 @@
 // @archon-test-isolated
 import {
-  InMemoryStore,
   makeDeps,
   makePlatform,
   makeFanResolver,
   fanChildEcho,
   fanChildCond,
 } from './child-runs/test-utils';
+import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import type { InMemoryStoreEvent } from './test-utils';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
@@ -15,6 +15,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { executeWorkflow } from './executor';
+import { executionClaim } from './store';
 import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps, IWorkflowPlatform } from './deps';
@@ -456,6 +457,7 @@ nodes:
       return pause(id, approval, extra, suspension);
     };
 
+    const claims: (string | null)[] = [];
     const result = await executeWorkflow(
       deps,
       makePlatform(),
@@ -463,15 +465,23 @@ nodes:
       cwd,
       await discover('fan-ask-race-parent'),
       'goal',
-      { conversationId: 'conv-db' }
+      { conversationId: 'conv-db' },
+      {
+        onExecutionClaimed: claim => {
+          claims.push(claim);
+        },
+      }
     );
 
+    expect(claims).toHaveLength(2);
+    expect(claims[0]).toBeNull();
     expect(raced).toBe(true);
     expect(result.success).toBe(true);
     expect('paused' in result && result.paused).toBeFalsy();
     const parentRun = [...store.runs.values()].find(
       r => r.workflow_name === 'fan-ask-race-parent'
     )!;
+    expect(claims[1]).toBe(executionClaim(parentRun.metadata));
     expect(parentRun.status).toBe('completed');
     const workCompleted = store.events.find(
       e => e.event_type === 'node_completed' && e.step_name === 'work'
@@ -844,7 +854,7 @@ nodes:
     expect(childA?.status).toBe('failed');
     expect((childA?.metadata as Record<string, unknown>).cancelled_reason).toBeUndefined();
     // User cancels child A out-of-band (a failed child → cancellable; no fan-out tag).
-    await store.cancelWorkflowRun(childA!.id);
+    await store.cancelWorkflowRun(childA!.id, { cancel_reason: 'operator' });
     expect((await store.getWorkflowRun(childA!.id))?.status).toBe('cancelled');
 
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun!.id))!);
@@ -867,6 +877,20 @@ nodes:
     const childAafter = await store.getWorkflowRun(childA!.id);
     expect(childAafter?.status).toBe('cancelled');
     expect((childAafter?.metadata as Record<string, unknown>).cancelled_reason).toBeUndefined();
+    const failed = store.events
+      .filter(e => e.event_type === 'node_failed' && e.step_name === 'work')
+      .at(-1);
+    expect(failed?.data?.fan_out_outcome).toMatchObject({
+      slots: [
+        {
+          index: 0,
+          outcome: 'cancelled_out_of_band',
+          child_run_id: childA!.id,
+          cancel_reason: 'operator',
+        },
+        { index: 1, outcome: 'completed' },
+      ],
+    });
     // Exactly one row for index 0 — never re-driven.
     expect(
       [...store.runs.values()].filter(

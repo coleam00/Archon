@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, mock, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { mkdtemp } from 'node:fs/promises';
@@ -646,6 +646,54 @@ describe('watchAttentionQueue', () => {
     }
   });
 
+  test.each(['attention', 'ready'] as const)(
+    'startup waits for initial %s delivery and rejects without starting background work',
+    async type => {
+      const store = await makeStore();
+      await pausedAtAsk(store);
+      await pausedAtAsk(store);
+      await running(store);
+      const reads = spyOn(store, 'readWorkflowEventsAfter');
+      const listRunning = spyOn(store, 'listWorkflowRuns');
+      const ownerLoss = mock(() => Promise.resolve(null));
+      const doorbell = mock(async () => () => {});
+      const entered = Promise.withResolvers<void>();
+      const delivery = Promise.withResolvers<void>();
+      const cause = new Error('initial delivery rejected');
+      const lines: AttentionStreamLine[] = [];
+      const startup = watchAttentionQueue(
+        store,
+        { ...host, ownerLoss, doorbell },
+        line => {
+          lines.push(line);
+          if (line.type === type) {
+            entered.resolve();
+            return delivery.promise;
+          }
+          return undefined;
+        },
+        { scope: { kind: 'all' }, pollIntervalMs: 5 }
+      ).then(
+        handle => ({ status: 'resolved' as const, handle }),
+        error => ({ status: 'rejected' as const, error: error as unknown })
+      );
+      await entered.promise;
+      const pending = await Promise.race([startup, Bun.sleep(10).then(() => 'pending' as const)]);
+      delivery.reject(cause);
+      const result = await startup;
+      if (result.status === 'resolved') await result.handle.close();
+      expect(pending).toBe('pending');
+      expect(result).toEqual({ status: 'rejected', error: cause });
+      expect(lines.map(line => line.type)).toEqual(
+        type === 'attention' ? ['attention'] : ['attention', 'attention', 'ready']
+      );
+      expect(reads).not.toHaveBeenCalled();
+      expect(listRunning).not.toHaveBeenCalled();
+      expect(ownerLoss).not.toHaveBeenCalled();
+      expect(doorbell).not.toHaveBeenCalled();
+    }
+  );
+
   test('the snapshot is the open set in scope, as the queue builds it, then ready', async () => {
     const store = await makeStore();
     const other = await pausedAtAsk(store, { ci: 'other' });
@@ -660,6 +708,8 @@ describe('watchAttentionQueue', () => {
         cursor: head,
         snapshot: true,
         project: { key: '_cwd/alpha', codebaseId: null, name: 'alpha' },
+        workflow: 'wf',
+        parentRunId: null,
         item: (await readAttentionQueueItem({ store, branchOf: host.branchOf }, other.runId))!,
       },
       { type: 'ready', cursor: head },
@@ -768,6 +818,100 @@ describe('watchAttentionQueue', () => {
     expect(stream.lines.filter(line => 'runId' in line || line.type === 'attention')).toHaveLength(
       3
     );
+  });
+
+  test("a child run's lines name its parent and workflow; a top-level run's name no parent", async () => {
+    const store = await makeStore();
+    const parentId = await running(store);
+    const stream = await watch(store);
+    const child = await store.createWorkflowRun({
+      workflow_name: 'child-wf',
+      user_message: '',
+      parent_run_id: parentId,
+    });
+    await store.claimPendingWorkflowRun(child.id);
+    const wait = ask();
+    await store.pauseWorkflowRunForWait(child.id, wait, { kind: 'started', stepName: 'ask' });
+    const context = { workflow: 'child-wf', parentRunId: parentId };
+    expect(await stream.next(attentionOf(child.id))).toMatchObject({ ...context, item: context });
+
+    await store.answerAttentionWait(child.id, answer(wait.pauseId));
+    expect(await stream.next(ofRun(child.id, 'resolved'))).toMatchObject(context);
+    await store.resumeWorkflowRun(child.id);
+    await store.completeWorkflowRun(child.id, { duration_ms: 1 });
+    expect(await stream.next(ofRun(child.id, 'terminal'))).toMatchObject({
+      ...context,
+      cause: null,
+    });
+    await store.completeWorkflowRun(parentId, { duration_ms: 1 });
+    expect(await stream.next(ofRun(parentId, 'terminal'))).toMatchObject({
+      workflow: 'wf',
+      parentRunId: null,
+    });
+    await stream.close();
+  });
+
+  test("a failed run's terminal line names the failed node and its recorded class, stable on replay", async () => {
+    const store = await makeStore();
+    const before = await store.getWorkflowEventHead();
+    const runId = await running(store);
+    const nodeFailed = (failureKind: string): Promise<void> =>
+      store.persistWorkflowEvent({
+        workflow_run_id: runId,
+        event_type: 'node_failed',
+        step_name: 'build',
+        data: { error: 'secret text', failure_kind: failureKind },
+      });
+    await nodeFailed('exec_failed');
+    await store.failWorkflowRun(runId, 'node failed');
+    const first = await watch(store, { after: before });
+    const terminal = await first.next(ofRun(runId, 'terminal'));
+    await first.close();
+    expect(terminal).toMatchObject({
+      status: 'failed',
+      workflow: 'wf',
+      parentRunId: null,
+      cause: { node: 'build', errorClass: 'exec_failed' },
+    });
+    expect(JSON.stringify(terminal)).not.toContain('secret text');
+
+    // A later attempt's failure is its own line; it does not rewrite the earlier one.
+    await store.resumeWorkflowRun(runId);
+    await nodeFailed('timeout');
+    await store.failWorkflowRun(runId, 'node failed');
+    const replay = await watch(store, { after: before });
+    await replay.next(line => ofRun(runId, 'terminal')(line) && !isDeepStrictEqual(line, terminal));
+    await replay.close();
+    const terminals = replay.lines.filter(ofRun(runId, 'terminal'));
+    expect(terminals[0]).toEqual(terminal);
+    expect(terminals[1]).toMatchObject({ cause: { node: 'build', errorClass: 'timeout' } });
+  });
+
+  test('a terminal line has no cause, or no class, when the engine recorded none', async () => {
+    const store = await makeStore();
+    const stream = await watch(store);
+    const unclassified = await running(store);
+    await store.persistWorkflowEvent({
+      workflow_run_id: unclassified,
+      event_type: 'node_failed',
+      step_name: 'build',
+      data: { error: 'boom' },
+    });
+    await store.failWorkflowRun(unclassified, 'node failed');
+    const outsideNode = await running(store);
+    await store.failWorkflowRun(outsideNode, 'setup failed');
+    const cancelled = await running(store);
+    await store.cancelWorkflowRun(cancelled);
+
+    expect(await stream.next(ofRun(unclassified, 'terminal'))).toMatchObject({
+      cause: { node: 'build', errorClass: null },
+    });
+    expect(await stream.next(ofRun(outsideNode, 'terminal'))).toMatchObject({ cause: null });
+    expect(await stream.next(ofRun(cancelled, 'terminal'))).toMatchObject({
+      status: 'cancelled',
+      cause: null,
+    });
+    await stream.close();
   });
 
   test('a relabel moves an item between label filters by revision, and unmatched is stateless', async () => {

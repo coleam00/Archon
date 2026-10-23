@@ -114,28 +114,37 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
       ) : (
         <div className="flex items-center gap-4">{row}</div>
       )}
-      {expanded && hasDetails ? (
-        <div className="ml-[72px] mt-2 space-y-1.5">
-          {hasInput ? (
-            <pre className="max-h-[320px] overflow-auto rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
-              {JSON.stringify(call.input, null, 2)}
-            </pre>
-          ) : null}
-          {call.output !== undefined && call.output.length > 0 ? (
-            <div>
-              <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wider text-text-tertiary">
-                Result
-              </div>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
-                {call.output.length > 2000
-                  ? `${call.output.slice(0, 2000)}\n\n… (${(call.output.length - 2000).toString()} more chars)`
-                  : call.output}
-              </pre>
-              {call.outputTruncated === true ? (
-                <div className="mt-0.5 text-[10px] text-text-tertiary">
-                  Output cut short by the provider.
-                </div>
-              ) : null}
+      {expanded && hasDetails ? <ToolCallDetails call={call} hasInput={hasInput} /> : null}
+    </div>
+  );
+}
+
+function ToolCallDetails({
+  call,
+  hasInput,
+}: Pick<ToolCallItemProps, 'call'> & {
+  hasInput: boolean;
+}): ReactElement {
+  return (
+    <div className="ml-[72px] mt-2 space-y-1.5">
+      {hasInput ? (
+        <pre className="max-h-[320px] overflow-auto rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
+          {JSON.stringify(call.input, null, 2)}
+        </pre>
+      ) : null}
+      {call.output !== undefined && call.output.length > 0 ? (
+        <div>
+          <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wider text-text-tertiary">
+            Result
+          </div>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
+            {call.output.length > 2000
+              ? `${call.output.slice(0, 2000)}\n\n… (${(call.output.length - 2000).toString()} more chars)`
+              : call.output}
+          </pre>
+          {call.outputTruncated === true ? (
+            <div className="mt-0.5 text-[10px] text-text-tertiary">
+              Output cut short by the provider.
             </div>
           ) : null}
         </div>

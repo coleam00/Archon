@@ -17,7 +17,9 @@ import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { WorkflowEventRow } from '@archon/core/schemas/workflow-event';
 import { workflowGetCommand, workflowStatusCommand } from './workflow-query';
-import { buildNodeSummaries } from './workflow-node-summaries';
+import { buildNodeSummaries, formatFanOutOutcome } from './workflow-node-summaries';
+import type { TerminalRecord } from '@archon/workflows/schemas/terminal-record';
+import { fanOutOutcome, type FanOutSlot } from '@archon/workflows/schemas/fan-out-outcome';
 
 const VERBOSE_EVENTS_FIXTURE: WorkflowEventRow[] = [
   {
@@ -455,28 +457,36 @@ describe('workflowStatusCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('No active workflows.');
   });
 
-  it('should list active runs with ID, name, path, status, and age', async () => {
-    mockListDashboardRuns.mockResolvedValueOnce(
-      statusRuns([
-        {
-          id: 'run-abc',
-          workflow_name: 'implement',
-          working_path: '/path/to/worktree',
-          status: 'running',
-          started_at: new Date(Date.now() - 5 * 60 * 1000), // 5 minutes ago
-          active_nodes: ['parallel-a', 'parallel-b'],
-        },
-      ])
-    );
+  it('prints the complete active run layout with fixed age and active nodes', async () => {
+    const now = spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-23T12:00:00Z'));
+    try {
+      mockListDashboardRuns.mockResolvedValueOnce(
+        statusRuns([
+          {
+            id: 'run-abc',
+            workflow_name: 'implement',
+            working_path: '/path/to/worktree',
+            status: 'running',
+            started_at: new Date('2026-10-23T11:55:00Z'),
+            active_nodes: ['parallel-a', 'parallel-b'],
+          },
+        ])
+      );
 
-    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
+      await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
 
-    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(calls.some(c => c.includes('run-abc'))).toBe(true);
-    expect(calls.some(c => c.includes('implement'))).toBe(true);
-    expect(calls.some(c => c.includes('/path/to/worktree'))).toBe(true);
-    expect(calls.some(c => c.includes('running'))).toBe(true);
-    expect(calls.some(c => c.includes('Active nodes: parallel-a, parallel-b'))).toBe(true);
+      expect(consoleSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n') + '\n').toBe(
+        '\nActive workflows (1):\n\n' +
+          '  ID:     run-abc\n' +
+          '  Name:   implement\n' +
+          '  Path:   /path/to/worktree\n' +
+          '  Status: running\n' +
+          '  Age:    5m\n' +
+          '  Active nodes: parallel-a, parallel-b\n\n'
+      );
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('should label authored outcome separately from active execution status', async () => {
@@ -758,35 +768,45 @@ describe('workflowStatusCommand', () => {
     expect(parsed.runs[0]?.nodes).toBeUndefined();
   });
 
-  it('degrades a verbose JSON event-query failure to an empty node payload', async () => {
-    const workflowEventsDb = await import('@archon/core/db/workflow-events');
-    mockListDashboardRuns.mockResolvedValueOnce(
-      statusRuns([
-        {
-          id: 'run-unavailable',
-          workflow_name: 'implement',
-          working_path: '/path/to/worktree',
-          status: 'running',
-          started_at: new Date(),
-          active_nodes: ['beta'],
-        },
-      ])
-    );
-    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('events unavailable')
-    );
+  it.each([false, true])(
+    'fails verbose JSON when a later run event query fails (rawEvents=%s)',
+    async rawEvents => {
+      const workflowEventsDb = await import('@archon/core/db/workflow-events');
+      mockListDashboardRuns.mockResolvedValueOnce(
+        statusRuns([
+          {
+            id: 'run-available',
+            workflow_name: 'implement',
+            working_path: '/path/to/first-worktree',
+            status: 'running',
+            started_at: new Date(),
+            active_nodes: ['alpha'],
+          },
+          {
+            id: 'run-unavailable',
+            workflow_name: 'implement',
+            working_path: '/path/to/worktree',
+            status: 'running',
+            started_at: new Date(),
+            active_nodes: ['beta'],
+          },
+        ])
+      );
+      (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>)
+        .mockResolvedValueOnce(VERBOSE_EVENTS_FIXTURE)
+        .mockRejectedValueOnce(new Error('events unavailable'));
 
-    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', {
-      json: true,
-      verbose: true,
-      all: true,
-    });
-
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
-      runs: Array<{ nodes: unknown[] }>;
-    };
-    expect(parsed.runs[0]?.nodes).toEqual([]);
-  });
+      await expect(
+        workflowStatusCommand(createTestWorkflowHost(), '/test/path', {
+          json: true,
+          verbose: true,
+          rawEvents,
+          all: true,
+        })
+      ).rejects.toThrow('Failed to fetch workflow events');
+      expect(stdoutSpy).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('workflowGetCommand', () => {
@@ -802,6 +822,206 @@ describe('workflowGetCommand', () => {
     consoleSpy.mockRestore();
     stdoutSpy.mockRestore();
   });
+
+  it.each([0, 20, 21])(
+    'summarizes terminal artifact inventory with %s operator files without changing JSON',
+    async fileCount => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const workflowEventsDb = await import('@archon/core/db/workflow-events');
+      const operatorPaths = [
+        `reports/${RUN_ARTIFACTS_ENGINE_SUBDIR}/report.md`,
+        '.summary.md',
+        ...Array.from({ length: 19 }, (_, index) => `report-${index}.md`),
+      ].slice(0, fileCount);
+      const internalPaths = [
+        `${RUN_ARTIFACTS_ENGINE_SUBDIR}/typed-artifacts/internal.json`,
+        `${RUN_ARTIFACTS_ENGINE_SUBDIR}/node-output-spills/output.txt`,
+      ];
+      const record: TerminalRecord = {
+        run_id: 'run-terminal-artifacts',
+        status: 'completed',
+        outcome: null,
+        error: null,
+        first_failed_node: null,
+        nodes: [],
+        returns: { availability: 'unavailable', node_id: null, reason: 'not_declared' },
+        artifacts: {
+          root: null,
+          files: [internalPaths[0], ...operatorPaths, internalPaths[1]].map(path => ({
+            path,
+            size: 42,
+          })),
+          limitations: [{ kind: 'unreadable', path: 'missing-report.md', code: 'EACCES' }],
+        },
+      };
+      const run = {
+        id: record.run_id,
+        workflow_name: 'implement',
+        status: record.status,
+        started_at: new Date(),
+        metadata: {},
+        output_root: null,
+        checkout_baseline: null,
+        codebase_id: null,
+      };
+      const events: WorkflowEventRow[] = [
+        {
+          id: 'terminal-event',
+          workflow_run_id: record.run_id,
+          event_type: 'workflow_completed',
+          step_name: null,
+          step_index: null,
+          created_at: '2026-10-23T00:00:00.000Z',
+          data: { terminal_record: record },
+        },
+      ];
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+        .mockResolvedValueOnce(run)
+        .mockResolvedValueOnce(run);
+      (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>)
+        .mockResolvedValueOnce(events)
+        .mockResolvedValueOnce(events);
+
+      expect(await workflowGetCommand(createTestWorkflowHost(), record.run_id)).toBe(0);
+
+      const lines: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+      expect(lines).toContain(`    Artifacts observed: ${fileCount + internalPaths.length}`);
+      expect(lines).toContain('    Engine-internal artifact files (not listed): 2');
+      expect(lines.filter(line => line.startsWith('      - '))).toEqual(
+        operatorPaths.slice(0, 20).map(path => `      - ${path}`)
+      );
+      for (const path of internalPaths) expect(lines.join('\n')).not.toContain(path);
+      expect(lines.includes('    Artifact list truncated at the display cap')).toBe(fileCount > 20);
+      expect(lines).toContain('    Inventory limitation: unreadable (missing-report.md)');
+
+      expect(await workflowGetCommand(createTestWorkflowHost(), record.run_id, true)).toBe(0);
+      expect(JSON.parse(firstJsonPayload(stdoutSpy)).terminal_record).toEqual(record);
+    }
+  );
+
+  const usageCases: [string, Record<string, unknown>, string, string, string][] = [
+    [
+      'recorded numbers',
+      { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
+      '$0.024',
+      '8420',
+      '2180',
+    ],
+    [
+      'reported zero',
+      { total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 },
+      '$0',
+      '0',
+      '0',
+    ],
+    [
+      'tiny cost',
+      { total_cost_usd: 0.00000001, total_tokens_in: 2, total_tokens_out: 3 },
+      '$0.00000001',
+      '2',
+      '3',
+    ],
+    [
+      'summed cost',
+      { total_cost_usd: 0.1 + 0.2, total_tokens_in: 2, total_tokens_out: 3 },
+      '$0.3',
+      '2',
+      '3',
+    ],
+    [
+      'large cost',
+      { total_cost_usd: 1e21, total_tokens_in: 2, total_tokens_out: 3 },
+      '$1000000000000000000000',
+      '2',
+      '3',
+    ],
+    ['missing data', {}, 'unknown', 'unknown', 'unknown'],
+    [
+      'null values',
+      { total_cost_usd: null, total_tokens_in: null, total_tokens_out: null },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'invalid values',
+      { total_cost_usd: '0', total_tokens_in: {}, total_tokens_out: '12' },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'nonfinite values',
+      { total_cost_usd: Infinity, total_tokens_in: NaN, total_tokens_out: -Infinity },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'unknown tokens',
+      { total_cost_usd: 1, total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: true },
+      '$1',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'malformed token marker',
+      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: 'false' },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'null token marker',
+      { total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: null },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'valid output axis',
+      { total_tokens_in: 'bad', total_tokens_out: 3, total_tokens_unknown: false },
+      'unknown',
+      'unknown',
+      '3',
+    ],
+    ['valid input axis', { total_tokens_in: 2, total_tokens_out: [] }, 'unknown', '2', 'unknown'],
+    [
+      'negative cost, fractional input and negative output',
+      { total_cost_usd: -1, total_tokens_in: 1.5, total_tokens_out: -2 },
+      'unknown',
+      'unknown',
+      'unknown',
+    ],
+    [
+      'negative input and fractional output',
+      { total_cost_usd: 0.5, total_tokens_in: -2, total_tokens_out: 1.5 },
+      '$0.5',
+      'unknown',
+      'unknown',
+    ],
+  ];
+
+  it.each(usageCases)(
+    'prints qualified usage for %s',
+    async (_name, metadata, cost, input, output) => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-usage',
+        checkout_baseline: null,
+        workflow_name: 'plan',
+        status: 'completed',
+        working_path: '/tmp/wt',
+        started_at: new Date(),
+        metadata,
+      });
+      expect(await workflowGetCommand(createTestWorkflowHost(), 'run-usage')).toBe(0);
+      expect(consoleSpy).toHaveBeenCalledWith('  Usage (recorded totals; completeness unknown):');
+      expect(consoleSpy).toHaveBeenCalledWith(`    Cost: ${cost}`);
+      expect(consoleSpy).toHaveBeenCalledWith(`    Input tokens: ${input}`);
+      expect(consoleSpy).toHaveBeenCalledWith(`    Output tokens: ${output}`);
+    }
+  );
 
   it('prints not-found (human) and exits non-zero for a missing run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
@@ -1211,6 +1431,13 @@ describe('workflowGetCommand', () => {
 
   it('emits the raw run as a single clean JSON object', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
+    const metadata = {
+      total_cost_usd: 0.024,
+      total_tokens_in: null,
+      total_tokens_out: 'historical',
+      total_tokens_unknown: null,
+      custom: { value: 1 },
+    };
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-json',
       checkout_baseline: null,
@@ -1218,7 +1445,7 @@ describe('workflowGetCommand', () => {
       status: 'completed',
       working_path: '/tmp/wt',
       started_at: new Date(),
-      metadata: {},
+      metadata,
     });
 
     const code = await workflowGetCommand(createTestWorkflowHost(), 'run-json', true);
@@ -1227,9 +1454,12 @@ describe('workflowGetCommand', () => {
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       id: string;
       status: string;
+      metadata: Record<string, unknown>;
     };
     expect(parsed.id).toBe('run-json');
     expect(parsed.status).toBe('completed');
+    expect(parsed.metadata).toEqual(metadata);
+    expect(consoleSpy).not.toHaveBeenCalled();
     expect(code).toBe(0);
   });
 
@@ -2022,5 +2252,52 @@ describe('workflowGetCommand', () => {
       runId: 'run-v',
       error: 'workflow_events_unavailable',
     });
+  });
+});
+
+describe('fan-out outcome lines', () => {
+  it('lists unfinished slots up to the display limit and counts the rest from the tally', () => {
+    const slots: FanOutSlot[] = Array.from({ length: 40 }, (_, index): FanOutSlot => {
+      if (index % 3 === 0) return { index, outcome: 'completed', child_run_id: `c${index}` };
+      if (index % 3 === 1)
+        return { index, outcome: 'failed', child_run_id: `c${index}`, error: 'exit 1' };
+      return { index, outcome: 'not_started', error: 'refused' };
+    });
+    slots[2] = {
+      index: 2,
+      outcome: 'cancelled_out_of_band',
+      child_run_id: 'c2',
+      cancel_reason: 'operator',
+    };
+    const lines = formatFanOutOutcome(fanOutOutcome(slots));
+    expect(lines[0]).toBe(
+      'Fan-out work: 26 of 40 children did not complete ' +
+        '(13 failed, 12 not started, 1 cancelled out of band)'
+    );
+    expect(lines.slice(1, 3)).toEqual([
+      '  item 1: failed — run c1 — exit 1',
+      '  item 2: cancelled out of band (operator) — run c2',
+    ]);
+    expect(lines).toHaveLength(1 + 10 + 1);
+    expect(lines.at(-1)).toBe('  … and 16 more (see --json)');
+    expect(
+      formatFanOutOutcome(fanOutOutcome([{ index: 0, outcome: 'completed', child_run_id: 'c' }]))
+    ).toEqual([]);
+  });
+
+  it('carries the slot record from a fan-out node event into its summary', () => {
+    const outcome = fanOutOutcome([{ index: 0, outcome: 'not_started', error: 'refused' }]);
+    const [summary] = buildNodeSummaries([
+      {
+        id: 'work-failed',
+        workflow_run_id: 'run-fan',
+        event_type: 'node_failed',
+        step_name: 'work',
+        step_index: null,
+        data: { error: 'refused all', fan_out: true, fan_out_outcome: outcome },
+        created_at: '2026-10-22T10:00:00.000Z',
+      },
+    ]);
+    expect(summary?.fanOutOutcome).toEqual(outcome);
   });
 });

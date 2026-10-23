@@ -1,5 +1,6 @@
 import type { ChatContext, ChatRunEvent, RunActionResult } from '@archon/chat-contract';
 import type { BlockButtonAction, ButtonAction } from '@slack/bolt';
+import { descriptor } from './descriptor';
 import {
   REACTION_FAILURE,
   REACTION_RUNNING,
@@ -408,16 +409,12 @@ export class SlackWorkflowBridge {
         let note = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled the run.`;
         for (const warning of result.cleanupWarnings ?? []) note += `\n:warning: ${warning}`;
         if (result.cascadeFailures > 0)
-          note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`/archon-workflow status\`.`;
+          note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`${descriptor.workflowCommand.prefix}status\`.`;
         if (result.blockedParentRunId)
           note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         await this.postActionNote(body, runId, note);
-      } else if (result.kind === 'cooperative' && !result.cancelled) {
-        await this.postActionNote(
-          body,
-          runId,
-          `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
-        );
+      } else if (result.kind === 'cooperative') {
+        await this.postCooperativeCancelNote(body, runId, result);
       }
     } catch (err) {
       logFailure('action.cancel', err);
@@ -427,6 +424,17 @@ export class SlackWorkflowBridge {
         `:warning: Could not cancel run \`${runId}\`. Check the server logs or try again.`
       );
     }
+  }
+
+  private async postCooperativeCancelNote(
+    body: BlockButtonAction,
+    runId: string,
+    result: Extract<RunActionResult, { kind: 'cooperative' }>
+  ): Promise<void> {
+    const note = result.cancelled
+      ? (result.cleanupWarnings ?? []).map(warning => `:warning: ${warning}`).join('\n')
+      : `:information_source: Run \`${runId}\` already finished — nothing to cancel.`;
+    if (note) await this.postActionNote(body, runId, note);
   }
 
   private async postActionNote(
@@ -510,6 +518,19 @@ function notResumedNote(result: { waitingForCapacity?: true }): string {
   return result.waitingForCapacity ? CAPACITY_WAIT_NOTE : RESUME_NOT_ACCEPTED_NOTE;
 }
 
+function rejectionNote(result: Extract<RunActionResult, { kind: 'rejected' }>): string {
+  if (result.cancelled)
+    return [
+      result.maxAttemptsReached ? 'cancelled — max reject attempts reached' : 'cancelled',
+      ...(result.cleanupWarnings ?? []).map(warning => `warning: ${warning}`),
+    ].join(' — ');
+  if (!result.resumed) return notResumedNote(result);
+  if (result.writeBack) return 'recorded — workflow resumed to discard the container changes';
+  return result.newMode
+    ? 'recorded — workflow resumed'
+    : 'recorded — workflow resumed and will retry with feedback';
+}
+
 export function resolutionNote(result: RunActionResult): string | undefined {
   switch (result.kind) {
     case 'approved':
@@ -519,17 +540,7 @@ export function resolutionNote(result: RunActionResult): string | undefined {
           ? 'workflow resumed — finalizes if the gate paused after a completion condition was met, otherwise the loop runs another iteration'
           : 'workflow resumed';
     case 'rejected':
-      return result.cancelled
-        ? result.maxAttemptsReached
-          ? 'cancelled — max reject attempts reached'
-          : 'cancelled'
-        : !result.resumed
-          ? notResumedNote(result)
-          : result.writeBack
-            ? 'recorded — workflow resumed to discard the container changes'
-            : result.newMode
-              ? 'recorded — workflow resumed'
-              : 'recorded — workflow resumed and will retry with feedback';
+      return rejectionNote(result);
     case 'answered':
     case 'resumed':
       return result.resumed ? 'workflow resumed' : notResumedNote(result);

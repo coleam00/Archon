@@ -15,7 +15,7 @@ import type {
 } from '@archon/provider-contract';
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
-import type { AttentionOption } from './schemas/dag-node';
+import type { AttentionOption } from './schemas/wait-node';
 import { legacyOccurrenceStep, type RunAttention, type WorkflowRun } from './schemas/workflow-run';
 import type { WorktreeDisposition } from './schemas/terminal-record';
 import type {
@@ -59,7 +59,7 @@ export type {
 export type WorkflowTokenUsage = TokenUsage;
 
 // ---------------------------------------------------------------------------
-// Platform-specific types (NOT mirrors — unique to workflow engine)
+// Platform message metadata
 // ---------------------------------------------------------------------------
 
 export interface WorkflowMessageMetadata {

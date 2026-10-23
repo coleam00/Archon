@@ -29,7 +29,7 @@ import {
 import { readComposedMeta } from '../compiled-command';
 import { type ExecNodeEnvironmentContext, buildExecNodeEnvironment } from '../exec-environment';
 import { substituteWorkflowVariables, type TemplateReferences } from '../workflow-variables';
-import { type AttentionOption, attentionOptionsSchema } from '../schemas/dag-node';
+import { type AttentionOption, attentionOptionsSchema } from '../schemas/wait-node';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
 import { type LoopBodyScope, loopScopeTokens, substituteLoopBodyText } from './loop-scope';
@@ -126,12 +126,13 @@ export function buildNodeShellEnvironment(
   node: DagNode,
   ctx: ShellInputContext,
   envVars: NodeJS.ProcessEnv | undefined,
-  executionContext: ExecNodeEnvironmentContext
+  executionContext: Omit<ExecNodeEnvironmentContext, 'inputEnvKeys'>
 ): NodeJS.ProcessEnv {
+  const inputs = inputEnvVars(node, ctx);
   return {
     ...envVars,
-    ...inputEnvVars(node, ctx),
-    ...buildExecNodeEnvironment(executionContext),
+    ...inputs,
+    ...buildExecNodeEnvironment({ ...executionContext, inputEnvKeys: Object.keys(inputs) }),
   };
 }
 
@@ -401,99 +402,153 @@ export function nodeOutputRefToken(
     const field: string | undefined = groups[2];
     const nodeOutput = nodeOutputs.get(nodeId);
     if (!nodeOutput) {
-      // A `.field` ref that resolves to no output (for example, a programmatically
-      // constructed definition that bypassed discovery, or a real producer whose
-      // output is unavailable on this execution path) fails the consuming node loudly,
-      // matching the strict
-      // no-silent-drop posture for known-producer field access below. The whole-text
-      // `$id.output` form stays lenient ('') by default as a long-documented surface.
-      // `until_bash` opts into requiredContext because empty text would become an
-      // input to a completion decision rather than merely missing display text.
-      if (field) {
-        const error = new OutputRefError(nodeId, field, 'unknown-node', {
-          reference: match,
-          candidates: similarNodeIds(nodeId, nodeOutputs.keys()),
-        });
-        throw requiredContext
-          ? requiredOutputRefError(requiredContext, match, error.message)
-          : error;
-      }
-      if (requiredContext) {
-        const candidates = similarNodeIds(nodeId, nodeOutputs.keys());
-        const hint =
-          candidates.length > 0
-            ? ` Did you mean: ${candidates.map(candidate => `'${candidate}'`).join(', ')}?`
-            : '';
-        throw requiredOutputRefError(
-          requiredContext,
-          match,
-          `node '${nodeId}' has not produced output at this point.${hint} Fix the id, or ensure '${nodeId}' runs before this check.`
-        );
-      }
-      getLog().warn({ nodeId, match }, 'dag_node_output_ref_unknown_node');
-      return escapedForBash ? "''" : '';
+      return missingNodeOutputRef(
+        nodeOutputs,
+        nodeId,
+        field,
+        match,
+        escapedForBash,
+        requiredContext
+      );
     }
     if (!field) {
-      if (requiredContext && (nodeOutput.state === 'skipped' || nodeOutput.state === 'pending')) {
-        throw requiredOutputRefError(
-          requiredContext,
-          match,
-          `node '${nodeId}' did not run (skipped or pending), so it has no output to read. Fix the dependency or guard the consuming loop.`
-        );
-      }
-      if (requiredContext && nodeOutput.state === 'failed') {
-        throw requiredOutputRefError(
-          requiredContext,
-          match,
-          `node '${nodeId}' failed (${nodeOutput.error}), so its output cannot be trusted. Fix the failure or guard the consuming loop.`
-        );
-      }
-      // A failed producer's stale output is never spliced into a consumer's own
-      // prompt/bash/command body (#2713) — matches resolveBindingDirective's #2710
-      // guard for the same class of bug (a loop_group's failure paths leave real,
-      // last-completed-iteration text behind). Routes through `assertProducerNotFailed`
-      // in output-ref.ts (#2722), which every whole-text reader of nodeOutputs shares.
-      assertProducerNotFailed(
+      return wholeNodeOutputRef(
         nodeOutput,
-        failed =>
-          `'$${nodeId}.output' references node '${nodeId}', but it failed ` +
-          `(${failed.error}), so its output cannot be spliced into this node's ` +
-          "prompt/script — a failed producer's stale output is never trusted. Fix the " +
-          "failure, or guard this node with a 'when:' condition that excludes the " +
-          'failed branch.'
+        nodeId,
+        match,
+        escapedForBash,
+        artifactsDir,
+        requiredContext
       );
-      return escapedForBash
-        ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, artifactsDir)
-        : nodeOutput.output;
     }
-    // No-silent-drop field access (resolveNodeOutputField): prefers the parsed
-    // structuredOutput payload, falls back to parsing `output`, and THROWS an
-    // OutputRefError for an unresolvable reference (field not in the producer's
-    // declared schema, or a schemaless node whose output isn't JSON / lacks the
-    // key). The throw propagates to runLayers' per-node catch → the
-    // consuming node fails visibly instead of receiving a poisoned ''. The only
-    // value that resolves to empty is an author-declared-optional field.
-    let resolution: ReturnType<typeof resolveNodeOutputField>;
-    try {
-      resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
-    } catch (error) {
-      if (requiredContext && error instanceof OutputRefError) {
-        throw requiredOutputRefError(requiredContext, match, error.message);
-      }
-      throw error;
-    }
-    if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
-    const value = resolution.value;
-    // numbers and booleans are shell-safe without quoting: JSON disallows
-    // NaN/Infinity so String(number) is digits/sign/'.', and String(boolean) is
-    // 'true'/'false' — no shell metacharacters.
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    // Everything else takes the one value→text rule (strings raw; arrays/objects/
-    // null as canonical JSON so downstream tools like jq get one JSON literal),
-    // with the bash-escaping decision staying here at the call site.
-    const text = canonicalValueText(value);
-    return escapedForBash ? shellQuoteOrFile(text, nodeId, field, artifactsDir) : text;
+    return nodeOutputFieldRef(
+      nodeOutput,
+      nodeId,
+      field,
+      match,
+      escapedForBash,
+      artifactsDir,
+      requiredContext
+    );
   });
+}
+
+function missingNodeOutputRef(
+  nodeOutputs: Map<string, NodeOutput>,
+  nodeId: string,
+  field: string | undefined,
+  match: string,
+  escapedForBash: boolean,
+  requiredContext?: RequiredOutputRefContext
+): string {
+  // A `.field` ref that resolves to no output (for example, a programmatically
+  // constructed definition that bypassed discovery, or a real producer whose
+  // output is unavailable on this execution path) fails the consuming node loudly,
+  // matching the strict
+  // no-silent-drop posture for known-producer field access below. The whole-text
+  // `$id.output` form stays lenient ('') by default as a long-documented surface.
+  // `until_bash` opts into requiredContext because empty text would become an
+  // input to a completion decision rather than merely missing display text.
+  if (field) {
+    const error = new OutputRefError(nodeId, field, 'unknown-node', {
+      reference: match,
+      candidates: similarNodeIds(nodeId, nodeOutputs.keys()),
+    });
+    throw requiredContext ? requiredOutputRefError(requiredContext, match, error.message) : error;
+  }
+  if (requiredContext) {
+    const candidates = similarNodeIds(nodeId, nodeOutputs.keys());
+    const hint =
+      candidates.length > 0
+        ? ` Did you mean: ${candidates.map(candidate => `'${candidate}'`).join(', ')}?`
+        : '';
+    throw requiredOutputRefError(
+      requiredContext,
+      match,
+      `node '${nodeId}' has not produced output at this point.${hint} Fix the id, or ensure '${nodeId}' runs before this check.`
+    );
+  }
+  getLog().warn({ nodeId, match }, 'dag_node_output_ref_unknown_node');
+  return escapedForBash ? "''" : '';
+}
+
+function wholeNodeOutputRef(
+  nodeOutput: NodeOutput,
+  nodeId: string,
+  match: string,
+  escapedForBash: boolean,
+  artifactsDir?: string,
+  requiredContext?: RequiredOutputRefContext
+): string {
+  if (requiredContext && (nodeOutput.state === 'skipped' || nodeOutput.state === 'pending')) {
+    throw requiredOutputRefError(
+      requiredContext,
+      match,
+      `node '${nodeId}' did not run (skipped or pending), so it has no output to read. Fix the dependency or guard the consuming loop.`
+    );
+  }
+  if (requiredContext && nodeOutput.state === 'failed') {
+    throw requiredOutputRefError(
+      requiredContext,
+      match,
+      `node '${nodeId}' failed (${nodeOutput.error}), so its output cannot be trusted. Fix the failure or guard the consuming loop.`
+    );
+  }
+  // A failed producer's stale output is never spliced into a consumer's own
+  // prompt/bash/command body (#2713) — matches resolveBindingDirective's #2710
+  // guard for the same class of bug (a loop_group's failure paths leave real,
+  // last-completed-iteration text behind). Routes through `assertProducerNotFailed`
+  // in output-ref.ts (#2722), which every whole-text reader of nodeOutputs shares.
+  assertProducerNotFailed(
+    nodeOutput,
+    failed =>
+      `'$${nodeId}.output' references node '${nodeId}', but it failed ` +
+      `(${failed.error}), so its output cannot be spliced into this node's ` +
+      "prompt/script — a failed producer's stale output is never trusted. Fix the " +
+      "failure, or guard this node with a 'when:' condition that excludes the " +
+      'failed branch.'
+  );
+  return escapedForBash
+    ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, artifactsDir)
+    : nodeOutput.output;
+}
+
+function nodeOutputFieldRef(
+  nodeOutput: NodeOutput,
+  nodeId: string,
+  field: string,
+  match: string,
+  escapedForBash: boolean,
+  artifactsDir?: string,
+  requiredContext?: RequiredOutputRefContext
+): string {
+  // No-silent-drop field access (resolveNodeOutputField): prefers the parsed
+  // structuredOutput payload, falls back to parsing `output`, and THROWS an
+  // OutputRefError for an unresolvable reference (field not in the producer's
+  // declared schema, or a schemaless node whose output isn't JSON / lacks the
+  // key). The throw propagates to runLayers' per-node catch → the
+  // consuming node fails visibly instead of receiving a poisoned ''. The only
+  // value that resolves to empty is an author-declared-optional field.
+  let resolution: ReturnType<typeof resolveNodeOutputField>;
+  try {
+    resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
+  } catch (error) {
+    if (requiredContext && error instanceof OutputRefError) {
+      throw requiredOutputRefError(requiredContext, match, error.message);
+    }
+    throw error;
+  }
+  if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
+  const value = resolution.value;
+  // numbers and booleans are shell-safe without quoting: JSON disallows
+  // NaN/Infinity so String(number) is digits/sign/'.', and String(boolean) is
+  // 'true'/'false' — no shell metacharacters.
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  // Everything else takes the one value→text rule (strings raw; arrays/objects/
+  // null as canonical JSON so downstream tools like jq get one JSON literal),
+  // with the bash-escaping decision staying here at the call site.
+  const text = canonicalValueText(value);
+  return escapedForBash ? shellQuoteOrFile(text, nodeId, field, artifactsDir) : text;
 }
 
 /** What a node's template resolves against besides its workflow variables. */

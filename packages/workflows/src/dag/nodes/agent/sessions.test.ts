@@ -5,7 +5,7 @@ import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import type { ProviderRegistry } from '@archon/provider-contract';
+import type { ProviderRegistry, ResultChunk } from '@archon/provider-contract';
 import {
   type MockWorkflowStore,
   createMockStore,
@@ -34,6 +34,10 @@ import type {
 import { dagNodeSchema } from '../../../schemas';
 import type { WorkflowDeps } from '../../../deps';
 import type { IWorkflowStore, PersistedNodeOutput, WorkflowNodeSessionKey } from '../../../store';
+import { waitCompletionEvents } from '../../../store';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import { ParentStatusReadError } from '../../../parent-status-read';
+import type { WorkflowEventRow } from '../../../schemas/workflow-event';
 
 describe('executeDagWorkflow -- persist_session', () => {
   let testDir: string;
@@ -335,6 +339,92 @@ describe('executeDagWorkflow -- persist_session', () => {
       typeof store.upsertWorkflowNodeSession
     >;
     expect(upsertMock.mock.calls[0][0]).toMatchObject({ provider_session_id: 'cold-id' });
+  });
+
+  /** Run a `persist_session` planner whose resume of 'prior-session-id' is rejected with `rejection`. */
+  async function runRejectedPersistedResume(rejection: ResultChunk) {
+    const store = createMockStore();
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'persist-test',
+        node_id: 'planner',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'prior-session-id',
+        last_run_id: 'prior-run',
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+    ]);
+    const platform = createMockPlatform();
+
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, resumeSessionId) {
+      if (resumeSessionId !== undefined) {
+        yield { ...rejection, sessionId: resumeSessionId, resumed: true };
+        return;
+      }
+      yield { type: 'agent_message_chunk', text: 'fresh run' };
+      yield { type: 'result', sessionId: 'fresh-id' };
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'persist-test',
+          nodes: [
+            {
+              id: 'planner',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              persist_session: true,
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    return { store, platform };
+  }
+  const executionError: ResultChunk = {
+    type: 'result',
+    isError: true,
+    errorSubtype: 'error_during_execution',
+    failure: { class: 'unknown', evidence: 'error_during_execution: evidence' },
+  };
+
+  it('persist_session resume rejected as stale → retried once fresh, completed, fresh id persisted', async () => {
+    const { store, platform } = await runRejectedPersistedResume({
+      ...executionError,
+      sessionNotFound: true,
+    });
+
+    expect(mockSendQueryDag.mock.calls.map(call => call[2])).toEqual([
+      'prior-session-id',
+      undefined,
+    ]);
+    const completed = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+      .map(call => call[0] as { event_type: string; step_name?: string })
+      .some(event => event.event_type === 'node_completed' && event.step_name === 'planner');
+    expect(completed).toBe(true);
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
+      String(c[1])
+    );
+    expect(messages.some(m => m.includes('could not resume the prior session'))).toBe(true);
+    const upsertMock = store.upsertWorkflowNodeSession as Mock<
+      typeof store.upsertWorkflowNodeSession
+    >;
+    expect(upsertMock.mock.calls[0][0]).toMatchObject({ provider_session_id: 'fresh-id' });
+  });
+
+  it('persist_session resume failing without a stale report is not retried fresh', async () => {
+    const { store } = await runRejectedPersistedResume(executionError);
+
+    expect(mockSendQueryDag.mock.calls.map(call => call[2])).toEqual(['prior-session-id']);
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
   // --- #1846: cross-invocation artifact scope + cold-resume pointer recovery ---
@@ -1424,24 +1514,10 @@ describe('executeDagWorkflow -- addressable session resume', () => {
         },
       });
       pause.resolved = 'approved';
-      const resume = async (state: Record<string, unknown>, failBeforeReplay = false) => {
-        const resumedStore = createEscalationStore('addressable-run');
-        if (failBeforeReplay) {
-          const getStatus = resumedStore.getWorkflowRunStatus.getMockImplementation();
-          let rejected = false;
-          resumedStore.getWorkflowRunStatus.mockImplementation(async id => {
-            if (
-              !rejected &&
-              persistedEvents(resumedStore).some(
-                event => event.event_type === 'node_started' && event.step_name === 'outer'
-              )
-            ) {
-              rejected = true;
-              throw new Error('Enclosing replay status read failed');
-            }
-            return getStatus?.(id) ?? 'running';
-          });
-        }
+      const resume = async (
+        state: Record<string, unknown>,
+        resumedStore = createEscalationStore('addressable-run')
+      ) => {
         await executeDagWorkflow(
           dagOptions({
             deps: createMockDeps(resumedStore),
@@ -1475,7 +1551,38 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       ).toBe(1);
       expect(invalid?.failWorkflowRun).toHaveBeenCalled();
       expect(mockSendQueryDag.mock.calls).toHaveLength(callsBeforeInvalidResume);
-      expect(await failedLoopIterations('outer', () => resume(metadata, true))).toBe(1);
+      const interruptedStore = createEscalationStore('addressable-run');
+      const statusReadError = new Error('Enclosing replay status read failed');
+      const getStatus = interruptedStore.getWorkflowRunStatus.getMockImplementation();
+      let rejected = false;
+      interruptedStore.getWorkflowRunStatus.mockImplementation(async id => {
+        if (
+          !rejected &&
+          persistedEvents(interruptedStore).some(
+            event => event.event_type === 'node_started' && event.step_name === 'outer'
+          )
+        ) {
+          rejected = true;
+          throw statusReadError;
+        }
+        return getStatus?.(id) ?? 'running';
+      });
+      expect(
+        await failedLoopIterations('outer', async () => {
+          const interruption: unknown = await resume(metadata, interruptedStore).catch(
+            (error: unknown) => error
+          );
+          expect(interruption).toBeInstanceOf(ParentStatusReadError);
+          expect(interruption).toMatchObject({ workflowRunId: 'addressable-run', nodeId: 'outer' });
+          expect(interruption instanceof Error ? interruption.cause : undefined).toBe(
+            statusReadError
+          );
+        })
+      ).toBeUndefined();
+      expect(interruptedStore.failWorkflowRun).not.toHaveBeenCalled();
+      expect(
+        persistedEvents(interruptedStore).filter(event => event.event_type === 'node_failed')
+      ).toEqual([]);
       expect(mockSendQueryDag.mock.calls).toHaveLength(callsBeforeInvalidResume);
       const resumedStore = await resume(metadata);
       expect(resumedStore.failWorkflowRun.mock.calls).toEqual([]);
@@ -1932,6 +2039,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       })
     );
     let store = createEscalationStore('addressable-run');
+    const history: WorkflowEventRow[] = [];
     await runAddressableWorkflow(nodes, store);
     for (const iteration of [1, 2]) {
       expect(store.getState().status).toBe('paused');
@@ -1951,7 +2059,32 @@ describe('executeDagWorkflow -- addressable session resume', () => {
             ]
       );
       metadata.wait.resumeAt = '2020-01-01T00:00:00.000Z';
+      const completedWaits = store.clearWorkflowWaitContext.mock.calls.map(
+        ([id, , completion]) => waitCompletionEvents(id, completion).node
+      );
+      history.push(
+        ...[...completedWaits, ...persistedEvents(store)].map((event, index) => ({
+          ...event,
+          step_name: event.step_name ?? null,
+          data: event.data ?? {},
+          id: String(history.length + index),
+          step_index: null,
+          created_at: new Date().toISOString(),
+        }))
+      );
       store = createEscalationStore('addressable-run');
+      store.listEventsForRuns.mockImplementation(
+        async (_ids, types) =>
+          new Map([
+            [
+              'addressable-run',
+              history.filter(row => !types || types.some(type => type === row.event_type)),
+            ],
+          ])
+      );
+      const snapshot = await foldDagResumeSnapshot(history, 'addressable-run');
+      expect(snapshot.completedNodeOutputs.has('group.pause')).toBe(false);
+      store.getDagResumeSnapshot.mockResolvedValue(snapshot);
       await executeDagWorkflow(
         dagOptions({
           deps: createMockDeps(store),
@@ -2615,6 +2748,43 @@ describe('executeDagWorkflow -- addressable session resume', () => {
         consumerResumeId: 'source-session',
       });
     }
+  });
+
+  it('fails a named resume rejected as stale instead of retrying it fresh', async () => {
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, resumeSessionId) {
+      if (resumeSessionId === undefined) {
+        yield { type: 'agent_message_chunk', text: prompt };
+        yield { type: 'result', sessionId: 'source-session' };
+        return;
+      }
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'error_during_execution',
+        failure: { class: 'unknown', evidence: 'error_during_execution: evidence' },
+        sessionId: resumeSessionId,
+        resumed: true,
+        sessionNotFound: true,
+      };
+    });
+    const store = await runAddressableWorkflow([
+      { id: 'source', kind: 'agent', source: { kind: 'inline', prompt: 'source' } },
+      {
+        id: 'consumer',
+        kind: 'agent',
+        source: { kind: 'inline', prompt: 'consumer' },
+        context: { resume: 'source' },
+        depends_on: ['source'],
+      },
+    ]);
+
+    // Only the source ran fresh; every consumer attempt resumed the named session.
+    const resumeIds = mockSendQueryDag.mock.calls.map(call => call[2]);
+    expect(resumeIds[0]).toBeUndefined();
+    expect(resumeIds.slice(1).length).toBeGreaterThan(0);
+    expect(resumeIds.slice(1).every(id => id === 'source-session')).toBe(true);
+    expect(store.failWorkflowRun.mock.calls.length).toBeGreaterThan(0);
   });
 
   it('fails before provider execution on runtime mismatch or missing fork capability', async () => {

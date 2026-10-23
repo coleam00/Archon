@@ -5,86 +5,18 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { Database, SQLiteError, type SQLQueryBindings } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
-import type { IDatabase, QueryResult, SqlDialect } from './types';
+import type { IDatabase, QueryResult, SqlDialect, TransactionOptions } from './types';
 import { createLogger } from '@archon/paths';
 import { APP_VERSION } from '../schema-version';
-
-/** bun:sqlite's get() returns null (not undefined) when the query has no row. */
-type Maybe<T> = T | null;
+import { migrateColumns } from './sqlite-migrations';
+import { prepareAll, prepareGet } from './sqlite-statements';
+import { isSqliteBusy, retryWhileBusy, retryWhileBusySync } from './sqlite-busy';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('db.sqlite');
   return cachedLog;
-}
-
-/**
- * SQLITE_BUSY and its extended codes (BUSY_SNAPSHOT, BUSY_RECOVERY, BUSY_TIMEOUT):
- * another connection holds the lock. SQLITE_LOCKED (6) is a same-connection conflict
- * that waiting cannot clear, so it is not included.
- */
-function isSqliteBusy(error: unknown): error is SQLiteError {
-  return error instanceof SQLiteError && (error.errno & 0xff) === 5;
-}
-
-const BUSY_RETRY_MAX_DELAY_MS = 2000;
-const BUSY_WARN_INTERVAL_MS = 30_000;
-
-/**
- * Run `attempt` until it stops failing with SQLITE_BUSY. Each attempt already waits
- * up to busy_timeout inside SQLite; between attempts this backs off without blocking
- * the event loop. There is deliberately no deadline: the lock belongs to another live
- * process, and a timer that gives up would end a run whose work is not lost, only
- * waiting. A lock that never clears shows up as a repeating warning, not a failure.
- */
-async function retryWhileBusy<T>(
-  operation: 'statement' | 'transaction',
-  attempt: () => Promise<T>
-): Promise<T> {
-  const startedAt = Date.now();
-  let delayMs = 50;
-  let nextWarnAtMs = 0;
-  for (;;) {
-    try {
-      return await attempt();
-    } catch (error) {
-      if (!isSqliteBusy(error)) throw error;
-      const waitedMs = Date.now() - startedAt;
-      if (waitedMs >= nextWarnAtMs) {
-        getLog().warn({ operation, code: error.code, waitedMs }, 'db.sqlite_busy_waiting');
-        nextWarnAtMs = waitedMs + BUSY_WARN_INTERVAL_MS;
-      }
-      await Bun.sleep(delayMs);
-      delayMs = Math.min(delayMs * 2, BUSY_RETRY_MAX_DELAY_MS);
-    }
-  }
-}
-
-/**
- * `retryWhileBusy` for the synchronous open path. Switching a fresh file to WAL takes
- * a lock that SQLite does not wait for through busy_timeout, so a process opening the
- * same new database as another one gets SQLITE_BUSY there instead of waiting.
- */
-function retryWhileBusySync(attempt: () => void): void {
-  const startedAt = Date.now();
-  let delayMs = 10;
-  let nextWarnAtMs = 0;
-  for (;;) {
-    try {
-      attempt();
-      return;
-    } catch (error) {
-      if (!isSqliteBusy(error)) throw error;
-      const waitedMs = Date.now() - startedAt;
-      if (waitedMs >= nextWarnAtMs) {
-        getLog().warn({ operation: 'open', code: error.code, waitedMs }, 'db.sqlite_busy_waiting');
-        nextWarnAtMs = waitedMs + BUSY_WARN_INTERVAL_MS;
-      }
-      Bun.sleepSync(delayMs);
-      delayMs = Math.min(delayMs * 2, BUSY_RETRY_MAX_DELAY_MS);
-    }
-  }
 }
 
 /**
@@ -182,7 +114,7 @@ export class SqliteAdapter implements IDatabase {
       const sqliteParams = reorderedParams as SQLQueryBindings[];
 
       if (isSelect) {
-        const rows = this.prepareAll<T>(convertedSql, sqliteParams);
+        const rows = prepareAll<T>(this.db, convertedSql, sqliteParams);
         return { rows, rowCount: rows.length };
       } else {
         const upperSql = sql.toUpperCase();
@@ -192,7 +124,7 @@ export class SqliteAdapter implements IDatabase {
         // RETURNING results, and its lastInsertRowid is unreliable when
         // ON CONFLICT DO UPDATE fires.
         if (upperSql.includes('RETURNING') && upperSql.includes('INSERT')) {
-          const rows = this.prepareAll<T>(convertedSql, sqliteParams);
+          const rows = prepareAll<T>(this.db, convertedSql, sqliteParams);
           return { rows, rowCount: rows.length };
         }
 
@@ -230,21 +162,25 @@ export class SqliteAdapter implements IDatabase {
   }
 
   async withTransaction<T>(
-    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>,
+    options?: TransactionOptions
   ): Promise<T> {
     this.assertNotInOwnTransaction();
-    // The block's own statements run directly on the open transaction, without a
-    // per-statement retry: under SQLITE_BUSY_SNAPSHOT the read snapshot is stale for
-    // good, so only rerunning the whole block can succeed.
+    // A busy snapshot requires replaying the whole transaction, never a single statement.
     const execute = this.execute.bind(this);
     const runOnce = async (): Promise<T> => {
-      // A busy statement spoils this attempt however the block handles it: callers wrap
-      // errors in their own messages, which would hide the busy code from the retry. So
-      // the adapter remembers it, rolls back, and rethrows the busy error itself.
+      // Remember busy errors even when the callback catches or wraps them.
       let busy: SQLiteError | undefined;
+      let firstStatement = true;
       const blockQuery = async <U>(sql: string, params?: unknown[]): Promise<QueryResult<U>> => {
         try {
-          return await execute<U>(sql, params);
+          const attempt = () => execute<U>(sql, params);
+          const result =
+            firstStatement && options?.retryOnBusy === 'first-statement'
+              ? await retryWhileBusy('statement', attempt)
+              : await attempt();
+          firstStatement = false;
+          return result;
         } catch (error) {
           if (isSqliteBusy(error)) busy = error;
           throw error;
@@ -266,9 +202,13 @@ export class SqliteAdapter implements IDatabase {
       }
     };
     // A busy failure anywhere in the block, COMMIT included, has already rolled back,
-    // so the block reruns from BEGIN against fresh state. Callers' blocks only issue
-    // queries and compute a return value, which makes rerunning them safe.
-    return this.serialize(() => retryWhileBusy('transaction', runOnce));
+    // so replayable blocks rerun from BEGIN against fresh state. Non-replayable
+    // blocks retry only the initial write that acquires the reservation.
+    return this.serialize(() =>
+      options?.retryOnBusy === 'first-statement'
+        ? runOnce()
+        : retryWhileBusy('transaction', runOnce)
+    );
   }
 
   /**
@@ -288,31 +228,6 @@ export class SqliteAdapter implements IDatabase {
     this.db.close();
   }
 
-  /**
-   * bun:sqlite does not finalize statements automatically when the connection
-   * closes: one unfinalized statement keeps the database file pinned until GC
-   * (delete-after-close fails with EBUSY on Windows). So every prepare() in
-   * this class must funnel through these wrappers, which finalize the
-   * statement within the operation's scope (#2875).
-   */
-  private prepareAll<T>(sql: string, params: SQLQueryBindings[] = []): T[] {
-    const stmt = this.db.prepare(sql);
-    try {
-      return stmt.all(...params) as T[];
-    } finally {
-      stmt.finalize();
-    }
-  }
-
-  private prepareGet<T>(sql: string, params: SQLQueryBindings[] = []): Maybe<T> {
-    const stmt = this.db.prepare(sql);
-    try {
-      return stmt.get(...params) as Maybe<T>;
-    } finally {
-      stmt.finalize();
-    }
-  }
-
   private prepareRun(sql: string, params: SQLQueryBindings[] = []): number {
     const stmt = this.db.prepare(sql);
     try {
@@ -321,7 +236,7 @@ export class SqliteAdapter implements IDatabase {
       // the statement's rows, as PostgreSQL does (not children updated by SET NULL).
       return changes === 0
         ? 0
-        : (this.prepareGet<{ count: number }>('SELECT changes() AS count')?.count ?? 0);
+        : (prepareGet<{ count: number }>(this.db, 'SELECT changes() AS count')?.count ?? 0);
     } finally {
       stmt.finalize();
     }
@@ -385,13 +300,14 @@ export class SqliteAdapter implements IDatabase {
         throw error;
       }
     }
-    const allApplied = this.migrateColumns();
+    const allApplied = migrateColumns(this.db, resourceSlotHoldersTable);
     this.recordSchemaVersion(preExisting, allApplied);
   }
 
   /** True when core Archon tables already exist — i.e. this is not a fresh database. */
   private hasAnyArchonTable(): boolean {
-    const row = this.prepareGet(
+    const row = prepareGet(
+      this.db,
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
       ['remote_agent_codebases']
     );
@@ -421,7 +337,8 @@ export class SqliteAdapter implements IDatabase {
       return;
     }
     try {
-      const existing = this.prepareGet<{ app_version: string }>(
+      const existing = prepareGet<{ app_version: string }>(
+        this.db,
         'SELECT app_version FROM remote_agent_schema_version WHERE id = 1'
       );
 
@@ -443,422 +360,6 @@ export class SqliteAdapter implements IDatabase {
       // never be able to stop the database from opening (e.g. a read-only DB file).
       getLog().warn({ err: e as Error }, 'db.sqlite_schema_version_record_failed');
     }
-  }
-
-  /**
-   * Add columns to existing tables that predate newer schema additions.
-   * SQLite's CREATE TABLE IF NOT EXISTS skips entirely for existing tables,
-   * so new columns must be added via ALTER TABLE for databases created before
-   * the columns were added to createSchema().
-   */
-  private migrateColumns(): boolean {
-    // Each block below suppresses its own failure so one bad table cannot abort
-    // schema init. This flag carries that outcome to recordSchemaVersion(): a
-    // database missing a failed migration must NOT be stamped as fully applied
-    // by this build, or the vintage becomes a wrong answer that gets believed.
-    let allApplied = true;
-    // Keep 'admin' for older writers and existing rows; new writers insert 'member'.
-    // Changing a SQLite column default would require a table rebuild.
-    // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
-    // on SQLite — so only the role column is backfilled here.
-    try {
-      const userCols = this.prepareAll<{ name: string }>("PRAGMA table_info('remote_agent_users')");
-      const userColNames = new Set(userCols.map(c => c.name));
-      if (!userColNames.has('role')) {
-        this.db.run("ALTER TABLE remote_agent_users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_users_columns_failed');
-      allApplied = false;
-    }
-
-    // Codebases columns
-    try {
-      const codebaseCols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_codebases')"
-      );
-      const codebaseColNames = new Set(codebaseCols.map(c => c.name));
-
-      if (!codebaseColNames.has('default_branch')) {
-        this.db.run('ALTER TABLE remote_agent_codebases ADD COLUMN default_branch TEXT');
-      }
-      if (!codebaseColNames.has('kind')) {
-        this.db.run(
-          "ALTER TABLE remote_agent_codebases ADD COLUMN kind TEXT NOT NULL DEFAULT 'repo'"
-        );
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_codebases_columns_failed');
-      allApplied = false;
-    }
-
-    // Conversations columns
-    try {
-      const cols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_conversations')"
-      );
-      const colNames = new Set(cols.map(c => c.name));
-
-      if (!colNames.has('title')) {
-        this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN title TEXT');
-      }
-      if (!colNames.has('deleted_at')) {
-        this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN deleted_at TEXT');
-      }
-      if (!colNames.has('hidden')) {
-        this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN hidden INTEGER DEFAULT 0');
-      }
-      if (!colNames.has('user_id')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_conversations ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
-        );
-      }
-      // Indexes must be created here, not in createSchema(): these columns don't
-      // exist on older databases until the ALTER TABLE statements above run, and
-      // CREATE INDEX on a missing column aborts the entire createSchema()
-      // exec block. Idempotent so they're safe to run unconditionally.
-      this.db.run(
-        'CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON remote_agent_conversations(user_id) WHERE user_id IS NOT NULL'
-      );
-      this.db.run(
-        'CREATE INDEX IF NOT EXISTS idx_conversations_hidden ON remote_agent_conversations(hidden)'
-      );
-      // idx_conversations_codebase was originally non-partial. Replace it once,
-      // not on every open: an unconditional DROP + CREATE rebuilds the index
-      // each time the adapter is constructed, and leaves a window where the
-      // index is gone if the re-create fails.
-      const existingCodebaseIdx = this.prepareGet<{ sql: string | null }>(
-        "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_conversations_codebase'"
-      );
-      if (existingCodebaseIdx && !(existingCodebaseIdx.sql ?? '').includes('deleted_at IS NULL')) {
-        this.db.run('DROP INDEX idx_conversations_codebase');
-      }
-      this.db.run(
-        'CREATE INDEX IF NOT EXISTS idx_conversations_codebase ON remote_agent_conversations(codebase_id) WHERE deleted_at IS NULL'
-      );
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_conversations_columns_failed');
-      allApplied = false;
-    }
-
-    // Workflow runs columns
-    try {
-      const wfCols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_workflow_runs')"
-      );
-      const wfColNames = new Set(wfCols.map(c => c.name));
-
-      if (!wfColNames.has('parent_conversation_id')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_conversation_id TEXT'
-        );
-      }
-
-      if (!wfColNames.has('origin')) {
-        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN origin TEXT');
-      }
-
-      if (!wfColNames.has('working_path')) {
-        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN working_path TEXT');
-      }
-
-      if (!wfColNames.has('user_id')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_workflow_runs ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
-        );
-      }
-      // Run-tree parent (#2121 Phase 2). Self-referential FK — a `workflow:` sub-run
-      // links back to its spawning parent. ON DELETE SET NULL so deleting a parent
-      // orphans children rather than cascade-deleting their audit trail.
-      if (!wfColNames.has('parent_run_id')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_workflow_runs ADD COLUMN parent_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL'
-        );
-      }
-      // Between-run continuation (#2747). Self-referential FK mirroring
-      // parent_run_id — written once at run creation, never on resume.
-      if (!wfColNames.has('adopted_from_run_id')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_workflow_runs ADD COLUMN adopted_from_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL'
-        );
-      }
-      // Durable output root (#2200). The resolved ~/.archon/workspaces/<project>/
-      // directory this run's artifacts, logs, and state live under, written once
-      // at run start so historical artifacts survive a codebase rename (#1192).
-      if (!wfColNames.has('output_root')) {
-        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN output_root TEXT');
-      }
-      // Run checkout baseline (#3305): JSON checkout observation written once when the
-      // run wins its execution claim. NULL means not recorded.
-      if (!wfColNames.has('checkout_baseline')) {
-        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN checkout_baseline TEXT');
-      }
-      if (!wfColNames.has('outcome')) {
-        this.db.run(
-          "ALTER TABLE remote_agent_workflow_runs ADD COLUMN outcome TEXT CHECK (outcome IN ('succeeded', 'failed'))"
-        );
-      }
-      // Same rationale as idx_conversations_user_id above.
-      this.db.run(
-        'CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL'
-      );
-      this.db.run(
-        'CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_run ON remote_agent_workflow_runs(parent_run_id) WHERE parent_run_id IS NOT NULL'
-      );
-      this.db.run(
-        'CREATE INDEX IF NOT EXISTS idx_workflow_runs_adopted_from ON remote_agent_workflow_runs(adopted_from_run_id) WHERE adopted_from_run_id IS NOT NULL'
-      );
-      this.db.run(
-        'CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_conv ON remote_agent_workflow_runs(parent_conversation_id)'
-      );
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_workflow_runs_columns_failed');
-      allApplied = false;
-    }
-
-    // Sessions columns
-    try {
-      const sessCols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_sessions')"
-      );
-      const sessColNames = new Set(sessCols.map(c => c.name));
-
-      if (!sessColNames.has('ended_reason')) {
-        this.db.run('ALTER TABLE remote_agent_sessions ADD COLUMN ended_reason TEXT');
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_session_columns_failed');
-      allApplied = false;
-    }
-
-    // Messages columns
-    try {
-      const cols = this.prepareAll<{ name: string }>("PRAGMA table_info('remote_agent_messages')");
-      const colNames = new Set(cols.map(c => c.name));
-      if (!colNames.has('user_id')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_messages ADD COLUMN user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
-        );
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_messages_columns_failed');
-      allApplied = false;
-    }
-
-    // Isolation environments columns
-    try {
-      const cols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_isolation_environments')"
-      );
-      const colNames = new Set(cols.map(c => c.name));
-      if (!colNames.has('created_by_user_id')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_isolation_environments ADD COLUMN created_by_user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL'
-        );
-      }
-    } catch (e: unknown) {
-      getLog().warn(
-        { err: e as Error },
-        'db.sqlite_migration_isolation_environments_columns_failed'
-      );
-      allApplied = false;
-    }
-
-    // User AI prefs columns. #1998: default_model is the per-user default
-    // CHAT model, written atomically with default_provider. The table itself
-    // shipped with Phase 3 (#1948), so pre-existing installs need this ALTER —
-    // CREATE TABLE IF NOT EXISTS in createSchema() is a no-op for them.
-    try {
-      const cols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_user_ai_prefs')"
-      );
-      const colNames = new Set(cols.map(c => c.name));
-      if (!colNames.has('default_model')) {
-        this.db.run('ALTER TABLE remote_agent_user_ai_prefs ADD COLUMN default_model TEXT');
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_user_ai_prefs_columns_failed');
-      allApplied = false;
-    }
-
-    // The high-water row survives event deletion. SQLite serializes writers;
-    // PostgreSQL records its sequence allocation here in the deferred trigger.
-    this.db
-      .transaction(() => {
-        const cols = this.prepareAll<{ name: string }>(
-          "PRAGMA table_info('remote_agent_workflow_events')"
-        );
-        if (!new Set(cols.map(c => c.name)).has('event_order')) {
-          this.db.run('ALTER TABLE remote_agent_workflow_events ADD COLUMN event_order INTEGER');
-        }
-        this.db.run(
-          `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order
-         ON remote_agent_workflow_events(workflow_run_id, event_order)
-         WHERE event_order IS NOT NULL`
-        );
-        this.db.run(`CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_sequence (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      value INTEGER NOT NULL DEFAULT 0
-    )`);
-        this.db.run(`INSERT INTO remote_agent_workflow_event_sequence (id, value)
-      SELECT 1, COALESCE(MAX(event_order), 0) FROM remote_agent_workflow_events WHERE true
-      ON CONFLICT(id) DO UPDATE SET value = MAX(value, excluded.value)`);
-        this.db.run(`CREATE TABLE IF NOT EXISTS remote_agent_workflow_event_archive AS
-          SELECT * FROM remote_agent_workflow_events WHERE false`);
-        this.db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_event_archive_order
-          ON remote_agent_workflow_event_archive(event_order)`);
-        this.db.run(`CREATE TRIGGER IF NOT EXISTS remote_agent_workflow_events_archive
-          BEFORE DELETE ON remote_agent_workflow_events
-          BEGIN
-            INSERT INTO remote_agent_workflow_event_archive
-              SELECT * FROM remote_agent_workflow_events WHERE rowid = OLD.rowid;
-          END`);
-        this.db.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
-        this.db.run(
-          `CREATE TRIGGER remote_agent_workflow_events_assign_order
-         AFTER INSERT ON remote_agent_workflow_events
-         BEGIN
-           UPDATE remote_agent_workflow_event_sequence SET value = value + 1 WHERE id = 1;
-           UPDATE remote_agent_workflow_events
-           SET event_order = (SELECT value FROM remote_agent_workflow_event_sequence WHERE id = 1)
-           WHERE rowid = NEW.rowid;
-         END`
-        );
-        this.db.run(`CREATE INDEX IF NOT EXISTS idx_workflow_events_order
-      ON remote_agent_workflow_events(event_order)`);
-      })
-      .immediate();
-
-    // #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
-    // copilot→github-copilot). Idempotent data fix mirroring
-    // migrations/000_combined.sql: where both a legacy and a vendor row exist
-    // for the same user, the vendor row wins; then legacy rows are renamed.
-    // Transactional so a mid-sequence failure can't leave partial renames
-    // (matches the Postgres path, which runs inside the schema-apply txn);
-    // a failed run is also survivable — reads normalize legacy ids.
-    try {
-      this.db.run('BEGIN');
-      try {
-        this.db.run(
-          `DELETE FROM remote_agent_user_provider_keys
-           WHERE provider IN ('claude', 'codex', 'copilot')
-             AND EXISTS (
-               SELECT 1 FROM remote_agent_user_provider_keys v
-               WHERE v.user_id = remote_agent_user_provider_keys.user_id
-                 AND v.provider = CASE remote_agent_user_provider_keys.provider
-                   WHEN 'claude' THEN 'anthropic'
-                   WHEN 'codex' THEN 'openai'
-                   WHEN 'copilot' THEN 'github-copilot'
-                 END
-             )`
-        );
-        this.db.run(
-          "UPDATE remote_agent_user_provider_keys SET provider = 'anthropic' WHERE provider = 'claude'"
-        );
-        this.db.run(
-          "UPDATE remote_agent_user_provider_keys SET provider = 'openai' WHERE provider = 'codex'"
-        );
-        this.db.run(
-          "UPDATE remote_agent_user_provider_keys SET provider = 'github-copilot' WHERE provider = 'copilot'"
-        );
-        this.db.run('COMMIT');
-      } catch (inner: unknown) {
-        this.db.run('ROLLBACK');
-        throw inner;
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_provider_key_vendor_ids_failed');
-      allApplied = false;
-    }
-
-    // Resource slot holders gained the 'attempt' kind and its owner columns (#2816).
-    // SQLite cannot alter a CHECK, so a table created with the narrow ('run') CHECK is
-    // rebuilt once. Only unreleased dev builds created that shape. BEGIN IMMEDIATE and
-    // the re-check make a concurrent opener skip instead of rebuilding twice.
-    try {
-      const holdersSql = (): string =>
-        this.prepareGet<{ sql: string }>(
-          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'remote_agent_resource_slot_holders'"
-        )?.sql ?? '';
-      if (!holdersSql().includes("'attempt'")) {
-        this.db.run('BEGIN IMMEDIATE');
-        try {
-          if (!holdersSql().includes("'attempt'")) {
-            this.db.run(resourceSlotHoldersTable('remote_agent_resource_slot_holders_next'));
-            this.db.run(
-              `INSERT INTO remote_agent_resource_slot_holders_next
-                 (resource_key, holder_kind, holder_id, acquired_at)
-               SELECT resource_key, holder_kind, holder_id, acquired_at
-                 FROM remote_agent_resource_slot_holders`
-            );
-            this.db.run('DROP TABLE remote_agent_resource_slot_holders');
-            this.db.run(
-              'ALTER TABLE remote_agent_resource_slot_holders_next RENAME TO remote_agent_resource_slot_holders'
-            );
-          }
-          this.db.run('COMMIT');
-        } catch (inner: unknown) {
-          this.db.run('ROLLBACK');
-          throw inner;
-        }
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_resource_slot_holders_failed');
-      allApplied = false;
-    }
-
-    // Names of event-derived inputs live beside the binding intent, not in it: older
-    // binaries parse `intent` strictly and would refuse an extra key.
-    try {
-      const cols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_start_receipt_bindings')"
-      );
-      if (!new Set(cols.map(c => c.name)).has('event_input_names')) {
-        this.db.run(
-          'ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN event_input_names TEXT'
-        );
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_receipt_bindings_columns_failed');
-      allApplied = false;
-    }
-
-    // The surface a state write outside a run came through; older rows came through the CLI.
-    try {
-      const cols = this.prepareAll<{ name: string }>(
-        "PRAGMA table_info('remote_agent_state_revisions')"
-      );
-      if (cols.length && !new Set(cols.map(c => c.name)).has('writer_via')) {
-        this.db.run('ALTER TABLE remote_agent_state_revisions ADD COLUMN writer_via TEXT');
-      }
-    } catch (e: unknown) {
-      getLog().warn({ err: e as Error }, 'db.sqlite_migration_state_revisions_columns_failed');
-      allApplied = false;
-    }
-
-    // The archive trigger copies an event row by position, and CREATE TABLE AS ran
-    // only once. Give the archive every column a later ADD COLUMN gave the events
-    // table, in the same order, so deleting an event never fails on a shape mismatch.
-    // The write transaction keeps a concurrent opener from adding the same column.
-    this.db
-      .transaction(() => {
-        const archived = new Set(
-          this.prepareAll<{ name: string }>(
-            "PRAGMA table_info('remote_agent_workflow_event_archive')"
-          ).map(column => column.name)
-        );
-        for (const column of this.prepareAll<{ name: string; type: string }>(
-          "PRAGMA table_info('remote_agent_workflow_events')"
-        )) {
-          if (!archived.has(column.name))
-            this.db.run(
-              `ALTER TABLE remote_agent_workflow_event_archive ADD COLUMN "${column.name}" ${column.type}`
-            );
-        }
-      })
-      .immediate();
-
-    return allApplied;
   }
 
   /**

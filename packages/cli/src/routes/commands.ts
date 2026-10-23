@@ -136,12 +136,13 @@ export async function runHelp({ positionals }: CliRouteContext): Promise<number>
   // Mirror `archon <command> [--subcommand] --help`: bare `archon help`
   // is the global index; `archon help <cmd>` scopes to one command;
   // `archon help <cmd> <subcmd>` scopes further to one subcommand.
-  await printUsageFor(positionals[1], positionals[2]);
+  await printUsageFor(positionals.slice(1));
   return 0;
 }
 
 export async function runChat({ positionals, json }: CliRouteContext): Promise<number> {
   const chatMessage = positionals.slice(1).join(' ');
+  if (json) return await fail(json, 'Chat does not support --json. Use archon chat <message>.');
   if (!chatMessage) return await fail(json, 'Usage: archon chat <message>');
   const { chatCommand } = await loadRoute(() => import('../commands/chat'), {
     database: true,
@@ -263,14 +264,13 @@ export async function runIsolation({
 
     case 'cleanup': {
       if (values.merged) {
-        await isolationCleanupMergedCommand({
+        return await isolationCleanupMergedCommand({
           includeClosed: Boolean(values['include-closed']),
         });
       } else {
         const days = parseInt(positionals[2] ?? '7', 10);
-        await isolationCleanupCommand(days);
+        return await isolationCleanupCommand(days);
       }
-      return 0;
     }
 
     default: {
@@ -455,21 +455,21 @@ async function runAiAlias(
 }
 
 export async function runTelemetry({ subcommand, json }: CliRouteContext): Promise<number> {
-  const { telemetryStatusCommand, telemetryResetCommand } = await loadRoute(
-    () => import('../commands/telemetry'),
-    { providers: false }
-  );
+  const { telemetryStatusCommand, telemetryResetCommand, telemetryWorkflowNoMatchCommand } =
+    await loadRoute(() => import('../commands/telemetry'), { providers: false });
   switch (subcommand) {
     case 'status':
       return telemetryStatusCommand();
     case 'reset':
       return telemetryResetCommand();
+    case 'no-match':
+      return telemetryWorkflowNoMatchCommand();
     default: {
       const problem =
         subcommand === undefined
           ? 'Missing telemetry subcommand'
           : `Unknown telemetry subcommand: ${subcommand}`;
-      return await fail(json, `${problem}\nAvailable: status, reset`);
+      return await fail(json, `${problem}\nAvailable: status, reset, no-match`);
     }
   }
 }

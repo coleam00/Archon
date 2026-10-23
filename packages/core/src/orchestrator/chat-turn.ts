@@ -1,10 +1,9 @@
 /**
  * One direct-chat turn: send the prompt to the provider, stream or batch its reply, and
- * route a command the reply carries. The turn's telemetry goes through `reportChatTurn`.
+ * report its telemetry through `reportChatTurn`.
  */
-import type { RunActor } from '../operations/run-authorization';
 import { captureChatTurn } from '@archon/paths';
-import type { IPlatformAdapter, HandleMessageContext, Conversation, Codebase } from '../types';
+import type { IPlatformAdapter, Conversation } from '../types';
 import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
 import {
   addResultUsage,
@@ -14,27 +13,14 @@ import {
 } from '@archon/provider-contract';
 import * as sessionDb from '../db/sessions';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
+import { withStaleResumeRetry } from '@archon/workflows/stale-resume';
 import { classifyAndFormatError, formatProviderFailure } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import type { getAgentProvider } from '../services/provider-admission';
-import { findCodebaseByName, type ProjectRegistration } from './chat-tools';
-import { findWorkflow } from '@archon/workflows/router';
-import type { WorkflowWithSource } from '@archon/workflows/schemas/workflow';
-import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
+import type { WorkflowCommandSurface } from '@archon/workflows/deps';
 import { getLog } from './agent-log';
-import {
-  NO_COMMANDS,
-  hasCommandPrefix,
-  isCommandFullyParsed,
-  normalizeCommandText,
-  parseOrchestratorCommands,
-  type OrchestratorCommands,
-  type WorkflowInvocation,
-} from './command-scan';
-import { registerProject } from './project-commands';
 import * as messageDb from '../db/messages';
 import { filterToolIndicators, shiftReplyChunk, type ReplyChunk } from './batch-reply';
-import { dispatchOrchestratorWorkflow } from './workflow-dispatch';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -73,16 +59,9 @@ async function tryPersistSessionId(
 export interface ChatTurn {
   readonly startedAt: number;
   reported: boolean;
-  /** The turn ended in a provider error result; a launch queued during it is dropped. */
+  result?: TurnResult;
+  /** A failed turn drops any launch queued during it. */
   failed: boolean;
-  /**
-   * The command scan routed the turn to a workflow or a project registration, which
-   * report as `workflow_invoked` / `codebase_registered`, not as a chat turn. A throw
-   * while dispatching it is not a failed chat turn. A dispatch that fails before its run
-   * exists sends nothing, as a workflow-not-found or invalid-YAML dispatch does; the
-   * executor's own run-creation failure is reported as `run_not_created`.
-   */
-  routed: boolean;
 }
 
 /**
@@ -97,30 +76,30 @@ function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface)
   return classifyAndFormatError(new Error(errorDetail || 'AI result error'), surface);
 }
 
-export function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn>[0]): void {
+export function reportChatTurn(
+  turn: ChatTurn,
+  props: Omit<Parameters<typeof captureChatTurn>[0], 'costUsd' | 'tokensIn' | 'tokensOut'>
+): void {
   turn.reported = true;
   turn.failed = props.outcome === 'failed';
-  captureChatTurn(props);
+  captureChatTurn({
+    ...props,
+    costUsd: turn.result?.cost,
+    tokensIn: turn.result?.tokens?.input,
+    tokensOut: turn.result?.tokens?.output,
+  });
 }
 
 /** Everything one chat turn's mode handler reads, built once by `handleMessage`. */
 export interface ChatTurnInput {
   readonly turn: ChatTurn;
-  /** Providers without in-process tools write command lines that the scan reads from the reply. */
-  readonly commandScan: boolean;
   readonly platform: IPlatformAdapter;
   readonly conversationId: string;
-  readonly originalMessage: string;
-  readonly codebases: readonly Codebase[];
-  readonly workflows: readonly WorkflowWithSource[];
   readonly aiClient: ReturnType<typeof getAgentProvider>;
   readonly fullPrompt: string;
   readonly cwd: string;
   readonly session: { id: string; assistant_session_id: string | null };
-  readonly isolationHints: HandleMessageContext['isolationHints'];
   readonly conversation: Conversation;
-  readonly actor: RunActor;
-  readonly issueContext?: string;
   readonly requestOptions: SendQueryOptions;
 }
 
@@ -128,8 +107,36 @@ export interface ChatTurnInput {
 type TurnResult = ResultUsageTotal & { stopReason?: string };
 
 /**
- * The provider session id to persist after a `result` chunk. An `error_during_execution`
- * result clears the stored id, which the provider can no longer resume.
+ * The turn's provider stream. A resume the provider reports as stale is retried once on a
+ * fresh session, with the stored id cleared first and the user told the context is gone.
+ */
+function turnChunks(input: ChatTurnInput): ReturnType<typeof withStaleResumeRetry> {
+  const { aiClient, fullPrompt, cwd, session, requestOptions, platform, conversationId } = input;
+  return withStaleResumeRetry(
+    resumeSessionId => aiClient.sendQuery(fullPrompt, cwd, resumeSessionId, requestOptions),
+    session.assistant_session_id ?? undefined,
+    {
+      logContext: { conversationId },
+      onRetry: async () => {
+        await tryPersistSessionId(session.id, null);
+        await platform
+          .sendMessage(
+            conversationId,
+            '⚠️ The previous conversation session could not be resumed, so this reply starts a new session without the earlier context.'
+          )
+          .catch((e: unknown) => {
+            getLog().error({ err: toError(e), conversationId }, 'stale_resume_notice_send_failed');
+          });
+      },
+    }
+  );
+}
+
+/**
+ * The provider session id to persist after a `result` chunk. Any `error_during_execution`
+ * result clears the stored id, so the next message starts fresh rather than resuming a
+ * session that may be broken. A stale resume the provider confirmed never reaches here:
+ * `turnChunks` already retried it.
  */
 async function sessionIdAfterResult(
   input: ChatTurnInput,
@@ -198,60 +205,8 @@ async function reportFailedResult(
   return true;
 }
 
-/**
- * Route a command the scan found in the reply: retract the reply and dispatch the workflow
- * or register the project. Returns whether it routed. `registrationText` is the reply the
- * registration preamble is extracted from.
- */
-async function routeScannedCommand(
-  input: ChatTurnInput,
-  commands: OrchestratorCommands,
-  registrationText: string
-): Promise<boolean> {
-  const { turn, platform, conversationId } = input;
-  if (commands.workflowInvocation) {
-    turn.routed = true;
-    // Retract the reply text — workflow dispatch replaces it
-    if (platform.emitRetract) {
-      await platform.emitRetract(conversationId);
-    }
-    await handleWorkflowInvocationResult(
-      platform,
-      conversationId,
-      input.conversation,
-      input.codebases,
-      input.workflows,
-      commands.workflowInvocation,
-      input.originalMessage,
-      input.isolationHints,
-      input.actor,
-      input.issueContext
-    );
-    return true;
-  }
-
-  if (commands.projectRegistration) {
-    turn.routed = true;
-    if (platform.emitRetract) {
-      await platform.emitRetract(conversationId);
-    }
-    await handleProjectRegistrationResult(
-      platform,
-      conversationId,
-      registrationText,
-      commands.projectRegistration
-    );
-    return true;
-  }
-  return false;
-}
-
 /** Persist the reply, send the result footer and report the completed turn. */
-async function completeChatTurn(
-  input: ChatTurnInput,
-  text: string,
-  turnResult: TurnResult | undefined
-): Promise<void> {
+async function completeChatTurn(input: ChatTurnInput, text: string): Promise<void> {
   const { turn, platform, conversationId, conversation, aiClient, requestOptions } = input;
   // Adapter-owned storage must not get a second copy of the assistant reply (#1182).
   if (platform.capabilities.messagePersistence === 'core' && text) {
@@ -263,10 +218,7 @@ async function completeChatTurn(
       );
     });
   }
-  await maybeSendResultFooter(platform, conversationId, turnResult);
-  // Anonymous telemetry: one completed direct-chat turn. A turn the command scan routed
-  // returns before this — those are covered by workflow_invoked / codebase_registered
-  // instead. Platform + provider only, never message content.
+  await maybeSendResultFooter(platform, conversationId, turn.result);
   reportChatTurn(turn, {
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
@@ -274,96 +226,87 @@ async function completeChatTurn(
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
     durationMs: Date.now() - turn.startedAt,
-    costUsd: turnResult?.cost,
-    tokensIn: turnResult?.tokens?.input,
-    tokensOut: turnResult?.tokens?.output,
     outcome: 'completed',
+  });
+}
+
+async function reportUnansweredToolFailure(input: ChatTurnInput): Promise<void> {
+  const { platform, conversationId, aiClient, requestOptions, turn } = input;
+  await platform.sendMessage(
+    conversationId,
+    'A tool failed or was cancelled, and the assistant returned no follow-up reply. The requested action may not have completed. Check the run status before retrying.'
+  );
+  await maybeSendResultFooter(platform, conversationId, turn.result);
+  reportChatTurn(turn, {
+    platform: platform.getPlatformType(),
+    provider: aiClient.getType(),
+    model: requestOptions.model,
+    durationMs: Date.now() - turn.startedAt,
+    outcome: 'failed',
   });
 }
 
 // ─── Streaming Mode ─────────────────────────────────────────────────────────
 
-/**
- * Stream mode: send text chunks immediately for real-time UX (web, Telegram stream).
- * With `commandScan` on (providers without in-process tools), a detected orchestrator
- * command retracts the streamed text and dispatches.
- */
-export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
-  const { commandScan, platform, conversationId, aiClient, fullPrompt, cwd, session } = input;
+async function streamReply(input: ChatTurnInput) {
+  const { turn, platform, conversationId } = input;
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
-  let commandDetected = false;
-  let commandFullyParsed = false;
-  let turnResult: TurnResult | undefined;
+  let toolFailed = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    input.requestOptions
-  )) {
-    if (msg.type === 'agent_message_chunk') {
-      // Accumulate only while the command is not yet fully captured; post-command
-      // trailing chunks would corrupt the project-name token if joined without a
-      // whitespace boundary, causing the parse regex to overshoot.
-      if (!commandFullyParsed) {
+  for await (const msg of turnChunks(input)) {
+    switch (msg.type) {
+      case 'agent_message_chunk':
+        if (msg.text.trim()) toolFailed = false;
         allMessages.push(msg.text);
-      }
-      if (!commandDetected) {
-        // Check for orchestrator commands BEFORE streaming to frontend.
-        // If detected, suppress this chunk and all future chunks — the full
-        // response will be parsed post-loop and the command dispatched there.
-        const accumulated = allMessages.join('');
-        if (commandScan && hasCommandPrefix(accumulated)) {
-          commandDetected = true;
-          // If the complete command pattern is already present, stop accumulating —
-          // no more chunks needed. This prevents trailing chunks from corrupting
-          // the project-name token when the command was fully emitted in one chunk.
-          if (isCommandFullyParsed(accumulated)) {
-            commandFullyParsed = true;
-          }
-        } else {
-          await platform.sendMessage(conversationId, msg.text);
-        }
-      } else if (!commandFullyParsed) {
-        // Post-prefix: keep accumulating until the full command pattern is present.
-        const accumulated = allMessages.join('');
-        if (isCommandFullyParsed(accumulated)) {
-          commandFullyParsed = true;
-        }
-      }
-    } else if (msg.type === 'tool_call') {
-      if (!commandDetected) {
+        await platform.sendMessage(conversationId, msg.text);
+        break;
+      case 'tool_call': {
         const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
         await platform.sendMessage(conversationId, toolMessage, {
           category: 'tool_call_formatted',
         });
-        if (platform.sendStructuredEvent) {
-          await platform.sendStructuredEvent(conversationId, msg);
-        }
+        await platform.sendStructuredEvent?.(conversationId, msg);
+        break;
       }
-    } else if (msg.type === 'tool_call_update') {
-      if (!commandDetected && platform.sendStructuredEvent) {
-        await platform.sendStructuredEvent(conversationId, msg);
+      case 'tool_call_update': {
+        toolFailed ||= msg.status === 'failed' || msg.status === 'cancelled';
+        await platform.sendStructuredEvent?.(conversationId, msg);
+        break;
       }
-    } else if (msg.type === 'warning') {
-      if (!commandDetected) await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
-    } else if (msg.type === 'result') {
-      newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
-      if (await reportFailedResult(input, msg, newSessionId)) return;
-      if (!commandDetected && platform.sendStructuredEvent) {
-        await platform.sendStructuredEvent(conversationId, msg);
+      case 'warning': {
+        await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
+        break;
       }
-      turnResult = {
-        ...addResultUsage(turnResult ?? {}, msg),
-        stopReason: msg.stopReason ?? turnResult?.stopReason,
-      };
+      case 'result': {
+        turn.result = {
+          ...addResultUsage(turn.result ?? {}, msg),
+          stopReason: msg.stopReason ?? turn.result?.stopReason,
+        };
+        newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
+        if (await reportFailedResult(input, msg, newSessionId)) return null;
+        await platform.sendStructuredEvent?.(conversationId, msg);
+        break;
+      }
     }
   }
+  return { allMessages, newSessionId, toolFailed };
+}
+
+/**
+ * Stream mode: send text chunks immediately for real-time UX (web, Telegram stream).
+ */
+export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
+  const { session, conversationId } = input;
+  const reply = await streamReply(input);
+  if (reply === null) return;
+  const { allMessages, newSessionId, toolFailed } = reply;
 
   if (newSessionId) {
     await tryPersistSessionId(session.id, newSessionId);
   }
+
+  if (toolFailed) return reportUnansweredToolFailure(input);
 
   if (allMessages.length === 0) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is
@@ -373,107 +316,91 @@ export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
   }
 
   const fullResponse = allMessages.join('');
-  const commands = commandScan
-    ? parseOrchestratorCommands(
-        fullResponse,
-        input.codebases,
-        input.workflows.map(ws => ws.workflow)
-      )
-    : NO_COMMANDS;
-  if (await routeScannedCommand(input, commands, fullResponse)) return;
-
   // Text was already streamed — nothing more to send.
-  await completeChatTurn(input, fullResponse, turnResult);
+  await completeChatTurn(input, fullResponse);
 }
 
 // ─── Batch Mode ─────────────────────────────────────────────────────────────
 
-/**
- * Batch mode: accumulate chunks and filter tool indicators, falling back to the originals.
- * Used by Slack, GitHub, Discord (batch), and CLI.
- */
-export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
-  const { commandScan, platform, conversationId, aiClient, fullPrompt, cwd, session } = input;
+function appendBatchAssistantChunk(messages: ReplyChunk[], chunk: ReplyChunk): boolean {
+  messages.push(chunk);
+  if (messages.length <= MAX_BATCH_ASSISTANT_CHUNKS) return false;
+  shiftReplyChunk(messages);
+  return true;
+}
+
+async function collectBatchChunks(input: ChatTurnInput) {
+  const { turn, platform, conversationId } = input;
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: ReplyChunk[] = [];
   let assistantChunksTruncated = false;
   let totalChunksTruncated = false;
   let newSessionId: string | undefined;
-  let commandDetected = false;
-  let commandFullyParsed = false;
-  let turnResult: TurnResult | undefined;
+  let toolFailed = false;
 
-  for await (const msg of aiClient.sendQuery(
-    fullPrompt,
-    cwd,
-    session.assistant_session_id ?? undefined,
-    input.requestOptions
-  )) {
-    if (msg.type === 'agent_message_chunk') {
-      // Always record in allChunks for debug logging; accumulate assistantMessages
-      // only while the command is not yet fully captured (same reason as stream mode).
-      allChunks.push({ type: 'assistant', content: msg.text });
-      if (!commandFullyParsed) {
-        assistantMessages.push(msg);
-      }
-
-      // Cap assistant-only chunks while no command has been detected.  Once
-      // commandDetected flips to true we stop shifting so that all tokens of
-      // the in-flight command are preserved — shifting the prefix away would
-      // break both the prefix and full-command regexes.  As a consequence, if
-      // the AI starts a command prefix but never completes it, assistantMessages
-      // can grow unbounded from the per-assistant perspective; the outer
-      // MAX_BATCH_TOTAL_CHUNKS guard on allChunks (below) is the true hard cap
-      // for that edge case.
-      if (
-        !commandDetected &&
-        !commandFullyParsed &&
-        assistantMessages.length > MAX_BATCH_ASSISTANT_CHUNKS
-      ) {
-        shiftReplyChunk(assistantMessages);
-        assistantChunksTruncated = true;
-      }
-
-      if (!commandDetected) {
-        const accumulated = assistantMessages.map(chunk => chunk.text).join('');
-        if (commandScan && hasCommandPrefix(accumulated)) {
-          commandDetected = true;
-          if (isCommandFullyParsed(accumulated)) {
-            commandFullyParsed = true;
-          }
+  for await (const msg of turnChunks(input)) {
+    switch (msg.type) {
+      case 'agent_message_chunk':
+        if (msg.text.trim()) toolFailed = false;
+        allChunks.push({ type: 'assistant', content: msg.text });
+        assistantChunksTruncated =
+          appendBatchAssistantChunk(assistantMessages, msg) || assistantChunksTruncated;
+        break;
+      case 'tool_call':
+        {
+          const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
+          allChunks.push({ type: 'tool', content: toolMessage });
+          getLog().debug({ toolName: msg.name }, 'tool_call');
         }
-      } else if (!commandFullyParsed) {
-        const accumulated = assistantMessages.map(chunk => chunk.text).join('');
-        if (isCommandFullyParsed(accumulated)) {
-          commandFullyParsed = true;
-        }
-      }
-    } else if (msg.type === 'tool_call') {
-      if (!commandDetected) {
-        const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
-        allChunks.push({ type: 'tool', content: toolMessage });
-        getLog().debug({ toolName: msg.name }, 'tool_call');
-      }
-    } else if (msg.type === 'warning') {
-      // A warning surfaces as it arrives, not batched into the reply.
-      if (!commandDetected) await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
-    } else if (msg.type === 'result') {
-      newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
-      if (await reportFailedResult(input, msg, newSessionId)) return;
-      turnResult = {
-        ...addResultUsage(turnResult ?? {}, msg),
-        stopReason: msg.stopReason ?? turnResult?.stopReason,
-      };
+        break;
+      case 'tool_call_update':
+        toolFailed ||= msg.status === 'failed' || msg.status === 'cancelled';
+        break;
+      case 'warning':
+        // A warning surfaces as it arrives, not batched into the reply.
+        await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
+        break;
+      case 'result':
+        turn.result = {
+          ...addResultUsage(turn.result ?? {}, msg),
+          stopReason: msg.stopReason ?? turn.result?.stopReason,
+        };
+        newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
+        if (await reportFailedResult(input, msg, newSessionId)) return;
     }
 
-    // Always enforce the total-chunk cap regardless of commandDetected — allChunks grows
-    // unconditionally now (for debug logging), so without this guard it would be unbounded.
     if (allChunks.length > MAX_BATCH_TOTAL_CHUNKS) {
       allChunks.shift();
       totalChunksTruncated = true;
     }
   }
 
+  return {
+    allChunks,
+    assistantMessages,
+    assistantChunksTruncated,
+    totalChunksTruncated,
+    newSessionId,
+    toolFailed,
+  };
+}
+
+/**
+ * Batch mode: accumulate chunks and filter tool indicators, falling back to the originals.
+ * Used by Slack, GitHub, Discord (batch), and CLI.
+ */
+export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
+  const batch = await collectBatchChunks(input);
+  if (!batch) return;
+  const {
+    allChunks,
+    assistantMessages,
+    assistantChunksTruncated,
+    totalChunksTruncated,
+    newSessionId,
+    toolFailed,
+  } = batch;
+  const { platform, conversationId, session } = input;
   if (newSessionId) {
     await tryPersistSessionId(session.id, newSessionId);
   }
@@ -498,6 +425,8 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
   // Filter tool indicators and build final message
   const finalMessage = filterToolIndicators(assistantMessages);
 
+  if (toolFailed) return reportUnansweredToolFailure(input);
+
   if (!finalMessage) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is
     // neither a completed nor a failed turn worth measuring.
@@ -505,21 +434,9 @@ export async function handleBatchMode(input: ChatTurnInput): Promise<void> {
     return;
   }
 
-  // Raw join keeps multi-chunk commands contiguous; the display separators
-  // from filterToolIndicators would break command names and arguments apart.
-  const commands = commandScan
-    ? parseOrchestratorCommands(
-        assistantMessages.map(chunk => chunk.text).join(''),
-        input.codebases,
-        input.workflows.map(ws => ws.workflow)
-      )
-    : NO_COMMANDS;
-  if (await routeScannedCommand(input, commands, finalMessage)) return;
-
-  // No orchestrator commands — send the clean response
   getLog().debug({ messageLength: finalMessage.length }, 'sending_final_message');
   await platform.sendMessage(conversationId, finalMessage);
-  await completeChatTurn(input, finalMessage, turnResult);
+  await completeChatTurn(input, finalMessage);
 }
 
 /**
@@ -541,117 +458,4 @@ async function maybeSendResultFooter(
   } catch (error) {
     getLog().warn({ err: toError(error), conversationId }, 'orchestrator.result_footer_failed');
   }
-}
-
-// ─── Orchestrator Command Handlers ──────────────────────────────────────────
-
-/**
- * Handle a parsed /invoke-workflow command from AI response.
- */
-async function handleWorkflowInvocationResult(
-  platform: IPlatformAdapter,
-  conversationId: string,
-  conversation: Conversation,
-  codebases: readonly Codebase[],
-  workflows: readonly WorkflowWithSource[],
-  invocation: WorkflowInvocation,
-  originalMessage: string,
-  isolationHints: HandleMessageContext['isolationHints'],
-  actor: RunActor,
-  issueContext?: string
-): Promise<void> {
-  const { workflowName, projectName, remainingMessage } = invocation;
-
-  // Send explanation text before dispatching
-  if (remainingMessage) {
-    await platform.sendMessage(conversationId, remainingMessage);
-  }
-
-  // Find the codebase and workflow (supports partial name matching)
-  const codebase = findCodebaseByName(codebases, projectName);
-  // Keep the discovery ENTRY, not just the definition: it carries the parse
-  // warnings this path used to discard (#2213).
-  const workflowEntry = workflows.find(ws => ws.workflow.name === workflowName);
-  const workflow = findWorkflow(
-    workflowName,
-    workflows.map(ws => ws.workflow)
-  );
-
-  if (codebase && workflow) {
-    const workflowPrompt = invocation.synthesizedPrompt ?? originalMessage;
-    getLog().debug(
-      {
-        source: invocation.synthesizedPrompt ? 'synthesized' : 'original',
-        promptLength: workflowPrompt.length,
-        workflowName,
-        hasIssueContext: !!issueContext,
-        issueContextLength: issueContext?.length ?? 0,
-      },
-      'workflow_prompt_resolved'
-    );
-    await dispatchOrchestratorWorkflow(
-      platform,
-      conversationId,
-      conversation,
-      codebase,
-      {
-        kind: 'start',
-        definition: workflow,
-        args: workflowPrompt,
-        parseWarnings: workflowEntry?.parseWarnings,
-      },
-      actor,
-      isolationHints,
-      workflowEntry?.source
-    );
-    return;
-  }
-
-  // Fallback: send error about missing project or workflow
-  if (!codebase) {
-    const projectList = codebases.map(c => `- ${c.name}`).join('\n');
-    await platform.sendMessage(
-      conversationId,
-      `I couldn't find a project matching "${projectName}". Here are your registered projects:\n${projectList || '(none)'}\n\nPlease specify which project you'd like to use.`
-    );
-  } else if (!workflow) {
-    getLog().warn({ workflowName, projectName }, 'workflow_not_found_in_dispatch');
-    await platform.sendMessage(
-      conversationId,
-      `Workflow \`${workflowName}\` is not available. Use \`${spellWorkflowCommand(platform, 'list')}\` to see available workflows.`
-    );
-  }
-}
-
-/**
- * Handle a parsed /register-project command from AI response.
- */
-async function handleProjectRegistrationResult(
-  platform: IPlatformAdapter,
-  conversationId: string,
-  fullResponse: string,
-  registration: ProjectRegistration
-): Promise<void> {
-  // Normalize before extraction so that Mode A's bold markers ('**') are
-  // stripped from the command line; otherwise textBeforeReg would include a
-  // trailing '**' when the model wrapped the command in markdown bold.
-  const normalizedForExtraction = normalizeCommandText(fullResponse);
-  // Match line-anchored to avoid landing on a prose mention of "/register-project".
-  const regLineMatch = /^\/register-project\b/m.exec(normalizedForExtraction);
-  if (!regLineMatch) {
-    // Parsing already succeeded upstream from raw concatenated assistant chunks.
-    // If extraction on filtered text fails, skip preamble extraction but still
-    // execute registration to avoid silently dropping a valid command.
-    getLog().warn({ conversationId }, 'orchestrator.extract_no_line_match');
-  }
-  const textBeforeReg = regLineMatch
-    ? normalizedForExtraction.slice(0, regLineMatch.index).trim()
-    : '';
-  if (textBeforeReg) {
-    await platform.sendMessage(conversationId, textBeforeReg);
-  }
-
-  // Register the project
-  const regResult = await registerProject(registration);
-  await platform.sendMessage(conversationId, regResult);
 }

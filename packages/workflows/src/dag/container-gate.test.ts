@@ -1,6 +1,10 @@
 // @archon-test-isolated
-import { describe, it, expect, afterEach, mock } from 'bun:test';
+import { WorkflowExecutionHandoffError } from '../engine-port';
+import * as nodeEventWrite from '../node-event-write';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { describe, it, expect, afterEach, mock, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { dagNodeSchema, isApprovalContext, isWorkflowWaitContext } from '../schemas';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -9,7 +13,9 @@ import {
   createMockDeps,
   createMockPlatform,
   persistedEvents,
+  ready,
   mockLogger,
+  mockSendQueryDag,
   stubMissingContainer,
   dagOptions,
   makeWorkflowRun,
@@ -19,6 +25,15 @@ import {
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
 import type { IWorkflowStore } from '../store';
+import { finishNodeExecution } from '../node-execution';
+import { serializeNodeStateRecord } from '../node-record-serialization';
+import { createFileWorkflowStore } from '../file-store/store';
+import * as sourceLoader from '../workflow-source/load';
+import {
+  captureWorkflowSource,
+  capturedSourceRoots,
+  WorkflowSourceUnavailableError,
+} from '../workflow-source';
 
 // ---------------------------------------------------------------------------
 // Container write-back gate + suspend-on-pause (Phase C)
@@ -28,11 +43,28 @@ describe('executeDagWorkflow -- container write-back gate', () => {
   const CONTAINER_EXEC = { kind: 'container' as const, containerId: 'cid-1' };
   const wbTestDir = join(tmpdir(), `dag-wb-test-${Date.now()}`);
   // The executor creates `logs/` under the run's cwd, so this path becomes a real tree.
-  afterEach(() => removeTempTree(wbTestDir));
+  const eventWrites: Promise<unknown>[] = [];
+  let containerProbe: ReturnType<typeof stubMissingContainer> | undefined;
+  afterEach(async () => {
+    containerProbe?.mockRestore();
+    containerProbe = undefined;
+    await Promise.all(eventWrites.splice(0));
+    await removeTempTree(wbTestDir);
+  });
+
+  function trackEventWrites(store: IWorkflowStore): void {
+    const create = store.createWorkflowEvent.bind(store);
+    store.createWorkflowEvent = (...args) => {
+      const write = create(...args);
+      eventWrites.push(write);
+      return write;
+    };
+  }
 
   function makeWritebackBackend(over?: Partial<Record<string, unknown>>) {
     return {
       suspend: mock(async () => undefined),
+      prepareSuspend: mock(async () => mock(async () => undefined)),
       finalize: mock(async () => ({ requiresApproval: false as boolean })),
       applyChanges: mock(async () => ({
         filesApplied: 0,
@@ -49,12 +81,11 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     backend: ReturnType<typeof makeWritebackBackend>;
     writeBack?: 'approve' | 'auto';
     runMetadata?: Record<string, unknown>;
-    status?: 'running' | 'paused';
     claimed?: boolean;
     platform?: ReturnType<typeof createMockPlatform>;
   }): Promise<IWorkflowStore> {
     const store = createMockStore();
-    store.getWorkflowRunStatus = mock(() => Promise.resolve(opts.status ?? ('running' as const)));
+    store.getWorkflowRunStatus = mock(() => Promise.resolve('running' as const));
     store.getWorkflowRun = mock(() =>
       Promise.resolve(makeWorkflowRun('wb-run', { metadata: opts.runMetadata ?? {} }))
     );
@@ -82,6 +113,642 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     );
     return store;
   }
+
+  it.each(['approval', 'wait', 'writeback', 'unresolved'] as const)(
+    '%s cannot be resumed until suspension has finished',
+    async kind => {
+      const store = await createFileWorkflowStore({ root: join(wbTestDir, 'store') });
+      trackEventWrites(store);
+      const created = await store.createWorkflowRun({
+        workflow_name: 'ordering',
+        user_message: '',
+      });
+      const run = await store.claimPendingWorkflowRun(created.id);
+      if (!run) throw new Error('run was not claimed');
+      const summary = {
+        added: ['x'],
+        modified: [],
+        deleted: [],
+        symlinks: [],
+        skipped: [],
+        totalCount: 1,
+        truncated: false,
+      };
+      if (kind === 'unresolved') {
+        await store.updateWorkflowRun(run.id, {
+          metadata: {
+            pending_writeback: { envId: 'env-x', summary },
+            approval: { type: 'writeback', nodeId: '__writeback__', message: '' },
+          },
+        });
+      }
+      const order: string[] = [];
+      const suspendStarted = Promise.withResolvers<void>();
+      const releaseSuspend = Promise.withResolvers<void>();
+      const backend = makeWritebackBackend({
+        finalize: mock(async () => ({ requiresApproval: true, changeSummary: summary })),
+        suspend: mock(async () => {
+          order.push('stop');
+          suspendStarted.resolve();
+          await releaseSuspend.promise;
+          order.push('stopped');
+        }),
+      });
+      const resumePublishedPause = async (): Promise<void> => {
+        order.push('published');
+        expect(await store.getWorkflowRunStatus(run.id)).toBe('paused');
+        expect((await store.resumeWorkflowRun(run.id)).status).toBe('running');
+        order.push('successor');
+      };
+      const pause = store.pauseWorkflowRun.bind(store);
+      store.pauseWorkflowRun = async (...args) => {
+        await pause(...args);
+        await resumePublishedPause();
+      };
+      const pauseForWait = store.pauseWorkflowRunForWait.bind(store);
+      store.pauseWorkflowRunForWait = async (...args) => {
+        await pauseForWait(...args);
+        await resumePublishedPause();
+      };
+      const options = dagOptions({
+        deps: createMockDeps(store),
+        cwd: wbTestDir,
+        workflowRun: run,
+        workflow: {
+          name: 'ordering',
+          nodes:
+            kind === 'approval'
+              ? [
+                  {
+                    id: 'review',
+                    kind: 'gate',
+                    message: 'Review',
+                    decisions: [{ id: 'approve' }, { id: 'reject' }],
+                    decisionsAuthored: false,
+                    captureResponse: false,
+                  },
+                ]
+              : kind === 'wait'
+                ? [dagNodeSchema.parse({ id: 'delay', wait: { duration_ms: 60_000 } })]
+                : [{ id: 'a', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
+        },
+        priorCompletedNodes:
+          kind === 'approval' || kind === 'wait' ? undefined : new Map([['a', { output: 'out' }]]),
+        execContext: CONTAINER_EXEC,
+        containerCtx: { envId: 'env-x', writeBack: 'approve', backend },
+      });
+      const pending = executeDagWorkflow(options);
+      try {
+        await suspendStarted.promise;
+        expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+        await expect(store.resumeWorkflowRun(run.id)).rejects.toThrow();
+        expect(order).toEqual(['stop']);
+      } finally {
+        releaseSuspend.resolve();
+        await pending;
+      }
+      expect(order).toEqual(['stop', 'stopped', 'published', 'successor']);
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+      expect(backend.applyChanges).not.toHaveBeenCalled();
+      expect(backend.discardChanges).not.toHaveBeenCalled();
+    }
+  );
+
+  async function realPauseFixture(nodes: Parameters<typeof dagOptions>[0]['workflow']['nodes']) {
+    containerProbe = stubMissingContainer();
+    const store = await createFileWorkflowStore({ root: join(wbTestDir, 'store') });
+    trackEventWrites(store);
+    const created = await store.createWorkflowRun({ workflow_name: 'pause', user_message: '' });
+    const run = await store.claimPendingWorkflowRun(created.id);
+    if (!run) throw new Error('run was not claimed');
+    const backend = makeWritebackBackend();
+    const options = dagOptions({
+      deps: createMockDeps(store),
+      cwd: wbTestDir,
+      workflowRun: run,
+      workflow: { name: 'pause', nodes },
+      execContext: CONTAINER_EXEC,
+      containerCtx: { envId: 'env-x', writeBack: 'approve', backend },
+    });
+    return { store, backend, options, run };
+  }
+
+  const reviewNode = (id = 'review') =>
+    dagNodeSchema.parse({ id, approval: { message: 'Review' } });
+
+  it('releases unreadable source instead of publishing a same-layer approval', async () => {
+    const { options, backend, store, run } = await realPauseFixture([
+      reviewNode(),
+      dagNodeSchema.parse({ id: 'check', runtime: 'bun', script: 'check' }),
+    ]);
+    const metadata = { ...run.metadata, isolation: 'container', isolation_env_id: 'env-x' };
+    await store.updateWorkflowRun(run.id, { metadata });
+    options.workflowRun = { ...run, metadata };
+    const scripts = join(wbTestDir, '.archon', 'scripts');
+    await mkdir(scripts, { recursive: true });
+    await writeFile(join(scripts, 'check.ts'), 'console.log("ok")');
+    const capture = await captureWorkflowSource({
+      sourceRoot: wbTestDir,
+      captureRoot: join(wbTestDir, 'capture'),
+    });
+    options.workflowSourceRoots = capturedSourceRoots(capture.anchor);
+    const fault = spyOn(sourceLoader, 'assertWorkflowSourceIntegrity').mockRejectedValue(
+      new WorkflowSourceUnavailableError(join(wbTestDir, 'capture'), new Error('read denied'))
+    );
+    const head = await store.getWorkflowEventHead();
+    try {
+      expect(await executeDagWorkflow(options)).toEqual({ kind: 'source_release', released: true });
+    } finally {
+      fault.mockRestore();
+    }
+    const released = await store.getWorkflowRun(run.id);
+    expect(released?.metadata.approval).toBeUndefined();
+    expect(released?.metadata.source_release).toBeDefined();
+    expect(backend.suspend).not.toHaveBeenCalled();
+    expect(backend.prepareSuspend).toHaveBeenCalledTimes(1);
+    const page = await store.readWorkflowEventsAfter(head, { limit: 100 });
+    expect(page.events.some(({ event }) => event.event_type === 'approval_pending')).toBe(false);
+  });
+
+  it('joins an active peer before stopping or publishing, and does not admit the next layer', async () => {
+    const peerStarted = Promise.withResolvers<void>();
+    const releasePeer = Promise.withResolvers<void>();
+    let peerSettled = false;
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      peerStarted.resolve();
+      await releasePeer.promise;
+      peerSettled = true;
+      yield { type: 'agent_message_chunk', text: 'Peer finished' };
+      yield { type: 'result', sessionId: 'peer-session' };
+    });
+    const { store, options, backend, run } = await realPauseFixture([
+      dagNodeSchema.parse({ id: 'peer', prompt: 'Slow peer' }),
+      reviewNode(),
+      dagNodeSchema.parse({ id: 'later', depends_on: ['review'], bash: 'echo should-not-run' }),
+    ]);
+    const suspendStarted = Promise.withResolvers<void>();
+    const releaseSuspend = Promise.withResolvers<void>();
+    backend.suspend = mock(async () => {
+      expect(peerSettled).toBe(true);
+      suspendStarted.resolve();
+      await releaseSuspend.promise;
+    });
+    const head = await store.getWorkflowEventHead();
+    const pending = executeDagWorkflow(options);
+    try {
+      await peerStarted.promise;
+      expect(backend.suspend).not.toHaveBeenCalled();
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+      releasePeer.resolve();
+      await suspendStarted.promise;
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+      await expect(store.resumeWorkflowRun(run.id)).rejects.toThrow();
+    } finally {
+      releasePeer.resolve();
+      releaseSuspend.resolve();
+      await pending;
+    }
+    expect(await store.getWorkflowRunStatus(run.id)).toBe('paused');
+    const page = await store.readWorkflowEventsAfter(head, { limit: 100 });
+    expect(page.events.filter(({ event }) => event.step_name === 'later')).toHaveLength(0);
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+  });
+
+  for (const container of [false, true]) {
+    it.each([
+      { duration_ms: 60_000 },
+      { until: '2099-01-01T00:00:00.000Z' },
+      { event: 'ready', deadline_ms: 60_000 },
+    ])(
+      `keeps an unresolved loop-group wait paused at the iteration cap (container=${container}, %j)`,
+      async wait => {
+        const group = dagNodeSchema.parse({
+          id: 'group',
+          loop_group: {
+            nodes: [{ id: 'delay', wait }],
+            until: 'DONE',
+            max_iterations: 1,
+          },
+        });
+        const { options, backend, store, run } = await realPauseFixture([group]);
+        if (!container) {
+          options.execContext = { kind: 'host' };
+          options.containerCtx = undefined;
+        }
+        await executeDagWorkflow(options);
+        const original = (await store.getWorkflowRun(run.id))?.metadata.wait;
+        options.workflowRun = await store.resumeWorkflowRun(run.id);
+        options.priorCompletedNodes = (
+          await store.getDagResumeSnapshot(run.id)
+        ).completedNodeOutputs;
+        const head = await store.getWorkflowEventHead();
+        await executeDagWorkflow(options);
+        expect((await store.getWorkflowRun(run.id))?.metadata.wait).toEqual(original);
+        expect(await store.getWorkflowRunStatus(run.id)).toBe('paused');
+        expect((await store.getDagResumeSnapshot(run.id)).failedNodes.size).toBe(0);
+        const page = await store.readWorkflowEventsAfter(head, { limit: 100 });
+        expect(page.events.filter(({ event }) => event.event_type === 'node_failed')).toHaveLength(
+          0
+        );
+        expect(backend.suspend).toHaveBeenCalledTimes(container ? 2 : 0);
+      }
+    );
+  }
+
+  it.each(['gate', 'interactive group', 'interactive loop', 'wait'] as const)(
+    'nested %s pauses stop before completion checks or another iteration',
+    async kind => {
+      const leaf =
+        kind === 'gate'
+          ? { id: 'review', approval: { message: 'Review' } }
+          : kind === 'wait'
+            ? { id: 'delay', wait: { duration_ms: 60_000 } }
+            : { id: 'work', prompt: 'Work' };
+      const inner =
+        kind === 'interactive loop'
+          ? {
+              id: 'inner',
+              loop: {
+                prompt: 'Work',
+                until: 'DONE',
+                max_iterations: 2,
+                interactive: true,
+                gate_message: 'Continue?',
+              },
+            }
+          : {
+              id: 'inner',
+              loop_group: {
+                nodes: [leaf],
+                until: 'DONE',
+                max_iterations: 2,
+                ...(kind === 'interactive group'
+                  ? { interactive: true, gate_message: 'Continue?' }
+                  : {}),
+              },
+            };
+      const outer = dagNodeSchema.parse({
+        id: 'outer',
+        loop_group: { nodes: [inner], until_bash: 'exit 0', max_iterations: 2 },
+      });
+      const { options, backend, store, run } = await realPauseFixture([outer]);
+      let previousWait: unknown;
+      if (kind === 'wait') {
+        await executeDagWorkflow({
+          ...options,
+          execContext: { kind: 'host' },
+          containerCtx: undefined,
+        });
+        previousWait = (await store.getWorkflowRun(run.id))?.metadata.wait;
+        options.workflowRun = await store.resumeWorkflowRun(run.id);
+        options.priorCompletedNodes = (
+          await store.getDagResumeSnapshot(run.id)
+        ).completedNodeOutputs;
+      }
+      const head = await store.getWorkflowEventHead();
+      await executeDagWorkflow(options);
+      expect(backend.suspend).toHaveBeenCalledTimes(1);
+      const paused = await store.getWorkflowRun(run.id);
+      expect(paused?.status).toBe('paused');
+      const page = await store.readWorkflowEventsAfter(head, { limit: 100 });
+      expect(page.events.filter(({ event }) => event.event_type === 'node_failed')).toHaveLength(0);
+      expect(
+        page.events.filter(
+          ({ event }) =>
+            event.event_type === 'loop_iteration_completed' && event.step_name === 'outer'
+        )
+      ).toHaveLength(0);
+      expect(
+        page.events.filter(
+          ({ event }) =>
+            event.event_type === 'node_completed' &&
+            ['outer', 'outer.inner'].includes(event.step_name ?? '')
+        )
+      ).toHaveLength(0);
+      if (kind === 'wait') {
+        expect(paused?.metadata.wait).toEqual(previousWait);
+        expect(paused?.metadata.wait).toMatchObject({
+          kind: 'time',
+          nodeId: 'inner',
+          bodyWaitId: 'delay',
+          iteration: 1,
+        });
+        expect(
+          page.events.some(
+            ({ event }) =>
+              event.event_type === 'node_suspended' && event.step_name === 'outer.inner.delay'
+          )
+        ).toBe(true);
+      } else {
+        expect(paused?.metadata.approval).toMatchObject({ nodeId: 'inner', iteration: 1 });
+      }
+    }
+  );
+
+  it.each([false, true])('stages a held child pause (fan-out=%s)', async fanOut => {
+    const child = dagNodeSchema.parse({
+      id: 'child',
+      workflow: 'child-workflow',
+      ...(fanOut ? { fan_out: { items: '["a"]', max_parallel: 1, join: 'all_done' } } : {}),
+    });
+    const { options, backend, store, run } = await realPauseFixture([child]);
+    await mkdir(join(wbTestDir, '.archon', 'workflows'), { recursive: true });
+    await writeFile(
+      join(wbTestDir, '.archon', 'workflows', 'child-workflow.yaml'),
+      'name: child-workflow\ndescription: Child\nnodes:\n  - id: work\n    bash: echo done\n'
+    );
+    options.runChildWorkflow = async () => ({ childRunId: 'held-child', status: 'paused' });
+    backend.suspend = mock(async () => {
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+      await expect(store.resumeWorkflowRun(run.id)).rejects.toThrow();
+    });
+    const receipt = await executeDagWorkflow(options);
+    expect(receipt).toMatchObject({
+      kind: 'container_pause',
+      pause: { kind: 'gate', context: { type: fanOut ? 'fan_out' : 'child_workflow' } },
+    });
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect((await store.getDagResumeSnapshot(run.id)).completedNodeOutputs.has('child')).toBe(
+      false
+    );
+  });
+
+  it.each([false, true])(
+    'surfaces a post-publication error and reports suspension failure=%s after resume',
+    async suspensionFails => {
+      const { options, store, run, backend } = await realPauseFixture([reviewNode()]);
+      if (suspensionFails) {
+        backend.suspend = mock(async () => {
+          throw new Error('stop failed');
+        });
+      }
+      const head = await store.getWorkflowEventHead();
+      const pause = store.pauseWorkflowRun.bind(store);
+      store.pauseWorkflowRun = async (...args) => {
+        await pause(...args);
+        await store.resumeWorkflowRun(run.id);
+      };
+      const failure = new Error('transcript write failed');
+      const original = nodeEventWrite.recordDerivedExecution;
+      const derived = spyOn(nodeEventWrite, 'recordDerivedExecution').mockImplementation(
+        async (...args) => {
+          if ('lifecycle' in args[1] && args[1].lifecycle.status === 'suspended') throw failure;
+          return original(...args);
+        }
+      );
+      try {
+        await expect(executeDagWorkflow(options)).rejects.toMatchObject({
+          name: WorkflowExecutionHandoffError.name,
+          workflowRunId: run.id,
+          cause: failure,
+        });
+        expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+        const page = await store.readWorkflowEventsAfter(head, { limit: 100 });
+        expect(
+          page.events.filter(({ event }) => event.event_type === 'workflow_cleanup_warning')
+        ).toHaveLength(suspensionFails ? 1 : 0);
+      } finally {
+        derived.mockRestore();
+      }
+    }
+  );
+
+  it('does not expose a continued wait when its required suspended record cannot be written', async () => {
+    const { options, store, run, backend } = await realPauseFixture([
+      dagNodeSchema.parse({ id: 'delay', wait: { duration_ms: 60_000 } }),
+    ]);
+    await executeDagWorkflow({
+      ...options,
+      execContext: { kind: 'host' },
+      containerCtx: undefined,
+    });
+    options.workflowRun = await store.resumeWorkflowRun(run.id);
+    options.priorCompletedNodes = (await store.getDagResumeSnapshot(run.id)).completedNodeOutputs;
+    const persist = store.persistWorkflowEvent.bind(store);
+    store.persistWorkflowEvent = async event => {
+      if (event.event_type === 'node_suspended') throw new Error('required record rejected');
+      return persist(event);
+    };
+    const pause = mock(store.pauseWorkflowRunForWait.bind(store));
+    store.pauseWorkflowRunForWait = pause;
+    await expect(executeDagWorkflow(options)).rejects.toBeInstanceOf(
+      nodeEventWrite.NodeEventWriteError
+    );
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(pause).not.toHaveBeenCalled();
+    expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+  });
+
+  it('only publishes one of two competing gates', async () => {
+    const { options, backend, store, run } = await realPauseFixture([
+      reviewNode('one'),
+      reviewNode('two'),
+    ]);
+    const pause = mock(store.pauseWorkflowRun.bind(store));
+    store.pauseWorkflowRun = pause;
+    await executeDagWorkflow(options);
+    expect(pause).toHaveBeenCalledTimes(1);
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(await store.getWorkflowRunStatus(run.id)).toBe('paused');
+  });
+
+  it.each(['time', 'event', 'attention'] as const)(
+    'records only the selected loop-group terminal %s wait as suspended',
+    async kind => {
+      const wait =
+        kind === 'time'
+          ? { duration_ms: 60_000 }
+          : kind === 'event'
+            ? { event: 'ready', deadline_ms: 60_000 }
+            : { attention: 'Continue?', form: 'approval' };
+      const { options, store, run } = await realPauseFixture(
+        ['selected', 'deferred'].map(id =>
+          dagNodeSchema.parse({
+            id,
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 1,
+              nodes: [{ id: 'hold', wait }],
+            },
+          })
+        )
+      );
+      await executeDagWorkflow(options);
+      const current = await store.getWorkflowRun(run.id);
+      const cursor = current?.metadata.wait;
+      if (!isWorkflowWaitContext(cursor)) throw new Error('Missing wait cursor');
+      const selected = cursor.nodeId;
+      expect(cursor).toMatchObject({
+        owner: 'loop_group',
+        nodeId: selected,
+        bodyWaitId: 'hold',
+        iteration: 1,
+      });
+      const events = await store.listWorkflowEvents(run.id);
+      expect(
+        events.filter(event => event.event_type === 'node_suspended').map(event => event.step_name)
+      ).toEqual([selected, `${selected}.hold`]);
+      expect(
+        events.find(event => event.step_name === selected && event.event_type === 'node_suspended')
+          ?.data
+      ).toMatchObject({ suspend_point: 'wait' });
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('paused');
+
+      options.workflow = ready({
+        name: 'pause',
+        nodes: options.workflow.nodes.filter(node => node.id === selected),
+      });
+      options.workflowRun = await store.resumeWorkflowRun(run.id);
+      options.priorCompletedNodes = (await store.getDagResumeSnapshot(run.id)).completedNodeOutputs;
+      await executeDagWorkflow(options);
+      const continued = await store.listWorkflowEvents(run.id);
+      expect(
+        continued
+          .slice(events.length)
+          .filter(event => event.event_type === 'node_suspended')
+          .map(event => event.step_name)
+      ).toEqual([selected, `${selected}.hold`]);
+      expect((await store.getWorkflowRun(run.id))?.metadata.wait).toEqual(current?.metadata.wait);
+
+      options.workflowRun = await store.resumeWorkflowRun(run.id);
+      options.priorCompletedNodes = (await store.getDagResumeSnapshot(run.id)).completedNodeOutputs;
+      options.workflow = ready({
+        name: 'pause',
+        nodes: [reviewNode('winner'), ...options.workflow.nodes],
+      });
+      await executeDagWorkflow(options);
+      const lost = await store.listWorkflowEvents(run.id);
+      expect(
+        lost
+          .slice(continued.length)
+          .filter(event => event.event_type === 'node_suspended')
+          .map(event => event.step_name)
+      ).toEqual(['winner']);
+      expect((await store.getWorkflowRun(run.id))?.metadata.approval).toMatchObject({
+        nodeId: 'winner',
+      });
+    }
+  );
+
+  it('records only the selected loop-group terminal gate as suspended', async () => {
+    const { options, store, run } = await realPauseFixture(
+      ['selected', 'deferred'].map(id =>
+        dagNodeSchema.parse({
+          id,
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 1,
+            nodes: [{ id: 'review', approval: { message: 'Review' } }],
+          },
+        })
+      )
+    );
+    await executeDagWorkflow(options);
+    const approval = (await store.getWorkflowRun(run.id))?.metadata.approval;
+    if (!isApprovalContext(approval)) throw new Error('Missing approval context');
+    expect(approval).toMatchObject({ bodyGateId: 'review', iteration: 1 });
+    const selected = approval.nodeId;
+    const events = await store.listWorkflowEvents(run.id);
+    expect(
+      events
+        .filter(event => event.event_type === 'node_suspended')
+        .map(event => event.step_name)
+        .sort()
+    ).toEqual([selected, `${selected}.review`]);
+    expect(
+      events.find(event => event.step_name === selected && event.event_type === 'node_suspended')
+        ?.data
+    ).toMatchObject({ suspend_point: 'approval' });
+  });
+
+  it('keeps deferred loop spend durable and selected loop spend on its gate', async () => {
+    const query = async function* () {
+      yield { type: 'agent_message_chunk' as const, text: 'COMPLETE' };
+      yield { type: 'result' as const, sessionId: 'loop-session', cost: 0.25 };
+    };
+    mockSendQueryDag.mockImplementationOnce(query).mockImplementationOnce(query);
+    const { options, store, run } = await realPauseFixture(
+      ['one', 'two'].map(id =>
+        dagNodeSchema.parse({
+          id,
+          loop: {
+            prompt: 'Work',
+            until: 'COMPLETE',
+            max_iterations: 2,
+            interactive: true,
+            gate_message: 'Continue?',
+          },
+        })
+      )
+    );
+    await executeDagWorkflow(options);
+    expect((await store.getDagResumeSnapshot(run.id)).costUsd).toBe(0.25);
+    const metadata = (await store.getWorkflowRun(run.id))?.metadata;
+    expect(metadata?.total_cost_usd).toBe(0.5);
+    expect(metadata?.approval).toMatchObject({ signaledCostUsd: 0.25 });
+  });
+
+  it.each(['approval', 'approved writeback', 'rejected writeback'] as const)(
+    'normal %s resumes and finishes with no second stop',
+    async kind => {
+      const { options, backend, store, run } = await realPauseFixture(
+        kind === 'approval'
+          ? [reviewNode()]
+          : [dagNodeSchema.parse({ id: 'work', bash: 'echo work' })]
+      );
+      if (kind !== 'approval') {
+        options.priorCompletedNodes = new Map([['work', { output: 'work' }]]);
+        backend.finalize = mock(async () => ({
+          requiresApproval: true,
+          changeSummary: {
+            added: ['x'],
+            modified: [],
+            deleted: [],
+            symlinks: [],
+            skipped: [],
+            totalCount: 1,
+            truncated: false,
+          },
+        }));
+      }
+      await executeDagWorkflow(options);
+      const paused = await store.getWorkflowRun(run.id);
+      const approval = paused?.metadata.approval;
+      if (!isApprovalContext(approval) || approval.pauseId === undefined)
+        throw new Error('missing approval');
+      const resolved = kind === 'rejected writeback' ? 'rejected' : 'approved';
+      const completion =
+        kind === 'approval' && approval.execution !== undefined
+          ? [
+              serializeNodeStateRecord(
+                finishNodeExecution(
+                  approval.execution,
+                  { status: 'completed' },
+                  { output: { text: '' }, diagnostics: { approvalDecision: 'approve' } }
+                )
+              ),
+            ]
+          : [];
+      expect(
+        await store.resolveApprovalGate(
+          run.id,
+          { approval: { ...approval, resolved } },
+          completion,
+          { nodeId: approval.nodeId, pauseId: approval.pauseId }
+        )
+      ).toEqual({ resolved: true });
+      const resumed = await store.resumeWorkflowRun(run.id);
+      await executeDagWorkflow({
+        ...options,
+        workflowRun: resumed,
+        priorCompletedNodes: (await store.getDagResumeSnapshot(run.id)).completedNodeOutputs,
+      });
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('completed');
+      expect(backend.suspend).toHaveBeenCalledTimes(1);
+      expect(backend.applyChanges).toHaveBeenCalledTimes(kind === 'approved writeback' ? 1 : 0);
+      expect(backend.discardChanges).toHaveBeenCalledTimes(kind === 'rejected writeback' ? 1 : 0);
+    }
+  );
 
   it.each([
     ['fuse', 'created', { containerId: 'cid-1' }],
@@ -211,14 +878,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     });
   });
 
-  it('a lost pause CAS during write-back stays fail-closed: throws, never suspends (#2489)', async () => {
-    // Unlike the other four gate types, a lost pause here must NEVER be tolerated —
-    // failClosed: true (dag-executor.ts raiseWriteBackGate) means this rejects
-    // straight through instead of being treated as a legitimate external
-    // transition, so the container teardown path preserves the overlay for retry.
-    // backend.suspend never firing proves the entire downstream sequence
-    // (suspend, then the user message) never runs — both are strictly sequential
-    // awaits after the pause call, with nothing to catch a throw in between.
+  it('a lost write-back pause stays fail-closed after suspension (#2489)', async () => {
     const backend = makeWritebackBackend({
       finalize: mock(async () => ({
         requiresApproval: true,
@@ -244,7 +904,10 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     await expect(runGateWithStore(store, backend, 'approve')).rejects.toThrow(
       /not found or not in running state/
     );
-    expect(backend.suspend).not.toHaveBeenCalled();
+    expect(backend.suspend).toHaveBeenCalledTimes(1);
+    expect(backend.applyChanges).not.toHaveBeenCalled();
+    expect(backend.discardChanges).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('non-empty diff + auto policy → applies without pausing, then completes', async () => {
@@ -550,29 +1213,104 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1); // re-raised, not applied
   });
 
-  it('mid-DAG pause suspends the container instead of completing', async () => {
-    const backend = makeWritebackBackend();
-    const store = await runGate({ backend, status: 'paused' });
-    // A node paused the run → suspend fires right after the layer walk; the gate
-    // + completion are never reached.
-    expect(backend.suspend).toHaveBeenCalledTimes(1);
-    expect(backend.finalize).not.toHaveBeenCalled();
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  it('a docker-stop failure during suspend does NOT flip the paused run to failed', async () => {
+  it.each([false, true])('ordinary pause survives suspension failure=%s', async fails => {
     const backend = makeWritebackBackend({
       suspend: mock(async () => {
-        throw new Error('Cannot connect to the Docker daemon');
+        if (fails) throw new Error('Cannot connect to the Docker daemon');
       }),
     });
-    // status 'paused' → the mid-DAG suspend path runs; a suspend throw is best-effort.
-    const store = await runGate({ backend, status: 'paused' });
+    const store = createMockStore();
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: wbTestDir,
+        workflowRun: makeWorkflowRun('ordinary'),
+        workflow: {
+          name: 'ordinary',
+          nodes: [dagNodeSchema.parse({ id: 'review', approval: { message: 'Review' } })],
+        },
+        execContext: CONTAINER_EXEC,
+        containerCtx: { envId: 'env-x', writeBack: 'approve', backend },
+      })
+    );
+    expect(result).toMatchObject({ kind: 'container_pause' });
     expect(backend.suspend).toHaveBeenCalledTimes(1);
-    // The run stays paused — suspend failure must not mark it failed or complete it.
+    expect(backend.finalize).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    const events = persistedEvents(store);
+    expect(events.filter(e => e.event_type === 'workflow_cleanup_warning')).toHaveLength(
+      fails ? 1 : 0
+    );
+    expect(events.filter(e => e.event_type === 'container_stopped')).toHaveLength(fails ? 0 : 1);
   });
+
+  it.each(['ordinary', 'writeback'] as const)(
+    '%s still pauses when suspension, warning persistence and notification all fail',
+    async kind => {
+      const store = createMockStore();
+      const persist = store.createWorkflowEvent;
+      store.createWorkflowEvent = mock(async event => {
+        if (event.event_type === 'workflow_cleanup_warning')
+          throw new Error('warning write failed');
+        return persist(event);
+      });
+      const platform = createMockPlatform();
+      platform.sendMessage = mock(async () => {
+        throw new Error('offline');
+      });
+      const backend = makeWritebackBackend({
+        suspend: mock(async () => {
+          throw new Error('stop failed');
+        }),
+        finalize: mock(async () => ({
+          requiresApproval: true,
+          changeSummary: {
+            added: ['x'],
+            modified: [],
+            deleted: [],
+            symlinks: [],
+            skipped: [],
+            totalCount: 1,
+            truncated: false,
+          },
+        })),
+      });
+      const result = await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: wbTestDir,
+          workflowRun: makeWorkflowRun('warning-run'),
+          workflow: {
+            name: 'warning',
+            nodes:
+              kind === 'ordinary'
+                ? [reviewNode()]
+                : [dagNodeSchema.parse({ id: 'work', bash: 'echo done' })],
+          },
+          priorCompletedNodes:
+            kind === 'ordinary' ? undefined : new Map([['work', { output: 'done' }]]),
+          execContext: CONTAINER_EXEC,
+          containerCtx: { envId: 'env-x', writeBack: 'approve', backend },
+        })
+      );
+      expect(result).toMatchObject({ kind: 'container_pause' });
+      expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(store.createWorkflowEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'workflow_cleanup_warning',
+          data: { warnings: [expect.stringContaining('stop failed')] },
+        })
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: 'warning-run' }),
+        'dag.container_suspend_warning_persist_failed'
+      );
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   // A run refused at preflight must not announce a container it will never use.
   it.each([

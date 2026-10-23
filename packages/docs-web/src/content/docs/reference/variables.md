@@ -8,11 +8,11 @@ sidebar:
   order: 5
 ---
 
-Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution. There are two categories of variables: workflow variables (substituted by the workflow engine) and node output references (DAG workflows only).
+Archon substitutes variables in command files, inline prompts, bash scripts, and `script:` node bodies before execution — except the user-controlled variables, which reach `bash:` and `script:` nodes as environment variables instead. There are two categories of variables: workflow variables (substituted by the workflow engine) and node output references (DAG workflows only).
 
 ## Workflow Variables
 
-These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one).
+These variables are substituted by the workflow executor in all node types (`command:`, `prompt:`, `bash:`, `script:`, `loop:`, `loop_group:`, and a `workflow:` node's `input:` field — which behaves like a `prompt:` body, not a bash-escaped one) — except the user-controlled ones in `bash:` and `script:` nodes, which arrive as environment variables instead (see [Shell quoting in `bash:` vs `script:`](#shell-quoting-in-bash-vs-script)).
 
 They are also substituted in a node's **AI-configuration text** — `systemPrompt:` and each entry's `agents.<id>.prompt` / `agents.<id>.description`. These go straight to the provider, so they resolve exactly as a `prompt:` does: workflow variables and `$nodeId.output` refs. A dangling `$nodeId.output` in any of the three is a load error, exactly as it is in a prompt.
 
@@ -21,8 +21,8 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$ARGUMENTS` | The user's input message that triggered the workflow | Primary way to pass user input to commands |
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
-| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. |
-| `$TYPED_ARTIFACTS_FILE` | Absolute path to the current typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation grouped by exact case-sensitive `output_type`. Each agent attempt receives a fresh listing before it starts, including transient retries. Plain `loop` structured-output reasks also receive fresh listings. Ordinary agent structured-output reasks (including agents in a `loop_group` body) reuse their attempt's listing. `bash:` and `script:` nodes receive one before execution. Each `until_bash` check receives a separate listing after the plain loop's agent work or the loop group's body. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/guides/authoring-workflows/#typed-artifacts-output_type). |
+| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. **Scratch work** (a checkout to bisect or spike against, a dependency install) goes under `$ARTIFACTS_DIR/.archon/scratch/`; create it with `mkdir -p`. Archon deletes that directory once the run is completed, failed or cancelled and its nodes have stopped (for a container run, when its container is removed), so a resumed run starts without it. A run whose nodes Archon cannot confirm stopped (its owner ran on another host, or its owner process is still alive) keeps it, and so does a CLI run stopped by a signal until it is abandoned or its conversation is reset; write evidence a later node or the operator reads anywhere else in `$ARTIFACTS_DIR`, which is kept. The deletion removes files only: remove a scratch worktree with `git worktree remove` (or use `git clone`), or its registration stays behind until `git worktree prune`. |
+| `$TYPED_ARTIFACTS_FILE` | Absolute path to the current typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation grouped by exact case-sensitive `output_type`. Each agent attempt receives a fresh listing before it starts, including transient retries. Plain `loop` structured-output reasks also receive fresh listings. Ordinary agent structured-output reasks (including agents in a `loop_group` body) reuse their attempt's listing. `bash:` and `script:` nodes receive one before execution. Each `until_bash` check receives a separate listing after the plain loop's agent work or the loop group's body. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/reference/workflow-language/#typed-artifacts-output_type). |
 | `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** unlike `$ARTIFACTS_DIR`, this host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
 | `$BASE_BRANCH` | Base branch for git operations | For top-level runs, resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. Fresh shared-checkout children (`inherit` or omitted) inherit the parent's resolved value, including `--base`. New isolated branches use `worktree.baseBranch`, then the codebase default, then detection, independently of parent flags. If an isolated branch is reused without a surviving child run record, its original base is unavailable; config is not used to guess it. A continuation -- `--resume`, an approved gate, or the automatic resume of a parent whose sub-run gate was approved -- reports the value recorded when the run was first dispatched instead of consulting config, the codebase default, or git again; only a `--base` re-passed to that continuation overrides the recorded value. `--base` sets the worktree cut-from too, so for a newly created top-level branch this variable names the branch the worktree was cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
@@ -70,19 +70,35 @@ Two properties matter:
 Like `$BASE_BRANCH`, referencing `$STATE_DIR` where no state directory could be resolved
 **throws** rather than substituting an empty string.
 
-If Archon finds a legacy `<repo>/.archon/state/` directory when a run starts, it logs one
-warning with the exact `mv` command and moves nothing.
+Archon no longer checks or warns about legacy `<repo>/.archon/state/` directories,
+and does not read or move their contents. Follow the [manual state migration
+steps](/reference/archon-directories/#legacy-archonstate), including the checks for
+hidden entries and destination conflicts, then update workflows to use `$STATE_DIR`.
 
 **Concurrency.** The engine does no locking on `$STATE_DIR`. See
-[Authoring Workflows](/guides/authoring-workflows/#cross-run-state-with-state_dir) for
-the read-modify-write hazard. Use [durable state documents](/guides/authoring-workflows/#durable-state-documents) for concurrent, audited JSON updates.
+[Workflow language](/reference/workflow-language/#cross-run-state-with-state_dir) for
+the read-modify-write hazard. Use [durable state documents](/reference/workflow-language/#durable-state-documents) for concurrent, audited JSON updates.
 
 **Name collisions.** The project segment is derived from the project's identity, and distinct
 projects can derive the same one — two no-remote local repos both called `api`, or two folder
 projects whose display names slugify identically. Registration keeps them apart: a new project
 whose segment is taken registers under the first free suffixed name, such as `_local/api-2` or
 `my-app-2`. A second clone of an already-registered remote is refused; use worktrees for
-parallel checkouts. Unregistered working directories use `@cwd/<basename>-<digest>`, where the digest is
+parallel checkouts. To start a fresh run in a separate clone under the existing project's
+identity and storage, use:
+
+```bash
+archon workflow run investigate --project owner/repo --cwd /other/clone --no-worktree
+```
+
+Find the registered name or ID with `archon project list`. `--no-worktree` executes in the
+clone; isolated execution uses the registered checkout. See [workflow run](/reference/cli/#workflow-run-name-message).
+
+Inspect the run with `archon workflow get <full-run-id>`, or run `archon workflow runs`
+from the registered checkout. From the separate clone, `workflow runs` falls back to
+an install-wide list limited to 20 rows by default.
+
+Unregistered working directories use `@cwd/<basename>-<digest>`, where the digest is
 SHA-256 of the resolved absolute directory path. Distinct directory paths have separate
 `$STATE_DIR` roots, even when their folder names match. Moving a directory changes its root.
 
@@ -129,7 +145,7 @@ every nested key must exist and intermediate values must be objects; a missing k
 non-object intermediate fails the consuming node.
 
 A `wait:` node's contract is fixed by the engine. A time or event wait declares
-`status`, `waited_ms`, `event` and `payload`. An [attention wait](/guides/authoring-workflows/#attention-waits)
+`status`, `waited_ms`, `event` and `payload`. An [attention wait](/reference/workflow-language/#attention-waits)
 declares its answer by form: `message` declares `text`; `approval` and `select` declare
 `decision` and `text`; `multi_select` declares `decisions` (an array of option ids) and
 `text`. So `$ask.output.decision` is checked at load time, and in a `loop_group` whose body
@@ -143,7 +159,7 @@ paths travel with the result and survive resume; the parent cannot declare an
 carries only its top-level fields, so a nested read from it fails as undeclared until
 the producer reruns.
 
-During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful `bash:` and `script:` events store at most a 32 KiB UTF-8 preview. When the output is larger, Archon also writes the full output to `$ARTIFACTS_DIR/.archon/node-output-spills/persisted/<node>.nodeoutput`, and a resumed run restores `$nodeId.output` from that file. Resume falls back to the preview, which ends in a `[truncated; original output was N bytes]` marker, when the file was never written, cannot be read (for example, after an operator [removed the run's artifacts](/reference/archon-directories/#user-level-archon)), or its byte length no longer matches the length recorded with the event. Each fallback logs a warning (`db.workflow_dag_node_output_spill_read_failed` or `db.workflow_dag_node_output_spill_stale`); a failed write is logged as `dag.spill_file_write_failed` when the node runs. The length check catches a later execution of the same node overwriting the file, but not one that wrote different output of the same length.
+During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful `bash:` and `script:` events store at most a 32 KiB UTF-8 preview. When the output is larger, Archon also writes the full output to `$ARTIFACTS_DIR/.archon/node-output-spills/persisted/<write-id>.nodeoutput`, and a resumed run restores `$nodeId.output` from the file named by the durable event. Each write gets a unique path, so a later execution cannot replace an earlier event's output, even if it writes before its own completion event commits. Ordinary output restoration falls back to the preview, which ends in a `[truncated; original output was N bytes]` marker, when the file was never written, cannot be read (for example, after an operator [removed the run's artifacts](/reference/archon-directories/#user-level-archon)), or its byte length no longer matches the length recorded with the event. Each fallback logs a warning (`db.workflow_dag_node_output_spill_read_failed` or `db.workflow_dag_node_output_spill_stale`); a failed write is logged as `dag.spill_file_write_failed` when the node runs. For an `until_bash` completion check after a terminally paused `loop_group` is answered, the preceding iteration must have complete history and full output bytes. Missing, unreadable, or stale spills fail restoration before the predicate runs; see [loop-group resume](/guides/loop-nodes/#resume). Historical events that used a shared `<node>.nodeoutput` path remain readable. Their length check detects a replacement of a different length, but cannot detect an equal-length replacement that already happened; unique paths do not retroactively recover those bytes.
 
 ### Shell Quoting in `bash:` vs `script:`
 
@@ -151,9 +167,9 @@ During the current run, downstream interpolation and `when:` conditions see the 
 
 Resolved `bash:` bodies and plain-loop and loop-group `until_bash:` completion checks are delivered as UTF-8 through stdin to a fixed `bash -c` evaluator, including executable Bash dry runs. Their aggregate inline size is no longer constrained by the OS argument limit. The 32,768-code-unit cutoff above remains a **per-reference** spill rule; memory, environment, and output limits still apply. `$0` and `BASH_SOURCE` retain their `bash -c` behavior. Authored Bash code sees stdin at EOF after delivery, and `BASH_EXECUTION_STRING` contains the evaluator rather than the authored body.
 
-User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`), never spliced as raw text into executable code — so attacker-influenced input can't inject. In `bash:` read them as `"$ARGUMENTS"`; in `script:` read them via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body no longer resolves and logs a one-release migration warning.
+User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`), never spliced as raw text into executable code — so attacker-influenced input can't inject. A `loop_group` body's `bash:` node is the exception: the loop scope splices the reply (`$LOOP_USER_INPUT`) into its source, shell-quoted, so the reply arrives already quoted. Read the spliced reply as an already-quoted value — assign it and quote the variable (`value=$LOOP_USER_INPUT; printf '%s' "$value"`) — rather than as `"$LOOP_USER_INPUT"`. In `bash:` read an environment-delivered value with `"$ARGUMENTS"`. In `script:` read it via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body is not substituted: the text stays in the source.
 
-At load time, Archon scans inline and named exec sources for static environment reads. The supported forms are `os.environ["NAME"]` and `os.environ.get("NAME", ...)` in Python, `process.env.NAME` and `process.env["NAME"]` in JavaScript/TypeScript, and `$INPUTS_NAME` or `${INPUTS_NAME}` in bash; single quotes work in bracket and call forms too. Within a declared `inputs:` contract, an `INPUTS_*` read with no matching script `with:` binding or declared workflow input is a load error. A workflow with no `inputs:` block keeps the open caller-input contract, so caller-provided names cannot be rejected while loading that workflow in isolation. Other static Python/JavaScript env reads that Archon does not provide produce a parse warning, since project and credential variables may still come from the execution environment. Diagnostics identify the inline `bash`/`script` line or the named script path and line, plus the available binding and input names.
+At load time, Archon scans inline and named exec sources for static environment reads. The supported forms are `os.environ["NAME"]` and `os.environ.get("NAME", ...)` in Python, `process.env.NAME` and `process.env["NAME"]` in JavaScript/TypeScript, and `$INPUTS_NAME` or `${INPUTS_NAME}` in bash; single quotes work in bracket and call forms too. Within a declared `inputs:` contract, an `INPUTS_*` read is a load error unless it matches a script `with:` binding, a declared workflow input, or an environment name configured in Archon or the project's `.archon/.env`. A workflow with no `inputs:` block keeps the open caller-input contract, so caller-provided names cannot be rejected while loading that workflow in isolation. Other static Python/JavaScript env reads that Archon does not provide produce a parse warning, since project and credential variables may still come from the execution environment. Diagnostics identify the inline `bash`/`script` line or the named script path and line, plus the available binding and input names.
 
 This is a deliberately lexical check, not a language parser. Computed keys, aliases, destructuring, `os.getenv`, and ordinary non-`INPUTS_*` bash variables are outside the supported detection boundary. An exact supported accessor spelling inside a comment or string literal can still be reported.
 
@@ -248,9 +264,11 @@ the workflow otherwise, so a binding can never race its producer. Node-local bin
 the **nearest** input layer: they win over a composed block's inputs, which win over the
 run's own `$INPUTS`.
 
-The load-time environment-read check uses these same binding names and the workflow's declared
-input names. For example, `process.env.INPUTS_GREEN` requires `with: { green: ... }` on that
-script node or a declared `green` workflow input. Engine-owned names such as `ARTIFACTS_DIR`,
+The load-time environment-read check accepts these binding names, declared workflow inputs,
+and environment names configured in Archon or the project's `.archon/.env`. Within a declared
+`inputs:` contract, an unconfigured `process.env.INPUTS_GREEN` read requires
+`with: { green: ... }` on that script node or a declared `green` workflow input.
+Engine-owned names such as `ARTIFACTS_DIR`,
 `BASE_BRANCH`, `ARGUMENTS`, and `WORKFLOW_ID` are always accepted.
 
 `with:` on other node types: `include:` and `workflow:` nodes keep their existing caller-input
@@ -270,7 +288,7 @@ A node output is a value, not a file. When a node produces something large, writ
 a node's logical value, must be a valid pointer: `run_id` and `path` are required non-empty
 strings. `path` is relative to the run's own artifacts directory. For how a pointer fits
 into a workflow's declared result, see
-[Authoring workflows → Result contracts](/guides/authoring-workflows/#result-contracts).
+[Workflow language → Result contracts](/reference/workflow-language/#result-contracts).
 
 Every pointer is checked once, **at the producing node and against its own run**, before the
 value is persisted — so a bad one fails the node that produced it rather than surfacing
@@ -339,7 +357,7 @@ Workflow variables and `$nodeId.output` refs both resolve in `systemPrompt:` and
 
 ## Authentication Environment Variables
 
-These are standard environment variables read from `process.env` at clone time. They are **not** workflow-substituted variables — they must be set in your shell environment or `.env` file before Archon starts.
+These are standard environment variables read from `process.env` at clone time. They are **not** workflow-substituted variables. Set them before Archon starts in your shell environment, `~/.archon/.env` for user-wide credentials, or `<cwd>/.archon/.env` for project overrides. The CLI strips keys named in a target repository's `<cwd>/.env`. See [environment file locations and load order](/reference/configuration/#env-file-locations) for precedence and entry-point differences.
 
 | Variable | Description |
 |----------|-------------|

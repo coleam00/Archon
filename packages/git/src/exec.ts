@@ -99,20 +99,25 @@ async function hasRepositoryMarker(path: string, env: NodeJS.ProcessEnv): Promis
   let current = await realpath(path);
   const device = (await stat(current)).dev;
   while (true) {
-    for (const marker of ['.git', 'HEAD']) {
-      try {
-        const entry = await stat(join(current, marker));
-        if (marker === '.git') return true;
-        if (entry.isFile() && (await stat(join(current, 'objects'))).isDirectory()) return true;
-      } catch (error) {
-        if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
-      }
-    }
+    if (await hasRepositoryMarkerAt(current)) return true;
     const parent = dirname(current);
     if (parent === current || ceilings.has(parent)) return false;
     if (!acrossFilesystems && (await stat(parent)).dev !== device) return false;
     current = parent;
   }
+}
+
+async function hasRepositoryMarkerAt(path: string): Promise<boolean> {
+  for (const marker of ['.git', 'HEAD']) {
+    try {
+      const entry = await stat(join(path, marker));
+      if (marker === '.git') return true;
+      if (entry.isFile() && (await stat(join(path, 'objects'))).isDirectory()) return true;
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
+    }
+  }
+  return false;
 }
 
 async function classifyGitFailure(

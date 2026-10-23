@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -48,6 +48,58 @@ export function parseSessionSpend(transcript: string, sessionId: string): SpendB
   };
 }
 
+function isNotFound(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+/** Mirrors SDK getSessionInfo's no-dir lookup, including custom/long project slugs. */
+async function findHostTranscripts(
+  sessionId: string,
+  input: { cwd: string; env: NodeJS.ProcessEnv }
+): Promise<string[]> {
+  const home = (process.platform === 'win32' ? input.env.USERPROFILE : input.env.HOME) || homedir();
+  const root = resolve(
+    input.cwd,
+    (input.env.CLAUDE_CONFIG_DIR ?? join(home, '.claude')).normalize('NFC')
+  );
+  const projects = join(root, 'projects');
+  const matches: string[] = [];
+  for (const entry of await readdir(projects, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const path = join(projects, entry.name, sessionId + '.jsonl');
+    try {
+      await stat(path);
+      matches.push(path);
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+    }
+  }
+  return matches;
+}
+
+/**
+ * Whether the host has no transcript for `sessionId`: `true` when the lookup completed and
+ * found none, `false` when one exists, `undefined` when it could not be established. Host
+ * only; a container run's transcript is not checked.
+ */
+export async function claudeSessionTranscriptMissing(
+  sessionId: string,
+  input: { cwd: string; env: NodeJS.ProcessEnv; signal?: AbortSignal }
+): Promise<boolean | undefined> {
+  if (!z.uuid().safeParse(sessionId).success) return undefined;
+  try {
+    return (await findHostTranscripts(sessionId, input)).length === 0;
+  } catch (error) {
+    input.signal?.throwIfAborted();
+    if (isNotFound(error)) return true;
+    createLogger('provider.claude').warn(
+      { code: error instanceof Error && 'code' in error ? error.code : undefined },
+      'claude.session_lookup_failed'
+    );
+    return undefined;
+  }
+}
+
 export async function readSessionSpendBaseline(
   sessionId: string | undefined,
   input: {
@@ -83,27 +135,10 @@ export async function readSessionSpendBaseline(
         );
       });
     } else {
-      // Mirrors SDK getSessionInfo's no-dir lookup, including custom/long project slugs.
-      const home =
-        (process.platform === 'win32' ? input.env.USERPROFILE : input.env.HOME) || homedir();
-      const root = resolve(
-        input.cwd,
-        (input.env.CLAUDE_CONFIG_DIR ?? join(home, '.claude')).normalize('NFC')
-      );
-      const projects = join(root, 'projects');
-      const matches: string[] = [];
-      for (const entry of await readdir(projects, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const path = join(projects, entry.name, sessionId + '.jsonl');
-        try {
-          matches.push(await readFile(path, { encoding: 'utf8', signal: input.signal }));
-        } catch (error) {
-          if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-        }
-      }
-      const [match] = matches;
-      if (matches.length !== 1 || match === undefined) return { kind: 'unknown' };
-      transcript = match;
+      const paths = await findHostTranscripts(sessionId, input);
+      const [path] = paths;
+      if (paths.length !== 1 || path === undefined) return { kind: 'unknown' };
+      transcript = await readFile(path, { encoding: 'utf8', signal: input.signal });
     }
     input.signal?.throwIfAborted();
     return parseSessionSpend(transcript, sessionId);

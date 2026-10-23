@@ -83,6 +83,10 @@ const keyClassifications = {
   },
 } as const satisfies Record<ConfigKey, KeyClassification>;
 
+export const workflowRunConfigKeys = Object.entries(keyClassifications)
+  .filter(([, classification]) => classification.kind === 'runtime')
+  .map(([key]) => key);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -159,6 +163,18 @@ export function parseWorkflowRunConfig(
     throw new Error("Invalid run config at 'document': expected an object");
   }
 
+  assertRunConfigKeys(value);
+  const docs = value.docs;
+  assertRunConfigDocs(docs);
+  const candidate = runConfigCandidate(value, docs);
+  const parsed = workflowRunConfigLayerSchema.safeParse(candidate);
+  if (!parsed.success) throw validationError(parsed.error);
+  const warning = parsed.data.workflows && deprecatedQuotaPolicyWarning(parsed.data.workflows);
+  if (warning) getLog().warn({ source: source.label, warning }, 'run_config.quota_keys_deprecated');
+  return { layer: normalizeRunConfigSemantics(parsed.data), source };
+}
+
+function assertRunConfigKeys(value: Record<string, unknown>): void {
   for (const key of Object.keys(value)) {
     const classification = keyClassifications[key as ConfigKey] as KeyClassification | undefined;
     if (!classification) {
@@ -174,8 +190,9 @@ export function parseWorkflowRunConfig(
       "Run config cannot set both 'assistant' and 'defaultAssistant'; use one spelling."
     );
   }
+}
 
-  const docs = value.docs;
+function assertRunConfigDocs(docs: unknown): asserts docs is Record<string, unknown> | undefined {
   if (docs !== undefined) {
     if (!isRecord(docs)) {
       throw new Error("Invalid run config at 'docs': expected an object");
@@ -185,8 +202,13 @@ export function parseWorkflowRunConfig(
       throw new Error(`Unknown run config key 'docs.${unknownDocsKey}'.`);
     }
   }
+}
 
-  const candidate = {
+function runConfigCandidate(
+  value: Record<string, unknown>,
+  docs: Record<string, unknown> | undefined
+) {
+  return {
     ...(value.assistant !== undefined || value.defaultAssistant !== undefined
       ? { assistant: value.assistant ?? value.defaultAssistant }
       : {}),
@@ -197,11 +219,6 @@ export function parseWorkflowRunConfig(
     ...(isRecord(docs) && docs.path !== undefined ? { docsPath: docs.path } : {}),
     ...(value.env !== undefined ? { envVars: value.env } : {}),
   };
-  const parsed = workflowRunConfigLayerSchema.safeParse(candidate);
-  if (!parsed.success) throw validationError(parsed.error);
-  const warning = parsed.data.workflows && deprecatedQuotaPolicyWarning(parsed.data.workflows);
-  if (warning) getLog().warn({ source: source.label, warning }, 'run_config.quota_keys_deprecated');
-  return { layer: normalizeRunConfigSemantics(parsed.data), source };
 }
 
 export async function loadWorkflowRunConfigFile(path: string): Promise<WorkflowRunConfigInput> {
