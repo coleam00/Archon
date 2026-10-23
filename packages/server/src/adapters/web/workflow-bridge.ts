@@ -35,7 +35,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         workflowName: '',
         status: 'running',
         timestamp: Date.now(),
-      });
+      } satisfies WorkflowStatusSsePayload);
     case 'workflow_started':
     case 'workflow_completed':
     case 'workflow_failed':
@@ -131,7 +131,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
           decisions: event.decisions,
           pauseId: event.pauseId,
         },
-      });
+      } satisfies WorkflowStatusSsePayload);
 
     case 'workflow_cancelled':
       return JSON.stringify({
@@ -140,7 +140,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         workflowName: '',
         status: 'cancelled',
         timestamp: Date.now(),
-      });
+      } satisfies WorkflowStatusSsePayload);
 
     case 'container_lifecycle':
       return JSON.stringify({
@@ -180,7 +180,7 @@ function mapWorkflowStatusEvent(
           : 'failed',
     error: event.type === 'workflow_failed' ? event.error : undefined,
     timestamp: Date.now(),
-  });
+  } satisfies WorkflowStatusSsePayload);
 }
 
 function mapDagNodeEvent(

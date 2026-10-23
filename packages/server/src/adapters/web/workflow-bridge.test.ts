@@ -51,6 +51,14 @@ const suspendedExecution: NodeExecutionMetadata = {
   lifecycle: { status: 'suspended', point: 'child_workflow' },
 };
 
+const completedExecution: NodeExecutionMetadata = {
+  ...suspendedExecution,
+  path: 'build',
+  node: { id: 'build', kind: 'workflow' },
+  timing: { startedAt: '2026-09-22T10:00:00Z', durationMs: 100 },
+  lifecycle: { status: 'completed' },
+};
+
 test('suspended node stays running and carries only public execution metadata', () => {
   const event: WorkflowEmitterEvent = {
     type: 'node_suspended',
@@ -88,7 +96,14 @@ test.each([
     { type: 'dag_node', runId: 'run-1', nodeId: 'build', name: 'Build', status: 'running' },
   ],
   [
-    { type: 'node_completed', runId: 'run-1', nodeId: 'build', nodeName: 'Build', duration: 100 },
+    {
+      type: 'node_completed',
+      runId: 'run-1',
+      nodeId: 'build',
+      nodeName: 'Build',
+      duration: 100,
+      execution: completedExecution,
+    },
     {
       type: 'dag_node',
       runId: 'run-1',
@@ -96,6 +111,7 @@ test.each([
       name: 'Build',
       status: 'completed',
       duration: 100,
+      execution: completedExecution,
     },
   ],
   [

@@ -10,6 +10,7 @@ import {
   sealWorkflowRunConfig,
   unsealWorkflowRunConfig,
   workflowRunConfigFromRun,
+  workflowRunConfigKeys,
 } from './run-config';
 import { decodeWorkflowRunConfigHandoff } from './run-config-handoff';
 
@@ -58,6 +59,40 @@ describe('workflow run config', () => {
         envVars: { BENCH_TOKEN: 'top-secret' },
       },
     });
+  });
+
+  it('projects every accepted runtime key to its layer field', () => {
+    const projections = {
+      assistant: { value: 'pi', layer: { assistant: 'pi' } },
+      defaultAssistant: { value: 'pi', layer: { assistant: 'pi' } },
+      assistants: {
+        value: { pi: { enableExtensions: false } },
+        layer: { assistants: { pi: { enableExtensions: false } } },
+      },
+      aliases: {
+        value: { '@planner': { provider: 'claude', model: 'opus' } },
+        layer: { aliases: { '@planner': { provider: 'claude', model: 'opus' } } },
+      },
+      tiers: {
+        value: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
+        layer: { tiers: { large: { provider: 'codex', model: 'gpt-5.6-sol' } } },
+      },
+      workflows: {
+        value: { toolCallAttentionMs: 60000 },
+        layer: { workflows: { toolCallAttentionMs: 60000 } },
+      },
+      docs: { value: { path: 'handbook' }, layer: { docsPath: 'handbook' } },
+      env: {
+        value: { BENCH_TOKEN: 'test-value' },
+        layer: { envVars: { BENCH_TOKEN: 'test-value' } },
+      },
+    };
+    expect(Object.keys(projections).sort()).toEqual([...workflowRunConfigKeys].sort());
+    for (const [key, { value, layer }] of Object.entries(projections)) {
+      expect(parseWorkflowRunConfig({ [key]: value }, { kind: 'http', label: key }).layer).toEqual(
+        layer
+      );
+    }
   });
 
   it('rejects unknown, ambiguous, and every unavailable top-level key with its name', () => {
