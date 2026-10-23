@@ -102,7 +102,11 @@ mock.module('@archon/paths', () => ({
 
 const STORE_ID = '6f1c2b3a-4d5e-4f60-8a71-92b3c4d5e6f7';
 const mockReadStoreId = mock((): string | null => STORE_ID);
-mock.module('@archon/paths/server-discovery', () => ({ readStoreId: mockReadStoreId }));
+const realServerDiscovery = { ...(await import('@archon/paths/server-discovery')) };
+mock.module('@archon/paths/server-discovery', () => ({
+  ...realServerDiscovery,
+  readStoreId: mockReadStoreId,
+}));
 
 mock.module('@archon/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
 mock.module('@archon/workflows/loader', makeLoaderMock);
