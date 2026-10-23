@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { terminateTree } from '@archon/paths/plugin-process';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 export class CliTestScope {
@@ -5,6 +8,10 @@ export class CliTestScope {
   private readonly children = new Map<Bun.Subprocess<'pipe', 'pipe', 'pipe'>, Promise<unknown>>();
 
   constructor(readonly root: string) {}
+
+  get detachedPids(): string {
+    return join(this.root, 'detached-pids');
+  }
 
   async run(command: string[], cwd: string, env: NodeJS.ProcessEnv, input = '') {
     if (this.closed) throw new Error('CLI test scope is closed');
@@ -29,6 +36,36 @@ export class CliTestScope {
     await Promise.all(children.map(([child]) => child.exited));
     await Promise.allSettled(children.map(([, settled]) => settled));
     this.children.clear();
+    await this.stopDetachedChildren();
     await removeTempTree(this.root);
+  }
+
+  private async stopDetachedChildren(): Promise<void> {
+    const stopped = new Set<number>();
+    // An owner can record a detached node while teardown is stopping it.
+    while (existsSync(this.detachedPids)) {
+      const owners = readFileSync(this.detachedPids, 'utf8').trim().split('\n').map(Number);
+      if (owners.some(pid => !Number.isSafeInteger(pid) || pid <= 0))
+        throw new Error('Invalid detached test PID');
+      const pending = owners.filter(pid => !stopped.has(pid));
+      if (pending.length === 0) return;
+      for (const pid of pending) await terminateTree(pid);
+      for (const pid of pending) {
+        const target = process.platform === 'win32' ? pid : -pid;
+        const deadline = Date.now() + 2000;
+        while (true) {
+          try {
+            process.kill(target, 0);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ESRCH') break;
+            throw error;
+          }
+          if (Date.now() >= deadline)
+            throw new Error(`Detached test process tree ${pid} is still alive`);
+          await Bun.sleep(10);
+        }
+        stopped.add(pid);
+      }
+    }
   }
 }
