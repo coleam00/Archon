@@ -958,7 +958,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 **How to resume:**
 
-- **CLI**: `archon workflow run <name> --resume` selects the newest eligible run by start time for `(workflow_name, cwd)`: a failed or paused run, or a `running` run whose last activity timestamp is missing or more than one day old. See the [CLI reference](/reference/cli/#workflow-run-name-message) for flag details. Use `archon workflow resume <run-id>` to target a specific run. Missing or old activity does not prove the owner is gone; verify that before resuming a `running` run.
+- **CLI**: `archon workflow run <name> --resume` selects the newest eligible run by start time for `(workflow_name, cwd)`: a failed or paused run, or a `running` run whose last activity timestamp is missing or more than one day old. With a SQL store, a `running` run is excluded while its resource-start request is `admitted`; see [trigger inspection and recovery](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). See the [CLI reference](/reference/cli/#workflow-resume) for detailed eligibility. Use `archon workflow resume <run-id>` to target a specific run. Missing or old activity does not prove the owner is gone; verify that before resuming a `running` run.
 - **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** (or stale `running`) run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run.
 - **Web UI**: Open the failed run in the console and use **Resume** in the run detail action bar.
 
@@ -968,13 +968,15 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 2. Completed nodes are skipped; only failed and not-yet-run nodes are executed. Failed nodes are retried when the failures are what stopped the run: resuming a **failed** run, or continuing after a provider-limit pause or a released source. A run that paused at a node that waits on purpose (an attention, time or event wait, an approval gate, or a child it is blocked on) instead replays the failures from before that pause when it continues, so a node the run had already moved past does not run again.
 3. You receive a platform message like: `Resuming workflow — skipping 3 already-completed node(s).`
 
-**Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup, because that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the console run list. Transition it to a terminal status explicitly:
+**Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup, because that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the console run list. To continue it, first verify that its owner is gone, then resume it directly when it meets the eligibility rules above. Do not cancel or abandon it before resuming: both mark it `cancelled`, which cannot be resumed.
 
-- **Web UI**: open the run and use **Cancel** in the run detail action bar. When no owner answers, Cancel refuses, shows what the run recorded, and offers **Abandon**; use it after verifying the owner is gone.
-- **CLI orphan cleanup**: after verifying the owner is gone, use `archon workflow abandon <run-id>`.
+To stop or discard a run instead:
+
+- **Web UI cleanup**: open the run and use **Cancel** in the run detail action bar. When no owner answers, Cancel refuses, shows what the run recorded, and offers **Abandon**; use it to discard the run after verifying the owner is gone.
+- **CLI orphan cleanup**: after verifying the owner is gone, use `archon workflow abandon <run-id>` to discard the run.
 - **Live detached CLI run**: use `archon workflow cancel <run-id>` (or Cancel on any surface) to stop the exact run's owner before marking it `cancelled`; see the reaped-leader exception under [Bash and script node timeouts](#bash-and-script-node-timeouts).
 
-Once the row reaches a terminal status, you can resume it explicitly via the paths above. Plain `archon workflow run` never resumes implicitly.
+Plain `archon workflow run` never resumes implicitly.
 
 > Not to be confused with `archon workflow cleanup [days]`, which **deletes** old terminal runs (`completed`/`failed`/`cancelled`) from the database for disk hygiene. It does not transition `running` rows.
 
