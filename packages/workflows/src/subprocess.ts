@@ -126,8 +126,7 @@ export function redactSubprocessError(
 
 interface SharedNodeProcessRecorder {
   mode: 'shared';
-  /** Each in-flight node's root PID, with the function that disarms its owner-death watcher. */
-  roots: Map<number, () => void>;
+  roots: Set<{ pid: number; disarm: () => void; child: ChildProcess }>;
   ended: boolean;
 }
 type NodeProcessRecorder = SharedNodeProcessRecorder | DetachedNodeProcesses;
@@ -176,20 +175,30 @@ export function recordNodeProcessTrees(options?: { mode: 'detached-posix' }): Re
       },
     };
   }
-  const recorder: SharedNodeProcessRecorder = { mode: 'shared', roots: new Map(), ended: false };
+  const recorder: SharedNodeProcessRecorder = { mode: 'shared', roots: new Set(), ended: false };
   nodeProcessRecorder = recorder;
   return {
     end: async () => {
       recorder.ended = true;
       const failed: string[] = [];
       await Promise.all(
-        [...recorder.roots].map(([pid, disarm]) =>
-          terminateTree(pid).then(disarm, (error: unknown) => {
+        [...recorder.roots].map(({ pid, disarm, child }) => {
+          // Windows can reuse the PID at exit; POSIX groups remain endable until close.
+          if (
+            process.platform === 'win32' &&
+            (child.exitCode !== null || child.signalCode !== null)
+          ) {
+            failed.push(
+              `${String(pid)} (root exited before output closed; descendants may still be running)`
+            );
+            return;
+          }
+          return terminateTree(pid).then(disarm, (error: unknown) => {
             failed.push(
               `${String(pid)} (${error instanceof Error ? error.message : String(error)})`
             );
-          })
-        )
+          });
+        })
       );
       if (failed.length > 0) {
         throw new Error(`could not end node process trees: ${failed.join(', ')}`);
@@ -233,10 +242,10 @@ function recordNodeProcess(
   }
   const disarm =
     process.platform !== 'win32' ? armNodeLifeline(rootPid, onError) : (): void => undefined;
-  recorder.roots.set(rootPid, disarm);
-  // Output held by a child keeps the node in flight after the root exits.
+  const root = { pid: rootPid, disarm, child };
+  recorder.roots.add(root);
   child.once('close', () => {
-    recorder.roots.delete(rootPid);
+    recorder.roots.delete(root);
     disarm();
   });
 }
