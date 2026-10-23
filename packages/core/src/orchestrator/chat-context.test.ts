@@ -1,5 +1,5 @@
 // @archon-test-isolated
-/** Covers chat-context.ts through `handleMessage`; shared mocks live in `../test/orchestrator-agent-harness`. */
+/** Shared mocks for discovery and chat integration live in `../test/orchestrator-agent-harness`. */
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import {
@@ -25,6 +25,7 @@ import {
   operator,
 } from '../test/orchestrator-agent-harness';
 import { handleMessage } from './orchestrator-agent';
+import { discoverAllWorkflows } from './chat-context';
 import { buildOrchestratorSystemAppend } from './prompt-builder';
 
 // ─── discoverAllWorkflows — remote sync ───────────────────────────────────────
@@ -373,30 +374,31 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
     );
   });
 
-  test('repo-specific workflows override global workflows by name', async () => {
+  test('repo-specific workflows override global workflows by name without changing their order', async () => {
     const conversation = makeConversation({ codebase_id: 'codebase-1' });
-    const codebase = makeCodebaseForSync();
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
-
-    // First call: global discovery returns 'assist' workflow
+    mockGetCodebase.mockResolvedValueOnce(makeCodebaseForSync());
+    const globalOnly = makeTestWorkflowWithSource({ name: 'global-only' });
+    const globalAssist = makeTestWorkflowWithSource({
+      name: 'assist',
+      description: 'Global assist',
+    });
+    const repoAssist = makeTestWorkflowWithSource(
+      { name: 'assist', description: 'Repo assist' },
+      'project'
+    );
+    const repoOnly = makeTestWorkflowWithSource({ name: 'repo-only' }, 'project');
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Global assist' })],
+      workflows: [globalOnly, globalAssist],
       errors: [],
     });
-    // Second call: repo discovery returns 'assist' with different description (override)
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'assist', description: 'Repo assist' }, 'project'),
-      ],
+      workflows: [repoAssist, repoOnly],
       errors: [],
     });
 
-    const platform = makePlatform();
-    // Send a non-command message so it triggers discoverAllWorkflows via the orchestrator flow
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
+    const result = await discoverAllWorkflows(conversation);
 
-    // discoverWorkflowsWithConfig should have been called twice (global + repo)
+    expect(result.workflows).toEqual([globalOnly, repoAssist, repoOnly]);
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledTimes(2);
   });
 

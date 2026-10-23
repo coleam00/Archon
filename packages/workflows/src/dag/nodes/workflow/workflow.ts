@@ -48,7 +48,7 @@ const LIVE_CHILD_STATUSES: readonly WorkflowRunStatus[] = workflowRunStatusSchem
  * as this node's output. The re-entry table (D5) makes this idempotent and
  * cross-process-safe:
  *  - no child yet        → start one in-process, interpret the outcome.
- *  - child completed     → thread its summary/cost (runLayers writes node_completed).
+ *  - child completed     → thread its summary/cost and persist node_completed here.
  *  - child failed        → resume-through-parent ONCE, then re-interpret.
  *  - child cancelled     → fail the node.
  *  - child paused/running → pause the PARENT "blocked on child" WITHOUT writing
@@ -306,12 +306,8 @@ export async function executeWorkflowNode(
 
 function resolveChildArguments(node: WorkflowNode, ctx: RunLayersContext, executionNodeId: string) {
   const parentRun = ctx.workflowRun;
-  // This run's named inputs (#2470), resolved once — threaded identically into the
-  // `input:` string and every `with:` value below.
   const parentInputs = resolveRunInputs(parentRun);
 
-  // Resolve the input data string (workflow vars + $node.output refs), exactly as
-  // prompt/bash nodes resolve their text surface.
   const rawInput = node.input ?? '';
   const { prompt: input } = substituteWorkflowVariables(
     rawInput,
@@ -324,10 +320,6 @@ function resolveChildArguments(node: WorkflowNode, ctx: RunLayersContext, execut
     undefined, // loopUserInput
     undefined, // rejectionReason
     undefined, // loopPrevOutput
-    // Thread the parent run's inputs so `$INPUTS.<name>` resolves in an `input:` string
-    // exactly as it does in the sibling `with:` values below (a nested sub-run forwarding
-    // a parent input into a grandchild's $ARGUMENTS). Without this the token would throw
-    // "This run has no declared inputs" on a run that DOES have inputs (#2470 parity).
     {
       stateDir: ctx.stateDir,
       inputs: parentInputs,
@@ -335,14 +327,7 @@ function resolveChildArguments(node: WorkflowNode, ctx: RunLayersContext, execut
     }
   );
 
-  // Resolve the node's `with:` map (#2470/#2637) into concrete JSON values: a
-  // non-string literal passes through with its logical type; a string that is exactly
-  // one whole `$INPUTS.<name>` / `$node.output[.field]` ref resolves to the LOGICAL
-  // value; any other string keeps the text-template path (workflow vars —
-  // non-shellSafe: these become the child's `$INPUTS`, not shell source — and
-  // `$node.output` refs). The result is persisted to the child's metadata at spawn
-  // and reconstituted on cold resume. Throws on a bad ref exactly as the input
-  // surface does — caught by the caller's try/catch → fail closed.
+  // `with:` delivers logical JSON data to the child, never shell source.
   const withResolutionCtx: ShellInputContext = {
     workflowRun: parentRun,
     artifactsDir: ctx.artifactsDir,
