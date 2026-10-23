@@ -144,6 +144,9 @@
       "src/commands/serve.test.ts"
     ],
     [
+      "src/commands/serve-web-archive.test.ts"
+    ],
+    [
       "src/commands/serve-binary.test.ts"
     ],
     [
