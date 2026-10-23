@@ -555,40 +555,7 @@ function checkoutInUseMessage(platform: IWorkflowPlatform, activeWorkflow: Workf
   let stateLine: string;
   let actionLines: string;
   if (activeWorkflow.status === 'paused') {
-    const attention = runAttention(activeWorkflow);
-    const wait = pendingWorkflowWaitDeadline(activeWorkflow);
-    if (attention?.kind === 'attention') {
-      stateLine = `paused, needs attention (${duration} since started, run \`${shortId}\`)`;
-      actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(platform, attention)
-        .map(line => `• ${line}\n`)
-        .join('')}`;
-    } else if (wait) {
-      const waitingFor =
-        wait.kind === 'event'
-          ? `for event \`${wait.event}\` until`
-          : wait.kind === 'quota'
-            ? 'on a provider usage or rate limit, trying again at'
-            : 'until';
-      stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
-      actionLines =
-        (wait.kind === 'event'
-          ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
-          : '') + `• Wait until ${wait.resumeAt}: \`${formatRunCommand(platform, 'status')}\`\n`;
-    } else if (
-      attention?.kind === 'blocked_on_child' ||
-      attention?.kind === 'blocked_on_children'
-    ) {
-      // The parent takes no answer of its own; it continues when its sub-runs finish.
-      const childRunIds =
-        attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
-      stateLine = `paused waiting on sub-runs (${duration} since started, run \`${shortId}\`)`;
-      actionLines = `• Check sub-runs ${childRunIds.map(id => `\`${id}\``).join(', ')}: \`${formatRunCommand(platform, 'status')}\`\n`;
-    } else {
-      stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
-      actionLines =
-        `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
-        `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n`;
-    }
+    ({ stateLine, actionLines } = pausedCheckoutState(platform, activeWorkflow, duration, shortId));
     actionLines +=
       // Cancel stops live work, and a paused run has none: abandon discards it.
       `• Discard it: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
@@ -611,6 +578,48 @@ function checkoutInUseMessage(platform: IWorkflowPlatform, activeWorkflow: Workf
     `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
     `(${stateLine}).\n${actionLines}`
   );
+}
+
+function pausedCheckoutState(
+  platform: IWorkflowPlatform,
+  activeWorkflow: WorkflowRun,
+  duration: string,
+  shortId: string
+): { stateLine: string; actionLines: string } {
+  let stateLine: string;
+  let actionLines: string;
+  const attention = runAttention(activeWorkflow);
+  const wait = pendingWorkflowWaitDeadline(activeWorkflow);
+  if (attention?.kind === 'attention') {
+    stateLine = `paused, needs attention (${duration} since started, run \`${shortId}\`)`;
+    actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(platform, attention)
+      .map(line => `• ${line}\n`)
+      .join('')}`;
+  } else if (wait) {
+    const waitingFor =
+      wait.kind === 'event'
+        ? `for event \`${wait.event}\` until`
+        : wait.kind === 'quota'
+          ? 'on a provider usage or rate limit, trying again at'
+          : 'until';
+    stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
+    actionLines =
+      (wait.kind === 'event'
+        ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
+        : '') + `• Wait until ${wait.resumeAt}: \`${formatRunCommand(platform, 'status')}\`\n`;
+  } else if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
+    // The parent takes no answer of its own; it continues when its sub-runs finish.
+    const childRunIds =
+      attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
+    stateLine = `paused waiting on sub-runs (${duration} since started, run \`${shortId}\`)`;
+    actionLines = `• Check sub-runs ${childRunIds.map(id => `\`${id}\``).join(', ')}: \`${formatRunCommand(platform, 'status')}\`\n`;
+  } else {
+    stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
+    actionLines =
+      `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
+      `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n`;
+  }
+  return { stateLine, actionLines };
 }
 
 /** Persist the baseline sampled at claim time, now that the run's artifacts directory exists. */
