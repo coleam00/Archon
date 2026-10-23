@@ -19,7 +19,11 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
-import { readNodeRecordData, readNodeRecordEvent } from './node-record-reader';
+import {
+  readNodeRecordData,
+  readNodeRecordEvent,
+  type ReadNodeRecordEvent,
+} from './node-record-reader';
 import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
 import type { FanOutOutcome } from './schemas/fan-out-outcome';
 
@@ -40,15 +44,17 @@ function withFanOutOutcome(
   return fanOutOutcome === undefined ? state : { ...state, fan_out_outcome: fanOutOutcome };
 }
 
-function foldNodeEvents(
-  run: Pick<WorkflowRun, 'id' | 'metadata'>,
-  events: readonly TerminalRecordEvent[]
-): {
+interface NodeEventFold {
   graph: RunGraph | undefined;
   nodes: Map<string, RunNodeState>;
   outputs: Map<string, Record<string, unknown>>;
   failureOrder: Map<string, number>;
-} {
+}
+
+function foldNodeEvents(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): NodeEventFold {
   const parsed = runGraphSchema.safeParse(run.metadata?.[RUN_GRAPH_METADATA_KEY]);
   const graph = parsed.success ? parsed.data : undefined;
   const nodes = new Map<string, RunNodeState>();
@@ -66,75 +72,84 @@ function foldNodeEvents(
       data: event.data,
     });
     if (!record) continue;
-    switch (record.eventType) {
-      case 'node_started':
-      case 'node_suspended':
-      case 'node_always_run_reset':
-      case 'node_prior_cache_invalidated':
-        nodes.set(nodeId, {
-          node_id: nodeId,
-          state:
-            record.eventType === 'node_started' || record.eventType === 'node_suspended'
-              ? 'running'
-              : 'pending',
-        });
-        outputs.delete(nodeId);
-        failureOrder.delete(nodeId);
-        break;
-      case 'node_completed':
-        nodes.set(
-          nodeId,
-          withFanOutOutcome({ node_id: nodeId, state: 'completed' }, record.data.fan_out_outcome)
-        );
-        outputs.set(nodeId, record.data);
-        failureOrder.delete(nodeId);
-        break;
-      case 'node_skipped_prior_success':
-        // A replayed node keeps the slot record its earlier completion wrote.
-        nodes.set(
-          nodeId,
-          withFanOutOutcome(
-            { node_id: nodeId, state: 'completed' },
-            nodes.get(nodeId)?.fan_out_outcome
-          )
-        );
-        outputs.set(nodeId, record.data);
-        failureOrder.delete(nodeId);
-        break;
-      case 'node_failed': {
-        const data = record.data;
-        nodes.set(
-          nodeId,
-          withFanOutOutcome(
-            {
-              node_id: nodeId,
-              state: 'failed',
-              ...(typeof data.error === 'string' ? { error: data.error } : {}),
-            },
-            data.fan_out_outcome
-          )
-        );
-        outputs.delete(nodeId);
-        failureOrder.set(nodeId, index);
-        break;
-      }
-      case 'node_skipped': {
-        const data = record.data;
-        const reason = nodeSkipReasonSchema.safeParse(data.reason);
-        const cause = skipCauseSchema.safeParse(data.cause);
-        nodes.set(nodeId, {
-          node_id: nodeId,
-          state: 'skipped',
-          ...(reason.success ? { reason: reason.data } : {}),
-          ...(cause.success ? { cause: cause.data } : {}),
-        });
-        outputs.delete(nodeId);
-        failureOrder.delete(nodeId);
-        break;
-      }
-    }
+    foldNodeRecord({ graph, nodes, outputs, failureOrder }, record, nodeId, index);
   }
   return { graph, nodes, outputs, failureOrder };
+}
+
+function foldNodeRecord(
+  { nodes, outputs, failureOrder }: NodeEventFold,
+  record: ReadNodeRecordEvent,
+  nodeId: string,
+  index: number
+): void {
+  switch (record.eventType) {
+    case 'node_started':
+    case 'node_suspended':
+    case 'node_always_run_reset':
+    case 'node_prior_cache_invalidated':
+      nodes.set(nodeId, {
+        node_id: nodeId,
+        state:
+          record.eventType === 'node_started' || record.eventType === 'node_suspended'
+            ? 'running'
+            : 'pending',
+      });
+      outputs.delete(nodeId);
+      failureOrder.delete(nodeId);
+      break;
+    case 'node_completed':
+      nodes.set(
+        nodeId,
+        withFanOutOutcome({ node_id: nodeId, state: 'completed' }, record.data.fan_out_outcome)
+      );
+      outputs.set(nodeId, record.data);
+      failureOrder.delete(nodeId);
+      break;
+    case 'node_skipped_prior_success':
+      // A replayed node keeps the slot record its earlier completion wrote.
+      nodes.set(
+        nodeId,
+        withFanOutOutcome(
+          { node_id: nodeId, state: 'completed' },
+          nodes.get(nodeId)?.fan_out_outcome
+        )
+      );
+      outputs.set(nodeId, record.data);
+      failureOrder.delete(nodeId);
+      break;
+    case 'node_failed': {
+      const data = record.data;
+      nodes.set(
+        nodeId,
+        withFanOutOutcome(
+          {
+            node_id: nodeId,
+            state: 'failed',
+            ...(typeof data.error === 'string' ? { error: data.error } : {}),
+          },
+          data.fan_out_outcome
+        )
+      );
+      outputs.delete(nodeId);
+      failureOrder.set(nodeId, index);
+      break;
+    }
+    case 'node_skipped': {
+      const data = record.data;
+      const reason = nodeSkipReasonSchema.safeParse(data.reason);
+      const cause = skipCauseSchema.safeParse(data.cause);
+      nodes.set(nodeId, {
+        node_id: nodeId,
+        state: 'skipped',
+        ...(reason.success ? { reason: reason.data } : {}),
+        ...(cause.success ? { cause: cause.data } : {}),
+      });
+      outputs.delete(nodeId);
+      failureOrder.delete(nodeId);
+      break;
+    }
+  }
 }
 
 /** The engine's per-node state at any point in a run: the same fold the terminal record uses. */
