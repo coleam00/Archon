@@ -7425,6 +7425,8 @@ export interface components {
       is_docker: boolean;
       is_wsl: boolean;
       wsl_distro?: string;
+      /** @description Opaque id of the Archon home this server serves. Compare it with that home's `store-id` file to confirm the server serves the home you mean. Omitted when the home has no readable store id. */
+      storeId?: string;
       activePlatforms?: string[];
       attentionDestinations?: {
         id: string;

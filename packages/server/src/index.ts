@@ -103,6 +103,12 @@ import {
   type PlatformAdapters,
   type PlatformRegistry,
 } from './platform-adapters';
+import {
+  ensureStoreId,
+  removeServerRecord,
+  writeServerRecord,
+} from '@archon/paths/server-discovery';
+import { appVersion } from './app-version';
 import { registerServerRoutes } from './server-routes';
 import { getLog } from './server-log';
 
@@ -164,6 +170,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // No required environment variables - SQLite works out of the box
   await requireAiCredentials();
   await connectDatabase();
+  const storeId = ensureStoreId();
 
   const config = await loadConfig();
   logConfig(config);
@@ -240,6 +247,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     port,
     idleTimeout: 255, // Max value (seconds) - prevents SSE connections from being killed
   });
+  // Bun reports no port only for a unix socket, which this server never binds.
+  if (server.port === undefined) throw new Error('Server is listening without a TCP port');
   // Children must use the bound socket, including explicit overrides and worktree ports.
   process.env.ARCHON_PORT = String(server.port);
   getLog().info({ port: server.port, hostname }, 'server_listening');
@@ -260,6 +269,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const shutdown = createShutdown({ web, dashboard, chat, adapters, telegram });
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+  // Published only once shutdown is wired, so a clean stop always removes it.
+  recordListeningServer({ port: server.port, host: hostname, storeId });
   chat.host.start();
   chat.router.start();
 
@@ -275,6 +286,20 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   checkGhAuth().catch((err: unknown) => {
     getLog().debug({ err }, 'gh_auth.check_unexpected_error');
   });
+}
+
+/** Publish this server in `$ARCHON_HOME/server.json`. Discovery is advisory, so a failed write only warns. */
+function recordListeningServer(listening: { port: number; host: string; storeId: string }): void {
+  try {
+    writeServerRecord({
+      pid: process.pid,
+      version: appVersion,
+      startedAt: new Date().toISOString(),
+      ...listening,
+    });
+  } catch (err) {
+    getLog().warn({ err }, 'server_record.write_failed');
+  }
 }
 
 async function assertSqlStore(): Promise<void> {
@@ -578,6 +603,11 @@ interface ServerServices {
 function createShutdown(services: ServerServices): () => void {
   return () => {
     getLog().info('server_shutting_down');
+    try {
+      removeServerRecord(process.pid);
+    } catch (err) {
+      getLog().warn({ err }, 'server_record.remove_failed');
+    }
     stopCleanupScheduler();
     stopWorkflowContinuationScheduler();
     services.web.persistence.stopPeriodicFlush();

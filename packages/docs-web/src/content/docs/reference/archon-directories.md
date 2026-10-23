@@ -64,6 +64,8 @@ layout below. Existing projects keep their names and storage.
 ├── tier-notice.json                # One-time tier-default notice state (CLI, per version)
 ├── install.json                    # Last compiled CLI path and version (discovery hint)
 ├── credential-key                  # Auto-provisioned per-user credential encryption key
+├── store-id                        # Opaque id of this home, returned by GET /api/health
+├── server.json                     # The server listening for this home (discovery record)
 ├── archon.db                       # SQLite database (when DATABASE_URL is unset)
 └── config.yaml                     # Global user configuration
 ```
@@ -106,6 +108,15 @@ layout below. Existing projects keep their names and storage.
 - `install.json` - Discovery metadata for the last compiled Archon invoked. GUI and
   service consumers may use its absolute `binary` path when the user has not
   configured one explicitly. Source/Bun runs do not write this file.
+- `store-id` - A random id generated the first time a server starts on this home and kept
+  for the home's life. `GET /api/health` returns it as `storeId`, so a client can compare it
+  with this file to confirm the server it reached serves this home and not another one.
+- `server.json` - Written by a server once it is listening and removed when it shuts down
+  cleanly: `pid`, `port`, `host` (the bound address), `version`, `startedAt` and `storeId`.
+  A same-machine client reads it to find the server instead of guessing a port. The record is
+  advisory: treat a missing or unreadable file, or one whose `pid` is no longer running (the
+  server was killed), as no server. When several servers share one home, the file names the
+  most recent to start.
 - `config.yaml` - Non-secret user preferences
 
 Each run also records the project root it resolved in `workflow_runs.output_root`, so an

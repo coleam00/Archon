@@ -65,6 +65,8 @@ curl http://localhost:3090/api/health
 
 `/api/health` is public, so its `concurrency` object carries counts and the oldest active and queued ages, never conversation ids. The per-conversation view is the authenticated `GET /api/dashboard/conversations`.
 
+`/api/health` also returns `storeId`, the opaque id of the Archon home the server serves. It is random and carries no path. To check that a server serves the home you mean, compare it with that home's `store-id` file; a running server for a home is recorded in `<ARCHON_HOME>/server.json`. See [Archon directories](/reference/archon-directories/).
+
 ---
 
 ## Conversations

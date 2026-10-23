@@ -88,6 +88,16 @@ mock.module('./boot/claude-auth-posture', () => ({
 }));
 mock.module('dotenv', () => ({ config: (): object => ({}) }));
 mock.module('@archon/paths/env-loader', () => ({ loadArchonEnv: (): void => undefined }));
+// In-process boots must not publish a store id or server record into the real home.
+mock.module('@archon/paths/server-discovery', () => ({
+  getStoreIdPath: (): string => '/nonexistent/archon-home/store-id',
+  getServerRecordPath: (): string => '/nonexistent/archon-home/server.json',
+  ensureStoreId: (): string => '00000000-0000-4000-8000-000000000000',
+  readStoreId: (): null => null,
+  readLiveServerRecord: (): null => null,
+  writeServerRecord: (): void => undefined,
+  removeServerRecord: (): void => undefined,
+}));
 mock.module('@archon/paths/cli-command', () => ({
   publishArchonCliCommand: (): void => undefined,
 }));
