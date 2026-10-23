@@ -183,51 +183,69 @@ const BRANCH_OID_HEADER = '# branch.oid ';
 function parseStatus(output: Buffer): Status {
   const entries: StatusEntry[] = [];
   let commit: string | null | undefined;
+  for (const record of nulTerminatedRecords(output)) {
+    const kind = String.fromCharCode(record[0] ?? 0);
+    if (kind !== '#') {
+      entries.push(parseStatusEntry(kind, record));
+      continue;
+    }
+    const oid = branchOid(record);
+    if (oid !== undefined) commit = oid;
+  }
+  return { commit, entries };
+}
+
+function* nulTerminatedRecords(output: Buffer): Generator<Buffer> {
   let start = 0;
   while (start < output.length) {
     const end = output.indexOf(0, start);
-    const record = output.subarray(start, end === -1 ? output.length : end);
-    start = end === -1 ? output.length : end + 1;
-    if (record.length === 0) continue;
-    const kind = String.fromCharCode(record[0] ?? 0);
-    if (kind === '#') {
-      const header = record.toString('latin1');
-      if (header.startsWith(BRANCH_OID_HEADER)) {
-        const oid = header.slice(BRANCH_OID_HEADER.length);
-        commit = oid === '(initial)' ? null : oid;
-      }
-      continue;
-    }
-    if (kind === '?') {
-      entries.push({ raw: record.subarray(2), staged: false, unstaged: false, untracked: true });
-      continue;
-    }
-    // Space-separated header fields precede the path, counting the record type: 8 for an
-    // ordinary record (`1 XY sub mH mI mW hH hI`), 10 for an unmerged one
-    // (`u XY sub m1 m2 m3 mW h1 h2 h3`). `mW` is the worktree mode in both.
-    const fieldCount = kind === '1' ? 8 : kind === 'u' ? 10 : -1;
-    if (fieldCount === -1) {
-      throw new Error(`unexpected git status record type '${kind}'`);
-    }
-    let offset = 0;
-    const fields: string[] = [];
-    for (let i = 0; i < fieldCount; i++) {
-      const space = record.indexOf(0x20, offset);
-      if (space === -1) throw new Error('truncated git status record');
-      fields.push(record.subarray(offset, space).toString('latin1'));
-      offset = space + 1;
-    }
-    const xy = fields[1] ?? '..';
-    entries.push({
-      raw: record.subarray(offset),
-      worktreeMode: kind === '1' ? fields[5] : fields[6],
-      submodule: fields[2],
-      staged: !xy.startsWith('.'),
-      unstaged: xy.charAt(1) !== '.',
-      untracked: false,
-    });
+    const stop = end === -1 ? output.length : end;
+    if (stop > start) yield output.subarray(start, stop);
+    start = stop + 1;
   }
-  return { commit, entries };
+}
+
+/** The commit a `# branch.oid` header names, null when unborn; undefined for other headers. */
+function branchOid(header: Buffer): string | null | undefined {
+  const text = header.toString('latin1');
+  if (!text.startsWith(BRANCH_OID_HEADER)) return undefined;
+  const oid = text.slice(BRANCH_OID_HEADER.length);
+  return oid === '(initial)' ? null : oid;
+}
+
+function parseStatusEntry(kind: string, record: Buffer): StatusEntry {
+  if (kind === '?') {
+    return { raw: record.subarray(2), staged: false, unstaged: false, untracked: true };
+  }
+  // Space-separated header fields precede the path, counting the record type: 8 for an
+  // ordinary record (`1 XY sub mH mI mW hH hI`), 10 for an unmerged one
+  // (`u XY sub m1 m2 m3 mW h1 h2 h3`). `mW` is the worktree mode in both.
+  const fieldCount = kind === '1' ? 8 : kind === 'u' ? 10 : undefined;
+  if (fieldCount === undefined) {
+    throw new Error(`unexpected git status record type '${kind}'`);
+  }
+  const { fields, path } = splitHeaderFields(record, fieldCount);
+  const xy = fields[1] ?? '..';
+  return {
+    raw: path,
+    worktreeMode: kind === '1' ? fields[5] : fields[6],
+    submodule: fields[2],
+    staged: !xy.startsWith('.'),
+    unstaged: xy.charAt(1) !== '.',
+    untracked: false,
+  };
+}
+
+function splitHeaderFields(record: Buffer, count: number): { fields: string[]; path: Buffer } {
+  let offset = 0;
+  const fields: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const space = record.indexOf(0x20, offset);
+    if (space === -1) throw new Error('truncated git status record');
+    fields.push(record.subarray(offset, space).toString('latin1'));
+    offset = space + 1;
+  }
+  return { fields, path: record.subarray(offset) };
 }
 
 type ObjectFormat = CheckoutManifest['objectFormat'];
