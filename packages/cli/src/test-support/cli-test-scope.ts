@@ -51,21 +51,24 @@ export class CliTestScope {
       if (pending.length === 0) return;
       for (const pid of pending) await terminateTree(pid);
       for (const pid of pending) {
-        const target = process.platform === 'win32' ? pid : -pid;
-        const deadline = Date.now() + 2000;
-        while (true) {
-          try {
-            process.kill(target, 0);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ESRCH') break;
-            throw error;
-          }
-          if (Date.now() >= deadline)
-            throw new Error(`Detached test process tree ${pid} is still alive`);
-          await Bun.sleep(10);
-        }
+        await waitForDetachedTreeExit(pid);
         stopped.add(pid);
       }
     }
+  }
+}
+
+async function waitForDetachedTreeExit(pid: number): Promise<void> {
+  const target = process.platform === 'win32' ? pid : -pid;
+  const deadline = Date.now() + 2000;
+  while (true) {
+    try {
+      process.kill(target, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') break;
+      throw error;
+    }
+    if (Date.now() >= deadline) throw new Error(`Detached test process tree ${pid} is still alive`);
+    await Bun.sleep(10);
   }
 }
