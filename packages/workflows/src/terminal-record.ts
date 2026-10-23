@@ -190,44 +190,48 @@ function readWorktreeDisposition(
   }
 }
 
+function selectRecordedReturn({ graph, nodes, outputs }: NodeEventFold): TerminalRecord['returns'] {
+  const selected = graph?.returns;
+  if (selected === undefined) {
+    return {
+      availability: 'unavailable',
+      node_id: null,
+      reason: graph ? 'not_declared' : 'graph_unavailable',
+    };
+  }
+  const data = outputs.get(selected);
+  if (nodes.get(selected)?.state !== 'completed') {
+    return { availability: 'unavailable', node_id: selected, reason: 'node_not_completed' };
+  }
+  if (data && Object.hasOwn(data, 'structured_output')) {
+    return { availability: 'available', node_id: selected, value: data.structured_output };
+  }
+  if (data?.node_output_truncated === true) {
+    return {
+      availability: 'truncated',
+      node_id: selected,
+      spill_path:
+        typeof data.node_output_spill_path === 'string' ? data.node_output_spill_path : null,
+      original_bytes:
+        typeof data.node_output_original_bytes === 'number'
+          ? data.node_output_original_bytes
+          : null,
+    };
+  }
+  if (typeof data?.node_output === 'string') {
+    return { availability: 'available', node_id: selected, value: data.node_output };
+  }
+  return { availability: 'unavailable', node_id: selected, reason: 'output_not_persisted' };
+}
+
 /** Fold ordered durable events; never reconstruct producer values from artifact contents. */
 export async function buildTerminalRecord(input: {
   run: Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'metadata' | 'output_root'>;
   events: readonly TerminalRecordEvent[];
 }): Promise<TerminalRecord> {
   const { run, events } = input;
-  const { graph, nodes, outputs, failureOrder } = foldNodeEvents(run, events);
-  let returns: TerminalRecord['returns'];
-  const selected = graph?.returns;
-  if (selected === undefined) {
-    returns = {
-      availability: 'unavailable',
-      node_id: null,
-      reason: graph ? 'not_declared' : 'graph_unavailable',
-    };
-  } else {
-    const data = outputs.get(selected);
-    if (nodes.get(selected)?.state !== 'completed') {
-      returns = { availability: 'unavailable', node_id: selected, reason: 'node_not_completed' };
-    } else if (data && Object.hasOwn(data, 'structured_output')) {
-      returns = { availability: 'available', node_id: selected, value: data.structured_output };
-    } else if (data?.node_output_truncated === true) {
-      returns = {
-        availability: 'truncated',
-        node_id: selected,
-        spill_path:
-          typeof data.node_output_spill_path === 'string' ? data.node_output_spill_path : null,
-        original_bytes:
-          typeof data.node_output_original_bytes === 'number'
-            ? data.node_output_original_bytes
-            : null,
-      };
-    } else if (typeof data?.node_output === 'string') {
-      returns = { availability: 'available', node_id: selected, value: data.node_output };
-    } else {
-      returns = { availability: 'unavailable', node_id: selected, reason: 'output_not_persisted' };
-    }
-  }
+  const folded = foldNodeEvents(run, events);
+  const { nodes, failureOrder } = folded;
   const root = resolveRunStorageRoot(run, null);
   const worktreeDisposition = readWorktreeDisposition(run);
   return terminalRecordSchema.parse({
@@ -237,7 +241,7 @@ export async function buildTerminalRecord(input: {
     error: typeof run.metadata?.error === 'string' ? run.metadata.error : null,
     first_failed_node: [...failureOrder].sort((left, right) => left[1] - right[1])[0]?.[0] ?? null,
     nodes: [...nodes.values()],
-    returns,
+    returns: selectRecordedReturn(folded),
     artifacts: await observeArtifactManifest(
       root === null ? null : getRunArtifactsDirForRoot(root, run.id),
       root ?? undefined,
