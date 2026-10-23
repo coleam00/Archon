@@ -16,6 +16,8 @@ import {
   dispatchResponseSchema,
   listMessagesQuerySchema,
   messageListResponseSchema,
+  sendMessageBodySchema,
+  sendMessageMultipartSchema,
 } from './schemas/conversation.schemas';
 
 const listMessagesRoute = createRoute({
@@ -39,10 +41,6 @@ const listMessagesRoute = createRoute({
   },
 });
 
-// Body validation is handled manually in the handler (multipart vs JSON branching).
-// Declaring both content types in the OpenAPI route causes @hono/zod-openapi to
-// validate JSON bodies against the multipart schema. We keep `request.body` empty
-// and document the schemas via the OpenAPI spec comments instead.
 const sendMessageRoute = createRoute({
   method: 'post',
   path: '/api/conversations/{id}/message',
@@ -53,6 +51,13 @@ const sendMessageRoute = createRoute({
     'with a `message` field and optional file attachments (max 5 files, 10 MB each).',
   request: {
     params: conversationIdParamsSchema,
+    body: {
+      required: true,
+      content: {
+        'application/json': { schema: sendMessageBodySchema },
+        'multipart/form-data': { schema: sendMessageMultipartSchema },
+      },
+    },
   },
   responses: {
     200: {
@@ -92,8 +97,12 @@ export function registerMessageRoutes(
   });
 
   // POST /api/conversations/:id/message - Send message
-  // Manual body parsing: multipart uses parseBody(), JSON uses req.json().
-  registerOpenApiRoute(sendMessageRoute, async c => {
+  app.openAPIRegistry.registerPath(sendMessageRoute);
+  // Hono installs validators for both media types when body is required. Keep
+  // manual parsing and authorization before reading the body.
+  const { body: _body, ...request } = sendMessageRoute.request;
+  const runtimeRoute = { ...sendMessageRoute, request, hide: true };
+  registerOpenApiRoute(runtimeRoute, async c => {
     const conversationId = c.req.param('id') ?? '';
 
     // Reject conversation IDs that could be used for path traversal when building
@@ -259,10 +268,11 @@ async function readMultipartMessage(
     return c.json({ error: 'Invalid multipart form data' }, 400);
   }
 
-  const message = body.message;
-  if (typeof message !== 'string' || !message) {
+  const parsed = sendMessageBodySchema.safeParse(body);
+  if (!parsed.success) {
     return c.json({ error: 'message must be a non-empty string' }, 400);
   }
+  const { message } = parsed.data;
 
   const fileEntries: File[] = [];
   for (const entry of formEntries(body.files)) {
@@ -290,7 +300,7 @@ async function readJsonMessage(
   c: Context,
   conversationId: string
 ): Promise<MessageBody | Response> {
-  let body: { message?: unknown };
+  let body: unknown;
   try {
     body = await c.req.json();
   } catch (parseErr: unknown) {
@@ -298,10 +308,11 @@ async function readJsonMessage(
     return c.json({ error: 'Invalid JSON in request body' }, 400);
   }
 
-  if (typeof body.message !== 'string' || !body.message) {
+  const parsed = sendMessageBodySchema.safeParse(body);
+  if (!parsed.success) {
     return c.json({ error: 'message must be a non-empty string' }, 400);
   }
-  return { message: body.message, savedFiles: [] };
+  return { message: parsed.data.message, savedFiles: [] };
 }
 
 /** Saves the user message to history; on failure removes its uploads and returns the 500. */

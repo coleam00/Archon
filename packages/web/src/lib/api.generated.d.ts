@@ -1188,7 +1188,12 @@ export interface paths {
         };
         cookie?: never;
       };
-      requestBody?: never;
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SendMessageBody'];
+          'multipart/form-data': components['schemas']['SendMessageMultipartBody'];
+        };
+      };
       responses: {
         /** @description Accepted */
         200: {
@@ -4887,6 +4892,14 @@ export interface components {
     DispatchResponse: {
       accepted: boolean;
       status: string;
+    };
+    SendMessageBody: {
+      message: string;
+    };
+    SendMessageMultipartBody: {
+      message: string;
+      /** @description Repeated files parts, each at most 10485760 bytes. Upload MIME type restrictions apply. */
+      files?: string[];
     };
     CodebaseListResponse: components['schemas']['Codebase'][];
     Codebase: {

@@ -1,3 +1,4 @@
+import type { paths } from '../../../lib/api.generated';
 import { requestJson, HttpError } from '../lib/http';
 import { toConversationSummary, type ConversationSummary } from '../primitives/conversation';
 
@@ -45,6 +46,9 @@ export async function listConversations(projectId: string): Promise<Conversation
   return raw.map(toConversationSummary);
 }
 
+type SendMessageJson =
+  paths['/api/conversations/{id}/message']['post']['requestBody']['content']['application/json'];
+
 export async function sendMessage(
   conversationPlatformId: string,
   message: string,
@@ -55,7 +59,7 @@ export async function sendMessage(
   if (files === undefined || files.length === 0) {
     await requestJson<{ accepted: boolean; status: string }>(url, {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message } satisfies SendMessageJson),
     });
     return;
   }
