@@ -201,6 +201,10 @@ export function parseJudgeChanges(json: string): JudgeChange[] {
     .filter(entry => entry.file !== '' || entry.change !== '');
 }
 
+/** An approval is a link to an issue or a comment on one (the owner's words), never a criterion id. */
+export const isApprovalLink = (approval: string): boolean =>
+  /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(#issuecomment-\d+)?$/.test(approval.trim());
+
 export interface GateFacts {
   readonly report: AppCheck;
   /** Changes to what a check judges, each with the owner's approval or the criterion asking for it. */
@@ -246,8 +250,13 @@ export function recordRefusals(facts: GateFacts): string[] {
       refusals.push(`${line.id} is a failure the default branch has too, but no issue that exists tracks it`);
     }
   }
-  for (const judge of facts.judgeChanges.filter(change => change.approval === '')) {
-    refusals.push(`${judge.file || 'a check'} changes what a check judges (${judge.change}) with no approval named`);
+  for (const judge of facts.judgeChanges) {
+    if (judge.approval === '') {
+      refusals.push(`${judge.file || 'a check'} changes what a check judges (${judge.change}) with no approval named`);
+    } else if (!isApprovalLink(judge.approval)) {
+      // A criterion id is the loop's own wording; only the owner's words, linked, approve a judge change.
+      refusals.push(`${judge.file || 'a check'} changes what a check judges (${judge.change}), and its approval (${judge.approval}) is not a link to the owner's words`);
+    }
   }
   for (const failed of facts.shipFailures) refusals.push(`the shipping pipeline's ${failed} failed`);
   return refusals;

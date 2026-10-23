@@ -64,7 +64,7 @@ Choose the depth of the black-box app check from the work item's risk, not from 
 - `normal`: the default, for an ordinary feature or fix a user can see.
 - `deep`: a new system, a change across the core of the product, authentication, security, data or migrations, or an item a `normal` check already let a defect through on.
 
-Checking costs every other change its turn, so `deep` is the exception, not the safe choice. A `continue` whose last review or merge-gate refusal asked for no code change (only the record, the evidence, or merging the default branch) is `light`. A `complex` item is `light` too, unless it touches authentication, security, data or migrations (then `deep`): the shipping pipeline reviews, tests and corrects it before the app check runs, so the app check confirms its criteria in the running app once instead of checking it a second time.
+Checking costs every other change its turn, so `deep` is the exception, not the safe choice. A `continue` whose last review or merge-gate refusal asked for no code change (only the record, the evidence, or merging the default branch) is `light`. A `complex` item is `light` too, unless it touches authentication, security, data or migrations, or changes what a check samples, skips, excuses or measures (then `deep`, so the app check tries what the change would let through): the shipping pipeline reviews, tests and corrects it before the app check runs, so the app check confirms its criteria in the running app once instead of checking it a second time.
 
 ## Contract first
 

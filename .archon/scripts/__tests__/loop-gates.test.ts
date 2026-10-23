@@ -275,10 +275,16 @@ describe('what the record proves (2026-10-19 audit)', () => {
       JSON.stringify([
         { file: 'game/harness/AllegianceCheck.cs', change: 'ghost pixels left out of foe samples', approval: '' },
         { file: 'game/harness/SceneryViewCheck.cs', change: 'new check', approval: 'C1' },
+        {
+          file: 'game/harness/HudCheck.cs',
+          change: 'exceptions for foes',
+          approval: 'https://github.com/o/r/issues/502#issuecomment-6303074947',
+        },
       ])
     );
     expect(gate(CLEAN, { judgeChanges: changes })).toEqual([
       'game/harness/AllegianceCheck.cs changes what a check judges (ghost pixels left out of foe samples) with no approval named',
+      "game/harness/SceneryViewCheck.cs changes what a check judges (new check), and its approval (C1) is not a link to the owner's words",
     ]);
     expect(parseJudgeChanges('not json')).toEqual([]);
   });
