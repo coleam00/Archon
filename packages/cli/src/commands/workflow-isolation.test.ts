@@ -73,7 +73,7 @@ describe('folderRunsInContainer', () => {
     expect(folderRunsInContainer({}, {}, undefined, containerRun)).toBe(false);
   });
 
-  it.each([null, undefined, { metadata: undefined }])(
+  it.each([null, undefined, { metadata: {} }])(
     'a resume without recorded isolation stays on the host: %j',
     resumable => {
       expect(
