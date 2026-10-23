@@ -209,6 +209,79 @@ describe('validateWorkflowsCommand', () => {
     expect(JSON.stringify(mockConsoleLog.mock.calls)).toContain('@custom');
   });
 
+  test.each([false, true])('missing workflow output, JSON=%s', async json => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({ workflows: [], errors: [] });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, 'missing', json)).toBe(1);
+      if (json) {
+        expect(write.mock.calls).toEqual([
+          ['{"error":"Workflow \'missing\' not found","suggestions":[],"available":[]}\n'],
+        ]);
+        expect(mockConsoleError.mock.calls).toEqual([]);
+      } else {
+        expect(mockConsoleError.mock.calls).toEqual([
+          ["Workflow 'missing' not found."],
+          ['Available workflows: '],
+        ]);
+        expect(write.mock.calls).toEqual([]);
+      }
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test.each([false, true])('sorted workflow results output, JSON=%s', async json => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+      workflows: [
+        {
+          ...makeTestWorkflowWithSource({ name: 'alpha', nodes: [{ id: 'run', bash: 'true' }] }),
+          parseWarnings: ['Check this workflow'],
+        },
+      ],
+      errors: [{ filename: 'broken.yaml', errorType: 'parse_error', error: 'Bad YAML' }],
+    });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, undefined, json)).toBe(1);
+      if (json) {
+        expect(write.mock.calls).toEqual([
+          [
+            `${JSON.stringify({
+              results: [
+                {
+                  workflowName: 'broken',
+                  filename: 'broken.yaml',
+                  valid: false,
+                  issues: [{ level: 'error', field: 'parse_error', message: 'Bad YAML' }],
+                },
+                {
+                  workflowName: 'alpha',
+                  valid: true,
+                  issues: [
+                    { level: 'warning', field: 'parse_warning', message: 'Check this workflow' },
+                  ],
+                },
+              ],
+              summary: { total: 2, valid: 1, errors: 1, warnings: 1 },
+            })}\n`,
+          ],
+        ]);
+        expect(mockConsoleLog.mock.calls).toEqual([]);
+      } else {
+        expect(mockConsoleLog.mock.calls).toEqual([
+          [`\nValidating workflows in ${validationCwd}\n`],
+          [`  ${'broken'.padEnd(40)} ERRORS\n    ERROR [parse_error] Bad YAML`],
+          [`  ${'alpha'.padEnd(40)} WARNINGS\n    WARNING [parse_warning] Check this workflow`],
+          ['\nResults: 1 valid, 1 with errors, 1 with warnings'],
+        ]);
+        expect(write.mock.calls).toEqual([]);
+      }
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   afterEach(async () => {
     console.log = originalLog;
     console.error = originalError;
