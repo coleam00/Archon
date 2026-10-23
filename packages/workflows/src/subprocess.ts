@@ -126,8 +126,7 @@ export function redactSubprocessError(
 
 interface SharedNodeProcessRecorder {
   mode: 'shared';
-  /** Each in-flight node's root PID, with the function that disarms its owner-death watcher. */
-  roots: Map<number, () => void>;
+  roots: Set<{ pid: number; disarm: () => void; endable: boolean }>;
   ended: boolean;
 }
 type NodeProcessRecorder = SharedNodeProcessRecorder | DetachedNodeProcesses;
@@ -176,20 +175,26 @@ export function recordNodeProcessTrees(options?: { mode: 'detached-posix' }): Re
       },
     };
   }
-  const recorder: SharedNodeProcessRecorder = { mode: 'shared', roots: new Map(), ended: false };
+  const recorder: SharedNodeProcessRecorder = { mode: 'shared', roots: new Set(), ended: false };
   nodeProcessRecorder = recorder;
   return {
     end: async () => {
       recorder.ended = true;
       const failed: string[] = [];
       await Promise.all(
-        [...recorder.roots].map(([pid, disarm]) =>
-          terminateTree(pid).then(disarm, (error: unknown) => {
+        [...recorder.roots].map(({ pid, disarm, endable }) => {
+          if (!endable) {
+            failed.push(
+              `${String(pid)} (root exited before output closed; descendants may still be running)`
+            );
+            return;
+          }
+          return terminateTree(pid).then(disarm, (error: unknown) => {
             failed.push(
               `${String(pid)} (${error instanceof Error ? error.message : String(error)})`
             );
-          })
-        )
+          });
+        })
       );
       if (failed.length > 0) {
         throw new Error(`could not end node process trees: ${failed.join(', ')}`);
@@ -233,11 +238,17 @@ function recordNodeProcess(
   }
   const disarm =
     process.platform !== 'win32' ? armNodeLifeline(rootPid, onError) : (): void => undefined;
-  recorder.roots.set(rootPid, disarm);
+  const root = { pid: rootPid, disarm, endable: true };
+  recorder.roots.add(root);
   // POSIX groups remain endable while a child holds output. Windows can reuse the
   // root PID as soon as it exits, so taskkill must stop targeting it at exit.
-  child.once(process.platform === 'win32' ? 'exit' : 'close', () => {
-    recorder.roots.delete(rootPid);
+  if (process.platform === 'win32') {
+    child.once('exit', () => {
+      root.endable = false;
+    });
+  }
+  child.once('close', () => {
+    recorder.roots.delete(root);
     disarm();
   });
 }

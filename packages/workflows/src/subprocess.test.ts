@@ -49,15 +49,24 @@ test.each([
   try {
     if (exited) child.emit('exit', 0, null);
 
-    if (terminationFails && !exited) {
+    if (exited) {
+      await expect(trees.end()).rejects.toThrow(
+        'could not end node process trees: 424242 (root exited before output closed; descendants may still be running)'
+      );
+    } else if (terminationFails) {
       await expect(trees.end()).rejects.toThrow(
         'could not end node process trees: 424242 (termination failed)'
       );
     } else {
       await trees.end();
     }
-    if (exited) expect(terminate).not.toHaveBeenCalled();
-    else expect(terminate).toHaveBeenCalledWith(424242);
+    if (exited) {
+      expect(terminate).not.toHaveBeenCalled();
+      child.emit('close', 0, null);
+      await pending;
+      await trees.end();
+      expect(terminate).not.toHaveBeenCalled();
+    } else expect(terminate).toHaveBeenCalledWith(424242);
 
     await expect(run()).rejects.toThrow(
       'The run owner is terminating; node subprocess not started'
