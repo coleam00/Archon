@@ -22,6 +22,7 @@ import type {
   WorkflowValidationResult,
   ValidationConfig,
   ScriptValidationResult,
+  CommandValidationResult,
 } from '@archon/workflows/validator';
 import { loadConfig, loadRepoConfig } from '@archon/core';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
@@ -222,19 +223,9 @@ export async function validateCommandsCommand(
   const config = await buildValidationConfig(cwd);
 
   if (name) {
-    // Validate a single command
     const result = await validateCommand(name, cwd, config);
-
-    if (jsonOutput) {
-      await writeStdout(`${JSON.stringify(result)}\n`);
-    } else {
-      const statusLabel = result.valid ? 'ok' : 'ERRORS';
-      console.log(`\n  ${result.commandName.padEnd(40, ' ')} ${statusLabel}`);
-      for (const issue of result.issues) {
-        console.log(formatIssue(issue));
-      }
-    }
-
+    if (jsonOutput) await writeStdout(`${JSON.stringify(result)}\n`);
+    else printCommandResult(result, '\n  ');
     return result.valid ? 0 : 1;
   }
 
@@ -252,6 +243,26 @@ export async function validateCommandsCommand(
   const totalScriptErrors = scriptResults.filter(r => !r.valid).length;
   const totalErrors = totalCommandErrors + totalScriptErrors;
 
+  await writeCommandResults(cwd, commandResults, scriptResults, totalErrors, jsonOutput);
+
+  return totalErrors > 0 ? 1 : 0;
+}
+
+function printCommandResult(result: CommandValidationResult, prefix = '  '): void {
+  const statusLabel = result.valid ? 'ok' : 'ERRORS';
+  console.log(`${prefix}${result.commandName.padEnd(40, ' ')} ${statusLabel}`);
+  for (const issue of result.issues) {
+    console.log(formatIssue(issue));
+  }
+}
+
+async function writeCommandResults(
+  cwd: string,
+  commandResults: CommandValidationResult[],
+  scriptResults: ScriptValidationResult[],
+  totalErrors: number,
+  jsonOutput: boolean | undefined
+): Promise<void> {
   if (jsonOutput) {
     await writeStdout(
       `${JSON.stringify({
@@ -267,16 +278,12 @@ export async function validateCommandsCommand(
   } else {
     if (commandResults.length === 0 && scriptResults.length === 0) {
       console.log('\nNo commands or scripts found.');
-      return 0;
+      return;
     }
 
     console.log(`\nValidating commands and scripts in ${cwd}\n`);
     for (const result of commandResults) {
-      const statusLabel = result.valid ? 'ok' : 'ERRORS';
-      console.log(`  ${result.commandName.padEnd(40, ' ')} ${statusLabel}`);
-      for (const issue of result.issues) {
-        console.log(formatIssue(issue));
-      }
+      printCommandResult(result);
     }
     for (const result of scriptResults) {
       console.log(formatScriptResult(result));
@@ -285,6 +292,4 @@ export async function validateCommandsCommand(
       `\nResults: ${commandResults.length + scriptResults.length - totalErrors} valid, ${totalErrors} with errors`
     );
   }
-
-  return totalErrors > 0 ? 1 : 0;
 }

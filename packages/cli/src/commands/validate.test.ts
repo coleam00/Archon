@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -30,7 +30,9 @@ mock.module('@archon/core', () => ({
 }));
 
 import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { validateWorkflowsCommand } from './validate';
+import { validateCommandsCommand, validateWorkflowsCommand } from './validate';
+import * as validator from '@archon/workflows/validator';
+import * as stdout from '../utils/stdout';
 
 // The CLI entrypoint registers providers before any command runs.
 registerBuiltinProviders();
@@ -212,4 +214,74 @@ describe('validateWorkflowsCommand', () => {
     console.error = originalError;
     await rm(validationCwd, { recursive: true, force: true });
   });
+});
+
+describe('validateCommandsCommand output', () => {
+  let logSpy: ReturnType<typeof spyOn>;
+  const invalid = {
+    commandName: 'broken',
+    valid: false,
+    issues: [{ level: 'error', field: 'content', message: 'Empty command', hint: 'Add content' }],
+  } satisfies validator.CommandValidationResult;
+  const script = { scriptName: 'check', valid: true, issues: [] };
+
+  beforeEach(() => {
+    logSpy = spyOn(console, 'log').mockImplementation(() => {});
+    spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    spyOn(validator, 'validateCommand').mockResolvedValue(invalid);
+    spyOn(validator, 'validateScript').mockResolvedValue(script);
+    spyOn(validator, 'discoverAvailableCommands').mockResolvedValue([]);
+    spyOn(validator, 'discoverAvailableScripts').mockResolvedValue([]);
+  });
+  afterEach(() => mock.restore());
+
+  test.each([false, true])('single-command output, JSON=%s', async json => {
+    expect(await validateCommandsCommand('/repo', 'broken', json)).toBe(1);
+    if (json) {
+      expect(stdout.writeStdout).toHaveBeenCalledWith(`${JSON.stringify(invalid)}\n`);
+      expect(console.log).not.toHaveBeenCalled();
+    } else {
+      expect(mockedLogLines()).toEqual([
+        `\n  ${'broken'.padEnd(40)} ERRORS`,
+        '    ERROR [content] Empty command\n      Add content',
+      ]);
+      expect(stdout.writeStdout).not.toHaveBeenCalled();
+    }
+    expect(validator.discoverAvailableCommands).not.toHaveBeenCalled();
+    expect(validator.discoverAvailableScripts).not.toHaveBeenCalled();
+  });
+
+  test.each([false, true])('empty inventory output, JSON=%s', async json => {
+    expect(await validateCommandsCommand('/repo', undefined, json)).toBe(0);
+    if (json) {
+      expect(stdout.writeStdout).toHaveBeenCalledWith(
+        '{"results":[],"scripts":[],"summary":{"total":0,"valid":0,"errors":0}}\n'
+      );
+    } else expect(mockedLogLines()).toEqual(['\nNo commands or scripts found.']);
+  });
+
+  test.each([false, true])('mixed command and script output, JSON=%s', async json => {
+    spyOn(validator, 'discoverAvailableCommands').mockResolvedValue(['broken']);
+    spyOn(validator, 'discoverAvailableScripts').mockResolvedValue([
+      { name: 'check', path: '/repo/.archon/scripts/check.ts', runtime: 'bun' },
+    ]);
+    expect(await validateCommandsCommand('/repo', undefined, json)).toBe(1);
+    if (json) {
+      expect(stdout.writeStdout).toHaveBeenCalledWith(
+        `${JSON.stringify({ results: [invalid], scripts: [script], summary: { total: 2, valid: 1, errors: 1 } })}\n`
+      );
+    } else {
+      expect(mockedLogLines()).toEqual([
+        '\nValidating commands and scripts in /repo\n',
+        `  ${'broken'.padEnd(40)} ERRORS`,
+        '    ERROR [content] Empty command\n      Add content',
+        `  ${'[script] check'.padEnd(40)} ok`,
+        '\nResults: 1 valid, 1 with errors',
+      ]);
+    }
+  });
+
+  function mockedLogLines(): unknown[] {
+    return logSpy.mock.calls.map(args => args[0]);
+  }
 });
