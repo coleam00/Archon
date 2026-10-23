@@ -25,7 +25,6 @@ import {
   buildNodeSummaries,
   fetchVerboseEvents,
   listRunEvents,
-  printVerboseNodes,
   withRunDetail,
 } from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
@@ -46,8 +45,7 @@ import {
   transcriptUnavailableMessage,
 } from './workflow-transcript';
 import {
-  usageLimitWaitLine,
-  formatToolAttention,
+  printStatusRun,
   formatWaitOutcome,
   announceWaitAttached,
   type LeaveBehind,
@@ -291,35 +289,45 @@ async function verboseStatusRuns(
   });
 }
 
+async function resolveStatusCodebase(host: WorkflowHost, cwd: string, all: boolean | undefined) {
+  try {
+    const codebase = await inheritedWorkflowCodebase(host, all);
+    if (codebase === undefined && !all) {
+      return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
+    }
+    return codebase;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_status_codebase_lookup_failed');
+    throw new Error(`Failed to resolve workflow status project: ${err.message}`, { cause: err });
+  }
+}
+
+async function listStatusRuns(
+  host: WorkflowHost,
+  cwd: string,
+  codebase: Awaited<ReturnType<typeof resolveStatusCodebase>>
+): Promise<DashboardWorkflowRun[]> {
+  try {
+    const result = await host.operations.getWorkflowStatus(
+      codebase ? { codebaseId: codebase.id } : undefined
+    );
+    return result.runs;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_status_failed');
+    throw new Error(`Failed to list workflow runs: ${err.message}`);
+  }
+}
+
 /** Show active workflow runs for the current project, or every project with `--all`. */
 export async function workflowStatusCommand(
   host: WorkflowHost,
   cwd: string,
   opts: { json?: boolean; verbose?: boolean; rawEvents?: boolean; all?: boolean } = {}
 ): Promise<void> {
-  const { getWorkflowStatus } = host.operations;
-
-  let codebase = null;
-  try {
-    codebase = await inheritedWorkflowCodebase(host, opts.all);
-    if (codebase === undefined && !opts.all) {
-      codebase = await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, cwd }, 'cli.workflow_status_codebase_lookup_failed');
-    throw new Error(`Failed to resolve workflow status project: ${err.message}`, { cause: err });
-  }
-
-  let runs: DashboardWorkflowRun[];
-  try {
-    const result = await getWorkflowStatus(codebase ? { codebaseId: codebase.id } : undefined);
-    runs = result.runs;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, cwd }, 'cli.workflow_status_failed');
-    throw new Error(`Failed to list workflow runs: ${err.message}`);
-  }
+  const codebase = await resolveStatusCodebase(host, cwd, opts.all);
+  const runs = await listStatusRuns(host, cwd, codebase);
 
   const scopeFallback = !opts.all && !codebase;
 
@@ -348,32 +356,7 @@ export async function workflowStatusCommand(
 
   console.log(`\nActive workflows (${runs.length}):\n`);
   for (const run of runs) {
-    const age = formatAge(run.started_at);
-    console.log(`  ID:     ${run.id}`);
-    console.log(`  Name:   ${run.workflow_name}`);
-    console.log(`  Path:   ${run.working_path ?? '(none)'}`);
-    console.log(`  Status: ${run.status}`);
-    const attention = runAttention(run);
-    if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
-    if (attention?.kind === 'usage_limit')
-      console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
-    if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
-    console.log(`  Age:    ${age}`);
-    if (run.active_nodes.length > 0) {
-      console.log(
-        `  Active node${run.active_nodes.length === 1 ? '' : 's'}: ${run.active_nodes.join(', ')}`
-      );
-    }
-
-    if (opts.verbose) {
-      const { events, failed } = await fetchVerboseEvents(host, run.id, false);
-      if (failed) {
-        console.log('  (node events unavailable — see logs)');
-      }
-      printVerboseNodes(events);
-    }
-
-    console.log('');
+    await printStatusRun(host, run, opts.verbose);
   }
 }
 

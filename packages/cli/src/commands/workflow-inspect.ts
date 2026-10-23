@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { join } from 'node:path';
 import type {
@@ -28,7 +29,44 @@ import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
 import { formatRunUsage } from './workflow-usage';
-import { formatFanOutOutcome, printVerboseNodes } from './workflow-node-summaries';
+import {
+  formatFanOutOutcome,
+  fetchVerboseEvents,
+  printVerboseNodes,
+} from './workflow-node-summaries';
+
+export async function printStatusRun(
+  host: WorkflowHost,
+  run: DashboardWorkflowRun,
+  verbose: boolean | undefined
+): Promise<void> {
+  const age = formatAge(run.started_at);
+  console.log(`  ID:     ${run.id}`);
+  console.log(`  Name:   ${run.workflow_name}`);
+  console.log(`  Path:   ${run.working_path ?? '(none)'}`);
+  console.log(`  Status: ${run.status}`);
+  const attention = runAttention(run);
+  if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
+  if (attention?.kind === 'usage_limit')
+    console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
+  if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
+  console.log(`  Age:    ${age}`);
+  if (run.active_nodes.length > 0) {
+    console.log(
+      `  Active node${run.active_nodes.length === 1 ? '' : 's'}: ${run.active_nodes.join(', ')}`
+    );
+  }
+
+  if (verbose) {
+    const { events, failed } = await fetchVerboseEvents(host, run.id, false);
+    if (failed) {
+      console.log('  (node events unavailable — see logs)');
+    }
+    printVerboseNodes(events);
+  }
+
+  console.log('');
+}
 
 export function usageLimitWaitLine(nodeId: string, resumeAt: string): string {
   return `  Wait:   provider usage or rate limit at '${nodeId}' — tries again at ${resumeAt}`;
