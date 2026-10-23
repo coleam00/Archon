@@ -19,23 +19,32 @@ export class GitFailure extends Error {
     message: string,
     cause?: unknown
   ) {
-    const stderr =
-      cause instanceof Error && 'stderr' in cause && typeof cause.stderr === 'string'
-        ? cause.stderr
-        : undefined;
-    const code = cause instanceof Error && 'code' in cause ? cause.code : undefined;
-    super(
-      `${message}${typeof code === 'number' ? ` (exit code ${code})` : ''}${stderr && !message.includes(stderr) ? `\n${stderr}` : ''}`,
-      { cause }
-    );
+    super(gitFailureMessage(message, cause), { cause });
     this.name = 'GitFailure';
-    if (cause instanceof Error) {
-      if ('code' in cause && (typeof cause.code === 'string' || typeof cause.code === 'number'))
-        this.code = cause.code;
-      if ('stderr' in cause && typeof cause.stderr === 'string') this.stderr = cause.stderr;
-      if ('stdout' in cause && typeof cause.stdout === 'string') this.stdout = cause.stdout;
-      if ('killed' in cause && typeof cause.killed === 'boolean') this.killed = cause.killed;
-      if ('signal' in cause && typeof cause.signal === 'string') this.signal = cause.signal;
-    }
+    Object.assign(this, gitFailureEvidence(cause));
   }
+}
+
+function gitFailureMessage(message: string, cause: unknown): string {
+  const stderr =
+    cause instanceof Error && 'stderr' in cause && typeof cause.stderr === 'string'
+      ? cause.stderr
+      : undefined;
+  const code = cause instanceof Error && 'code' in cause ? cause.code : undefined;
+  return `${message}${typeof code === 'number' ? ` (exit code ${code})` : ''}${stderr && !message.includes(stderr) ? `\n${stderr}` : ''}`;
+}
+
+function gitFailureEvidence(
+  cause: unknown
+): Pick<GitFailure, 'code' | 'stderr' | 'stdout' | 'killed' | 'signal'> {
+  if (!(cause instanceof Error)) return {};
+  return {
+    ...('code' in cause && (typeof cause.code === 'string' || typeof cause.code === 'number')
+      ? { code: cause.code }
+      : {}),
+    ...('stderr' in cause && typeof cause.stderr === 'string' ? { stderr: cause.stderr } : {}),
+    ...('stdout' in cause && typeof cause.stdout === 'string' ? { stdout: cause.stdout } : {}),
+    ...('killed' in cause && typeof cause.killed === 'boolean' ? { killed: cause.killed } : {}),
+    ...('signal' in cause && typeof cause.signal === 'string' ? { signal: cause.signal } : {}),
+  };
 }

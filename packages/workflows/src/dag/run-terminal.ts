@@ -139,53 +139,14 @@ async function failOnNodeOutcome(
   runTranscriptUsage: WorkflowUsage
 ): Promise<void> {
   const { deps, platform, conversationId, workflow, workflowRun, logDir, nodeOutputs } = ctx;
+  const noneCompleted = nodeCounts.completed === 0;
   const anyFailed = nodeCounts.failed > 0;
-  if (nodeCounts.completed === 0) {
-    if (await skipIfStatusChanged(deps, workflowRun, 'dag.skip_fail_status_changed')) return;
-    if (anyFailed && (await pauseForUsageLimit(ctx))) return;
-    const failedNodes: string[] = [];
-    for (const [nodeId, o] of nodeOutputs) {
-      if (o.state === 'failed') failedNodes.push(nodeId);
-    }
-    const failMsg =
-      failedNodes.length > 0
-        ? `DAG workflow '${workflow.name}' failed: node${failedNodes.length > 1 ? 's' : ''} ${failedNodes.join(', ')} failed. ` +
-          `${nodeCounts.skipped} downstream node${nodeCounts.skipped !== 1 ? 's were' : ' was'} skipped.`
-        : `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
-          'Check node conditions, trigger rules, and upstream failures.';
-    // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
-    // Frontend guards with isValidNodeCounts so missing node_counts is safe. (Usage IS
-    // stored: persistRunUsage wrote it at the run tail, before this branch — #2469.)
-    await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
-      (logErr: Error) => {
-        getLog().error(
-          { err: logErr, workflowRunId: workflowRun.id },
-          'dag.workflow_error_log_write_failed'
-        );
-      }
-    );
-    await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
-      workflowId: workflowRun.id,
-    });
-    await failRun(
-      deps,
-      workflowRun,
-      workflow.name,
-      failMsg,
-      // A first-node failure completes nothing, but it is still a node failure.
-      anyFailed ? 'node_error' : 'no_nodes_completed',
-      'dag.no_nodes_completed_fail'
-    );
-    return;
-  }
-
   if (await skipIfStatusChanged(deps, workflowRun, 'dag.skip_fail_status_changed')) return;
-  if (await pauseForUsageLimit(ctx)) return;
-  const failedNodes = [...nodeOutputs.entries()]
-    .filter(([, o]) => o.state === 'failed')
-    .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
-    .join('; ');
-  const failMsg = `DAG workflow '${workflow.name}' completed with failures: ${failedNodes}`;
+  if ((!noneCompleted || anyFailed) && (await pauseForUsageLimit(ctx))) return;
+
+  const failMsg = noneCompleted
+    ? noSuccessfulNodesMessage(workflow.name, nodeOutputs, nodeCounts.skipped)
+    : partialFailureMessage(workflow.name, nodeOutputs);
   await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
     (logErr: Error) => {
       getLog().error(
@@ -197,7 +158,42 @@ async function failOnNodeOutcome(
   await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
     workflowId: workflowRun.id,
   });
-  await failRun(deps, workflowRun, workflow.name, failMsg, 'node_error', 'dag.node_failure_fail');
+  await failRun(
+    deps,
+    workflowRun,
+    workflow.name,
+    failMsg,
+    // A first-node failure completes nothing, but it is still a node failure.
+    noneCompleted && !anyFailed ? 'no_nodes_completed' : 'node_error',
+    noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail'
+  );
+}
+
+function noSuccessfulNodesMessage(
+  workflowName: string,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>,
+  skipped: number
+): string {
+  const failedNodes: string[] = [];
+  for (const [nodeId, output] of nodeOutputs) {
+    if (output.state === 'failed') failedNodes.push(nodeId);
+  }
+  return failedNodes.length > 0
+    ? `DAG workflow '${workflowName}' failed: node${failedNodes.length > 1 ? 's' : ''} ${failedNodes.join(', ')} failed. ` +
+        `${skipped} downstream node${skipped !== 1 ? 's were' : ' was'} skipped.`
+    : `DAG workflow '${workflowName}' completed with no successful nodes. ` +
+        'Check node conditions, trigger rules, and upstream failures.';
+}
+
+function partialFailureMessage(
+  workflowName: string,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>
+): string {
+  const failedNodes = [...nodeOutputs.entries()]
+    .filter(([, o]) => o.state === 'failed')
+    .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
+    .join('; ');
+  return `DAG workflow '${workflowName}' completed with failures: ${failedNodes}`;
 }
 
 /**
