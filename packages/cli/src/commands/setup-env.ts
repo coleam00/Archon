@@ -320,10 +320,20 @@ interface WriteScopedEnvResult {
   forced: boolean;
 }
 
-export function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth: boolean) {
-  const preservedKeys: string[] = [];
-  const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
-  const proposed = parseDotenv(content);
+function removeEmptyAppAuth(existing: Record<string, string>): void {
+  for (const key of GITHUB_APP_KEYS) {
+    if (existing[key] !== undefined && !existing[key].trim()) delete existing[key];
+  }
+  for (const key of GITHUB_PAT_KEYS) {
+    if (!existing[key]) delete existing[key];
+  }
+}
+
+function prepareExistingGitHubAuth(
+  existing: Record<string, string>,
+  proposed: Record<string, string>,
+  replaceGitHubAuth: boolean
+): void {
   if (replaceGitHubAuth) {
     for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
     // An App's webhook secret is the one typed from the App's settings, so it must win.
@@ -333,23 +343,32 @@ export function mergeScopedEnv(content: string, existingRaw: string, replaceGitH
     proposed.GITHUB_APP_ID ||
     (!proposed.GITHUB_TOKEN && hasCompleteAppCredential(existing))
   ) {
-    for (const key of GITHUB_APP_KEYS) {
-      if (existing[key] !== undefined && !existing[key].trim()) delete existing[key];
-    }
-    for (const key of GITHUB_PAT_KEYS) {
-      if (!existing[key]) delete existing[key];
-    }
+    removeEmptyAppAuth(existing);
   } else if (proposed.GITHUB_TOKEN) {
     for (const key of GITHUB_APP_CREDENTIAL_KEYS) {
       if (!existing[key]) delete existing[key];
     }
   }
+}
+
+function preservePrivateKeySource(
+  existing: Record<string, string>,
+  proposed: Record<string, string>,
+  preservedKeys: string[]
+): void {
   const existingPrivateKey = GITHUB_APP_PRIVATE_KEY_KEYS.find(key => existing[key]?.trim());
   if (existingPrivateKey && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => key in proposed)) {
     // Inline PEM outranks a path at runtime; adding a new source would replace the credential.
     preservedKeys.push(existingPrivateKey);
     for (const key of GITHUB_APP_PRIVATE_KEY_KEYS) delete proposed[key];
   }
+}
+
+function mergeEnvValues(
+  existing: Record<string, string>,
+  proposed: Record<string, string>,
+  preservedKeys: string[]
+): Record<string, string> {
   const merged: Record<string, string> = { ...existing };
   for (const [key, value] of Object.entries(proposed)) {
     const prior = existing[key];
@@ -363,6 +382,16 @@ export function mergeScopedEnv(content: string, existingRaw: string, replaceGitH
       preservedKeys.push(key);
     }
   }
+  return merged;
+}
+
+export function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth: boolean) {
+  const preservedKeys: string[] = [];
+  const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
+  const proposed = parseDotenv(content);
+  prepareExistingGitHubAuth(existing, proposed, replaceGitHubAuth);
+  preservePrivateKeySource(existing, proposed, preservedKeys);
+  const merged = mergeEnvValues(existing, proposed, preservedKeys);
   return { content: serializeEnv(merged), preservedKeys };
 }
 
