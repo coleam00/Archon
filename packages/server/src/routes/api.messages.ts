@@ -1,7 +1,8 @@
 import { unlink } from 'fs/promises';
 import { type OpenAPIHono, createRoute } from '@hono/zod-openapi';
+import type { Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import type { AttachedFile, HandleMessageContext } from '@archon/core';
+import type { AttachedFile, Conversation, HandleMessageContext } from '@archon/core';
 import * as messageDb from '@archon/core/db/messages';
 import type { WebAdapter } from '../adapters/web';
 import { DASHBOARD_STREAM } from '../adapters/web/transport';
@@ -105,85 +106,17 @@ export function registerMessageRoutes(
     // conversation's upload directory.
     const access = await authorizeDispatchConversation(c, conversationId);
     if ('error' in access) return access.error;
-    const conv = access.conversation;
-    const actor = access.actor;
-    const userId = actor.kind === 'user' ? actor.userId : undefined;
+    const { conversation: conv, actor } = access;
 
-    let message: string;
-    let savedFiles: AttachedFile[] = [];
-
-    const contentType = c.req.header('content-type') ?? '';
-
-    if (contentType.includes('multipart/form-data')) {
-      let body: Record<string, string | File | (string | File)[]>;
-      try {
-        body = await c.req.parseBody({ all: true });
-      } catch (parseErr: unknown) {
-        getLog().warn({ err: parseErr, conversationId }, 'upload.parse_failed');
-        return c.json({ error: 'Invalid multipart form data' }, 400);
-      }
-
-      const rawMessage = body.message;
-      if (typeof rawMessage !== 'string' || !rawMessage) {
-        return c.json({ error: 'message must be a non-empty string' }, 400);
-      }
-      message = rawMessage;
-
-      const rawFiles = body.files;
-      let fileList: (string | File)[];
-      if (Array.isArray(rawFiles)) {
-        fileList = rawFiles;
-      } else if (rawFiles !== undefined) {
-        fileList = [rawFiles];
-      } else {
-        fileList = [];
-      }
-
-      const fileEntries = fileList.filter((e): e is File => e instanceof File);
-      if (fileEntries.length > 0) {
-        const result = await persistUploadedFiles(conversationId, fileEntries);
-        if (!result.ok) {
-          return c.json({ error: result.error }, result.status);
-        }
-        savedFiles = result.savedFiles;
-        getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
-      }
-    } else {
-      let body: { message?: unknown };
-      try {
-        body = await c.req.json();
-      } catch (parseErr: unknown) {
-        getLog().warn({ err: parseErr, conversationId }, 'message.json_parse_failed');
-        return c.json({ error: 'Invalid JSON in request body' }, 400);
-      }
-
-      if (typeof body.message !== 'string' || !body.message) {
-        return c.json({ error: 'message must be a non-empty string' }, 400);
-      }
-      message = body.message;
-    }
+    const body = await readMessageBody(c, conversationId);
+    if (body instanceof Response) return body;
+    const { message, savedFiles } = body;
 
     // Persist user message and pass DB ID to adapter for assistant message persistence
     if (conv) {
-      // Omit path from persisted metadata — the on-disk file is ephemeral and will be
-      // deleted after the AI processes it; storing stale paths would confuse future readers.
-      const meta =
-        savedFiles.length > 0
-          ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
-          : undefined;
-      try {
-        await messageDb.addMessage(conv.id, 'user', message, meta, userId);
-      } catch (e: unknown) {
-        getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
-        for (const file of savedFiles) {
-          await unlink(file.path).catch((err: NodeJS.ErrnoException) => {
-            if (err.code !== 'ENOENT') {
-              getLog().warn({ err, filePath: file.path, conversationId }, 'upload.rollback_failed');
-            }
-          });
-        }
-        return apiError(c, 500, 'Failed to save message to history');
-      }
+      const userId = actor.kind === 'user' ? actor.userId : undefined;
+      const refused = await persistUserMessage(c, conv, conversationId, body, userId);
+      if (refused) return refused;
       webAdapter.setConversationDbId(conversationId, conv.id);
     }
 
@@ -299,4 +232,98 @@ export function registerMessageRoutes(
       }
     });
   });
+}
+
+interface MessageBody {
+  message: string;
+  savedFiles: AttachedFile[];
+}
+
+/** The message and its saved attachments, or the response that refuses the body. */
+function readMessageBody(c: Context, conversationId: string): Promise<MessageBody | Response> {
+  const contentType = c.req.header('content-type') ?? '';
+  return contentType.includes('multipart/form-data')
+    ? readMultipartMessage(c, conversationId)
+    : readJsonMessage(c, conversationId);
+}
+
+async function readMultipartMessage(
+  c: Context,
+  conversationId: string
+): Promise<MessageBody | Response> {
+  let body: Record<string, string | File | (string | File)[]>;
+  try {
+    body = await c.req.parseBody({ all: true });
+  } catch (parseErr: unknown) {
+    getLog().warn({ err: parseErr, conversationId }, 'upload.parse_failed');
+    return c.json({ error: 'Invalid multipart form data' }, 400);
+  }
+
+  const message = body.message;
+  if (typeof message !== 'string' || !message) {
+    return c.json({ error: 'message must be a non-empty string' }, 400);
+  }
+
+  const fileEntries = formEntries(body.files).filter((e): e is File => e instanceof File);
+  if (fileEntries.length === 0) return { message, savedFiles: [] };
+  const result = await persistUploadedFiles(conversationId, fileEntries);
+  if (!result.ok) {
+    return c.json({ error: result.error }, result.status);
+  }
+  getLog().info({ conversationId, fileCount: result.savedFiles.length }, 'message.files_uploaded');
+  return { message, savedFiles: result.savedFiles };
+}
+
+/** A multipart field parsed with `all: true` is absent, one entry, or a list of them. */
+function formEntries(raw: string | File | (string | File)[] | undefined): (string | File)[] {
+  if (Array.isArray(raw)) return raw;
+  return raw === undefined ? [] : [raw];
+}
+
+async function readJsonMessage(
+  c: Context,
+  conversationId: string
+): Promise<MessageBody | Response> {
+  let body: { message?: unknown };
+  try {
+    body = await c.req.json();
+  } catch (parseErr: unknown) {
+    getLog().warn({ err: parseErr, conversationId }, 'message.json_parse_failed');
+    return c.json({ error: 'Invalid JSON in request body' }, 400);
+  }
+
+  if (typeof body.message !== 'string' || !body.message) {
+    return c.json({ error: 'message must be a non-empty string' }, 400);
+  }
+  return { message: body.message, savedFiles: [] };
+}
+
+/** Saves the user message to history; on failure removes its uploads and returns the 500. */
+async function persistUserMessage(
+  c: Context,
+  conv: Conversation,
+  conversationId: string,
+  { message, savedFiles }: MessageBody,
+  userId: string | undefined
+): Promise<Response | undefined> {
+  // Omit path from persisted metadata — the on-disk file is ephemeral and will be
+  // deleted after the AI processes it; storing stale paths would confuse future readers.
+  const meta =
+    savedFiles.length > 0
+      ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
+      : undefined;
+  try {
+    await messageDb.addMessage(conv.id, 'user', message, meta, userId);
+    return undefined;
+  } catch (e: unknown) {
+    getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
+    for (const file of savedFiles) {
+      await unlink(file.path).catch((err: NodeJS.ErrnoException) => {
+        if (err.code !== 'ENOENT') {
+          getLog().warn({ err, filePath: file.path, conversationId }, 'upload.rollback_failed');
+        }
+      });
+    }
+    return apiError(c, 500, 'Failed to save message to history');
+  }
 }
