@@ -258,6 +258,46 @@ export interface GitHubAuthReconciliation {
   saved: DotenvParseOutput;
 }
 
+function assertOtherScopeGitHubAuth(
+  githubMode: ReturnType<typeof selectGitHubAuthMode>['kind'],
+  otherEnvPath: string,
+  targetEnvPath: string,
+  otherGitHubEnv: DotenvParseOutput
+): void {
+  if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
+    const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
+    if (conflictingKeys.some(key => otherGitHubEnv[key])) {
+      cancel(
+        `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
+      );
+      exitSetup(1);
+    }
+  }
+}
+
+async function confirmGitHubAuthReplacement(
+  github: GitHubConfig,
+  saved: DotenvParseOutput
+): Promise<boolean> {
+  const oppositeKeys = github.mode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
+  const replacePartialApp =
+    github.mode === 'app' &&
+    !hasCompleteAppCredential(saved) &&
+    GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(saved[key]));
+  if (oppositeKeys.some(key => Boolean(saved[key])) || replacePartialApp) {
+    const approved = await confirm({
+      message: `Replace existing GitHub authentication with ${github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
+      initialValue: false,
+    });
+    if (isCancel(approved) || !approved) {
+      cancel('Setup cancelled. Existing configuration was not changed.');
+      exitSetup(0);
+    }
+    return true;
+  }
+  return false;
+}
+
 /**
  * Check the collected GitHub choice against the GitHub auth already saved in
  * the target env file and the other scope's env file. Exits setup on a
@@ -287,31 +327,9 @@ export async function reconcileGitHubAuth(
   }
   if (config.platforms.github) {
     const githubMode = config.github?.mode ?? selectGitHubAuthMode(saved).kind;
-    if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
-      const other = otherGitHubEnv;
-      const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
-      if (conflictingKeys.some(key => other[key])) {
-        cancel(
-          `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
-        );
-        exitSetup(1);
-      }
-    }
-    const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
-    const replacePartialApp =
-      config.github?.mode === 'app' &&
-      !hasCompleteAppCredential(saved) &&
-      GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(saved[key]));
-    if (config.github && (oppositeKeys.some(key => Boolean(saved[key])) || replacePartialApp)) {
-      const approved = await confirm({
-        message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
-        initialValue: false,
-      });
-      if (isCancel(approved) || !approved) {
-        cancel('Setup cancelled. Existing configuration was not changed.');
-        exitSetup(0);
-      }
-      replaceGitHubAuth = true;
+    assertOtherScopeGitHubAuth(githubMode, otherEnvPath, targetEnvPath, otherGitHubEnv);
+    if (config.github) {
+      replaceGitHubAuth = await confirmGitHubAuthReplacement(config.github, saved);
     }
   }
   return { replaceGitHubAuth, otherGitHubEnv, saved };
