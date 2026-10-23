@@ -237,19 +237,8 @@ function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
   for (const chunk of chunks) {
     switch (chunk.type) {
       case 'tool_call':
-        if (startedCalls.has(chunk.toolCallId)) {
-          violations.push(`rule 2, tool call ${chunk.toolCallId} is started twice`);
-        } else {
-          startedCalls.add(chunk.toolCallId);
-          openCalls.add(chunk.toolCallId);
-        }
-        break;
       case 'tool_call_update':
-        if (!startedCalls.has(chunk.toolCallId)) {
-          violations.push(`rule 3, tool call ${chunk.toolCallId} is updated before it starts`);
-        } else if (!openCalls.delete(chunk.toolCallId) && !lateCalls.has(chunk.toolCallId)) {
-          violations.push(`rule 2, tool call ${chunk.toolCallId} is closed twice`);
-        }
+        observeToolCallClosure(chunk, startedCalls, openCalls, lateCalls, violations);
         break;
       case 'subtask':
         if (TERMINAL_SUBTASK_STATUSES.has(chunk.status)) openSubtasks.delete(chunk.taskId);
@@ -274,6 +263,29 @@ function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
     violations.push(`rule 2, tool call ${toolCallId} is never closed`);
   }
   return violations;
+}
+
+function observeToolCallClosure(
+  chunk: Extract<ProviderChunk, { type: 'tool_call' | 'tool_call_update' }>,
+  startedCalls: Set<string>,
+  openCalls: Set<string>,
+  lateCalls: ReadonlySet<string>,
+  violations: string[]
+): void {
+  if (chunk.type === 'tool_call') {
+    if (startedCalls.has(chunk.toolCallId)) {
+      violations.push(`rule 2, tool call ${chunk.toolCallId} is started twice`);
+    } else {
+      startedCalls.add(chunk.toolCallId);
+      openCalls.add(chunk.toolCallId);
+    }
+    return;
+  }
+  if (!startedCalls.has(chunk.toolCallId)) {
+    violations.push(`rule 3, tool call ${chunk.toolCallId} is updated before it starts`);
+  } else if (!openCalls.delete(chunk.toolCallId) && !lateCalls.has(chunk.toolCallId)) {
+    violations.push(`rule 2, tool call ${chunk.toolCallId} is closed twice`);
+  }
 }
 
 /**
