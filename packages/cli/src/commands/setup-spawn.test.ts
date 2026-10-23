@@ -66,7 +66,7 @@ const platforms = [
     platform: 'linux',
     commands: ['x-terminal-emulator', 'gnome-terminal', 'konsole', 'xterm'],
     args: [
-      [`--working-directory=${repoPath}`, '-e', `bash -c "${shellSetup}"`],
+      ['-e', 'bash', '-c', `cd -- "$1" && ${shellSetup}`, 'archon-setup', repoPath],
       [`--working-directory=${repoPath}`, '--', 'bash', '-c', shellSetup],
       ['--workdir', repoPath, '-e', 'bash', '-c', shellSetup],
       ['-e', 'bash', '-c', `cd -- "$1" && ${shellSetup}`, 'archon-setup', repoPath],
@@ -142,9 +142,13 @@ describe('setup terminal spawning', () => {
     ]);
   });
 
-  for (const platform of ['darwin', 'linux'] as const) {
+  for (const { platform, terminal, successAt } of [
+    { platform: 'darwin', terminal: 'osascript', successAt: 0 },
+    { platform: 'linux', terminal: 'x-terminal-emulator', successAt: 0 },
+    { platform: 'linux', terminal: 'xterm', successAt: 3 },
+  ] as const) {
     it.skipIf(nativePlatform === 'win32' || (platform === 'darwin' && nativePlatform !== 'darwin'))(
-      `${platform}: executes setup in the requested directory with paths kept as data`,
+      `${terminal}: executes setup in the requested directory with paths kept as data`,
       async () => {
         const root = realpathSync(tempRoots(mkdtempSync(join(tmpdir(), 'setup-launch-'))));
         const repoPath = join(root, 'repo\'s "quoted" \\ $(exit 23) `exit 24`');
@@ -158,7 +162,7 @@ describe('setup terminal spawning', () => {
           { mode: 0o755 }
         );
         usePlatform(platform);
-        const { spawn } = terminalSpawns(platform === 'darwin' ? 0 : 3);
+        const { spawn } = terminalSpawns(successAt);
         expect(
           await spawnTerminalWithSetup({
             repoPath,
@@ -167,6 +171,7 @@ describe('setup terminal spawning', () => {
             force: true,
           })
         ).toEqual({ success: true });
+        expect(spawn.mock.calls.at(-1)![0]).toBe(terminal);
         const args = spawn.mock.calls.at(-1)![1];
         let program: string;
         let programArgs: readonly string[];
