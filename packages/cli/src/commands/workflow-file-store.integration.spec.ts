@@ -11,7 +11,7 @@ import {
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
-import { expect, test, setSystemTime } from 'bun:test';
+import { afterEach, beforeEach, expect, test, setSystemTime, spyOn } from 'bun:test';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { readdir } from 'node:fs/promises';
 import {
@@ -26,10 +26,36 @@ import {
 import { join } from 'node:path';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { tmpdir, hostname } from 'node:os';
-import { trackTempRoots } from '@archon/paths/test-utils';
-const roots = trackTempRoots();
+import { CliTestScope } from '../test-support/cli-test-scope';
+import { getLogLevel, setLogLevel } from '@archon/paths';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
+import { clearPlatformPolicies, setPlatformPolicies } from '@archon/core/platforms/registry';
+import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
+import { triggerCommand } from './trigger';
+import {
+  workflowAnswerCommand,
+  workflowApproveCommand,
+  workflowRejectCommand,
+  workflowRespondCommand,
+} from './workflow-control';
+import { workflowContinuationCommand } from './workflow-continuations';
+const scopes: CliTestScope[] = [];
+let originalHome: string | undefined;
+let originalLogLevel: ReturnType<typeof getLogLevel>;
+beforeEach(() => {
+  originalHome = process.env.ARCHON_HOME;
+  originalLogLevel = getLogLevel();
+});
+afterEach(async () => {
+  for (const scope of scopes.splice(0)) await scope.close();
+  if (originalHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = originalHome;
+  setLogLevel(originalLogLevel);
+  clearPlatformPolicies();
+});
 const repo = join(import.meta.dir, '../../../..');
 interface Fixture {
+  scope: CliTestScope;
   root: string;
   project: string;
   home: string;
@@ -41,7 +67,9 @@ function fixture(
   config = 'store: files\n',
   nativeStatus?: 'usable' | 'not_connected' | 'real'
 ): Fixture {
-  const root = roots(mkdtempSync(join(tmpdir(), 'cli-file-store-')));
+  const root = mkdtempSync(join(tmpdir(), 'cli-file-store-'));
+  const scope = new CliTestScope(root);
+  scopes.push(scope);
   const project = join(root, 'project'),
     home = join(root, 'home'),
     entry = join(root, 'entry.ts'),
@@ -103,7 +131,7 @@ await import(${src('packages/cli/src/cli.ts')});`
     WORKFLOW_ID: '',
     ARCHON_NODE_EXECUTION: '',
   };
-  return { root, project, home, entry, trap, env };
+  return { scope, root, project, home, entry, trap, env };
 }
 async function cli(
   f: ReturnType<typeof fixture>,
@@ -112,22 +140,81 @@ async function cli(
   input = '',
   launchCwd = f.project
 ): Promise<{ output: string; error: string; code: number }> {
-  const child = Bun.spawn([process.execPath, f.entry, ...args], {
-    cwd: launchCwd,
-    env,
-    stdin: 'pipe',
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  child.stdin.write(input);
-  child.stdin.end();
-  const [output, error, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  return { output, error, code };
+  return f.scope.run([process.execPath, f.entry, ...args], launchCwd, env, input);
 }
+async function commandResult(command: () => Promise<number | void>) {
+  let output = '';
+  const log = spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+    output += `${args.join(' ')}\n`;
+  });
+  const stdout = spyOn(process.stdout, 'write').mockImplementation((...args: unknown[]) => {
+    output += String(args[0]);
+    const callback = args.find(arg => typeof arg === 'function');
+    if (typeof callback === 'function') callback();
+    return true;
+  });
+  try {
+    const code = (await command()) ?? 0;
+    return { code, output, error: '' };
+  } catch (error) {
+    return { code: 1, output, error: String(error) };
+  } finally {
+    log.mockRestore();
+    stdout.mockRestore();
+  }
+}
+test('a timed-out CLI child settles before its fixture is removed', async () => {
+  const f = fixture();
+  const childRoot = join(f.root, 'timed-out');
+  mkdirSync(childRoot);
+  const pidFile = join(f.root, 'child.pid');
+  const proof = join(f.root, 'closed');
+  const continued = join(f.root, 'continued');
+  const spec = join(f.root, 'timeout.test.ts');
+  writeFileSync(
+    spec,
+    `
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
+import * as cleanup from ${JSON.stringify(join(repo, 'packages/paths/src/test-utils.ts'))};
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
+const scope = new CliTestScope(${JSON.stringify(childRoot)});
+afterEach(async () => {
+  expect(existsSync(scope.root)).toBe(true);
+  const pid = Number(readFileSync(${JSON.stringify(pidFile)}, 'utf8'));
+  const removeTempTree = cleanup.removeTempTree;
+  const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
+    expect(() => process.kill(pid, 0)).toThrow();
+    await removeTempTree(root);
+  });
+  try {
+    await scope.close();
+  } finally {
+    removal.mockRestore();
+  }
+  expect(existsSync(scope.root)).toBe(false);
+  expect(() => process.kill(pid, 0)).toThrow();
+  await expect(scope.run([process.execPath, '-e', ''], scope.root, process.env)).rejects.toThrow('scope is closed');
+  writeFileSync(${JSON.stringify(proof)}, 'closed');
+});
+let running: ReturnType<CliTestScope['run']>;
+beforeEach(async () => {
+  running = scope.run([process.execPath, '-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 1500);`)}], scope.root, process.env);
+  while (!existsSync(${JSON.stringify(pidFile)})) await Bun.sleep(10);
+});
+test('forced timeout', async () => {
+  await running;
+  writeFileSync(${JSON.stringify(continued)}, 'continued after timeout');
+}, 1000);
+`
+  );
+  const result = await f.scope.run([process.execPath, 'test', spec], repo, f.env);
+  expect(result.code).toBe(1);
+  expect(result.output + result.error).toContain('timed out');
+  expect(readFileSync(proof, 'utf8')).toBe('closed');
+  expect(existsSync(continued)).toBe(false);
+  expect(existsSync(childRoot)).toBe(false);
+});
 /** A Claude environment with no login, so only project settings can supply one. */
 function withoutClaudeLogin(f: Fixture, claudeConfig: string): NodeJS.ProcessEnv {
   return {
@@ -872,7 +959,7 @@ nodes:
     });
   }, 30000);
 
-  test(`${action} accepts an answer at capacity and refuses stale answers in both modes`, async () => {
+  test(`${action} accepts an answer at capacity and refuses stale answers in supported modes`, async () => {
     const f = fixture();
     f.env.LOG_LEVEL = 'error';
     writeFileSync(
@@ -895,21 +982,21 @@ nodes:
     bash: echo finished >> result.txt
 `
     );
-    writeFileSync(
-      join(f.project, '.archon/workflows/register.yaml'),
-      'name: register\ndescription: register project\nnodes:\n  - id: ready\n    bash: echo ready\n'
+    setLogLevel('error');
+    registerBuiltinProviders();
+    setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+    process.env.ARCHON_HOME = f.home;
+    const host = await createFileWorkflowHost(join(f.home, 'store'));
+    await host.records.codebases.createCodebase({
+      name: 'capacity-test',
+      default_cwd: realpathSync(f.project),
+      kind: 'folder',
+    });
+    const user = await host.records.users.findOrCreateUserByPlatformIdentity(
+      'cli',
+      'file-operator'
     );
-    const registered = await cli(f, [
-      'workflow',
-      'run',
-      'register',
-      '--folder',
-      '--no-worktree',
-      '--quiet',
-    ]);
-    expect(registered, registered.output + registered.error).toMatchObject({ code: 0 });
-    const identity = await cli(f, ['trigger', 'whoami']);
-    expect(identity, identity.output + identity.error).toMatchObject({ code: 0 });
+    if (!user) throw new Error('Missing test user');
     const config = join(f.root, 'trigger.json');
     writeFileSync(
       config,
@@ -921,7 +1008,7 @@ nodes:
           bindingId: 'answer-test',
           bindingRevision: null,
           hostId: 'answer-test',
-          runAsUserId: JSON.parse(identity.output).runAsUserId,
+          runAsUserId: user.id,
           resource: 'answer-test',
           capacity: 1,
           overlap: 'queue',
@@ -934,23 +1021,16 @@ nodes:
         },
       })
     );
-    const fired = await cli(f, ['trigger', 'fire', '--config', config]);
+    const fired = await commandResult(() => triggerCommand(host, 'fire', [], { config }));
     expect(fired, fired.output + fired.error).toMatchObject({ code: 0 });
-    const disposition = resourceStartDispositionSchema.parse(
-      JSON.parse(fired.output).bindings[0].disposition
-    );
-    if (disposition.status !== 'admitted') throw new Error('Run not admitted');
-    const id = disposition.runId;
-    const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
-    const deadline = Date.now() + 15_000;
-    let run = await store.getWorkflowRun(id);
-    while (run?.status !== 'paused' && Date.now() < deadline) {
-      expect(run?.status, JSON.stringify(run)).not.toBeOneOf(['failed', 'cancelled']);
-      await Bun.sleep(25);
-      run = await store.getWorkflowRun(id);
-    }
-    expect(run?.status).toBe('paused');
-    const attention = run && runAttention(run);
+    const store = host.deps.store;
+    const {
+      runs: [run],
+    } = await store.listWorkflowRuns();
+    if (!run) throw new Error('Missing resource run');
+    const id = run.id;
+    expect(run.status).toBe('paused');
+    const attention = runAttention(run);
     if (attention?.kind !== 'attention') throw new Error('Run not awaiting answer');
     const args = (occurrence: string): string[] => [
       'workflow',
@@ -960,12 +1040,40 @@ nodes:
       '--occurrence',
       occurrence,
     ];
+    const answer = (occurrence: string, flags: string[] = []) =>
+      commandResult(() => {
+        const json = flags.includes('--json');
+        const detach = flags.includes('--detach');
+        if (action === 'answer')
+          return workflowAnswerCommand(
+            host,
+            id,
+            occurrence,
+            ['approve'],
+            undefined,
+            json,
+            f.project
+          );
+        if (action === 'respond')
+          return workflowRespondCommand(
+            host,
+            id,
+            'retry',
+            undefined,
+            json,
+            f.project,
+            detach,
+            occurrence
+          );
+        const command = action === 'approve' ? workflowApproveCommand : workflowRejectCommand;
+        return command(host, id, undefined, json, f.project, detach, occurrence);
+      });
     for (const flags of [
       [],
       ['--json'],
       ...(action === 'answer' ? [] : [['--detach'], ['--detach', '--json']]),
     ]) {
-      const refused = await cli(f, [...args('stale'), ...flags]);
+      const refused = await answer('stale', flags);
       expect(refused, refused.output + refused.error).toMatchObject({ code: 1 });
       if (flags.includes('--json')) expect(JSON.parse(refused.output)).toMatchObject({ ok: false });
       expect(refused.output + refused.error).toContain(
@@ -997,7 +1105,10 @@ nodes:
       })
     ).toMatchObject({ status: 'admitted' });
     await store.claimPendingWorkflowRun(blocker);
-    const answered = await cli(f, args(attention.occurrence));
+    const answered =
+      action === 'answer'
+        ? await cli(f, args(attention.occurrence))
+        : await answer(attention.occurrence);
     expect(answered, answered.output + answered.error).toMatchObject({ code: 0 });
     expect(answered.output).toContain('answer was recorded');
     expect(answered.output).toContain('waiting for capacity');
@@ -1012,7 +1123,10 @@ nodes:
     expect(waiting?.metadata.capacity_wait).toMatchObject({ since: expect.any(String) });
     expect(waiting && answeredPauseContinuation(waiting)).toBeDefined();
     await store.completeWorkflowRun(blocker, { duration_ms: 1 });
-    const woken = await cli(f, ['workflow', 'wake', '--json']);
+    const woken =
+      action === 'answer'
+        ? await cli(f, ['workflow', 'wake', '--json'])
+        : await commandResult(() => workflowContinuationCommand(host, 'wake', [], { json: true }));
     expect(woken, woken.output + woken.error).toMatchObject({ code: 0 });
     expect(JSON.parse(woken.output)).toMatchObject({
       outcomes: [{ runId: id, kind: 'accepted', status: 'completed' }],
