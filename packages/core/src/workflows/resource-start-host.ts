@@ -707,7 +707,7 @@ async function checkAdmittedRunCredentials(
   cwd: string
 ): Promise<WorkflowExecutionResult | undefined> {
   try {
-    await assertRunCredentials(host.deps, preparedAiConfiguration, { cwd: cwd });
+    await assertRunCredentials(host.deps, preparedAiConfiguration, { cwd });
   } catch (error) {
     if (error instanceof WorkflowCredentialPreflightError) {
       await requireTerminalStatusWrite(host.deps.store.failWorkflowRun(runId, error.message), {
@@ -718,4 +718,5 @@ async function checkAdmittedRunCredentials(
     }
     throw error;
   }
+  return undefined;
 }

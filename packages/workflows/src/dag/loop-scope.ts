@@ -80,26 +80,27 @@ export function collectLoopBodyNodeIds(
  * lenient — every absent ref resolves to '', preserving the pre-#2142 behavior.
  */
 export function loopPrevRefToken(scope: LoopBodyScope, escapedForBash: boolean): TemplateToken {
+  const { loopPrevOutputs, outputFileDir, knownBodyIds, directBodyIds } = scope;
+  const bodyIds = { knownBodyIds, directBodyIds };
   return templateToken(PRIOR_OUTPUT_PATH_SOURCE, groups => {
     const [match, nodeId] = groups;
     // An optional group that did not match is undefined, whatever RegExpExecArray says.
     const field: string | undefined = groups[2];
-    const nodeOutput = scope.loopPrevOutputs?.get(nodeId);
+    const nodeOutput = loopPrevOutputs?.get(nodeId);
     if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
-      return resolveAbsentPriorOutput(scope, nodeId, field, match, escapedForBash);
+      return resolveAbsentPriorOutput(bodyIds, nodeId, field, match, escapedForBash);
     }
-    return renderPriorOutput(nodeOutput, nodeId, field, match, scope.outputFileDir, escapedForBash);
+    return renderPriorOutput(nodeOutput, nodeId, field, match, outputFileDir, escapedForBash);
   });
 }
 
 function resolveAbsentPriorOutput(
-  scope: LoopBodyScope,
+  { knownBodyIds, directBodyIds }: Pick<LoopBodyScope, 'knownBodyIds' | 'directBodyIds'>,
   nodeId: string,
   field: string | undefined,
   match: string,
   escapedForBash: boolean
 ): string | undefined {
-  const { knownBodyIds, directBodyIds } = scope;
   if (knownBodyIds) {
     if (!knownBodyIds.has(nodeId)) {
       if (field) {

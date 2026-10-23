@@ -60,6 +60,7 @@ function foldNodeEvents(
   const nodes = new Map<string, RunNodeState>();
   const outputs = new Map<string, Record<string, unknown>>();
   const failureOrder = new Map<string, number>();
+  const folded = { graph, nodes, outputs, failureOrder };
   if (graph)
     for (const nodeId of graph.node_ids) nodes.set(nodeId, { node_id: nodeId, state: 'pending' });
   for (const [index, event] of events.entries()) {
@@ -72,13 +73,13 @@ function foldNodeEvents(
       data: event.data,
     });
     if (!record) continue;
-    foldNodeRecord({ graph, nodes, outputs, failureOrder }, record, nodeId, index);
+    foldNodeRecord(folded, record, nodeId, index);
   }
-  return { graph, nodes, outputs, failureOrder };
+  return folded;
 }
 
 function foldNodeRecord(
-  { nodes, outputs, failureOrder }: NodeEventFold,
+  { nodes, outputs, failureOrder }: Omit<NodeEventFold, 'graph'>,
   record: ReadNodeRecordEvent,
   nodeId: string,
   index: number
