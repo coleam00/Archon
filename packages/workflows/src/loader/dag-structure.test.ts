@@ -317,6 +317,30 @@ nodes:
     ).toBeNull();
   });
 
+  it('rejects a prior-iteration numeric comparison against a non-numeric literal', () => {
+    const result = parseWorkflow(
+      `name: prior-numeric-condition
+description: Prior iteration numeric syntax
+nodes:
+  - id: refine
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+        - id: work
+          bash: echo 90
+        - id: guarded
+          bash: echo run
+          depends_on: [work]
+          when: "$LOOP_PREV.work.output > 'high'"
+`,
+      'prior-numeric-condition.yaml'
+    );
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+    expect(result.error?.error).toContain('unsupported condition syntax');
+  });
+
   it.each([
     'not a condition',
     "$a.output = 'x'",
