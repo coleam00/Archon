@@ -468,11 +468,23 @@ export const mockReclaimContainerEnv = mock(async () => undefined);
 export const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
   Promise.resolve(null)
 );
+export const mockGetWorktreeStatusBreakdown = mock<
+  typeof import('../../services/cleanup-service').getWorktreeStatusBreakdown
+>(() =>
+  Promise.resolve({
+    total: 0,
+    active: 0,
+    merged: 0,
+    stale: 0,
+    activeEnvs: [],
+    mergedEnvs: [],
+    staleEnvs: [],
+    inspectionFailedEnvs: [],
+  })
+);
 mock.module('../../services/cleanup-service', () => ({
   cleanupStaleWorktrees: mockCleanupStaleWorktrees,
-  getWorktreeStatusBreakdown: mock(() =>
-    Promise.resolve({ total: 0, active: 0, merged: 0, stale: 0, activeEnvs: [] })
-  ),
+  getWorktreeStatusBreakdown: mockGetWorktreeStatusBreakdown,
 }));
 mock.module('../../services/cleanup/run-lock', () => ({
   getLiveRunBlocker: mockGetLiveRunBlocker,
@@ -526,6 +538,7 @@ mock.module('@archon/paths', () => ({
 
 // Helper to clear all mocks
 export function clearAllMocks(): void {
+  mockGetWorktreeStatusBreakdown.mockClear();
   mockUpdateConversation.mockClear();
   mockGetCodebase.mockClear();
   mockFindCodebaseByDefaultCwd.mockClear();
