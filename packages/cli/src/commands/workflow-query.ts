@@ -303,23 +303,6 @@ async function resolveStatusCodebase(host: WorkflowHost, cwd: string, all: boole
   }
 }
 
-async function listStatusRuns(
-  host: WorkflowHost,
-  cwd: string,
-  codebase: Awaited<ReturnType<typeof resolveStatusCodebase>>
-): Promise<DashboardWorkflowRun[]> {
-  try {
-    const result = await host.operations.getWorkflowStatus(
-      codebase ? { codebaseId: codebase.id } : undefined
-    );
-    return result.runs;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, cwd }, 'cli.workflow_status_failed');
-    throw new Error(`Failed to list workflow runs: ${err.message}`);
-  }
-}
-
 /** Show active workflow runs for the current project, or every project with `--all`. */
 export async function workflowStatusCommand(
   host: WorkflowHost,
@@ -327,7 +310,17 @@ export async function workflowStatusCommand(
   opts: { json?: boolean; verbose?: boolean; rawEvents?: boolean; all?: boolean } = {}
 ): Promise<void> {
   const codebase = await resolveStatusCodebase(host, cwd, opts.all);
-  const runs = await listStatusRuns(host, cwd, codebase);
+  let runs: DashboardWorkflowRun[];
+  try {
+    const result = await host.operations.getWorkflowStatus(
+      codebase ? { codebaseId: codebase.id } : undefined
+    );
+    runs = result.runs;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_status_failed');
+    throw new Error(`Failed to list workflow runs: ${err.message}`);
+  }
 
   const scopeFallback = !opts.all && !codebase;
 
