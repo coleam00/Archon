@@ -324,104 +324,26 @@ export async function prepareChatTurnRequest(
     config,
     cwd,
   } = input;
-  // Execution identity: the message sender when the adapter resolved one,
-  // else the conversation creator (solo installs / legacy rows / surfaces
-  // without auth). Sender-first mirrors the workflow executor, which
-  // resolves prefs from the run starter — without it, a multi-user thread
-  // would execute every turn on the creator's credentials (#1976).
-  const executionUserId = userId ?? conversation.user_id ?? undefined;
-  if (!userId && conversation.user_id && isPerUserProviderKeysEnabled()) {
-    // No sender identity arrived with this turn while per-user credentials
-    // are active — the turn executes (and bills) as the conversation
-    // CREATOR. Distinguishes a degraded auth resolution from the normal
-    // solo-install path (where per-user keys are off and this stays silent).
-    getLog().warn(
-      { conversationId, fallbackUserId: conversation.user_id },
-      'orchestrator.execution_identity_creator_fallback'
-    );
-  }
+  const executionUserId = resolveChatExecutionUser(userId, conversation, conversationId);
   // Per-user AI prefs (Phase 3): the user's tiers/aliases/default-assistant
   // override install config (highest precedence). `{}` (no identity, no row,
   // or DB failure) keeps config-only behavior byte-for-byte.
   const userAiPrefs = executionUserId ? await resolveUserAiPrefsForChat(executionUserId) : {};
-  let configuredProviderKey = userAiPrefs.defaultProvider ?? conversation.ai_assistant_type;
-  let aiProfile: ReturnType<typeof buildAiProfile>;
-  try {
-    aiProfile = buildAiProfile(configuredProviderKey, {
-      repoTiers: config.tiers,
-      repoAliases: config.aliases,
-      userTiers: userAiPrefs.tiers,
-      userAliases: userAiPrefs.aliases,
-    });
-  } catch (profileErr) {
-    // Structurally invalid STORED prefs (corrupt DB row) must not break the
-    // user's chat — degrade to config-only. A broken config layer still
-    // fails fast: the rebuild rethrows the same error.
-    getLog().error(
-      { err: profileErr as Error, userId: executionUserId },
-      'orchestrator.user_ai_prefs_profile_invalid'
-    );
-    configuredProviderKey = conversation.ai_assistant_type;
-    aiProfile = buildAiProfile(configuredProviderKey, {
-      repoTiers: config.tiers,
-      repoAliases: config.aliases,
-    });
-  }
+  const { configuredProviderKey, aiProfile } = resolveChatProfile(
+    userAiPrefs,
+    conversation.ai_assistant_type,
+    config,
+    executionUserId
+  );
   // Main chat model: per-user default_model > configured `large` tier >
   // install assistants.<p>.model > built-in tier default (#1998).
   const chatRequest = resolveChatModelRequest(aiProfile, configuredProviderKey, userAiPrefs, {
     assistants: config.assistants,
     tiers: config.tiers,
   });
-  // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
-  // 'large'; when that tier is unset and a sibling preset answered, tell the
-  // user ONCE PER CONVERSATION, non-blocking — the dedup Set below is what
-  // keeps it from becoming a per-message banner (review C1). Only the main
-  // chat request nags — the background title model ('small') falls back
-  // silently. Delivery failure must never fail the chat turn.
-  if (
-    chatRequest.matchedTier !== undefined &&
-    chatRequest.matchedTier !== 'large' &&
-    !tierFallbackNudgedConversations.has(conversation.id)
-  ) {
-    // Mark BEFORE attempting delivery: a failed send shouldn't retry the
-    // nudge on every subsequent message either.
-    tierFallbackNudgedConversations.add(conversation.id);
-    getLog().warn(
-      {
-        requestedTier: 'large',
-        matchedTier: chatRequest.matchedTier,
-        provider: chatRequest.provider,
-        model: chatRequest.model,
-      },
-      'orchestrator.tier_fallback_nudge'
-    );
-    try {
-      await platform.sendMessage(
-        conversationId,
-        `ℹ️ Model tier 'large' isn't configured — using the '${chatRequest.matchedTier}' preset ` +
-          `(${chatRequest.provider}/${chatRequest.model ?? ''}). Set it in Settings → Model Tiers ` +
-          'or `archon ai tier set large <provider> <model>`.'
-      );
-    } catch (nudgeErr) {
-      getLog().warn(
-        { err: nudgeErr as Error, conversationId },
-        'orchestrator.tier_fallback_nudge_delivery_failed'
-      );
-    }
-  }
+  await reportTierFallback(platform, conversationId, conversation.id, chatRequest);
   const providerKey = chatRequest.provider;
-  let dbEnvVars: Record<string, string> = {};
-  if (conversation.codebase_id) {
-    try {
-      dbEnvVars = await getCodebaseEnvVars(conversation.codebase_id);
-    } catch (error) {
-      getLog().warn(
-        { err: error as Error, codebaseId: conversation.codebase_id },
-        'codebase_env_vars_load_failed'
-      );
-    }
-  }
+  const dbEnvVars = await loadChatCodebaseEnv(conversation.codebase_id);
   // Per-user AI-provider credentials (Phase 2), delivered as env. Merged LAST
   // so a connected user's keys win over file/db env. No-op when the feature is
   // disabled or no execution identity resolved (sender, else creator).
@@ -434,24 +356,7 @@ export async function prepareChatTurnRequest(
     isPerUserProviderKeysEnabled() && executionUserId
       ? await resolveUserProviderEnvForChat(executionUserId)
       : { env: {}, failed: new Map<string, CredentialFailure>(), credentials: undefined };
-  const failedVendorFor = (
-    provider: string,
-    model: string | undefined
-  ): { vendor: string; failure: CredentialFailure } | undefined => {
-    // An unregistered provider fails where it is used (title generation falls back
-    // to a truncated title); this check must not turn that into a failed turn.
-    if (delivery.failed.size === 0 || !isRegisteredProvider(provider)) return undefined;
-    const vendor = getRegistration(provider).credentials.vendorFor(model);
-    const failure = vendor !== undefined ? delivery.failed.get(vendor) : undefined;
-    return vendor !== undefined && failure !== undefined ? { vendor, failure } : undefined;
-  };
-  const failedTurnVendor = failedVendorFor(providerKey, chatRequest.model);
-  if (failedTurnVendor) {
-    throw new ConnectedCredentialUnavailableError(
-      failedTurnVendor.vendor,
-      failedTurnVendor.failure
-    );
-  }
+  refuseFailedChatCredential(providerKey, chatRequest.model, delivery.failed);
   const userProviderEnv: Record<string, string> = delivery.env;
   const protectedEnvKeys = Object.keys(userProviderEnv);
   const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
@@ -500,4 +405,131 @@ export async function prepareChatTurnRequest(
     );
   }
   return { providerKey, requestOptions, caps };
+}
+
+function resolveChatExecutionUser(
+  userId: string | undefined,
+  conversation: Conversation,
+  conversationId: string
+): string | undefined {
+  // Execution identity: the message sender when the adapter resolved one,
+  // else the conversation creator (solo installs / legacy rows / surfaces
+  // without auth). Sender-first mirrors the workflow executor, which
+  // resolves prefs from the run starter — without it, a multi-user thread
+  // would execute every turn on the creator's credentials (#1976).
+  const executionUserId = userId ?? conversation.user_id ?? undefined;
+  if (!userId && conversation.user_id && isPerUserProviderKeysEnabled()) {
+    // No sender identity arrived with this turn while per-user credentials
+    // are active — the turn executes (and bills) as the conversation
+    // CREATOR. Distinguishes a degraded auth resolution from the normal
+    // solo-install path (where per-user keys are off and this stays silent).
+    getLog().warn(
+      { conversationId, fallbackUserId: conversation.user_id },
+      'orchestrator.execution_identity_creator_fallback'
+    );
+  }
+  return executionUserId;
+}
+
+function resolveChatProfile(
+  userAiPrefs: UserAiPrefs,
+  fallbackProvider: string,
+  config: MergedConfig,
+  executionUserId: string | undefined
+): { configuredProviderKey: string; aiProfile: ReturnType<typeof buildAiProfile> } {
+  let configuredProviderKey = userAiPrefs.defaultProvider ?? fallbackProvider;
+  let aiProfile: ReturnType<typeof buildAiProfile>;
+  try {
+    aiProfile = buildAiProfile(configuredProviderKey, {
+      repoTiers: config.tiers,
+      repoAliases: config.aliases,
+      userTiers: userAiPrefs.tiers,
+      userAliases: userAiPrefs.aliases,
+    });
+  } catch (profileErr) {
+    // Structurally invalid STORED prefs (corrupt DB row) must not break the
+    // user's chat — degrade to config-only. A broken config layer still
+    // fails fast: the rebuild rethrows the same error.
+    getLog().error(
+      { err: profileErr as Error, userId: executionUserId },
+      'orchestrator.user_ai_prefs_profile_invalid'
+    );
+    configuredProviderKey = fallbackProvider;
+    aiProfile = buildAiProfile(configuredProviderKey, {
+      repoTiers: config.tiers,
+      repoAliases: config.aliases,
+    });
+  }
+  return { configuredProviderKey, aiProfile };
+}
+
+async function reportTierFallback(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  dbConversationId: string,
+  chatRequest: ResolvedModelRequest
+): Promise<void> {
+  // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
+  // 'large'; when that tier is unset and a sibling preset answered, tell the
+  // user ONCE PER CONVERSATION, non-blocking — the dedup Set is what
+  // keeps it from becoming a per-message banner (review C1). Only the main
+  // chat request nags — the background title model ('small') falls back
+  // silently. Delivery failure must never fail the chat turn.
+  if (
+    chatRequest.matchedTier !== undefined &&
+    chatRequest.matchedTier !== 'large' &&
+    !tierFallbackNudgedConversations.has(dbConversationId)
+  ) {
+    // Mark BEFORE attempting delivery: a failed send shouldn't retry the
+    // nudge on every subsequent message either.
+    tierFallbackNudgedConversations.add(dbConversationId);
+    getLog().warn(
+      {
+        requestedTier: 'large',
+        matchedTier: chatRequest.matchedTier,
+        provider: chatRequest.provider,
+        model: chatRequest.model,
+      },
+      'orchestrator.tier_fallback_nudge'
+    );
+    try {
+      await platform.sendMessage(
+        conversationId,
+        `ℹ️ Model tier 'large' isn't configured — using the '${chatRequest.matchedTier}' preset ` +
+          `(${chatRequest.provider}/${chatRequest.model ?? ''}). Set it in Settings → Model Tiers ` +
+          'or `archon ai tier set large <provider> <model>`.'
+      );
+    } catch (nudgeErr) {
+      getLog().warn(
+        { err: nudgeErr as Error, conversationId },
+        'orchestrator.tier_fallback_nudge_delivery_failed'
+      );
+    }
+  }
+}
+
+async function loadChatCodebaseEnv(codebaseId: string | null): Promise<Record<string, string>> {
+  let dbEnvVars: Record<string, string> = {};
+  if (codebaseId) {
+    try {
+      dbEnvVars = await getCodebaseEnvVars(codebaseId);
+    } catch (error) {
+      getLog().warn({ err: error as Error, codebaseId }, 'codebase_env_vars_load_failed');
+    }
+  }
+  return dbEnvVars;
+}
+
+function refuseFailedChatCredential(
+  provider: string,
+  model: string | undefined,
+  failed: ReadonlyMap<string, CredentialFailure>
+): void {
+  // An unregistered provider fails where it is used; the credential check must not mask it.
+  if (failed.size === 0 || !isRegisteredProvider(provider)) return;
+  const vendor = getRegistration(provider).credentials.vendorFor(model);
+  const failure = vendor !== undefined ? failed.get(vendor) : undefined;
+  if (vendor !== undefined && failure !== undefined) {
+    throw new ConnectedCredentialUnavailableError(vendor, failure);
+  }
 }
