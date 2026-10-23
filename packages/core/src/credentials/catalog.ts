@@ -17,7 +17,11 @@ import {
   PI_PROVIDER_ENV_VARS,
   type CredentialKind,
 } from '@archon/providers';
-import { consumesStoredCredential, type StoredCredentialKind } from '@archon/provider-contract';
+import {
+  consumesStoredCredential,
+  type CredentialSpec,
+  type StoredCredentialKind,
+} from '@archon/provider-contract';
 import { KNOWN_VENDORS, normalizeCredentialVendor } from './delivery';
 import { SUBSCRIPTION_PROVIDERS } from './oauth-providers';
 
@@ -44,20 +48,7 @@ export function getVendorCatalog(): Map<string, VendorCatalogEntry> {
   for (const reg of getRegisteredProviders()) {
     if (reg.credentials.kind !== 'static') continue;
     for (const spec of reg.credentials.specs) {
-      const existing = catalog.get(spec.vendor);
-      if (existing) {
-        existing.agents.push(reg.id);
-        for (const k of spec.kinds) {
-          if (!existing.kinds.includes(k)) existing.kinds.push(k);
-        }
-      } else {
-        catalog.set(spec.vendor, {
-          vendor: spec.vendor,
-          displayName: spec.displayName,
-          kinds: [...spec.kinds],
-          agents: [reg.id],
-        });
-      }
+      mergeVendorSpec(catalog, reg.id, spec);
     }
   }
   for (const entry of catalog.values()) {
@@ -69,6 +60,27 @@ export function getVendorCatalog(): Map<string, VendorCatalogEntry> {
     }
   }
   return catalog;
+}
+
+function mergeVendorSpec(
+  catalog: Map<string, VendorCatalogEntry>,
+  agent: string,
+  spec: CredentialSpec
+): void {
+  const existing = catalog.get(spec.vendor);
+  if (existing) {
+    existing.agents.push(agent);
+    for (const k of spec.kinds) {
+      if (!existing.kinds.includes(k)) existing.kinds.push(k);
+    }
+  } else {
+    catalog.set(spec.vendor, {
+      vendor: spec.vendor,
+      displayName: spec.displayName,
+      kinds: [...spec.kinds],
+      agents: [agent],
+    });
+  }
 }
 
 /** Sorted vendor ids a user can connect an API key for. */
