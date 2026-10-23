@@ -528,28 +528,14 @@ export function serializeNodeEmitter(
         ...base,
         execution,
         type: 'node_started',
-        ...(record.binding.provider !== undefined ? { provider: record.binding.provider } : {}),
-        ...(record.binding.model?.requested !== undefined
-          ? { model: record.binding.model.requested }
-          : {}),
-        ...(record.binding.tier !== undefined ? { tier: record.binding.tier } : {}),
-        ...(record.binding.effort !== undefined ? { effort: record.binding.effort } : {}),
+        ...emitterBinding(record.binding),
       };
     case 'completed':
       return {
         ...base,
         execution,
         type: 'node_completed',
-        ...(record.timing.durationMs !== undefined ? { duration: record.timing.durationMs } : {}),
-        ...(reportsOwnSpend(record) && record.spend.costUsd.source === 'provider'
-          ? { costUsd: record.spend.costUsd.value }
-          : {}),
-        ...(record.spend.stopReason.source === 'provider'
-          ? { stopReason: record.spend.stopReason.value }
-          : {}),
-        ...(record.spend.numTurns.source === 'provider'
-          ? { numTurns: record.spend.numTurns.value }
-          : {}),
+        ...emitterCompletion(record),
       };
     case 'failed':
       return { ...base, execution, type: 'node_failed', error: lifecycle.error };
@@ -566,4 +552,28 @@ export function serializeNodeEmitter(
     case 'suspended':
       return { ...base, execution, type: 'node_suspended' };
   }
+}
+
+function emitterBinding(binding: NodeExecutionRecord['binding']) {
+  return {
+    ...(binding.provider !== undefined ? { provider: binding.provider } : {}),
+    ...(binding.model?.requested !== undefined ? { model: binding.model.requested } : {}),
+    ...(binding.tier !== undefined ? { tier: binding.tier } : {}),
+    ...(binding.effort !== undefined ? { effort: binding.effort } : {}),
+  };
+}
+
+function emitterCompletion(record: NodeExecutionRecord) {
+  return {
+    ...(record.timing.durationMs !== undefined ? { duration: record.timing.durationMs } : {}),
+    ...(reportsOwnSpend(record) && record.spend.costUsd.source === 'provider'
+      ? { costUsd: record.spend.costUsd.value }
+      : {}),
+    ...(record.spend.stopReason.source === 'provider'
+      ? { stopReason: record.spend.stopReason.value }
+      : {}),
+    ...(record.spend.numTurns.source === 'provider'
+      ? { numTurns: record.spend.numTurns.value }
+      : {}),
+  };
 }
