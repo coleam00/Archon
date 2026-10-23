@@ -193,42 +193,52 @@ export function runMessageConversationId(run: Run | undefined): string | null {
   return run.conversationPlatformId ?? run.workerPlatformId;
 }
 
+function readApproval(approval: WorkflowApproval | undefined): Run['approval'] {
+  return approval !== undefined && (approval.resolved ?? null) === null
+    ? {
+        nodeId: approval.nodeId,
+        pauseId: approval.pauseId,
+        message:
+          approval.type === 'child_workflow'
+            ? approval.childRunId
+              ? `Waiting on sub-run ${approval.childRunId}. Review the child run to continue.`
+              : 'Waiting on a sub-run. Review the child run to continue.'
+            : approval.message,
+        completionSignaled: approval.completionSignaled === true,
+        decisions: approval.decisions ?? [],
+        decisionsAuthored: approval.decisionsAuthored === true,
+      }
+    : null;
+}
+
+function readRunProvenance(raw: RawWorkflowRun) {
+  return {
+    projectId: raw.codebase_id,
+    projectName: raw.codebase_name ?? null,
+    conversationId: raw.conversation_id ?? null,
+    conversationPlatformId: raw.conversation_platform_id ?? null,
+    workerPlatformId: raw.worker_platform_id ?? null,
+    origin: normalizeOrigin(raw.platform_type),
+    parentRunId: raw.parent_run_id ?? null,
+  };
+}
+
 export function toRun(raw: RawWorkflowRun): Run {
   const activeNodes = Array.isArray(raw.active_nodes)
     ? raw.active_nodes.filter(nodeId => typeof nodeId === 'string' && nodeId.length > 0)
     : [];
   const approval = raw.metadata?.approval;
   const gateResolved = approval?.resolved ?? null;
-  const parsedApproval =
-    approval !== undefined && gateResolved === null
-      ? {
-          nodeId: approval.nodeId,
-          pauseId: approval.pauseId,
-          message:
-            approval.type === 'child_workflow'
-              ? approval.childRunId
-                ? `Waiting on sub-run ${approval.childRunId}. Review the child run to continue.`
-                : 'Waiting on a sub-run. Review the child run to continue.'
-              : approval.message,
-          completionSignaled: approval.completionSignaled === true,
-          decisions: approval.decisions ?? [],
-          decisionsAuthored: approval.decisionsAuthored === true,
-        }
-      : null;
+  const parsedApproval = readApproval(approval);
   const wait = raw.metadata?.wait;
   const parsedWait: NormalizedWorkflowWait | null =
     wait === undefined ? null : normalizeWorkflowWait(wait);
 
   return {
+    ...readRunProvenance(raw),
     id: raw.id,
-    projectId: raw.codebase_id,
-    projectName: raw.codebase_name ?? null,
     costUsd: readCost(raw.metadata),
-    conversationId: raw.conversation_id ?? null,
-    conversationPlatformId: raw.conversation_platform_id ?? null,
-    workerPlatformId: raw.worker_platform_id ?? null,
     workflow: raw.workflow_name,
-    origin: normalizeOrigin(raw.platform_type),
     status: normalizeStatus(raw.status),
     ownerObservation: raw.owner_observation,
     attention: raw.attention ?? null,
@@ -245,6 +255,5 @@ export function toRun(raw: RawWorkflowRun): Run {
     wait: parsedWait,
     gateResolved,
     stopReason: raw.metadata?.stop_reason ?? null,
-    parentRunId: raw.parent_run_id ?? null,
   };
 }
