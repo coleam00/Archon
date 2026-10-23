@@ -95,13 +95,7 @@ function tryRenderScalarEdits(definition: Plain, source: string): string | undef
       inFlow,
       type: typeof value !== 'string' ? 'PLAIN' : node.type === 'PLAIN' ? scalar.type : undefined,
     });
-    const eol = original.includes('\r\n')
-      ? '\r\n'
-      : original.includes('\n')
-        ? '\n'
-        : source.includes('\r\n')
-          ? '\r\n'
-          : '\n';
+    const eol = scalarLineEnding(original, source);
     edits.push({
       start,
       end,
@@ -119,6 +113,12 @@ function tryRenderScalarEdits(definition: Plain, source: string): string | undef
     boundary = edit.start;
   }
   return text;
+}
+
+function scalarLineEnding(original: string, source: string): string {
+  if (original.includes('\r\n')) return '\r\n';
+  if (original.includes('\n')) return '\n';
+  return source.includes('\r\n') ? '\r\n' : '\n';
 }
 
 interface MergeState {
