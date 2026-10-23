@@ -3,6 +3,7 @@ import type { BlockButtonAction, ButtonAction } from '@slack/bolt';
 import type { ChatContext, ChatRunActionResponse, RunActionResult } from '@archon/chat-contract';
 import { SlackAdapter } from './adapter';
 import { SlackPlugin } from './plugin';
+import { descriptor } from './descriptor';
 import { resolutionNote } from './workflow-bridge';
 import { StubSlack } from './test/slack';
 
@@ -615,4 +616,22 @@ test('child card and refused approve preserve host-rendered Slack guidance', asy
   );
   expect(note && 'text' in note ? note.text : undefined).not.toContain('Could not record');
   expect(slack.updates).toHaveLength(updates);
+});
+
+test('cancel cascade guidance follows the descriptor prefix', async () => {
+  const original = descriptor.workflowCommand.prefix;
+  descriptor.workflowCommand.prefix = '/test-workflow ';
+  try {
+    await started();
+    runAction.mockResolvedValue({
+      status: 'done',
+      result: { kind: 'stopped', pid: 123, cascadeFailures: 2 },
+    });
+    await click('cancel:run');
+    expect(slack.posts.at(-1)).toMatchObject({
+      text: "Stopped the run's live owner process (pid 123), then cancelled the run.\n:warning: 2 sub-run(s) could not be cancelled and may still be running — check `/test-workflow status`.",
+    });
+  } finally {
+    descriptor.workflowCommand.prefix = original;
+  }
 });

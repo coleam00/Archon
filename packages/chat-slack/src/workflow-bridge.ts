@@ -1,5 +1,6 @@
 import type { ChatContext, ChatRunEvent, RunActionResult } from '@archon/chat-contract';
 import type { BlockButtonAction, ButtonAction } from '@slack/bolt';
+import { descriptor } from './descriptor';
 import {
   REACTION_FAILURE,
   REACTION_RUNNING,
@@ -408,7 +409,7 @@ export class SlackWorkflowBridge {
         let note = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled the run.`;
         for (const warning of result.cleanupWarnings ?? []) note += `\n:warning: ${warning}`;
         if (result.cascadeFailures > 0)
-          note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`/archon-workflow status\`.`;
+          note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`${descriptor.workflowCommand.prefix}status\`.`;
         if (result.blockedParentRunId)
           note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it so it reads this sub-run's outcome, or abandon it too.`;
         await this.postActionNote(body, runId, note);
