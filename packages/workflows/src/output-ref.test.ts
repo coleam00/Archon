@@ -12,11 +12,14 @@ import {
   declaredOutputPathsFromSchema,
   assertDeclaredOutputPath,
   jsonValueSchema,
+  inputRefToken,
   OutputRefError,
   parseWholeInputsRef,
   parseWholeOutputRef,
   resolveNodeOutputField,
+  resolveInputValue,
   similarNodeIds,
+  substituteTemplate,
 } from './output-ref';
 import { buildTruncationMarker, hasTruncationMarker } from './utils/output-truncation';
 import type { NodeOutput } from './schemas';
@@ -153,6 +156,39 @@ describe('parseWholeInputsRef', () => {
     expect(parseWholeInputsRef('$plan.output')).toBeUndefined();
     expect(parseWholeInputsRef('literal')).toBeUndefined();
     expect(parseWholeInputsRef('')).toBeUndefined();
+  });
+});
+
+describe('input value and template resolution', () => {
+  it('preserves logical values and converts only template replacements to text', () => {
+    const inputs = {
+      text: '$INPUTS.other',
+      empty: '',
+      count: 0,
+      flag: false,
+      absent: null,
+      items: [1, 'two'],
+      object: { nested: true },
+    };
+    for (const [name, value] of Object.entries(inputs)) {
+      expect(resolveInputValue(name, inputs)).toBe(value);
+      expect(substituteTemplate(`value=$INPUTS.${name}`, [inputRefToken(inputs)])).toBe(
+        `value=${typeof value === 'string' ? value : JSON.stringify(value)}`
+      );
+    }
+  });
+
+  it('keeps the same unknown-input errors on logical and text surfaces', () => {
+    for (const [name, inputs, suffix] of [
+      ['pln', { plan: 'x' }, ' Did you mean $INPUTS.plan?'],
+      ['xyzzy', { plan: 'x' }, ' Available inputs: $INPUTS.plan.'],
+      ['toString', {}, ' This run has no declared inputs.'],
+      ['missing', undefined, ' This run has no declared inputs.'],
+    ] as const) {
+      const error = new Error(`Unknown input '$INPUTS.${name}'.${suffix}`);
+      expect(() => resolveInputValue(name, inputs)).toThrow(error);
+      expect(() => substituteTemplate(`$INPUTS.${name}`, [inputRefToken(inputs)])).toThrow(error);
+    }
   });
 });
 

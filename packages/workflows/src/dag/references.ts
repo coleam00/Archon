@@ -25,6 +25,7 @@ import {
   assertSupportedOutputRefs,
   substituteTemplate,
   inputRefToken,
+  resolveInputValue,
 } from '../output-ref';
 import { readComposedMeta } from '../compiled-command';
 import { type ExecNodeEnvironmentContext, buildExecNodeEnvironment } from '../exec-environment';
@@ -198,7 +199,7 @@ export function resolveWorkflowValue(
 ): JsonValue {
   if (typeof rawValue !== 'string') return rawValue;
   const inputsName = parseWholeInputsRef(rawValue);
-  if (inputsName !== undefined) return resolveWholeInput(inputsName, runInputs);
+  if (inputsName !== undefined) return resolveInputValue(inputsName, runInputs);
   const wholeRef = parseWholeOutputRef(rawValue);
   if (wholeRef !== undefined) {
     const producer = ctx.nodeOutputs.get(wholeRef.nodeId);
@@ -226,23 +227,6 @@ export function resolveWorkflowValue(
     // unknown whole-text ref to '' with a warn — byte-identical to pre-#2637.
   }
   return resolveValueTemplate(rawValue, ctx, runInputs);
-}
-
-function resolveWholeInput(
-  name: string,
-  runInputs: Record<string, JsonValue> | undefined
-): JsonValue {
-  if (runInputs && Object.hasOwn(runInputs, name)) return runInputs[name];
-  // Same loud posture (and hint shape) as the text splice in workflow-variables.
-  const known = runInputs ? Object.keys(runInputs) : [];
-  const hint = similarNodeIds(name, known);
-  const suffix =
-    hint.length > 0
-      ? ` Did you mean ${hint.map(h => `$INPUTS.${h}`).join(', ')}?`
-      : known.length > 0
-        ? ` Available inputs: ${known.map(k => `$INPUTS.${k}`).join(', ')}.`
-        : ' This run has no declared inputs.';
-  throw new Error(`Unknown input '$INPUTS.${name}'.${suffix}`);
 }
 
 /**
