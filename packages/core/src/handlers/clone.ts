@@ -379,6 +379,33 @@ async function reuseRegisteredCheckout(
   return loadRepositoryCommands(codebases, existing, checkoutPath, existing.repository_url, true);
 }
 
+async function assertCloneDestinationAvailable(targetPath: string): Promise<void> {
+  let directoryExists = false;
+  try {
+    await access(join(targetPath, '.git'));
+    directoryExists = true;
+  } catch {
+    // A missing checkout can be cloned; git reports other destination failures.
+  }
+  if (directoryExists) {
+    throw new ProjectRegistrationError(
+      `Directory already exists: ${targetPath}\n\nNo matching codebase found in database. Remove the directory and re-clone.`
+    );
+  }
+}
+
+async function validateCloneBaseBranch(baseBranch: string | undefined): Promise<void> {
+  if (baseBranch !== undefined) {
+    try {
+      await validateBranchName(baseBranch);
+    } catch (error) {
+      if (error instanceof InvalidBaseBranchError)
+        throw new ProjectRegistrationError(error.message);
+      throw error;
+    }
+  }
+}
+
 /**
  * Clone a repository from a URL and register it in the supplied store.
  * Local paths (absolute, or starting with ~ or .) are delegated to registerRepository
@@ -415,28 +442,8 @@ export async function cloneRepository(
     repo: derived.repoName,
   };
   const targetPath = getProjectSourcePath(ownerName, repoName);
-  let directoryExists = false;
-  try {
-    await access(join(targetPath, '.git'));
-    directoryExists = true;
-  } catch {
-    // A missing checkout can be cloned; git reports other destination failures.
-  }
-  if (directoryExists) {
-    throw new ProjectRegistrationError(
-      `Directory already exists: ${targetPath}\n\nNo matching codebase found in database. Remove the directory and re-clone.`
-    );
-  }
-
-  if (options.baseBranch !== undefined) {
-    try {
-      await validateBranchName(options.baseBranch);
-    } catch (error) {
-      if (error instanceof InvalidBaseBranchError)
-        throw new ProjectRegistrationError(error.message);
-      throw error;
-    }
-  }
+  await assertCloneDestinationAvailable(targetPath);
+  await validateCloneBaseBranch(options.baseBranch);
 
   const credentials = await repositoryCredentials(workingUrl, options);
   await ensureProjectStructure(ownerName, repoName).catch(refuseOccupiedSource);
