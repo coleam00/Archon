@@ -126,7 +126,7 @@ export function redactSubprocessError(
 
 interface SharedNodeProcessRecorder {
   mode: 'shared';
-  roots: Set<{ pid: number; disarm: () => void; endable: boolean }>;
+  roots: Set<{ pid: number; disarm: () => void; child: ChildProcess }>;
   ended: boolean;
 }
 type NodeProcessRecorder = SharedNodeProcessRecorder | DetachedNodeProcesses;
@@ -182,8 +182,12 @@ export function recordNodeProcessTrees(options?: { mode: 'detached-posix' }): Re
       recorder.ended = true;
       const failed: string[] = [];
       await Promise.all(
-        [...recorder.roots].map(({ pid, disarm, endable }) => {
-          if (!endable) {
+        [...recorder.roots].map(({ pid, disarm, child }) => {
+          // Windows can reuse the PID at exit; POSIX groups remain endable until close.
+          if (
+            process.platform === 'win32' &&
+            (child.exitCode !== null || child.signalCode !== null)
+          ) {
             failed.push(
               `${String(pid)} (root exited before output closed; descendants may still be running)`
             );
@@ -238,15 +242,8 @@ function recordNodeProcess(
   }
   const disarm =
     process.platform !== 'win32' ? armNodeLifeline(rootPid, onError) : (): void => undefined;
-  const root = { pid: rootPid, disarm, endable: true };
+  const root = { pid: rootPid, disarm, child };
   recorder.roots.add(root);
-  // POSIX groups remain endable while a child holds output. Windows can reuse the
-  // root PID as soon as it exits, so taskkill must stop targeting it at exit.
-  if (process.platform === 'win32') {
-    child.once('exit', () => {
-      root.endable = false;
-    });
-  }
   child.once('close', () => {
     recorder.roots.delete(root);
     disarm();

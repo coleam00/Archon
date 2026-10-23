@@ -21,11 +21,14 @@ const trackTempRoot = trackTempRoots();
 const posixOnly = process.platform === 'win32' ? test.skip : test;
 
 test.each([
-  { exited: false, terminationFails: false },
-  { exited: true, terminationFails: false },
-  { exited: false, terminationFails: true },
-  { exited: true, terminationFails: true },
-])('ending Windows node trees: %j', async ({ exited, terminationFails }) => {
+  { exit: 'running', terminationFails: false },
+  { exit: 'code', terminationFails: false },
+  { exit: 'running', terminationFails: true },
+  { exit: 'code', terminationFails: true },
+  { exit: 'signal', terminationFails: false },
+  { exit: 'signal', terminationFails: true },
+])('ending Windows node trees: %j', async ({ exit, terminationFails }) => {
+  const exited = exit !== 'running';
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
   const child = Object.defineProperties(new childProcess.ChildProcess(), {
     pid: { value: 424242 },
@@ -47,7 +50,12 @@ test.each([
     });
   const pending = run();
   try {
-    if (exited) child.emit('exit', 0, null);
+    if (exited) {
+      Object.defineProperty(child, exit === 'code' ? 'exitCode' : 'signalCode', {
+        value: exit === 'code' ? 0 : 'SIGTERM',
+      });
+      child.emit('exit', child.exitCode, child.signalCode);
+    }
 
     if (exited) {
       await expect(trees.end()).rejects.toThrow(
@@ -110,6 +118,7 @@ test.each([false, true])(
       });
     try {
       pending.push(run());
+      Object.defineProperty(older, 'exitCode', { value: 0 });
       older.emit('exit', 0, null);
       pending.push(run());
       older.emit('close', 0, null);
