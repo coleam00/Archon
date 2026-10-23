@@ -170,20 +170,16 @@ export async function workflowTestCommand(
   return 0;
 }
 
-/**
- * List available workflows in the current directory
- */
-export async function workflowListCommand(
-  cwd: string,
-  options: WorkflowListOptions = {}
-): Promise<void> {
-  const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
-  let listedEntries = workflowEntries;
-  if (options.name !== undefined) {
+function selectWorkflowEntries(
+  workflowEntries: WorkflowWithSource[],
+  errors: WorkflowLoadError[],
+  name: string | undefined
+): WorkflowWithSource[] {
+  if (name !== undefined) {
     let workflow: WorkflowWithSource['workflow'] | undefined;
     try {
       workflow = resolveWorkflowName(
-        options.name,
+        name,
         workflowEntries.map(entry => entry.workflow)
       );
     } catch (error) {
@@ -195,12 +191,61 @@ export async function workflowListCommand(
         .map(entry => `  - ${entry.workflow.name}`)
         .join('\n');
       throw new WorkflowListLookupError(
-        `Workflow '${options.name}' not found.\n\nAvailable workflows:\n${availableWorkflows || '  (none)'}`,
+        `Workflow '${name}' not found.\n\nAvailable workflows:\n${availableWorkflows || '  (none)'}`,
         errors
       );
     }
-    listedEntries = workflowEntries.filter(entry => entry.workflow.name === workflow.name);
+    return workflowEntries.filter(entry => entry.workflow.name === workflow.name);
   }
+
+  return workflowEntries;
+}
+
+function workflowJsonEntry(
+  { workflow: w, parseWarnings, declared }: WorkflowWithSource,
+  full: boolean
+): WorkflowJsonEntry {
+  const description = projectWorkflowDescription(w.description, full);
+  const entry: WorkflowJsonEntry = {
+    name: w.name,
+    description: description.description,
+    descriptionTruncated: description.truncated,
+  };
+  if (declared?.provider !== undefined) entry.provider = declared.provider;
+  if (declared?.model !== undefined) entry.model = declared.model;
+  if (declared?.effort !== undefined) entry.effort = declared.effort;
+  if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
+  if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
+  return entry;
+}
+
+function printWorkflowEntry(
+  { workflow, parseWarnings, declared }: WorkflowWithSource,
+  full: boolean
+): void {
+  const description = projectWorkflowDescription(workflow.description, full);
+  console.log(`  ${workflow.name}`);
+  console.log(
+    `    ${description.description}${description.truncated ? WORKFLOW_DESCRIPTION_TRUNCATION_MARKER : ''}`
+  );
+  if (declared?.provider) {
+    console.log(`    Provider: ${declared.provider}`);
+  }
+  for (const warning of parseWarnings ?? []) {
+    console.log(`    Warning: ${warning}`);
+  }
+  console.log('');
+}
+
+/**
+ * List available workflows in the current directory
+ */
+export async function workflowListCommand(
+  cwd: string,
+  options: WorkflowListOptions = {}
+): Promise<void> {
+  const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
+  const listedEntries = selectWorkflowEntries(workflowEntries, errors, options.name);
 
   if (options.json) {
     const output = {
@@ -208,22 +253,7 @@ export async function workflowListCommand(
       // onto the nodes and removes them (#1764), so the listing reports what the author
       // wrote. `webSearchMode` is the one that stays on the definition — it has no
       // per-node form to collapse onto.
-      workflows: listedEntries.map(
-        ({ workflow: w, parseWarnings, declared }): WorkflowJsonEntry => {
-          const description = projectWorkflowDescription(w.description, options.full === true);
-          const entry: WorkflowJsonEntry = {
-            name: w.name,
-            description: description.description,
-            descriptionTruncated: description.truncated,
-          };
-          if (declared?.provider !== undefined) entry.provider = declared.provider;
-          if (declared?.model !== undefined) entry.model = declared.model;
-          if (declared?.effort !== undefined) entry.effort = declared.effort;
-          if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
-          if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
-          return entry;
-        }
-      ),
+      workflows: listedEntries.map(entry => workflowJsonEntry(entry, options.full === true)),
       errors: errors.map(e => ({
         filename: e.filename,
         error: e.error,
@@ -245,20 +275,7 @@ export async function workflowListCommand(
   if (listedEntries.length > 0) {
     console.log(`\nFound ${listedEntries.length} workflow(s):\n`);
 
-    for (const { workflow, parseWarnings, declared } of listedEntries) {
-      const description = projectWorkflowDescription(workflow.description, options.full === true);
-      console.log(`  ${workflow.name}`);
-      console.log(
-        `    ${description.description}${description.truncated ? WORKFLOW_DESCRIPTION_TRUNCATION_MARKER : ''}`
-      );
-      if (declared?.provider) {
-        console.log(`    Provider: ${declared.provider}`);
-      }
-      for (const warning of parseWarnings ?? []) {
-        console.log(`    Warning: ${warning}`);
-      }
-      console.log('');
-    }
+    for (const entry of listedEntries) printWorkflowEntry(entry, options.full === true);
   }
 
   if (errors.length > 0) {
