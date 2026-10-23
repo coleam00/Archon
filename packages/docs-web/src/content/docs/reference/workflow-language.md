@@ -958,7 +958,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 **How to resume:**
 
-- **CLI**: `archon workflow run <name> --resume` resumes the most recent failed run for `(workflow_name, cwd)`. Or `archon workflow resume <run-id>` to target a specific run.
+- **CLI**: `archon workflow run <name> --resume` selects the newest eligible run by start time for `(workflow_name, cwd)`: a failed or paused run, or a `running` run whose last activity timestamp is missing or more than one day old. See the [CLI reference](/reference/cli/#workflow-run-name-message) for flag details. Use `archon workflow resume <run-id>` to target a specific run. Missing or old activity does not prove the owner is gone; verify that before resuming a `running` run.
 - **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** (or stale `running`) run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run.
 - **Web UI**: Open the failed run in the console and use **Resume** in the run detail action bar.
 
