@@ -158,58 +158,8 @@ export function AssistantConfigPanel(): ReactElement {
     }
   };
 
-  return (
-    <SettingsSection title="Defaults">
-      {/* Lead combo (#1998): "chat runs on [provider][model]" — the install
-          row edits the default assistant + its default model
-          (assistants.<p>.model, shared state with the grid row below); saved
-          by the panel's Save button. */}
-      <label className="mb-5 flex flex-wrap items-center gap-[18px]">
-        <span className="w-[150px] shrink-0 text-[13.5px] font-semibold text-text-secondary">
-          Chat runs on{' '}
-          <span className="font-mono text-[10px] font-bold uppercase tracking-[0.06em] text-text-tertiary">
-            this install
-          </span>
-        </span>
-        <SelectShell className="w-[180px] shrink-0">
-          <select
-            value={form.assistant}
-            onChange={e => {
-              patch({ assistant: e.target.value });
-            }}
-            className={`${SELECT_CLASS_COMPACT} py-[11px] pl-3.5 text-[13.5px]`}
-          >
-            {form.assistant === '' && (
-              <option value="" disabled>
-                Select a default provider
-              </option>
-            )}
-            {providers.map(p => (
-              <option key={p.id} value={p.id}>
-                {p.displayName}
-              </option>
-            ))}
-          </select>
-        </SelectShell>
-        {form.assistant !== '' && (
-          <ModelPickerField
-            // Re-key per agent so picker-internal state never bleeds across a switch.
-            key={form.assistant}
-            agentId={form.assistant}
-            value={form.models[form.assistant] ?? ''}
-            onChange={v => {
-              setModel(form.assistant, v);
-            }}
-            placeholder="model — blank = tier default"
-            selectEmptyLabel="tier default"
-            ariaLabel="Install default chat model"
-            className="min-w-[160px] flex-1"
-            agents={keyData?.agents}
-            piModels={piModels}
-          />
-        )}
-      </label>
-
+  const renderUserDefault = (): ReactElement => (
+    <>
       {userScope.kind === 'load-failed' ? (
         <div className="mb-5">
           <UserPrefsLoadFailed error={userScope.error} />
@@ -276,6 +226,62 @@ export function AssistantConfigPanel(): ReactElement {
           ) : null}
         </div>
       ) : null}
+    </>
+  );
+
+  return (
+    <SettingsSection title="Defaults">
+      {/* Lead combo (#1998): "chat runs on [provider][model]" — the install
+          row edits the default assistant + its default model
+          (assistants.<p>.model, shared state with the grid row below); saved
+          by the panel's Save button. */}
+      <label className="mb-5 flex flex-wrap items-center gap-[18px]">
+        <span className="w-[150px] shrink-0 text-[13.5px] font-semibold text-text-secondary">
+          Chat runs on{' '}
+          <span className="font-mono text-[10px] font-bold uppercase tracking-[0.06em] text-text-tertiary">
+            this install
+          </span>
+        </span>
+        <SelectShell className="w-[180px] shrink-0">
+          <select
+            value={form.assistant}
+            onChange={e => {
+              patch({ assistant: e.target.value });
+            }}
+            className={`${SELECT_CLASS_COMPACT} py-[11px] pl-3.5 text-[13.5px]`}
+          >
+            {form.assistant === '' && (
+              <option value="" disabled>
+                Select a default provider
+              </option>
+            )}
+            {providers.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.displayName}
+              </option>
+            ))}
+          </select>
+        </SelectShell>
+        {form.assistant !== '' && (
+          <ModelPickerField
+            // Re-key per agent so picker-internal state never bleeds across a switch.
+            key={form.assistant}
+            agentId={form.assistant}
+            value={form.models[form.assistant] ?? ''}
+            onChange={v => {
+              setModel(form.assistant, v);
+            }}
+            placeholder="model — blank = tier default"
+            selectEmptyLabel="tier default"
+            ariaLabel="Install default chat model"
+            className="min-w-[160px] flex-1"
+            agents={keyData?.agents}
+            piModels={piModels}
+          />
+        )}
+      </label>
+
+      {renderUserDefault()}
 
       <div className="flex flex-col gap-[11px]">
         {providers.map(p => {
