@@ -258,7 +258,6 @@ describe('isolationListCommand', () => {
           environments: [
             {
               ...mockEnv,
-              codebase_repository_url: 'https://github.com/owner/repo',
               days_since_activity: 2.5,
               cleanupSkipReason: 'run run-live is running',
             },

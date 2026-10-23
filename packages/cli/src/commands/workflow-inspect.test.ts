@@ -680,7 +680,7 @@ describe('workflowStatusCommand', () => {
       all: true,
     });
 
-    const lines = consoleSpy.mock.calls.map(call => call[0]);
+    const lines = consoleSpy.mock.calls.map((call: unknown[]) => call[0]);
     expect(lines).toContain(
       '        Fan-out work: 2 of 2 children did not complete (1 failed, 1 not started)'
     );
