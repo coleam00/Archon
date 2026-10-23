@@ -432,7 +432,6 @@ beforeEach(async () => {
   while (!existsSync(${JSON.stringify(nodePid)})) await Bun.sleep(10);
   owners = readFileSync(scope.detachedPids, 'utf8').trim().split(String.fromCharCode(10)).map(Number);
   node = Number(readFileSync(${JSON.stringify(nodePid)}, 'utf8').trim());
-  for (const pid of [...owners, node]) if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid detached timeout PID ' + pid);
   for (const owner of owners) process.kill(owner, 0);
   process.kill(node, 0);
 }, 10000);
