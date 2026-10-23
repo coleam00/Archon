@@ -244,28 +244,37 @@ function toModelAliasPreset(entry: RawAliasEntry): ModelAliasPreset {
   };
 }
 
-export interface BuildAiProfileOptions {
-  /** Tier overrides from ~/.archon/config.yaml */
-  globalTiers?: RawTiersConfig;
-  /** Tier overrides from .archon/config.yaml (repo) — override globalTiers on key collision */
-  repoTiers?: RawTiersConfig;
-  /** Aliases from ~/.archon/config.yaml */
-  globalAliases?: RawAliasesConfig;
-  /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
-  repoAliases?: RawAliasesConfig;
-  /** Per-user tier overrides (DB) — highest precedence, override repoTiers on key collision */
-  userTiers?: RawTiersConfig;
-  /** Per-user aliases (DB) — highest precedence, override repoAliases on key collision */
-  userAliases?: RawAliasesConfig;
-  /** One invocation's tier rebindings — highest precedence, sparse by key. */
-  runTiers?: RawTiersConfig;
-  /** One invocation's alias rebindings — highest precedence, sparse by key. */
-  runAliases?: RawAliasesConfig;
-}
+const TIER_LAYERS = [
+  /** Tier overrides from ~/.archon/config.yaml. */
+  'globalTiers',
+  /** Repository overrides from .archon/config.yaml, above global tiers. */
+  'repoTiers',
+  /** Per-user overrides from the database, above repository tiers. */
+  'userTiers',
+  /** One invocation's sparse rebindings, above user tiers. */
+  'runTiers',
+] as const;
+
+const ALIAS_LAYERS = [
+  /** Aliases from ~/.archon/config.yaml. */
+  'globalAliases',
+  /** Repository aliases from .archon/config.yaml, above global aliases. */
+  'repoAliases',
+  /** Per-user aliases from the database, above repository aliases. */
+  'userAliases',
+  /** One invocation's sparse rebindings, above user aliases. */
+  'runAliases',
+] as const;
+
+export type BuildAiProfileOptions = {
+  [Layer in (typeof TIER_LAYERS)[number]]?: RawTiersConfig;
+} & {
+  [Layer in (typeof ALIAS_LAYERS)[number]]?: RawAliasesConfig;
+};
 
 /**
  * Build a ResolvedAiProfile by layering tier defaults → global tiers → repo tiers
- * → per-user tiers → global aliases → repo aliases → per-user aliases.
+ * → per-user tiers → run tiers → global aliases → repo aliases → per-user aliases → run aliases.
  * Throws if any alias name collides with a reserved tier name, or if an alias
  * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
@@ -274,18 +283,14 @@ export function buildAiProfile(
   options: BuildAiProfileOptions = {}
 ): ResolvedAiProfile {
   const aliases = defaultTierAliases(defaultProvider);
-  applyTierLayers(aliases, [
-    options.globalTiers,
-    options.repoTiers,
-    options.userTiers,
-    options.runTiers,
-  ]);
-  applyAliasLayers(aliases, [
-    options.globalAliases,
-    options.repoAliases,
-    options.userAliases,
-    options.runAliases,
-  ]);
+  applyTierLayers(
+    aliases,
+    TIER_LAYERS.map(key => options[key])
+  );
+  applyAliasLayers(
+    aliases,
+    ALIAS_LAYERS.map(key => options[key])
+  );
 
   // Profiles are persisted in JSON run metadata, where `undefined` is invalid.
   return { ...(defaultProvider !== undefined ? { defaultProvider } : {}), aliases };
