@@ -250,24 +250,7 @@ export function buildStatusBlocks(
       ? ':pause_button: Workflow paused'
       : ':arrows_counterclockwise: Workflow running';
 
-  const authoredOutcomeLabel =
-    snapshot.authoredOutcome === 'unavailable'
-      ? 'unavailable — failed to read persisted run'
-      : snapshot.authoredOutcome === undefined
-        ? undefined
-        : `\`${snapshot.authoredOutcome}\``;
-  const runFacts = authoredOutcomeLabel
-    ? `\n*Execution status:* \`${snapshot.status}\` · *Authored outcome:* ${authoredOutcomeLabel}`
-    : '';
-  const headerSection: KnownBlock = {
-    type: 'section',
-    text: {
-      type: 'mrkdwn',
-      text: `${header}${runFacts}\n*Workflow:* \`${snapshot.workflowName}\` · *Run:* \`${shortRunId(snapshot.runId)}\` · *Elapsed:* ${elapsed}`,
-    },
-  };
-
-  const blocks: KnownBlock[] = [headerSection];
+  const blocks: KnownBlock[] = [buildStatusHeader(snapshot, header, elapsed)];
   const approvalRecovery =
     snapshot.status === 'paused' && snapshot.approvalDeliveryFailed
       ? `Approval card could not be delivered. Run \`${snapshot.runId}\` is awaiting approval. Open the run in the Web UI to respond, or check \`${descriptor.workflowCommand.prefix}get ${snapshot.runId}\` for the gate and respond with \`${descriptor.workflowCommand.prefix}respond\`.`
@@ -295,19 +278,8 @@ export function buildStatusBlocks(
     });
   }
 
-  const footerParts: string[] = [];
-  if (terminalStatus && typeof snapshot.totalCostUsd === 'number') {
-    footerParts.push(`total cost: $${snapshot.totalCostUsd.toFixed(4)}`);
-  }
-  if ((snapshot.status === 'failed' || snapshot.status === 'cancelled') && snapshot.failureReason) {
-    footerParts.push(`reason: ${truncate(snapshot.failureReason, 200)}`);
-  }
-  if (footerParts.length > 0) {
-    blocks.push({
-      type: 'context',
-      elements: [{ type: 'mrkdwn', text: footerParts.map(p => `_${p}_`).join(' · ') }],
-    });
-  }
+  const footer = buildStatusFooter(snapshot, terminalStatus);
+  if (footer) blocks.push(footer);
 
   if (!terminalStatus) {
     blocks.push({
@@ -326,18 +298,65 @@ export function buildStatusBlocks(
 
   return {
     blocks,
-    fallbackText: `${
-      terminalStatus
-        ? `${TERMINAL_HEADER[terminalStatus]} (${snapshot.workflowName})`
-        : snapshot.status === 'paused'
-          ? `Workflow ${snapshot.workflowName} paused`
-          : `Workflow ${snapshot.workflowName} running`
-    }${
-      snapshot.authoredOutcome
-        ? ` · authored outcome: ${snapshot.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : snapshot.authoredOutcome}`
-        : ''
-    }${approvalRecovery ? ` · ${approvalRecovery}` : ''}`,
+    fallbackText: statusFallbackText(snapshot, terminalStatus, approvalRecovery),
   };
+}
+
+function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: string): KnownBlock {
+  const authoredOutcomeLabel =
+    snapshot.authoredOutcome === 'unavailable'
+      ? 'unavailable — failed to read persisted run'
+      : snapshot.authoredOutcome === undefined
+        ? undefined
+        : `\`${snapshot.authoredOutcome}\``;
+  const runFacts = authoredOutcomeLabel
+    ? `\n*Execution status:* \`${snapshot.status}\` · *Authored outcome:* ${authoredOutcomeLabel}`
+    : '';
+  return {
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `${header}${runFacts}\n*Workflow:* \`${snapshot.workflowName}\` · *Run:* \`${shortRunId(snapshot.runId)}\` · *Elapsed:* ${elapsed}`,
+    },
+  };
+}
+
+function buildStatusFooter(
+  snapshot: RunSnapshot,
+  terminalStatus: RunTerminalStatus | undefined
+): KnownBlock | undefined {
+  const footerParts: string[] = [];
+  if (terminalStatus && typeof snapshot.totalCostUsd === 'number') {
+    footerParts.push(`total cost: $${snapshot.totalCostUsd.toFixed(4)}`);
+  }
+  if ((snapshot.status === 'failed' || snapshot.status === 'cancelled') && snapshot.failureReason) {
+    footerParts.push(`reason: ${truncate(snapshot.failureReason, 200)}`);
+  }
+  if (footerParts.length > 0) {
+    return {
+      type: 'context',
+      elements: [{ type: 'mrkdwn', text: footerParts.map(p => `_${p}_`).join(' · ') }],
+    };
+  }
+  return undefined;
+}
+
+function statusFallbackText(
+  snapshot: RunSnapshot,
+  terminalStatus: RunTerminalStatus | undefined,
+  approvalRecovery: string | undefined
+): string {
+  return `${
+    terminalStatus
+      ? `${TERMINAL_HEADER[terminalStatus]} (${snapshot.workflowName})`
+      : snapshot.status === 'paused'
+        ? `Workflow ${snapshot.workflowName} paused`
+        : `Workflow ${snapshot.workflowName} running`
+  }${
+    snapshot.authoredOutcome
+      ? ` · authored outcome: ${snapshot.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : snapshot.authoredOutcome}`
+      : ''
+  }${approvalRecovery ? ` · ${approvalRecovery}` : ''}`;
 }
 
 type OpenNotice = Exclude<ChatAttentionNotice, { type: 'terminal' }>;
