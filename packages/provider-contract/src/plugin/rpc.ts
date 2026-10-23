@@ -347,37 +347,40 @@ export class PluginRpc {
     let parts: Uint8Array[] = [];
     let bytes = 0;
     const decoder = new TextDecoder('utf-8', { fatal: true });
+    const readChunk = (value: Uint8Array): void => {
+      let start = 0;
+      for (let index = 0; index <= value.length; index++) {
+        const newline = index < value.length && value[index] === 10;
+        if (!newline && index < value.length) continue;
+        const part = value.subarray(start, index);
+        bytes += part.byteLength;
+        if (bytes > PLUGIN_MAX_MESSAGE_BYTES)
+          throw new PluginProtocolError(
+            this.plugin,
+            this.line + 1,
+            'message exceeds maximum byte length'
+          );
+        if (part.length) parts.push(part);
+        if (newline) {
+          this.line++;
+          const line = new Uint8Array(bytes);
+          let offset = 0;
+          for (const piece of parts) {
+            line.set(piece, offset);
+            offset += piece.length;
+          }
+          this.handleLine(decoder, line);
+          parts = [];
+          bytes = 0;
+        }
+        start = index + 1;
+      }
+    };
     try {
       while (!this.ended) {
         const { value, done } = await this.reader.read();
         if (done) break;
-        let start = 0;
-        for (let index = 0; index <= value.length; index++) {
-          const newline = index < value.length && value[index] === 10;
-          if (!newline && index < value.length) continue;
-          const part = value.subarray(start, index);
-          bytes += part.byteLength;
-          if (bytes > PLUGIN_MAX_MESSAGE_BYTES)
-            throw new PluginProtocolError(
-              this.plugin,
-              this.line + 1,
-              'message exceeds maximum byte length'
-            );
-          if (part.length) parts.push(part);
-          if (newline) {
-            this.line++;
-            const line = new Uint8Array(bytes);
-            let offset = 0;
-            for (const piece of parts) {
-              line.set(piece, offset);
-              offset += piece.length;
-            }
-            this.handleLine(decoder, line);
-            parts = [];
-            bytes = 0;
-          }
-          start = index + 1;
-        }
+        readChunk(value);
       }
       if (bytes) throw new PluginProtocolError(this.plugin, this.line + 1, 'unterminated message');
       if (this.failure) throw this.failure;
