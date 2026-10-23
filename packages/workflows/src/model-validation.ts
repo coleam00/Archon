@@ -273,8 +273,26 @@ export function buildAiProfile(
   defaultProvider: string | undefined,
   options: BuildAiProfileOptions = {}
 ): ResolvedAiProfile {
-  const aliases: Record<string, ModelAliasPreset> = {};
+  const aliases = defaultTierAliases(defaultProvider);
+  applyTierLayers(aliases, [
+    options.globalTiers,
+    options.repoTiers,
+    options.userTiers,
+    options.runTiers,
+  ]);
+  applyAliasLayers(aliases, [
+    options.globalAliases,
+    options.repoAliases,
+    options.userAliases,
+    options.runAliases,
+  ]);
 
+  // Profiles are persisted in JSON run metadata, where `undefined` is invalid.
+  return { ...(defaultProvider !== undefined ? { defaultProvider } : {}), aliases };
+}
+
+function defaultTierAliases(defaultProvider: string | undefined): Record<string, ModelAliasPreset> {
+  const aliases: Record<string, ModelAliasPreset> = {};
   const tierEntries = defaultProvider === undefined ? undefined : TIER_DEFAULTS[defaultProvider];
   if (tierEntries && defaultProvider !== undefined) {
     for (const tier of TIER_NAMES) {
@@ -289,12 +307,14 @@ export function buildAiProfile(
     }
   }
 
-  for (const layer of [
-    options.globalTiers,
-    options.repoTiers,
-    options.userTiers,
-    options.runTiers,
-  ]) {
+  return aliases;
+}
+
+function applyTierLayers(
+  aliases: Record<string, ModelAliasPreset>,
+  layers: readonly (RawTiersConfig | undefined)[]
+): void {
+  for (const layer of layers) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertValidTierName(name);
@@ -302,13 +322,13 @@ export function buildAiProfile(
       aliases[name] = toModelAliasPreset(entry);
     }
   }
+}
 
-  for (const layer of [
-    options.globalAliases,
-    options.repoAliases,
-    options.userAliases,
-    options.runAliases,
-  ]) {
+function applyAliasLayers(
+  aliases: Record<string, ModelAliasPreset>,
+  layers: readonly (RawAliasesConfig | undefined)[]
+): void {
+  for (const layer of layers) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertNotReserved(name);
@@ -317,9 +337,6 @@ export function buildAiProfile(
       aliases[name] = toModelAliasPreset(entry);
     }
   }
-
-  // Profiles are persisted in JSON run metadata, where `undefined` is invalid.
-  return { ...(defaultProvider !== undefined ? { defaultProvider } : {}), aliases };
 }
 
 function presetForOverrideTarget(profile: ResolvedAiProfile, name: string): ModelAliasPreset {
