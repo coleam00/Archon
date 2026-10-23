@@ -198,6 +198,20 @@ describe('node record serializers', () => {
     expect(restored?.data).not.toHaveProperty('cost_usd');
   });
 
+  it('projects the requested binding onto the started event', () => {
+    const source = record();
+    source.lifecycle = { status: 'started' };
+    source.binding.effort = 'high';
+
+    expect(serializeNodeEmitter(source)).toMatchObject({
+      type: 'node_started',
+      provider: 'claude',
+      model: 'large',
+      tier: 'large',
+      effort: 'high',
+    });
+  });
+
   it('projects one canonical record truthfully through persistence, transcript, emitter and runtime', () => {
     const source = record();
     const durable = serializeNodeStateRecord(source);

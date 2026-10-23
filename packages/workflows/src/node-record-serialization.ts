@@ -293,7 +293,7 @@ function nodeKindFields(node: NodeDescriptor): SerializedNodeData {
   }
 }
 
-function bindingFields(binding: NodeExecutionRecord['binding']): SerializedNodeData {
+function bindingFields(binding: NodeExecutionRecord['binding']) {
   return {
     ...(binding.provider !== undefined ? { provider: binding.provider } : {}),
     ...(binding.model?.requested !== undefined ? { model: binding.model.requested } : {}),
@@ -528,7 +528,7 @@ export function serializeNodeEmitter(
         ...base,
         execution,
         type: 'node_started',
-        ...emitterBinding(record.binding),
+        ...bindingFields(record.binding),
       };
     case 'completed':
       return {
@@ -552,15 +552,6 @@ export function serializeNodeEmitter(
     case 'suspended':
       return { ...base, execution, type: 'node_suspended' };
   }
-}
-
-function emitterBinding(binding: NodeExecutionRecord['binding']) {
-  return {
-    ...(binding.provider !== undefined ? { provider: binding.provider } : {}),
-    ...(binding.model?.requested !== undefined ? { model: binding.model.requested } : {}),
-    ...(binding.tier !== undefined ? { tier: binding.tier } : {}),
-    ...(binding.effort !== undefined ? { effort: binding.effort } : {}),
-  };
 }
 
 function emitterCompletion(record: NodeExecutionRecord) {

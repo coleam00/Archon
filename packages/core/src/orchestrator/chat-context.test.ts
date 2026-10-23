@@ -388,7 +388,7 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
     );
     const repoOnly = makeTestWorkflowWithSource({ name: 'repo-only' }, 'project');
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
-      workflows: [globalOnly, globalAssist],
+      workflows: [globalAssist, globalOnly],
       errors: [],
     });
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
@@ -398,7 +398,7 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
 
     const result = await discoverAllWorkflows(conversation);
 
-    expect(result.workflows).toEqual([globalOnly, repoAssist, repoOnly]);
+    expect(result.workflows).toEqual([repoAssist, globalOnly, repoOnly]);
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledTimes(2);
   });
 
