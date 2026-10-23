@@ -10,6 +10,24 @@ sidebar:
 
 Common issues and their solutions when running Archon.
 
+## Codex credential preflight fails while other Codex work succeeds
+
+Multiple Codex processes can try to refresh the same native ChatGPT login. One
+process may keep a rejected refresh token after another has saved a working login,
+causing a credential check to report "no usable login".
+
+Archon rechecks that result once in a fresh Codex process, using the same caller
+deadline and requesting a refresh again. It logs `codex.native_login_rechecked`
+with the resulting credential state. Errors, timeouts and malformed responses
+remain inconclusive checks; the recheck does not bypass authentication or send a
+model request.
+
+Run `archon doctor` under the same OS user and environment as the server to check
+its current native login. `codex login status` alone does not prove that a refresh
+will succeed. If doctor reports the login usable, resume an affected run by its
+existing ID after resolving any outstanding run-specific gates. If the native
+login remains unavailable, use `codex login` and check again before resuming.
+
 ## Project uses an unexpected provider
 
 New projects follow the configured provider when a conversation is created: repository

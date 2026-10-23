@@ -237,22 +237,42 @@ export class CodexProvider implements IAgentProvider {
     request: Parameters<IAgentProvider['checkCredential']>[0]
   ): Promise<CredentialStatus> {
     const { signal } = request;
+    let onAbort: (() => void) | undefined;
+    // Keep one cancellation subscription across both processes and their cleanup.
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = (): void => {
+        const reason: unknown = signal.reason;
+        reject(reason instanceof Error ? reason : new Error(String(reason)));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+      const status = await this.checkCredentialOnce(request, aborted);
+      if (status.state !== 'unusable') return status;
+      // Concurrent Codex processes can refresh the same native login. The losing process
+      // retains its rejected token even after the winner saves a working one. A new process
+      // reloads that login; it must still pass the refresh check within the caller's deadline.
+      const rechecked = await this.checkCredentialOnce(request, aborted);
+      getLog().info({ state: rechecked.state }, 'codex.native_login_rechecked');
+      return rechecked;
+    } finally {
+      if (onAbort) signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  private async checkCredentialOnce(
+    request: Parameters<IAgentProvider['checkCredential']>[0],
+    aborted: Promise<never>
+  ): Promise<CredentialStatus> {
+    const { signal } = request;
     const { env, resolveBinary } = codexLaunch(request.assistantConfig, request.env);
     let connection: AppServerConnection | undefined;
-    let onAbort: (() => void) | undefined;
     try {
       signal.throwIfAborted();
       if (codexLogin(env)) return { state: 'usable', source: 'native' };
-      const binary = await resolveBinary();
+      const binary = await Promise.race([aborted, resolveBinary()]);
       signal.throwIfAborted();
       connection = AppServerConnection.start(binary, [], env, this.spawner);
-      const aborted = new Promise<never>((_resolve, reject) => {
-        onAbort = (): void => {
-          const reason: unknown = signal.reason;
-          reject(reason instanceof Error ? reason : new Error(String(reason)));
-        };
-        signal.addEventListener('abort', onAbort, { once: true });
-      });
       await Promise.race([
         aborted,
         connection.request('initialize', {
@@ -302,7 +322,6 @@ export class CodexProvider implements IAgentProvider {
         ),
       };
     } finally {
-      if (onAbort) signal.removeEventListener('abort', onAbort);
       await connection?.shutdown(this.shutdownGraceMs);
     }
   }
