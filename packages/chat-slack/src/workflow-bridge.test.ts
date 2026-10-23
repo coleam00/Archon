@@ -625,7 +625,7 @@ test('cancel cascade guidance follows the descriptor prefix', async () => {
     await started();
     runAction.mockResolvedValue({
       status: 'done',
-      result: { kind: 'stopped', pid: 123, cascadeFailures: 2 },
+      result: { kind: 'stopped', pid: 123, cascadeFailures: 2, blockedParentRunId: null },
     });
     await click('cancel:run');
     expect(slack.posts.at(-1)).toMatchObject({
