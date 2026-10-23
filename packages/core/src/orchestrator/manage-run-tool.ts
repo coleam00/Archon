@@ -390,9 +390,6 @@ function formatRunGate(run: WorkflowRun): string[] {
     const excerpt = (rawApproval.signaledOutput ?? '').trim().slice(0, 300);
     if (excerpt) parts.push(`output: ${excerpt}`);
   }
-  // Paused gate with an author-declared decision vocabulary beyond approve/reject
-  // (#2707 step 2) — surface it so the agent knows what action=respond accepts,
-  // instead of guessing at a decision id.
   if (
     run.status === 'paused' &&
     isApprovalContext(rawApproval) &&
