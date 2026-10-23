@@ -152,64 +152,7 @@ export async function executeBashNode(
     certified = certifyExecOutput(node, trimmedStdout, credentialValues);
     await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
   } catch (error) {
-    const err = error as RawSubprocessRejection;
-    // A contract failure (#2453) is Archon's own diagnosis of stdout, not a subprocess
-    // rejection. Report it verbatim and keep it outside subprocess classification.
-    const contractFailure = error instanceof ExecOutputContractError;
-    const isTimeout = !contractFailure && isSubprocessTimeout(err);
-    if (isTimeout && node.on_timeout === 'skip') {
-      return recordExecTimeoutSkip(ctx, execution);
-    }
-    const label = `Bash node '${node.id}'`;
-    // Always run the formatter so logs get sanitized fields regardless of which
-    // user-facing branch we end up in — the timeout message also contains the
-    // full `Command failed: bash -c <body>` line and would otherwise leak.
-    const formatted = formatSubprocessFailure(err, label);
-    const spawnMessage = formatHostSpawnFailure(
-      hostSpawnFailure(execContext, err),
-      'sh',
-      bashPath,
-      label
-    );
-    let errorMsg: string;
-    if (contractFailure) {
-      errorMsg = err.message;
-    } else if (isTimeout) {
-      errorMsg = `${label} timed out after ${String(node.timeout)}ms`;
-    } else if (err.treeSurvived) {
-      errorMsg = `${label} failed: ${err.message}`;
-    } else if (err.cancelled) {
-      errorMsg = `${label} cancelled`;
-    } else if (spawnMessage !== undefined) {
-      errorMsg = spawnMessage;
-    } else {
-      errorMsg = formatted.userMessage;
-    }
-
-    getLog().error(
-      { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
-      'dag_node_failed'
-    );
-
-    return recordNodeState(
-      { store: deps.store, logDir },
-      finishNodeExecution(
-        execution,
-        {
-          status: 'failed',
-          error: errorMsg,
-          failureKind: contractFailure
-            ? 'output_contract'
-            : err.cancelled
-              ? 'cancelled'
-              : isTimeout
-                ? 'timeout'
-                : 'exec_failed',
-          ...(contractFailure ? { retryable: false as const } : {}),
-        },
-        { output: { text: '' } }
-      )
-    );
+    return recordBashFailure(ctx, node, execution, bashPath, error);
   }
 
   const output = certified.output;
@@ -237,6 +180,94 @@ export async function executeBashNode(
           },
         },
       }
+    )
+  );
+}
+
+function bashFailureMessage(
+  err: RawSubprocessRejection,
+  node: ExecNode,
+  contractFailure: boolean,
+  isTimeout: boolean,
+  spawnMessage: string | undefined,
+  fallback: string
+): string {
+  const label = `Bash node '${node.id}'`;
+  if (contractFailure) {
+    return err.message;
+  }
+  if (isTimeout) {
+    return `${label} timed out after ${String(node.timeout)}ms`;
+  }
+  if (err.treeSurvived) {
+    return `${label} failed: ${err.message}`;
+  }
+  if (err.cancelled) {
+    return `${label} cancelled`;
+  }
+  if (spawnMessage !== undefined) {
+    return spawnMessage;
+  }
+  return fallback;
+}
+
+async function recordBashFailure(
+  ctx: RunLayersContext,
+  node: ExecNode,
+  execution: NodeExecutionRecord,
+  bashPath: string,
+  error: unknown
+): Promise<NodeExecutionResult> {
+  const err = error as RawSubprocessRejection;
+  // A contract failure (#2453) is Archon's own diagnosis of stdout, not a subprocess
+  // rejection. Report it verbatim and keep it outside subprocess classification.
+  const contractFailure = error instanceof ExecOutputContractError;
+  const isTimeout = !contractFailure && isSubprocessTimeout(err);
+  if (isTimeout && node.on_timeout === 'skip') {
+    return recordExecTimeoutSkip(ctx, execution);
+  }
+  const label = `Bash node '${node.id}'`;
+  // Always run the formatter so logs get sanitized fields regardless of which
+  // user-facing branch we end up in — the timeout message also contains the
+  // full `Command failed: bash -c <body>` line and would otherwise leak.
+  const formatted = formatSubprocessFailure(err, label);
+  const spawnMessage = formatHostSpawnFailure(
+    hostSpawnFailure(ctx.execContext, err),
+    'sh',
+    bashPath,
+    label
+  );
+  const errorMsg = bashFailureMessage(
+    err,
+    node,
+    contractFailure,
+    isTimeout,
+    spawnMessage,
+    formatted.userMessage
+  );
+
+  getLog().error(
+    { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
+    'dag_node_failed'
+  );
+
+  return recordNodeState(
+    { store: ctx.deps.store, logDir: ctx.logDir },
+    finishNodeExecution(
+      execution,
+      {
+        status: 'failed',
+        error: errorMsg,
+        failureKind: contractFailure
+          ? 'output_contract'
+          : err.cancelled
+            ? 'cancelled'
+            : isTimeout
+              ? 'timeout'
+              : 'exec_failed',
+        ...(contractFailure ? { retryable: false as const } : {}),
+      },
+      { output: { text: '' } }
     )
   );
 }
