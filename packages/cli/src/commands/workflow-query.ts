@@ -123,7 +123,7 @@ export async function workflowTestCommand(
       })),
       passed: report.passed,
       failed: report.failed,
-      errors: fixtureLoadErrorsJson(errors),
+      errors: workflowLoadErrorsJson(errors),
     });
   } else {
     await writeStdout(`${formatFixtureReport(report)}\n${formatFixtureLoadErrors(errors)}`);
@@ -139,7 +139,7 @@ export async function workflowTestCommand(
   return 0;
 }
 
-function fixtureLoadErrorsJson(errors: readonly WorkflowLoadError[]) {
+function workflowLoadErrorsJson(errors: readonly WorkflowLoadError[]) {
   return errors.map(e => ({ filename: e.filename, error: e.error, errorType: e.errorType }));
 }
 
@@ -157,7 +157,7 @@ async function writeFixtureFailure(
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   if (json) {
-    await writeJsonLine({ ok: false, error: message, errors: fixtureLoadErrorsJson(errors) });
+    await writeJsonLine({ ok: false, error: message, errors: workflowLoadErrorsJson(errors) });
   } else {
     await writeStdout(`Error: ${message}\n${formatFixtureLoadErrors(errors)}`);
   }
@@ -247,7 +247,7 @@ export async function workflowListCommand(
       // wrote. `webSearchMode` is the one that stays on the definition — it has no
       // per-node form to collapse onto.
       workflows: listedEntries.map(entry => workflowJsonEntry(entry, options.full === true)),
-      errors: fixtureLoadErrorsJson(errors),
+      errors: workflowLoadErrorsJson(errors),
     };
     await writeJsonLine(output);
     return;

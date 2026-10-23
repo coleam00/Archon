@@ -40,8 +40,8 @@ registerBuiltinProviders();
 describe('validateWorkflowsCommand', () => {
   const originalLog = console.log;
   const originalError = console.error;
-  const mockConsoleLog = mock(() => {});
-  const mockConsoleError = mock(() => {});
+  const mockConsoleLog = mock<typeof console.log>(() => {});
+  const mockConsoleError = mock<typeof console.error>(() => {});
   let validationCwd: string;
 
   beforeEach(async () => {
@@ -290,7 +290,7 @@ describe('validateWorkflowsCommand', () => {
 });
 
 describe('validateCommandsCommand output', () => {
-  let logSpy: ReturnType<typeof spyOn>;
+  let logSpy: ReturnType<typeof spyOn<typeof console, 'log'>>;
   const invalid = {
     commandName: 'broken',
     valid: false,

@@ -676,9 +676,9 @@ describe('workflowTestCommand', () => {
         workflows: [makeTestWorkflowWithSource({ name: 'plan' }, 'project')],
       })
     );
-    expect(firstJsonPayload(stdoutSpy)).toContain('1 workflow(s) failed to load:');
-    expect(firstJsonPayload(stdoutSpy)).toContain(
-      '  broken.yaml: YAML parse error: unexpected end of document'
+    expect(stdoutSpy).toHaveBeenCalledTimes(1);
+    expect(stdoutSpy.mock.calls[0]?.[0]).toBe(
+      'FIXTURE REPORT\n\n1 workflow(s) failed to load:\n\n  broken.yaml: YAML parse error: unexpected end of document\n'
     );
   });
 
@@ -732,10 +732,9 @@ describe('workflowTestCommand', () => {
     const exit = await workflowTestCommand('/test/path', 'missing');
 
     expect(exit).toBe(1);
-    expect(firstJsonPayload(stdoutSpy)).toContain("Error: No fixtures found for 'missing'.");
-    expect(firstJsonPayload(stdoutSpy)).toContain('1 workflow(s) failed to load:');
-    expect(firstJsonPayload(stdoutSpy)).toContain(
-      '  broken.yaml: YAML parse error: unexpected end of document'
+    expect(stdoutSpy).toHaveBeenCalledTimes(1);
+    expect(stdoutSpy.mock.calls[0]?.[0]).toBe(
+      "Error: No fixtures found for 'missing'.\n\n1 workflow(s) failed to load:\n\n  broken.yaml: YAML parse error: unexpected end of document\n"
     );
   });
 

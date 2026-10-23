@@ -104,7 +104,6 @@ export async function validateWorkflowsCommand(
     }
   }
 
-  // Error count descending, then name.
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
     const bErrors = b.issues.filter(i => i.level === 'error').length;
