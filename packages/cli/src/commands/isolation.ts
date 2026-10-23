@@ -104,15 +104,7 @@ export async function isolationListCommand(): Promise<void> {
   console.log(`\nTotal: ${String(containers.length)} container environment(s)`);
 }
 
-/**
- * Cleanup stale isolation environments.
- * Note: This command has its own stale-finding logic (per-env worktree destroy)
- * distinct from the cleanup-service's cleanupStaleWorktrees (which uses different
- * criteria). Kept here because the display-heavy flow doesn't map cleanly to
- * the operations layer's batch-oriented API.
- */
-export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
-  // Reconcile ghosts via the operations layer
+async function reportCleanupReconciliation(): Promise<void> {
   const { ghostsReconciled, codebases } = await listEnvironments();
   if (ghostsReconciled > 0) {
     console.log(`Reconciled ${String(ghostsReconciled)} ghost environment(s) (missing from disk).`);
@@ -125,95 +117,79 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
       }
     }
   }
+}
 
-  console.log(`Finding environments with no activity for ${String(daysStale)}+ days...`);
+type StaleEnvironment = Awaited<ReturnType<typeof isolationDb.findStaleEnvironments>>[number];
 
-  const staleEnvs = (await isolationDb.findStaleEnvironments(daysStale)).filter(
-    env => env.provider === 'worktree'
-  );
+async function cleanupStaleWorktree(
+  env: StaleEnvironment,
+  daysStale: number,
+  provider: ReturnType<typeof getIsolationProvider>
+): Promise<'cleaned' | 'skipped' | 'failed'> {
+  console.log(`\nCleaning: ${env.branch_name ?? env.workflow_id}`);
+  console.log(`  Path: ${env.working_path}`);
 
-  if (staleEnvs.length === 0) {
-    console.log('No stale worktree environments found.');
-  } else {
-    console.log(`Found ${String(staleEnvs.length)} stale worktree environment(s):`);
-  }
-
-  const provider = getIsolationProvider();
-  let cleaned = 0;
-  let skipped = 0;
-  let failed = 0;
-
-  for (const env of staleEnvs) {
-    console.log(`\nCleaning: ${env.branch_name ?? env.workflow_id}`);
-    console.log(`  Path: ${env.working_path}`);
-
-    try {
-      // Same lock the cleanup-service sweeps use: a run that can still claim the
-      // environment blocks removal, even when the conversation recency filter
-      // marks the env stale. A failed run past the window no longer does.
-      const lock = await getCleanupRunLock(env, toRepoPath(env.codebase_default_cwd), {
-        kind: 'stale',
-        staleDays: daysStale,
-      });
-      if (lock.kind === 'locked') {
-        const { runId, runStatus, display } = lock.blocker;
-        getLog().info({ envId: env.id, runId, runStatus }, 'skip_stale_live_run');
-        console.log(`  Status: Skipped — ${display}`);
-        skipped++;
-        continue;
-      }
-      if (lock.kind === 'unpushed') {
-        getLog().warn(
-          { envId: env.id, ...(lock.runId ? { runId: lock.runId } : {}) },
-          'skip_stale_unpushed_commits'
-        );
-        console.log(`  Status: Skipped — ${lock.display}`);
-        skipped++;
-        continue;
-      }
-
-      const result = await isolationDb.withWorktreeRegistration(env, async markDestroyed => {
-        const result = await provider.destroy(env.working_path, {
-          // A stale environment's branch is deleted only when the environment created it;
-          // an existing branch it checked out may hold commits that exist nowhere else.
-          branchName:
-            env.branch_name && readWorktreeBranchCreated(env.metadata)
-              ? toBranchName(env.branch_name)
-              : undefined,
-          canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
-          creationId: readWorktreeCreationId(env.metadata) ?? undefined,
-        });
-
-        if (!result.worktreeRemoved || !result.directoryClean) {
-          throw new Error(
-            `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
-          );
-        }
-        await markDestroyed();
-        return result;
-      });
-      for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
-      console.log(
-        lock.kind === 'released'
-          ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`
-          : '  Status: Cleaned'
-      );
-      cleaned++;
-    } catch (error) {
-      const err = error as Error;
-      getLog().warn({ err, envId: env.id, path: env.working_path }, 'worktree_destroy_failed');
-      console.error(`  Status: Failed - ${err.message}`);
-      failed++;
+  try {
+    // Same lock the cleanup-service sweeps use: a run that can still claim the
+    // environment blocks removal, even when the conversation recency filter
+    // marks the env stale. A failed run past the window no longer does.
+    const lock = await getCleanupRunLock(env, toRepoPath(env.codebase_default_cwd), {
+      kind: 'stale',
+      staleDays: daysStale,
+    });
+    if (lock.kind === 'locked') {
+      const { runId, runStatus, display } = lock.blocker;
+      getLog().info({ envId: env.id, runId, runStatus }, 'skip_stale_live_run');
+      console.log(`  Status: Skipped — ${display}`);
+      return 'skipped';
     }
+    if (lock.kind === 'unpushed') {
+      getLog().warn(
+        { envId: env.id, ...(lock.runId ? { runId: lock.runId } : {}) },
+        'skip_stale_unpushed_commits'
+      );
+      console.log(`  Status: Skipped — ${lock.display}`);
+      return 'skipped';
+    }
+
+    const result = await isolationDb.withWorktreeRegistration(env, async markDestroyed => {
+      const result = await provider.destroy(env.working_path, {
+        // A stale environment's branch is deleted only when the environment created it;
+        // an existing branch it checked out may hold commits that exist nowhere else.
+        branchName:
+          env.branch_name && readWorktreeBranchCreated(env.metadata)
+            ? toBranchName(env.branch_name)
+            : undefined,
+        canonicalRepoPath: toRepoPath(env.codebase_default_cwd),
+        creationId: readWorktreeCreationId(env.metadata) ?? undefined,
+      });
+
+      if (!result.worktreeRemoved || !result.directoryClean) {
+        throw new Error(
+          `Worktree removal incomplete; environment retained. ${result.warnings.join('; ')}`
+        );
+      }
+      await markDestroyed();
+      return result;
+    });
+    for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
+    console.log(
+      lock.kind === 'released'
+        ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`
+        : '  Status: Cleaned'
+    );
+    return 'cleaned';
+  } catch (error) {
+    const err = error as Error;
+    getLog().warn({ err, envId: env.id, path: env.working_path }, 'worktree_destroy_failed');
+    console.error(`  Status: Failed - ${err.message}`);
+    return 'failed';
   }
+}
 
-  console.log(
-    `\nCleanup complete: ${String(cleaned)} cleaned, ${String(skipped)} skipped, ${String(failed)} failed`
-  );
-
-  // Reap orphaned container environments (terminal / run-less, older than the
-  // threshold). Paused runs' containers are deliberately skipped (awaited state).
-  const containerReport = await cleanupContainerEnvironments(daysStale);
+function printContainerCleanupReport(
+  containerReport: Awaited<ReturnType<typeof cleanupContainerEnvironments>>
+): void {
   const containerTotal =
     containerReport.removed.length + containerReport.skipped.length + containerReport.errors.length;
   if (containerTotal > 0) {
@@ -233,7 +209,45 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
         `${String(containerReport.errors.length)} failed`
     );
   }
-  return failed > 0 || containerReport.errors.length > 0 ? 1 : 0;
+}
+
+/**
+ * Cleanup stale isolation environments.
+ * Note: This command has its own stale-finding logic (per-env worktree destroy)
+ * distinct from the cleanup-service's cleanupStaleWorktrees (which uses different
+ * criteria). Kept here because the display-heavy flow doesn't map cleanly to
+ * the operations layer's batch-oriented API.
+ */
+export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
+  await reportCleanupReconciliation();
+
+  console.log(`Finding environments with no activity for ${String(daysStale)}+ days...`);
+
+  const staleEnvs = (await isolationDb.findStaleEnvironments(daysStale)).filter(
+    env => env.provider === 'worktree'
+  );
+
+  if (staleEnvs.length === 0) {
+    console.log('No stale worktree environments found.');
+  } else {
+    console.log(`Found ${String(staleEnvs.length)} stale worktree environment(s):`);
+  }
+
+  const provider = getIsolationProvider();
+  const counts = { cleaned: 0, skipped: 0, failed: 0 };
+  for (const env of staleEnvs) {
+    counts[await cleanupStaleWorktree(env, daysStale, provider)]++;
+  }
+
+  console.log(
+    `\nCleanup complete: ${String(counts.cleaned)} cleaned, ${String(counts.skipped)} skipped, ${String(counts.failed)} failed`
+  );
+
+  // Reap orphaned container environments (terminal / run-less, older than the
+  // threshold). Paused runs' containers are deliberately skipped (awaited state).
+  const containerReport = await cleanupContainerEnvironments(daysStale);
+  printContainerCleanupReport(containerReport);
+  return counts.failed > 0 || containerReport.errors.length > 0 ? 1 : 0;
 }
 
 function printMergedCleanupResult(result: MergedCleanupResult): void {
