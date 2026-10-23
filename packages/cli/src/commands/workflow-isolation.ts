@@ -29,7 +29,7 @@ import {
   type PreparedWorkflowSource,
 } from '@archon/workflows/run-source';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { isContainerRun, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { getArchonHome } from '@archon/paths';
 import { join } from 'node:path';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -431,7 +431,7 @@ export function folderRunsInContainer(
   resumable: Pick<WorkflowRun, 'metadata'> | null | undefined
 ): boolean {
   return options.resume
-    ? resumable?.metadata?.isolation === 'container'
+    ? resumable != null && isContainerRun(resumable)
     : (options.container ??
         workflow.container?.enabled ??
         folderConfig?.container?.enabled ??

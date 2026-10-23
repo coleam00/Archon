@@ -56,8 +56,8 @@ async function confirmedRunContainer(
   ctx: OperationContext,
   run: WorkflowRun
 ): Promise<string | undefined> {
-  if (run.metadata?.isolation !== 'container') return undefined;
-  const envId = run.metadata.isolation_env_id;
+  if (!isContainerRun(run)) return undefined;
+  const envId = run.metadata?.isolation_env_id;
   if (typeof envId !== 'string' || envId.trim().length === 0) {
     throw new CancelRefusedError(
       'not_stopped',

@@ -2,6 +2,7 @@ import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
+  isContainerRun,
   isRunBlockedOnChild,
   readExecutionOwner,
 } from '@archon/workflows/schemas/workflow-run';
@@ -266,10 +267,7 @@ export async function reclaimCancelledRunContainer(
   ctx: OperationContext,
   run: WorkflowRun
 ): Promise<string[]> {
-  if (
-    run.metadata?.isolation !== 'container' ||
-    typeof run.metadata.isolation_env_id !== 'string'
-  ) {
+  if (!isContainerRun(run) || typeof run.metadata?.isolation_env_id !== 'string') {
     return [];
   }
   try {
