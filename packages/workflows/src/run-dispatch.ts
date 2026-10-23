@@ -266,17 +266,18 @@ async function prepareDispatchAiConfiguration(
     const adoptedAiRun = await findAdoptedAiRun(deps, opts, isContinuation, !!recorded);
     const inherited =
       adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    return !recorded && !inherited && opts.preparedAiConfiguration
-      ? opts.preparedAiConfiguration
-      : await prepareRunAiConfiguration(deps, workflow, cwd, {
-          codebaseId: opts.codebaseId,
-          userId: executionUserId,
-          runConfig: opts.runConfig,
-          modelOverrideLayer: opts.modelOverrideLayer,
-          ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
-          aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
-          ...(recorded ? { inheritAiConfiguration: true } : {}),
-        });
+    if (!recorded && !inherited && opts.preparedAiConfiguration) {
+      return opts.preparedAiConfiguration;
+    }
+    return await prepareRunAiConfiguration(deps, workflow, cwd, {
+      codebaseId: opts.codebaseId,
+      userId: executionUserId,
+      runConfig: opts.runConfig,
+      modelOverrideLayer: opts.modelOverrideLayer,
+      ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
+      aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
+      ...(recorded ? { inheritAiConfiguration: true } : {}),
+    });
   } catch (error) {
     if (error instanceof TerminalStatusWriteError) throw error;
     if (preCreatedRun)
