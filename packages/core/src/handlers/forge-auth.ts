@@ -63,6 +63,38 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
 ];
 
 /**
+ * Self-hosted forges: the clone scheme and authority must equal a configured *_URL's.
+ * A hostname that merely looks like a forge (gitlab.attacker.example) gets no
+ * token, because anyone who can submit a clone URL controls that hostname.
+ */
+const SELF_HOSTED_FORGE_AUTH: {
+  resolveUrl: () => string | undefined;
+  resolveToken: () => string | undefined;
+  buildCredentials: BuildForgeCredentials;
+}[] = [
+  {
+    resolveUrl: () => readGitHubHost()?.webUrl,
+    resolveToken: resolveGitHubTokenFromEnv,
+    buildCredentials: githubTokenCredentials,
+  },
+  {
+    resolveUrl: () => process.env.GITEA_URL,
+    resolveToken: () => process.env.GITEA_TOKEN,
+    buildCredentials: tokenAsUsername,
+  },
+  {
+    resolveUrl: () => process.env.GITLAB_URL,
+    resolveToken: () => process.env.GITLAB_TOKEN,
+    buildCredentials: tokenAsOAuth2Password,
+  },
+  {
+    resolveUrl: () => process.env.FORGEJO_URL,
+    resolveToken: () => process.env.GITEA_TOKEN,
+    buildCredentials: tokenAsUsername,
+  },
+];
+
+/**
  * Resolve forge-specific credentials without adding them to the repository URL.
  * `url` is a clone URL that `validateCloneUrl` has normalized, so a bare
  * `host/path` has already become `https://host/path`.
@@ -75,73 +107,43 @@ export function resolveForgeAuth(url: string): CloneCredentials | undefined {
   const parsed = safeParseUrl(url);
   if (!parsed) return undefined;
   const hostname = parsed.hostname.toLowerCase();
+  const known = FORGE_AUTH.find(entry => entry.hostPattern === hostname);
+  return known ? resolveKnownForgeAuth(parsed, known) : resolveSelfHostedForgeAuth(parsed);
+}
+
+function resolveKnownForgeAuth(parsed: URL, entry: ForgeAuthEntry): CloneCredentials | undefined {
+  const token = entry.resolveToken();
+  if (parsed.protocol !== 'https:') {
+    logWithheldToken(parsed, token, 'https:');
+    return undefined;
+  }
+  return token ? entry.buildCredentials(token) : undefined;
+}
+
+function resolveSelfHostedForgeAuth(parsed: URL): CloneCredentials | undefined {
   const authority = parsed.host.toLowerCase();
-
-  // 1. Exact known-host match
-  // A withheld token is logged, because the clone then fails as an auth error that
-  // does not say why. Host and scheme only; never the token or the full URL.
-  const logWithheld = (token: string | undefined, expected: string): void => {
-    if (!token) return;
-    getLog().warn(
-      { host: authority, scheme: parsed.protocol, expectedScheme: expected },
-      'clone.forge_token_withheld_insecure_scheme'
-    );
-  };
-
-  for (const entry of FORGE_AUTH) {
-    if (hostname === entry.hostPattern) {
-      const token = entry.resolveToken();
-      if (parsed.protocol !== 'https:') {
-        logWithheld(token, 'https:');
-        return undefined;
-      }
-      return token ? entry.buildCredentials(token) : undefined;
-    }
-  }
-
-  // 2. Self-hosted: the clone scheme and authority must equal a configured *_URL's.
-  //    A hostname that merely looks like a forge (gitlab.attacker.example) gets no
-  //    token, because anyone who can submit a clone URL controls that hostname.
-  const URL_FORGE: {
-    resolveUrl: () => string | undefined;
-    resolveToken: () => string | undefined;
-    buildCredentials: BuildForgeCredentials;
-  }[] = [
-    {
-      resolveUrl: () => readGitHubHost()?.webUrl,
-      resolveToken: resolveGitHubTokenFromEnv,
-      buildCredentials: githubTokenCredentials,
-    },
-    {
-      resolveUrl: () => process.env.GITEA_URL,
-      resolveToken: () => process.env.GITEA_TOKEN,
-      buildCredentials: tokenAsUsername,
-    },
-    {
-      resolveUrl: () => process.env.GITLAB_URL,
-      resolveToken: () => process.env.GITLAB_TOKEN,
-      buildCredentials: tokenAsOAuth2Password,
-    },
-    {
-      resolveUrl: () => process.env.FORGEJO_URL,
-      resolveToken: () => process.env.GITEA_TOKEN,
-      buildCredentials: tokenAsUsername,
-    },
-  ];
-  for (const entry of URL_FORGE) {
+  for (const entry of SELF_HOSTED_FORGE_AUTH) {
     const forgeUrl = entry.resolveUrl();
-    if (forgeUrl) {
-      const forgeParsed = safeParseUrl(forgeUrl);
-      if (forgeParsed?.host.toLowerCase() === authority) {
-        const token = entry.resolveToken();
-        if (forgeParsed.protocol !== parsed.protocol) {
-          logWithheld(token, forgeParsed.protocol);
-          continue;
-        }
-        if (token) return entry.buildCredentials(token);
-      }
+    const forgeParsed = forgeUrl ? safeParseUrl(forgeUrl) : null;
+    if (forgeParsed?.host.toLowerCase() !== authority) continue;
+    const token = entry.resolveToken();
+    if (forgeParsed.protocol !== parsed.protocol) {
+      logWithheldToken(parsed, token, forgeParsed.protocol);
+      continue;
     }
+    if (token) return entry.buildCredentials(token);
   }
-
   return undefined;
+}
+
+/**
+ * A withheld token is logged, because the clone then fails as an auth error that
+ * does not say why. Host and scheme only; never the token or the full URL.
+ */
+function logWithheldToken(parsed: URL, token: string | undefined, expected: string): void {
+  if (!token) return;
+  getLog().warn(
+    { host: parsed.host.toLowerCase(), scheme: parsed.protocol, expectedScheme: expected },
+    'clone.forge_token_withheld_insecure_scheme'
+  );
 }
