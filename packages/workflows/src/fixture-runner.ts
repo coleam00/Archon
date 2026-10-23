@@ -43,6 +43,7 @@ import {
   type DryRunStubs,
 } from './dry-run';
 import type { WorkflowWithSource } from './schemas/workflow';
+import { workflowRunOutcomeSchema } from './schemas';
 import type { WorkflowConfig } from './deps';
 import type { ResolvedAiProfile } from './model-validation';
 import { resolveTopLevelInputs } from './utils/workflow-requirements';
@@ -69,6 +70,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export const fixtureDeclarationSchema = z
   .object({
     expect: z.enum(['completed', 'failed', 'paused', 'cancelled']).default('completed'),
+    authored: workflowRunOutcomeSchema.optional(),
     // A single node id, or the exact set of failed entries when one failure
     // implies another — a node failing inside a loop_group fails the group
     // too, so that shape is always two entries and was inexpressible before.
@@ -596,6 +598,31 @@ async function resolveFixtureConfig(
   return execCode && options.resolveExecConfig ? options.resolveExecConfig() : options.config;
 }
 
+function fixtureOutcomeFailure(
+  result: DryRunResult,
+  declaration: FixtureDeclaration
+): string | undefined {
+  if (result.outcome !== declaration.expect) {
+    return `expected ${declaration.expect}, dry-run reported ${result.outcome}`;
+  }
+  if (declaration.expect === 'failed') {
+    const failures = result.trace.filter(entry => entry.state === 'failed');
+    const declared = declaration['fail-node'];
+    const expected = (typeof declared === 'string' ? [declared] : [...(declared ?? [])]).sort();
+    const actual = failures.map(f => f.nodeId).sort();
+    if (expected.length !== actual.length || expected.some((id, i) => id !== actual[i])) {
+      return (
+        `expected exactly the failed trace entries [${expected.join(', ')}], got ` +
+        (actual.join(', ') || '(none)')
+      );
+    }
+  }
+  if (declaration.authored !== undefined && result.authoredOutcome !== declaration.authored) {
+    return `expected authored outcome ${declaration.authored}, dry-run reported ${result.authoredOutcome ?? 'undeclared'}`;
+  }
+  return undefined;
+}
+
 async function checkFixture(
   workflowName: string,
   ws: WorkflowWithSource,
@@ -628,23 +655,7 @@ async function checkFixture(
       });
     const result = execCode ? await withExecWorkspace(options.cwd, run) : await run(options.cwd);
 
-    let failureReason: string | undefined;
-    if (result.outcome !== parsed.declaration.expect) {
-      failureReason = `expected ${parsed.declaration.expect}, dry-run reported ${result.outcome}`;
-    } else if (parsed.declaration.expect === 'failed') {
-      const failures = result.trace.filter(entry => entry.state === 'failed');
-      const declared = parsed.declaration['fail-node'];
-      const expected = (typeof declared === 'string' ? [declared] : [...(declared ?? [])]).sort();
-      const actual = failures.map(f => f.nodeId).sort();
-      if (expected.length !== actual.length || expected.some((id, i) => id !== actual[i])) {
-        failureReason =
-          `expected exactly the failed trace entries [${expected.join(', ')}], got ` +
-          (actual.join(', ') || '(none)');
-      }
-    }
-    // Checked whenever declared, never chained after the outcome branches above: a
-    // fixture that expects a later gate to fail still has to prove the nodes before it
-    // ran, and a declaration that can silently prove nothing is worse than none.
+    let failureReason = fixtureOutcomeFailure(result, parsed.declaration);
     if (failureReason === undefined && parsed.declaration.reached !== undefined) {
       const missingReached = parsed.declaration.reached.filter(
         nodeId =>
