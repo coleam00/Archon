@@ -23,10 +23,12 @@ export async function maybeWarnLegacyCwdStoragePath(cwd: string, newRoot: string
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return;
+    if (warnedCwds.has(cwd)) return;
     warnedCwds.add(cwd);
     getLog().warn({ err, legacyPath }, 'workflow.legacy_cwd_storage_probe_error');
     return;
   }
+  if (warnedCwds.has(cwd)) return;
   warnedCwds.add(cwd);
   getLog().warn(
     {
