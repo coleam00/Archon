@@ -80,56 +80,62 @@ export function collectLoopBodyNodeIds(
  * lenient — every absent ref resolves to '', preserving the pre-#2142 behavior.
  */
 export function loopPrevRefToken(scope: LoopBodyScope, escapedForBash: boolean): TemplateToken {
-  const { loopPrevOutputs, outputFileDir, knownBodyIds, directBodyIds } = scope;
   return templateToken(PRIOR_OUTPUT_PATH_SOURCE, groups => {
     const [match, nodeId] = groups;
     // An optional group that did not match is undefined, whatever RegExpExecArray says.
     const field: string | undefined = groups[2];
-    const nodeOutput = loopPrevOutputs?.get(nodeId);
+    const nodeOutput = scope.loopPrevOutputs?.get(nodeId);
     if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
-      if (knownBodyIds) {
-        if (!knownBodyIds.has(nodeId)) {
-          // Typo: id matches NO body node anywhere in the enclosing loop_group (a typo
-          // the loader can't see — it never scans `$LOOP_PREV.*` refs). A `.field` ref
-          // fails the consuming node loudly, mirroring nodeOutputRefToken /
-          // resolveOutputRef; a whole-text ref stays lenient ('' below). The static set
-          // is required: the runtime `loopPrevOutputs` map is empty on iteration 1, so it
-          // alone cannot tell a typo from a legitimate first-pass absence.
-          if (field) {
-            throw new OutputRefError(nodeId, field, 'unknown-node', {
-              reference: match,
-              candidates: similarNodeIds(nodeId, knownBodyIds),
-            });
-          }
-        } else if (directBodyIds && !directBodyIds.has(nodeId)) {
-          // Known id owned by a NESTED loop_group, not this group's own body. Decline it so
-          // the inner loop_group's scope resolves it against its OWN prior-iteration
-          // snapshot — this scope must not consume it, or the inner loop could never
-          // reference its own previous iteration.
-          return undefined;
-        }
-        // else: known + direct id with no prior output → legitimate iteration-1 / skipped
-        // absence → lenient '' below.
-      }
-      // No prior-iteration output for this body node (iteration 1, or the node was
-      // skipped / hasn't settled last iteration). Resolve to empty rather than
-      // throwing — the author opted into a cross-iteration ref, and absence on the
-      // first pass (or after a skipped node) is expected.
-      getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
-      return escapedForBash ? "''" : '';
+      return resolveAbsentPriorOutput(scope, nodeId, field, match, escapedForBash);
     }
-    if (!field) {
-      return escapedForBash
-        ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
-        : nodeOutput.output;
-    }
-    const resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
-    if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
-    const value = resolution.value;
-    if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    const text = canonicalValueText(value);
-    return escapedForBash ? shellQuoteOrFile(text, nodeId, field, outputFileDir) : text;
+    return renderPriorOutput(nodeOutput, nodeId, field, match, scope.outputFileDir, escapedForBash);
   });
+}
+
+function resolveAbsentPriorOutput(
+  scope: LoopBodyScope,
+  nodeId: string,
+  field: string | undefined,
+  match: string,
+  escapedForBash: boolean
+): string | undefined {
+  const { knownBodyIds, directBodyIds } = scope;
+  if (knownBodyIds) {
+    if (!knownBodyIds.has(nodeId)) {
+      if (field) {
+        throw new OutputRefError(nodeId, field, 'unknown-node', {
+          reference: match,
+          candidates: similarNodeIds(nodeId, knownBodyIds),
+        });
+      }
+    } else if (directBodyIds && !directBodyIds.has(nodeId)) {
+      // Leave nested body ids for the inner scope's own prior-iteration snapshot.
+      return undefined;
+    }
+  }
+  getLog().debug({ nodeId, match }, 'loop_group_prev_ref_no_prior_output');
+  return escapedForBash ? "''" : '';
+}
+
+function renderPriorOutput(
+  nodeOutput: NodeOutput,
+  nodeId: string,
+  field: string | undefined,
+  match: string,
+  outputFileDir: string | undefined,
+  escapedForBash: boolean
+): string {
+  if (!field) {
+    return escapedForBash
+      ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
+      : nodeOutput.output;
+  }
+  const resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
+  if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
+  const value = resolution.value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  const text = canonicalValueText(value);
+  return escapedForBash ? shellQuoteOrFile(text, nodeId, field, outputFileDir) : text;
 }
 
 /**
