@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import * as processTools from '@archon/paths/plugin-process';
 import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import {
@@ -229,6 +231,38 @@ test('invalid detached process records preserve the fixture', async () => {
   await expect(f.scope.close()).rejects.toThrow('Invalid detached test PID');
   expect(existsSync(f.root)).toBe(true);
   unlinkSync(f.scope.detachedPids);
+});
+test('a refused detached group signal requires proof that the group is gone', async () => {
+  const f = fixture();
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  if (!child.pid) throw new Error('Missing detached child PID');
+  writeFileSync(f.scope.detachedPids, String(child.pid));
+  const refusedSignal = spyOn(processTools, 'terminateTree').mockRejectedValue(
+    Object.assign(new Error('Signal refused'), { code: 'EPERM' })
+  );
+  try {
+    await expect(f.scope.close()).rejects.toThrow(
+      process.platform === 'win32' ? 'Signal refused' : 'Process groups still running'
+    );
+    expect(existsSync(f.root)).toBe(true);
+    child.kill('SIGKILL');
+    await exited;
+    if (process.platform === 'win32') refusedSignal.mockRestore();
+    await f.scope.close();
+    expect(existsSync(f.root)).toBe(false);
+  } finally {
+    refusedSignal.mockRestore();
+    child.kill('SIGKILL');
+    await exited;
+  }
 });
 for (const launch of ['workflow', 'fire', 'drain'] as const) {
   test(`a timed-out ${launch} launcher stops its detached execution before removal`, async () => {

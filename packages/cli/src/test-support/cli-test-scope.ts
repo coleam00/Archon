@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { terminateTree } from '@archon/paths/plugin-process';
+import { confirmProcessGroupsGone, terminateTree } from '@archon/paths/plugin-process';
 import { removeTempTree } from '@archon/paths/test-utils';
 
 export class CliTestScope {
@@ -49,23 +49,37 @@ export class CliTestScope {
         throw new Error('Invalid detached test PID');
       const pending = owners.filter(pid => !stopped.has(pid));
       if (pending.length === 0) return;
-      for (const pid of pending) await terminateTree(pid);
+      for (const pid of pending) await stopDetachedTree(pid);
       for (const pid of pending) {
-        await waitForDetachedTreeExit(pid);
         stopped.add(pid);
       }
     }
   }
 }
 
-async function waitForDetachedTreeExit(pid: number): Promise<void> {
-  const target = process.platform === 'win32' ? pid : -pid;
+async function stopDetachedTree(pid: number): Promise<void> {
+  try {
+    await terminateTree(pid);
+  } catch (error) {
+    if (process.platform === 'win32' || (error as NodeJS.ErrnoException).code !== 'EPERM')
+      throw error;
+    // macOS can refuse a group signal after leader exit. Process-list confirmation
+    // below must still prove that no member survives before fixture removal.
+  }
+  if (process.platform !== 'win32') {
+    await confirmProcessGroupsGone([pid], 2000);
+    return;
+  }
+  await waitForDetachedProcessExit(pid);
+}
+
+async function waitForDetachedProcessExit(pid: number): Promise<void> {
   const deadline = Date.now() + 2000;
   while (true) {
     try {
-      process.kill(target, 0);
+      process.kill(pid, 0);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') break;
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
       throw error;
     }
     if (Date.now() >= deadline) throw new Error(`Detached test process tree ${pid} is still alive`);
