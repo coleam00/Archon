@@ -225,7 +225,7 @@ afterEach(async () => {
 });
 let running: ReturnType<CliTestScope['run']>;
 beforeEach(async () => {
-  running = scope.run([process.execPath, '-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 1500);`)}], scope.root, process.env);
+  running = scope.run([process.execPath, '-e', ${JSON.stringify(`const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid)); fs.renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)}); setTimeout(() => process.exit(0), 1500);`)}], scope.root, process.env);
   while (!existsSync(${JSON.stringify(pidFile)})) await Bun.sleep(10);
 });
 test('forced timeout', async () => {
@@ -317,10 +317,13 @@ for (const launch of ['workflow', 'fire', 'drain'] as const) {
     const outer = fixture();
     const f = fixture();
     const nodePid = join(f.project, 'node.pid');
+    // writeFileSync truncates before it writes; a poll between the two reads PID 0,
+    // and process.kill(0, 0) succeeds against the test's own process group.
     writeFileSync(
       join(f.project, 'hold.ts'),
-      `import { writeFileSync } from 'node:fs';
-writeFileSync('node.pid', String(process.pid));
+      `import { renameSync, writeFileSync } from 'node:fs';
+writeFileSync('node.pid.tmp', String(process.pid));
+renameSync('node.pid.tmp', 'node.pid');
 setInterval(() => {}, 1000);
 `
     );
@@ -429,6 +432,7 @@ beforeEach(async () => {
   while (!existsSync(${JSON.stringify(nodePid)})) await Bun.sleep(10);
   owners = readFileSync(scope.detachedPids, 'utf8').trim().split(String.fromCharCode(10)).map(Number);
   node = Number(readFileSync(${JSON.stringify(nodePid)}, 'utf8').trim());
+  for (const pid of [...owners, node]) if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid detached timeout PID ' + pid);
   for (const owner of owners) process.kill(owner, 0);
   process.kill(node, 0);
 }, 10000);
