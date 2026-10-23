@@ -31,6 +31,7 @@ import {
 } from '../output-ref';
 import { readComposedBindings } from '../compiled-command';
 import { transitiveDepsLookup } from '../depends-on';
+import { indexDependencies } from '../graph-plan';
 import { checkNodeReferences, type DagScope } from './dag-references';
 
 type NodeCheck = (node: DagNode | IncludeDirective, scope: DagScope) => string | null;
@@ -138,26 +139,9 @@ function checkDependsOn(
   return null;
 }
 
-function dependencyEdges(nodes: readonly (DagNode | IncludeDirective)[]): {
-  inDegree: Map<string, number>;
-  dependents: Map<string, string[]>;
-} {
-  const inDegree = new Map<string, number>();
-  const dependents = new Map<string, string[]>();
-  for (const node of nodes) {
-    inDegree.set(node.id, node.depends_on?.length ?? 0);
-    for (const dep of node.depends_on ?? []) {
-      const existing = dependents.get(dep) ?? [];
-      existing.push(node.id);
-      dependents.set(dep, existing);
-    }
-  }
-  return { inDegree, dependents };
-}
-
 /** The ready sets of Kahn's algorithm in execution order, or the cycle error. */
 function topologicalLayers(nodes: readonly (DagNode | IncludeDirective)[]): string[][] | string {
-  const { inDegree, dependents } = dependencyEdges(nodes);
+  const { inDegree, dependents } = indexDependencies(nodes);
   let ready = nodes.filter(n => (inDegree.get(n.id) ?? 0) === 0).map(n => n.id);
   const layers: string[][] = [];
   let visited = 0;

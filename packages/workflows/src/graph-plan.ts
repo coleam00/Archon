@@ -17,7 +17,7 @@ function requireResolvedNodes(nodes: readonly (DagNode | IncludeDirective)[]): D
   return resolved;
 }
 
-function indexDependencies(nodes: readonly DagNode[]) {
+export function indexDependencies(nodes: readonly (DagNode | IncludeDirective)[]) {
   const inDegree = new Map<string, number>();
   const dependents = new Map<string, string[]>();
 
