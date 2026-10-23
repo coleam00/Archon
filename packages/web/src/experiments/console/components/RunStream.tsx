@@ -99,37 +99,53 @@ export function pairProviderToolCalls(providerEvents: RunProviderEvents): Paired
       const { event } = record;
       const key = JSON.stringify([record.attemptId, 'toolCallId' in event ? event.toolCallId : '']);
       if (event.type === 'tool_call') {
-        const entry: PairedToolCall = {
-          record,
-          id: `${stepName}:${key}`,
-          timestamp: record.observedAt,
-          nodeId: stepName,
-          call: {
-            name: event.title || event.name,
-            input: event.rawInput === undefined ? {} : event.rawInput,
-          },
-        };
+        const entry = openedToolCall(record, event, stepName, key);
         byId.set(key, entry);
         paired.push(entry);
       } else if (event.type === 'tool_call_update') {
         const entry = byId.get(key);
-        if (entry === undefined) continue;
-        entry.call = {
-          ...entry.call,
-          status: event.status,
-          ...(event.output !== undefined ? { output: event.output } : {}),
-          ...(event.outputTruncated === true ? { outputTruncated: true } : {}),
-          ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
-          // A translated legacy row's time is its row's `created_at`, 1 s apart on
-          // SQLite, so it cannot time a call.
-          ...(record.attemptId !== null
-            ? { durationMs: Date.parse(record.observedAt) - Date.parse(entry.timestamp) }
-            : {}),
-        };
+        if (entry !== undefined) entry.call = completedToolCall(entry, record, event);
       }
     }
   }
   return paired;
+}
+
+function openedToolCall(
+  record: ProviderEventRecord,
+  event: Extract<ProviderEvent, { type: 'tool_call' }>,
+  stepName: string,
+  key: string
+): PairedToolCall {
+  return {
+    record,
+    id: `${stepName}:${key}`,
+    timestamp: record.observedAt,
+    nodeId: stepName,
+    call: {
+      name: event.title || event.name,
+      input: event.rawInput === undefined ? {} : event.rawInput,
+    },
+  };
+}
+
+function completedToolCall(
+  entry: PairedToolCall,
+  record: ProviderEventRecord,
+  event: Extract<ProviderEvent, { type: 'tool_call_update' }>
+): InlineToolCall {
+  return {
+    ...entry.call,
+    status: event.status,
+    ...(event.output !== undefined ? { output: event.output } : {}),
+    ...(event.outputTruncated === true ? { outputTruncated: true } : {}),
+    ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+    // A translated legacy row's time is its row's `created_at`, 1 s apart on
+    // SQLite, so it cannot time a call.
+    ...(record.attemptId !== null
+      ? { durationMs: Date.parse(record.observedAt) - Date.parse(entry.timestamp) }
+      : {}),
+  };
 }
 
 /**
