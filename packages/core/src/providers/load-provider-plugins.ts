@@ -93,5 +93,6 @@ function loadProviderReceipt(
         ? 'provider descriptor failed schema validation'
         : `provider descriptor could not be registered: ${error instanceof Error ? error.message : String(error)}`
     );
+    return undefined;
   }
 }
