@@ -32,39 +32,48 @@ interface FsBindings {
   promiseNamespaces: Set<string>;
 }
 
-function fsBindings(sourceFile: ts.SourceFile): FsBindings {
-  const functions = new Map<string, string>();
-  const namespaces = new Set<string>();
-  const promiseNamespaces = new Set<string>();
+function bindFsNames(
+  elements: ts.NamedImports['elements'],
+  isPromiseModule: boolean,
+  { functions, promiseNamespaces }: FsBindings
+): void {
+  for (const element of elements) {
+    const importedName = element.propertyName?.text ?? element.name.text;
+    if (importedName === 'promises' && !isPromiseModule) {
+      promiseNamespaces.add(element.name.text);
+    } else if (RM_NAMES.has(importedName) && (!isPromiseModule || importedName === 'rm')) {
+      functions.set(element.name.text, importedName);
+    }
+  }
+}
 
+function bindFsImport(importClause: ts.ImportClause, module: string, result: FsBindings): void {
+  const isPromiseModule = module === 'fs/promises' || module === 'node:fs/promises';
+  const namespaces = isPromiseModule ? result.promiseNamespaces : result.namespaces;
+  if (importClause.name !== undefined) namespaces.add(importClause.name.text);
+  const bindings = importClause.namedBindings;
+  if (bindings === undefined) return;
+  if (ts.isNamespaceImport(bindings)) {
+    namespaces.add(bindings.name.text);
+  } else {
+    bindFsNames(bindings.elements, isPromiseModule, result);
+  }
+}
+
+function fsBindings(sourceFile: ts.SourceFile): FsBindings {
+  const result: FsBindings = {
+    functions: new Map(),
+    namespaces: new Set(),
+    promiseNamespaces: new Set(),
+  };
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
       continue;
     const module = statement.moduleSpecifier.text;
     if (!FS_MODULES.has(module) || statement.importClause === undefined) continue;
-
-    const { importClause } = statement;
-    const isPromiseModule = module === 'fs/promises' || module === 'node:fs/promises';
-    if (importClause.name !== undefined) {
-      (isPromiseModule ? promiseNamespaces : namespaces).add(importClause.name.text);
-    }
-    const bindings = importClause.namedBindings;
-    if (bindings === undefined) continue;
-    if (ts.isNamespaceImport(bindings)) {
-      (isPromiseModule ? promiseNamespaces : namespaces).add(bindings.name.text);
-      continue;
-    }
-    for (const element of bindings.elements) {
-      const importedName = element.propertyName?.text ?? element.name.text;
-      if (importedName === 'promises' && !isPromiseModule) {
-        promiseNamespaces.add(element.name.text);
-      } else if (RM_NAMES.has(importedName) && (!isPromiseModule || importedName === 'rm')) {
-        functions.set(element.name.text, importedName);
-      }
-    }
+    bindFsImport(statement.importClause, module, result);
   }
-
-  return { functions, namespaces, promiseNamespaces };
+  return result;
 }
 
 function rmCallName(call: ts.CallExpression, bindings: FsBindings): string | undefined {
