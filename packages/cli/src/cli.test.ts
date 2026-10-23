@@ -636,44 +636,84 @@ describe('workflow answer flag rejection and command discovery', () => {
 });
 
 describe('workflow run config argument', () => {
-  for (const flag of ['config', 'config-from-run']) {
-    it.each([false, true])(
-      `refuses --${flag} outside run before dispatch (json: %s)`,
-      async json => {
-        const root = mkdtempSync(join(tmpdir(), 'archon-config-refusal-'));
-        try {
-          const result = spawnSync(
-            process.execPath,
-            [CLI_ENTRY, 'help', `--${flag}`, 'unused-config', ...(json ? ['--json'] : [])],
-            {
-              cwd: root,
-              env: {
-                ...process.env,
-                ARCHON_HOME: root,
-                ARCHON_TELEMETRY_DISABLED: '1',
-                DATABASE_URL: '',
-              },
-              encoding: 'utf8',
-            }
+  for (const args of [
+    ['help'],
+    ['forge', 'pr.view'],
+    ['workflow', 'wake'],
+    ['workflow', 'wake', 'schedule'],
+    ['workflow', 'signal', 'run-1'],
+  ]) {
+    for (const flag of ['config', 'config-from-run']) {
+      it.each([false, true])(
+        `refuses --${flag} on ${args.join(' ')} before initialization (json: %s)`,
+        async json => {
+          const root = mkdtempSync(join(tmpdir(), 'archon-config-refusal-'));
+          const preload = join(root, 'preload.ts');
+          writeFileSync(
+            preload,
+            `import { mock } from 'bun:test';
+mock.module(${JSON.stringify(join(import.meta.dir, 'routes/route-loader.ts'))}, () => ({
+  usesDatabaseStore: async () => { throw new Error('unexpected store initialization'); },
+  registerProviders: async () => { throw new Error('unexpected provider initialization'); },
+  loadRoute: async () => { throw new Error('unexpected command initialization'); },
+  markDatabaseRouteLoaded: () => {},
+  closeDb: async () => {},
+}));
+mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, () => ({
+  createCliWorkflowHost: async () => { throw new Error('unexpected host initialization'); },
+}));
+`
           );
-          const message =
-            flag === 'config'
-              ? 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
-              : 'Error: --config-from-run can only be used with workflow run.';
-          expect(result.status, result.stderr).toBe(1);
-          if (json) {
-            expect(JSON.parse(result.stdout)).toEqual({ ok: false, error: message });
-            expect(result.stderr).toBe('');
-          } else {
-            expect(result.stdout).toBe('');
-            expect(result.stderr).toBe(`${message}\n`);
+          try {
+            const result = spawnSync(
+              process.execPath,
+              [
+                '--preload',
+                preload,
+                CLI_ENTRY,
+                ...args,
+                `--${flag}`,
+                'unused-config',
+                ...(json ? ['--json'] : []),
+              ],
+              {
+                cwd: root,
+                env: {
+                  ...process.env,
+                  ARCHON_HOME: root,
+                  ARCHON_TELEMETRY_DISABLED: '1',
+                  DATABASE_URL: '',
+                },
+                encoding: 'utf8',
+              }
+            );
+            const message =
+              flag === 'config'
+                ? 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+                : 'Error: --config-from-run can only be used with workflow run.';
+            expect(result.status, result.stderr).toBe(1);
+            if (json) {
+              expect(JSON.parse(result.stdout)).toEqual({ ok: false, error: message });
+              expect(result.stderr).toBe('');
+            } else {
+              expect(result.stdout).toBe('');
+              expect(result.stderr).toBe(`${message}\n`);
+            }
+          } finally {
+            await removeTempTree(root);
           }
-        } finally {
-          await removeTempTree(root);
         }
-      }
-    );
+      );
+    }
   }
+
+  it('accepts config flags on their owning commands', () => {
+    expect(rejectConfigOutsideRun('workflow', 'run', 'config.yaml')).toBeUndefined();
+    expect(rejectConfigOutsideRun('workflow', 'run', undefined, 'run-1')).toBeUndefined();
+    for (const subcommand of ['fire', 'schedule']) {
+      expect(rejectConfigOutsideRun('trigger', subcommand, 'config.yaml')).toBeUndefined();
+    }
+  });
 
   it('parses one local path', () => {
     const parsed = parseArgs({
