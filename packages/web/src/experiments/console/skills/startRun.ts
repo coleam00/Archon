@@ -61,48 +61,54 @@ export async function startRun({
   const hasTiers = tiers !== undefined && Object.keys(tiers).length > 0;
   const hasAliases = aliases !== undefined && Object.keys(aliases).length > 0;
 
+  const body = {
+    conversationId: conv.conversationId,
+    message,
+    ...(hasInputs ? { inputs } : {}),
+    ...(hasTiers ? { tiers } : {}),
+    ...(hasAliases ? { aliases } : {}),
+  } satisfies WorkflowRunLaunchJson;
+
   if (files === undefined || files.length === 0) {
     await requestJson<{ accepted: boolean; status: string }>(url, {
       method: 'POST',
-      body: JSON.stringify({
-        conversationId: conv.conversationId,
-        message,
-        ...(hasInputs ? { inputs } : {}),
-        ...(hasTiers ? { tiers } : {}),
-        ...(hasAliases ? { aliases } : {}),
-      } satisfies WorkflowRunLaunchJson),
+      body: JSON.stringify(body),
     });
     return;
   }
 
+  const form = buildRunForm(body, files);
+  const res = await fetch(url, { method: 'POST', body: form });
+  if (!res.ok) await throwRunError(res, url);
+}
+
+function buildRunForm(body: WorkflowRunLaunchJson, files: File[]): FormData {
   // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
-  form.append('conversationId', conv.conversationId);
-  form.append('message', message);
-  // A form field can only be a string, so the input map travels JSON-encoded — the
-  // shape the multipart branch of the run route parses.
-  if (hasInputs) {
-    form.append('inputs', JSON.stringify(inputs));
-  }
-  if (hasTiers) form.append('tiers', JSON.stringify(tiers));
-  if (hasAliases) form.append('aliases', JSON.stringify(aliases));
+  form.append('conversationId', body.conversationId);
+  form.append('message', body.message);
+  // A form field can only be a string; the run route parses the maps as JSON.
+  if (body.inputs !== undefined) form.append('inputs', JSON.stringify(body.inputs));
+  if (body.tiers !== undefined) form.append('tiers', JSON.stringify(body.tiers));
+  if (body.aliases !== undefined) form.append('aliases', JSON.stringify(body.aliases));
   for (const file of files) {
     form.append('files', file, file.name);
   }
-  const res = await fetch(url, { method: 'POST', body: form });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    let parsed: { error?: string } = {};
-    try {
-      parsed = JSON.parse(text) as { error?: string };
-    } catch {
-      /* not JSON */
-    }
-    // Match requestJson's 200-char truncation so a 502 HTML body doesn't
-    // land in the error toast as raw markup.
-    const raw = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
-    const msg = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
-    const path = new URL(url, window.location.origin).pathname;
-    throw new HttpError(res.status, path, msg);
+  return form;
+}
+
+async function throwRunError(res: Response, url: string): Promise<never> {
+  const text = await res.text().catch(() => '');
+  let parsed: { error?: string } = {};
+  try {
+    parsed = JSON.parse(text) as { error?: string };
+  } catch {
+    /* not JSON */
   }
+  // Match requestJson's 200-char truncation so a 502 HTML body doesn't
+  // land in the error toast as raw markup.
+  const raw = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
+  const msg = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
+  const path = new URL(url, window.location.origin).pathname;
+  throw new HttpError(res.status, path, msg);
 }
