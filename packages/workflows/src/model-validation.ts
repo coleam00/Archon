@@ -549,6 +549,25 @@ export function createRunModelBindingsMetadata(
   };
 }
 
+function invalidModelBindingsMetadata(path: readonly PropertyKey[]): Error {
+  const bindingName = typeof path[2] === 'string' ? path[2] : 'unknown';
+  if (path.includes('thinking')) {
+    return new Error(
+      `Model binding '${bindingName}' uses removed 'thinking:'; use 'effort:' instead.`
+    );
+  }
+  if (path.includes('effort')) {
+    return new Error(`Model binding '${bindingName}' has an invalid effort.`);
+  }
+  if (path[0] === 'overrides' && (path[1] === 'tiers' || path[1] === 'aliases')) {
+    return new Error(`Workflow run has invalid model_bindings ${path[1]} metadata.`);
+  }
+  if (path[0] === 'effective') {
+    return new Error('Workflow run has invalid effective model bindings.');
+  }
+  return new Error('Workflow run has invalid model_bindings metadata.');
+}
+
 /** Read metadata written by this module; malformed external JSON fails explicitly. */
 export function readRunModelBindingsMetadata(
   providers: ProviderRegistry,
@@ -558,23 +577,7 @@ export function readRunModelBindingsMetadata(
   if (value === undefined) return undefined;
   const parsed = runModelBindingsMetadataSchema.safeParse(value);
   if (!parsed.success) {
-    const path = parsed.error.issues[0]?.path ?? [];
-    const bindingName = typeof path[2] === 'string' ? path[2] : 'unknown';
-    if (path.includes('thinking')) {
-      throw new Error(
-        `Model binding '${bindingName}' uses removed 'thinking:'; use 'effort:' instead.`
-      );
-    }
-    if (path.includes('effort')) {
-      throw new Error(`Model binding '${bindingName}' has an invalid effort.`);
-    }
-    if (path[0] === 'overrides' && (path[1] === 'tiers' || path[1] === 'aliases')) {
-      throw new Error(`Workflow run has invalid model_bindings ${path[1]} metadata.`);
-    }
-    if (path[0] === 'effective') {
-      throw new Error('Workflow run has invalid effective model bindings.');
-    }
-    throw new Error('Workflow run has invalid model_bindings metadata.');
+    throw invalidModelBindingsMetadata(parsed.error.issues[0]?.path ?? []);
   }
 
   const tiers = Object.fromEntries(
