@@ -69,6 +69,18 @@ function isStubValue(value: unknown): value is DryRunStubValue {
   return dryRunStubValueSchema.safeParse(value).success;
 }
 
+function objectPlaceholder(schema: Record<string, unknown>): Record<string, unknown> {
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required)
+    ? schema.required.filter((name): name is string => typeof name === 'string')
+    : [];
+  return Object.fromEntries(required.map(name => [name, schemaPlaceholder(properties[name])]));
+}
+
+function nonnegativeInteger(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) ? Math.max(0, value) : 0;
+}
+
 function schemaPlaceholder(schema: unknown): unknown {
   if (!isRecord(schema)) return 'TODO';
 
@@ -79,18 +91,10 @@ function schemaPlaceholder(schema: unknown): unknown {
   }
 
   switch (schema.type) {
-    case 'object': {
-      const properties = isRecord(schema.properties) ? schema.properties : {};
-      const required = Array.isArray(schema.required)
-        ? schema.required.filter((name): name is string => typeof name === 'string')
-        : [];
-      return Object.fromEntries(required.map(name => [name, schemaPlaceholder(properties[name])]));
-    }
+    case 'object':
+      return objectPlaceholder(schema);
     case 'array': {
-      const minItems =
-        typeof schema.minItems === 'number' && Number.isInteger(schema.minItems)
-          ? Math.max(0, schema.minItems)
-          : 0;
+      const minItems = nonnegativeInteger(schema.minItems);
       return Array.from({ length: minItems }, () => schemaPlaceholder(schema.items));
     }
     case 'boolean':
@@ -102,10 +106,7 @@ function schemaPlaceholder(schema: unknown): unknown {
     case 'null':
       return null;
     case 'string': {
-      const minLength =
-        typeof schema.minLength === 'number' && Number.isInteger(schema.minLength)
-          ? Math.max(0, schema.minLength)
-          : 0;
+      const minLength = nonnegativeInteger(schema.minLength);
       return minLength > 4 ? 'T'.repeat(minLength) : 'TODO';
     }
     default:
