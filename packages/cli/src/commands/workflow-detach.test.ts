@@ -932,6 +932,34 @@ describe('workflowRunCommand — detach', () => {
     }
   });
 
+  it('reports log close failure without changing a successful detached launch', async () => {
+    const closeError = Object.assign(new Error('close failed'), { code: 'EIO' });
+    const originalClose = fs.closeSync;
+    const closeSpy = spyOn(fs, 'closeSync').mockImplementation(fd => {
+      originalClose(fd);
+      throw closeError;
+    });
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    mockLogger.warn.mockClear();
+
+    try {
+      const launch = spawnDetachedWorkflowRun('/test/path', 'close-success', []);
+      await finishStartupWindow(launch, spawnSpy);
+
+      expect(await launch).toBe(join(testHome, 'logs', 'detached-run-close-success.log'));
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { err: closeError },
+        'cli.detached_run_log_close_failed'
+      );
+    } finally {
+      closeSpy.mockRestore();
+      spawnSpy.mockRestore();
+    }
+  });
+
   it.each([
     { writeFails: false, code: 'EBADF' },
     { writeFails: false, code: 'EIO' },
