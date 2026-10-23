@@ -168,6 +168,118 @@ export function runToolCalls(
   };
 }
 
+function messageEntries(messages: readonly Message[], showInline: boolean): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+  for (const m of messages) {
+    const base = new Date(m.timestamp).getTime();
+    const meaningful = isMeaningful(m);
+    const isSystemy = isSystemCategory(m.category) || m.role === 'system';
+
+    if (isSystemy) {
+      // Framework chatter — surface as a compact system row instead of
+      // rendering as agent prose. Dispatch metadata gets its own row when
+      // present so the workflow name shows up explicitly.
+      if (m.dispatch !== null) {
+        entries.push({
+          kind: 'system_row',
+          key: `sm:dispatch:${m.id}`,
+          at: base,
+          row: {
+            label: 'Workflow dispatch',
+            detail: m.dispatch.workflowName,
+            timestamp: m.timestamp,
+          },
+        });
+      } else {
+        entries.push({
+          kind: 'system_row',
+          key: `sm:${m.id}`,
+          at: base,
+          row: {
+            label: m.category ?? 'System',
+            detail: m.content.split('\n')[0]?.slice(0, 160) ?? '',
+            timestamp: m.timestamp,
+          },
+        });
+      }
+      continue;
+    }
+
+    if (!meaningful) {
+      // Empty / no-signal messages — usually plumbing the SDK emits. Hide
+      // by default; behind System the user gets a noise row to see the
+      // gap that would otherwise be invisible.
+      entries.push({
+        kind: 'system_row',
+        key: `sm:noise:${m.id}`,
+        at: base,
+        row: {
+          label: 'Noise',
+          detail: `${m.role} · no content`,
+          timestamp: m.timestamp,
+        },
+      });
+      continue;
+    }
+
+    entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
+    if (!showInline) continue;
+    m.toolCalls.forEach((call, idx) => {
+      entries.push({
+        kind: 'tool',
+        key: `t:${m.id}:${idx.toString()}`,
+        // Place tool calls just after the parent message so they appear right
+        // below it but don't collide across sibling messages.
+        at: base + idx + 1,
+        call,
+        timestamp: m.timestamp,
+        // Message-inline tools are node-blind — messages carry no step.
+        nodeId: null,
+      });
+    });
+  }
+  return entries;
+}
+
+function providerEntries(
+  providerEvents: RunProviderEvents,
+  nodeRuns: readonly NodeRun[],
+  toolCalls: ReturnType<typeof runToolCalls>
+): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+
+  const nodeStatus = new Map(nodeRuns.map(r => [r.nodeId, r.status]));
+  const pairedTools = new Map(toolCalls.fromProviderEvents.map(t => [t.record, t]));
+  for (const [stepName, records] of providerEvents) {
+    for (const record of records) {
+      const t = pairedTools.get(record);
+      if (t !== undefined) {
+        const status = nodeStatus.get(t.nodeId);
+        const unrecorded =
+          t.call.status === undefined && status !== undefined && status !== 'running';
+        entries.push({
+          kind: 'tool',
+          key: `pt:${t.id}`,
+          at: Date.parse(t.timestamp),
+          call: unrecorded ? { ...t.call, outcomeUnrecorded: true } : t.call,
+          timestamp: t.timestamp,
+          nodeId: t.nodeId,
+        });
+      } else if (record.event.type === 'hook') {
+        entries.push({
+          kind: 'hook',
+          key: `ph:${JSON.stringify([stepName, record.attemptId, record.seq])}`,
+          at: Date.parse(record.observedAt),
+          event: record.event,
+          timestamp: record.observedAt,
+          nodeId: stepName,
+        });
+      }
+    }
+  }
+  return entries;
+}
+
 /**
  * Merges conversation messages + workflow events into a single timeline. Tool calls
  * come from {@link runToolCalls}.
@@ -197,104 +309,8 @@ export function RunStream({
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [];
-    for (const m of messages) {
-      const base = new Date(m.timestamp).getTime();
-      const meaningful = isMeaningful(m);
-      const isSystemy = isSystemCategory(m.category) || m.role === 'system';
-
-      if (isSystemy) {
-        // Framework chatter — surface as a compact system row instead of
-        // rendering as agent prose. Dispatch metadata gets its own row when
-        // present so the workflow name shows up explicitly.
-        if (m.dispatch !== null) {
-          entries.push({
-            kind: 'system_row',
-            key: `sm:dispatch:${m.id}`,
-            at: base,
-            row: {
-              label: 'Workflow dispatch',
-              detail: m.dispatch.workflowName,
-              timestamp: m.timestamp,
-            },
-          });
-        } else {
-          entries.push({
-            kind: 'system_row',
-            key: `sm:${m.id}`,
-            at: base,
-            row: {
-              label: m.category ?? 'System',
-              detail: m.content.split('\n')[0]?.slice(0, 160) ?? '',
-              timestamp: m.timestamp,
-            },
-          });
-        }
-        continue;
-      }
-
-      if (!meaningful) {
-        // Empty / no-signal messages — usually plumbing the SDK emits. Hide
-        // by default; behind System the user gets a noise row to see the
-        // gap that would otherwise be invisible.
-        entries.push({
-          kind: 'system_row',
-          key: `sm:noise:${m.id}`,
-          at: base,
-          row: {
-            label: 'Noise',
-            detail: `${m.role} · no content`,
-            timestamp: m.timestamp,
-          },
-        });
-        continue;
-      }
-
-      entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
-      if (!toolCalls.showInline) continue;
-      m.toolCalls.forEach((call, idx) => {
-        entries.push({
-          kind: 'tool',
-          key: `t:${m.id}:${idx.toString()}`,
-          // Place tool calls just after the parent message so they appear right
-          // below it but don't collide across sibling messages.
-          at: base + idx + 1,
-          call,
-          timestamp: m.timestamp,
-          // Message-inline tools are node-blind — messages carry no step.
-          nodeId: null,
-        });
-      });
-    }
-
-    const nodeStatus = new Map(nodeRuns.map(r => [r.nodeId, r.status]));
-    const pairedTools = new Map(toolCalls.fromProviderEvents.map(t => [t.record, t]));
-    for (const [stepName, records] of providerEvents) {
-      for (const record of records) {
-        const t = pairedTools.get(record);
-        if (t !== undefined) {
-          const status = nodeStatus.get(t.nodeId);
-          const unrecorded =
-            t.call.status === undefined && status !== undefined && status !== 'running';
-          entries.push({
-            kind: 'tool',
-            key: `pt:${t.id}`,
-            at: Date.parse(t.timestamp),
-            call: unrecorded ? { ...t.call, outcomeUnrecorded: true } : t.call,
-            timestamp: t.timestamp,
-            nodeId: t.nodeId,
-          });
-        } else if (record.event.type === 'hook') {
-          entries.push({
-            kind: 'hook',
-            key: `ph:${JSON.stringify([stepName, record.attemptId, record.seq])}`,
-            at: Date.parse(record.observedAt),
-            event: record.event,
-            timestamp: record.observedAt,
-            nodeId: stepName,
-          });
-        }
-      }
-    }
+    entries.push(...messageEntries(messages, toolCalls.showInline));
+    entries.push(...providerEntries(providerEvents, nodeRuns, toolCalls));
 
     // One divider per node, positioned at its first transition so it heads that
     // node's events in the stream.
