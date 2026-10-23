@@ -230,8 +230,8 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
   let msg = '';
   try {
     const breakdown = await getWorktreeStatusBreakdown(codebase.id, codebase.default_cwd);
-    msg += `\n\nWorktrees: ${String(breakdown.total)} active`;
-    if (breakdown.merged > 0 || breakdown.stale > 0) {
+    msg += `\n\nWorktrees: ${String(breakdown.total)} total`;
+    if (breakdown.merged > 0 || breakdown.stale > 0 || breakdown.inspectionFailedEnvs.length > 0) {
       if (breakdown.merged > 0) {
         msg += `\n  • ${String(breakdown.merged)} merged (can auto-remove)`;
       }
@@ -239,6 +239,9 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
         msg += `\n  • ${String(breakdown.stale)} stale (14+ days inactive)`;
       }
       msg += `\n  • ${String(breakdown.active)} active`;
+    }
+    for (const env of breakdown.inspectionFailedEnvs) {
+      msg += `\n  • ${env.branchName}: merge inspection failed (${env.errors.join('; ')})`;
     }
     for (const env of breakdown.activeEnvs) {
       if (env.reason) msg += `\n  • ${env.branchName}: ${env.reason}`;

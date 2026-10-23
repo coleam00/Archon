@@ -8,6 +8,7 @@
  */
 import type { WorktreeStatusBreakdown } from '@archon/isolation';
 import { isBranchMerged, isPatchEquivalent, toBranchName, toRepoPath } from '@archon/git';
+import type { RepoPath, BranchName } from '@archon/git';
 import type { PrLookup } from '@archon/isolation';
 import {
   getRegisteredPlatformPolicies,
@@ -246,6 +247,7 @@ export async function getWorktreeStatusBreakdown(
     mergedEnvs: [],
     staleEnvs: [],
     activeEnvs: [],
+    inspectionFailedEnvs: [],
   };
 
   const { remoteMainRef } = await resolveRepoGitContext(repoPath, mainRepoPath);
@@ -259,25 +261,16 @@ export async function getWorktreeStatusBreakdown(
     }
     const retained = retainsWorkspace(env.created_by_platform);
 
-    // Check if merged (treat as not-merged on unexpected errors)
-    let merged = false;
-    try {
-      merged = await isBranchMerged(repoPath, toBranchName(env.branch_name), remoteMainRef);
-    } catch (error) {
-      getLog().warn(
-        { err: error, envId: env.id, branchName: env.branch_name },
-        'merge_check_error_in_breakdown'
-      );
+    const inspection = await inspectWorktreeMerge(repoPath, env.branch_name, remoteMainRef);
+    if (inspection.status === 'failed') {
+      breakdown.inspectionFailedEnvs.push({
+        id: env.id,
+        branchName: env.branch_name,
+        errors: inspection.errors,
+      });
+      continue;
     }
-    // Fallback to patch-equivalence for squash-merge detection.
-    if (!merged) {
-      try {
-        merged = await isPatchEquivalent(repoPath, toBranchName(env.branch_name), remoteMainRef);
-      } catch {
-        // Patch-equivalence is best-effort; a failure doesn't change the result.
-      }
-    }
-    if (merged) {
+    if (inspection.status === 'merged') {
       breakdown.merged++;
       breakdown.mergedEnvs.push({ id: env.id, branchName: env.branch_name });
       continue;
@@ -300,6 +293,32 @@ export async function getWorktreeStatusBreakdown(
   }
 
   return breakdown;
+}
+
+async function inspectWorktreeMerge(
+  repoPath: RepoPath,
+  branchName: string,
+  baseRef: BranchName
+): Promise<{ status: 'merged' | 'unmerged' } | { status: 'failed'; errors: string[] }> {
+  const errors: string[] = [];
+  try {
+    if (await isBranchMerged(repoPath, toBranchName(branchName), baseRef)) {
+      return { status: 'merged' };
+    }
+  } catch (error) {
+    getLog().warn({ err: error, branchName }, 'merge_check_error_in_breakdown');
+    errors.push(`Ancestry: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  // Squash merges can be patch-equivalent even when ancestry inspection fails.
+  try {
+    if (await isPatchEquivalent(repoPath, toBranchName(branchName), baseRef)) {
+      return { status: 'merged' };
+    }
+  } catch (error) {
+    getLog().warn({ err: error, branchName }, 'patch_check_error_in_breakdown');
+    errors.push(`Patch equivalence: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return errors.length > 0 ? { status: 'failed', errors } : { status: 'unmerged' };
 }
 
 /**

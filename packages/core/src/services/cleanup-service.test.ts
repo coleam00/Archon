@@ -746,6 +746,7 @@ describe('getWorktreeStatusBreakdown', () => {
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
 
     expect(breakdown.total).toBe(4);
+    expect(mockIsPatchEquivalent).toHaveBeenCalledTimes(3);
     expect(breakdown.merged).toBe(1);
     // No worktree.remote configured — default-branch detection gets
     // 'origin' (the remote default).
@@ -753,6 +754,14 @@ describe('getWorktreeStatusBreakdown', () => {
     // env-4 is old but its platform retains workspaces, so it counts as active, not stale.
     expect(breakdown.stale).toBe(1);
     expect(breakdown.active).toBe(2);
+    expect(breakdown.inspectionFailedEnvs).toEqual([]);
+    expect(breakdown.staleEnvs).toEqual([
+      {
+        id: 'env-2',
+        branchName: 'stale-branch',
+        daysInactive: 30,
+      },
+    ]);
     // Verify the remote-qualified ref is threaded through to isBranchMerged.
     expect(mockIsBranchMerged).toHaveBeenCalledWith(
       '/workspace/repo',
@@ -760,6 +769,55 @@ describe('getWorktreeStatusBreakdown', () => {
       'origin/main'
     );
   });
+
+  test('reports both merge inspection failures instead of classifying an old worktree as stale', async () => {
+    mockListByCodebaseWithAge.mockResolvedValue([
+      makeEnvironmentWithAge({ branch_name: 'unknown-branch', days_since_activity: 30 }),
+    ]);
+    mockIsBranchMerged.mockRejectedValueOnce(new Error('ancestry unavailable'));
+    mockIsPatchEquivalent.mockRejectedValueOnce(new Error('patch comparison unavailable'));
+
+    const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
+
+    expect(breakdown.stale).toBe(0);
+    expect(breakdown.staleEnvs).toEqual([]);
+    expect(breakdown.active).toBe(0);
+    expect(breakdown.merged).toBe(0);
+    expect(breakdown.inspectionFailedEnvs).toEqual([
+      {
+        id: 'env-1',
+        branchName: 'unknown-branch',
+        errors: [
+          'Ancestry: ancestry unavailable',
+          'Patch equivalence: patch comparison unavailable',
+        ],
+      },
+    ]);
+  });
+
+  test.each(['ancestry', 'patch'])(
+    'reports incomplete inspection when only %s fails',
+    async check => {
+      mockListByCodebaseWithAge.mockResolvedValue([
+        makeEnvironmentWithAge({ days_since_activity: 30 }),
+      ]);
+      if (check === 'ancestry') mockIsBranchMerged.mockRejectedValueOnce(new Error('unavailable'));
+      else mockIsPatchEquivalent.mockRejectedValueOnce('unavailable');
+
+      const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
+
+      expect(breakdown.staleEnvs).toEqual([]);
+      expect(breakdown.inspectionFailedEnvs).toEqual([
+        {
+          id: 'env-1',
+          branchName: 'task-1',
+          errors: [
+            check === 'ancestry' ? 'Ancestry: unavailable' : 'Patch equivalence: unavailable',
+          ],
+        },
+      ]);
+    }
+  );
 
   test('reports an empty codebase against the default branch of the configured worktree.remote', async () => {
     mockLoadRepoConfig.mockResolvedValue({ worktree: { remote: 'upstream' } });
@@ -775,18 +833,21 @@ describe('getWorktreeStatusBreakdown', () => {
       mergedEnvs: [],
       staleEnvs: [],
       activeEnvs: [],
+      inspectionFailedEnvs: [],
     });
   });
 
-  test('detects squash-merged branches via isPatchEquivalent fallback', async () => {
+  test.each([false, true])('detects squash merges when ancestry fails=%s', async ancestryFails => {
     mockListByCodebaseWithAge.mockResolvedValue([
       makeEnvironmentWithAge({ branch_name: 'squash-branch', days_since_activity: 5 }),
     ]);
+    if (ancestryFails) mockIsBranchMerged.mockRejectedValueOnce(new Error('ancestry unavailable'));
     mockIsPatchEquivalent.mockResolvedValueOnce(true);
 
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
 
     expect(breakdown.merged).toBe(1);
+    expect(breakdown.inspectionFailedEnvs).toEqual([]);
     expect(mockIsPatchEquivalent).toHaveBeenCalledWith(
       '/workspace/repo',
       'squash-branch',
