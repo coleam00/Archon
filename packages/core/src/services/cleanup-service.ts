@@ -311,7 +311,11 @@ async function inspectWorktreeMerge(
   }
   // Squash merges can be patch-equivalent even when ancestry inspection fails.
   try {
-    if (await isPatchEquivalent(repoPath, toBranchName(branchName), baseRef)) {
+    if (
+      await isPatchEquivalent(repoPath, toBranchName(branchName), baseRef, {
+        throwOnExpectedError: true,
+      })
+    ) {
       return { status: 'merged' };
     }
   } catch (error) {

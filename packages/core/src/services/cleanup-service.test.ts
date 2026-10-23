@@ -770,30 +770,37 @@ describe('getWorktreeStatusBreakdown', () => {
     );
   });
 
-  test('reports both merge inspection failures instead of classifying an old worktree as stale', async () => {
-    mockListByCodebaseWithAge.mockResolvedValue([
-      makeEnvironmentWithAge({ branch_name: 'unknown-branch', days_since_activity: 30 }),
-    ]);
-    mockIsBranchMerged.mockRejectedValueOnce(new Error('ancestry unavailable'));
-    mockIsPatchEquivalent.mockRejectedValueOnce(new Error('patch comparison unavailable'));
+  test.each([2, 30])(
+    'reports both merge inspection failures for a %s-day-old worktree',
+    async daysInactive => {
+      mockListByCodebaseWithAge.mockResolvedValue([
+        makeEnvironmentWithAge({
+          branch_name: 'unknown-branch',
+          days_since_activity: daysInactive,
+        }),
+      ]);
+      mockIsBranchMerged.mockRejectedValueOnce(new Error('ancestry unavailable'));
+      mockIsPatchEquivalent.mockRejectedValueOnce(new Error('patch comparison unavailable'));
 
-    const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
+      const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
 
-    expect(breakdown.stale).toBe(0);
-    expect(breakdown.staleEnvs).toEqual([]);
-    expect(breakdown.active).toBe(0);
-    expect(breakdown.merged).toBe(0);
-    expect(breakdown.inspectionFailedEnvs).toEqual([
-      {
-        id: 'env-1',
-        branchName: 'unknown-branch',
-        errors: [
-          'Ancestry: ancestry unavailable',
-          'Patch equivalence: patch comparison unavailable',
-        ],
-      },
-    ]);
-  });
+      expect(breakdown.stale).toBe(0);
+      expect(breakdown.staleEnvs).toEqual([]);
+      expect(breakdown.active).toBe(0);
+      expect(breakdown.activeEnvs).toEqual([]);
+      expect(breakdown.merged).toBe(0);
+      expect(breakdown.inspectionFailedEnvs).toEqual([
+        {
+          id: 'env-1',
+          branchName: 'unknown-branch',
+          errors: [
+            'Ancestry: ancestry unavailable',
+            'Patch equivalence: patch comparison unavailable',
+          ],
+        },
+      ]);
+    }
+  );
 
   test.each(['ancestry', 'patch'])(
     'reports incomplete inspection when only %s fails',
@@ -851,7 +858,8 @@ describe('getWorktreeStatusBreakdown', () => {
     expect(mockIsPatchEquivalent).toHaveBeenCalledWith(
       '/workspace/repo',
       'squash-branch',
-      'origin/main'
+      'origin/main',
+      { throwOnExpectedError: true }
     );
   });
 
