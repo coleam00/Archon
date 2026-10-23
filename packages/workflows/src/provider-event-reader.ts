@@ -94,7 +94,7 @@ function legacyHook(data: Record<string, unknown>) {
  * no `tool_call_id`) yields nothing rather than a record the contract forbids.
  */
 function translateLegacyRow(
-  eventType: string,
+  eventType: Exclude<(typeof PROVIDER_EVENT_ROW_TYPES)[number], 'provider_event'>,
   data: Record<string, unknown>
 ): ProviderEvent | undefined {
   let candidate: unknown;
@@ -117,6 +117,7 @@ function translateLegacyRow(
       candidate = legacyHook(data);
       break;
     default:
+      eventType satisfies never;
       return undefined;
   }
   const parsed = providerEventSchema.safeParse(candidate);
@@ -131,14 +132,12 @@ export function readProviderEventRows(
   const byStep = new Map<string, ProviderEventRecord[]>();
   const legacySeq = new Map<string, number>();
   for (const row of rows) {
-    if (!PROVIDER_EVENT_ROW_TYPES.some(type => type === row.event_type)) continue;
+    const eventType = PROVIDER_EVENT_ROW_TYPES.find(type => type === row.event_type);
+    if (eventType === undefined) continue;
     const stepName = row.step_name;
     let record: ProviderEventRecord | undefined;
-    if (stepName !== null && row.event_type === 'provider_event') {
-      const envelope = providerEventEnvelopeSchema.safeParse(row.data);
-      if (envelope.success) record = { runId: runId, stepName, ...envelope.data };
-    } else if (stepName !== null) {
-      const event = translateLegacyRow(row.event_type, row.data);
+    if (stepName !== null && eventType !== 'provider_event') {
+      const event = translateLegacyRow(eventType, row.data);
       if (event !== undefined) {
         const seq = legacySeq.get(stepName) ?? 0;
         legacySeq.set(stepName, seq + 1);
@@ -151,6 +150,9 @@ export function readProviderEventRows(
           event,
         };
       }
+    } else if (stepName !== null) {
+      const envelope = providerEventEnvelopeSchema.safeParse(row.data);
+      if (envelope.success) record = { runId: runId, stepName, ...envelope.data };
     }
     if (record === undefined) {
       createLogger('workflow-provider-events').warn(
