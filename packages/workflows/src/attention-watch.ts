@@ -485,6 +485,28 @@ export async function watchAttentionQueue(
     return false;
   };
 
+  const retryDeliveryView = async (
+    { event, cursor }: WorkflowRunDelivery,
+    error: unknown
+  ): Promise<RunView | null | undefined> => {
+    const runId = event.workflow_run_id;
+    const fields = { err: error as Error, runId, eventId: event.id, cursor };
+    try {
+      const view = await projectRun(runId);
+      if (closed) throw error;
+      views.set(runId, Promise.resolve(view));
+      blocked = undefined;
+      return view;
+    } catch (retryError) {
+      if (retryError instanceof WorkflowEventCursorError) throw retryError;
+      if (closed) throw retryError;
+      getLog().warn({ ...fields, retryError }, 'workflow.attention_watch_delivery_unreadable');
+      isolated.add(runId);
+      blocked = undefined;
+      return undefined;
+    }
+  };
+
   const deliveryView = async (
     delivery: WorkflowRunDelivery
   ): Promise<RunView | null | undefined> => {
@@ -507,20 +529,7 @@ export async function watchAttentionQueue(
         blocked.warned = true;
       }
       if (closed || !(await hasReadableWitness(delivery))) throw error;
-      try {
-        const view = await projectRun(runId);
-        if (closed) throw error;
-        views.set(runId, Promise.resolve(view));
-        blocked = undefined;
-        return view;
-      } catch (retryError) {
-        if (retryError instanceof WorkflowEventCursorError) throw retryError;
-        if (closed) throw retryError;
-        getLog().warn({ ...fields, retryError }, 'workflow.attention_watch_delivery_unreadable');
-        isolated.add(runId);
-        blocked = undefined;
-        return undefined;
-      }
+      return retryDeliveryView(delivery, error);
     }
   };
   const reconciled = new Set<string>();
@@ -603,18 +612,11 @@ export async function watchAttentionQueue(
     };
   };
 
-  const handle = async (delivery: WorkflowRunDelivery): Promise<void> => {
-    const { cursor, event } = delivery;
+  const emitUnmatched = async (
+    { cursor, event }: WorkflowRunDelivery,
+    view: RunView | null
+  ): Promise<void> => {
     const runId = event.workflow_run_id;
-    if (closed || isolated.has(runId)) return;
-    const view = await deliveryView(delivery);
-    if (closed || view === undefined) return;
-    const inScope = view === null ? scope.kind === 'all' : isInAttentionScope(view.project, scope);
-    if (view?.run.status !== 'running' || !inScope) disarm(runId);
-    if (!reconciled.has(runId)) {
-      await reconcile(runId, view, cursor);
-      reconciled.add(runId);
-    }
     if (filtersLabels && event.event_type === 'attention_labeled' && view?.item) {
       const { item } = view;
       const occurrence = occurrenceOf(item);
@@ -634,8 +636,15 @@ export async function watchAttentionQueue(
           revision: item.revision,
         });
     }
+  };
+
+  const emitLifecycle = async (
+    delivery: WorkflowRunDelivery,
+    view: RunView | null
+  ): Promise<void> => {
+    const { event } = delivery;
     const status = terminalRunStatusForEventType(event.event_type);
-    if (status !== undefined && inScope) {
+    if (status !== undefined) {
       const { outcome, firstFailedNode } = terminalFacts(event, status);
       await emit({
         type: 'terminal',
@@ -645,8 +654,24 @@ export async function watchAttentionQueue(
         cause: status === 'failed' ? await failureCause(event, firstFailedNode) : null,
       });
     }
-    if (event.event_type === 'workflow_resumed' && inScope)
+    if (event.event_type === 'workflow_resumed')
       await emit({ type: 'resumed', ...lifecycleFields(delivery, view), status: 'running' });
+  };
+
+  const handle = async (delivery: WorkflowRunDelivery): Promise<void> => {
+    const { cursor, event } = delivery;
+    const runId = event.workflow_run_id;
+    if (closed || isolated.has(runId)) return;
+    const view = await deliveryView(delivery);
+    if (closed || view === undefined) return;
+    const inScope = view === null ? scope.kind === 'all' : isInAttentionScope(view.project, scope);
+    if (view?.run.status !== 'running' || !inScope) disarm(runId);
+    if (!reconciled.has(runId)) {
+      await reconcile(runId, view, cursor);
+      reconciled.add(runId);
+    }
+    await emitUnmatched(delivery, view);
+    if (inScope) await emitLifecycle(delivery, view);
     if (view?.run.status === 'running' && inScope) arm(view.run, view.project);
   };
 
