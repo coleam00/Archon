@@ -31,7 +31,11 @@ import { tmpdir, hostname } from 'node:os';
 import { CliTestScope } from '../test-support/cli-test-scope';
 import { getLogLevel, setLogLevel } from '@archon/paths';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { clearPlatformPolicies, setPlatformPolicies } from '@archon/core/platforms/registry';
+import {
+  clearPlatformPolicies,
+  getRegisteredPlatformPolicies,
+  setPlatformPolicies,
+} from '@archon/core/platforms/registry';
 import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
 import { triggerCommand } from './trigger';
 import * as workflowCommands from './workflow';
@@ -49,12 +53,24 @@ beforeEach(() => {
   originalEnv = { ...process.env };
   originalLogLevel = getLogLevel();
 });
-afterEach(async () => {
-  for (const scope of scopes.splice(0)) await scope.close();
-  process.env = originalEnv;
-  setLogLevel(originalLogLevel);
-  clearPlatformPolicies();
-});
+afterEach(closeFixtures);
+async function closeFixtures(): Promise<void> {
+  const errors: unknown[] = [];
+  try {
+    for (const scope of scopes.splice(0)) {
+      try {
+        await scope.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  } finally {
+    process.env = originalEnv;
+    setLogLevel(originalLogLevel);
+    clearPlatformPolicies();
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'CLI fixture cleanup failed');
+}
 const repo = join(import.meta.dir, '../../../..');
 interface Fixture {
   scope: CliTestScope;
@@ -225,6 +241,37 @@ test('forced timeout', async () => {
   expect(existsSync(continued)).toBe(false);
   expect(existsSync(childRoot)).toBe(false);
 });
+test('failed fixture closes still clean other scopes and restore shared state', async () => {
+  const first = fixture();
+  const second = fixture();
+  const third = fixture();
+  writeFileSync(first.scope.detachedPids, '0');
+  writeFileSync(third.scope.detachedPids, '0');
+  process.env = { ...first.env };
+  setLogLevel(originalLogLevel === 'error' ? 'silent' : 'error');
+  setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+  try {
+    const error = await closeFixtures().catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) throw error;
+    expect(error.errors).toHaveLength(2);
+    for (const failure of error.errors) {
+      expect(failure).toMatchObject({ message: 'Invalid detached test PID' });
+    }
+    expect(existsSync(first.root)).toBe(true);
+    expect(existsSync(second.root)).toBe(false);
+    expect(existsSync(third.root)).toBe(true);
+    expect(process.env).toEqual(originalEnv);
+    expect(getLogLevel()).toBe(originalLogLevel);
+    expect(getRegisteredPlatformPolicies).toThrow('Platform policies are not configured');
+  } finally {
+    unlinkSync(first.scope.detachedPids);
+    unlinkSync(third.scope.detachedPids);
+    await first.scope.close();
+    await second.scope.close();
+    await third.scope.close();
+  }
+});
 test('invalid detached process records preserve the fixture', async () => {
   const f = fixture();
   writeFileSync(f.scope.detachedPids, '0');
@@ -271,6 +318,14 @@ for (const launch of ['workflow', 'fire', 'drain'] as const) {
     const f = fixture();
     const nodePid = join(f.project, 'node.pid');
     writeFileSync(
+      join(f.project, 'hold.ts'),
+      `import { writeFileSync } from 'node:fs';
+writeFileSync('node.pid', String(process.pid));
+setInterval(() => {}, 1000);
+`
+    );
+    const executable = "'" + process.execPath.replaceAll("'", "'\\''") + "'";
+    writeFileSync(
       join(f.project, '.archon/workflows/hold.yaml'),
       `name: hold
 description: hold for teardown proof
@@ -278,7 +333,7 @@ worktree:
   enabled: false
 nodes:
   - id: hold
-    bash: echo $$ > node.pid; exec sleep 60
+    bash: exec ${executable} hold.ts
 `
     );
     let args = ['workflow', 'run', 'hold', '--folder', '--no-worktree', '--detach'];
