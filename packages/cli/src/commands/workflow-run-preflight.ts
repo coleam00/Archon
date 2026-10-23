@@ -261,6 +261,17 @@ export async function maybePrintTierNotice(
     return;
   }
 
+  const notice = formatTierNotice(effectiveAssistant, aliases);
+  if (notice === undefined) return;
+  process.stderr.write(notice);
+
+  markTierNoticeShown(version);
+}
+
+function formatTierNotice(
+  effectiveAssistant: string,
+  aliases: ResolvedAiProfile['aliases']
+): string | undefined {
   const tierLines: string[] = [];
   for (const t of TIER_NAMES) {
     const preset = aliases[t];
@@ -292,9 +303,7 @@ export async function maybePrintTierNotice(
     '   See anytime: `archon ai tier list`           (shown once per version)',
     ''
   );
-  process.stderr.write(lines.join('\n') + '\n');
-
-  markTierNoticeShown(version);
+  return lines.join('\n') + '\n';
 }
 
 /**
