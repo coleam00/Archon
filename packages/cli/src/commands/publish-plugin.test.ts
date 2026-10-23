@@ -11,6 +11,15 @@ let busy: (operation: string, path: string) => boolean = () => false;
 const ebusy = () => Object.assign(new Error('injected EBUSY'), { code: 'EBUSY' });
 mock.module('node:fs/promises', () => ({
   ...real,
+  async lstat(path: string) {
+    if (fail('lstat', path))
+      throw Object.assign(new Error('injected stat failure'), { code: 'EACCES' });
+    return real.lstat(path);
+  },
+  async copyFile(source: string, target: string) {
+    if (fail('copyFile', source)) throw new Error('injected copy failure');
+    return real.copyFile(source, target);
+  },
   async rename(source: string, target: string) {
     if (fail('rename', source)) throw new Error('injected rename failure');
     if (busy('rename', target)) throw ebusy();
@@ -85,6 +94,27 @@ for (const update of [false, true]) {
     });
   }
 }
+
+test.each(['lstat', 'copyFile'])(
+  '%s failure refuses publication before replacing installed files',
+  async operation => {
+    const data = await fixture(true, false);
+    fail = (op, path) => op === operation && path === data.oldBinary;
+    await expect(publishPlugin(data)).rejects.toThrow(
+      `Plugin could not back up installed files: ${data.receiptFile}. injected ${operation === 'lstat' ? 'stat' : 'copy'} failure`
+    );
+    expect(await Bun.file(data.receiptFile).text()).toBe('old receipt');
+    expect(await Bun.file(data.target).text()).toBe('old binary');
+    expect(await Bun.file(data.stagedReceipt).text()).toBe('new receipt');
+    expect(await Bun.file(data.stagedBinary).text()).toBe('new binary');
+    expect((await real.readdir(data.root)).sort()).toEqual([
+      'binary',
+      'binary.partial',
+      'receipt.json',
+      'receipt.partial',
+    ]);
+  }
+);
 
 test('failed same-name update restores executable bytes', async () => {
   const data = await fixture(true, false);
