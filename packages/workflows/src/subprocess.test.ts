@@ -1,9 +1,11 @@
 // @archon-test-isolated
 import { describe, expect, it, spyOn, test } from 'bun:test';
+import * as childProcess from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from '@archon/git';
+import * as processTools from '@archon/paths/plugin-process';
 import { bashInvocation } from './bash-invocation';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
@@ -17,6 +19,59 @@ import {
 
 const trackTempRoot = trackTempRoots();
 const posixOnly = process.platform === 'win32' ? test.skip : test;
+
+test.each([
+  { exited: false, terminationFails: false },
+  { exited: true, terminationFails: false },
+  { exited: false, terminationFails: true },
+  { exited: true, terminationFails: true },
+])('ending Windows node trees: %j', async ({ exited, terminationFails }) => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  const child = Object.defineProperties(new childProcess.ChildProcess(), {
+    pid: { value: 424242 },
+    stdin: { value: null },
+    stdout: { value: null },
+    stderr: { value: null },
+  });
+  const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
+  const terminate = spyOn(processTools, 'terminateTree').mockImplementation(async () => {
+    if (terminationFails) throw new Error('termination failed');
+  });
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+  const trees = recordNodeProcessTrees();
+  const run = () =>
+    runSubprocess({ kind: 'host' }, 'mock-node', [], {
+      cwd: import.meta.dir,
+      env: {},
+      retention: { standalone: true },
+    });
+  const pending = run();
+  try {
+    if (exited) child.emit('exit', 0, null);
+
+    if (terminationFails && !exited) {
+      await expect(trees.end()).rejects.toThrow(
+        'could not end node process trees: 424242 (termination failed)'
+      );
+    } else {
+      await trees.end();
+    }
+    if (exited) expect(terminate).not.toHaveBeenCalled();
+    else expect(terminate).toHaveBeenCalledWith(424242);
+
+    await expect(run()).rejects.toThrow(
+      'The run owner is terminating; node subprocess not started'
+    );
+    expect(spawn).toHaveBeenCalledTimes(1);
+  } finally {
+    child.emit('close', 0, null);
+    await pending;
+    trees.release();
+    Object.defineProperty(process, 'platform', platform);
+    terminate.mockRestore();
+    spawn.mockRestore();
+  }
+});
 
 function runHostBash(script: string, timeout?: number): ReturnType<typeof runSubprocess> {
   const invocation = bashInvocation(script);

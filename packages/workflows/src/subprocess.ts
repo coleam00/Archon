@@ -234,8 +234,9 @@ function recordNodeProcess(
   const disarm =
     process.platform !== 'win32' ? armNodeLifeline(rootPid, onError) : (): void => undefined;
   recorder.roots.set(rootPid, disarm);
-  // Output held by a child keeps the node in flight after the root exits.
-  child.once('close', () => {
+  // POSIX groups remain endable while a child holds output. Windows can reuse the
+  // root PID as soon as it exits, so taskkill must stop targeting it at exit.
+  child.once(process.platform === 'win32' ? 'exit' : 'close', () => {
     recorder.roots.delete(rootPid);
     disarm();
   });
