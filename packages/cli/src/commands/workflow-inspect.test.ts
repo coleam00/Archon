@@ -457,28 +457,36 @@ describe('workflowStatusCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('No active workflows.');
   });
 
-  it('should list active runs with ID, name, path, status, and age', async () => {
-    mockListDashboardRuns.mockResolvedValueOnce(
-      statusRuns([
-        {
-          id: 'run-abc',
-          workflow_name: 'implement',
-          working_path: '/path/to/worktree',
-          status: 'running',
-          started_at: new Date(Date.now() - 5 * 60 * 1000), // 5 minutes ago
-          active_nodes: ['parallel-a', 'parallel-b'],
-        },
-      ])
-    );
+  it('prints the complete active run layout with fixed age and active nodes', async () => {
+    const now = spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-23T12:00:00Z'));
+    try {
+      mockListDashboardRuns.mockResolvedValueOnce(
+        statusRuns([
+          {
+            id: 'run-abc',
+            workflow_name: 'implement',
+            working_path: '/path/to/worktree',
+            status: 'running',
+            started_at: new Date('2026-10-23T11:55:00Z'),
+            active_nodes: ['parallel-a', 'parallel-b'],
+          },
+        ])
+      );
 
-    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
+      await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
 
-    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(calls.some(c => c.includes('run-abc'))).toBe(true);
-    expect(calls.some(c => c.includes('implement'))).toBe(true);
-    expect(calls.some(c => c.includes('/path/to/worktree'))).toBe(true);
-    expect(calls.some(c => c.includes('running'))).toBe(true);
-    expect(calls.some(c => c.includes('Active nodes: parallel-a, parallel-b'))).toBe(true);
+      expect(consoleSpy.mock.calls.map((call: unknown[]) => call.join(' ')).join('\n') + '\n').toBe(
+        '\nActive workflows (1):\n\n' +
+          '  ID:     run-abc\n' +
+          '  Name:   implement\n' +
+          '  Path:   /path/to/worktree\n' +
+          '  Status: running\n' +
+          '  Age:    5m\n' +
+          '  Active nodes: parallel-a, parallel-b\n\n'
+      );
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('should label authored outcome separately from active execution status', async () => {
