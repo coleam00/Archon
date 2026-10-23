@@ -28,6 +28,8 @@ interface ToolCallAttentionOptions {
 /** The stall occurrences currently published by a stream. */
 export type StreamStall = Pick<ToolCallAttention, 'streamId' | 'toolCallId' | 'raisedAt'>[];
 
+type SubtaskEvent = Extract<ProviderEvent, { type: 'subtask' }>;
+
 type TrackedCall = Omit<ToolCallAttention, 'raisedAt'> & { raisedAt?: string };
 
 const terminalSubtasks: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
@@ -164,59 +166,69 @@ function createToolCallAttention(
     await persist();
   };
 
+  function trackToolCall(event: Extract<ProviderEvent, { type: 'tool_call' }>): void {
+    if (tools.has(event.toolCallId)) return;
+    const at = new Date(now()).toISOString();
+    tools.set(event.toolCallId, {
+      streamId,
+      nodeId: options.nodeId,
+      provider: options.provider,
+      toolCallId: event.toolCallId,
+      name: display(event.name) || 'tool',
+      ...(event.title ? { title: display(event.title) } : {}),
+      startedAt: at,
+      lastProgressAt: at,
+      thresholdMs: options.thresholdMs,
+    });
+  }
+
+  function observeSubtask(event: SubtaskEvent): void {
+    if (event.parentToolCallId) parents.set(event.taskId, event.parentToolCallId);
+    markParentToolProgress(event.taskId);
+    if (options.reportedBackgroundWork) trackSubtask(event);
+  }
+
+  // Any subtask event is progress on the tool call that spawned it.
+  function markParentToolProgress(taskId: string): void {
+    const parent = parents.get(taskId);
+    const tool = parent ? tools.get(parent) : undefined;
+    if (!tool) return;
+    tool.lastProgressAt = new Date(now()).toISOString();
+    delete tool.raisedAt;
+  }
+
+  function trackSubtask(event: SubtaskEvent): void {
+    if (terminalSubtasks.has(event.status)) {
+      subtasks.delete(event.taskId);
+      return;
+    }
+    const at = new Date(now()).toISOString();
+    const task = subtasks.get(event.taskId);
+    if (!task) {
+      subtasks.set(event.taskId, {
+        streamId,
+        nodeId: options.nodeId,
+        provider: options.provider,
+        toolCallId: `subtask:${event.taskId}`,
+        name: display(event.taskType || 'subtask'),
+        ...(event.description ? { title: display(event.description) } : {}),
+        startedAt: at,
+        lastProgressAt: at,
+        thresholdMs: options.thresholdMs,
+      });
+    } else if (event.status === 'running') {
+      task.lastProgressAt = at;
+      delete task.raisedAt;
+    }
+  }
+
   return {
     hasOpenTools: () => tools.size > 0,
     stall: () => stall,
     async observe(event: ProviderEvent): Promise<void> {
-      if (event.type === 'tool_call' && !tools.has(event.toolCallId)) {
-        const at = new Date(now()).toISOString();
-        tools.set(event.toolCallId, {
-          streamId,
-          nodeId: options.nodeId,
-          provider: options.provider,
-          toolCallId: event.toolCallId,
-          name: display(event.name) || 'tool',
-          ...(event.title ? { title: display(event.title) } : {}),
-          startedAt: at,
-          lastProgressAt: at,
-          thresholdMs: options.thresholdMs,
-        });
-      } else if (event.type === 'tool_call_update') {
-        tools.delete(event.toolCallId);
-      } else if (event.type === 'subtask') {
-        if (event.parentToolCallId) parents.set(event.taskId, event.parentToolCallId);
-        const parent = parents.get(event.taskId);
-        const tool = parent ? tools.get(parent) : undefined;
-        if (tool) {
-          tool.lastProgressAt = new Date(now()).toISOString();
-          delete tool.raisedAt;
-        }
-        if (options.reportedBackgroundWork) {
-          if (terminalSubtasks.has(event.status)) subtasks.delete(event.taskId);
-          else {
-            const at = new Date(now()).toISOString();
-            const task = subtasks.get(event.taskId);
-            if (task) {
-              if (event.status === 'running') {
-                task.lastProgressAt = at;
-                delete task.raisedAt;
-              }
-            } else {
-              subtasks.set(event.taskId, {
-                streamId,
-                nodeId: options.nodeId,
-                provider: options.provider,
-                toolCallId: `subtask:${event.taskId}`,
-                name: display(event.taskType || 'subtask'),
-                ...(event.description ? { title: display(event.description) } : {}),
-                startedAt: at,
-                lastProgressAt: at,
-                thresholdMs: options.thresholdMs,
-              });
-            }
-          }
-        }
-      }
+      if (event.type === 'tool_call') trackToolCall(event);
+      else if (event.type === 'tool_call_update') tools.delete(event.toolCallId);
+      else if (event.type === 'subtask') observeSubtask(event);
       await refresh();
     },
     refresh,
