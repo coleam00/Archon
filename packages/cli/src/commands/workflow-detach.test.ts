@@ -1,5 +1,6 @@
 import {
   testHome,
+  mockLogger,
   mockStartRunLiveOwner,
   mockClaimDetachedRunProcessOwner,
   mockCreateWorkflowRun,
@@ -33,7 +34,11 @@ import {
   workflowResumeCommand,
 } from './workflow-control';
 import { workflowRunCommand } from './workflow-run-owned';
-import { buildDetachedRunCmd, resolveDetachedRunEncryptionEnv } from './workflow-detach';
+import {
+  buildDetachedRunCmd,
+  resolveDetachedRunEncryptionEnv,
+  spawnDetachedWorkflowRun,
+} from './workflow-detach';
 import { DETACHED_RUN_FAILED_EXIT_CODE } from '../utils/workflow-exit-code';
 
 const git = await import('@archon/git');
@@ -923,6 +928,89 @@ describe('workflowRunCommand — detach', () => {
       expect(delimiters).toHaveLength(2);
     } finally {
       process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+  });
+
+  it('reports log close failure without changing a successful detached launch', async () => {
+    const closeError = Object.assign(new Error('close failed'), { code: 'EIO' });
+    const originalClose = fs.closeSync;
+    const closeSpy = spyOn(fs, 'closeSync').mockImplementation(fd => {
+      originalClose(fd);
+      throw closeError;
+    });
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    mockLogger.warn.mockClear();
+
+    try {
+      const launch = spawnDetachedWorkflowRun('/test/path', 'close-success', []);
+      await finishStartupWindow(launch, spawnSpy);
+
+      expect(await launch).toBe(join(testHome, 'logs', 'detached-run-close-success.log'));
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { err: closeError },
+        'cli.detached_run_log_close_failed'
+      );
+    } finally {
+      closeSpy.mockRestore();
+      spawnSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    { writeFails: false, code: 'EBADF' },
+    { writeFails: false, code: 'EIO' },
+    { writeFails: true, code: 'EBADF' },
+    { writeFails: true, code: 'EIO' },
+  ])('preserves launch failure during log cleanup: %j', async ({ writeFails, code }) => {
+    const closeError = Object.assign(new Error('close failed'), { code });
+    const writeError = new Error('delimiter write failed');
+    const spawnError = new Error('spawn failed');
+    const originalClose = fs.closeSync;
+    const closeSpy = spyOn(fs, 'closeSync').mockImplementation(fd => {
+      originalClose(fd);
+      throw closeError;
+    });
+    const writeSpy = spyOn(fs, 'writeSync');
+    if (writeFails) {
+      writeSpy.mockImplementationOnce(() => {
+        throw writeError;
+      });
+    }
+    const spawnSpy = spyOn(childProcess, 'spawn').mockImplementation(() => {
+      throw spawnError;
+    });
+    mockLogger.warn.mockClear();
+
+    try {
+      await expect(spawnDetachedWorkflowRun('/test/path', 'close-failure', [])).rejects.toBe(
+        spawnError
+      );
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      if (code === 'EBADF') {
+        expect(mockLogger.warn).not.toHaveBeenCalledWith(
+          expect.anything(),
+          'cli.detached_run_log_close_failed'
+        );
+      } else {
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          { err: closeError },
+          'cli.detached_run_log_close_failed'
+        );
+      }
+      if (writeFails) {
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          { err: writeError },
+          'cli.detached_run_log_open_failed'
+        );
+      }
+      expect(mockLogger.warn).toHaveBeenCalledTimes(Number(writeFails) + Number(code !== 'EBADF'));
+    } finally {
+      closeSpy.mockRestore();
+      writeSpy.mockRestore();
       spawnSpy.mockRestore();
     }
   });

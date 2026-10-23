@@ -178,6 +178,58 @@ export function resolveDetachedRunEncryptionEnv(
   };
 }
 
+function closeDetachedRunLog(logFd: number | undefined): void {
+  if (logFd !== undefined) {
+    try {
+      closeSync(logFd);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'EBADF') return;
+      getLog().warn({ err: error }, 'cli.detached_run_log_close_failed');
+    }
+  }
+}
+
+function openDetachedRunLog(conversationId: string) {
+  let logPath: string | null = null;
+  let logFd: number | undefined;
+  try {
+    const logDir = join(getArchonHome(), 'logs');
+    mkdirSync(logDir, { recursive: true });
+    logPath = join(logDir, `detached-run-${conversationId}.log`);
+    logFd = openSync(logPath, 'a');
+    writeSync(
+      logFd,
+      `\n--- detached workflow invocation: ${conversationId} at ${new Date().toISOString()} ---\n`
+    );
+  } catch (error) {
+    closeDetachedRunLog(logFd);
+    getLog().warn({ err: error as Error }, 'cli.detached_run_log_open_failed');
+    logPath = null;
+    logFd = undefined;
+  }
+  return { logPath, logFd };
+}
+
+async function confirmDetachedResume(child: ChildProcess, logPath: string | null): Promise<void> {
+  const pipe = child.stdio[DETACHED_RESUME_RECEIPT_FD];
+  if (!pipe || !('readable' in pipe)) {
+    child.unref();
+    throw new Error('Detached resume acceptance pipe was not created.');
+  }
+  try {
+    await waitForDetachedResumeReceipt(child, pipe, (code, signal) =>
+      detachedStartupExitError(code, signal, null)
+    );
+  } catch (error) {
+    const tail = logPath ? readDetachedLogTail(logPath) : null;
+    throw new Error(
+      `Detached resume acceptance was not confirmed. ${error instanceof Error ? error.message : String(error)}` +
+        (logPath ? `\nChild output (${logPath}):\n${tail ?? '(no output recorded)'}` : ''),
+      { cause: error }
+    );
+  }
+}
+
 export async function spawnDetachedWorkflowRun(
   cwd: string,
   conversationId: string,
@@ -197,29 +249,7 @@ export async function spawnDetachedWorkflowRun(
     process.execArgv
   );
 
-  let logPath: string | null = null;
-  let logFd: number | undefined;
-  try {
-    const logDir = join(getArchonHome(), 'logs');
-    mkdirSync(logDir, { recursive: true });
-    logPath = join(logDir, `detached-run-${conversationId}.log`);
-    logFd = openSync(logPath, 'a');
-    writeSync(
-      logFd,
-      `\n--- detached workflow invocation: ${conversationId} at ${new Date().toISOString()} ---\n`
-    );
-  } catch (error) {
-    if (logFd !== undefined) {
-      try {
-        closeSync(logFd);
-      } catch {
-        /* fd already closed/invalid — nothing to clean up */
-      }
-    }
-    getLog().warn({ err: error as Error }, 'cli.detached_run_log_open_failed');
-    logPath = null;
-    logFd = undefined;
-  }
+  const { logPath, logFd } = openDetachedRunLog(conversationId);
 
   try {
     // Node's spawn with `detached: true` puts the child in its own process
@@ -268,36 +298,14 @@ export async function spawnDetachedWorkflowRun(
       throw new Error(`Failed to start detached workflow child (executable: ${cmd[0]})`);
     }
     if (confirmResume) {
-      const pipe = child.stdio[DETACHED_RESUME_RECEIPT_FD];
-      if (!pipe || !('readable' in pipe)) {
-        child.unref();
-        throw new Error('Detached resume acceptance pipe was not created.');
-      }
-      try {
-        await waitForDetachedResumeReceipt(child, pipe, (code, signal) =>
-          detachedStartupExitError(code, signal, null)
-        );
-      } catch (error) {
-        const tail = logPath ? readDetachedLogTail(logPath) : null;
-        throw new Error(
-          `Detached resume acceptance was not confirmed. ${error instanceof Error ? error.message : String(error)}` +
-            (logPath ? `\nChild output (${logPath}):\n${tail ?? '(no output recorded)'}` : ''),
-          { cause: error }
-        );
-      }
+      await confirmDetachedResume(child, logPath);
     } else {
       await waitForDetachedStartup(child, logPath, cmd[0], conversationId);
     }
   } finally {
     // The child inherits its own dup of the log fd; close the parent's copy so a
     // synchronous spawn failure (bad execPath, invalid cwd) doesn't leak it.
-    if (logFd !== undefined) {
-      try {
-        closeSync(logFd);
-      } catch {
-        /* fd already closed/invalid — nothing to clean up */
-      }
-    }
+    closeDetachedRunLog(logFd);
   }
   return logPath;
 }

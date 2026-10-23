@@ -1090,6 +1090,10 @@ describe('GitHub setup wizard', () => {
       switchAnswer = false;
       expect(await run()).toBe(0);
       expect(readFileSync(target, 'utf8')).toBe(original);
+      expect(prompts.confirm).toHaveBeenCalledWith({
+        message: `Replace existing GitHub authentication with ${selectedMode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
+        initialValue: false,
+      });
       switchAnswer = true;
       expect(await run()).toBe(0);
       expect(selectGitHubAuthMode(read())).toEqual({ kind: selectedMode });
