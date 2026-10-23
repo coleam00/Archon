@@ -524,6 +524,15 @@ describe('user-provider-key-store', () => {
 
   describe('getStoredCredentialStatus', () => {
     test('conforms: the status never carries the decrypted credential', async () => {
+      const logMethods = [
+        mockLogger.fatal,
+        mockLogger.error,
+        mockLogger.warn,
+        mockLogger.info,
+        mockLogger.debug,
+        mockLogger.trace,
+      ];
+      for (const method of logMethods) method.mockClear();
       const violations = await checkCredentialStatuses([
         {
           name: 'api key',
@@ -560,6 +569,12 @@ describe('user-provider-key-store', () => {
         },
       ]);
       expect(violations).toEqual([]);
+      const logged = JSON.stringify(
+        logMethods.flatMap(method => method.mock.calls),
+        (_key, value: unknown) =>
+          value instanceof Error ? { message: value.message, stack: value.stack } : value
+      );
+      expect(logged).not.toContain('sk-ant-ort01-PLANTED');
     });
 
     test('a failing credential reports the store status unchanged', async () => {
