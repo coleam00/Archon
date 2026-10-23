@@ -1234,6 +1234,12 @@
             "waitingForCapacity": {
               "type": "boolean",
               "const": true
+            },
+            "cleanupWarnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [
