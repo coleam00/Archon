@@ -11,26 +11,30 @@ export function quoteCommandArg(value: string): string {
   return `"${value.replace(/[\\"]/g, c => `\\${c}`)}"`;
 }
 
-export function parseSlashCommand(text: string): { command: string; args: string[] } {
+function tokenizeCommand(text: string): string[] {
   const matches: string[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
   let escaping = false;
   let hasToken = false;
 
+  const appendQuotedCharacter = (char: string): void => {
+    hasToken = true;
+    if (escaping) {
+      current += char;
+      escaping = false;
+    } else if (char === '\\') {
+      escaping = true;
+    } else if (char === quote) {
+      quote = null;
+    } else {
+      current += char;
+    }
+  };
+
   for (const char of text.trim()) {
     if (quote) {
-      hasToken = true;
-      if (escaping) {
-        current += char;
-        escaping = false;
-      } else if (char === '\\') {
-        escaping = true;
-      } else if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
+      appendQuotedCharacter(char);
       continue;
     }
 
@@ -60,6 +64,11 @@ export function parseSlashCommand(text: string): { command: string; args: string
     matches.push(current);
   }
 
+  return matches;
+}
+
+export function parseSlashCommand(text: string): { command: string; args: string[] } {
+  const matches = tokenizeCommand(text);
   if (matches.length === 0 || !matches[0]) {
     return { command: '', args: [] };
   }
