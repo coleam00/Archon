@@ -357,6 +357,13 @@ async function decodeDetachedRunConfig({
 /** Routes the commands that run before the project gate, then gates and routes the rest. */
 async function dispatchCommand(base: CliRouteContext): Promise<number> {
   const { command, subcommand, values } = base;
+  const configOutsideRun = rejectConfigOutsideRun(
+    command,
+    subcommand,
+    values.config,
+    values['config-from-run']
+  );
+  if (configOutsideRun) return await fail(base.json, configOutsideRun);
   await assertFileStoreIfNeeded(base);
   const ctx = { ...base, detachedRunConfig: await decodeDetachedRunConfig(base) };
 
@@ -364,13 +371,6 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
   if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
     return await workflowRoutes.runWorkflowContinuation(ctx, subcommand);
   }
-  const configOutsideRun = rejectConfigOutsideRun(
-    command,
-    subcommand,
-    values.config,
-    values['config-from-run']
-  );
-  if (configOutsideRun) return await fail(ctx.json, configOutsideRun);
   if (command === 'continue') return await routes.runRemovedContinue(ctx);
   if (command === 'provider') return await routes.runProvider(ctx);
   if (command === 'plugin') return await routes.runPlugin(ctx);
