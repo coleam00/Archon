@@ -62,6 +62,12 @@ import {
   validateStructural,
 } from '../packages/web/src/experiments/console/builder/validation/structural';
 import { MAX_DURABLE_WAIT_MS } from '../packages/workflows/src/schemas/durable-wait';
+import {
+  createEditorState,
+  editorReducer,
+} from '../packages/web/src/experiments/console/builder/editor/state';
+import { toWorkflowDefinition } from '../packages/web/src/experiments/console/builder/model/to-workflow';
+import { serializeToYaml } from '../packages/web/src/experiments/console/builder/yaml';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 // OUTPUT_REF_SOURCE moved from loader.ts to output-ref.ts (#2637) so the loader
@@ -498,6 +504,45 @@ describe('loop completion-channel parity', () => {
       expect(builderAccepts(channels)).toBe(engineAccepts(channels));
     });
   }
+});
+
+describe('new builder loops', () => {
+  test('an untouched new loop exports a valid shell completion check without warnings', () => {
+    const initial = createEditorState({
+      name: 'new-loop',
+      description: 'New loop defaults',
+      meta: {},
+      nodes: [],
+    });
+    const { workflow } = editorReducer(initial, {
+      type: 'add-node',
+      variant: 'loop',
+      position: { x: 0, y: 0 },
+      at: 0,
+    });
+    const exported = toWorkflowDefinition(workflow);
+    const node = exported.nodes[0];
+    const loop = node.loop;
+    if (!loop) throw new Error('New loop is missing its configuration');
+    expect(Object.hasOwn(loop, 'until')).toBe(false);
+    expect(loop.until_field).toBeUndefined();
+    expect(node.output_format).toBeUndefined();
+    expect(validateStructural(workflow).filter(issue => issue.severity === 'error')).toEqual([]);
+    const check = loop.until_bash;
+    if (!check?.trim()) throw new Error('New loop is missing its shell completion check');
+
+    const yaml = serializeToYaml(exported);
+    const parsed = parseWorkflow(yaml, 'new-loop.yaml', providerRegistry);
+    expect(parsed.error).toBeNull();
+    expect(parsed.workflow).not.toBeNull();
+    expect(parsed.warnings).toEqual([]);
+    const parsedNode = parsed.workflow?.nodes[0];
+    if (!parsedNode || !('loop' in parsedNode)) throw new Error('Parsed loop is missing');
+    expect(parsedNode.loop?.until_bash).toBe(check);
+
+    const result = Bun.spawnSync(['bash', '-c', check]);
+    expect(result.exitCode).toBe(1);
+  });
 });
 
 describe('loop until_field schema parity', () => {

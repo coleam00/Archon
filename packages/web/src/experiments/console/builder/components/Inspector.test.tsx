@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { BuilderNode } from '../types';
+import { defaultLoopData } from '../variants/loop';
 import { Inspector } from './Inspector';
 import { WhenBuilder } from './WhenBuilder';
 
@@ -62,6 +63,24 @@ describe('Inspector', () => {
     expect(html).toContain('value="all_done" selected');
     expect(html).toContain('Output type');
     expect(html).toContain('value="report"');
+  });
+
+  test('new loop inspector shows the shell placeholder and explains its failure behavior', () => {
+    const html = renderInspector({
+      id: 'loop',
+      variant: 'loop',
+      base: {},
+      data: defaultLoopData(),
+    });
+    expect(html).toContain(
+      'value="exit 1 # TODO: replace with a completion check (exit 0 = done)"'
+    );
+    expect(html).toContain('placeholder check that never completes');
+    expect(html).toContain('Replace it with a real check');
+    expect(html).toContain('before running');
+    expect(html).toContain('Exit 0 completes the loop');
+    expect(html).toContain('leaving the placeholder reaches the iteration cap');
+    expect(html).toContain('and fails the node');
   });
 
   test('loop inspector explains where to author the until_field schema', () => {
