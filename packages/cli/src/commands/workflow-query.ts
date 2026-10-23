@@ -109,27 +109,7 @@ export async function workflowTestCommand(
     });
   } catch (error) {
     if (errors.length === 0) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    if (options.json) {
-      await writeJsonLine({
-        ok: false,
-        error: message,
-        errors: errors.map(e => ({
-          filename: e.filename,
-          error: e.error,
-          errorType: e.errorType,
-        })),
-      });
-    } else {
-      let output = `Error: ${message}\n`;
-      if (errors.length > 0) {
-        output += `\n${errors.length} workflow(s) failed to load:\n\n`;
-        for (const loadError of errors) {
-          output += `  ${loadError.filename}: ${loadError.error}\n`;
-        }
-      }
-      await writeStdout(output);
-    }
+    await writeFixtureFailure(error, errors, options.json);
     return 1;
   }
 
@@ -143,21 +123,10 @@ export async function workflowTestCommand(
       })),
       passed: report.passed,
       failed: report.failed,
-      errors: errors.map(e => ({
-        filename: e.filename,
-        error: e.error,
-        errorType: e.errorType,
-      })),
+      errors: fixtureLoadErrorsJson(errors),
     });
   } else {
-    let output = `${formatFixtureReport(report)}\n`;
-    if (errors.length > 0) {
-      output += `\n${errors.length} workflow(s) failed to load:\n\n`;
-      for (const error of errors) {
-        output += `  ${error.filename}: ${error.error}\n`;
-      }
-    }
-    await writeStdout(output);
+    await writeStdout(`${formatFixtureReport(report)}\n${formatFixtureLoadErrors(errors)}`);
   }
 
   if (
@@ -168,6 +137,30 @@ export async function workflowTestCommand(
     return 1;
   }
   return 0;
+}
+
+function fixtureLoadErrorsJson(errors: readonly WorkflowLoadError[]) {
+  return errors.map(e => ({ filename: e.filename, error: e.error, errorType: e.errorType }));
+}
+
+function formatFixtureLoadErrors(errors: readonly WorkflowLoadError[]): string {
+  if (errors.length === 0) return '';
+  return `\n${errors.length} workflow(s) failed to load:\n\n${errors
+    .map(error => `  ${error.filename}: ${error.error}\n`)
+    .join('')}`;
+}
+
+async function writeFixtureFailure(
+  error: unknown,
+  errors: readonly WorkflowLoadError[],
+  json: boolean | undefined
+): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  if (json) {
+    await writeJsonLine({ ok: false, error: message, errors: fixtureLoadErrorsJson(errors) });
+  } else {
+    await writeStdout(`Error: ${message}\n${formatFixtureLoadErrors(errors)}`);
+  }
 }
 
 function selectWorkflowEntries(
@@ -254,11 +247,7 @@ export async function workflowListCommand(
       // wrote. `webSearchMode` is the one that stays on the definition — it has no
       // per-node form to collapse onto.
       workflows: listedEntries.map(entry => workflowJsonEntry(entry, options.full === true)),
-      errors: errors.map(e => ({
-        filename: e.filename,
-        error: e.error,
-        errorType: e.errorType,
-      })),
+      errors: fixtureLoadErrorsJson(errors),
     };
     await writeJsonLine(output);
     return;
