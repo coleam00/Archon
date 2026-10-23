@@ -653,7 +653,7 @@ describe('workflow run config argument', () => {
             preload,
             `import { mock } from 'bun:test';
 mock.module(${JSON.stringify(join(import.meta.dir, 'routes/route-loader.ts'))}, () => ({
-  usesDatabaseStore: async () => true,
+  usesDatabaseStore: async () => { throw new Error('unexpected store initialization'); },
   registerProviders: async () => { throw new Error('unexpected provider initialization'); },
   loadRoute: async () => { throw new Error('unexpected command initialization'); },
   markDatabaseRouteLoaded: () => {},
