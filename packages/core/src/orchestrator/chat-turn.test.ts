@@ -804,7 +804,12 @@ describe('message persistence for non-web platforms', () => {
   });
 
   test('persists user + assistant messages for non-web platform (stream mode)', async () => {
-    const platform: IPlatformAdapter = {
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: 'hello ' };
+      yield { type: 'agent_message_chunk', text: 'back' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+    const platform = {
       ...makePlatform(),
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'telegram'),
@@ -813,6 +818,10 @@ describe('message persistence for non-web platforms', () => {
 
     await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
 
+    expect(platform.sendMessage.mock.calls).toEqual([
+      ['conv-1', 'hello '],
+      ['conv-1', 'back'],
+    ]);
     expect(mockAddMessage).toHaveBeenCalledWith(
       'conv-db-id',
       'user',
@@ -820,11 +829,7 @@ describe('message persistence for non-web platforms', () => {
       undefined,
       undefined
     );
-    expect(mockAddMessage).toHaveBeenCalledWith(
-      'conv-db-id',
-      'assistant',
-      expect.stringContaining('hello back')
-    );
+    expect(mockAddMessage).toHaveBeenCalledWith('conv-db-id', 'assistant', 'hello back');
     expect(mockAddMessage).toHaveBeenCalledTimes(2);
   });
 

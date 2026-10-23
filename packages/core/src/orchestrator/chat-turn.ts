@@ -248,47 +248,59 @@ async function reportUnansweredToolFailure(input: ChatTurnInput): Promise<void> 
 
 // ─── Streaming Mode ─────────────────────────────────────────────────────────
 
-/**
- * Stream mode: send text chunks immediately for real-time UX (web, Telegram stream).
- */
-export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
-  const { turn, platform, conversationId, session } = input;
+async function streamReply(input: ChatTurnInput) {
+  const { turn, platform, conversationId } = input;
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let toolFailed = false;
 
   for await (const msg of turnChunks(input)) {
-    if (msg.type === 'agent_message_chunk') {
-      if (msg.text.trim()) toolFailed = false;
-      allMessages.push(msg.text);
-      await platform.sendMessage(conversationId, msg.text);
-    } else if (msg.type === 'tool_call') {
-      const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
-      await platform.sendMessage(conversationId, toolMessage, {
-        category: 'tool_call_formatted',
-      });
-      if (platform.sendStructuredEvent) {
-        await platform.sendStructuredEvent(conversationId, msg);
+    switch (msg.type) {
+      case 'agent_message_chunk':
+        if (msg.text.trim()) toolFailed = false;
+        allMessages.push(msg.text);
+        await platform.sendMessage(conversationId, msg.text);
+        break;
+      case 'tool_call': {
+        const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
+        await platform.sendMessage(conversationId, toolMessage, {
+          category: 'tool_call_formatted',
+        });
+        await platform.sendStructuredEvent?.(conversationId, msg);
+        break;
       }
-    } else if (msg.type === 'tool_call_update') {
-      toolFailed ||= msg.status === 'failed' || msg.status === 'cancelled';
-      if (platform.sendStructuredEvent) {
-        await platform.sendStructuredEvent(conversationId, msg);
+      case 'tool_call_update': {
+        toolFailed ||= msg.status === 'failed' || msg.status === 'cancelled';
+        await platform.sendStructuredEvent?.(conversationId, msg);
+        break;
       }
-    } else if (msg.type === 'warning') {
-      await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
-    } else if (msg.type === 'result') {
-      turn.result = {
-        ...addResultUsage(turn.result ?? {}, msg),
-        stopReason: msg.stopReason ?? turn.result?.stopReason,
-      };
-      newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
-      if (await reportFailedResult(input, msg, newSessionId)) return;
-      if (platform.sendStructuredEvent) {
-        await platform.sendStructuredEvent(conversationId, msg);
+      case 'warning': {
+        await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
+        break;
+      }
+      case 'result': {
+        turn.result = {
+          ...addResultUsage(turn.result ?? {}, msg),
+          stopReason: msg.stopReason ?? turn.result?.stopReason,
+        };
+        newSessionId = await sessionIdAfterResult(input, msg, newSessionId);
+        if (await reportFailedResult(input, msg, newSessionId)) return null;
+        await platform.sendStructuredEvent?.(conversationId, msg);
+        break;
       }
     }
   }
+  return { allMessages, newSessionId, toolFailed };
+}
+
+/**
+ * Stream mode: send text chunks immediately for real-time UX (web, Telegram stream).
+ */
+export async function handleStreamMode(input: ChatTurnInput): Promise<void> {
+  const { session, conversationId } = input;
+  const reply = await streamReply(input);
+  if (reply === null) return;
+  const { allMessages, newSessionId, toolFailed } = reply;
 
   if (newSessionId) {
     await tryPersistSessionId(session.id, newSessionId);
