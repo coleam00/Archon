@@ -229,6 +229,87 @@ describe('POST /api/conversations/:id/message', () => {
     mockAddMessage.mockReset();
   });
 
+  test('publishes JSON and multipart message request bodies', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/openapi.json');
+    expect(response.status).toBe(200);
+    const doc = (await response.json()) as ReturnType<typeof app.getOpenAPIDocument>;
+    type Schema = NonNullable<NonNullable<typeof doc.components>['schemas']>[string];
+    function resolve(schema: Schema | undefined): Exclude<Schema, { $ref: string }> {
+      if (!schema) throw new Error('Missing schema');
+      if ('$ref' in schema)
+        return resolve(doc.components?.schemas?.[schema.$ref.split('/').at(-1) ?? '']);
+      return schema;
+    }
+    const body = doc.paths['/api/conversations/{id}/message']?.post?.requestBody;
+    if (!body || '$ref' in body) throw new Error('Missing message request body');
+    expect(body.required).toBe(true);
+    expect(Object.keys(body.content)).toEqual(['application/json', 'multipart/form-data']);
+    const json = resolve(body.content['application/json']?.schema);
+    const form = resolve(body.content['multipart/form-data']?.schema);
+    for (const schema of [json, form]) {
+      expect(schema.required).toEqual(['message']);
+      expect(resolve(schema.properties?.message)).toMatchObject({ type: 'string', minLength: 1 });
+    }
+    expect(json.properties?.files).toBeUndefined();
+    const files = resolve(form.properties?.files);
+    expect(files).toMatchObject({ type: 'array', maxItems: 5 });
+    if (!files.items || Array.isArray(files.items)) throw new Error('Missing file item schema');
+    expect(resolve(files.items)).toMatchObject({ type: 'string', format: 'binary' });
+  });
+
+  test('accepts multipart without attachments and keeps manual validation errors', async () => {
+    mockFindConversationByPlatformId.mockResolvedValue(null);
+    const { app } = makeApp();
+    for (const message of ['Hello', '']) {
+      const form = new FormData();
+      form.set('message', message);
+      const response = await app.request('/api/conversations/web-test-abc/message', {
+        method: 'POST',
+        body: form,
+      });
+      expect(response.status).toBe(message ? 200 : 400);
+      expect(await response.json()).toEqual(
+        message
+          ? { accepted: true, status: 'started' }
+          : { error: 'message must be a non-empty string' }
+      );
+    }
+    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(['too many', 'too large'] as const)('refuses %s attachments', async kind => {
+    mockFindConversationByPlatformId.mockResolvedValue(null);
+    const { app } = makeApp();
+    const form = new FormData();
+    form.set('message', 'Hello');
+    for (let index = 0; index < (kind === 'too many' ? 6 : 1); index++) {
+      form.append(
+        'files',
+        new File(
+          [kind === 'too large' ? new Uint8Array(10 * 1024 * 1024 + 1) : 'hello'],
+          'file.txt',
+          {
+            type: 'text/plain',
+          }
+        )
+      );
+    }
+    const response = await app.request('/api/conversations/web-test-abc/message', {
+      method: 'POST',
+      body: form,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error:
+        kind === 'too many'
+          ? 'Maximum 5 files per message'
+          : 'File "file.txt" exceeds the 10 MB size limit',
+    });
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockAddMessage).not.toHaveBeenCalled();
+  });
+
   test('accepts a valid message and dispatches to orchestrator', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
     mockAddMessage.mockImplementationOnce(async () => ({
@@ -325,7 +406,6 @@ describe('POST /api/conversations/:id/message', () => {
     expect(response.status).toBe(400);
 
     const body = (await response.json()) as { error: string };
-    // Zod validation returns "message: Required" before the handler runs
     expect(body.error).toContain('message');
   });
 
