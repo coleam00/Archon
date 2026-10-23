@@ -302,24 +302,18 @@ function parseContinuationFields(body: {
 }
 
 async function parseJsonRunRequest(c: Context): Promise<Parsed<RunLaunchRequest>> {
-  let body: {
-    conversationId?: unknown;
-    message?: unknown;
-    inputs?: unknown;
-    tiers?: unknown;
-    aliases?: unknown;
-    config?: unknown;
-    configPath?: unknown;
-    adopt_run_id?: unknown;
-    supersedes_run_id?: unknown;
-  };
+  let raw: unknown;
   try {
-    body = await c.req.json();
+    raw = await c.req.json();
   } catch (parseErr: unknown) {
     getLog().warn({ err: parseErr }, 'run_workflow.json_parse_failed');
     return { ok: false, error: 'Invalid JSON in request body' };
   }
 
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, error: 'Request body must be a JSON object' };
+  }
+  const body = raw as Record<string, unknown>;
   const { conversationId, message } = body;
   if (typeof conversationId !== 'string' || !conversationId) {
     return { ok: false, error: 'conversationId must be a non-empty string' };
