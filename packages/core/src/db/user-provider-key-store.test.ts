@@ -330,6 +330,44 @@ describe('user-provider-key-store', () => {
       expect(insertParams[4]).not.toContain('ROTATED'); // re-encrypted, not plaintext
     });
 
+    test.each([1, 2])('returns the rotated token after %i failed save attempts', async failures => {
+      mockLogger.error.mockClear();
+      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+      for (let attempt = 0; attempt < failures; attempt++) {
+        mockQuery.mockRejectedValueOnce(new Error('save unavailable'));
+      }
+      mockMintSubscription.mockResolvedValueOnce({
+        newCredentials: { access: 'ROTATED', refresh: 'r2', expires: 999 },
+        apiKey: 'minted-after-rotate',
+      });
+
+      expect(await getDecryptedProviderCredential('user-1', 'claude')).toMatchObject({
+        state: 'usable',
+        credential: { oauthApiKey: 'minted-after-rotate' },
+      });
+      expect(mockQuery).toHaveBeenCalledTimes(3);
+      if (failures === 2) {
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          { err: expect.any(Error), userId: 'user-1', provider: 'claude' },
+          'user_provider_key.oauth_resave_failed'
+        );
+      } else {
+        expect(mockLogger.error).not.toHaveBeenCalled();
+      }
+    });
+
+    test('does not save unchanged OAuth fields when their JSON order changes', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+      mockMintSubscription.mockResolvedValueOnce({
+        newCredentials: { expires: OAUTH_BLOB_EXPIRES, access: 'oauth-bearer' },
+        apiKey: 'minted-oauth-key',
+      });
+      expect(await getDecryptedProviderCredential('user-1', 'claude')).toMatchObject({
+        state: 'usable',
+      });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
     test('coalesces concurrent oauth reads → a single refresh (inflight Map)', async () => {
       mockMintSubscription.mockClear();
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
