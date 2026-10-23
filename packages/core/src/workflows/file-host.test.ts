@@ -3,7 +3,12 @@ import { drainResourceStartHost, ResourceStartDrainError } from './resource-star
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { afterEach, expect, expectTypeOf, spyOn, test } from 'bun:test';
 import type { z } from 'zod';
-import type { IsolationEnvironmentRow } from '@archon/isolation';
+import {
+  type IsolationEnvironmentRow,
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
+} from '@archon/isolation';
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { access, mkdtemp, mkdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
@@ -29,6 +34,34 @@ afterEach(() => {
 });
 test('file isolation records conform to the isolation store row', () => {
   expectTypeOf<z.output<typeof isolationSchema>[number]>().toEqualTypeOf<IsolationEnvironmentRow>();
+});
+test('file isolation records validate persisted rows with every isolation vocabulary member', () => {
+  const row: IsolationEnvironmentRow = {
+    id: 'environment',
+    codebase_id: 'project',
+    workflow_type: 'task',
+    workflow_id: 'run',
+    provider: 'worktree',
+    working_path: '/checkout',
+    branch_name: 'feature',
+    status: 'active',
+    created_at: new Date('2026-01-01T00:00:00.000Z'),
+    created_by_platform: null,
+    created_by_user_id: null,
+    metadata: { adopted: true, nested: { value: 1 } },
+  };
+  for (const workflow_type of ISOLATION_WORKFLOW_TYPES) {
+    for (const provider of ISOLATION_PROVIDER_TYPES) {
+      for (const status of ENVIRONMENT_STATUSES) {
+        const expected = { ...row, workflow_type, provider, status };
+        expect(isolationSchema.parse(JSON.parse(JSON.stringify([expected])))).toEqual([expected]);
+      }
+    }
+  }
+  for (const field of ['workflow_type', 'provider', 'status'] as const) {
+    expect(isolationSchema.safeParse([{ ...row, [field]: 'unsupported' }]).success).toBe(false);
+  }
+  expect(isolationSchema.safeParse([{ ...row, created_at: 'invalid-date' }]).success).toBe(false);
 });
 test('file host records persist across hosts and released worktrees fence pending claims', async () => {
   const home = roots(await mkdtemp(join(tmpdir(), 'file-host-')));

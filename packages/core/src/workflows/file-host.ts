@@ -17,6 +17,9 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import {
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
   WORKTREE_REGISTRATION_ID,
   WorktreeRegistrationChangedError,
   sameWorktreeRegistration,
@@ -52,12 +55,12 @@ export const isolationSchema = z.array(
   z.object({
     id: z.string(),
     codebase_id: z.string(),
-    workflow_type: z.enum(['issue', 'pr', 'review', 'thread', 'task']),
+    workflow_type: z.enum(ISOLATION_WORKFLOW_TYPES),
     workflow_id: z.string(),
-    provider: z.enum(['worktree', 'container', 'vm', 'remote']),
+    provider: z.enum(ISOLATION_PROVIDER_TYPES),
     working_path: z.string(),
     branch_name: z.string(),
-    status: z.enum(['active', 'destroyed']),
+    status: z.enum(ENVIRONMENT_STATUSES),
     created_at: z.coerce.date(),
     created_by_platform: z.string().nullable(),
     created_by_user_id: z.string().nullable(),

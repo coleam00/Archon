@@ -42,6 +42,9 @@ export type {
 } from './types';
 
 export {
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
   isPRIsolationRequest,
   CONTAINER_LABELS,
   worktreeRegistrationMetadata,
