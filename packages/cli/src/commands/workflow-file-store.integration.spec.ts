@@ -409,6 +409,7 @@ nodes:
       }
     }
     const proof = join(outer.root, 'closed');
+    const bodyStarted = join(outer.root, 'body-started');
     const spec = join(outer.root, 'detached-timeout.test.ts');
     writeFileSync(
       spec,
@@ -418,9 +419,11 @@ import * as cleanup from ${JSON.stringify(join(repo, 'packages/paths/src/test-ut
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
 const scope = new CliTestScope(${JSON.stringify(f.root)});
-let owners;
-let node;
+let owners: number[] | undefined;
+let node: number;
 beforeEach(async () => {
+  // Exercise setup that exceeds the forced body timeout.
+  await Bun.sleep(100);
   const result = await scope.run(${JSON.stringify([process.execPath, f.entry, ...args])}, ${JSON.stringify(f.project)}, { ...process.env, ARCHON_HOME: ${JSON.stringify(f.home)}, LOG_LEVEL: 'silent' });
   expect(result, result.output + result.error).toMatchObject({ code: 0 });
   while (!existsSync(${JSON.stringify(nodePid)})) await Bun.sleep(10);
@@ -428,11 +431,12 @@ beforeEach(async () => {
   node = Number(readFileSync(${JSON.stringify(nodePid)}, 'utf8').trim());
   for (const owner of owners) process.kill(owner, 0);
   process.kill(node, 0);
-});
+}, 10000);
 afterEach(async () => {
   const removeTempTree = cleanup.removeTempTree;
   const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
     expect(existsSync(root)).toBe(true);
+    if (!owners) throw new Error('Detached timeout setup did not record owner PIDs');
     for (const owner of owners) expect(() => process.kill(owner, 0)).toThrow();
     expect(() => process.kill(node, 0)).toThrow();
     await removeTempTree(root);
@@ -440,13 +444,17 @@ afterEach(async () => {
   try { await scope.close(); } finally { removal.mockRestore(); }
   expect(existsSync(scope.root)).toBe(false);
   writeFileSync(${JSON.stringify(proof)}, 'closed');
-});
-test('forced detached timeout', async () => { await Bun.sleep(60000); }, 50);
+}, 10000);
+test('forced detached timeout', async () => {
+  writeFileSync(${JSON.stringify(bodyStarted)}, 'started');
+  await Bun.sleep(60000);
+}, 50);
 `
     );
     const result = await outer.scope.run([process.execPath, 'test', spec], repo, f.env);
     expect(result.code).toBe(1);
     expect(result.output + result.error).toContain('timed out');
+    expect(existsSync(bodyStarted), result.output + result.error).toBe(true);
     expect(existsSync(proof), result.output + result.error).toBe(true);
     expect(readFileSync(proof, 'utf8')).toBe('closed');
     expect(existsSync(f.root)).toBe(false);
