@@ -21,12 +21,7 @@ import {
   type WorkflowRunOutcome,
 } from './schemas';
 import type { DryRunContext } from './dry-run/context';
-import {
-  dryRunResultSchema,
-  type DryRunResult,
-  type DryRunTraceEntry,
-  type DryRunResolution,
-} from './dry-run/schemas';
+import { dryRunResultSchema, type DryRunResult, type DryRunResolution } from './dry-run/schemas';
 import { isRecord, type DryRunStubs } from './dry-run/stubs';
 import { simulateNodes } from './dry-run/simulate';
 
@@ -236,7 +231,16 @@ export async function dryRunWorkflow(options: {
 
 export function formatDryRunTrace(result: DryRunResult): string {
   const lines = [`Dry-run: ${result.workflow}`, ''];
-  for (const entry of result.trace) lines.push(...formatDryRunEntry(entry));
+  for (const entry of result.trace) {
+    const suffix = entry.reason ? ` — ${entry.reason}` : '';
+    const iteration = entry.iteration ? ` [iteration ${String(entry.iteration)}]` : '';
+    lines.push(
+      `${entry.state.toUpperCase().padEnd(9)} ${entry.nodeId} (${entry.nodeType})${iteration}${suffix}`
+    );
+    if (entry.resolution) lines.push(...formatDryRunResolution(entry.resolution));
+    if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
+    if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);
+  }
   lines.push(
     '',
     `Simulation outcome: ${result.outcome}`,
@@ -247,19 +251,6 @@ export function formatDryRunTrace(result: DryRunResult): string {
   if (result.unusedStubs.length > 0) lines.push(`Unused stubs: ${result.unusedStubs.join(', ')}`);
   if (result.summary) lines.push(`Summary: ${result.summary}`);
   return lines.join('\n');
-}
-
-function formatDryRunEntry(entry: DryRunTraceEntry): string[] {
-  const lines: string[] = [];
-  const suffix = entry.reason ? ` — ${entry.reason}` : '';
-  const iteration = entry.iteration ? ` [iteration ${String(entry.iteration)}]` : '';
-  lines.push(
-    `${entry.state.toUpperCase().padEnd(9)} ${entry.nodeId} (${entry.nodeType})${iteration}${suffix}`
-  );
-  if (entry.resolution) lines.push(...formatDryRunResolution(entry.resolution));
-  if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
-  if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);
-  return lines;
 }
 
 function formatDryRunResolution(resolution: DryRunResolution): string[] {
