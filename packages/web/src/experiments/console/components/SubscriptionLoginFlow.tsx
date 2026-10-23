@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import * as skill from '../skills';
-import type { ProviderOAuthPoll, ProviderOAuthStart } from '../skills';
+import type { ProviderOAuthStart } from '../skills';
 import { invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { normalizeOAuthCode } from '../lib/oauth-code';
@@ -51,35 +51,31 @@ export function SubscriptionLoginFlow({
     const stale = (): boolean => superseded || cancelledRef.current;
     let started = false;
 
-    const finishPoll = (res: ProviderOAuthPoll): boolean => {
-      // The authorize URL / device code can arrive via POLL rather than
-      // start (supersede latency) — merge late signals or the manual
-      // panel stays linkless forever while polling "pending".
-      setStart(prev => (prev ? mergeOAuthSignals(prev, res) : prev));
-      const polledMode = res.mode;
-      if (polledMode) {
-        setPhase(p => (p === 'error' ? p : polledMode));
-      }
-      if (res.status === 'connected') {
-        invalidate(K.providerConnections);
-        onDoneRef.current();
-        return true;
-      }
-      if (res.status === 'error') {
-        setPhase('error');
-        setMessage(res.detail ?? 'Login failed.');
-        return true;
-      }
-      return false;
-    };
-
     const pollAndCheckCompletion = async (sessionId: string): Promise<boolean> => {
       try {
         const submit = pendingCodeRef.current;
         pendingCodeRef.current = undefined;
         const res = await skill.pollProviderOAuth(provider, sessionId, submit);
         if (stale()) return true;
-        return finishPoll(res);
+        // The authorize URL / device code can arrive via POLL rather than
+        // start (supersede latency) — merge late signals or the manual
+        // panel stays linkless forever while polling "pending".
+        setStart(prev => (prev ? mergeOAuthSignals(prev, res) : prev));
+        const polledMode = res.mode;
+        if (polledMode) {
+          setPhase(p => (p === 'error' ? p : polledMode));
+        }
+        if (res.status === 'connected') {
+          invalidate(K.providerConnections);
+          onDoneRef.current();
+          return true;
+        }
+        if (res.status === 'error') {
+          setPhase('error');
+          setMessage(res.detail ?? 'Login failed.');
+          return true;
+        }
+        return false;
       } catch (e: unknown) {
         if (stale()) return true;
         setPhase('error');
