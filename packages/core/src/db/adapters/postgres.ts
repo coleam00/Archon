@@ -1,6 +1,7 @@
 /**
  * PostgreSQL adapter using pg Pool
  */
+import { createHash } from 'node:crypto';
 import { Pool } from 'pg';
 import type { PoolClient } from 'pg';
 import type { DbNotificationListener, IDatabase, QueryResult, SqlDialect } from './types';
@@ -30,6 +31,39 @@ CREATE TRIGGER archon_workflow_event_notify
   AFTER INSERT ON remote_agent_workflow_events
   FOR EACH ROW EXECUTE FUNCTION archon_notify_workflow_event();
 `;
+
+/**
+ * Fingerprint of everything a boot converges: the bundled schema, the notify trigger
+ * and the app version the vintage row records. A boot that finds this fingerprint
+ * already recorded skips convergence entirely. Running the DDL on every boot is not
+ * free: DROP/CREATE TRIGGER takes an exclusive lock on remote_agent_workflow_events,
+ * and every short-lived CLI process (a status query, a timer tick) used to take it
+ * while live runs were inserting node events, which deadlocked those inserts.
+ */
+function schemaFingerprint(schemaSql: string): string {
+  return createHash('sha256')
+    .update(schemaSql)
+    .update('\0')
+    .update(WORKFLOW_EVENT_NOTIFY_SQL)
+    .update('\0')
+    .update(APP_VERSION)
+    .digest('hex');
+}
+
+/** SQLSTATEs Postgres asks the client to retry: deadlock victim, serialization failure. */
+const RETRYABLE_SQLSTATES = new Set(['40P01', '40001']);
+const RETRY_ATTEMPTS = 4;
+
+function isRetryable(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && RETRYABLE_SQLSTATES.has(code);
+}
+
+/** 50, 100, 200 ms plus jitter, so two victims of one deadlock do not collide again. */
+function retryDelay(attempt: number): Promise<void> {
+  const ms = 50 * 2 ** attempt + Math.floor(Math.random() * 50);
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -69,9 +103,14 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
   }
 
   private async initSchema(): Promise<void> {
+    const sql = getSchemaSQL();
+    const fingerprint = schemaFingerprint(sql);
+    if (await this.schemaIsCurrent(fingerprint)) {
+      getLog().debug('db.postgres_schema_current');
+      return;
+    }
     let client: PoolClient | undefined;
     try {
-      const sql = getSchemaSQL();
       client = await this.pool.connect();
       // Advisory lock serializes schema convergence across concurrent boots
       // (e.g. two app containers starting at once against a fresh DB).
@@ -113,7 +152,46 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
     // Best-effort, AFTER the core schema commits: a role without CREATE FUNCTION/
     // TRIGGER must not fail boot — the dashboard poller's interval backstop still
     // streams CLI runs, just without the instant LISTEN/NOTIFY push.
-    await this.installNotifyTrigger();
+    if (await this.installNotifyTrigger()) await this.recordFingerprint(fingerprint);
+  }
+
+  /**
+   * True when a previous boot converged this exact schema, trigger and version. Read
+   * without a lock or transaction: a stale answer only means this boot converges
+   * again, which is what every boot did before. Any error (a database that predates
+   * the column, a fresh database) reads as "not current".
+   */
+  private async schemaIsCurrent(fingerprint: string): Promise<boolean> {
+    try {
+      const result = await this.pool.query<{ schema_fingerprint: string | null }>(
+        'SELECT schema_fingerprint FROM remote_agent_schema_version WHERE id = 1'
+      );
+      return result.rows[0]?.schema_fingerprint === fingerprint;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Written only after the schema committed and the trigger installed, so a boot that
+   * skips convergence never skips something that did not happen. Best-effort: a failure
+   * leaves the next boot converging, as before.
+   */
+  private async recordFingerprint(fingerprint: string): Promise<void> {
+    try {
+      await this.pool.query(
+        'ALTER TABLE remote_agent_schema_version ADD COLUMN IF NOT EXISTS schema_fingerprint TEXT'
+      );
+      await this.pool.query(
+        'UPDATE remote_agent_schema_version SET schema_fingerprint = $1 WHERE id = 1',
+        [fingerprint]
+      );
+    } catch (e) {
+      getLog().warn(
+        { err: e instanceof Error ? e : new Error(String(e)) },
+        'db.postgres_schema_fingerprint_record_failed'
+      );
+    }
   }
 
   /**
@@ -156,7 +234,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
    * concurrent boots don't race on DROP/CREATE TRIGGER. Shares the schema lock:
    * both transactions mutate workflow_events, so separate locks can deadlock.
    */
-  private async installNotifyTrigger(): Promise<void> {
+  private async installNotifyTrigger(): Promise<boolean> {
     let client: PoolClient | undefined;
     try {
       client = await this.pool.connect();
@@ -165,6 +243,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       await client.query(WORKFLOW_EVENT_NOTIFY_SQL);
       await client.query('COMMIT');
       getLog().info('db.postgres_notify_trigger_installed');
+      return true;
     } catch (e) {
       if (client) {
         try {
@@ -178,6 +257,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
         'db.postgres_notify_trigger_install_failed'
       );
       // Non-fatal — degrade to poll-only.
+      return false;
     } finally {
       client?.release();
     }
@@ -185,18 +265,44 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
 
   async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
     await this.schemaInitPromise;
-    // Cast to satisfy pg's QueryResultRow constraint while keeping our generic interface
-    const result = await this.pool.query(sql, params);
-    return {
-      rows: result.rows as T[],
-      rowCount: result.rowCount ?? 0,
-    };
+    // A deadlock victim's statement was rolled back whole, so running it again is
+    // what Postgres asks for; anything else propagates unchanged.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        // Cast to satisfy pg's QueryResultRow constraint while keeping our generic interface
+        const result = await this.pool.query(sql, params);
+        return {
+          rows: result.rows as T[],
+          rowCount: result.rowCount ?? 0,
+        };
+      } catch (e) {
+        if (!isRetryable(e) || attempt + 1 >= RETRY_ATTEMPTS) throw e;
+        getLog().warn({ err: e as Error, attempt: attempt + 1 }, 'db.postgres_query_retry');
+        await retryDelay(attempt);
+      }
+    }
   }
 
   async withTransaction<T>(
     fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
   ): Promise<T> {
     await this.schemaInitPromise;
+    // The whole transaction is rolled back on a deadlock or serialization failure, so
+    // it is retried whole, the way Postgres documents.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.transactionOnce(fn);
+      } catch (e) {
+        if (!isRetryable(e) || attempt + 1 >= RETRY_ATTEMPTS) throw e;
+        getLog().warn({ err: e as Error, attempt: attempt + 1 }, 'db.postgres_transaction_retry');
+        await retryDelay(attempt);
+      }
+    }
+  }
+
+  private async transactionOnce<T>(
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
+  ): Promise<T> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
