@@ -22,9 +22,15 @@ import {
   type ProviderSessionRequest,
 } from './wire';
 
-const hostProtocolSchema = z.object({
-  clientCapabilities: z.object({
-    _meta: z.object({ archon: z.object({ protocol: z.number().int().positive() }) }),
+const hostCapabilitiesSchema = initializeRequestSchema.shape.clientCapabilities;
+const hostMetaSchema = hostCapabilitiesSchema.shape._meta;
+const hostProtocolSchema = initializeRequestSchema.pick({ clientCapabilities: true }).extend({
+  clientCapabilities: hostCapabilitiesSchema.pick({ _meta: true }).extend({
+    _meta: hostMetaSchema.extend({
+      archon: hostMetaSchema.shape.archon
+        .pick({ protocol: true })
+        .extend({ protocol: z.number().int().positive() }),
+    }),
   }),
 });
 
