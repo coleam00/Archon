@@ -293,7 +293,7 @@ async function readJsonMessage(
   c: Context,
   conversationId: string
 ): Promise<MessageBody | Response> {
-  let body: { message?: unknown };
+  let body: unknown;
   try {
     body = await c.req.json();
   } catch (parseErr: unknown) {
@@ -301,7 +301,13 @@ async function readJsonMessage(
     return c.json({ error: 'Invalid JSON in request body' }, 400);
   }
 
-  if (typeof body.message !== 'string' || !body.message) {
+  if (
+    typeof body !== 'object' ||
+    body === null ||
+    !('message' in body) ||
+    typeof body.message !== 'string' ||
+    !body.message
+  ) {
     return c.json({ error: 'message must be a non-empty string' }, 400);
   }
   return { message: body.message, savedFiles: [] };

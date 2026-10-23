@@ -409,6 +409,22 @@ describe('POST /api/conversations/:id/message', () => {
     expect(body.error).toContain('message');
   });
 
+  test.each(['null', 'true', '42', '"Hello"', '[]', '["Hello"]'])(
+    'returns 400 for a non-object JSON body: %s',
+    async body => {
+      const { app } = makeApp();
+      const response = await app.request('/api/conversations/web-test-abc/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'message must be a non-empty string' });
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(mockAddMessage).not.toHaveBeenCalled();
+    }
+  );
+
   test('returns 400 for malformed JSON body', async () => {
     const { app } = makeApp();
     const response = await app.request('/api/conversations/web-test-abc/message', {

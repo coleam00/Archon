@@ -343,6 +343,43 @@ describe('POST /api/workflows/:name/run', () => {
     }
   );
 
+  test('message dispatch receives every multipart attachment with its contents', async () => {
+    const originalHome = mockArchonHome;
+    const home = await mkdtemp(join(tmpdir(), 'archon-message-files-'));
+    setMockArchonHome(home);
+    const received: { name: string; content: string }[] = [];
+    mockFindConversationByPlatformId.mockResolvedValue(null);
+    mockHandleMessage.mockImplementationOnce(async (_adapter, _id, _message, context) => {
+      for (const file of context.attachedFiles ?? []) {
+        received.push({ name: file.name, content: await fsPromises.readFile(file.path, 'utf8') });
+      }
+    });
+    try {
+      const form = new FormData();
+      form.set('message', 'Read both attachments');
+      form.append('files', new File(['first contents'], 'first.txt', { type: 'text/plain' }));
+      form.append('files', new File(['second contents'], 'second.txt', { type: 'text/plain' }));
+      const { app } = makeApp();
+      const response = await app.request('/api/conversations/web-test-abc/message', {
+        method: 'POST',
+        body: form,
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ accepted: true, status: 'started' });
+      expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+      expect(received).toEqual([
+        { name: 'first.txt', content: 'first contents' },
+        { name: 'second.txt', content: 'second contents' },
+      ]);
+      expect(await fsPromises.readdir(join(home, 'artifacts', 'uploads', 'web-test-abc'))).toEqual(
+        []
+      );
+    } finally {
+      setMockArchonHome(originalHome);
+      await removeTempTree(home);
+    }
+  });
+
   test('refuses launch when the chat request cannot be persisted', async () => {
     mockFindConversationByPlatformId.mockResolvedValueOnce(MOCK_CONV);
     mockAddMessage.mockRejectedValueOnce(new Error('history database unavailable'));
