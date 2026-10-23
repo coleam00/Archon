@@ -568,19 +568,7 @@ export async function startAdmittedResourceStart(
   input: StartAdmittedResourceStartInput
 ): Promise<WorkflowExecutionResult> {
   const { host } = input;
-  const request = await host.deps.store.getResourceStartRequest(input.requestId);
-  if (request?.status !== 'admitted' || request.hostId !== input.hostId) {
-    throw new Error('Execution requires an admitted request for this configured host.');
-  }
-  const { launch } = request;
-  const run = await host.deps.store.getWorkflowRun(launch.run.id);
-  if (run?.status !== 'pending') {
-    throw new Error(`Admitted run '${launch.run.id}' is ${run?.status ?? 'missing'}, not pending.`);
-  }
-  const frozen = await resolveContinuationWorkflow(host.deps, run, launch.execution.cwd);
-  if (!frozen) throw new Error(`Admitted run '${run.id}' has no frozen workflow source.`);
-  const codebase = await host.records.codebases.getCodebase(launch.run.codebase_id);
-  if (!codebase) throw new Error(`Admitted run '${run.id}' names a missing project.`);
+  const { launch, run, frozen, codebase } = await loadAdmittedResourceStart(input);
 
   const platform = input.createPlatform({
     conversationId: launch.execution.conversationId,
@@ -614,18 +602,13 @@ export async function startAdmittedResourceStart(
           : {}),
       }
     );
-    try {
-      await assertRunCredentials(deps, preparedAiConfiguration, { cwd: launch.execution.cwd });
-    } catch (error) {
-      if (error instanceof WorkflowCredentialPreflightError) {
-        await requireTerminalStatusWrite(deps.store.failWorkflowRun(run.id, error.message), {
-          workflowRunId: run.id,
-          site: 'resource_start.credential_preflight_failed',
-        });
-        return { success: false, workflowRunId: run.id, error: error.message };
-      }
-      throw error;
-    }
+    const refusal = await checkAdmittedRunCredentials(
+      host,
+      run.id,
+      preparedAiConfiguration,
+      launch.execution.cwd
+    );
+    if (refusal) return refusal;
     const lane = launch.execution.isolation;
     const execution =
       lane.kind === 'worktree'
@@ -695,5 +678,44 @@ export async function startAdmittedResourceStart(
     await liveOwner.close().catch((error: unknown) => {
       log.error({ err: error as Error, runId: run.id }, 'resource_start.live_owner_close_failed');
     });
+  }
+}
+
+async function loadAdmittedResourceStart(input: StartAdmittedResourceStartInput) {
+  const { host } = input;
+  const request = await host.deps.store.getResourceStartRequest(input.requestId);
+  if (request?.status !== 'admitted' || request.hostId !== input.hostId) {
+    throw new Error('Execution requires an admitted request for this configured host.');
+  }
+  const { launch } = request;
+  const run = await host.deps.store.getWorkflowRun(launch.run.id);
+  if (run?.status !== 'pending') {
+    throw new Error(`Admitted run '${launch.run.id}' is ${run?.status ?? 'missing'}, not pending.`);
+  }
+  const frozen = await resolveContinuationWorkflow(host.deps, run, launch.execution.cwd);
+  if (!frozen) throw new Error(`Admitted run '${run.id}' has no frozen workflow source.`);
+  const codebase = await host.records.codebases.getCodebase(launch.run.codebase_id);
+  if (!codebase) throw new Error(`Admitted run '${run.id}' names a missing project.`);
+
+  return { launch, run, frozen, codebase };
+}
+
+async function checkAdmittedRunCredentials(
+  host: WorkflowHost,
+  runId: string,
+  preparedAiConfiguration: PreparedRunAiConfiguration,
+  cwd: string
+): Promise<WorkflowExecutionResult | undefined> {
+  try {
+    await assertRunCredentials(host.deps, preparedAiConfiguration, { cwd: cwd });
+  } catch (error) {
+    if (error instanceof WorkflowCredentialPreflightError) {
+      await requireTerminalStatusWrite(host.deps.store.failWorkflowRun(runId, error.message), {
+        workflowRunId: runId,
+        site: 'resource_start.credential_preflight_failed',
+      });
+      return { success: false, workflowRunId: runId, error: error.message };
+    }
+    throw error;
   }
 }
