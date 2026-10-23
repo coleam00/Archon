@@ -82,6 +82,60 @@ test.each([
   }
 });
 
+test.each([false, true])(
+  'ending a live Windows root after an older root with the same PID closes (termination fails: %j)',
+  async terminationFails => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    const children = Array.from({ length: 2 }, () =>
+      Object.defineProperties(new childProcess.ChildProcess(), {
+        pid: { value: 424242 },
+        stdin: { value: null },
+        stdout: { value: null },
+        stderr: { value: null },
+      })
+    );
+    const [older, live] = children;
+    const spawn = spyOn(childProcess, 'spawn').mockReturnValueOnce(older).mockReturnValueOnce(live);
+    const terminate = spyOn(processTools, 'terminateTree').mockImplementation(async () => {
+      if (terminationFails) throw new Error('termination failed');
+    });
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const trees = recordNodeProcessTrees();
+    const pending: ReturnType<typeof runSubprocess>[] = [];
+    const run = () =>
+      runSubprocess({ kind: 'host' }, 'mock-node', [], {
+        cwd: import.meta.dir,
+        env: {},
+        retention: { standalone: true },
+      });
+    try {
+      pending.push(run());
+      older.emit('exit', 0, null);
+      pending.push(run());
+      older.emit('close', 0, null);
+      await pending[0];
+      expect(spawn).toHaveBeenCalledTimes(2);
+
+      if (terminationFails) {
+        await expect(trees.end()).rejects.toThrow(
+          'could not end node process trees: 424242 (termination failed)'
+        );
+      } else {
+        await trees.end();
+      }
+      expect(terminate).toHaveBeenCalledTimes(1);
+      expect(terminate).toHaveBeenCalledWith(424242);
+    } finally {
+      for (const child of children) child.emit('close', 0, null);
+      await Promise.all(pending);
+      trees.release();
+      Object.defineProperty(process, 'platform', platform);
+      terminate.mockRestore();
+      spawn.mockRestore();
+    }
+  }
+);
+
 function runHostBash(script: string, timeout?: number): ReturnType<typeof runSubprocess> {
   const invocation = bashInvocation(script);
   return runSubprocess({ kind: 'host' }, git.resolveBashPath(), invocation.args, {
