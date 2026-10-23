@@ -182,8 +182,9 @@ function closeDetachedRunLog(logFd: number | undefined): void {
   if (logFd !== undefined) {
     try {
       closeSync(logFd);
-    } catch {
-      /* fd already closed/invalid — nothing to clean up */
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'EBADF') return;
+      getLog().warn({ err: error }, 'cli.detached_run_log_close_failed');
     }
   }
 }
