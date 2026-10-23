@@ -423,6 +423,44 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
     });
   });
 
+  test.each(['agent', 'exec', 'loop'] as const)(
+    'hydrates canonical string output through authored and generated routes for %s',
+    async kind => {
+      const workflow = (trigger_rule?: 'all_done') =>
+        makeTestWorkflow({
+          name: 'string-output',
+          nodes: [
+            {
+              id: 'result',
+              ...(kind === 'loop'
+                ? { loop: { prompt: 'Result', until: 'DONE', max_iterations: 1 } }
+                : kind === 'exec'
+                  ? { bash: 'echo unused' }
+                  : { prompt: 'Result' }),
+              ...(trigger_rule === undefined ? {} : { trigger_rule }),
+              output_format: { type: 'string', enum: ['DONE'] },
+            },
+          ],
+        });
+      const scaffold = createDryRunStubScaffold(workflow());
+      expect(scaffold).toEqual({ result: '"DONE"' });
+      for (const options of [
+        { workflow: workflow(), defaultStubs: true },
+        { workflow: workflow('all_done') },
+        { workflow: workflow(), stubs: scaffold },
+        { workflow: workflow(), stubs: { result: '"DONE"' } },
+      ]) {
+        const result = await dryRunWorkflow(options);
+        expect(result).toMatchObject({ outcome: 'completed', authoredOutcome: null });
+        expect(result.trace[0]?.output).toBe('DONE');
+        expect(result.summary).toBe('DONE');
+        if (kind === 'loop') {
+          expect(result.trace[0]?.reason).toContain('completion signal');
+        }
+      }
+    }
+  );
+
   test('generates array-typed output_format stubs', () => {
     const workflow = makeTestWorkflow({
       name: 'array-output',
