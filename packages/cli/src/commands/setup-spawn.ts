@@ -99,7 +99,7 @@ async function spawnLinuxTerminal(
   if (
     await trySpawn(
       'x-terminal-emulator',
-      ['--working-directory=' + repoPath, '-e', `bash -c "${setupCmd}"`],
+      ['-e', 'bash', '-c', `cd -- "$1" && ${setupCmd}`, 'archon-setup', repoPath],
       {
         detached: true,
         stdio: 'ignore',
