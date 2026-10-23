@@ -402,35 +402,11 @@ async function holdCheckoutPathLock(
   const subrun = readSubrunMetadata(workflowRun.metadata);
   if (workflow.mutates_checkout === false && subrun.childIndex === undefined) return undefined;
   try {
-    const ancestry = workflowRun.parent_run_id
-      ? await deps.store.getRunAncestry(workflowRun.id)
-      : [];
-    const pathLockExclude = ancestry.map(run => run.id);
-    const sharedCheckoutSiblings: WorkflowRun[] = [];
-    for (const branch of [workflowRun, ...ancestry]) {
-      const branchMetadata = readSubrunMetadata(branch.metadata);
-      if (
-        branch.working_path !== cwd ||
-        !branch.parent_run_id ||
-        branchMetadata.parentNodeId === undefined ||
-        branchMetadata.childIndex === undefined
-      ) {
-        continue;
-      }
-      const siblings = (await deps.store.findChildRuns(branch.parent_run_id)).filter(peer => {
-        const peerMetadata = readSubrunMetadata(peer.metadata);
-        return (
-          peer.id !== branch.id &&
-          peer.working_path === cwd &&
-          peerMetadata.parentNodeId === branchMetadata.parentNodeId &&
-          peerMetadata.childIndex !== undefined
-        );
-      });
-      if (branch.id === workflowRun.id) sharedCheckoutSiblings.push(...siblings);
-      for (const sibling of siblings) {
-        pathLockExclude.push(sibling.id, ...(await gatherDescendantRunIds(deps, sibling.id)));
-      }
-    }
+    const { pathLockExclude, sharedCheckoutSiblings } = await findSharedCheckoutRuns(
+      deps,
+      cwd,
+      workflowRun
+    );
     const skipPathLock = workflow.mutates_checkout === false;
     if (!skipPathLock) {
       pathLockExclude.push(...(await gatherDescendantRunIds(deps, workflowRun.id)));
@@ -463,27 +439,13 @@ async function holdCheckoutPathLock(
         error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
       };
     }
-    if (workflowRun.parent_run_id && subrun.parentNodeId !== undefined) {
-      for (const sibling of sharedCheckoutSiblings) {
-        // Append on both runs: the earlier child may already have finished before
-        // this child exists. No read/modify/write metadata race is needed.
-        for (const [runId, siblingId] of [
-          [workflowRun.id, sibling.id],
-          [sibling.id, workflowRun.id],
-        ]) {
-          await deps.store.persistWorkflowEvent({
-            workflow_run_id: runId,
-            event_type: 'workflow.checkout_shared',
-            data: {
-              parent_run_id: workflowRun.parent_run_id,
-              parent_node_id: subrun.parentNodeId,
-              working_path: cwd,
-              sibling_run_id: siblingId,
-            } satisfies CheckoutSharedEventData,
-          });
-        }
-      }
-    }
+    await recordCheckoutSharing(
+      deps,
+      cwd,
+      workflowRun,
+      subrun.parentNodeId,
+      sharedCheckoutSiblings
+    );
   } catch (error) {
     if (error instanceof TerminalStatusWriteError) throw error;
     const err = error as Error;
@@ -512,6 +474,71 @@ async function holdCheckoutPathLock(
     return { success: false, error: 'Database error checking for active workflow' };
   }
   return undefined;
+}
+
+async function findSharedCheckoutRuns(
+  deps: WorkflowDeps,
+  cwd: string,
+  workflowRun: WorkflowRun
+): Promise<{ pathLockExclude: string[]; sharedCheckoutSiblings: WorkflowRun[] }> {
+  const ancestry = workflowRun.parent_run_id ? await deps.store.getRunAncestry(workflowRun.id) : [];
+  const pathLockExclude = ancestry.map(run => run.id);
+  const sharedCheckoutSiblings: WorkflowRun[] = [];
+  for (const branch of [workflowRun, ...ancestry]) {
+    const branchMetadata = readSubrunMetadata(branch.metadata);
+    if (
+      branch.working_path !== cwd ||
+      !branch.parent_run_id ||
+      branchMetadata.parentNodeId === undefined ||
+      branchMetadata.childIndex === undefined
+    ) {
+      continue;
+    }
+    const siblings = (await deps.store.findChildRuns(branch.parent_run_id)).filter(peer => {
+      const peerMetadata = readSubrunMetadata(peer.metadata);
+      return (
+        peer.id !== branch.id &&
+        peer.working_path === cwd &&
+        peerMetadata.parentNodeId === branchMetadata.parentNodeId &&
+        peerMetadata.childIndex !== undefined
+      );
+    });
+    if (branch.id === workflowRun.id) sharedCheckoutSiblings.push(...siblings);
+    for (const sibling of siblings) {
+      pathLockExclude.push(sibling.id, ...(await gatherDescendantRunIds(deps, sibling.id)));
+    }
+  }
+  return { pathLockExclude, sharedCheckoutSiblings };
+}
+
+async function recordCheckoutSharing(
+  deps: WorkflowDeps,
+  cwd: string,
+  workflowRun: WorkflowRun,
+  parentNodeId: string | undefined,
+  sharedCheckoutSiblings: WorkflowRun[]
+): Promise<void> {
+  if (workflowRun.parent_run_id && parentNodeId !== undefined) {
+    for (const sibling of sharedCheckoutSiblings) {
+      // Append on both runs: the earlier child may already have finished before
+      // this child exists. No read/modify/write metadata race is needed.
+      for (const [runId, siblingId] of [
+        [workflowRun.id, sibling.id],
+        [sibling.id, workflowRun.id],
+      ]) {
+        await deps.store.persistWorkflowEvent({
+          workflow_run_id: runId,
+          event_type: 'workflow.checkout_shared',
+          data: {
+            parent_run_id: workflowRun.parent_run_id,
+            parent_node_id: parentNodeId,
+            working_path: cwd,
+            sibling_run_id: siblingId,
+          } satisfies CheckoutSharedEventData,
+        });
+      }
+    }
+  }
 }
 
 /** Spell a workflow action the way the surface rendering the message accepts it. */
