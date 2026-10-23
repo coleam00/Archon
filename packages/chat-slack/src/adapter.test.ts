@@ -3,6 +3,7 @@ import type { App, SlashCommand } from '@slack/bolt';
 import type { ChatContext } from '@archon/chat-contract';
 import { SlackAdapter, splitMessage, stripBotMention } from './adapter';
 import { SlackPlugin } from './plugin';
+import { descriptor } from './descriptor';
 import { StubSlack } from './test/slack';
 
 let slack: StubSlack;
@@ -265,4 +266,23 @@ test('trigger tracking caps distinct conversations and refreshing a thread does 
   expect(adapter.getTriggeringMessage('C1:0')).toBeUndefined();
   expect(adapter.getTriggeringMessage('C1:1')).toBeDefined();
   expect(adapter.getTriggeringMessage('C1:1000')).toBeDefined();
+});
+
+test('workflow registration and slash text follow the descriptor prefix', async () => {
+  const original = descriptor.workflowCommand.prefix;
+  descriptor.workflowCommand.prefix = '/test-workflow ';
+  try {
+    await start();
+    expect([...slack.commands.keys()]).toEqual(['/archon', '/test-workflow']);
+    expect((await slash('', '/test-workflow'))[0]).toBe(
+      'Usage: `/test-workflow <subcommand>` — e.g. `list`, `status`, `get <id>`, `run <name> <args>`, `approve <id>`, `reject <id> <reason>`, `abandon <id>`.'
+    );
+    expect(await slash('run assist', '/test-workflow')).toEqual([
+      'Running `/test-workflow run assist` — see thread for output.',
+    ]);
+    expect(slack.posts[0]).toMatchObject({ text: '<@U1> ran `/test-workflow run assist`' });
+    expect(inbound.mock.calls[0]?.[0].text).toBe('/workflow run assist');
+  } finally {
+    descriptor.workflowCommand.prefix = original;
+  }
 });

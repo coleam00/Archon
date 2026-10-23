@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { descriptor } from './descriptor';
 
 import {
   buildApprovalBlocks,
@@ -367,4 +368,38 @@ describe('reaction name constants', () => {
     expect(REACTION_SUCCESS).toBe('white_check_mark');
     expect(REACTION_FAILURE).toBe('x');
   });
+});
+
+test('approval and recovery hints follow the descriptor prefix', () => {
+  const original = descriptor.workflowCommand.prefix;
+  descriptor.workflowCommand.prefix = '/test-workflow ';
+  try {
+    expect(
+      buildApprovalBlocks({
+        runId: 'run',
+        nodeId: 'review',
+        message: 'Choose',
+        decisions: [{ id: 'approve' }],
+      }).fallbackText
+    ).toBe(
+      'Approval needed for run run\nChoose\napprove: /test-workflow respond run approve [text]'
+    );
+    const recovery = buildStatusBlocks(
+      {
+        runId: 'run',
+        workflowName: 'assist',
+        startedAt: 0,
+        nodes: [],
+        status: 'paused',
+        approvalDeliveryFailed: true,
+      },
+      0
+    );
+    expect(recovery.fallbackText).toContain('`/test-workflow get run`');
+    expect(recovery.fallbackText).toContain('`/test-workflow respond`');
+    expect(JSON.stringify(recovery.blocks)).toContain('`/test-workflow get run`');
+    expect(JSON.stringify(recovery.blocks)).toContain('`/test-workflow respond`');
+  } finally {
+    descriptor.workflowCommand.prefix = original;
+  }
 });

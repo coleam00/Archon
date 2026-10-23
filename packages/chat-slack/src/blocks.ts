@@ -6,6 +6,7 @@ import {
   type ChatResultFooter,
 } from '@archon/chat-contract';
 import type { types } from '@slack/bolt';
+import { descriptor } from './descriptor';
 
 type TerminalEvent = Extract<ChatRunEvent, { type: 'terminal' }>;
 type ApprovalEvent = Extract<ChatRunEvent, { type: 'approval_pending' }>;
@@ -173,7 +174,7 @@ export function buildApprovalBlocks(input: {
   }
   const choices = decisions.map(decision => {
     const display = decision.label ? `${decision.label} (${decision.id})` : decision.id;
-    return `${display}: /archon-workflow respond ${input.runId} ${decision.id} [text]`;
+    return `${display}: ${descriptor.workflowCommand.prefix}respond ${input.runId} ${decision.id} [text]`;
   });
   return {
     blocks: controlsFit ? blocks : [],
@@ -269,7 +270,7 @@ export function buildStatusBlocks(
   const blocks: KnownBlock[] = [headerSection];
   const approvalRecovery =
     snapshot.status === 'paused' && snapshot.approvalDeliveryFailed
-      ? `Approval card could not be delivered. Run \`${snapshot.runId}\` is awaiting approval. Open the run in the Web UI to respond, or check \`/archon-workflow get ${snapshot.runId}\` for the gate and respond with \`/archon-workflow respond\`.`
+      ? `Approval card could not be delivered. Run \`${snapshot.runId}\` is awaiting approval. Open the run in the Web UI to respond, or check \`${descriptor.workflowCommand.prefix}get ${snapshot.runId}\` for the gate and respond with \`${descriptor.workflowCommand.prefix}respond\`.`
       : undefined;
   if (approvalRecovery) {
     blocks.push({
