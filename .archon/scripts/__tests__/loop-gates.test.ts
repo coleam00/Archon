@@ -346,6 +346,7 @@ describe('loop wiring', () => {
     expect(check).toContain('never every tick, frame or combination of inputs');
     const pick = readFileSync(resolve(pack, 'loop/commands/loop-pick.md'), 'utf8');
     expect(pick).not.toContain('tries every user action');
+    expect(pick).toContain('A `complex` item is `light` too');
   });
 
   it('the manager runs the holdouts once per pass, not again each time the default branch moves', () => {
