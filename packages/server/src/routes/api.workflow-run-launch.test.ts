@@ -65,6 +65,39 @@ describe('POST /api/conversations/:id/message multipart files', () => {
     }
   );
 
+  test('refuses six file parts before any attachment or message write or dispatch', async () => {
+    const originalHome = mockArchonHome;
+    const home = await mkdtemp(join(tmpdir(), 'archon-over-limit-message-files-'));
+    setMockArchonHome(home);
+    const write = spyOn(fsPromises, 'writeFile');
+    try {
+      const form = new FormData();
+      form.set('message', 'Read attachments');
+      for (let index = 0; index < 6; index++) {
+        form.append(
+          'files',
+          new File([`details ${index}`], `request-${index}.txt`, { type: 'text/plain' })
+        );
+      }
+      const { app, mockWebAdapter } = makeApp();
+      const response = await app.request('/api/conversations/web-test-abc/message', {
+        method: 'POST',
+        body: form,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'Maximum 5 files per message' });
+      expect(write).not.toHaveBeenCalled();
+      expect(await fsPromises.readdir(home)).toEqual([]);
+      expect(mockAddMessage).not.toHaveBeenCalled();
+      expect(mockWebAdapter.setConversationDbId).not.toHaveBeenCalled();
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+      setMockArchonHome(originalHome);
+      await removeTempTree(home);
+    }
+  });
+
   test.each([0, 1, 2, 5])('accepts %i file parts and delivers every attachment', async count => {
     const originalHome = mockArchonHome;
     const home = await mkdtemp(join(tmpdir(), 'archon-valid-message-files-'));
