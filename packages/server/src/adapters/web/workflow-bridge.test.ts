@@ -68,6 +68,57 @@ test('suspended node stays running and carries only public execution metadata', 
   expect(JSON.stringify(payload)).not.toContain('sessionId');
 });
 
+test.each([
+  [
+    { type: 'workflow_completed', runId: 'run-1', workflowName: 'build', duration: 100 },
+    { type: 'workflow_status', runId: 'run-1', workflowName: 'build', status: 'completed' },
+  ],
+  [
+    { type: 'workflow_failed', runId: 'run-1', workflowName: 'build', error: 'failed' },
+    {
+      type: 'workflow_status',
+      runId: 'run-1',
+      workflowName: 'build',
+      status: 'failed',
+      error: 'failed',
+    },
+  ],
+  [
+    { type: 'node_started', runId: 'run-1', nodeId: 'build', nodeName: 'Build' },
+    { type: 'dag_node', runId: 'run-1', nodeId: 'build', name: 'Build', status: 'running' },
+  ],
+  [
+    { type: 'node_completed', runId: 'run-1', nodeId: 'build', nodeName: 'Build', duration: 100 },
+    {
+      type: 'dag_node',
+      runId: 'run-1',
+      nodeId: 'build',
+      name: 'Build',
+      status: 'completed',
+      duration: 100,
+    },
+  ],
+  [
+    { type: 'node_failed', runId: 'run-1', nodeId: 'build', nodeName: 'Build', error: 'failed' },
+    {
+      type: 'dag_node',
+      runId: 'run-1',
+      nodeId: 'build',
+      name: 'Build',
+      status: 'failed',
+      error: 'failed',
+    },
+  ],
+] satisfies [WorkflowEmitterEvent, Record<string, unknown>][])(
+  'projects %j with its status-specific fields and no unrelated fields',
+  (event, expected) => {
+    expect(JSON.parse(mapWorkflowEvent(event) ?? '{}')).toEqual({
+      ...expected,
+      timestamp: expect.any(Number),
+    });
+  }
+);
+
 test('persisted typed node rows retain public execution metadata through dashboard replay', () => {
   const { runId: _runId, path: _path, lifecycle: _lifecycle, ...data } = suspendedExecution;
   const payload = JSON.parse(
