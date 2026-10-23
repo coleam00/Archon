@@ -2,6 +2,7 @@
 // reclaimed when it is abandoned.
 import { lstat } from 'node:fs/promises';
 import {
+  isContainerRun,
   readOwnedWorktree,
   type OwnedWorktree,
   type WorkflowRun,
@@ -102,7 +103,7 @@ export async function assessCompletedRunWorktree(
   readers: WorktreeOwnershipReaders
 ): Promise<WorktreeDisposition | null> {
   const proof = readOwnedWorktree(run.metadata);
-  if (!proof || run.metadata?.isolation === 'container') return null;
+  if (!proof || isContainerRun(run)) return null;
   try {
     const { env, repo } = await resolveOwnedWorktree(run, proof, store, readers.getCodebase);
     if (!isGeneratedTaskBranch(env)) return null;
@@ -201,7 +202,7 @@ async function unprovenCheckoutRelease(
   run: WorkflowRun,
   readers: WorktreeOwnershipReaders
 ): Promise<RunWorktreeRelease> {
-  if (run.metadata?.isolation === 'container') return { warnings: [] };
+  if (isContainerRun(run)) return { warnings: [] };
   const codebase = run.codebase_id ? await readers.getCodebase(run.codebase_id) : null;
   if (codebase?.kind === 'folder') return { warnings: [] };
   return {

@@ -72,6 +72,20 @@ describe('folderRunsInContainer', () => {
     expect(folderRunsInContainer({}, {}, configOn, containerRun)).toBe(true);
     expect(folderRunsInContainer({}, {}, undefined, containerRun)).toBe(false);
   });
+
+  it.each([null, undefined, {}])(
+    'a resume without recorded isolation stays on the host: %j',
+    resumable => {
+      expect(
+        folderRunsInContainer(
+          { resume: true, container: true },
+          { container: { enabled: true } },
+          configOn,
+          resumable
+        )
+      ).toBe(false);
+    }
+  );
 });
 
 describe('resolveContainerBackendConfig', () => {
