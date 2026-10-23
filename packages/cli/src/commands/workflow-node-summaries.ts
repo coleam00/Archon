@@ -375,36 +375,46 @@ export function printVerboseNodes(events: WorkflowEventRow[]): void {
   if (nodes.length === 0) return;
   console.log('  Nodes:');
   for (const node of nodes) {
-    const iconMap: Record<NodeSummary['state'], string> = {
-      completed: '✓',
-      failed: '✗',
-      skipped: '-',
-      running: '◌',
-      pending: '○',
-    };
-    const icon = iconMap[node.state];
-    const duration = node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
-    const stateLabel =
-      node.state === 'running' || node.state === 'pending' ? ` (${node.state})` : '';
-    const skipCause = node.cause ? ` (${formatSkipCause(node.cause)})` : '';
-    console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}${skipCause}`);
-    if (node.outputPreview !== undefined) {
-      console.log(`        Output: ${node.outputPreview}`);
-    }
-    if (node.error !== undefined) {
-      console.log(`        Error:  ${node.error}`);
-    }
-    formatFanOutOutcome(node.fanOutOutcome).forEach(line => console.log(`        ${line}`));
-    if (node.sessionIds !== undefined) {
-      const label = node.sessionIds.length === 1 ? 'Session' : 'Sessions';
-      console.log(`        ${label}: ${node.sessionIds.join(', ')}`);
-    }
-    if (node.blockedOnChildRunId !== undefined) {
-      const abandon = spellWorkflowCommand(
-        CLI_WORKFLOW_SURFACE,
-        `abandon ${node.blockedOnChildRunId}`
-      );
-      console.log(`        Abandon: ${abandon}`);
-    }
+    console.log(formatNodeHeading(node));
+    for (const line of formatNodeDetails(node)) console.log(`        ${line}`);
   }
+}
+
+function formatNodeHeading(node: NodeSummary): string {
+  const iconMap: Record<NodeSummary['state'], string> = {
+    completed: '✓',
+    failed: '✗',
+    skipped: '-',
+    running: '◌',
+    pending: '○',
+  };
+  const icon = iconMap[node.state];
+  const duration = node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
+  const stateLabel = node.state === 'running' || node.state === 'pending' ? ` (${node.state})` : '';
+  const skipCause = node.cause ? ` (${formatSkipCause(node.cause)})` : '';
+  return `    ${icon} ${node.nodeId}${duration}${stateLabel}${skipCause}`;
+}
+
+function formatNodeDetails(node: NodeSummary): string[] {
+  const lines: string[] = [];
+
+  if (node.outputPreview !== undefined) {
+    lines.push(`Output: ${node.outputPreview}`);
+  }
+  if (node.error !== undefined) {
+    lines.push(`Error:  ${node.error}`);
+  }
+  lines.push(...formatFanOutOutcome(node.fanOutOutcome));
+  if (node.sessionIds !== undefined) {
+    const label = node.sessionIds.length === 1 ? 'Session' : 'Sessions';
+    lines.push(`${label}: ${node.sessionIds.join(', ')}`);
+  }
+  if (node.blockedOnChildRunId !== undefined) {
+    const abandon = spellWorkflowCommand(
+      CLI_WORKFLOW_SURFACE,
+      `abandon ${node.blockedOnChildRunId}`
+    );
+    lines.push(`Abandon: ${abandon}`);
+  }
+  return lines;
 }

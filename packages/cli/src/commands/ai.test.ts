@@ -401,6 +401,24 @@ describe('aiTierListCommand', () => {
     expect(text).toContain('default'); // unset tiers show their default
   });
 
+  it('--json preserves install and user tiers and gives the user override precedence', async () => {
+    loadConfigResult = {
+      assistant: 'claude',
+      tiers: { large: { provider: 'claude', model: 'opus' } },
+    };
+    userPrefsResult = { tiers: { large: { provider: 'codex', model: 'gpt-5.5' } } };
+
+    expect(await aiTierListCommand(true)).toBe(0);
+
+    expect(JSON.parse(jsonOut()).tiers).toContainEqual({
+      tier: 'large',
+      configured: { provider: 'claude', model: 'opus' },
+      user: { provider: 'codex', model: 'gpt-5.5' },
+      default: expect.any(Object),
+      effective: { provider: 'codex', model: 'gpt-5.5' },
+    });
+  });
+
   it('--json emits structured output', async () => {
     loadConfigResult = { assistant: 'claude', tiers: {} };
     expect(await aiTierListCommand(true)).toBe(0);

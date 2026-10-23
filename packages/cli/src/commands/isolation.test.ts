@@ -247,6 +247,42 @@ function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvi
 const mockEnv = makeEnvironment({ metadata: { worktree_creation_id: 'checkout-proof' } });
 
 describe('isolationListCommand', () => {
+  it('displays active worktree details and the cleanup skip reason', async () => {
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    mockListEnvironments.mockResolvedValueOnce({
+      codebases: [
+        {
+          codebaseId: 'cb-123',
+          defaultCwd: '/test/repo',
+          repositoryUrl: 'https://github.com/owner/repo',
+          environments: [
+            {
+              ...mockEnv,
+              days_since_activity: 2.5,
+              cleanupSkipReason: 'run run-live is running',
+            },
+          ],
+        },
+      ],
+      totalEnvironments: 1,
+      ghostsReconciled: 0,
+    });
+    try {
+      await isolationListCommand();
+
+      expect(log.mock.calls.map(call => call[0])).toEqual([
+        '\nhttps://github.com/owner/repo:',
+        '  feature-branch',
+        '    Path: /test/worktree',
+        '    Type: task | Platform: cli | Last activity: 2d ago',
+        '    Cleanup skipped: run run-live is running',
+        '\nTotal: 1 worktree environment(s)',
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it.each([
     { runId: null, runStatus: 'lookup-failed', display: 'run lookup failed' },
     { runId: null, runStatus: null, display: 'no run (orphan)' },

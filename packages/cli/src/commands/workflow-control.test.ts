@@ -113,6 +113,35 @@ describe('write command --json output', () => {
     });
   });
 
+  it('abandon --json reports the stopped live owner and cancelled status', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-ab',
+      workflow_name: 'implement',
+      status: 'running',
+    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+    mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
+      pid: 42,
+      stop: mockDetachedTargetStop,
+      release: mockDetachedTargetRelease,
+    }));
+
+    expect(await workflowAbandonCommand(createTestWorkflowHost(), 'run-ab', true)).toBe(0);
+
+    expect(stdoutSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toEqual({
+      ok: true,
+      runId: 'run-ab',
+      action: 'abandon',
+      status: 'cancelled',
+      workflowName: 'implement',
+      owner: { outcome: 'stopped', pid: 42 },
+    });
+  });
+
   it('abandon --json emits {ok:false} on a not-found run (never throws)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);

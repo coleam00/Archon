@@ -293,13 +293,7 @@ export async function collectAIConfig(
   diagnose: (id: string) => Promise<CheckResult[]> = id => checkProviderDiagnostics(id)
 ): Promise<SetupConfig['ai']> {
   const selectedProviders = await selectSetupProviders(options.providers, install);
-  for (const id of selectedProviders) {
-    for (const check of await diagnose(id)) {
-      const message = `${check.label}: ${check.message}`;
-      if (check.status === 'fail' || check.status === 'warn') log.warning(message);
-      else log.info(message);
-    }
-  }
+  await reportProviderDiagnostics(selectedProviders, diagnose);
   const hasClaude = selectedProviders.includes('claude');
   const hasCodex = selectedProviders.includes('codex');
   const hasPi = selectedProviders.includes('pi');
@@ -335,29 +329,7 @@ export async function collectAIConfig(
     piApiKeyEnvVar = piConfig.apiKeyEnvVar;
   }
 
-  let defaultAssistant: string | undefined;
-
-  if (selectedProviders.length > 1) {
-    const providerChoices = selectedProviders.map(id => {
-      const reg = getRegisteredProviders().find(p => p.id === id);
-      const displayName = reg?.displayName ?? id;
-      return {
-        value: id,
-        label: displayName,
-      };
-    });
-
-    const defaultChoice = await select({
-      message: 'Which should be the default AI assistant?',
-      options: providerChoices,
-    });
-
-    if (isCancel(defaultChoice)) cancelSetup();
-
-    defaultAssistant = defaultChoice;
-  } else if (selectedProviders.length === 1) {
-    defaultAssistant = selectedProviders[0];
-  }
+  const defaultAssistant = await selectDefaultAssistant(selectedProviders);
 
   // Optional, skippable default-chat-model step for the default assistant
   // (#1999). Pi is excluded: its model was already chosen in collectPiConfig
@@ -383,4 +355,47 @@ export async function collectAIConfig(
     ...(selectedProviders.length > 0 ? { defaultAssistantSelected: true } : {}),
     ...(defaultModel !== undefined ? { defaultModel } : {}),
   };
+}
+
+async function reportProviderDiagnostics(
+  providers: readonly string[],
+  diagnose: (id: string) => Promise<CheckResult[]>
+): Promise<void> {
+  for (const id of providers) {
+    for (const check of await diagnose(id)) {
+      const message = `${check.label}: ${check.message}`;
+      if (check.status === 'fail' || check.status === 'warn') log.warning(message);
+      else log.info(message);
+    }
+  }
+}
+
+async function selectDefaultAssistant(
+  selectedProviders: readonly string[]
+): Promise<string | undefined> {
+  let defaultAssistant: string | undefined;
+
+  if (selectedProviders.length > 1) {
+    const providerChoices = selectedProviders.map(id => {
+      const reg = getRegisteredProviders().find(p => p.id === id);
+      const displayName = reg?.displayName ?? id;
+      return {
+        value: id,
+        label: displayName,
+      };
+    });
+
+    const defaultChoice = await select({
+      message: 'Which should be the default AI assistant?',
+      options: providerChoices,
+    });
+
+    if (isCancel(defaultChoice)) cancelSetup();
+
+    defaultAssistant = defaultChoice;
+  } else if (selectedProviders.length === 1) {
+    defaultAssistant = selectedProviders[0];
+  }
+
+  return defaultAssistant;
 }
