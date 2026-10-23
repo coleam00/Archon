@@ -1,4 +1,4 @@
-import { constants } from 'node:fs';
+import { constants, type BigIntStats } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { nodeArtifactSchema } from './schemas/node-artifact';
@@ -74,35 +74,38 @@ export async function observeArtifactManifest(
           manifest.limitations.push({ path, kind: 'link_excluded' });
           continue;
         }
-        // Flags vary by platform. Descriptor identity protects the read even when
-        // O_NOFOLLOW is unavailable or a parent changes between lookup and open.
-        // Keep identities exact: 64-bit file IDs can collide when converted to numbers.
-        const platformFlags: Partial<Pick<typeof constants, 'O_NOFOLLOW'>> = constants;
-        const handle = await open(full, constants.O_RDONLY | (platformFlags.O_NOFOLLOW ?? 0));
-        let raw: string;
-        try {
-          const opened = await handle.stat({ bigint: true });
-          if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) {
-            manifest.limitations.push({ path, kind: 'unreadable', code: 'ESTALE' });
-            continue;
-          }
-          raw = await handle.readFile('utf8');
-        } finally {
-          await handle.close();
-        }
-        try {
-          const parsed = nodeArtifactSchema.safeParse(JSON.parse(raw));
-          if (!parsed.success || (runId !== undefined && parsed.data.runId !== runId)) {
-            manifest.limitations.push({ path, kind: 'invalid_metadata' });
-            continue;
-          }
-          metadata.push({ path, value: parsed.data });
-        } catch {
-          manifest.limitations.push({ path, kind: 'invalid_metadata' });
-        }
+        await observeSidecar(full, path, stat);
       } catch (error) {
         fault(path, error);
       }
+    }
+  }
+  async function observeSidecar(full: string, path: string, stat: BigIntStats): Promise<void> {
+    // Flags vary by platform. Descriptor identity protects the read even when
+    // O_NOFOLLOW is unavailable or a parent changes between lookup and open.
+    // Keep identities exact: 64-bit file IDs can collide when converted to numbers.
+    const platformFlags: Partial<Pick<typeof constants, 'O_NOFOLLOW'>> = constants;
+    const handle = await open(full, constants.O_RDONLY | (platformFlags.O_NOFOLLOW ?? 0));
+    let raw: string;
+    try {
+      const opened = await handle.stat({ bigint: true });
+      if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) {
+        manifest.limitations.push({ path, kind: 'unreadable', code: 'ESTALE' });
+        return;
+      }
+      raw = await handle.readFile('utf8');
+    } finally {
+      await handle.close();
+    }
+    try {
+      const parsed = nodeArtifactSchema.safeParse(JSON.parse(raw));
+      if (!parsed.success || (runId !== undefined && parsed.data.runId !== runId)) {
+        manifest.limitations.push({ path, kind: 'invalid_metadata' });
+        return;
+      }
+      metadata.push({ path, value: parsed.data });
+    } catch {
+      manifest.limitations.push({ path, kind: 'invalid_metadata' });
     }
   }
   await visit(scanRoot);
