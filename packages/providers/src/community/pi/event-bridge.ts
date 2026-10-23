@@ -481,6 +481,59 @@ export async function* bridgeSession(
   const promptSideCalls: Usage[] = [];
   let sawAgentEnd = false;
 
+  const finishAgentTurn = (event: Extract<AgentSessionEvent, { type: 'agent_end' }>): void => {
+    // Streaming tail completion: Pi occasionally fails to flush the last
+    // characters of an assistant turn as text_delta events, leaving them
+    // present only in agent_end.messages. Detect the gap and emit the
+    // missing suffix as a corrective assistant chunk so the orchestrator's
+    // allMessages accumulator receives the full command text. Checked on
+    // every agent_end: each loop run's final turn can have its own gap.
+    // Condition: assembled text is strictly longer and starts with what was
+    // streamed (an extension, not a replacement); no assistant message in
+    // the transcript is treated as clean.
+    // The tail joins the buffered prefix so the executor sees one text block,
+    // not the prefix and the tail joined as two blocks.
+    const assembled = extractLastAssistantText(event.messages);
+    if (
+      assembled !== undefined &&
+      assembled.length > currentTurnText.length &&
+      assembled.startsWith(currentTurnText)
+    ) {
+      const tail = assembled.slice(currentTurnText.length);
+      appendPending('agent_message_chunk', tail);
+      if (wantsStructured) assistantBuffer += tail;
+      getLog().warn(
+        {
+          streamedLen: currentTurnText.length,
+          assembledLen: assembled.length,
+          tailLen: tail.length,
+        },
+        'pi.event-bridge.streaming_tail_completed'
+      );
+    }
+    flushPending();
+    currentTurnText = '';
+    promptMessages.push(...event.messages);
+    sawAgentEnd = true;
+  };
+  const enqueueChunk = (chunk: MessageChunk): void => {
+    if (chunk.type === 'agent_message_chunk') {
+      // Coalesce char-level deltas; hold them until a boundary flush so the
+      // executor receives one block-level chunk instead of dozens of tiny
+      // ones. The accumulators below still observe every delta.
+      currentTurnText += chunk.text;
+      if (wantsStructured) assistantBuffer += chunk.text;
+      appendPending(chunk.type, chunk.text);
+    } else if (chunk.type === 'agent_thought_chunk') {
+      appendPending(chunk.type, chunk.text);
+    } else {
+      // Any other chunk is a boundary: drain buffered text first so ordering
+      // is preserved.
+      flushPending();
+      queue.push({ kind: 'chunk', chunk });
+    }
+  };
+
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     try {
       if (event.type === 'turn_start') {
@@ -500,58 +553,10 @@ export async function* bridgeSession(
         promptSideCalls.push(event.result.usage);
       }
       if (event.type === 'agent_end') {
-        // Streaming tail completion: Pi occasionally fails to flush the last
-        // characters of an assistant turn as text_delta events, leaving them
-        // present only in agent_end.messages. Detect the gap and emit the
-        // missing suffix as a corrective assistant chunk so the orchestrator's
-        // allMessages accumulator receives the full command text. Checked on
-        // every agent_end: each loop run's final turn can have its own gap.
-        // Condition: assembled text is strictly longer and starts with what was
-        // streamed (an extension, not a replacement); no assistant message in
-        // the transcript is treated as clean.
-        // The tail joins the buffered prefix so the executor sees one text block,
-        // not the prefix and the tail joined as two blocks.
-        const assembled = extractLastAssistantText(event.messages);
-        if (
-          assembled !== undefined &&
-          assembled.length > currentTurnText.length &&
-          assembled.startsWith(currentTurnText)
-        ) {
-          const tail = assembled.slice(currentTurnText.length);
-          appendPending('agent_message_chunk', tail);
-          if (wantsStructured) assistantBuffer += tail;
-          getLog().warn(
-            {
-              streamedLen: currentTurnText.length,
-              assembledLen: assembled.length,
-              tailLen: tail.length,
-            },
-            'pi.event-bridge.streaming_tail_completed'
-          );
-        }
-        flushPending();
-        currentTurnText = '';
-        promptMessages.push(...event.messages);
-        sawAgentEnd = true;
+        finishAgentTurn(event);
         return;
       }
-      for (const chunk of mapPiEvent(event)) {
-        if (chunk.type === 'agent_message_chunk') {
-          // Coalesce char-level deltas; hold them until a boundary flush so the
-          // executor receives one block-level chunk instead of dozens of tiny
-          // ones. The accumulators below still observe every delta.
-          currentTurnText += chunk.text;
-          if (wantsStructured) assistantBuffer += chunk.text;
-          appendPending(chunk.type, chunk.text);
-        } else if (chunk.type === 'agent_thought_chunk') {
-          appendPending(chunk.type, chunk.text);
-        } else {
-          // Any other chunk is a boundary: drain buffered text first so ordering
-          // is preserved.
-          flushPending();
-          queue.push({ kind: 'chunk', chunk });
-        }
-      }
+      for (const chunk of mapPiEvent(event)) enqueueChunk(chunk);
       // A completed block flushes promptly so stream-mode consumers see each
       // block as it finishes rather than waiting for the terminal result.
       if (
@@ -616,50 +621,22 @@ export async function* bridgeSession(
           }
         );
 
-  try {
-    // An aborted caller may have walked away with a next() still pending. Yielding to
-    // it would park this generator for good and skip the cleanup below, so end by throwing.
-    if (abortSignal?.aborted) throw new Error('Query aborted');
-    for await (const item of queue) {
-      if (abortSignal?.aborted) throw new Error('Query aborted');
-      if (item.kind === 'done') {
-        extensionTurn?.throwIfFailed();
-        extensionTurn?.stopAccepting();
-        // Buffered text is flushed ahead of the result chunk when an agent_end
-        // was seen; a prompt that resolved without one can still strand text.
-        const stranded = takePending();
-        if (stranded) yield stranded;
-        return;
-      }
-      if (item.kind === 'error') {
-        // Preserve partial output: emit whatever text was buffered before the
-        // failure so it still reaches the user instead of being discarded.
-        const stranded = takePending();
-        if (stranded) yield stranded;
-        throw item.error;
-      }
-      // Annotate the terminal result chunk with Pi's session UUID so Archon's
-      // orchestrator can pass it back as `resumeSessionId` on the next call.
-      // Pi's session.sessionId is always a UUID (even for in-memory); we emit
-      // it unconditionally and let the caller decide whether resume is
-      // meaningful (capability-gated at the registry level).
-      if (item.chunk.type === 'result') {
-        extensionTurn?.throwIfFailed();
-        extensionTurn?.stopAccepting();
-        // The chunk was built for this turn by buildResultChunk; annotate it in place.
-        const terminal = item.chunk;
-        if (session.sessionId) terminal.sessionId = session.sessionId;
-        // Structured output: a valid structured_output tool call wins; without
-        // one, parse the reply text. With neither, leave it off and the
-        // dag-executor reasks or fails the node.
-        if (structuredToolOutput) {
-          attachStructuredOutput(terminal, structuredToolOutput(), assistantBuffer);
-        }
-        yield terminal;
-      } else {
-        yield item.chunk;
-      }
+  const finishResult = (terminal: ResultChunk): ResultChunk => {
+    extensionTurn?.throwIfFailed();
+    extensionTurn?.stopAccepting();
+    // The chunk was built for this turn by buildResultChunk; annotate it in place.
+    if (session.sessionId) terminal.sessionId = session.sessionId;
+    // Structured output: a valid structured_output tool call wins; without
+    // one, parse the reply text. With neither, leave it off and the
+    // dag-executor reasks or fails the node.
+    if (structuredToolOutput) {
+      attachStructuredOutput(terminal, structuredToolOutput(), assistantBuffer);
     }
+    return terminal;
+  };
+
+  try {
+    yield* consumeBridgeQueue(queue, takePending, finishResult, abortSignal, extensionTurn);
   } finally {
     // Close the queue first so any producer push() still in flight becomes
     // a no-op and pending iterate() waiters resolve — otherwise a consumer
@@ -678,8 +655,8 @@ export async function* bridgeSession(
       // debug so SDK regressions surface without polluting normal output.
       getLog().debug({ err }, 'pi.event-bridge.dispose_failed');
     }
-    // Don't await promptPromise. The queue is closed above (line 392), and the
-    // .then() handlers attached at construction (line 344) only push to that
+    // Don't await promptPromise. The queue is closed above, and the
+    // .then() handlers attached at construction only push to that
     // queue — closed pushes are no-ops. There's nothing the caller is waiting
     // for; whether prompt() resolves in 1ms or never, no observable behavior
     // changes. Awaiting it is what caused #1561: Pi's session.prompt() can
@@ -692,5 +669,36 @@ export async function* bridgeSession(
     promptPromise.catch((err: unknown) => {
       getLog().debug({ err }, 'pi.event-bridge.prompt_rejected_after_close');
     });
+  }
+}
+
+async function* consumeBridgeQueue(
+  queue: AsyncQueue<BridgeQueueItem>,
+  takePending: () => MessageChunk | undefined,
+  finishResult: (terminal: ResultChunk) => ResultChunk,
+  abortSignal?: AbortSignal,
+  extensionTurn?: PiExtensionTurn
+): AsyncGenerator<MessageChunk> {
+  // A pending next() from an aborted caller must throw so cleanup still runs.
+  if (abortSignal?.aborted) throw new Error('Query aborted');
+  for await (const item of queue) {
+    if (abortSignal?.aborted) throw new Error('Query aborted');
+    switch (item.kind) {
+      case 'done': {
+        extensionTurn?.throwIfFailed();
+        extensionTurn?.stopAccepting();
+        const stranded = takePending();
+        if (stranded) yield stranded;
+        return;
+      }
+      case 'error': {
+        const stranded = takePending();
+        if (stranded) yield stranded;
+        throw item.error;
+      }
+      case 'chunk':
+        yield item.chunk.type === 'result' ? finishResult(item.chunk) : item.chunk;
+        break;
+    }
   }
 }
