@@ -136,6 +136,117 @@ export function registerChatInbound(
       return { resumed: false };
     }
   };
+  type Operations = ReturnType<typeof createSqlWorkflowOperations>;
+  const answerRun = async (
+    operations: Operations,
+    action: Extract<ChatRunAction, { action: 'answer' }>,
+    actor: ChatActor
+  ): Promise<ChatRunActionResponse> => {
+    const run = await workflowDb.getWorkflowRun(action.runId);
+    if (!run) return { status: 'refused', message: 'Workflow run not found' };
+    // Authorize first, so a member who may not answer never learns the open occurrence.
+    await operations.assertRunActionAllowed(run, actor, 'respond');
+    const { nodeId, pauseId, choose, text } = action.response;
+    const origin: GateAnswerOrigin = { via: descriptor.id, expectedGate: { nodeId, pauseId } };
+    const request = text === undefined ? { choose } : { choose, text };
+    try {
+      assertAnswerAdmissible(run, origin);
+      attentionAnswerFor(run, assertAnswerable(run), request);
+    } catch (refusal) {
+      return { status: 'refused', message: workflowOperationErrorMessage(refusal, platform) };
+    }
+    await operations.answerWorkflow(action.runId, request, actor, origin);
+    return {
+      status: 'done',
+      result: { kind: 'answered', ...(await continueRun(action.runId, actor, 'answer')) },
+    };
+  };
+  const cancelRun = async (
+    operations: Operations,
+    action: ChatRunAction,
+    actor: ChatActor
+  ): Promise<ChatRunActionResponse> => {
+    const result = await operations.cancelWorkflow(action.runId, actor);
+    return {
+      status: 'done',
+      result:
+        result.kind === 'cooperative'
+          ? {
+              kind: 'cooperative',
+              cancelled: result.cancelled,
+              cleanupWarnings: result.cleanupWarnings,
+            }
+          : {
+              kind: 'stopped',
+              pid: result.pid,
+              cleanupWarnings: result.cleanupWarnings,
+              cascadeFailures: result.cascadeFailures,
+              blockedParentRunId: result.blockedParentRunId,
+            },
+    };
+  };
+  const respondToRun = async (
+    operations: Operations,
+    action: Exclude<ChatRunAction, { action: 'answer' | 'resume' | 'cancel' }>,
+    actor: ChatActor
+  ): Promise<ChatRunActionResponse> => {
+    const response = action.response;
+    const result = await operations.respondToWorkflow(
+      action.runId,
+      action.action === 'respond' ? action.response.decision : action.action,
+      response?.text,
+      actor,
+      {
+        via: descriptor.id,
+        ...(response?.nodeId
+          ? {
+              expectedGate: response.pauseId
+                ? { nodeId: response.nodeId, pauseId: response.pauseId }
+                : response.nodeId,
+            }
+          : {}),
+      }
+    );
+    const resume =
+      !('cancelled' in result) || !result.cancelled
+        ? await continueRun(action.runId, actor, action.action)
+        : { resumed: false };
+    return {
+      status: 'done',
+      result:
+        'cancelled' in result
+          ? {
+              kind: 'rejected',
+              cancelled: result.cancelled,
+              maxAttemptsReached: result.maxAttemptsReached,
+              writeBack: result.writeBack,
+              newMode: result.newMode,
+              cleanupWarnings: result.cleanupWarnings,
+              ...resume,
+            }
+          : { kind: 'approved', type: result.type, ...resume },
+    };
+  };
+  const actionFailure = (error: unknown, action: ChatRunAction): ChatRunActionResponse => {
+    if (error instanceof RunActionForbiddenError)
+      return { status: 'forbidden', message: error.message };
+    if (error instanceof ChildRunRedirectError)
+      return { status: 'refused', message: error.messageFor(platform) };
+    if (error instanceof StaleGateAnswerError || error instanceof ResumeRefusedError)
+      return { status: 'refused', message: error.message };
+    if (error instanceof CancelRefusedError)
+      return {
+        status: 'refused',
+        message: error.message,
+        ...(error.reason === 'no_owner_answered'
+          ? {
+              abandonHint: `Use ${platform.formatWorkflowCommand?.(`abandon ${action.runId}`) ?? `/workflow abandon ${action.runId}`} only after confirming the owner is gone.`,
+            }
+          : {}),
+      };
+    getLog().error({ plugin: descriptor.id, action: action.action }, 'chat.run_action_failed');
+    return { status: 'refused', message: 'The run action failed. Check the server diagnostics.' };
+  };
   connection.onRunAction(async (action): Promise<ChatRunActionResponse> => {
     if (!isAllowed(action.sender.platformUserId))
       return { status: 'rejected', reason: 'not_allowed' };
@@ -149,101 +260,11 @@ export function registerChatInbound(
           result: { kind: 'resumed', ...(await continueRun(action.runId, actor, 'resume')) },
         };
       }
-      if (action.action === 'answer') {
-        const run = await workflowDb.getWorkflowRun(action.runId);
-        if (!run) return { status: 'refused', message: 'Workflow run not found' };
-        // Authorize first, so a member who may not answer never learns the open occurrence.
-        await operations.assertRunActionAllowed(run, actor, 'respond');
-        const { nodeId, pauseId, choose, text } = action.response;
-        const origin: GateAnswerOrigin = { via: descriptor.id, expectedGate: { nodeId, pauseId } };
-        const request = text === undefined ? { choose } : { choose, text };
-        try {
-          assertAnswerAdmissible(run, origin);
-          attentionAnswerFor(run, assertAnswerable(run), request);
-        } catch (refusal) {
-          return { status: 'refused', message: workflowOperationErrorMessage(refusal, platform) };
-        }
-        await operations.answerWorkflow(action.runId, request, actor, origin);
-        return {
-          status: 'done',
-          result: { kind: 'answered', ...(await continueRun(action.runId, actor, 'answer')) },
-        };
-      }
-      if (action.action === 'cancel') {
-        const result = await operations.cancelWorkflow(action.runId, actor);
-        return {
-          status: 'done',
-          result:
-            result.kind === 'cooperative'
-              ? {
-                  kind: 'cooperative',
-                  cancelled: result.cancelled,
-                  cleanupWarnings: result.cleanupWarnings,
-                }
-              : {
-                  kind: 'stopped',
-                  pid: result.pid,
-                  cleanupWarnings: result.cleanupWarnings,
-                  cascadeFailures: result.cascadeFailures,
-                  blockedParentRunId: result.blockedParentRunId,
-                },
-        };
-      }
-      const response = action.response;
-      const result = await operations.respondToWorkflow(
-        action.runId,
-        action.action === 'respond' ? action.response.decision : action.action,
-        response?.text,
-        actor,
-        {
-          via: descriptor.id,
-          ...(response?.nodeId
-            ? {
-                expectedGate: response.pauseId
-                  ? { nodeId: response.nodeId, pauseId: response.pauseId }
-                  : response.nodeId,
-              }
-            : {}),
-        }
-      );
-      const resume =
-        !('cancelled' in result) || !result.cancelled
-          ? await continueRun(action.runId, actor, action.action)
-          : { resumed: false };
-      return {
-        status: 'done',
-        result:
-          'cancelled' in result
-            ? {
-                kind: 'rejected',
-                cancelled: result.cancelled,
-                maxAttemptsReached: result.maxAttemptsReached,
-                writeBack: result.writeBack,
-                newMode: result.newMode,
-                cleanupWarnings: result.cleanupWarnings,
-                ...resume,
-              }
-            : { kind: 'approved', type: result.type, ...resume },
-      };
+      if (action.action === 'answer') return await answerRun(operations, action, actor);
+      if (action.action === 'cancel') return await cancelRun(operations, action, actor);
+      return await respondToRun(operations, action, actor);
     } catch (error) {
-      if (error instanceof RunActionForbiddenError)
-        return { status: 'forbidden', message: error.message };
-      if (error instanceof ChildRunRedirectError)
-        return { status: 'refused', message: error.messageFor(platform) };
-      if (error instanceof StaleGateAnswerError || error instanceof ResumeRefusedError)
-        return { status: 'refused', message: error.message };
-      if (error instanceof CancelRefusedError)
-        return {
-          status: 'refused',
-          message: error.message,
-          ...(error.reason === 'no_owner_answered'
-            ? {
-                abandonHint: `Use ${platform.formatWorkflowCommand?.(`abandon ${action.runId}`) ?? `/workflow abandon ${action.runId}`} only after confirming the owner is gone.`,
-              }
-            : {}),
-        };
-      getLog().error({ plugin: descriptor.id, action: action.action }, 'chat.run_action_failed');
-      return { status: 'refused', message: 'The run action failed. Check the server diagnostics.' };
+      return actionFailure(error, action);
     }
   });
 }
