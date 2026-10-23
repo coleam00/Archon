@@ -158,15 +158,8 @@ function importedPackages(file: SourceFile): { specifier: string; line: number }
   return imports;
 }
 
-export function findEdgeViolations(input: {
-  packages: readonly PackageManifest[];
-  files: readonly SourceFile[];
-}): Violation[] {
+function workflowDependencyViolations(workflows: PackageManifest | undefined): Violation[] {
   const violations: Violation[] = [];
-  const packages = new Map(
-    input.packages.map(manifest => [packageDirectory(manifest.path), manifest])
-  );
-  const workflows = packages.get('workflows');
   for (const field of dependencySections) {
     if (workflows && '@hono/zod-openapi' in (workflows[field] ?? {})) {
       violations.push({
@@ -175,6 +168,55 @@ export function findEdgeViolations(input: {
       });
     }
   }
+  return violations;
+}
+
+function fileEdgeViolations(
+  file: SourceFile,
+  name: string,
+  manifest: PackageManifest
+): Violation[] {
+  const violations: Violation[] = [];
+  const path = normalizePath(file.path);
+  const test = isTestFile(path);
+  const declared = declaredArchonPackages(
+    manifest,
+    test ? dependencySections : runtimeDependencySections
+  );
+  for (const { specifier, line } of importedPackages({ ...file, path })) {
+    if (
+      (path.startsWith('packages/workflows/src/') ||
+        path === 'packages/core/src/schemas/user.ts') &&
+      (specifier === '@hono/zod-openapi' || specifier.startsWith('@hono/zod-openapi/'))
+    ) {
+      violations.push({
+        file: file.path,
+        line,
+        message: 'Engine schemas must import plain zod instead of @hono/zod-openapi',
+      });
+    }
+    const target = packageTarget(specifier);
+    if (target === undefined || target === name) continue;
+    const workspaceSpecifier = `@archon/${target}`;
+    if (!declared.has(target)) {
+      violations.push({
+        file: file.path,
+        line,
+        message: `${name} → ${workspaceSpecifier} is undeclared in ${(test ? dependencySections : runtimeDependencySections).join(', ')}`,
+      });
+    }
+  }
+  return violations;
+}
+
+export function findEdgeViolations(input: {
+  packages: readonly PackageManifest[];
+  files: readonly SourceFile[];
+}): Violation[] {
+  const packages = new Map(
+    input.packages.map(manifest => [packageDirectory(manifest.path), manifest])
+  );
+  const violations = workflowDependencyViolations(packages.get('workflows'));
   for (const file of input.files) {
     const path = normalizePath(file.path);
     if (!path.startsWith('packages/')) continue;
@@ -182,34 +224,7 @@ export function findEdgeViolations(input: {
     if (name === undefined) continue;
     const manifest = packages.get(name);
     if (!manifest) continue;
-    const test = isTestFile(path);
-    const declared = declaredArchonPackages(
-      manifest,
-      test ? dependencySections : runtimeDependencySections
-    );
-    for (const { specifier, line } of importedPackages({ ...file, path })) {
-      if (
-        (path.startsWith('packages/workflows/src/') ||
-          path === 'packages/core/src/schemas/user.ts') &&
-        (specifier === '@hono/zod-openapi' || specifier.startsWith('@hono/zod-openapi/'))
-      ) {
-        violations.push({
-          file: file.path,
-          line,
-          message: 'Engine schemas must import plain zod instead of @hono/zod-openapi',
-        });
-      }
-      const target = packageTarget(specifier);
-      if (target === undefined || target === name) continue;
-      const workspaceSpecifier = `@archon/${target}`;
-      if (!declared.has(target)) {
-        violations.push({
-          file: file.path,
-          line,
-          message: `${name} → ${workspaceSpecifier} is undeclared in ${(test ? dependencySections : runtimeDependencySections).join(', ')}`,
-        });
-      }
-    }
+    violations.push(...fileEdgeViolations(file, name, manifest));
   }
   return violations;
 }
@@ -280,6 +295,47 @@ const isUnder = (path: string, root: string): boolean =>
 /** The engine file that locates the bundled pack root for source builds and the binary build. */
 export const BUNDLED_PACK_SEAM = 'packages/workflows/src/defaults/bundled-data.ts';
 
+function boundaryPathViolation(path: string, target: string, engine: boolean): string | undefined {
+  if (engine) {
+    const intoPack =
+      isUnder(target, '.archon/scripts') ||
+      (isUnder(target, '.archon/workflows') &&
+        !(path === BUNDLED_PACK_SEAM && target === '.archon/workflows'));
+    if (intoPack)
+      return `engine code reaches ${target}; the engine may not import or read the pack`;
+  } else if (isUnder(target, 'packages')) {
+    return `pack code reaches ${target}; the pack may not import or read engine code`;
+  }
+  return undefined;
+}
+
+function filePackBoundaryViolations(file: SourceFile): Violation[] {
+  const violations: Violation[] = [];
+  const path = normalizePath(file.path);
+  const engine = /^packages\/[^/]+\/src\//.test(path);
+  const pack = isUnder(path, '.archon/workflows') || isUnder(path, '.archon/scripts');
+  if (!engine && !pack) return violations;
+  const reported = new Set<string>();
+  const report = (line: number, message: string): void => {
+    const key = `${String(line)}:${message}`;
+    if (reported.has(key)) return;
+    reported.add(key);
+    violations.push({ file: file.path, line, message });
+  };
+  const located = { ...file, path };
+  if (pack) {
+    for (const { specifier, line } of importedPackages(located)) {
+      if (specifier.startsWith('@archon/'))
+        report(line, `pack code imports ${specifier}; the pack may not import engine code`);
+    }
+  }
+  for (const { target, line } of selfLocatedPaths(located)) {
+    const message = boundaryPathViolation(path, target, engine);
+    if (message !== undefined) report(line, message);
+  }
+  return violations;
+}
+
 /**
  * The engine (`packages/<name>/src`) and the bundled pack (`.archon/workflows`,
  * `.archon/scripts`) meet only through the workflow language, the CLI and the forge and
@@ -288,40 +344,7 @@ export const BUNDLED_PACK_SEAM = 'packages/workflows/src/defaults/bundled-data.t
  * import `@archon/*` or reach into `packages/`.
  */
 export function findPackBoundaryViolations(files: readonly SourceFile[]): Violation[] {
-  const violations: Violation[] = [];
-  for (const file of files) {
-    const path = normalizePath(file.path);
-    const engine = /^packages\/[^/]+\/src\//.test(path);
-    const pack = isUnder(path, '.archon/workflows') || isUnder(path, '.archon/scripts');
-    if (!engine && !pack) continue;
-    const reported = new Set<string>();
-    const report = (line: number, message: string): void => {
-      const key = `${String(line)}:${message}`;
-      if (reported.has(key)) return;
-      reported.add(key);
-      violations.push({ file: file.path, line, message });
-    };
-    const located = { ...file, path };
-    if (pack) {
-      for (const { specifier, line } of importedPackages(located)) {
-        if (specifier.startsWith('@archon/'))
-          report(line, `pack code imports ${specifier}; the pack may not import engine code`);
-      }
-    }
-    for (const { target, line } of selfLocatedPaths(located)) {
-      if (engine) {
-        const intoPack =
-          isUnder(target, '.archon/scripts') ||
-          (isUnder(target, '.archon/workflows') &&
-            !(path === BUNDLED_PACK_SEAM && target === '.archon/workflows'));
-        if (intoPack)
-          report(line, `engine code reaches ${target}; the engine may not import or read the pack`);
-      } else if (isUnder(target, 'packages')) {
-        report(line, `pack code reaches ${target}; the pack may not import or read engine code`);
-      }
-    }
-  }
-  return violations;
+  return files.flatMap(filePackBoundaryViolations);
 }
 
 function declaredArchonPackages(
