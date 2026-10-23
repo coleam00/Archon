@@ -425,6 +425,18 @@ nodes:
 });
 
 describe('container policy', () => {
+  it('preserves every schema field through the container parser', () => {
+    const policy = {
+      enabled: false,
+      write_back: workflowContainerPolicySchema.shape.write_back.unwrap().options[0],
+    } satisfies Required<NonNullable<ReturnType<typeof parseContainerPolicy>>>;
+
+    expect(Object.keys(policy).sort()).toEqual(
+      Object.keys(workflowContainerPolicySchema.shape).sort()
+    );
+    expect(parseContainerPolicy(policy, 'policy.yaml')).toEqual(policy);
+  });
+
   it.each(workflowContainerPolicySchema.shape.write_back.unwrap().options)(
     'accepts schema write_back mode %s without adding absent fields',
     writeBack => {
