@@ -110,6 +110,9 @@ function parseServerRecord(value: unknown): ServerRecord | null {
     !Number.isSafeInteger(pid) ||
     pid <= 0 ||
     typeof port !== 'number' ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535 ||
     typeof host !== 'string' ||
     typeof version !== 'string' ||
     typeof startedAt !== 'string' ||

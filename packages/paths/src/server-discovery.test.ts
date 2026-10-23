@@ -65,11 +65,15 @@ describe('server record', () => {
       expect(statSync(getServerRecordPath(home)).mode & 0o777).toBe(0o600);
   });
 
-  test('a missing, malformed or dead-process record means no server', () => {
+  test('a missing, malformed, unusable-port or dead-process record means no server', () => {
     const home = makeHome();
     expect(readLiveServerRecord(home)).toBeNull();
     writeFileSync(getServerRecordPath(home), '{"pid":');
     expect(readLiveServerRecord(home)).toBeNull();
+    for (const port of [-1, 0, 65536, 3456.5]) {
+      writeServerRecord({ ...record(home), port }, home);
+      expect(readLiveServerRecord(home)).toBeNull();
+    }
 
     writeServerRecord(record(home, 424242), home);
     spies.push(

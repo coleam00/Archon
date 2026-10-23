@@ -55,17 +55,23 @@ async function startServer(home: string): Promise<RunningServer> {
   child.stdout?.on('data', chunk => (output += String(chunk)));
   child.stderr?.on('data', chunk => (output += String(chunk)));
   const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
-  const record = await waitFor(
-    () => {
-      const found = readLiveServerRecord(home);
-      return found?.pid === child.pid ? found : null;
-    },
-    'the server record',
-    () => {
-      if (child.exitCode !== null || child.signalCode !== null) throw new Error(output);
-    }
-  );
-  return { child, record, exited };
+  try {
+    const record = await waitFor(
+      () => {
+        const found = readLiveServerRecord(home);
+        return found?.pid === child.pid ? found : null;
+      },
+      'the server record',
+      () => {
+        if (child.exitCode !== null || child.signalCode !== null) throw new Error(output);
+      }
+    );
+    return { child, record, exited };
+  } catch (error) {
+    child.kill('SIGKILL');
+    await exited;
+    throw error;
+  }
 }
 
 async function stop(server: RunningServer, signal: NodeJS.Signals): Promise<void> {
