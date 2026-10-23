@@ -309,6 +309,47 @@ async function discoverInstalledPackScripts(
   return scripts;
 }
 
+async function ensureBundledScriptTree(unitDir: string, files: [string, string][]): Promise<void> {
+  try {
+    if (!(await stat(unitDir)).isDirectory()) {
+      throw new Error(`Bundled script cache is not a directory: ${unitDir}`);
+    }
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  // Publish the complete tree at once; another discovery must never see half a pack.
+  const staging = `${unitDir}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await mkdir(staging, { recursive: true });
+    for (const [relativePath, content] of files) {
+      const target = join(staging, relativePath);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, content, 'utf-8');
+    }
+    await publishBundledScriptTree(staging, unitDir);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function publishBundledScriptTree(staging: string, unitDir: string): Promise<void> {
+  try {
+    await rename(staging, unitDir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Windows reports EPERM for an existing directory. Accept a competing
+    // publisher only when its complete unit is present; other permission
+    // failures must retain the original rename error.
+    if (code !== 'EEXIST' && code !== 'ENOTEMPTY' && code !== 'EPERM') throw error;
+    const published = await stat(unitDir).then(
+      info => info.isDirectory(),
+      () => false
+    );
+    if (!published) throw error;
+  }
+}
+
 async function materializeBundledScripts(): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
   for (const [pack, bundled] of Object.entries(BUNDLED_SCRIPT_PACKS)) {
@@ -319,43 +360,7 @@ async function materializeBundledScripts(): Promise<Map<string, ScriptDefinition
       .slice(0, 16);
     const packCache = join(getArchonHome(), 'cache', 'workflow-scripts', pack);
     const unitDir = join(packCache, contentHash);
-    let exists = false;
-    try {
-      if (!(await stat(unitDir)).isDirectory()) {
-        throw new Error(`Bundled script cache is not a directory: ${unitDir}`);
-      }
-      exists = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    if (!exists) {
-      // Publish the complete tree at once; another discovery must never see half a pack.
-      const staging = `${unitDir}.${process.pid}.${randomUUID()}.tmp`;
-      try {
-        await mkdir(staging, { recursive: true });
-        for (const [relativePath, content] of files) {
-          const target = join(staging, relativePath);
-          await mkdir(dirname(target), { recursive: true });
-          await writeFile(target, content, 'utf-8');
-        }
-        try {
-          await rename(staging, unitDir);
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          // Windows reports EPERM for an existing directory. Accept a competing
-          // publisher only when its complete unit is present; other permission
-          // failures must retain the original rename error.
-          if (code !== 'EEXIST' && code !== 'ENOTEMPTY' && code !== 'EPERM') throw error;
-          const published = await stat(unitDir).then(
-            info => info.isDirectory(),
-            () => false
-          );
-          if (!published) throw error;
-        }
-      } finally {
-        await rm(staging, { recursive: true, force: true });
-      }
-    }
+    await ensureBundledScriptTree(unitDir, files);
     for (const [name, entry] of Object.entries(bundled.scripts)) {
       const packaged = parsePackagedResourceReference(name);
       if (packaged?.owner.source !== 'bundled' || packaged.owner.pack !== pack) {

@@ -35,36 +35,49 @@ export function formatToolCall(toolName: string, toolInput?: unknown): string {
  * @returns Brief description of what the tool is doing
  */
 export function formatToolInputBrief(toolName: string, toolInput: unknown): string | null {
-  if (typeof toolInput === 'object' && toolInput !== null) {
-    if (toolName === 'Bash' && 'command' in toolInput && typeof toolInput.command === 'string') {
-      const cmd = toolInput.command;
-      return cmd.length > 100 ? cmd.substring(0, 100) + '...' : cmd;
-    }
-    if ('file_path' in toolInput && typeof toolInput.file_path === 'string') {
-      if (toolName === 'Read') return `Reading: ${toolInput.file_path}`;
-      if (toolName === 'Write') return `Writing: ${toolInput.file_path}`;
-      if (toolName === 'Edit') return `Editing: ${toolInput.file_path}`;
-    }
-    if ('pattern' in toolInput && typeof toolInput.pattern === 'string') {
-      if (toolName === 'Glob') return `Pattern: ${toolInput.pattern}`;
-      if (toolName === 'Grep') return `Searching: ${toolInput.pattern}`;
-    }
-  }
+  const brief = formatKnownToolInput(toolName, toolInput);
+  if (brief !== null) return brief;
+  if (toolName.startsWith('mcp__')) return `MCP: ${toolName.split('__').slice(1).join(' ')}`;
+  return formatJsonInput(toolInput);
+}
 
-  // MCP tools - show tool name
-  if (toolName.startsWith('mcp__')) {
-    // Extract readable name from mcp__server__tool format
-    const parts = toolName.split('__');
-    if (parts.length >= 2) {
-      return `MCP: ${parts.slice(1).join(' ')}`;
+function formatKnownToolInput(toolName: string, input: unknown): string | null {
+  switch (toolName) {
+    case 'Bash': {
+      const command = stringInput(input, 'command');
+      return command === undefined ? null : truncate(command, 100);
     }
+    case 'Read':
+      return formatStringInput(input, 'file_path', 'Reading');
+    case 'Write':
+      return formatStringInput(input, 'file_path', 'Writing');
+    case 'Edit':
+      return formatStringInput(input, 'file_path', 'Editing');
+    case 'Glob':
+      return formatStringInput(input, 'pattern', 'Pattern');
+    case 'Grep':
+      return formatStringInput(input, 'pattern', 'Searching');
+    default:
+      return null;
   }
+}
 
-  // Generic handling for other tools - show JSON input (truncated)
-  const toolInputStr = JSON.stringify(toolInput);
-  if (toolInputStr === undefined) return null;
-  if (toolInputStr.length > 80) {
-    return toolInputStr.substring(0, 80) + '...';
-  }
-  return toolInputStr;
+function stringInput(input: unknown, key: string): string | undefined {
+  if (typeof input !== 'object' || input === null || !(key in input)) return undefined;
+  const value: unknown = Reflect.get(input, key);
+  return typeof value === 'string' ? value : undefined;
+}
+
+function formatStringInput(input: unknown, key: string, label: string): string | null {
+  const value = stringInput(input, key);
+  return value === undefined ? null : `${label}: ${value}`;
+}
+
+function formatJsonInput(input: unknown): string | null {
+  const text = JSON.stringify(input);
+  return text === undefined ? null : truncate(text, 80);
+}
+
+function truncate(text: string, length: number): string {
+  return text.length > length ? text.substring(0, length) + '...' : text;
 }

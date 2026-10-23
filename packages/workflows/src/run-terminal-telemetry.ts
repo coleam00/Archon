@@ -57,20 +57,11 @@ export function buildRunTerminalTelemetry(input: {
   );
   const terminalData = terminalEvent ? readNodeRecordData(terminalEvent.data) : {};
   const started = events.find(e => e.event_type === 'workflow_started');
-  const startedData = started ? readNodeRecordData(started.data) : {};
   const record = getTerminalRecord(run.status, events);
 
-  const firstFailed = firstFailedNodeEvent(record, events);
-  const failedNode = nodeDescriptorSchema.safeParse(
-    firstFailed ? readNodeRecordData(firstFailed.data).node : undefined
-  );
   const exitReason = runExitReasonSchema.safeParse(terminalData.exit_reason);
   const cancelReason = runCancelReasonSchema.safeParse(terminalData.cancel_reason);
-  const nodeStates = record?.nodes.map(node => node.state) ?? [];
   const loopIterations = events.filter(e => e.event_type === 'loop_iteration_completed').length;
-  const origin = stringOf(startedData.origin);
-  const provider = stringOf(startedData.provider);
-  const model = stringOf(startedData.model);
   const source = readRunDispatchMetadata(run.metadata)?.source;
 
   return {
@@ -79,26 +70,62 @@ export function buildRunTerminalTelemetry(input: {
     isChild: run.parent_run_id != null,
     workflowName: run.workflow_name,
     ...(source !== undefined ? { workflowSource: source } : {}),
+    ...startTelemetry(started, terminalEvent),
+    ...nodeCountTelemetry(record),
+    ...(status.data === 'failed' && exitReason.success ? { exitReason: exitReason.data } : {}),
+    ...(status.data === 'cancelled' && cancelReason.success
+      ? { cancelReason: cancelReason.data }
+      : {}),
+    ...failedNodeTelemetry(record, events),
+    ...usageTelemetry(usage),
+    ...(loopIterations > 0 ? { loopIterations } : {}),
+  };
+}
+
+function startTelemetry(
+  started: RunTelemetryEvent | undefined,
+  terminalEvent: RunTelemetryEvent | undefined
+) {
+  const startedData = started ? readNodeRecordData(started.data) : {};
+  const origin = stringOf(startedData.origin);
+  const provider = stringOf(startedData.provider);
+  const model = stringOf(startedData.model);
+  return {
     ...(provider !== undefined ? { provider } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(origin !== undefined ? { platform: origin } : {}),
     ...(started && terminalEvent
       ? { durationMs: Math.max(0, time(terminalEvent) - time(started)) }
       : {}),
-    ...(record
-      ? {
-          nodesCompleted: nodeStates.filter(state => state === 'completed').length,
-          nodesFailed: nodeStates.filter(state => state === 'failed').length,
-          nodesSkipped: nodeStates.filter(state => state === 'skipped').length,
-          nodesTotal: nodeStates.length,
-        }
-      : {}),
-    ...(status.data === 'failed' && exitReason.success ? { exitReason: exitReason.data } : {}),
-    ...(status.data === 'cancelled' && cancelReason.success
-      ? { cancelReason: cancelReason.data }
-      : {}),
+  };
+}
+
+function nodeCountTelemetry(record: ReturnType<typeof getTerminalRecord>) {
+  if (!record) return {};
+  const states = record.nodes.map(node => node.state);
+  return {
+    nodesCompleted: states.filter(state => state === 'completed').length,
+    nodesFailed: states.filter(state => state === 'failed').length,
+    nodesSkipped: states.filter(state => state === 'skipped').length,
+    nodesTotal: states.length,
+  };
+}
+
+function failedNodeTelemetry(
+  record: ReturnType<typeof getTerminalRecord>,
+  events: readonly RunTelemetryEvent[]
+) {
+  const firstFailed = firstFailedNodeEvent(record, events);
+  const failedData = firstFailed ? readNodeRecordData(firstFailed.data) : {};
+  const failedNode = nodeDescriptorSchema.safeParse(failedData.node);
+  return {
     ...(firstFailed ? { errorClass: recordedFailureKind(firstFailed) ?? 'unknown' } : {}),
     ...(failedNode.success ? { failedNodeType: telemetryNodeType(failedNode.data) } : {}),
+  };
+}
+
+function usageTelemetry(usage: Pick<DagResumeSnapshot, 'costUsd' | 'tokens'>) {
+  return {
     // Absent when no provider reported spend, so absence never reads as "free".
     ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage.tokens !== undefined
@@ -114,7 +141,6 @@ export function buildRunTerminalTelemetry(input: {
           ...(usage.tokens.cachePartial ? { cachePartialTokens: true as const } : {}),
         }
       : {}),
-    ...(loopIterations > 0 ? { loopIterations } : {}),
   };
 }
 
