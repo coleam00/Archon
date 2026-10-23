@@ -1,11 +1,12 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdir, writeFile, symlink as fsSymlink } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile, symlink as fsSymlink } from 'fs/promises';
 import {
   getCommandFolderSearchPaths,
   getWorkflowFolderSearchPaths,
   findMarkdownFilesRecursive,
+  findCommandFiles,
 } from './markdown-discovery';
 import { usePathEnvSnapshot, removeTempTree } from './test-utils';
 
@@ -41,6 +42,21 @@ describe('markdown-discovery', () => {
       const paths = getWorkflowFolderSearchPaths();
       expect(paths).toEqual(['.archon/workflows']);
     });
+  });
+
+  test('findCommandFiles excludes markdown directly inside node_modules', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'archon-command-discovery-'));
+    try {
+      await writeFile(join(root, 'root.md'), '# root');
+      await mkdir(join(root, 'node_modules'));
+      await writeFile(join(root, 'node_modules', 'unwanted.md'), '# unwanted');
+
+      expect(await findCommandFiles(root)).toEqual([
+        { commandName: 'root', relativePath: 'root.md' },
+      ]);
+    } finally {
+      await removeTempTree(root);
+    }
   });
 });
 
