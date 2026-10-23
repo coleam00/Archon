@@ -561,6 +561,35 @@ describe('POST /api/workflows/:name/run', () => {
     expect(body.error).toContain('Invalid workflow name');
   });
 
+  test.each([
+    'null',
+    '[]',
+    '[{"conversationId":"web-test-abc","message":"Go"}]',
+    '"Go"',
+    '42',
+    'true',
+    'false',
+  ])('returns 400 for non-object JSON body %s before writes or dispatch', async body => {
+    const write = spyOn(fsPromises, 'writeFile');
+    try {
+      const { app } = makeApp();
+      const response = await app.request('/api/workflows/deploy/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(response.status).toBe(400);
+      expect(response.headers.get('Content-Type')).toContain('application/json');
+      expect(await response.json()).toEqual({ error: 'Request body must be a JSON object' });
+      expect(mockFindConversationByPlatformId).not.toHaveBeenCalled();
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(mockAddMessage).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('returns 400 for malformed JSON body', async () => {
     const { app } = makeApp();
     const response = await app.request('/api/workflows/deploy/run', {
