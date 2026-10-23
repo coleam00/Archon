@@ -161,82 +161,9 @@ async function collectGitHubPatConfig(): Promise<GitHubConfig> {
 
   if (isCancel(token)) cancelSetup();
 
-  // Probe `gh` CLI auth — workflows that shell out to `gh` (e.g. `gh issue
-  // create`, `gh pr edit`) need this even if the PAT is set, because they call
-  // the local `gh` binary, not the API directly.
-  const ghSpin = spinner();
-  ghSpin.start('Checking gh CLI authentication...');
-  let ghAuthOk = false;
-  let ghAuthError: string | undefined;
-  try {
-    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
-    ghAuthOk = true;
-    ghSpin.stop('gh CLI is authenticated');
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    ghAuthError =
-      e.code === 'ENOENT'
-        ? 'gh not found in PATH — install it first (https://cli.github.com)'
-        : (e.message ?? 'unknown error');
-    ghSpin.stop('gh CLI check failed');
-  }
-
-  if (!ghAuthOk) {
-    log.warning(
-      `gh auth check failed: ${ghAuthError}\n` +
-        (ghAuthError?.includes('not found') ? '' : 'Run: gh auth login')
-    );
-    // gh auth login is an interactive OAuth flow — only offer it from a TTY.
-    if (process.stdout.isTTY) {
-      const runGhLogin = await confirm({
-        message: 'Run `gh auth login` now?',
-        initialValue: true,
-      });
-      if (!isCancel(runGhLogin) && runGhLogin) {
-        // spawnSync with inherited stdio so the OAuth prompt reaches the terminal.
-        const ghLoginResult = spawnSync('gh', ['auth', 'login'], { stdio: 'inherit' });
-        if (ghLoginResult.error) {
-          log.warning(
-            `Could not run gh auth login: ${ghLoginResult.error.message}. ` +
-              'Install the gh CLI from https://cli.github.com/ and run it manually.'
-          );
-        } else if (ghLoginResult.status !== 0) {
-          // gh exited non-zero (user cancelled, OAuth callback failed, etc.).
-          // .error is only set on spawn failure, so without this the wizard
-          // would proceed as if auth succeeded.
-          log.warning(
-            `gh auth login exited with code ${ghLoginResult.status ?? 'null'}. ` +
-              'Authentication may not have completed — re-run `gh auth login` manually if needed.'
-          );
-        }
-      }
-    }
-  }
-
+  await ensureGhCliAuth();
   const allowedUsers = await collectGitHubAllowedUsers();
-
-  const customMention = await confirm({
-    message: 'Do you want to set a custom @mention name? (Default: archon)',
-  });
-
-  if (isCancel(customMention)) cancelSetup();
-
-  let botMention: string | undefined;
-  if (customMention) {
-    const mention = await text({
-      message: 'Enter the @mention name (without @):',
-      placeholder: 'archon',
-      validate: value => {
-        if (!value) return 'Mention name is required';
-        if (value.includes('@')) return 'Do not include @ symbol';
-        return undefined;
-      },
-    });
-
-    if (isCancel(mention)) cancelSetup();
-
-    botMention = mention;
-  }
+  const botMention = await collectBotMention();
 
   // Auto-generate webhook secret
   const webhookSecret = generateWebhookSecret();
@@ -249,6 +176,85 @@ async function collectGitHubPatConfig(): Promise<GitHubConfig> {
     allowedUsers: allowedUsers || '',
     botMention,
   };
+}
+
+/**
+ * Probe `gh` CLI auth — workflows that shell out to `gh` (e.g. `gh issue
+ * create`, `gh pr edit`) need this even if the PAT is set, because they call
+ * the local `gh` binary, not the API directly.
+ */
+async function ensureGhCliAuth(): Promise<void> {
+  const ghAuthError = await probeGhCliAuth();
+  if (ghAuthError === undefined) return;
+  log.warning(
+    `gh auth check failed: ${ghAuthError}\n` +
+      (ghAuthError.includes('not found') ? '' : 'Run: gh auth login')
+  );
+  // gh auth login is an interactive OAuth flow — only offer it from a TTY.
+  if (process.stdout.isTTY) await offerGhAuthLogin();
+}
+
+/** Returns why `gh auth status` failed, or undefined when gh is authenticated. */
+async function probeGhCliAuth(): Promise<string | undefined> {
+  const ghSpin = spinner();
+  ghSpin.start('Checking gh CLI authentication...');
+  try {
+    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
+    ghSpin.stop('gh CLI is authenticated');
+    return undefined;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    ghSpin.stop('gh CLI check failed');
+    return e.code === 'ENOENT'
+      ? 'gh not found in PATH — install it first (https://cli.github.com)'
+      : (e.message ?? 'unknown error');
+  }
+}
+
+async function offerGhAuthLogin(): Promise<void> {
+  const runGhLogin = await confirm({
+    message: 'Run `gh auth login` now?',
+    initialValue: true,
+  });
+  if (isCancel(runGhLogin) || !runGhLogin) return;
+  // spawnSync with inherited stdio so the OAuth prompt reaches the terminal.
+  const ghLoginResult = spawnSync('gh', ['auth', 'login'], { stdio: 'inherit' });
+  if (ghLoginResult.error) {
+    log.warning(
+      `Could not run gh auth login: ${ghLoginResult.error.message}. ` +
+        'Install the gh CLI from https://cli.github.com/ and run it manually.'
+    );
+  } else if (ghLoginResult.status !== 0) {
+    // gh exited non-zero (user cancelled, OAuth callback failed, etc.).
+    // .error is only set on spawn failure, so without this the wizard
+    // would proceed as if auth succeeded.
+    log.warning(
+      `gh auth login exited with code ${ghLoginResult.status ?? 'null'}. ` +
+        'Authentication may not have completed — re-run `gh auth login` manually if needed.'
+    );
+  }
+}
+
+async function collectBotMention(): Promise<string | undefined> {
+  const customMention = await confirm({
+    message: 'Do you want to set a custom @mention name? (Default: archon)',
+  });
+
+  if (isCancel(customMention)) cancelSetup();
+  if (!customMention) return undefined;
+
+  const mention = await text({
+    message: 'Enter the @mention name (without @):',
+    placeholder: 'archon',
+    validate: value => {
+      if (!value) return 'Mention name is required';
+      if (value.includes('@')) return 'Do not include @ symbol';
+      return undefined;
+    },
+  });
+
+  if (isCancel(mention)) cancelSetup();
+  return mention;
 }
 
 /** What `reconcileGitHubAuth` found in the env files, read again by the write step. */

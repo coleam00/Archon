@@ -22,6 +22,7 @@ import {
   workflowRunOriginSchema,
   validateWorkflowWaitMetadata,
   type WorkflowRun,
+  type WorkflowRunOrigin,
 } from '@archon/workflows/schemas/workflow-run';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
@@ -42,36 +43,7 @@ export async function insertWorkflowRun(
   data: WorkflowRunInsert
 ): Promise<WorkflowRun> {
   validateWorkflowWaitMetadata(data.metadata);
-  // Serialize metadata with validation to catch circular references early
-  let metadataJson: string;
-  try {
-    metadataJson = JSON.stringify(data.metadata ?? {});
-  } catch (serializeError) {
-    const err = serializeError as Error;
-
-    // Losing launch policy would silently change execution on the next resume.
-    if (
-      data.metadata &&
-      ('github_context' in data.metadata || RUN_AI_CONFIGURATION_METADATA_KEY in data.metadata)
-    ) {
-      getLog().error(
-        { err, metadataKeys: Object.keys(data.metadata) },
-        'db.workflow_run_metadata_serialize_failed'
-      );
-      throw new Error(
-        `Failed to serialize workflow metadata: ${err.message}. ` +
-          'Metadata contains required workflow context or AI configuration.'
-      );
-    }
-
-    // Non-critical metadata: fall back to empty object and log warning
-    getLog().warn(
-      { err, metadataKeys: data.metadata ? Object.keys(data.metadata) : [] },
-      'db.workflow_run_metadata_serialize_fallback'
-    );
-    metadataJson = '{}';
-  }
-
+  const metadataJson = serializeRunMetadata(data.metadata);
   const origin = workflowRunOriginSchema.parse(data.origin ?? {});
   if (origin.conversationId) assertPublicConversation(origin.conversationId);
   if (origin.parentConversationId) assertPublicConversation(origin.parentConversationId);
@@ -84,41 +56,83 @@ export async function insertWorkflowRun(
       ...(origin.conversationId ? [origin.conversationId] : []),
       ...(origin.parentConversationId ? [origin.parentConversationId] : []),
     ]);
-    const result = await query<WorkflowRunRow>(
-      data.id === undefined
-        ? `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING *, CAST(origin AS TEXT) AS origin`
-        : `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       RETURNING *, CAST(origin AS TEXT) AS origin`,
-      [
-        data.workflow_name,
-        physicalConversationId,
-        data.codebase_id ?? null,
-        data.user_message,
-        metadataJson,
-        data.working_path ?? null,
-        origin.parentConversationId ?? null,
-        origin.userId ?? null,
-        data.parent_run_id ?? null,
-        data.adopted_from_run_id ?? null,
-        JSON.stringify(origin),
-        ...(data.id === undefined ? [] : [data.id]),
-      ]
-    );
-    const row = result.rows[0];
-    if (!row) {
-      throw new Error(
-        `Failed to create workflow run: INSERT returned no rows (workflow: ${data.workflow_name})`
-      );
-    }
+    const row = await insertRunRow(query, data, metadataJson, physicalConversationId, origin);
     return normalizeWorkflowRun(row);
   } catch (error) {
     throw new Error(`Failed to create workflow run: ${(error as Error).message}`);
   }
+}
+
+/** Serializes run metadata, refusing only when it carries launch policy a resume needs. */
+function serializeRunMetadata(metadata: WorkflowRunInsert['metadata']): string {
+  try {
+    return JSON.stringify(metadata ?? {});
+  } catch (serializeError) {
+    const err = serializeError as Error;
+
+    // Losing launch policy would silently change execution on the next resume.
+    if (
+      metadata &&
+      ('github_context' in metadata || RUN_AI_CONFIGURATION_METADATA_KEY in metadata)
+    ) {
+      getLog().error(
+        { err, metadataKeys: Object.keys(metadata) },
+        'db.workflow_run_metadata_serialize_failed'
+      );
+      throw new Error(
+        `Failed to serialize workflow metadata: ${err.message}. ` +
+          'Metadata contains required workflow context or AI configuration.'
+      );
+    }
+
+    // Non-critical metadata: fall back to empty object and log warning
+    getLog().warn(
+      { err, metadataKeys: metadata ? Object.keys(metadata) : [] },
+      'db.workflow_run_metadata_serialize_fallback'
+    );
+    return '{}';
+  }
+}
+
+async function insertRunRow(
+  query: TransactionQuery,
+  data: WorkflowRunInsert,
+  metadataJson: string,
+  physicalConversationId: string,
+  origin: WorkflowRunOrigin
+): Promise<WorkflowRunRow> {
+  const result = await query<WorkflowRunRow>(
+    data.id === undefined
+      ? `INSERT INTO remote_agent_workflow_runs
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *, CAST(origin AS TEXT) AS origin`
+      : `INSERT INTO remote_agent_workflow_runs
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *, CAST(origin AS TEXT) AS origin`,
+    [
+      data.workflow_name,
+      physicalConversationId,
+      data.codebase_id ?? null,
+      data.user_message,
+      metadataJson,
+      data.working_path ?? null,
+      origin.parentConversationId ?? null,
+      origin.userId ?? null,
+      data.parent_run_id ?? null,
+      data.adopted_from_run_id ?? null,
+      JSON.stringify(origin),
+      ...(data.id === undefined ? [] : [data.id]),
+    ]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error(
+      `Failed to create workflow run: INSERT returned no rows (workflow: ${data.workflow_name})`
+    );
+  }
+  return row;
 }
 
 export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
