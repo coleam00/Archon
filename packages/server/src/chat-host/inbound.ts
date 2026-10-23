@@ -220,6 +220,7 @@ export function registerChatInbound(
                 maxAttemptsReached: result.maxAttemptsReached,
                 writeBack: result.writeBack,
                 newMode: result.newMode,
+                cleanupWarnings: result.cleanupWarnings,
                 ...resume,
               }
             : { kind: 'approved', type: result.type, ...resume },
