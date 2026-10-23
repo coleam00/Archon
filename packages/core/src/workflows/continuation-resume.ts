@@ -246,29 +246,8 @@ export async function wakeDueWorkflowContinuations(
           { runId: run.id, kind: outcome.kind, blocker: outcome.blocker },
           'workflow_continuation_capacity_refused'
         );
-      const sourceError =
-        outcome.kind === 'unavailable'
-          ? outcome.sourceError
-          : outcome.kind === 'failed' &&
-              outcome.error instanceof runSource.WorkflowSourceIntegrityError
-            ? outcome.error
-            : undefined;
-      if (sourceError) {
-        const count = (structuralFailures.get(run.id)?.count ?? 0) + 1;
-        structuralFailures.set(run.id, { cursor, count });
-        if (count >= MAX_SOURCE_FAILURES) {
-          if (!warnedRuns.has(run.id)) {
-            warnedRuns.add(run.id);
-            log.warn(
-              { err: sourceError, runId: run.id, path: sourceError.path, attempts: count },
-              `This host stopped automatically resuming run ${run.id}: ${unverifiableSourceGuidance(run.id, sourceError)}`
-            );
-          }
-          return outcome;
-        }
-      } else if (outcome.kind === 'accepted') {
-        structuralFailures.delete(run.id);
-      }
+      if (sourceFailureLimitReached(outcome, cursor)) return outcome;
+      if (outcome.kind === 'accepted') structuralFailures.delete(run.id);
       if (outcome.kind !== 'accepted') {
         try {
           await store.deferWorkflowContinuation(
@@ -284,4 +263,32 @@ export async function wakeDueWorkflowContinuations(
       return outcome;
     })
   );
+}
+
+function sourceFailureLimitReached(
+  outcome: ContinuationWakeOutcome,
+  cursor: WorkflowResumeCursor
+): boolean {
+  const runId = outcome.runId;
+  const sourceError =
+    outcome.kind === 'unavailable'
+      ? outcome.sourceError
+      : outcome.kind === 'failed' && outcome.error instanceof runSource.WorkflowSourceIntegrityError
+        ? outcome.error
+        : undefined;
+  if (sourceError) {
+    const count = (structuralFailures.get(runId)?.count ?? 0) + 1;
+    structuralFailures.set(runId, { cursor, count });
+    if (count >= MAX_SOURCE_FAILURES) {
+      if (!warnedRuns.has(runId)) {
+        warnedRuns.add(runId);
+        log.warn(
+          { err: sourceError, runId, path: sourceError.path, attempts: count },
+          `This host stopped automatically resuming run ${runId}: ${unverifiableSourceGuidance(runId, sourceError)}`
+        );
+      }
+      return true;
+    }
+  }
+  return false;
 }

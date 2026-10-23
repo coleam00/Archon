@@ -56,47 +56,50 @@ async function scanDirectory(directory: string, source: string): Promise<PluginC
   }
   const candidates: PluginCandidate[] = [];
   for (const entry of entries.sort()) {
-    const name = executableName(entry);
-    if (!name) {
-      if (/^archon-forge-/i.test(entry)) {
-        process.stderr.write(`Skipping forge plugin ${entry}: unsupported executable format\n`);
-      }
-      continue;
-    }
-    const command = resolve(directory, entry);
-    try {
-      const details = await stat(command);
-      if (!details.isFile()) continue;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      // Retain a broken link as an unavailable candidate, so selecting it
-      // cannot silently turn into an unclaimed (no-forge) result.
-      candidates.push({
-        source: `${source}:${name}`,
-        configured: false,
-        command,
-        args: [],
-        expectedName: name,
-      });
-      continue;
-    }
-    if (process.platform !== 'win32') {
-      try {
-        await access(command, constants.X_OK);
-      } catch {
-        process.stderr.write(`Skipping forge plugin ${entry}: file is not executable\n`);
-        continue;
-      }
-    }
-    candidates.push({
-      source: `${source}:${name}`,
-      configured: false,
-      command,
-      args: [],
-      expectedName: name,
-    });
+    const candidate = await scannedCandidate(directory, source, entry);
+    if (candidate) candidates.push(candidate);
   }
   return candidates;
+}
+
+async function scannedCandidate(
+  directory: string,
+  source: string,
+  entry: string
+): Promise<PluginCandidate | undefined> {
+  const name = executableName(entry);
+  if (!name) {
+    if (/^archon-forge-/i.test(entry)) {
+      process.stderr.write(`Skipping forge plugin ${entry}: unsupported executable format\n`);
+    }
+    return undefined;
+  }
+  const command = resolve(directory, entry);
+  const candidate: PluginCandidate = {
+    source: `${source}:${name}`,
+    configured: false,
+    command,
+    args: [],
+    expectedName: name,
+  };
+  try {
+    const details = await stat(command);
+    if (!details.isFile()) return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    // Retain a broken link as an unavailable candidate, so selecting it
+    // cannot silently turn into an unclaimed (no-forge) result.
+    return candidate;
+  }
+  if (process.platform !== 'win32') {
+    try {
+      await access(command, constants.X_OK);
+    } catch {
+      process.stderr.write(`Skipping forge plugin ${entry}: file is not executable\n`);
+      return undefined;
+    }
+  }
+  return candidate;
 }
 
 function configuredCandidates(
