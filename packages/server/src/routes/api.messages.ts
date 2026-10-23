@@ -268,10 +268,11 @@ async function readMultipartMessage(
     return c.json({ error: 'Invalid multipart form data' }, 400);
   }
 
-  const message = body.message;
-  if (typeof message !== 'string' || !message) {
+  const parsed = sendMessageBodySchema.safeParse(body);
+  if (!parsed.success) {
     return c.json({ error: 'message must be a non-empty string' }, 400);
   }
+  const { message } = parsed.data;
 
   const fileEntries = formEntries(body.files).filter((e): e is File => e instanceof File);
   if (fileEntries.length === 0) return { message, savedFiles: [] };
@@ -301,16 +302,11 @@ async function readJsonMessage(
     return c.json({ error: 'Invalid JSON in request body' }, 400);
   }
 
-  if (
-    typeof body !== 'object' ||
-    body === null ||
-    !('message' in body) ||
-    typeof body.message !== 'string' ||
-    !body.message
-  ) {
+  const parsed = sendMessageBodySchema.safeParse(body);
+  if (!parsed.success) {
     return c.json({ error: 'message must be a non-empty string' }, 400);
   }
-  return { message: body.message, savedFiles: [] };
+  return { message: parsed.data.message, savedFiles: [] };
 }
 
 /** Saves the user message to history; on failure removes its uploads and returns the 500. */

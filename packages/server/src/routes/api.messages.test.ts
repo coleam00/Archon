@@ -6,6 +6,7 @@ import { validationErrorHook } from './openapi-defaults';
 import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 import { MAX_TOOL_OUTPUT_CHARS } from '../adapters/web/truncate';
+import { sendMessageBodySchema } from './schemas/conversation.schemas';
 
 // ---------------------------------------------------------------------------
 // Mock setup — must be before dynamic imports of mocked modules
@@ -258,25 +259,35 @@ describe('POST /api/conversations/:id/message', () => {
     expect(resolve(files.items)).toMatchObject({ type: 'string', format: 'binary' });
   });
 
-  test('accepts multipart without attachments and keeps manual validation errors', async () => {
-    mockFindConversationByPlatformId.mockResolvedValue(null);
-    const { app } = makeApp();
-    for (const message of ['Hello', '']) {
-      const form = new FormData();
-      form.set('message', message);
-      const response = await app.request('/api/conversations/web-test-abc/message', {
-        method: 'POST',
-        body: form,
-      });
-      expect(response.status).toBe(message ? 200 : 400);
-      expect(await response.json()).toEqual(
-        message
-          ? { accepted: true, status: 'started' }
-          : { error: 'message must be a non-empty string' }
-      );
+  test.each(['json', 'multipart'] as const)(
+    '%s message validation follows the published schema',
+    async transport => {
+      mockFindConversationByPlatformId.mockResolvedValue(null);
+      const { app } = makeApp();
+      for (const message of [undefined, '', 'a', ' ', 'Hello']) {
+        mockHandleMessage.mockClear();
+        const form = new FormData();
+        if (message !== undefined) form.set('message', message);
+        const valid = sendMessageBodySchema.safeParse({ message }).success;
+        const response = await app.request('/api/conversations/web-test-abc/message', {
+          method: 'POST',
+          ...(transport === 'json'
+            ? {
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message }),
+              }
+            : { body: form }),
+        });
+        expect(response.status).toBe(valid ? 200 : 400);
+        expect(await response.json()).toEqual(
+          valid
+            ? { accepted: true, status: 'started' }
+            : { error: 'message must be a non-empty string' }
+        );
+        expect(mockHandleMessage).toHaveBeenCalledTimes(valid ? 1 : 0);
+      }
     }
-    expect(mockHandleMessage).toHaveBeenCalledTimes(1);
-  });
+  );
 
   test.each(['too many', 'too large'] as const)('refuses %s attachments', async kind => {
     mockFindConversationByPlatformId.mockResolvedValue(null);
