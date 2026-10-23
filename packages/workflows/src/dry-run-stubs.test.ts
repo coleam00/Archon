@@ -423,6 +423,32 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
     });
   });
 
+  test('hydrates schema-valid string placeholders through every generated route', async () => {
+    const workflow = (trigger_rule?: 'all_done') =>
+      makeTestWorkflow({
+        name: 'string-output',
+        nodes: [
+          {
+            id: 'result',
+            prompt: 'Result',
+            ...(trigger_rule === undefined ? {} : { trigger_rule }),
+            output_format: { type: 'string', enum: ['DONE'] },
+          },
+        ],
+      });
+    const scaffold = createDryRunStubScaffold(workflow());
+    expect(scaffold).toEqual({ result: '"DONE"' });
+    for (const options of [
+      { workflow: workflow(), defaultStubs: true },
+      { workflow: workflow('all_done') },
+      { workflow: workflow(), stubs: scaffold },
+    ]) {
+      const result = await dryRunWorkflow(options);
+      expect(result).toMatchObject({ outcome: 'completed', authoredOutcome: null });
+      expect(result.trace[0]?.output).toBe('"DONE"');
+    }
+  });
+
   test('generates array-typed output_format stubs', () => {
     const workflow = makeTestWorkflow({
       name: 'array-output',

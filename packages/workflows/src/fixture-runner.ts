@@ -79,6 +79,7 @@ export const fixtureDeclarationSchema = z
     inputs: z.record(z.string(), z.string()).optional(),
     'resolved-text-contains': z.record(z.string(), z.string()).optional(),
   })
+  .strict()
   .refine(decl => decl.expect !== 'failed' || decl['fail-node'] !== undefined, {
     message: "fail-node is required when expect is 'failed'",
   });

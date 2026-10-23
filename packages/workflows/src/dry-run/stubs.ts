@@ -151,13 +151,14 @@ export function generatedStubFor(node: DagNode): DryRunStubValue {
       `Cannot generate dry-run stub for node '${node.id}': output_format produced a placeholder of an unsupported type`
     );
   }
-  return value;
+  return typeof value === 'string' ? JSON.stringify(value) : value;
 }
 
 function stubSatisfiesNode(node: DagNode, stub: DryRunStubValue): boolean {
-  if (node.output_format !== undefined) {
-    const validation = validateStructuredOutput(stub, node.output_format);
-    if (!validation.valid) return false;
+  try {
+    assertAuthoredStubSatisfiesSchema(node, stub);
+  } catch {
+    return false;
   }
   if (isLoopNode(node)) {
     return loopIterationCompletes(node.loop, completedOutput(node, stub)).kind !== 'incomplete';
@@ -327,9 +328,12 @@ export function completedOutput(node: DagNode, stub: DryRunStubValue): NodeOutpu
   const declaredOutputPaths = definedOutputPaths(node);
   const contract = declaredOutputPaths !== undefined ? { declaredOutputPaths } : {};
   if (typeof stub === 'string') {
+    const structuredOutput: unknown =
+      node.output_format === undefined ? undefined : JSON.parse(stub);
     return {
       state: 'completed',
       output: stub,
+      ...(node.output_format === undefined ? {} : { structuredOutput }),
       ...contract,
     };
   }

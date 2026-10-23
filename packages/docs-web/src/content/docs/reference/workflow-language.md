@@ -1811,10 +1811,12 @@ authored outcome and usage; its zero exit does not prove completion. Use `archon
 to await a terminal or gate transition and `archon workflow get <run-id>` to inspect the current result.
 See [CLI handoff behavior](/reference/cli/#workflow-run-name-message). When `outcome` is null, result
 surfaces retain the normal status-only presentation. A dry run
-reports the same declaration separately as nullable `authoredOutcome`, derived only from the declared
-return node's structured fixture value. Its existing `outcome` remains the simulation result and
-continues to control CLI exit codes and fixture `expect` checks. Generated placeholder stubs never
-author a verdict.
+reports the same declaration separately as nullable `authoredOutcome`, derived from the declared
+return node's schema-valid stub (a structured value or JSON string), or its schema-certified
+`bash:` / `script:` output with `--exec-code`. Its existing `outcome` remains the simulation result
+and continues to control CLI exit codes and fixture `expect` checks. Fixtures can independently
+assert the authored verdict with `fixture.authored: succeeded` or `failed`. Generated placeholder
+stubs, including tolerated `all_done` joins, never author a verdict.
 
 ### Deterministic checks, authored outcomes, and evidence markers
 
