@@ -73,6 +73,21 @@ export function SubscriptionLoginFlow({
       return false;
     };
 
+    const pollAndCheckCompletion = async (sessionId: string): Promise<boolean> => {
+      try {
+        const submit = pendingCodeRef.current;
+        pendingCodeRef.current = undefined;
+        const res = await skill.pollProviderOAuth(provider, sessionId, submit);
+        if (stale()) return true;
+        return finishPoll(res);
+      } catch (e: unknown) {
+        if (stale()) return true;
+        setPhase('error');
+        setMessage(e instanceof Error ? e.message : 'Login poll failed.');
+        return true;
+      }
+    };
+
     const pollLoop = async (sessionId: string): Promise<void> => {
       const deadline = Date.now() + 10 * 60 * 1000; // bridge SESSION_TTL_MS
       for (;;) {
@@ -84,19 +99,7 @@ export function SubscriptionLoginFlow({
         }
         await new Promise(r => setTimeout(r, 2000));
         if (stale()) return;
-        try {
-          const submit = pendingCodeRef.current;
-          pendingCodeRef.current = undefined;
-          const res = await skill.pollProviderOAuth(provider, sessionId, submit);
-          if (stale()) return;
-          if (finishPoll(res)) return;
-          // 'pending' → keep polling
-        } catch (e: unknown) {
-          if (stale()) return;
-          setPhase('error');
-          setMessage(e instanceof Error ? e.message : 'Login poll failed.');
-          return;
-        }
+        if (await pollAndCheckCompletion(sessionId)) return;
       }
     };
 
