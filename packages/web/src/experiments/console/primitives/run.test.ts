@@ -50,6 +50,20 @@ describe('runDetailPath', () => {
 });
 
 describe('toRun — provenance', () => {
+  test('preserves the assigned project for project-scoped routing', () => {
+    const run = toRun(
+      raw({
+        id: 'run-1',
+        workflow_name: 'implement',
+        status: 'running',
+        codebase_id: 'project-1',
+      })
+    );
+
+    expect(run.projectId).toBe('project-1');
+    expect(runDetailPath(run)).toBe('/console/p/project-1/r/run-1');
+  });
+
   test('keeps every parallel active node', () => {
     const parallel = toRun(
       raw({
