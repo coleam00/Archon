@@ -40,25 +40,33 @@ function tryRenderScalarEdits(definition: Plain, source: string): string | undef
     if (Bun.deepEquals(previous, value)) return true;
     // Shared sources need alias settlement; tagged values need schema-aware merging.
     if (!isNode(node) || isAlias(node) || node.anchor || node.tag) return false;
-    if (isMap(node) && isPlainObject(value)) {
-      const keys = Object.keys(value).filter(key => value[key] !== undefined);
-      if (keys.length !== node.items.length) return false;
-      return node.items.every(
-        ({ key, value: child }) =>
-          isScalar(key) &&
-          typeof key.value === 'string' &&
-          keys.includes(key.value) &&
-          collect(child, value[key.value], inFlow || node.flow === true)
-      );
-    }
-    if (isSeq(node) && Array.isArray(value)) {
-      if (node.items.length !== value.length) return false;
-      return node.items.every((child, index) => {
-        const oldValue: unknown = isNode(child) ? child.toJS(doc) : child;
-        if (itemId(oldValue) !== itemId(value[index])) return false;
-        return collect(child, value[index], inFlow || node.flow === true);
-      });
-    }
+    if (isMap(node) && isPlainObject(value)) return collectMap(node, value, inFlow);
+    if (isSeq(node) && Array.isArray(value)) return collectSequence(node, value, inFlow);
+    return collectScalar(node, value, inFlow);
+  }
+
+  function collectMap(node: YAMLMap, value: Plain, inFlow: boolean): boolean {
+    const keys = Object.keys(value).filter(key => value[key] !== undefined);
+    if (keys.length !== node.items.length) return false;
+    return node.items.every(
+      ({ key, value: child }) =>
+        isScalar(key) &&
+        typeof key.value === 'string' &&
+        keys.includes(key.value) &&
+        collect(child, value[key.value], inFlow || node.flow === true)
+    );
+  }
+
+  function collectSequence(node: YAMLSeq, value: unknown[], inFlow: boolean): boolean {
+    if (node.items.length !== value.length) return false;
+    return node.items.every((child, index) => {
+      const oldValue: unknown = isNode(child) ? child.toJS(doc) : child;
+      if (itemId(oldValue) !== itemId(value[index])) return false;
+      return collect(child, value[index], inFlow || node.flow === true);
+    });
+  }
+
+  function collectScalar(node: Node, value: unknown, inFlow: boolean): boolean {
     if (
       !isScalar(node) ||
       (value !== null &&
