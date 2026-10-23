@@ -1152,6 +1152,8 @@ archon workflow reject <run-id> --reason "Needs more tests"
 archon workflow reject <run-id> --json
 ```
 
+A reject that cancels a managed container run reclaims its container once no executor can still run in it. If that reclamation fails, the run stays cancelled and the command prints a warning (`cleanupWarnings` with `--json`), as [`workflow cancel`](#workflow-cancel) does.
+
 ### `workflow resume`
 
 Resume a failed or paused run by id. Nodes that completed in the earlier attempt are skipped.

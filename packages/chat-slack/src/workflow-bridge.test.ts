@@ -360,6 +360,15 @@ test('gate notes retain resume and rejection distinctions', () => {
     },
     {
       kind: 'rejected',
+      cancelled: true,
+      maxAttemptsReached: false,
+      writeBack: false,
+      newMode: false,
+      resumed: false,
+      cleanupWarnings: ['Container reclaim failed.'],
+    },
+    {
+      kind: 'rejected',
       cancelled: false,
       maxAttemptsReached: false,
       writeBack: true,
@@ -384,6 +393,7 @@ test('gate notes retain resume and rejection distinctions', () => {
     expect.stringContaining('resume was not accepted'),
     expect.stringContaining('waiting for capacity'),
     'cancelled — max reject attempts reached',
+    'cancelled — warning: Container reclaim failed.',
     'recorded — workflow resumed to discard the container changes',
     'recorded — workflow resumed',
   ]);

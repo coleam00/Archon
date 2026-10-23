@@ -14,11 +14,13 @@ import {
   mockResolveRunWorkflow,
   mockHydrateResumableRun,
   mockExecuteWorkflow,
+  mockReclaimContainerEnv,
   MOCK_RUNNING_RUN,
   makeApp,
   MOCK_PAUSED_RUN,
 } from '../test/api-workflow-runs-harness';
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { hostname } from 'node:os';
 import * as sqlHost from '@archon/core/workflows/sql-host';
 import { answeredPauseContinuation } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
@@ -1009,6 +1011,31 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
+  });
+
+  test('a cancelling reject reports a failed container reclaim', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      metadata: {
+        ...MOCK_PAUSED_RUN.metadata,
+        isolation: 'container',
+        isolation_env_id: 'env-a',
+        execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
+      },
+    });
+    mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/reject', {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'needs work' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean; message: string };
+    expect(body.success).toBe(true);
+    expect(body.message).toContain('Workflow rejected');
+    expect(body.message).toContain('Could not reclaim container environment env-a');
+    expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
   });
 
   test('records rejection and increments count when on_reject configured and under limit', async () => {

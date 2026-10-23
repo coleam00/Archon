@@ -800,6 +800,15 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'no', operator, { via: 'manage_run' });
   });
 
+  test('reject that cancels reports cleanup warnings', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    mockReject.mockResolvedValue(rejectionResult({ cleanupWarnings: ['container env-a remains'] }));
+    const tool = buildManageRunTool({ actor: operator, operations, codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'reject', runId: 'r1abcdef', confirm: true });
+    expect(out).toContain('Rejected and cancelled');
+    expect(out).toContain('Warning: container env-a remains');
+  });
+
   test('reject with no message leaves the default reason to rejectWorkflow', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     mockReject.mockResolvedValue(rejectionResult());

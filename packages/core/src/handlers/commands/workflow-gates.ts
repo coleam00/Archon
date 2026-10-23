@@ -57,9 +57,10 @@ async function rejectionResult(
 ): Promise<CommandResult> {
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
+    const warnings = (result.cleanupWarnings ?? []).map(warning => `\n⚠️ ${warning}`).join('');
     return {
       success: true,
-      message: `Workflow \`${result.workflowName}\` rejected and cancelled${suffix}.`,
+      message: `Workflow \`${result.workflowName}\` rejected and cancelled${suffix}.${warnings}`,
     };
   }
   // Not cancelled means either a legacy on_reject rework is staged, or

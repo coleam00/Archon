@@ -9,6 +9,7 @@ import {
   expectedGateForOccurrence,
   StaleGateAnswerError,
   type GateAnswerOrigin,
+  type RejectionOperationResult,
   type WorkflowOperations,
 } from '@archon/core/operations/workflow-operations';
 import {
@@ -369,12 +370,7 @@ export function registerRunGateRoutes(
       const result = await rejectWorkflow(runId, body.reason, actor, origin);
 
       if (result.cancelled) {
-        return c.json({
-          success: true,
-          message: result.maxAttemptsReached
-            ? `Workflow rejected and cancelled (max attempts reached): ${run.workflow_name}`
-            : `Workflow rejected: ${run.workflow_name}`,
-        });
+        return c.json({ success: true, message: cancelledRejectionMessage(run, result) });
       }
 
       return c.json({
@@ -437,12 +433,7 @@ export function registerRunGateRoutes(
       const result = await respondToWorkflow(runId, decision, body.text, actor, origin);
 
       if ('cancelled' in result && result.cancelled) {
-        return c.json({
-          success: true,
-          message: result.maxAttemptsReached
-            ? `Workflow rejected and cancelled (max attempts reached): ${run.workflow_name}`
-            : `Workflow rejected: ${run.workflow_name}`,
-        });
+        return c.json({ success: true, message: cancelledRejectionMessage(run, result) });
       }
 
       return c.json({
@@ -496,4 +487,12 @@ export function registerRunGateRoutes(
       return apiError(c, 500, 'Failed to answer workflow run');
     }
   });
+}
+
+function cancelledRejectionMessage(run: WorkflowRun, result: RejectionOperationResult): string {
+  const message = result.maxAttemptsReached
+    ? `Workflow rejected and cancelled (max attempts reached): ${run.workflow_name}`
+    : `Workflow rejected: ${run.workflow_name}`;
+  const warnings = (result.cleanupWarnings ?? []).map(warning => ` — warning: ${warning}`);
+  return message + warnings.join('');
 }
