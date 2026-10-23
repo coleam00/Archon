@@ -1,6 +1,54 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test, type Mock } from 'bun:test';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type * as Git from './index';
 import { clearLogger, output, branch, git, mockLogger, repo } from './test-fixtures/git-harness';
+
+const trackTempRoot = trackTempRoots();
+
+test('fetch-only classifies newly fetched remote commits without updating HEAD', async () => {
+  const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-workspace-sync-')));
+  const remote = join(root, 'remote.git');
+  const writer = join(root, 'writer');
+  const checkout = repo(join(root, 'checkout'));
+  const run = async (cwd: string, ...args: string[]): Promise<string> => {
+    const result = await git.execFileAsync('git', ['-C', cwd, ...args]);
+    return result.stdout.trim();
+  };
+
+  await run(root, 'init', '--bare', '-q', '-b', 'main', remote);
+  await run(root, 'clone', '-q', remote, writer);
+  await run(writer, 'config', 'user.name', 'Archon Test');
+  await run(writer, 'config', 'user.email', 'test@example.com');
+  await run(writer, 'config', 'commit.gpgsign', 'false');
+  await run(writer, 'commit', '--allow-empty', '-qm', 'base');
+  await run(writer, 'push', '-q', 'origin', 'main');
+  await run(root, 'clone', '-q', remote, checkout);
+  const initialHead = await run(checkout, 'rev-parse', 'HEAD');
+  const initialShortHead = await run(checkout, 'rev-parse', '--short=8', 'HEAD');
+
+  await run(writer, 'commit', '--allow-empty', '-qm', 'remote advance');
+  await run(writer, 'push', '-q', 'origin', 'main');
+  const remoteHead = await run(writer, 'rev-parse', 'HEAD');
+  expect(remoteHead).not.toBe(initialHead);
+  expect(await run(checkout, 'rev-parse', 'origin/main')).toBe(initialHead);
+
+  const result = await git.syncWorkspace(checkout, branch('main'), { mode: 'fetch-only' });
+
+  expect(result).toEqual({
+    branch: branch('main'),
+    synced: true,
+    mode: 'fetch-only',
+    state: 'behind',
+    previousHead: initialShortHead,
+    newHead: initialShortHead,
+    updated: false,
+  });
+  expect(await run(checkout, 'rev-parse', 'origin/main')).toBe(remoteHead);
+  expect(await run(checkout, 'rev-parse', 'HEAD')).toBe(initialHead);
+});
 
 function failingWorkspaceCommand(
   operation: 'fetch' | 'reset',
