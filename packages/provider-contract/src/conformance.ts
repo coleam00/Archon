@@ -48,33 +48,42 @@ export async function checkFailureClasses(
       );
       continue;
     }
-    if (results.length !== 1) {
-      violations.push(`${failureCase.name}: expected one result, got ${String(results.length)}`);
-      continue;
-    }
-    const { failure, isError } = results[0];
-    if (failure === undefined) {
-      violations.push(`${failureCase.name}: result carries no failure`);
-      continue;
-    }
-    const parsed = providerFailureSchema.safeParse(failure);
-    if (!parsed.success) {
-      violations.push(`${failureCase.name}: failure is malformed (${parsed.error.message})`);
-      continue;
-    }
-    if (parsed.data.class !== failureCase.expected) {
-      violations.push(
-        `${failureCase.name}: reported ${parsed.data.class}, expected ${failureCase.expected}`
-      );
-    }
-    if (!parsed.data.evidence.includes(failureCase.evidence)) {
-      violations.push(
-        `${failureCase.name}: evidence does not keep the vendor text "${failureCase.evidence}"`
-      );
-    }
-    if (isError !== true) {
-      violations.push(`${failureCase.name}: a failed result does not set isError`);
-    }
+    violations.push(...checkFailureResult(failureCase, results));
+  }
+  return violations;
+}
+
+function checkFailureResult(
+  failureCase: ProviderFailureCase,
+  results: { failure?: unknown; isError?: unknown }[]
+): string[] {
+  const violations: string[] = [];
+  if (results.length !== 1) {
+    violations.push(`${failureCase.name}: expected one result, got ${String(results.length)}`);
+    return violations;
+  }
+  const { failure, isError } = results[0];
+  if (failure === undefined) {
+    violations.push(`${failureCase.name}: result carries no failure`);
+    return violations;
+  }
+  const parsed = providerFailureSchema.safeParse(failure);
+  if (!parsed.success) {
+    violations.push(`${failureCase.name}: failure is malformed (${parsed.error.message})`);
+    return violations;
+  }
+  if (parsed.data.class !== failureCase.expected) {
+    violations.push(
+      `${failureCase.name}: reported ${parsed.data.class}, expected ${failureCase.expected}`
+    );
+  }
+  if (!parsed.data.evidence.includes(failureCase.evidence)) {
+    violations.push(
+      `${failureCase.name}: evidence does not keep the vendor text "${failureCase.evidence}"`
+    );
+  }
+  if (isError !== true) {
+    violations.push(`${failureCase.name}: a failed result does not set isError`);
   }
   return violations;
 }
