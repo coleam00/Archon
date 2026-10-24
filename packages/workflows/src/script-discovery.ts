@@ -200,6 +200,24 @@ export async function discoverScripts(
   return scripts;
 }
 
+async function isPackDirectory(
+  packPath: string,
+  onMissing?: (path: string, error: unknown) => void
+): Promise<boolean> {
+  try {
+    return (await stat(packPath)).isDirectory();
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      onMissing?.(packPath, error);
+      return false;
+    }
+    throw new Error(`Failed to inspect packaged workflow pack "${packPath}": ${err.message}`, {
+      cause: err,
+    });
+  }
+}
+
 async function discoverPackagedScripts(
   workflowsRoot: string,
   source: WorkflowSource,
@@ -231,18 +249,7 @@ async function discoverPackagedScripts(
     )
       continue;
     const packPath = join(workflowsRoot, pack);
-    try {
-      if (!(await stat(packPath)).isDirectory()) continue;
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') {
-        onMissing?.(packPath, error);
-        continue;
-      }
-      throw new Error(`Failed to inspect packaged workflow pack "${packPath}": ${err.message}`, {
-        cause: err,
-      });
-    }
+    if (!(await isPackDirectory(packPath, onMissing))) continue;
     await discoverPackScripts(packPath, pack, source, scripts, requestedNames, onMissing);
   }
   return scripts;
