@@ -1,5 +1,5 @@
 import { createLogger } from '@archon/paths';
-import { missingProviderMessage } from '@archon/provider-contract';
+import { missingProviderMessage, type ProviderDefaults } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
@@ -114,43 +114,54 @@ function normalizePreset(path: string, preset: ModelAliasPreset): ModelAliasPres
   }
 }
 
+function parseAssistantDefaults(
+  provider: string,
+  defaults: ProviderDefaults
+): Record<string, unknown> {
+  assertRegisteredProvider(provider, `assistants.${provider}`);
+  try {
+    return getRegistration(provider).parseConfig(defaults, 'run');
+  } catch (error) {
+    if (!(error instanceof InvalidProviderRunConfigError)) throw error;
+    const suffix = error.fieldPath ? `.${error.fieldPath}` : '';
+    throw new Error(`Invalid run config at 'assistants.${provider}${suffix}': ${error.message}.`);
+  }
+}
+
+function normalizeAssistants(
+  assistants: NonNullable<WorkflowRunConfigLayer['assistants']>
+): Record<string, Record<string, unknown>> {
+  const normalized: Record<string, Record<string, unknown>> = {};
+  for (const [provider, defaults] of Object.entries(assistants)) {
+    normalized[provider] = parseAssistantDefaults(provider, defaults);
+  }
+  return normalized;
+}
+
+function normalizePresets(
+  section: 'tiers' | 'aliases',
+  presets: Record<string, ModelAliasPreset>
+): Record<string, ModelAliasPreset> {
+  return Object.fromEntries(
+    Object.entries(presets).map(([name, preset]) => [
+      name,
+      normalizePreset(`${section}.${name}`, preset),
+    ])
+  );
+}
+
 /** Validate and normalize constraints owned by the live provider registry and lifecycle. */
 export function normalizeRunConfigSemantics(layer: WorkflowRunConfigLayer): WorkflowRunConfigLayer {
   if (layer.assistant !== undefined) {
     assertRegisteredProvider(layer.assistant, 'assistant');
   }
-  const assistants: Record<string, Record<string, unknown>> = {};
-  for (const [provider, defaults] of Object.entries(layer.assistants ?? {})) {
-    assertRegisteredProvider(provider, `assistants.${provider}`);
-    try {
-      assistants[provider] = getRegistration(provider).parseConfig(defaults, 'run');
-    } catch (error) {
-      if (error instanceof InvalidProviderRunConfigError) {
-        const suffix = error.fieldPath ? `.${error.fieldPath}` : '';
-        throw new Error(
-          `Invalid run config at 'assistants.${provider}${suffix}': ${error.message}.`
-        );
-      }
-      throw error;
-    }
-  }
-  const tiers = Object.fromEntries(
-    Object.entries(layer.tiers ?? {}).map(([tier, preset]) => [
-      tier,
-      normalizePreset(`tiers.${tier}`, preset),
-    ])
-  );
-  const aliases = Object.fromEntries(
-    Object.entries(layer.aliases ?? {}).map(([alias, preset]) => [
-      alias,
-      normalizePreset(`aliases.${alias}`, preset),
-    ])
-  );
   return {
     ...layer,
-    ...(layer.assistants === undefined ? {} : { assistants }),
-    ...(layer.tiers === undefined ? {} : { tiers }),
-    ...(layer.aliases === undefined ? {} : { aliases }),
+    ...(layer.assistants === undefined
+      ? {}
+      : { assistants: normalizeAssistants(layer.assistants) }),
+    ...(layer.tiers === undefined ? {} : { tiers: normalizePresets('tiers', layer.tiers) }),
+    ...(layer.aliases === undefined ? {} : { aliases: normalizePresets('aliases', layer.aliases) }),
   };
 }
 
