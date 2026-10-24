@@ -35,6 +35,27 @@ export function GithubIdentityPanel(): ReactElement | null {
     };
   }, []);
 
+  const pollUntilConnected = async (
+    start: Awaited<ReturnType<typeof skill.startGithubDeviceFlow>>
+  ): Promise<boolean> => {
+    const deadline = Date.now() + start.expires_in * 1000;
+    let interval = Math.max(1, start.interval);
+    for (;;) {
+      if (cancelledRef.current) return false;
+      if (Date.now() > deadline) throw new Error('Device code expired — try again.');
+      await new Promise(r => setTimeout(r, interval * 1000));
+      if (cancelledRef.current) return false;
+      const res = await skill.pollGithubDeviceFlow(start.device_code);
+      const step = skill.interpretPollStatus(res, interval);
+      if (step.kind === 'connected') return true;
+      if (step.kind === 'retry') {
+        interval = step.nextInterval;
+        continue;
+      }
+      throw new Error(step.message); // 'failed'
+    }
+  };
+
   const connect = async (): Promise<void> => {
     setPhase('pending');
     setMessage(null);
@@ -43,29 +64,13 @@ export function GithubIdentityPanel(): ReactElement | null {
       if (cancelledRef.current) return;
       setUserCode(start.user_code);
       setVerificationUri(start.verification_uri);
-      const deadline = Date.now() + start.expires_in * 1000;
-      let interval = Math.max(1, start.interval);
-      for (;;) {
-        if (cancelledRef.current) return;
-        if (Date.now() > deadline) throw new Error('Device code expired — try again.');
-        await new Promise(r => setTimeout(r, interval * 1000));
-        if (cancelledRef.current) return;
-        const res = await skill.pollGithubDeviceFlow(start.device_code);
-        const step = skill.interpretPollStatus(res, interval);
-        if (step.kind === 'connected') {
-          // Keep `phase = 'pending'` (button stays "Connecting…") until the
-          // invalidate refetch flips `status.connected` to true — otherwise the
-          // not-connected branch flashes "Connect GitHub" for one render.
-          setUserCode(null);
-          setVerificationUri(null);
-          invalidate(K.githubConnection);
-          return;
-        }
-        if (step.kind === 'retry') {
-          interval = step.nextInterval;
-          continue;
-        }
-        throw new Error(step.message); // 'failed'
+      if (await pollUntilConnected(start)) {
+        // Keep `phase = 'pending'` (button stays "Connecting…") until the
+        // invalidate refetch flips `status.connected` to true — otherwise the
+        // not-connected branch flashes "Connect GitHub" for one render.
+        setUserCode(null);
+        setVerificationUri(null);
+        invalidate(K.githubConnection);
       }
     } catch (e: unknown) {
       if (cancelledRef.current) return;
