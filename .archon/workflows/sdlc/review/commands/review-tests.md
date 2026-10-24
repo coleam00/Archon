@@ -25,7 +25,7 @@ Coverage targets; tests for getters, wiring, or framework behavior; behavior the
 
 ## What a finding costs
 
-State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding. Name the behavior that can regress silently and what that regression costs; say whether the change adds or fixes that behavior, or whether the gap is extra leverage beyond it, which you report sparingly.
+State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding. A surviving mutation is evidence for part 3, not the whole of it: the regression must be an edit someone would plausibly make, and the test one the project would keep. On a behavior-preserving refactor, a gap the old code already had is not this change's finding unless the refactor made the regression more plausible. Name the behavior that can regress silently and what that regression costs; say whether the change adds or fixes that behavior, or whether the gap is extra leverage beyond it, which you report sparingly.
 
 ## Output
 
