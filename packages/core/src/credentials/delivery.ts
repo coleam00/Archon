@@ -75,37 +75,9 @@ export function deliverCredential(provider: string, cred: ResolvedCredential): D
   const vendor = normalizeCredentialVendor(provider);
   switch (vendor) {
     case 'anthropic':
-      if (cred.kind === 'api_key') {
-        // CLAUDE_API_KEY kept alongside ANTHROPIC_API_KEY for parity with the
-        // pre-#1955 'claude' delivery (harmless superset).
-        return { env: { ANTHROPIC_API_KEY: cred.apiKey, CLAUDE_API_KEY: cred.apiKey } };
-      }
-      // Claude Pro/Max subscription, read by the native Claude SDK. It is not delivered
-      // under a Pi variable: a Claude subscription runs only on the Claude provider.
-      return { env: { CLAUDE_CODE_OAUTH_TOKEN: cred.oauthApiKey } };
-
+      return deliverAnthropic(cred);
     case 'openai':
-      if (cred.kind === 'api_key') {
-        // Pi reads OPENAI_API_KEY; Codex reads only its own name.
-        return { env: { OPENAI_API_KEY: cred.apiKey, [CODEX_CREDENTIAL_ENV.apiKey]: cred.apiKey } };
-      }
-      {
-        // ChatGPT subscription → the Codex provider logs its app-server in with these
-        // in memory, so the user's CODEX_HOME stays theirs.
-        const accountId = cred.rawCreds.accountId;
-        if (typeof accountId !== 'string' || accountId === '') {
-          throw new Error(
-            'Stored OpenAI subscription has no ChatGPT account id; reconnect it with `archon ai login openai`.'
-          );
-        }
-        return {
-          env: {
-            [CODEX_CREDENTIAL_ENV.chatgptAccessToken]: cred.oauthApiKey,
-            [CODEX_CREDENTIAL_ENV.chatgptAccountId]: accountId,
-          },
-        };
-      }
-
+      return deliverOpenAi(cred);
     case 'github-copilot':
       // Copilot subscription (oauth) or a Copilot PAT (api_key) → the env var the
       // native Copilot provider reads (COPILOT_GITHUB_TOKEN wins over generic GH
@@ -115,38 +87,72 @@ export function deliverCredential(provider: string, cred: ResolvedCredential): D
           COPILOT_GITHUB_TOKEN: cred.kind === 'api_key' ? cred.apiKey : cred.oauthApiKey,
         },
       };
+    default:
+      return deliverPiBackend(vendor, cred);
+  }
+}
 
-    default: {
-      // Happy path first: any vendor in the generated env map delivers its
-      // API key. This includes google-vertex, which is BOTH api_key-capable
-      // and ambient — a stored Vertex key must deliver, so the env lookup
-      // takes precedence over the ambient check.
-      const piEnvVar = PI_PROVIDER_ENV_VARS[vendor];
-      if (piEnvVar) {
-        if (cred.kind === 'oauth') {
-          // Reached only if an oauth row exists under a Pi-backend id (connect
-          // guards against this — oauth is anthropic/openai/github-copilot
-          // only). The Pi runtime consumes subscriptions via the aggregate
-          // auth.json (buildPiAuthJson), not this per-vendor env path.
-          throw new Error(
-            `Vendor '${vendor}' (Pi backend) has no env-based OAuth delivery; subscriptions reach Pi via auth.json.`
-          );
-        }
-        return { env: { [piEnvVar]: cred.apiKey } };
-      }
-      if (PI_AMBIENT_VENDORS.includes(vendor)) {
-        // Ambient-ONLY vendors (amazon-bedrock — no env var in the map):
-        // chains are detected from the environment, never stored — a stored
-        // row for one is a connect bug.
-        throw new Error(
-          `Vendor '${vendor}' uses ambient cloud credentials and has no stored-credential delivery.`
-        );
-      }
+function deliverAnthropic(cred: ResolvedCredential): DeliveryResult {
+  if (cred.kind === 'api_key') {
+    // CLAUDE_API_KEY kept alongside ANTHROPIC_API_KEY for parity with the
+    // pre-#1955 'claude' delivery (harmless superset).
+    return { env: { ANTHROPIC_API_KEY: cred.apiKey, CLAUDE_API_KEY: cred.apiKey } };
+  }
+  // Claude Pro/Max subscription, read by the native Claude SDK. It is not delivered
+  // under a Pi variable: a Claude subscription runs only on the Claude provider.
+  return { env: { CLAUDE_CODE_OAUTH_TOKEN: cred.oauthApiKey } };
+}
+
+function deliverOpenAi(cred: ResolvedCredential): DeliveryResult {
+  if (cred.kind === 'api_key') {
+    // Pi reads OPENAI_API_KEY; Codex reads only its own name.
+    return { env: { OPENAI_API_KEY: cred.apiKey, [CODEX_CREDENTIAL_ENV.apiKey]: cred.apiKey } };
+  }
+  // ChatGPT subscription → the Codex provider logs its app-server in with these
+  // in memory, so the user's CODEX_HOME stays theirs.
+  const accountId = cred.rawCreds.accountId;
+  if (typeof accountId !== 'string' || accountId === '') {
+    throw new Error(
+      'Stored OpenAI subscription has no ChatGPT account id; reconnect it with `archon ai login openai`.'
+    );
+  }
+  return {
+    env: {
+      [CODEX_CREDENTIAL_ENV.chatgptAccessToken]: cred.oauthApiKey,
+      [CODEX_CREDENTIAL_ENV.chatgptAccountId]: accountId,
+    },
+  };
+}
+
+function deliverPiBackend(vendor: string, cred: ResolvedCredential): DeliveryResult {
+  // Happy path first: any vendor in the generated env map delivers its
+  // API key. This includes google-vertex, which is BOTH api_key-capable
+  // and ambient — a stored Vertex key must deliver, so the env lookup
+  // takes precedence over the ambient check.
+  const piEnvVar = PI_PROVIDER_ENV_VARS[vendor];
+  if (piEnvVar) {
+    if (cred.kind === 'oauth') {
+      // Reached only if an oauth row exists under a Pi-backend id (connect
+      // guards against this — oauth is anthropic/openai/github-copilot
+      // only). The Pi runtime consumes subscriptions via the aggregate
+      // auth.json (buildPiAuthJson), not this per-vendor env path.
       throw new Error(
-        `Unknown credential vendor '${vendor}'. Known: ${[...KNOWN_VENDORS].sort().join(', ')}.`
+        `Vendor '${vendor}' (Pi backend) has no env-based OAuth delivery; subscriptions reach Pi via auth.json.`
       );
     }
+    return { env: { [piEnvVar]: cred.apiKey } };
   }
+  if (PI_AMBIENT_VENDORS.includes(vendor)) {
+    // Ambient-ONLY vendors (amazon-bedrock — no env var in the map):
+    // chains are detected from the environment, never stored — a stored
+    // row for one is a connect bug.
+    throw new Error(
+      `Vendor '${vendor}' uses ambient cloud credentials and has no stored-credential delivery.`
+    );
+  }
+  throw new Error(
+    `Unknown credential vendor '${vendor}'. Known: ${[...KNOWN_VENDORS].sort().join(', ')}.`
+  );
 }
 
 /**

@@ -1,7 +1,11 @@
 /** Holds abortable subscription logins across start/poll requests. */
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '@archon/paths';
-import type { OAuthAuthInfo, OAuthDeviceCodeInfo } from './subscription-oauth';
+import type {
+  OAuthAuthInfo,
+  OAuthDeviceCodeInfo,
+  OAuthProviderInterface,
+} from './subscription-oauth';
 import {
   subscriptionOAuthProviderFor,
   SUBSCRIPTION_PROVIDERS,
@@ -86,7 +90,7 @@ interface OAuthSession {
   expiresAt: number;
   /**
    * Resolves when the held `login()` call has settled. Never rejects: it is
-   * the full `.then().catch()` chain built in `startOAuth`, whose terminal
+   * the full `.then().catch()` chain built in `settleLogin`, whose terminal
    * `.catch()` swallows every failure into session state.
    */
   settled: Promise<void>;
@@ -172,6 +176,34 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   // Expired sessions may also hold a callback server — include them in the
   // settle-wait below so the port is free before the new login binds it.
   const supersededSettled: Promise<void>[] = sweepExpired();
+  const { provider, oauthProvider } = resolveSubscriptionProvider(providerId);
+  supersededSettled.push(...supersedeCollidingSessions(userId, provider, oauthProvider));
+  if (supersededSettled.length > 0) {
+    await Promise.race([Promise.all(supersededSettled), sleep(ABORT_SETTLE_MS)]);
+  }
+  const session = openSession(userId, provider);
+  const loginPromise = oauthProvider
+    ? runProviderLogin(session, oauthProvider)
+    : runOpenAiManualLogin(session);
+  getLog().info(
+    { userId, provider, sessionId: session.sessionId, mode: session.mode },
+    'oauth_bridge.login_started'
+  );
+  session.settled = settleLogin(session, loginPromise);
+
+  // Wait for the first callback so the URL / user-code is available to return.
+  await Promise.race([session.firstSignal.promise, sleep(START_FIRST_SIGNAL_MS)]);
+  return startResult(session);
+}
+
+/**
+ * The OpenAI subscription runs Archon's own manual flow (`oauthProvider`
+ * undefined); every other subscription vendor needs a registered provider.
+ */
+function resolveSubscriptionProvider(providerId: string): {
+  provider: string;
+  oauthProvider: OAuthProviderInterface | undefined;
+} {
   const provider = normalizeCredentialVendor(providerId);
   // SUBSCRIPTION_PROVIDERS is the single source of truth for "connectable via
   // subscription". Gate here too so the bridge can't be driven past the
@@ -179,19 +211,31 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   if (!SUBSCRIPTION_PROVIDERS.has(provider)) {
     throw new Error(`Provider '${providerId}' does not support subscription login.`);
   }
-  const oauthProvider =
-    provider === OPENAI_SUBSCRIPTION_VENDOR ? undefined : subscriptionOAuthProviderFor(provider);
-  if (provider !== OPENAI_SUBSCRIPTION_VENDOR && !oauthProvider) {
+  if (provider === OPENAI_SUBSCRIPTION_VENDOR) return { provider, oauthProvider: undefined };
+  const oauthProvider = subscriptionOAuthProviderFor(provider);
+  if (!oauthProvider) {
     throw new Error(`Provider '${providerId}' does not support subscription login.`);
   }
-  // Hard-cancel prior in-flight logins that would collide with this one:
-  //   - same user (one login per user — the original I3 behavior), and
-  //   - same vendor when the flow binds a local fixed-port callback server
-  //     (anthropic: 53692). Two such logins can't coexist in one process, and
-  //     an abandoned one would otherwise EADDRINUSE every later start for ANY
-  //     user until restart (#1963). The newest interactive request wins; a
-  //     superseded session's user sees "session not found" on their next poll
-  //     and can simply restart — recoverable, so the heuristic is acceptable.
+  return { provider, oauthProvider };
+}
+
+/**
+ * Hard-cancel prior in-flight logins that would collide with this one:
+ *   - same user (one login per user — the original I3 behavior), and
+ *   - same vendor when the flow binds a local fixed-port callback server
+ *     (anthropic: 53692). Two such logins can't coexist in one process, and
+ *     an abandoned one would otherwise EADDRINUSE every later start for ANY
+ *     user until restart (#1963). The newest interactive request wins; a
+ *     superseded session's user sees "session not found" on their next poll
+ *     and can simply restart — recoverable, so the heuristic is acceptable.
+ * Returns the superseded sessions' settled promises so `start` can wait.
+ */
+function supersedeCollidingSessions(
+  userId: string,
+  provider: string,
+  oauthProvider: OAuthProviderInterface | undefined
+): Promise<void>[] {
+  const supersededSettled: Promise<void>[] = [];
   for (const [id, s] of sessions) {
     const callbackPortConflict =
       oauthProvider?.usesCallbackServer === true && s.provider === provider;
@@ -206,12 +250,12 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
       sessions.delete(id);
     }
   }
-  if (supersededSettled.length > 0) {
-    await Promise.race([Promise.all(supersededSettled), sleep(ABORT_SETTLE_MS)]);
-  }
-  const sessionId = randomUUID();
+  return supersededSettled;
+}
+
+function openSession(userId: string, provider: string): OAuthSession {
   const session: OAuthSession = {
-    sessionId,
+    sessionId: randomUUID(),
     userId,
     provider,
     mode: 'pending',
@@ -221,49 +265,61 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
     firstSignal: deferred<true>(),
     abort: new AbortController(),
     expiresAt: Date.now() + SESSION_TTL_MS,
-    settled: Promise.resolve(), // replaced with the real login chain below
+    settled: Promise.resolve(), // replaced with the real login chain by startOAuth
   };
   // Device flows never consume the manual-code deferred — keep its abort-path
   // rejection from surfacing as an unhandled rejection.
   session.codeDeferred.promise.catch(() => undefined);
-  sessions.set(sessionId, session);
+  sessions.set(session.sessionId, session);
+  return session;
+}
 
-  const loginPromise: Promise<DeliveryOAuthCredentials> = oauthProvider
-    ? oauthProvider.login({
-        onAuth: (info: OAuthAuthInfo) => {
-          session.url = info.url;
-          if (session.mode === 'pending') session.mode = 'manual';
-          session.firstSignal.resolve(true);
-        },
-        onDeviceCode: (info: OAuthDeviceCodeInfo) => {
-          session.userCode = info.userCode;
-          session.verificationUri = info.verificationUri;
-          session.mode = 'device';
-          session.firstSignal.resolve(true);
-        },
-        // Manual providers ask for the pasted code via onManualCodeInput; route
-        // that to the deferred the client submits through poll(code).
-        onManualCodeInput: () => session.codeDeferred.promise,
-        // Free-text/secret prompts have no interactive channel here (#2763):
-        // answering with "" takes the provider's documented blank-input default
-        // (github-copilot's enterprise-domain prompt defaults to github.com).
-        // Routing them to codeDeferred would deadlock — poll(code) only
-        // resolves once the flow reaches manual/device mode, which for
-        // github-copilot happens strictly after this prompt is answered.
-        onPrompt: async () => {
-          getLog().info({ provider }, 'oauth_bridge.prompt_defaulted');
-          return '';
-        },
-        // No interactive account picker on the web bridge — take the first option.
-        onSelect: async prompt => prompt.options[0]?.id,
-        onProgress: message => {
-          getLog().warn({ provider, message }, 'oauth_bridge.progress');
-        },
-        signal: session.abort.signal,
-      })
-    : runOpenAiManualLogin(session);
-  getLog().info({ userId, provider, sessionId, mode: session.mode }, 'oauth_bridge.login_started');
-  session.settled = loginPromise
+function runProviderLogin(
+  session: OAuthSession,
+  oauthProvider: OAuthProviderInterface
+): Promise<DeliveryOAuthCredentials> {
+  const { provider } = session;
+  return oauthProvider.login({
+    onAuth: (info: OAuthAuthInfo) => {
+      session.url = info.url;
+      if (session.mode === 'pending') session.mode = 'manual';
+      session.firstSignal.resolve(true);
+    },
+    onDeviceCode: (info: OAuthDeviceCodeInfo) => {
+      session.userCode = info.userCode;
+      session.verificationUri = info.verificationUri;
+      session.mode = 'device';
+      session.firstSignal.resolve(true);
+    },
+    // Manual providers ask for the pasted code via onManualCodeInput; route
+    // that to the deferred the client submits through poll(code).
+    onManualCodeInput: () => session.codeDeferred.promise,
+    // Free-text/secret prompts have no interactive channel here (#2763):
+    // answering with "" takes the provider's documented blank-input default
+    // (github-copilot's enterprise-domain prompt defaults to github.com).
+    // Routing them to codeDeferred would deadlock — poll(code) only
+    // resolves once the flow reaches manual/device mode, which for
+    // github-copilot happens strictly after this prompt is answered.
+    onPrompt: async () => {
+      getLog().info({ provider }, 'oauth_bridge.prompt_defaulted');
+      return '';
+    },
+    // No interactive account picker on the web bridge — take the first option.
+    onSelect: async prompt => prompt.options[0]?.id,
+    onProgress: message => {
+      getLog().warn({ provider, message }, 'oauth_bridge.progress');
+    },
+    signal: session.abort.signal,
+  });
+}
+
+/** Persist a successful login and fold every failure into session state; never rejects. */
+function settleLogin(
+  session: OAuthSession,
+  loginPromise: Promise<DeliveryOAuthCredentials>
+): Promise<void> {
+  const { userId, provider } = session;
+  return loginPromise
     .then(async (creds: DeliveryOAuthCredentials) => {
       await persistProviderOAuth(userId, provider, creds);
       session.status = 'connected';
@@ -290,10 +346,10 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
         'oauth_bridge.login_failed'
       );
     });
+}
 
-  // Wait for the first callback so the URL / user-code is available to return.
-  await Promise.race([session.firstSignal.promise, sleep(START_FIRST_SIGNAL_MS)]);
-
+function startResult(session: OAuthSession): StartOAuthResult {
+  const { sessionId } = session;
   // An early login() failure → throw (route returns 500, CLI prints the message)
   // rather than returning a misleading { mode:'manual', url:undefined } (I1).
   if (session.status === 'error') {
