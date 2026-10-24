@@ -437,7 +437,6 @@ export function registerRunGateRoutes(
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
-      // A race lost after the pre-check above: the run moved to another pause meanwhile.
       if (error instanceof StaleGateAnswerError) return apiError(c, 409, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_respond_failed');
       return apiError(c, 500, 'Failed to respond to workflow run');
