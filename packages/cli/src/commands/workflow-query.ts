@@ -1,3 +1,4 @@
+import { writeWaitOutcome } from './workflow-wait-output';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -46,7 +47,6 @@ import {
 } from './workflow-transcript';
 import {
   printStatusRun,
-  formatWaitOutcome,
   announceWaitAttached,
   type LeaveBehind,
   buildLeaveBehind,
@@ -402,29 +402,8 @@ export async function workflowWaitCommand(
     throw new Error(`Failed to wait for workflow run: ${err.message}`);
   }
 
-  if (result.kind === 'not_found') {
-    if (json) {
-      await writeJsonLine({ ok: false, runId, action: 'wait', error: 'not_found' });
-    } else {
-      console.log(formatWaitOutcome(resolvedId, result));
-    }
-    return 1;
-  }
-
-  if (json) {
-    await writeJsonLine({
-      ok: true,
-      action: 'wait',
-      runId: resolvedId,
-      result: result.kind,
-      ...(result.kind === 'attention' ? { attention: result.attention } : {}),
-      ...(result.kind === 'deadline' || result.kind === 'owner_lost'
-        ? { observedStatus: result.observedStatus }
-        : {}),
-    });
-  } else {
-    console.log(formatWaitOutcome(resolvedId, result));
-  }
+  await writeWaitOutcome(runId, resolvedId, result, json);
+  if (result.kind === 'not_found') return 1;
 
   // 3 keeps "the run is still live" distinguishable from both a real answer (0) and a
   // broken wait (1).

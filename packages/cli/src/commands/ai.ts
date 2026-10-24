@@ -702,12 +702,7 @@ export async function aiDefaultCommand(
         );
       }
     } else {
-      await setInstallDefault(provider, model);
-      if (model) {
-        console.log(`✓ Default assistant set to '${provider}' with default model '${model}'.`);
-      } else {
-        console.log(`✓ Default assistant set to '${provider}'.`);
-      }
+      await setAndReportInstallDefault(provider, model);
     }
     const notice = getRegistration(provider).deprecationNotice;
     if (notice) console.log(`! ${notice}`);
@@ -765,5 +760,17 @@ export async function aiCapacityReleaseCommand(attemptId: string | undefined): P
         `Provider attempt ${attemptId} belongs to a process still running on this host; it was not released.`
       );
       return 1;
+  }
+}
+
+async function setAndReportInstallDefault(
+  provider: string,
+  model: string | undefined
+): Promise<void> {
+  await setInstallDefault(provider, model);
+  if (model) {
+    console.log(`✓ Default assistant set to '${provider}' with default model '${model}'.`);
+  } else {
+    console.log(`✓ Default assistant set to '${provider}'.`);
   }
 }
