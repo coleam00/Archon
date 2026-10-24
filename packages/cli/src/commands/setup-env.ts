@@ -274,23 +274,7 @@ function serializeEnvDocument(document: EnvLine[]): string {
     }
     const [key, value] = entry;
     entries[key] = value;
-    const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-    const candidates: string[] = [];
-    // Prefer quoted forms for leading quotes, which can consume later entries.
-    if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
-    for (const [quote, contents] of [
-      ['"', encodedLineBreaks],
-      ["'", value],
-      ['`', value],
-    ]) {
-      if (!contents.replaceAll(`\\${quote}`, '').includes(quote)) {
-        candidates.push(`${key}=${quote}${contents}${quote}`);
-      }
-    }
-    candidates.push(`${key}=${value}`);
-    const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
-    if (line === undefined)
-      throw new Error(`Cannot serialize env key ${key} without changing its value`);
+    const line = serializeEnvEntry(key, value);
     // An unmatched opening quote can close in a later entry, even in a comment.
     // Put values requiring this bare representation after the rest of the document.
     if (/^["'`]/.test(value) && line === `${key}=${value}`) trailing.push(line);
@@ -306,6 +290,27 @@ function serializeEnvDocument(document: EnvLine[]): string {
     throw new Error('Cannot serialize env without changing its values');
   }
   return content;
+}
+
+function serializeEnvEntry(key: string, value: string): string {
+  const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+  const candidates: string[] = [];
+  // Prefer quoted forms for leading quotes, which can consume later entries.
+  if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
+  for (const [quote, contents] of [
+    ['"', encodedLineBreaks],
+    ["'", value],
+    ['`', value],
+  ]) {
+    if (!contents.replaceAll(`\\${quote}`, '').includes(quote)) {
+      candidates.push(`${key}=${quote}${contents}${quote}`);
+    }
+  }
+  candidates.push(`${key}=${value}`);
+  const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
+  if (line === undefined)
+    throw new Error(`Cannot serialize env key ${key} without changing its value`);
+  return line;
 }
 
 /**
