@@ -302,64 +302,78 @@ export const DASHBOARD_SOURCE_EVENT_TYPES: readonly WorkflowEventType[] =
  * best-effort (the REST refetch is the source of truth).
  */
 export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
+  const timestamp = Date.now();
+  const workflowStatus = ROW_WORKFLOW_STATUS[row.event_type];
+  if (workflowStatus) return mapWorkflowStatusRow(row, workflowStatus, timestamp);
+  const approvalStatus = ROW_APPROVAL_STATUS[row.event_type];
+  if (approvalStatus) return mapApprovalRow(row, approvalStatus, timestamp);
+  const nodeStatus = ROW_NODE_STATUS[row.event_type];
+  if (nodeStatus) return mapNodeRow(row, nodeStatus, timestamp);
+  return null;
+}
+
+function mapWorkflowStatusRow(
+  row: WorkflowEventRow,
+  workflowStatus: RowWorkflowStatus,
+  timestamp: number
+): string {
   const runId = row.workflow_run_id;
   const data = row.data;
-  const timestamp = Date.now();
+  const payload: WorkflowStatusSsePayload = {
+    type: 'workflow_status',
+    runId,
+    workflowName: dataStr(data, 'workflow_name', 'workflowName') ?? '',
+    status: workflowStatus,
+    error: row.event_type === TERMINAL_RUN_EVENT_TYPE.failed ? dataStr(data, 'error') : undefined,
+    timestamp,
+  };
+  return JSON.stringify(payload);
+}
 
-  const workflowStatus = ROW_WORKFLOW_STATUS[row.event_type];
-  if (workflowStatus) {
-    const payload: WorkflowStatusSsePayload = {
-      type: 'workflow_status',
-      runId,
-      workflowName: dataStr(data, 'workflow_name', 'workflowName') ?? '',
-      status: workflowStatus,
-      error: row.event_type === TERMINAL_RUN_EVENT_TYPE.failed ? dataStr(data, 'error') : undefined,
-      timestamp,
-    };
-    return JSON.stringify(payload);
-  }
+function mapApprovalRow(
+  row: WorkflowEventRow,
+  approvalStatus: 'paused' | 'running',
+  timestamp: number
+): string {
+  const runId = row.workflow_run_id;
+  const data = row.data;
+  const payload: WorkflowStatusSsePayload = {
+    type: 'workflow_status',
+    runId,
+    workflowName: '',
+    status: approvalStatus,
+    timestamp,
+    approval:
+      approvalStatus === 'paused'
+        ? {
+            nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
+            message: dataStr(data, 'message') ?? '',
+          }
+        : undefined,
+  };
+  return JSON.stringify(payload);
+}
 
-  const approvalStatus = ROW_APPROVAL_STATUS[row.event_type];
-  if (approvalStatus) {
-    const payload: WorkflowStatusSsePayload = {
-      type: 'workflow_status',
-      runId,
-      workflowName: '',
-      status: approvalStatus,
-      timestamp,
-      approval:
-        approvalStatus === 'paused'
-          ? {
-              nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
-              message: dataStr(data, 'message') ?? '',
-            }
-          : undefined,
-    };
-    return JSON.stringify(payload);
-  }
-
-  const nodeStatus = ROW_NODE_STATUS[row.event_type];
-  if (nodeStatus) {
-    const record = readNodeRecordEvent(row);
-    const payload: DagNodeSseEvent = {
-      type: 'dag_node',
-      runId,
-      nodeId: row.step_name ?? '',
-      name: row.step_name ?? '',
-      status: nodeStatus,
-      error:
-        row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'
-          ? dataStr(data, 'error')
-          : undefined,
-      reason: row.event_type === 'node_skipped' ? dataSkipReason(data) : undefined,
-      cause: row.event_type === 'node_skipped' ? dataSkipCause(data) : undefined,
-      execution: record?.metadata,
-      timestamp,
-    };
-    return JSON.stringify(payload);
-  }
-
-  return null;
+function mapNodeRow(row: WorkflowEventRow, nodeStatus: RowNodeStatus, timestamp: number): string {
+  const runId = row.workflow_run_id;
+  const data = row.data;
+  const record = readNodeRecordEvent(row);
+  const payload: DagNodeSseEvent = {
+    type: 'dag_node',
+    runId,
+    nodeId: row.step_name ?? '',
+    name: row.step_name ?? '',
+    status: nodeStatus,
+    error:
+      row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'
+        ? dataStr(data, 'error')
+        : undefined,
+    reason: row.event_type === 'node_skipped' ? dataSkipReason(data) : undefined,
+    cause: row.event_type === 'node_skipped' ? dataSkipCause(data) : undefined,
+    execution: record?.metadata,
+    timestamp,
+  };
+  return JSON.stringify(payload);
 }
 
 export class WorkflowEventBridge {
