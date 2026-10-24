@@ -93,6 +93,58 @@ async function run(
   );
   return { code, output, stdout };
 }
+function fixtureEnvironment(home: string, mode: CredentialMode): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ARCHON_HOME: home,
+    DATABASE_URL: '',
+    ARCHON_TELEMETRY_DISABLED: '1',
+    LOG_LEVEL: 'silent',
+    GITHUB_APP_ID: mode === 'absent' ? '' : '123',
+    GITHUB_APP_PRIVATE_KEY: mode === 'absent' ? '' : privateKey,
+    GITHUB_APP_PRIVATE_KEY_PATH: '',
+    GITHUB_APP_SLUG: 'archon',
+    GITHUB_APP_INSTALLATION_ID: '',
+    GITHUB_TOKEN: '',
+    GH_TOKEN: mode === 'absent' ? 'ambient-fixture' : '',
+    WEBHOOK_SECRET: '',
+    TOKEN_ENCRYPTION_KEY: ['user', 'scrub', 'fallback'].includes(mode) ? 'ab'.repeat(32) : '',
+    GITHUB_APP_CLIENT_ID: '',
+    ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK: mode === 'fallback' ? 'true' : '',
+    ARCHON_ALLOW_ORG_PROVIDER_TOKEN_FALLBACK: 'true',
+  };
+}
+
+function bashCredentialCheck(mode: CredentialMode): string {
+  return mode === 'scrub'
+    ? '[ -z "$GH_TOKEN" ] && [ -z "$GITHUB_TOKEN" ]'
+    : mode === 'absent'
+      ? '[ "$GH_TOKEN" = "explicit-fixture" ] && [ "$GITHUB_TOKEN" = "explicit-fixture" ]'
+      : mode === 'user'
+        ? '[ "$GH_TOKEN" = "stub-user-credential" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]'
+        : '[ "${GH_TOKEN#stub-installation-}" != "$GH_TOKEN" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]';
+}
+
+function scriptCredentialCheck(mode: CredentialMode, expectedTokenFile: string): string {
+  return mode === 'scrub'
+    ? '!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN'
+    : mode === 'absent'
+      ? "process.env.GH_TOKEN === 'explicit-fixture' && process.env.GITHUB_TOKEN === 'explicit-fixture'"
+      : mode === 'user'
+        ? "process.env.GH_TOKEN === 'stub-user-credential' && process.env.GITHUB_TOKEN === process.env.GH_TOKEN"
+        : `process.env.GH_TOKEN === require('node:fs').readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8') && process.env.GITHUB_TOKEN === process.env.GH_TOKEN`;
+}
+
+function providerCredentialValue(mode: CredentialMode, expectedTokenFile: string): string {
+  return mode === 'user'
+    ? "'stub-user-credential'"
+    : mode === 'scrub'
+      ? "''"
+      : mode === 'absent'
+        ? "'explicit-fixture'"
+        : `readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8')`;
+}
+
 async function fixture(
   options: {
     wait?: 'event' | 'timer' | 'attention';
@@ -123,30 +175,51 @@ async function fixture(
   }
   const mode = options.mode ?? 'bot';
   const deliveryMode = options.mintFailure ? 'absent' : mode;
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    ARCHON_HOME: home,
-    DATABASE_URL: '',
-    ARCHON_TELEMETRY_DISABLED: '1',
-    LOG_LEVEL: 'silent',
-    GITHUB_APP_ID: mode === 'absent' ? '' : '123',
-    GITHUB_APP_PRIVATE_KEY: mode === 'absent' ? '' : privateKey,
-    GITHUB_APP_PRIVATE_KEY_PATH: '',
-    GITHUB_APP_SLUG: 'archon',
-    GITHUB_APP_INSTALLATION_ID: '',
-    GITHUB_TOKEN: '',
-    GH_TOKEN: mode === 'absent' ? 'ambient-fixture' : '',
-    WEBHOOK_SECRET: '',
-    TOKEN_ENCRYPTION_KEY: ['user', 'scrub', 'fallback'].includes(mode) ? 'ab'.repeat(32) : '',
-    GITHUB_APP_CLIENT_ID: '',
-    ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK: mode === 'fallback' ? 'true' : '',
-    ARCHON_ALLOW_ORG_PROVIDER_TOKEN_FALLBACK: 'true',
-  };
+  const env = fixtureEnvironment(home, mode);
   // The loader distinguishes an absent optional ID from an explicitly invalid one.
   // The entry removes only this test's suppressed empty value after Bun loads env.
   const source = (p: string): string => JSON.stringify(join(repo, p));
   const providerEntry = join(root, 'provider.ts');
   const expectedTokenFile = join(root, 'expected-token');
+  const writeWorkflowFixture = () => {
+    const check = bashCredentialCheck(deliveryMode);
+    const scriptCheck = scriptCredentialCheck(deliveryMode, expectedTokenFile);
+    writeFileSync(
+      join(project, '.archon/workflows/app.yaml'),
+      `name: app
+description: CLI App credential delivery
+provider: claude
+nodes:
+  - id: bash
+    bash: |
+      ${check} || exit 41
+      echo bash >> '${marker.replaceAll('\\', '/')}'
+${options.fail ? '  - id: refuse\n    depends_on: [bash]\n    bash: test -f allow\n' : ''}${
+  options.wait
+    ? `  - id: pause
+    depends_on: [bash]
+    wait:
+${
+  options.wait === 'attention'
+    ? '      attention: Decide\n      form: message'
+    : options.wait === 'event'
+      ? '      event: ready\n      deadline_ms: 60000'
+      : '      duration_ms: 1000'
+}
+`
+    : ''
+}  - id: script
+    depends_on: [${options.wait ? 'pause' : options.fail ? 'refuse' : 'bash'}]
+    runtime: bun
+    script: |
+      if (!(${scriptCheck})) throw new Error('Script credential delivery failed');
+      require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'script\\n');
+  - id: ai
+    depends_on: [script]
+    prompt: Verify delivery.
+`
+    );
+  };
   writeFileSync(
     providerEntry,
     `
@@ -160,7 +233,7 @@ await serveProvider({
     getCapabilities: () => claudeDescriptor.capabilities,
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
     async *sendQuery(_prompt, _cwd, _session, options) {
-      const expected = ${deliveryMode === 'user' ? "'stub-user-credential'" : deliveryMode === 'scrub' ? "''" : deliveryMode === 'absent' ? "'explicit-fixture'" : `readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8')`};
+      const expected = ${providerCredentialValue(deliveryMode, expectedTokenFile)};
       if (options?.env?.GH_TOKEN !== expected || options?.env?.GITHUB_TOKEN !== expected) throw new Error('AI credential delivery failed');
       if (${deliveryMode !== 'absent'} && !['GH_TOKEN', 'GITHUB_TOKEN'].every(key => options?.protectedEnvKeys?.includes(key))) throw new Error('Injected credentials unprotected');
       appendFileSync(${JSON.stringify(marker)}, 'ai\\n');
@@ -251,57 +324,7 @@ if (process.argv[2] === 'seed') {
 }
 `
   );
-  const check =
-    deliveryMode === 'scrub'
-      ? '[ -z "$GH_TOKEN" ] && [ -z "$GITHUB_TOKEN" ]'
-      : deliveryMode === 'absent'
-        ? '[ "$GH_TOKEN" = "explicit-fixture" ] && [ "$GITHUB_TOKEN" = "explicit-fixture" ]'
-        : deliveryMode === 'user'
-          ? '[ "$GH_TOKEN" = "stub-user-credential" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]'
-          : '[ "${GH_TOKEN#stub-installation-}" != "$GH_TOKEN" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]';
-  const scriptCheck =
-    deliveryMode === 'scrub'
-      ? '!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN'
-      : deliveryMode === 'absent'
-        ? "process.env.GH_TOKEN === 'explicit-fixture' && process.env.GITHUB_TOKEN === 'explicit-fixture'"
-        : deliveryMode === 'user'
-          ? "process.env.GH_TOKEN === 'stub-user-credential' && process.env.GITHUB_TOKEN === process.env.GH_TOKEN"
-          : `process.env.GH_TOKEN === require('node:fs').readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8') && process.env.GITHUB_TOKEN === process.env.GH_TOKEN`;
-  writeFileSync(
-    join(project, '.archon/workflows/app.yaml'),
-    `name: app
-description: CLI App credential delivery
-provider: claude
-nodes:
-  - id: bash
-    bash: |
-      ${check} || exit 41
-      echo bash >> '${marker.replaceAll('\\', '/')}'
-${options.fail ? '  - id: refuse\n    depends_on: [bash]\n    bash: test -f allow\n' : ''}${
-  options.wait
-    ? `  - id: pause
-    depends_on: [bash]
-    wait:
-${
-  options.wait === 'attention'
-    ? '      attention: Decide\n      form: message'
-    : options.wait === 'event'
-      ? '      event: ready\n      deadline_ms: 60000'
-      : '      duration_ms: 1000'
-}
-`
-    : ''
-}  - id: script
-    depends_on: [${options.wait ? 'pause' : options.fail ? 'refuse' : 'bash'}]
-    runtime: bun
-    script: |
-      if (!(${scriptCheck})) throw new Error('Script credential delivery failed');
-      require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'script\\n');
-  - id: ai
-    depends_on: [script]
-    prompt: Verify delivery.
-`
-  );
+  writeWorkflowFixture();
   writeFileSync(
     join(project, '.archon/config.yaml'),
     'assistant: claude\nenv:\n  GH_TOKEN: explicit-fixture\n  GITHUB_TOKEN: explicit-fixture\n' +
