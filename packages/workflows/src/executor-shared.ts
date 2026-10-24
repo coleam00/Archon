@@ -300,18 +300,7 @@ export function formatSubprocessFailure(
   // fallback diagnostic. Actual process output belongs to stdout and stderr.
   const hasCommandFailedPrefix = err.commandFailed || rawMessage.startsWith('Command failed:');
 
-  // Well-behaved scripts print failure context to stdout, so both streams share
-  // the cap. stderr keeps budget priority; the leftover goes to stdout, and each
-  // stream is labelled only when both are present. The budget accounts for the
-  // label overhead so the joined diagnostic never truncates away a label.
-  const bothPresent = stderr.length > 0 && stdout.length > 0;
-  const labelsOverhead = bothPresent ? STDERR_LABEL.length + STDOUT_LABEL.length : 0;
-  const halfCap = Math.floor(SUBPROCESS_ERROR_MAX_CHARS / 2);
-  const stderrTail = streamTail(stderr, bothPresent ? halfCap : SUBPROCESS_ERROR_MAX_CHARS);
-  const stdoutTail = streamTail(
-    stdout,
-    SUBPROCESS_ERROR_MAX_CHARS - labelsOverhead - (stderrTail?.length ?? 0)
-  );
+  const { stderrTail, stdoutTail } = subprocessStreamTails(stderr, stdout);
 
   const diagnostic = subprocessDiagnostic(
     stderrTail,
@@ -342,6 +331,23 @@ export function formatSubprocessFailure(
       stdoutTail,
     },
   };
+}
+
+function subprocessStreamTails(stderr: string, stdout: string) {
+  // Well-behaved scripts print failure context to stdout, so both streams share
+  // the cap. stderr keeps budget priority; the leftover goes to stdout, and each
+  // stream is labelled only when both are present. The budget accounts for the
+  // label overhead so the joined diagnostic never truncates away a label.
+  const bothPresent = stderr.length > 0 && stdout.length > 0;
+  const labelsOverhead = bothPresent ? STDERR_LABEL.length + STDOUT_LABEL.length : 0;
+  const halfCap = Math.floor(SUBPROCESS_ERROR_MAX_CHARS / 2);
+  const stderrTail = streamTail(stderr, bothPresent ? halfCap : SUBPROCESS_ERROR_MAX_CHARS);
+  const stdoutTail = streamTail(
+    stdout,
+    SUBPROCESS_ERROR_MAX_CHARS - labelsOverhead - (stderrTail?.length ?? 0)
+  );
+
+  return { stderrTail, stdoutTail };
 }
 
 // ─── Completion Signal Detection ────────────────────────────────────────────
