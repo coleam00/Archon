@@ -306,21 +306,8 @@ describe('dedicated gate answers with expectedGate', () => {
     }
   );
 
-  test.each([
-    'approve',
-    'terminal reject',
-    'writeback reject',
-    'rework reject',
-    'declared reject',
-    'custom response',
-    'attention approve',
-    'attention reject',
-  ])('%s preserves conflict after a lost write even if the diagnostic read fails', async mode => {
-    const attention = mode.startsWith('attention');
-    const route =
-      mode === 'custom response' ? 'respond' : mode.endsWith('reject') ? 'reject' : 'approve';
-    const expectedGate = { nodeId: attention ? 'ask' : 'review-gate', pauseId: 'pause-current' };
-    const run = attention
+  function lostWriteRun(mode: string, expectedGate: { nodeId: string; pauseId: string }) {
+    return mode.startsWith('attention')
       ? attentionRun(expectedGate.pauseId)
       : {
           ...MOCK_PAUSED_RUN,
@@ -339,6 +326,23 @@ describe('dedicated gate answers with expectedGate', () => {
             },
           },
         };
+  }
+
+  test.each([
+    'approve',
+    'terminal reject',
+    'writeback reject',
+    'rework reject',
+    'declared reject',
+    'custom response',
+    'attention approve',
+    'attention reject',
+  ])('%s preserves conflict after a lost write even if the diagnostic read fails', async mode => {
+    const attention = mode.startsWith('attention');
+    const route =
+      mode === 'custom response' ? 'respond' : mode.endsWith('reject') ? 'reject' : 'approve';
+    const expectedGate = { nodeId: attention ? 'ask' : 'review-gate', pauseId: 'pause-current' };
+    const run = lostWriteRun(mode, expectedGate);
     mockAnswerAttentionWait.mockClear();
     mockGetWorkflowRun
       .mockResolvedValueOnce(run)

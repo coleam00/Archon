@@ -1008,6 +1008,15 @@ describe('ContainerBackend.resumeEnv', () => {
     const store = fakeStore();
     const row = seedContainerRow(store);
     let runs = 0;
+    function inspectOutput(args: string[]): string {
+      return args.includes('{{json .Config.Env}}')
+        ? JSON.stringify(['ARCHON_OVERLAY_MODE=native'])
+        : args.includes('{{.Id}}')
+          ? 'cid-2\n'
+          : args.includes('{{.State.ExitCode}}')
+            ? '78\n'
+            : 'false\n';
+    }
     const docker = fakeDocker(args => {
       if (args[0] === 'container')
         return {
@@ -1019,13 +1028,7 @@ describe('ContainerBackend.resumeEnv', () => {
       if (args[0] === 'exec' && runs === 1) throw new IsolationFailure('unclassified', 'not ready');
       if (args[0] === 'inspect')
         return {
-          stdout: args.includes('{{json .Config.Env}}')
-            ? JSON.stringify(['ARCHON_OVERLAY_MODE=native'])
-            : args.includes('{{.Id}}')
-              ? 'cid-2\n'
-              : args.includes('{{.State.ExitCode}}')
-                ? '78\n'
-                : 'false\n',
+          stdout: inspectOutput(args),
           stderr: '',
         };
       return { stdout: '', stderr: '' };
@@ -1054,6 +1057,19 @@ describe('ContainerBackend.resumeEnv', () => {
           let containerId: string | undefined;
           let activeMode = 'fuse';
           let runs = 0;
+          function inspectOutput(args: string[]): string {
+            return args.includes('{{json .Config.Env}}')
+              ? JSON.stringify([`ARCHON_OVERLAY_MODE=${activeMode}`])
+              : args.includes('{{.Id}}')
+                ? (containerId ?? '')
+                : args.includes('{{.State.ExitCode}}')
+                  ? '78'
+                  : 'false';
+          }
+          function removeContainer(): void {
+            if (cleanupFails && activeMode === mode) throw cleanupError;
+            containerId = undefined;
+          }
           const docker = fakeDocker(args => {
             if (args[0] === 'container')
               return {
@@ -1070,18 +1086,11 @@ describe('ContainerBackend.resumeEnv', () => {
               throw new IsolationFailure('unclassified', 'not ready');
             if (args[0] === 'inspect')
               return {
-                stdout: args.includes('{{json .Config.Env}}')
-                  ? JSON.stringify([`ARCHON_OVERLAY_MODE=${activeMode}`])
-                  : args.includes('{{.Id}}')
-                    ? (containerId ?? '')
-                    : args.includes('{{.State.ExitCode}}')
-                      ? '78'
-                      : 'false',
+                stdout: inspectOutput(args),
                 stderr: '',
               };
             if (args[0] === 'rm') {
-              if (cleanupFails && activeMode === mode) throw cleanupError;
-              containerId = undefined;
+              removeContainer();
             }
             return { stdout: '', stderr: '' };
           });
