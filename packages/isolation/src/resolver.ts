@@ -110,6 +110,86 @@ async function resolveCanonicalPath(
   }
 }
 
+type CreatedEnvironment = Awaited<ReturnType<IIsolationProvider['create']>>;
+
+function newIsolationRequest(
+  codebase: ResolveRequest['codebase'] & object,
+  workflowType: IsolationWorkflowType,
+  workflowId: string,
+  hints: IsolationHints | undefined,
+  canonicalPath: RepoPath
+): IsolationRequest {
+  const baseRequest = {
+    codebaseId: codebase.id,
+    codebaseName: codebase.name,
+    canonicalRepoPath: canonicalPath,
+    baseBranch: codebase.defaultBranch ?? undefined,
+    identifier: workflowId,
+  };
+  if (workflowType === 'pr') {
+    return {
+      ...baseRequest,
+      workflowType: 'pr' as const,
+      prBranch: hints?.prBranch ?? toBranchName(`pr-${workflowId}`),
+      prSha: hints?.prSha,
+      isForkPR: hints?.isForkPR ?? false,
+    };
+  }
+  if (workflowType === 'task') {
+    return { ...baseRequest, workflowType: 'task' as const, taskBranch: hints?.taskBranch };
+  }
+  return { ...baseRequest, workflowType };
+}
+
+/** Turn a known creation failure into a blocked resolution; rethrow any other error. */
+function blockedCreation(
+  error: unknown,
+  codebase: ResolveRequest['codebase'] & object
+): IsolationResolution {
+  const err = error instanceof Error ? error : new Error(String(error));
+
+  if (!isKnownIsolationError(err)) {
+    // Unknown errors (programming bugs, unexpected failures) should propagate
+    // so they appear in logs as crashes, not as silent "workspace blocked" messages.
+    throw err;
+  }
+
+  const userMessage = classifyIsolationError(err);
+  getLog().error(
+    {
+      err,
+      errorType: err.constructor.name,
+      codebaseId: codebase.id,
+      codebaseName: codebase.name,
+    },
+    'isolation_creation_failed'
+  );
+
+  return {
+    status: 'blocked',
+    reason: 'creation_failed',
+    userMessage:
+      userMessage +
+      ' Execution blocked to prevent changes to shared codebase. Please resolve the issue and try again.',
+  };
+}
+
+function creationMethod(
+  isolatedEnv: CreatedEnvironment,
+  canonicalPath: RepoPath
+): ResolvedIsolation['method'] {
+  if (isolatedEnv.metadata.provenance !== 'created') return { type: 'provider_adoption' };
+  return {
+    type: 'created',
+    creationId: isolatedEnv.metadata.creationId,
+    canonicalRepoPath: canonicalPath,
+    branchCreated: isolatedEnv.metadata.branchCreated,
+    ...(isolatedEnv.metadata.cutFromCommit !== undefined
+      ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
+      : {}),
+  };
+}
+
 /**
  * Resolves which isolation environment to use for a conversation.
  *
@@ -506,68 +586,20 @@ export class IsolationResolver {
     userId: string | undefined,
     setupExecutor?: WorktreeSetupExecutor
   ): Promise<IsolationResolution> {
-    // Construct request based on workflow type
-    const baseRequest = {
-      codebaseId: codebase.id,
-      codebaseName: codebase.name,
-      canonicalRepoPath: canonicalPath,
-      baseBranch: codebase.defaultBranch ?? undefined,
-      identifier: workflowId,
-    };
-
-    let isolationRequest: IsolationRequest;
-    if (workflowType === 'pr') {
-      isolationRequest = {
-        ...baseRequest,
-        workflowType: 'pr' as const,
-        prBranch: hints?.prBranch ?? toBranchName(`pr-${workflowId}`),
-        prSha: hints?.prSha,
-        isForkPR: hints?.isForkPR ?? false,
-      };
-    } else if (workflowType === 'task') {
-      isolationRequest = {
-        ...baseRequest,
-        workflowType: 'task' as const,
-        taskBranch: hints?.taskBranch,
-      };
-    } else {
-      isolationRequest = {
-        ...baseRequest,
-        workflowType,
-      };
-    }
+    const isolationRequest = newIsolationRequest(
+      codebase,
+      workflowType,
+      workflowId,
+      hints,
+      canonicalPath
+    );
 
     const registrationsBeforeCreation = await this.store.listActive();
-    let isolatedEnv: Awaited<ReturnType<typeof this.provider.create>>;
+    let isolatedEnv: CreatedEnvironment;
     try {
       isolatedEnv = await this.provider.create(isolationRequest, setupExecutor);
     } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-
-      if (!isKnownIsolationError(err)) {
-        // Unknown errors (programming bugs, unexpected failures) should propagate
-        // so they appear in logs as crashes, not as silent "workspace blocked" messages.
-        throw err;
-      }
-
-      const userMessage = classifyIsolationError(err);
-      getLog().error(
-        {
-          err,
-          errorType: err.constructor.name,
-          codebaseId: codebase.id,
-          codebaseName: codebase.name,
-        },
-        'isolation_creation_failed'
-      );
-
-      return {
-        status: 'blocked',
-        reason: 'creation_failed',
-        userMessage:
-          userMessage +
-          ' Execution blocked to prevent changes to shared codebase. Please resolve the issue and try again.',
-      };
+      return blockedCreation(error, codebase);
     }
 
     const env = await registerWorktree(
@@ -591,18 +623,7 @@ export class IsolationResolver {
       status: 'resolved',
       env,
       cwd: env.working_path,
-      method:
-        isolatedEnv.metadata.provenance === 'created'
-          ? {
-              type: 'created',
-              creationId: isolatedEnv.metadata.creationId,
-              canonicalRepoPath: canonicalPath,
-              branchCreated: isolatedEnv.metadata.branchCreated,
-              ...(isolatedEnv.metadata.cutFromCommit !== undefined
-                ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
-                : {}),
-            }
-          : { type: 'provider_adoption' },
+      method: creationMethod(isolatedEnv, canonicalPath),
       ...(isolatedEnv.warnings?.length ? { warnings: isolatedEnv.warnings } : {}),
     };
   }

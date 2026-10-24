@@ -333,6 +333,52 @@ export async function startRunLiveOwner(
 
     let request = '';
     let phase: 'request' | 'watching' | 'lease' | 'terminating' = 'request';
+    const startWatching = (): void => {
+      phase = 'watching';
+      watcherSockets.add(socket);
+      socket.setTimeout(0);
+      socket.write(WATCH_READY);
+    };
+    const offerStopLease = (detachedProcessPid: number): void => {
+      phase = 'lease';
+      stopSockets.add(socket);
+      socket.setTimeout(RUN_LIVE_OWNER_IPC_TIMEOUT_MS, () => socket.destroy());
+      // `JSON.stringify` drops an unclaimed (undefined) job, so POSIX frames carry none.
+      socket.write(
+        stopResponseFrame({
+          kind: 'detached',
+          pid: detachedProcessPid,
+          windowsJob: currentWindowsRunJob(),
+        })
+      );
+    };
+    const beginTermination = (): void => {
+      phase = 'terminating';
+      socket.setTimeout(0);
+      for (const watcher of watcherSockets) watcher.write(CONTROL_HANDOFF);
+      prepareStop(socket);
+    };
+    /** Answer one request frame. False once the socket is finished with. */
+    const handleFrame = (frame: string): boolean => {
+      if (phase === 'request' && frame === WATCH_REQUEST) {
+        startWatching();
+        return true;
+      }
+      if (phase === 'request' && frame === STOP_REQUEST) {
+        if (options.detachedProcessPid === undefined) {
+          socket.end(stopResponseFrame({ kind: 'unsupported' }));
+          return false;
+        }
+        offerStopLease(options.detachedProcessPid);
+        return true;
+      }
+      if (phase === 'lease' && frame === TERMINATE_REQUEST) {
+        beginTermination();
+        return true;
+      }
+      socket.destroy();
+      return false;
+    };
     socket.on('data', chunk => {
       request += chunk;
       if (Buffer.byteLength(request) > MAX_MESSAGE_BYTES) {
@@ -343,36 +389,7 @@ export async function startRunLiveOwner(
       while (newline !== -1) {
         const frame = request.slice(0, newline + 1);
         request = request.slice(newline + 1);
-        if (phase === 'request' && frame === WATCH_REQUEST) {
-          phase = 'watching';
-          watcherSockets.add(socket);
-          socket.setTimeout(0);
-          socket.write(WATCH_READY);
-        } else if (phase === 'request' && frame === STOP_REQUEST) {
-          if (options.detachedProcessPid === undefined) {
-            socket.end(stopResponseFrame({ kind: 'unsupported' }));
-            return;
-          }
-          phase = 'lease';
-          stopSockets.add(socket);
-          socket.setTimeout(RUN_LIVE_OWNER_IPC_TIMEOUT_MS, () => socket.destroy());
-          // `JSON.stringify` drops an unclaimed (undefined) job, so POSIX frames carry none.
-          socket.write(
-            stopResponseFrame({
-              kind: 'detached',
-              pid: options.detachedProcessPid,
-              windowsJob: currentWindowsRunJob(),
-            })
-          );
-        } else if (phase === 'lease' && frame === TERMINATE_REQUEST) {
-          phase = 'terminating';
-          socket.setTimeout(0);
-          for (const watcher of watcherSockets) watcher.write(CONTROL_HANDOFF);
-          prepareStop(socket);
-        } else {
-          socket.destroy();
-          return;
-        }
+        if (!handleFrame(frame)) return;
         newline = request.indexOf('\n');
       }
     });
