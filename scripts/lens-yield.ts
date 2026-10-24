@@ -137,30 +137,31 @@ export async function collectFindings(
 }
 
 export function tallyLenses(files: readonly FindingsFile[]): LensTally[] {
-  const tallies = new Map<
-    string,
-    { findings: number; sole: number; blocking: number; disproved: number }
-  >();
+  const tallies = new Map<string, Omit<LensTally, 'lens'>>();
   for (const file of files) {
     for (const finding of file.findings) {
-      const lenses = [...new Set(finding.sources)];
-      // A declined finding is one the owner refused with a reason synthesis accepted:
-      // like a disproved one, it was never a valid finding to act on.
-      const disproved = finding.status === 'disproved' || finding.status === 'declined';
-      const blocking = BLOCKING.has(finding.severity.toLowerCase()) && !disproved;
-      for (const lens of lenses) {
-        const tally = tallies.get(lens) ?? { findings: 0, sole: 0, blocking: 0, disproved: 0 };
-        tally.findings += 1;
-        if (lenses.length === 1) tally.sole += 1;
-        if (blocking) tally.blocking += 1;
-        if (disproved) tally.disproved += 1;
-        tallies.set(lens, tally);
-      }
+      tallyFinding(finding, tallies);
     }
   }
   return [...tallies]
     .map(([lens, tally]) => ({ lens, ...tally }))
     .sort((a, b) => b.findings - a.findings || a.lens.localeCompare(b.lens));
+}
+
+function tallyFinding(finding: FindingRecord, tallies: Map<string, Omit<LensTally, 'lens'>>): void {
+  const lenses = [...new Set(finding.sources)];
+  // A declined finding is one the owner refused with a reason synthesis accepted:
+  // like a disproved one, it was never a valid finding to act on.
+  const disproved = finding.status === 'disproved' || finding.status === 'declined';
+  const blocking = BLOCKING.has(finding.severity.toLowerCase()) && !disproved;
+  for (const lens of lenses) {
+    const tally = tallies.get(lens) ?? { findings: 0, sole: 0, blocking: 0, disproved: 0 };
+    tally.findings += 1;
+    if (lenses.length === 1) tally.sole += 1;
+    if (blocking) tally.blocking += 1;
+    if (disproved) tally.disproved += 1;
+    tallies.set(lens, tally);
+  }
 }
 
 export function formatReport(
