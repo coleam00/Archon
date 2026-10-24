@@ -594,6 +594,29 @@ describe('run-scoped config layer (#2482)', () => {
     });
   });
 
+  it('persists sealed config on a pending pre-created run', async () => {
+    const store = makeStore();
+    const sealRunConfig = mock(() => sealedMetadata);
+    const result = await startWorkflow({
+      deps: { ...makeDeps(store), sealRunConfig },
+      options: {
+        preCreatedRun: makeRun({ id: 'pending-config-run', status: 'pending' }),
+        runConfig: {
+          source: sealedMetadata.source,
+          layer: { docsPath: 'handbook' },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    expect(sealRunConfig).toHaveBeenCalledTimes(1);
+    expect(store.updateWorkflowRun).toHaveBeenCalledWith(
+      'pending-config-run',
+      expect.objectContaining({
+        metadata: expect.objectContaining({ run_config: sealedMetadata }),
+      })
+    );
+  });
+
   it('restores the sealed layer on cold resume without caller input', async () => {
     const unsealRunConfig = mock(() => ({
       docsPath: 'handbook',

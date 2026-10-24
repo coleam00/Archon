@@ -203,33 +203,8 @@ export async function continueBlockedRun(
     return undefined;
   }
 
-  let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
-  try {
-    hydrated = await hydrateResumableRun(deps, parent);
-  } catch (err) {
-    // Nothing has been mutated yet on a pre-CAS throw (resumeWorkflowRun's CAS is
-    // hydrate's last step; a lost CAS throws WorkflowNotResumableError instead) —
-    // the parent stays 'paused' and manually resumable, so log and stand down.
-    if (err instanceof Error && err.name === 'WorkflowNotResumableError') {
-      // Benign race: a concurrent (manual or duplicate) resume won the CAS and
-      // now owns the parent. Not an error — no user-facing message (it IS resuming).
-      getLog().info(
-        { parentRunId, childRunId: trigger.childRunId },
-        'workflow.parent_auto_resume_lost_race'
-      );
-    } else {
-      getLog().error({ err: err as Error, parentRunId }, 'workflow.parent_resume_hydrate_failed');
-      await notifyStuck('preparing the parent for resume failed');
-    }
-    return undefined;
-  }
-  if (!hydrated) {
-    // A parent paused on a child_workflow or fan_out gate is always resumable (see
-    // reRunsOwnNodeOnResume), so null here is unexpected.
-    getLog().warn({ parentRunId }, 'workflow.parent_resume_nothing_to_resume');
-    await notifyStuck('the parent had no resumable state');
-    return undefined;
-  }
+  const hydrated = await prepareParentResume(deps, parent, notifyStuck, trigger.childRunId);
+  if (!hydrated) return undefined;
 
   getLog().info(
     { parentRunId, childRunId: trigger.childRunId, childStatus: trigger.childStatus },
@@ -272,6 +247,40 @@ export async function continueBlockedRun(
     });
     return { success: false, workflowRunId: parentRunId, error };
   }
+}
+
+async function prepareParentResume(
+  deps: WorkflowDeps,
+  parent: WorkflowRun,
+  notifyStuck: (reason: string) => Promise<void>,
+  childRunId: string | undefined
+): Promise<Awaited<ReturnType<typeof hydrateResumableRun>> | undefined> {
+  const parentRunId = parent.id;
+  let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
+  try {
+    hydrated = await hydrateResumableRun(deps, parent);
+  } catch (err) {
+    // Nothing has been mutated yet on a pre-CAS throw (resumeWorkflowRun's CAS is
+    // hydrate's last step; a lost CAS throws WorkflowNotResumableError instead) —
+    // the parent stays 'paused' and manually resumable, so log and stand down.
+    if (err instanceof Error && err.name === 'WorkflowNotResumableError') {
+      // Benign race: a concurrent (manual or duplicate) resume won the CAS and
+      // now owns the parent. Not an error — no user-facing message (it IS resuming).
+      getLog().info({ parentRunId, childRunId }, 'workflow.parent_auto_resume_lost_race');
+    } else {
+      getLog().error({ err: err as Error, parentRunId }, 'workflow.parent_resume_hydrate_failed');
+      await notifyStuck('preparing the parent for resume failed');
+    }
+    return undefined;
+  }
+  if (!hydrated) {
+    // A parent paused on a child_workflow or fan_out gate is always resumable (see
+    // reRunsOwnNodeOnResume), so null here is unexpected.
+    getLog().warn({ parentRunId }, 'workflow.parent_resume_nothing_to_resume');
+    await notifyStuck('the parent had no resumable state');
+    return undefined;
+  }
+  return hydrated;
 }
 
 async function resolveParentResumeWorkflow(

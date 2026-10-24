@@ -63,3 +63,45 @@ test('auto-resume propagates a published-pause error without failing the success
     resolve.mockRestore();
   }
 });
+
+test('auto-resume notifies the operator when parent hydration fails', async () => {
+  const deps = createMockDeps();
+  const run = makeWorkflowRun('parent', { status: 'paused', working_path: '/project' });
+  const workflow = resolveWorkflow({
+    name: run.workflow_name,
+    description: 'Parent',
+    nodes: [{ id: 'work', kind: 'agent', source: { kind: 'command', name: 'work' } }],
+  });
+  const resolve = spyOn(source, 'resolveContinuationWorkflow').mockResolvedValue({
+    workflow,
+    roots: liveSourceRoots('/project'),
+    workflows: [],
+    errors: [],
+  });
+  const hydrate = spyOn(resume, 'hydrateResumableRun').mockRejectedValue(
+    new Error('database unavailable')
+  );
+  const execute = spyOn(executor, 'executeWorkflow');
+  const notifyStuck = mock(async (_reason: string) => {});
+  try {
+    const result = await continueBlockedRun(
+      deps,
+      createMockPlatform(),
+      'conversation',
+      run,
+      notifyStuck,
+      { childRunId: 'child', childStatus: 'completed' }
+    );
+    expect(result).toBeUndefined();
+    expect(hydrate).toHaveBeenCalledWith(deps, run);
+    expect(notifyStuck).toHaveBeenCalledTimes(1);
+    expect(notifyStuck).toHaveBeenCalledWith('preparing the parent for resume failed');
+    expect(execute).not.toHaveBeenCalled();
+    expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(run.status).toBe('paused');
+  } finally {
+    execute.mockRestore();
+    hydrate.mockRestore();
+    resolve.mockRestore();
+  }
+});
