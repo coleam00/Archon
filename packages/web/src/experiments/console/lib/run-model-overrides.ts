@@ -41,11 +41,15 @@ export function collectRunModelOverrides(
     }
   }
 
+  return { ok: true, overrides: omitEmptyOverrides(tiers, aliases) };
+}
+
+function omitEmptyOverrides(
+  tiers: NonNullable<CollectedRunModelOverrides['tiers']>,
+  aliases: NonNullable<CollectedRunModelOverrides['aliases']>
+): CollectedRunModelOverrides {
   return {
-    ok: true,
-    overrides: {
-      ...(Object.keys(tiers).length > 0 ? { tiers } : {}),
-      ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
-    },
+    ...(Object.keys(tiers).length > 0 ? { tiers } : {}),
+    ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
   };
 }
