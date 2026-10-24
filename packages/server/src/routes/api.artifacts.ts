@@ -65,6 +65,24 @@ const listRunArtifactsRoute = createRoute({
   },
 });
 
+interface FileEntry {
+  path: string;
+  size: number;
+  modifiedAt: string;
+}
+async function readArtifactFileEntry(child: string, path: string): Promise<FileEntry | undefined> {
+  try {
+    const s = await stat(child);
+    return { path, size: s.size, modifiedAt: s.mtime.toISOString() };
+  } catch (err) {
+    // Race with deletion / permission flips: skip ENOENT / EACCES,
+    // but surface other failures rather than returning a half-list.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'EACCES') return undefined;
+    throw err;
+  }
+}
+
 export function registerArtifactRoutes(app: OpenAPIHono): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
 
@@ -120,11 +138,6 @@ export function registerArtifactRoutes(app: OpenAPIHono): void {
       return apiError(c, 400, 'Invalid artifact path');
     }
 
-    interface FileEntry {
-      path: string;
-      size: number;
-      modifiedAt: string;
-    }
     const files: FileEntry[] = [];
 
     async function walk(dir: string, rel: string): Promise<void> {
@@ -144,21 +157,8 @@ export function registerArtifactRoutes(app: OpenAPIHono): void {
         if (entry.isDirectory()) {
           await walk(child, childRel);
         } else if (entry.isFile()) {
-          try {
-            const s = await stat(child);
-            files.push({
-              path: childRel,
-              size: s.size,
-              modifiedAt: s.mtime.toISOString(),
-            });
-          } catch (err) {
-            // Race with deletion / permission flips: skip ENOENT / EACCES
-            // silently, surface anything else so we don't return a half-list
-            // with no diagnostic.
-            const code = (err as NodeJS.ErrnoException).code;
-            if (code === 'ENOENT' || code === 'EACCES') continue;
-            throw err;
-          }
+          const file = await readArtifactFileEntry(child, childRel);
+          if (file) files.push(file);
         }
       }
     }
