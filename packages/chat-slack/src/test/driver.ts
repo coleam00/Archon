@@ -43,6 +43,56 @@ export async function serveFixture(plugin: ChatPlugin): Promise<void> {
       },
     })
   );
+  const dispatchInbound = async (raw: unknown): Promise<Response> => {
+    const message = chatInboundSchema.parse(raw);
+    const handler = slack.events.get('app_mention');
+    if (!handler) throw new Error('missing Slack mention handler');
+    inboundResult = undefined;
+    await handler({
+      event: {
+        channel: message.conversationId,
+        ts: '1',
+        user: message.sender.platformUserId,
+        text: message.text,
+      },
+    });
+    if (!inboundResult) throw new Error('Slack did not dispatch inbound');
+    return Response.json(inboundResult);
+  };
+  const dispatchAction = async (raw: unknown): Promise<Response> => {
+    const { sender, ...action } = chatRunActionSchema.parse(raw);
+    // Answer and resume controls appear only on attention notices.
+    const notice = action.action === 'answer' || action.action === 'resume';
+    const actionId =
+      action.action === 'cancel'
+        ? `cancel:${action.runId}`
+        : notice
+          ? 'attention:choose:0'
+          : 'respond:0';
+    const handler = slack.actions.find(entry => entry.pattern.test(actionId));
+    if (!handler) throw new Error('missing Slack action handler');
+    actionResult = undefined;
+    await handler.handler({
+      ack: async () => {},
+      body: {
+        user: { id: sender.platformUserId },
+        channel: { id: 'fixture' },
+        message: { ts: '1' },
+      } as BlockButtonAction,
+      action: {
+        type: 'button',
+        action_id: actionId,
+        value:
+          action.action === 'cancel'
+            ? undefined
+            : notice
+              ? JSON.stringify(action)
+              : JSON.stringify({ runId: action.runId, ...action.response }),
+      } as ButtonAction,
+    });
+    if (!actionResult) throw new Error('Slack did not dispatch run action');
+    return Response.json(actionResult);
+  };
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -51,56 +101,8 @@ export async function serveFixture(plugin: ChatPlugin): Promise<void> {
       try {
         if (!started) throw new Error('fixture not started');
         const raw: unknown = await request.json();
-        if (path === '/inbound') {
-          const message = chatInboundSchema.parse(raw);
-          const handler = slack.events.get('app_mention');
-          if (!handler) throw new Error('missing Slack mention handler');
-          inboundResult = undefined;
-          await handler({
-            event: {
-              channel: message.conversationId,
-              ts: '1',
-              user: message.sender.platformUserId,
-              text: message.text,
-            },
-          });
-          if (!inboundResult) throw new Error('Slack did not dispatch inbound');
-          return Response.json(inboundResult);
-        }
-        if (path === '/action') {
-          const { sender, ...action } = chatRunActionSchema.parse(raw);
-          // Answer and resume controls appear only on attention notices.
-          const notice = action.action === 'answer' || action.action === 'resume';
-          const actionId =
-            action.action === 'cancel'
-              ? `cancel:${action.runId}`
-              : notice
-                ? 'attention:choose:0'
-                : 'respond:0';
-          const handler = slack.actions.find(entry => entry.pattern.test(actionId));
-          if (!handler) throw new Error('missing Slack action handler');
-          actionResult = undefined;
-          await handler.handler({
-            ack: async () => {},
-            body: {
-              user: { id: sender.platformUserId },
-              channel: { id: 'fixture' },
-              message: { ts: '1' },
-            } as BlockButtonAction,
-            action: {
-              type: 'button',
-              action_id: actionId,
-              value:
-                action.action === 'cancel'
-                  ? undefined
-                  : notice
-                    ? JSON.stringify(action)
-                    : JSON.stringify({ runId: action.runId, ...action.response }),
-            } as ButtonAction,
-          });
-          if (!actionResult) throw new Error('Slack did not dispatch run action');
-          return Response.json(actionResult);
-        }
+        if (path === '/inbound') return await dispatchInbound(raw);
+        if (path === '/action') return await dispatchAction(raw);
         if (path === '/malformed') {
           const reply = new Promise<unknown>(resolve => {
             malformedReply = resolve;

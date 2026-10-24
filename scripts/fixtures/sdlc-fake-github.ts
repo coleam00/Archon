@@ -97,15 +97,14 @@ function comment(row: FakeGitHubState['comments'][number]): Record<string, unkno
   };
 }
 
-function route(
+function routeIssueCollection(
   state: FakeGitHubState,
   url: URL,
   method: string,
   body: Record<string, unknown> | undefined
-): Response {
+): Response | undefined {
   const path = `${url.origin}${url.pathname}`;
   const page = Number(url.searchParams.get('page') ?? '1');
-  const pull = state.pulls[0];
   if (path === `${ROOT}/issues`) {
     if (method === 'POST' && body) {
       const number = state.issues.length + 100;
@@ -123,6 +122,16 @@ function route(
     }
     return Response.json(state.issues.slice((page - 1) * 100, page * 100));
   }
+}
+
+function routeLabels(
+  state: FakeGitHubState,
+  url: URL,
+  method: string,
+  body: Record<string, unknown> | undefined
+): Response | undefined {
+  const path = `${url.origin}${url.pathname}`;
+  const page = Number(url.searchParams.get('page') ?? '1');
   if (path === `${ROOT}/labels`) {
     if (method === 'POST' && body)
       state.labels.push({
@@ -138,6 +147,15 @@ function route(
     );
     return label ? Response.json(label) : Response.json({}, { status: 404 });
   }
+}
+
+function routeIssue(
+  state: FakeGitHubState,
+  url: URL,
+  method: string,
+  body: Record<string, unknown> | undefined
+): Response | undefined {
+  const path = `${url.origin}${url.pathname}`;
   const issue = state.issues.find(
     row =>
       path === `${ROOT}/issues/${String(row.number)}` ||
@@ -152,6 +170,16 @@ function route(
     }
     return Response.json(issue);
   }
+}
+
+function routePull(
+  state: FakeGitHubState,
+  url: URL,
+  method: string,
+  body: Record<string, unknown> | undefined
+): Response | undefined {
+  const path = `${url.origin}${url.pathname}`;
+  const pull = state.pulls[0];
   if (path === GRAPHQL && method === 'POST' && pull) {
     const mutation = String(body?.query).includes('convertPullRequestToDraft')
       ? 'convertPullRequestToDraft'
@@ -186,6 +214,16 @@ function route(
     if (method === 'PATCH' && typeof body?.body === 'string') pull.body = body.body;
     return Response.json(pull);
   }
+}
+
+function routeCommentCollection(
+  state: FakeGitHubState,
+  url: URL,
+  method: string,
+  body: Record<string, unknown> | undefined
+): Response | undefined {
+  const path = `${url.origin}${url.pathname}`;
+  const page = Number(url.searchParams.get('page') ?? '1');
   const commentsOn = /\/issues\/(\d+)\/comments$/.exec(path)?.[1];
   if (commentsOn !== undefined) {
     const on = Number(commentsOn) === 42 ? undefined : Number(commentsOn);
@@ -201,6 +239,15 @@ function route(
     const rows = state.comments.filter(row => row.issue === on);
     return Response.json(page === 1 ? rows.map(comment) : []);
   }
+}
+
+function routeComment(
+  state: FakeGitHubState,
+  url: URL,
+  method: string,
+  body: Record<string, unknown> | undefined
+): Response | undefined {
+  const path = `${url.origin}${url.pathname}`;
   const commentId = /\/issues\/comments\/(\d+)$/.exec(path)?.[1];
   if (commentId !== undefined) {
     const row = state.comments.find(entry => entry.id === Number(commentId));
@@ -208,6 +255,11 @@ function route(
     if (method === 'PATCH' && typeof body?.body === 'string') row.body = body.body;
     return Response.json(comment(row));
   }
+}
+
+function routeChecks(state: FakeGitHubState, url: URL): Response | undefined {
+  const path = `${url.origin}${url.pathname}`;
+  const page = Number(url.searchParams.get('page') ?? '1');
   if (path === `${ROOT}/actions/runs`)
     return Response.json({
       total_count: state.workflowRuns.length,
@@ -217,7 +269,24 @@ function route(
     return Response.json({ check_runs: page === 1 ? state.checkRuns : [] });
   }
   if (path === `${ROOT}/commits/${state.headSha}/statuses`) return Response.json([]);
-  return Response.json({ message: 'Not Found' }, { status: 404 });
+}
+
+function route(
+  state: FakeGitHubState,
+  url: URL,
+  method: string,
+  body: Record<string, unknown> | undefined
+): Response {
+  return (
+    routeIssueCollection(state, url, method, body) ??
+    routeLabels(state, url, method, body) ??
+    routeIssue(state, url, method, body) ??
+    routePull(state, url, method, body) ??
+    routeCommentCollection(state, url, method, body) ??
+    routeComment(state, url, method, body) ??
+    routeChecks(state, url) ??
+    Response.json({ message: 'Not Found' }, { status: 404 })
+  );
 }
 
 export function install(statePath: string): void {
