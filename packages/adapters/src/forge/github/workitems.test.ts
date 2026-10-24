@@ -34,6 +34,38 @@ function fixture(mode = 'ok') {
   const labels = [{ name: 'other', color: 'abcdef', description: 'operator' }];
   const calls: string[] = [];
   let writes = 0;
+  const issueList = (url: URL, method: string, init?: RequestInit) => {
+    if (method === 'POST') {
+      const payload = JSON.parse(String(init?.body)) as { title: string; body: string };
+      if (mode !== 'unverified') issues.push({ ...issue, ...payload });
+      if (mode === 'lost-create') throw new Error('committed but response lost');
+      return Response.json(issue, { status: 201 });
+    }
+    const page = Number(url.searchParams.get('page'));
+    return Response.json(page === 1 ? issues : []);
+  };
+  const setLabels = (init?: RequestInit) => {
+    if (mode !== 'unverified')
+      issue.labels = (JSON.parse(String(init?.body)) as { labels: string[] }).labels.map(name => ({
+        name,
+      }));
+    return Response.json(issue.labels);
+  };
+  const readIssue = () => {
+    if (mode === 'read-failed' && writes > 0) return Response.json({}, { status: 500 });
+    return issues[0] ? Response.json(issues[0]) : Response.json({}, { status: 404 });
+  };
+  const repositoryLabels = (method: string, init?: RequestInit) => {
+    if (method === 'POST' && mode !== 'unverified')
+      labels.push(JSON.parse(String(init?.body)) as (typeof labels)[number]);
+    return Response.json(labels);
+  };
+  const labelByName = (url: URL) => {
+    const label = labels.find(
+      row => row.name === decodeURIComponent(url.pathname.split('/').pop() ?? '')
+    );
+    return label ? Response.json(label) : Response.json({}, { status: 404 });
+  };
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     const path = url.origin + url.pathname;
@@ -46,36 +78,19 @@ function fixture(mode = 'ok') {
     }
     if (mode === 'lookup-failed' && method === 'GET') return Response.json({}, { status: 500 });
     if (path === `${root}/issues`) {
-      if (method === 'POST') {
-        const payload = JSON.parse(String(init?.body)) as { title: string; body: string };
-        if (mode !== 'unverified') issues.push({ ...issue, ...payload });
-        if (mode === 'lost-create') throw new Error('committed but response lost');
-        return Response.json(issue, { status: 201 });
-      }
-      const page = Number(url.searchParams.get('page'));
-      return Response.json(page === 1 ? issues : []);
+      return issueList(url, method, init);
     }
     if (path === `${root}/issues/1`) {
-      if (mode === 'read-failed' && writes > 0) return Response.json({}, { status: 500 });
-      return issues[0] ? Response.json(issues[0]) : Response.json({}, { status: 404 });
+      return readIssue();
     }
     if (path === `${root}/issues/1/labels`) {
-      if (mode !== 'unverified')
-        issue.labels = (JSON.parse(String(init?.body)) as { labels: string[] }).labels.map(
-          name => ({ name })
-        );
-      return Response.json(issue.labels);
+      return setLabels(init);
     }
     if (path === `${root}/labels`) {
-      if (method === 'POST' && mode !== 'unverified')
-        labels.push(JSON.parse(String(init?.body)) as (typeof labels)[number]);
-      return Response.json(labels);
+      return repositoryLabels(method, init);
     }
     if (path.startsWith(`${root}/labels/`)) {
-      const label = labels.find(
-        row => row.name === decodeURIComponent(url.pathname.split('/').pop() ?? '')
-      );
-      return label ? Response.json(label) : Response.json({}, { status: 404 });
+      return labelByName(url);
     }
     throw new Error(`unexpected ${path}`);
   };
@@ -288,6 +303,27 @@ function labelForge(options: { kind?: 'issue' | 'pr'; interleave?: boolean; lose
   const calls: string[] = [];
   let reads = 0;
   const bothRead = Promise.withResolvers<void>();
+  const addLabels = (init?: RequestInit) => {
+    for (const name of (JSON.parse(String(init?.body)) as { labels: string[] }).labels)
+      if (!item.labels.some(label => label.name === name)) item.labels.push({ name });
+  };
+  const writeLabels = async (url: URL, method: string, init?: RequestInit) => {
+    if (options.interleave) await bothRead.promise;
+    if (method === 'PUT' && !options.lose) {
+      const names = (JSON.parse(String(init?.body)) as { labels: string[] }).labels;
+      item.labels = names.map(name => ({ name }));
+    }
+    if (method === 'POST' && !options.lose) {
+      addLabels(init);
+    }
+    if (method === 'DELETE') {
+      const name = decodeURIComponent(url.pathname.split('/').pop() ?? '');
+      if (!item.labels.some(label => label.name === name))
+        return Response.json({ message: 'Label does not exist' }, { status: 404 });
+      if (!options.lose) item.labels = item.labels.filter(label => label.name !== name);
+    }
+    return Response.json(item.labels);
+  };
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     const path = url.origin + url.pathname;
@@ -304,22 +340,7 @@ function labelForge(options: { kind?: 'issue' | 'pr'; interleave?: boolean; lose
       return label ? Response.json(label) : Response.json({}, { status: 404 });
     }
     if (path.startsWith(`${root}/issues/1/labels`)) {
-      if (options.interleave) await bothRead.promise;
-      if (method === 'PUT' && !options.lose) {
-        const names = (JSON.parse(String(init?.body)) as { labels: string[] }).labels;
-        item.labels = names.map(name => ({ name }));
-      }
-      if (method === 'POST' && !options.lose) {
-        for (const name of (JSON.parse(String(init?.body)) as { labels: string[] }).labels)
-          if (!item.labels.some(label => label.name === name)) item.labels.push({ name });
-      }
-      if (method === 'DELETE') {
-        const name = decodeURIComponent(url.pathname.split('/').pop() ?? '');
-        if (!item.labels.some(label => label.name === name))
-          return Response.json({ message: 'Label does not exist' }, { status: 404 });
-        if (!options.lose) item.labels = item.labels.filter(label => label.name !== name);
-      }
-      return Response.json(item.labels);
+      return writeLabels(url, method, init);
     }
     throw new Error(`unexpected ${method} ${path}`);
   };
@@ -534,6 +555,18 @@ function conversationForge(options: { kind?: 'issue' | 'pr'; lose?: boolean } = 
   };
   const comments: { id: number; html_url: string; issue_url: string; body: string }[] = [];
   const calls: string[] = [];
+  const commentList = (url: URL, method: string, body: Record<string, string>) => {
+    if (method === 'GET')
+      return Response.json(url.searchParams.get('page') === '1' ? comments : []);
+    const comment = {
+      id: 900 + comments.length,
+      html_url: `https://github.com/owner/repo/issues/1#issuecomment-${String(900 + comments.length)}`,
+      issue_url: `${root}/issues/1`,
+      body: body.body,
+    };
+    if (!options.lose) comments.push(comment);
+    return Response.json(comment, { status: 201 });
+  };
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     const path = url.origin + url.pathname;
@@ -546,16 +579,7 @@ function conversationForge(options: { kind?: 'issue' | 'pr'; lose?: boolean } = 
       return Response.json(item);
     }
     if (path === `${root}/issues/1/comments`) {
-      if (method === 'GET')
-        return Response.json(url.searchParams.get('page') === '1' ? comments : []);
-      const comment = {
-        id: 900 + comments.length,
-        html_url: `https://github.com/owner/repo/issues/1#issuecomment-${String(900 + comments.length)}`,
-        issue_url: `${root}/issues/1`,
-        body: body.body,
-      };
-      if (!options.lose) comments.push(comment);
-      return Response.json(comment, { status: 201 });
+      return commentList(url, method, body);
     }
     if (path.startsWith(`${root}/issues/comments/`)) {
       const comment = comments.find(row => String(row.id) === url.pathname.split('/').pop());
