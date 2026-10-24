@@ -155,19 +155,25 @@ export function validateNodeOutputFormats(
     // compile gate below never sees one.
     const ownershipError = workflowNodeOutputFormatError(node);
     if (ownershipError !== null) return ownershipError;
-    // Only a schema the engine will enforce is worth rejecting. Where the field is
-    // inert (warned and ignored) a dangling `$ref` governs nothing and must not fail
-    // the file; the predicate derives from the ignored-field lists, so it stays true
-    // as those lists change.
-    if (isOutputFormatEnforced(node) && node.output_format !== undefined) {
-      const compileError = compileOutputSchema(node.output_format);
-      if (compileError !== null) {
-        return `Node '${node.id}' declares an output_format that cannot be compiled: ${compileError}`;
-      }
-    }
+    const schemaError = nodeOutputFormatCompileError(node);
+    if (schemaError !== null) return schemaError;
     if (isLoopGroupNode(node)) {
       const bodyError = validateNodeOutputFormats(node.loop_group.nodes);
       if (bodyError) return bodyError;
+    }
+  }
+  return null;
+}
+
+function nodeOutputFormatCompileError(node: DagNode): string | null {
+  // Only a schema the engine will enforce is worth rejecting. Where the field is
+  // inert (warned and ignored) a dangling `$ref` governs nothing and must not fail
+  // the file; the predicate derives from the ignored-field lists, so it stays true
+  // as those lists change.
+  if (isOutputFormatEnforced(node) && node.output_format !== undefined) {
+    const compileError = compileOutputSchema(node.output_format);
+    if (compileError !== null) {
+      return `Node '${node.id}' declares an output_format that cannot be compiled: ${compileError}`;
     }
   }
   return null;

@@ -406,24 +406,7 @@ export function serializeNodeOutput(
   record: NodeExecutionRecord,
   continuation: { resumed?: boolean } = {}
 ): NodeExecutionResult {
-  const common = {
-    output: record.output?.text ?? '',
-    ...(record.output?.structured !== undefined
-      ? { structuredOutput: record.output.structured }
-      : {}),
-    ...(record.output?.declaredOutputPaths !== undefined
-      ? { declaredOutputPaths: record.output.declaredOutputPaths }
-      : {}),
-    ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
-    ...(record.spend.tokens.source === 'unavailable' && record.spend.tokens.reason === 'incomplete'
-      ? { tokensUnknown: true }
-      : {}),
-    ...(record.spend.costUsd.source === 'provider' ? { costUsd: record.spend.costUsd.value } : {}),
-    ...(record.diagnostics?.loopIterations !== undefined
-      ? { loopIterations: record.diagnostics.loopIterations }
-      : {}),
-    execution: executionMetadata(record),
-  };
+  const common = nodeOutputFields(record);
   const session = record.sessionId !== undefined ? { sessionId: record.sessionId } : {};
   const lifecycle = record.lifecycle;
   switch (lifecycle.status) {
@@ -446,6 +429,27 @@ export function serializeNodeOutput(
     case 'suspended':
       return { ...common, ...session, ...continuation, state: 'running' };
   }
+}
+
+function nodeOutputFields(record: NodeExecutionRecord) {
+  return {
+    output: record.output?.text ?? '',
+    ...(record.output?.structured !== undefined
+      ? { structuredOutput: record.output.structured }
+      : {}),
+    ...(record.output?.declaredOutputPaths !== undefined
+      ? { declaredOutputPaths: record.output.declaredOutputPaths }
+      : {}),
+    ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
+    ...(record.spend.tokens.source === 'unavailable' && record.spend.tokens.reason === 'incomplete'
+      ? { tokensUnknown: true }
+      : {}),
+    ...(record.spend.costUsd.source === 'provider' ? { costUsd: record.spend.costUsd.value } : {}),
+    ...(record.diagnostics?.loopIterations !== undefined
+      ? { loopIterations: record.diagnostics.loopIterations }
+      : {}),
+    execution: executionMetadata(record),
+  };
 }
 
 /**
