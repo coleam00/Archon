@@ -322,6 +322,7 @@ describe('loop wiring', () => {
     expect(work).toContain('a green CI run on the commit you push is that full run');
     const pick = readFileSync(resolve(pack, 'loop/commands/loop-pick.md'), 'utf8');
     expect(pick).toContain('that unblocks the most other open work');
+    expect(pick).toContain('an open issue labeled `priority`');
     expect(pick).toContain('asked for no code change (only the record, the evidence, or merging the default branch) is `light`');
     expect(pick).not.toContain('lowest number first unless');
   });
