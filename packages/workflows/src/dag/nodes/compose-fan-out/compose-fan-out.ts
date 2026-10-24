@@ -1,7 +1,7 @@
 import { ParentStatusReadError } from '../../../parent-status-read';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
-import { type NodeFailureKind } from '../../../schemas/node-execution';
+import { type NodeExecutionRecord, type NodeFailureKind } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
 import { discoverWorkflowsWithConfig } from '../../../workflow-discovery';
 import { resolveWorkflowCommandContents } from '../../../workflow-discovery/command-scan';
@@ -382,12 +382,7 @@ export async function executeComposeFanOutNode(
 
   const parent = await readParentStatus(ctx, node);
   if (parent === 'stopped') {
-    return {
-      ...serializeNodeOutput(execution),
-      ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
-      ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
-      ...(tokensUnknown ? { tokensUnknown: true } : {}),
-    };
+    return interruptedFanOutResult(execution, totalCostUsd, totalTokens, tokensUnknown);
   }
 
   const joined = joinComposeOutcomes(node, fanOut.join, snapshots, outcomes);
@@ -407,4 +402,18 @@ export async function executeComposeFanOutNode(
     totalTokens,
     joined.elements
   );
+}
+
+function interruptedFanOutResult(
+  execution: NodeExecutionRecord,
+  costUsd: number | undefined,
+  tokens: TokenUsage | undefined,
+  tokensUnknown: boolean
+): NodeExecutionResult {
+  return {
+    ...serializeNodeOutput(execution),
+    ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(tokens !== undefined ? { tokens } : {}),
+    ...(tokensUnknown ? { tokensUnknown: true } : {}),
+  };
 }
