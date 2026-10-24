@@ -108,6 +108,23 @@ describe('node record serializers', () => {
     }
   });
 
+  it.each([
+    ['started', 'node_start'],
+    ['completed', 'node_complete'],
+  ] as const)('labels %s shell transcript rows as <bash>', (status, type) => {
+    const source: NodeExecutionRecord = {
+      ...record(),
+      node: { id: 'build', kind: 'exec', runtime: 'sh' },
+      lifecycle: { status },
+    };
+
+    expect(serializeNodeTranscript(source)).toMatchObject({
+      type,
+      step: 'build',
+      content: '<bash>',
+    });
+  });
+
   it('projects deferred usage without lifecycle, output or provider binding', () => {
     const source = {
       ...record(),

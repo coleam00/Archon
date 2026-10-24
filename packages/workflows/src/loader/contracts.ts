@@ -44,19 +44,26 @@ export function validateWorkflowOutcomeDeclaration(
     return `Workflow outcome_field: '${field}' cannot select composed fan-out node '${workflow.returns}' because its runtime output is an aggregate array; select a collector node with a required boolean output instead`;
   }
 
-  const schema = selectedNode.output_format;
+  return validateOutcomeFieldSchema(workflow.returns, field, selectedNode.output_format);
+}
+
+function validateOutcomeFieldSchema(
+  nodeId: string,
+  field: string,
+  schema: DagNode['output_format']
+): string | null {
   if (schema === undefined) {
-    return `Workflow outcome_field: '${field}' selects node '${workflow.returns}', but that node declares no output_format`;
+    return `Workflow outcome_field: '${field}' selects node '${nodeId}', but that node declares no output_format`;
   }
   if (schema.type !== 'object') {
-    return `Workflow outcome_field: '${field}' requires node '${workflow.returns}' output_format to declare type: object`;
+    return `Workflow outcome_field: '${field}' requires node '${nodeId}' output_format to declare type: object`;
   }
   const declared = declaredFieldsFromSchema(schema);
   if (!declared?.includes(field)) {
-    return `Workflow outcome_field: '${field}' is not declared in node '${workflow.returns}' output_format properties${declared && declared.length > 0 ? ` (declared: ${declared.join(', ')})` : ''}`;
+    return `Workflow outcome_field: '${field}' is not declared in node '${nodeId}' output_format properties${declared && declared.length > 0 ? ` (declared: ${declared.join(', ')})` : ''}`;
   }
   if (!Array.isArray(schema.required) || !schema.required.includes(field)) {
-    return `Workflow outcome_field: '${field}' must be listed in node '${workflow.returns}' output_format.required`;
+    return `Workflow outcome_field: '${field}' must be listed in node '${nodeId}' output_format.required`;
   }
   const properties = schema.properties as Record<string, unknown>;
   const property = properties[field];
@@ -65,7 +72,7 @@ export function validateWorkflowOutcomeDeclaration(
       ? (property as { type?: unknown }).type
       : undefined;
   if (propertyType !== 'boolean') {
-    return `Workflow outcome_field: '${field}' on node '${workflow.returns}' must explicitly declare type: boolean`;
+    return `Workflow outcome_field: '${field}' on node '${nodeId}' must explicitly declare type: boolean`;
   }
   return null;
 }

@@ -106,7 +106,7 @@ function resolveDryRunAuthoredOutcome(
   return typeof verdict === 'boolean' ? (verdict ? 'succeeded' : 'failed') : null;
 }
 
-export async function dryRunWorkflow(options: {
+interface DryRunOptions {
   workflow: ResolvedWorkflow;
   userMessage: string;
   cwd: string;
@@ -143,15 +143,16 @@ export async function dryRunWorkflow(options: {
    */
   config?: WorkflowConfig;
   aiProfile?: ResolvedAiProfile;
-}): Promise<DryRunResult> {
+}
+
+function createDryRunContext(options: DryRunOptions, tempRoot: string): DryRunContext {
   const assistantModels = options.config ? assistantModelDefaults(options.config) : {};
   // Same layering as the executor: declared defaults under caller-supplied values
   // (supplied wins). A workflow with no `inputs:` block keeps passthrough semantics.
   const declaredDefaults = defaultRunInputs(options.workflow.inputs);
   const inputs =
     declaredDefaults || options.inputs ? { ...declaredDefaults, ...options.inputs } : undefined;
-  const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
-  const ctx: DryRunContext = {
+  return {
     envVars: options.config?.envVars,
     protectedEnvKeys: options.config?.protectedEnvKeys,
     protectedCredentialValues: options.config?.protectedCredentialValues,
@@ -183,6 +184,11 @@ export async function dryRunWorkflow(options: {
     assistantModels,
     ...(options.aiProfile ? { aiProfile: options.aiProfile } : {}),
   };
+}
+
+export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResult> {
+  const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
+  const ctx = createDryRunContext(options, tempRoot);
   const outputs = new Map<string, NodeOutput>();
   try {
     await simulateNodes(options.workflow.plan, outputs, ctx);

@@ -624,6 +624,57 @@ function fixtureOutcomeFailure(
   return undefined;
 }
 
+function fixtureReachedFailure(
+  result: DryRunResult,
+  declaration: FixtureDeclaration
+): string | undefined {
+  if (declaration.reached === undefined) return undefined;
+  const missingReached = declaration.reached.filter(
+    nodeId =>
+      !result.trace.some(
+        entry =>
+          entry.nodeId === nodeId && (entry.state === 'completed' || entry.state === 'stubbed')
+      )
+  );
+  if (missingReached.length > 0) {
+    return `required nodes did not complete: ${missingReached.join(', ')}`;
+  }
+  return undefined;
+}
+
+function fixtureResolvedTextFailure(
+  result: DryRunResult,
+  declaration: FixtureDeclaration
+): string | undefined {
+  if (declaration['resolved-text-contains'] === undefined) return undefined;
+  for (const [nodeId, expectedText] of Object.entries(declaration['resolved-text-contains'])) {
+    const traceEntries = result.trace.filter(
+      entry =>
+        entry.nodeId === nodeId &&
+        (entry.state === 'completed' || entry.state === 'stubbed' || entry.state === 'paused')
+    );
+    if (traceEntries.length === 0) {
+      return `expected resolved text for node '${nodeId}', but it was not reached`;
+    }
+    // Line endings belong to the checkout, not to the workflow. A command file is read as
+    // raw text, so `* text=auto` gives a Windows clone CRLF inside it, while a fixture
+    // spells its expectation with `\n` escapes that stay LF everywhere. This declaration is
+    // about interpolated content, so it compares on LF alone rather than passing on Linux
+    // and failing on Windows for the same workflow. (Workflow YAML is immune: the parser
+    // normalizes line breaks in its own scalars.)
+    const expected = withLfEndings(expectedText);
+    if (
+      !traceEntries.some(
+        entry =>
+          entry.resolvedText !== undefined && withLfEndings(entry.resolvedText).includes(expected)
+      )
+    ) {
+      return `expected node '${nodeId}' resolved text to contain ${JSON.stringify(expectedText)}`;
+    }
+  }
+  return undefined;
+}
+
 async function checkFixture(
   workflowName: string,
   ws: WorkflowWithSource,
@@ -656,51 +707,10 @@ async function checkFixture(
       });
     const result = execCode ? await withExecWorkspace(options.cwd, run) : await run(options.cwd);
 
-    let failureReason = fixtureOutcomeFailure(result, parsed.declaration);
-    if (failureReason === undefined && parsed.declaration.reached !== undefined) {
-      const missingReached = parsed.declaration.reached.filter(
-        nodeId =>
-          !result.trace.some(
-            entry =>
-              entry.nodeId === nodeId && (entry.state === 'completed' || entry.state === 'stubbed')
-          )
-      );
-      if (missingReached.length > 0) {
-        failureReason = `required nodes did not complete: ${missingReached.join(', ')}`;
-      }
-    }
-    if (failureReason === undefined && parsed.declaration['resolved-text-contains'] !== undefined) {
-      for (const [nodeId, expectedText] of Object.entries(
-        parsed.declaration['resolved-text-contains']
-      )) {
-        const traceEntries = result.trace.filter(
-          entry =>
-            entry.nodeId === nodeId &&
-            (entry.state === 'completed' || entry.state === 'stubbed' || entry.state === 'paused')
-        );
-        if (traceEntries.length === 0) {
-          failureReason = `expected resolved text for node '${nodeId}', but it was not reached`;
-          break;
-        }
-        // Line endings belong to the checkout, not to the workflow. A command file is read as
-        // raw text, so `* text=auto` gives a Windows clone CRLF inside it, while a fixture
-        // spells its expectation with `\n` escapes that stay LF everywhere. This declaration is
-        // about interpolated content, so it compares on LF alone rather than passing on Linux
-        // and failing on Windows for the same workflow. (Workflow YAML is immune: the parser
-        // normalizes line breaks in its own scalars.)
-        const expected = withLfEndings(expectedText);
-        if (
-          !traceEntries.some(
-            entry =>
-              entry.resolvedText !== undefined &&
-              withLfEndings(entry.resolvedText).includes(expected)
-          )
-        ) {
-          failureReason = `expected node '${nodeId}' resolved text to contain ${JSON.stringify(expectedText)}`;
-          break;
-        }
-      }
-    }
+    let failureReason =
+      fixtureOutcomeFailure(result, parsed.declaration) ??
+      fixtureReachedFailure(result, parsed.declaration) ??
+      fixtureResolvedTextFailure(result, parsed.declaration);
     // A `trigger_rule: all_done` join tolerates its own missing stub (#2869) — it never
     // blocked this simulated outcome, so it must not block the fixture either. Only the
     // untolerated remainder still means "this fixture never verified a reached node."
