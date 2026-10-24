@@ -210,9 +210,6 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
           : frame;
       stdout.write(`${JSON.stringify(outgoing)}\n`);
     };
-    const completeTurn = (status: TurnStatus, error: TurnError | null = null): void => {
-      send(turnCompleted(status, error));
-    };
 
     // Like the real server, nothing but `initialize` is served before the client
     // acknowledges with the `initialized` notification.
@@ -221,7 +218,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       if (turn.exitCode !== undefined) close(turn.exitCode, null);
       else if (turn.completion !== null) {
         const completion = turn.completion ?? { status: 'completed' };
-        completeTurn(completion.status, completion.error ?? null);
+        send(turnCompleted(completion.status, completion.error ?? null));
       }
     };
     let callIndex = 0;
@@ -299,7 +296,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         case 'turn/interrupt':
           if (turn.ignoreInterrupt) break;
           send({ id, result: {} satisfies TurnInterruptResponse });
-          completeTurn('interrupted');
+          send(turnCompleted('interrupted'));
           break;
         case 'account/read':
           readAccount(id);
@@ -349,7 +346,6 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         return;
       }
       const id = message.id;
-      // Unknown methods still reach serveRequest's default.
       const method = message.method as Method;
       record.requests.push({ method, params: message.params as Record<string, unknown> });
       if (method !== 'initialize' && !initialized) {
@@ -384,8 +380,6 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
   spawner.processes = processes;
   return spawner;
 }
-
-// ─── Response builders ───────────────────────────────────────────────────
 
 function initializeResponse(): InitializeResponse {
   return {
