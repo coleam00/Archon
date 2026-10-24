@@ -377,7 +377,9 @@ export function isInAttentionScope(
 export type AttentionQueueOrder = { by: 'age' } | { by: 'label'; key: string };
 
 /** What a count groups by: project, or one label's value. */
-export type AttentionQueueCountBy = { by: 'project' } | { by: 'label'; key: string };
+export type AttentionQueueCountBy = {
+  [Counts in AttentionQueueCounts as Counts['by']]: Omit<Counts, 'counts'>;
+}[AttentionQueueCounts['by']];
 
 export interface AttentionQueueQuery {
   scope: AttentionQueueScope;
@@ -533,12 +535,18 @@ export function countAttentionQueue(
 ): AttentionQueueCounts {
   const selected = items.filter(item => inQuery(item, query));
   const { countBy } = query;
-  return countBy.by === 'project'
-    ? countQueueByProject(selected)
-    : countQueueByLabel(selected, countBy.key);
+  switch (countBy.by) {
+    case 'project':
+      return countQueueByProject(selected);
+    case 'label':
+      return countQueueByLabel(selected, countBy.key);
+  }
+  return countBy satisfies never;
 }
 
-function countQueueByProject(items: readonly AttentionQueueItem[]): AttentionQueueCounts {
+function countQueueByProject(
+  items: readonly AttentionQueueItem[]
+): Extract<AttentionQueueCounts, { by: 'project' }> {
   const groups = new Map<string, { project: ProjectRef | null; count: number }>();
   for (const item of items) {
     const id =
@@ -562,7 +570,7 @@ function countQueueByProject(items: readonly AttentionQueueItem[]): AttentionQue
 function countQueueByLabel(
   items: readonly AttentionQueueItem[],
   key: string
-): AttentionQueueCounts {
+): Extract<AttentionQueueCounts, { by: 'label' }> {
   const groups = new Map<string | null, number>();
   for (const item of items) {
     const value = Object.hasOwn(item.labels, key) ? (item.labels[key] ?? '') : null;
