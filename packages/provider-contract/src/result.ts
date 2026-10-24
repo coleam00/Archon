@@ -162,12 +162,7 @@ export function addResultUsage(
   if (total.tokensUnknown === true || result.tokensUnknown === true) {
     next.tokensUnknown = true;
   } else {
-    const incoming =
-      result.tokens !== undefined &&
-      Number.isFinite(result.tokens.input) &&
-      Number.isFinite(result.tokens.output)
-        ? result.tokens
-        : undefined;
+    const incoming = finiteTokenUsage(result.tokens);
     // The first result passes through untouched; merging is only for the second onward.
     const tokens =
       total.tokens === undefined || incoming === undefined
@@ -181,4 +176,10 @@ export function addResultUsage(
       : total.cost;
   if (cost !== undefined) next.cost = cost;
   return next;
+}
+
+function finiteTokenUsage(tokens: TokenUsage | undefined): TokenUsage | undefined {
+  return tokens !== undefined && Number.isFinite(tokens.input) && Number.isFinite(tokens.output)
+    ? tokens
+    : undefined;
 }

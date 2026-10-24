@@ -126,6 +126,15 @@ describe('addResultUsage', () => {
     expect(total.cost).toBeCloseTo(0.3);
   });
 
+  test.each([
+    { input: Number.NaN, output: 1 },
+    { input: 1, output: Number.POSITIVE_INFINITY },
+  ])('ignores non-finite token usage: %j', tokens => {
+    const prior = { input: 5, output: 2 };
+    expect(addResultUsage({}, { tokens })).toEqual({});
+    expect(addResultUsage({ tokens: prior }, { tokens })).toEqual({ tokens: prior });
+  });
+
   test('a non-finite cost contributes nothing', () => {
     expect(addResultUsage({ cost: 0.1 }, { cost: Number.NaN })).toEqual({ cost: 0.1 });
   });
