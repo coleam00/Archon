@@ -167,27 +167,6 @@ else {
       },
     });
 
-  /** A merge-queue read's answer; `mismatch` answers another pull request or commit. */
-  const mergeQueueRead = (mismatch: boolean): unknown => {
-    if (input.op === 'pr.merge-state') return mergeState(ref.number + (mismatch ? 1 : 0));
-    if (input.op === 'checks.commit') {
-      const asked = input.at?.kind === 'revision' ? input.at.revision : 'devsha';
-      return commitChecks(mismatch ? 'another-revision' : asked);
-    }
-    if (input.op !== 'workitem.comments') return undefined;
-    return read({
-      workitem: subject,
-      comments: [
-        {
-          id: '7',
-          author: { host: 'forge.example', id: '1', login: 'maintainer' },
-          url: `${subject.url}#issuecomment-7`,
-          body: 'private conversation comment',
-        },
-      ],
-    });
-  };
-
   /** An applied answer that does not answer the request it was sent. */
   const mismatched = (): unknown => {
     if (input.op === 'workitem.label.add') return answer(ref, { workitem: subject, labels: [] });
@@ -344,15 +323,32 @@ else {
         workitem: { ...subject, kind: 'issue' },
         bodyDigest: digest(input.body ?? ''),
       }),
-    'checks.commit': () => mergeQueueRead(false),
-    'pr.merge-state': () => mergeQueueRead(false),
-    'workitem.comments': () => mergeQueueRead(false),
+    'checks.commit': () =>
+      commitChecks(input.at?.kind === 'revision' ? input.at.revision : 'devsha'),
+    'pr.merge-state': () => mergeState(ref.number),
+    'workitem.comments': () =>
+      read({
+        workitem: subject,
+        comments: [
+          {
+            id: '7',
+            author: { host: 'forge.example', id: '1', login: 'maintainer' },
+            url: `${subject.url}#issuecomment-7`,
+            body: 'private conversation comment',
+          },
+        ],
+      }),
     'pr.edit-body': editReply,
     resolve: editReply,
     'checks.state': editReply,
     'workitem.view': editReply,
     'pr.view': editReply,
   } satisfies Record<(typeof OPS)[number], () => unknown>;
+  const mismatchedReads = new Map<string, () => unknown>([
+    ['checks.commit', () => commitChecks('another-revision')],
+    ['pr.merge-state', () => mergeState(ref.number + 1)],
+    ['workitem.comments', replies['workitem.comments']],
+  ]);
   const appliedReplies = new Map(Object.entries(replies));
   const applied = (): unknown => appliedReplies.get(input.op)?.() ?? editReply();
 
@@ -389,7 +385,7 @@ else {
       )
     );
   } else if (mode === 'mismatch') {
-    process.stdout.write(JSON.stringify(mergeQueueRead(true) ?? mismatched()));
+    process.stdout.write(JSON.stringify(mismatchedReads.get(input.op)?.() ?? mismatched()));
   } else if (mode === 'registered-case') {
     // The forge answers in the case it has registered, whatever case was asked with.
     const registered = { host: repo.host.toUpperCase(), path: repo.path.toUpperCase() };
