@@ -26,6 +26,7 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { IsolationFailure } from '../errors';
 import {
   applyOverlayChanges,
   summarizeOverlayChanges,
@@ -529,24 +530,98 @@ describe('summary script — faithful representation (M1)', () => {
 });
 
 describe('walk record producer/consumer conformance', () => {
+  const target = { volume: 'fixture', hostRoot: '/fixture', image: 'fixture' };
+  const emptySummary = {
+    added: [],
+    modified: [],
+    deleted: [],
+    symlinks: [],
+    skipped: [],
+    totalCount: 0,
+    truncated: false,
+  };
+  const emptyApply = { filesApplied: 0, filesDeleted: 0, warnings: [] };
+
   test.each([
-    { name: 'summary', script: buildSummaryScript, arities: { A: 1, M: 1, D: 1, L: 3, S: 2 } },
-    { name: 'apply', script: buildApplyScript, arities: { D: 1, K: 1, W: 1, S: 2 } },
-  ])('$name emits only records with the decoder tag and arity', ({ script, arities }) => {
-    // Check every NUL-delimited printf site, including branches requiring privileged devices.
-    const formats = [...script().matchAll(/printf '([^']*\\0)'/g)].map(match => match[1] ?? '');
-    expect(formats.length).toBeGreaterThan(0);
-    const tags = new Set<string>();
-    for (const format of formats) {
-      const [tag, ...fields] = format.replace(/\\0$/, '').split('\\t');
-      const arity = Object.entries(arities).find(([name]) => name === tag)?.[1];
-      expect(arity).toBeDefined();
-      expect(fields).toHaveLength(arity ?? -1);
-      expect(fields[0]).toBe('%s');
-      tags.add(tag ?? '');
+    {
+      name: 'summary',
+      script: buildSummaryScript,
+      decode: summarizeOverlayChanges,
+      empty: emptySummary,
+      records: [
+        { tag: 'A', fields: ['path'], expected: () => ({ added: ['path'], totalCount: 1 }) },
+        { tag: 'M', fields: ['path'], expected: () => ({ modified: ['path'], totalCount: 1 }) },
+        { tag: 'D', fields: ['path'], expected: () => ({ deleted: ['path'], totalCount: 1 }) },
+        {
+          tag: 'L',
+          fields: ['path', 'target', '1'],
+          expected: () => ({
+            symlinks: [{ path: 'path', target: 'target', escapes: true }],
+            totalCount: 1,
+          }),
+        },
+        {
+          tag: 'S',
+          fields: ['path', 'reason'],
+          expected: (fields: string[]) => ({
+            skipped: [{ path: 'path', reason: fields[1] }],
+          }),
+        },
+      ],
+    },
+    {
+      name: 'apply',
+      script: buildApplyScript,
+      decode: applyOverlayChanges,
+      empty: emptyApply,
+      records: [
+        { tag: 'D', fields: ['path'], completed: 1, expected: () => ({ filesDeleted: 1 }) },
+        { tag: 'K', fields: ['path'], completed: 1, expected: () => ({ filesApplied: 1 }) },
+        { tag: 'W', fields: ['path'], completed: 1, expected: () => ({ filesApplied: 1 }) },
+        {
+          tag: 'S',
+          fields: ['path', 'reason'],
+          completed: 0,
+          expected: (fields: string[]) => ({
+            warnings: [`skipped path: ${fields[1]}`],
+          }),
+        },
+      ],
+    },
+  ])(
+    '$name decodes every emitted format with its actual tag, arity and meaning',
+    async ({ script, decode, empty, records }) => {
+      // Inspect every printf, including branches requiring privileged devices, then
+      // pass its record through the public reader rather than a second parser alone.
+      const formats = [...script().matchAll(/printf '([^']*\\0)'/g)].map(match => match[1] ?? '');
+      expect(formats.length).toBeGreaterThan(0);
+      const tags = new Set<string>();
+      for (const format of formats) {
+        const [tag, ...slots] = format.replace(/\\0$/, '').split('\\t');
+        const record = records.find(record => record.tag === tag);
+        if (!record) throw new Error(`No decoder expectation for ${format}`);
+        expect(slots).toHaveLength(record.fields.length);
+        expect(slots[0]).toBe('%s');
+        const fields = slots.map((slot, index) => (slot === '%s' ? record.fields[index] : slot));
+        const stdout = [tag, ...fields].join('\t') + '\0';
+        expect(await decode(async () => ({ stdout, stderr: '' }), target)).toEqual({
+          ...empty,
+          ...record.expected(fields.map(field => field ?? '')),
+        });
+        if ('completed' in record) {
+          const cause = Object.assign(new Error('apply failed'), { stdout });
+          const failure = new IsolationFailure('unclassified', 'apply failed', cause);
+          await expect(
+            applyOverlayChanges(async () => {
+              throw failure;
+            }, target)
+          ).rejects.toThrow(`${record.completed} path(s) confirmed completed`);
+        }
+        tags.add(tag ?? '');
+      }
+      expect([...tags].sort()).toEqual(records.map(record => record.tag).sort());
     }
-    expect([...tags].sort()).toEqual(Object.keys(arities).sort());
-  });
+  );
 
   test.skipIf(isWin)('decodes every record family emitted by both actual scripts', async () => {
     const { upper, dest, ws } = makeDirs();
