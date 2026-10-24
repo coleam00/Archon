@@ -29,7 +29,11 @@ import type { WorkflowEventBridge } from './web/workflow-bridge';
 const mockAddMessage = mock<
   (...args: Parameters<typeof import('@archon/core/db/messages')['addMessage']>) => Promise<void>
 >(async () => {});
-mock.module('@archon/core/db/messages', () => ({ addMessage: mockAddMessage }));
+mock.module('@archon/core/db/messages', () => ({
+  addMessage: mockAddMessage,
+  listMessages: mock(async () => []),
+  getRecentWorkflowResultMessages: mock(async () => []),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
