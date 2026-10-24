@@ -185,7 +185,7 @@ function isHookCall(call: ts.CallExpression, hooks: Set<string>, namespaces: Set
   );
 }
 
-function cleanupBindings(sourceFile: ts.SourceFile): CleanupBindings {
+function hookBindings(sourceFile: ts.SourceFile): Pick<CleanupBindings, 'hooks' | 'namespaces'> {
   const hooks = new Set(HOOK_NAMES);
   const namespaces = new Set<string>();
 
@@ -211,6 +211,11 @@ function cleanupBindings(sourceFile: ts.SourceFile): CleanupBindings {
     }
   }
 
+  return { hooks, namespaces };
+}
+
+function cleanupBindings(sourceFile: ts.SourceFile): CleanupBindings {
+  const { hooks, namespaces } = hookBindings(sourceFile);
   const functions = sameFileFunctions(sourceFile);
   const reachable = new Set<string>();
   const pending: string[] = [];
@@ -488,6 +493,14 @@ export function checkRepository(root = REPO_ROOT, baseline = LEGACY_RECURSIVE_CL
     }
   }
 
+  return [...failures, ...checkCleanupLedger(cleanup, baseline)];
+}
+
+function checkCleanupLedger(
+  cleanup: ReadonlyMap<string, DriftViolation[]>,
+  baseline: ReadonlyMap<string, number>
+): string[] {
+  const failures: string[] = [];
   for (const file of new Set([...cleanup.keys(), ...baseline.keys()])) {
     const found = cleanup.get(file) ?? [];
     const recorded = baseline.get(file) ?? 0;

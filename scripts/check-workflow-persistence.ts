@@ -171,16 +171,21 @@ export function findPersistenceImports(root: string, consumers: readonly string[
           if (symbol && reachesPersistence(symbol)) report(node, specifier.text);
         }
       };
+      const checkImport = (
+        clause: ts.ImportClause | undefined,
+        specifier: ts.StringLiteral
+      ): void => {
+        if (clause?.isTypeOnly) return;
+        const bindings = clause?.namedBindings;
+        const named = bindings && ts.isNamedImports(bindings) ? bindings.elements : [];
+        const names: ts.Node[] = named.filter(item => !item.isTypeOnly).map(item => item.name);
+        if (clause?.name) names.push(clause.name);
+        if (bindings && ts.isNamespaceImport(bindings)) names.push(bindings.name);
+        return checkModule(specifier, names.length + named.length ? names : undefined);
+      };
       const visit = (node: ts.Node): void => {
         if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-          const clause = node.importClause;
-          if (clause?.isTypeOnly) return;
-          const bindings = clause?.namedBindings;
-          const named = bindings && ts.isNamedImports(bindings) ? bindings.elements : [];
-          const names: ts.Node[] = named.filter(item => !item.isTypeOnly).map(item => item.name);
-          if (clause?.name) names.push(clause.name);
-          if (bindings && ts.isNamespaceImport(bindings)) names.push(bindings.name);
-          return checkModule(node.moduleSpecifier, names.length + named.length ? names : undefined);
+          return checkImport(node.importClause, node.moduleSpecifier);
         }
         if (
           ts.isExportDeclaration(node) &&
