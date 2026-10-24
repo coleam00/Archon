@@ -360,6 +360,10 @@ describe('loop wiring', () => {
     }
     const manage = readFileSync(resolve(pack, 'manager/commands/manage.md'), 'utf8');
     expect(manage).toContain('Run every check the repository commits on the default branch each pass');
+    expect(manage).toContain('Ask the owner only about product direction, scope, how the game feels to play, how it looks');
+    expect(manage).toContain('`Manager decision`');
+    const review = readFileSync(resolve(pack, 'loop/commands/loop-review.md'), 'utf8');
+    expect(review).toContain('A change that would let the check stop catching something a player would see');
   });
 
   it('the manager runs the holdouts once per pass, not again each time the default branch moves', () => {
