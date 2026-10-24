@@ -1,4 +1,4 @@
-import { type OpenAPIHono, createRoute } from '@hono/zod-openapi';
+import { type OpenAPIHono, createRoute, type z } from '@hono/zod-openapi';
 import { rm, stat } from 'fs/promises';
 import { normalize } from 'path';
 import {
@@ -236,6 +236,28 @@ const getCodebaseEnvironmentsRoute = createRoute({
   },
 });
 
+async function registerRequestedProject(
+  body: z.infer<typeof addCodebaseBodySchema>,
+  registration: Pick<CloneOptions, 'githubAppAuth'>
+): ReturnType<typeof cloneRepository> {
+  if ('url' in body) {
+    return cloneRepository(body.url, {
+      ...registration,
+      baseBranch: body.base_branch ?? undefined,
+    });
+  }
+  if (body.folder === true) {
+    return registerFolder(body.path, undefined, {
+      baseBranch: body.base_branch ?? undefined,
+    });
+  }
+  const localPath = await canonicalizeProjectPath(body.path);
+  const kind = await detectProjectKind(localPath);
+  return kind === 'repo'
+    ? registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
+    : registerFolder(localPath, undefined, { baseBranch: body.base_branch ?? undefined });
+}
+
 export function registerCodebaseRoutes(
   app: OpenAPIHono,
   registration: Pick<CloneOptions, 'githubAppAuth'>
@@ -312,26 +334,7 @@ export function registerCodebaseRoutes(
     const body = getValidatedBody(c, addCodebaseBodySchema);
 
     try {
-      let result;
-      if ('url' in body) {
-        result = await cloneRepository(body.url, {
-          ...registration,
-          baseBranch: body.base_branch ?? undefined,
-        });
-      } else if (body.folder === true) {
-        result = await registerFolder(body.path, undefined, {
-          baseBranch: body.base_branch ?? undefined,
-        });
-      } else {
-        const localPath = await canonicalizeProjectPath(body.path);
-        const kind = await detectProjectKind(localPath);
-        result =
-          kind === 'repo'
-            ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
-            : await registerFolder(localPath, undefined, {
-                baseBranch: body.base_branch ?? undefined,
-              });
-      }
+      const result = await registerRequestedProject(body, registration);
 
       // Fetch the full codebase record for a consistent response
       const codebase = await codebaseDb.getCodebase(result.codebaseId);
