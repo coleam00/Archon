@@ -11,7 +11,8 @@
  *
  * The stub provider requires OpenAI auth and the ChatGPT backend points at the same stub,
  * so the recorded request also carries the credential each auth path logged Codex in with
- * and nothing leaves localhost.
+ * and no model request or credential leaves localhost. Codex's own curated-plugin sync
+ * still fetches from GitHub; see `CODEX_SCRATCH_DIR`.
  *
  * The temp home is the fixture under test; the provider never sets CODEX_HOME itself.
  * `beforeAll` builds it once as a template, and each test runs on its own copy, so what
@@ -25,7 +26,7 @@ import { spawn } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import type { MessageChunk, SendQueryOptions } from '../types';
 import { AppServerConnection, settlesWithin, type Spawner } from './app-server';
@@ -50,6 +51,14 @@ createInterface({ input: process.stdin }).on('line', line => {
 const HOOK_SCRIPT = `require('node:fs').appendFileSync(process.argv[3], process.argv[2] + '\\n');`;
 
 const TEMPLATE_DIR = 'template-home';
+/**
+ * Codex's scratch directory in a home. Every app-server start syncs the curated plugins
+ * there with `git`, and that `git` outlives the app-server: once stdin closes the server
+ * exits and `git` is reparented to PID 1 and keeps writing for seconds. A copy that reads
+ * it races that write, so the template's copies leave it out. No case reads it; the
+ * installed plugins live in `plugins/cache`.
+ */
+const CODEX_SCRATCH_DIR = '.tmp';
 
 let root: string;
 /** The home `beforeAll` builds, with the plugins installed and trusted. */
@@ -254,7 +263,10 @@ afterAll(async () => {
 
 beforeEach(async () => {
   home = await mkdtemp(join(root, 'home-'));
-  await cp(template, home, { recursive: true });
+  await cp(template, home, {
+    recursive: true,
+    filter: source => relative(template, source) !== CODEX_SCRATCH_DIR,
+  });
   const configPath = join(home, 'config.toml');
   await writeFile(configPath, trustCopiedUserHook(await readFile(configPath, 'utf8'), home));
   modelRequests = [];
