@@ -413,7 +413,7 @@ import { join } from 'node:path';
 import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
 const scope = new CliTestScope(${JSON.stringify(f.root)});
 const logs = ${JSON.stringify(join(f.home, 'logs'))};
-let node: number | undefined;
+let ready = false;
 // The node records itself with the owners, then signals here, so teardown stops it by its own PID.
 const started = Promise.withResolvers<number>();
 const listener = Bun.listen({
@@ -421,9 +421,19 @@ const listener = Bun.listen({
   port: 0,
   socket: { data: (_socket, data) => started.resolve(Number(data.toString())) },
 });
+function pids(records: string): number[] {
+  return records.split(String.fromCharCode(10)).filter(Boolean).map(Number);
+}
 function recorded(): number[] {
-  if (!existsSync(scope.detachedPids)) return [];
-  return readFileSync(scope.detachedPids, 'utf8').trim().split(String.fromCharCode(10)).map(Number);
+  return existsSync(scope.detachedPids) ? pids(readFileSync(scope.detachedPids, 'utf8')) : [];
+}
+// The diagnostic must not throw, or teardown would leave the detached processes running.
+function read(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (error) {
+    return 'unreadable: ' + ((error as NodeJS.ErrnoException).code ?? String(error));
+  }
 }
 function liveness(pid: number): string {
   try {
@@ -434,13 +444,13 @@ function liveness(pid: number): string {
   }
 }
 function setupState(): string {
-  const records = existsSync(scope.detachedPids) ? readFileSync(scope.detachedPids, 'utf8') : 'missing';
-  const runLogs = existsSync(logs) ? readdirSync(logs).filter(name => name.startsWith('detached-run-')) : [];
+  const records = existsSync(scope.detachedPids) ? read(scope.detachedPids) : undefined;
+  const runLogs = existsSync(logs) ? readdirSync(logs) : [];
   return [
     'Detached timeout setup did not finish. State before teardown:',
-    'recorded PIDs file: ' + JSON.stringify(records),
-    ...recorded().map(pid => 'PID ' + pid + ': ' + liveness(pid)),
-    ...(runLogs.length ? runLogs.map(name => '--- ' + name + ' ---' + String.fromCharCode(10) + readFileSync(join(logs, name), 'utf8')) : ['no detached-run log in ' + logs]),
+    'recorded PIDs file: ' + (records === undefined ? 'missing' : JSON.stringify(records)),
+    ...pids(records ?? '').map(pid => 'PID ' + pid + ': ' + liveness(pid)),
+    ...(runLogs.length ? runLogs.map(name => '--- ' + name + ' ---' + String.fromCharCode(10) + read(join(logs, name))) : ['no run log in ' + logs]),
   ].join(String.fromCharCode(10));
 }
 beforeEach(async () => {
@@ -454,20 +464,25 @@ beforeEach(async () => {
   ].join(String.fromCharCode(10)));
   const result = await scope.run(${JSON.stringify([process.execPath, f.entry, ...args])}, ${JSON.stringify(f.project)}, { ...process.env, ARCHON_HOME: ${JSON.stringify(f.home)}, LOG_LEVEL: 'info' });
   expect(result, result.output + result.error).toMatchObject({ code: 0 });
-  node = await started.promise;
+  const node = await started.promise;
   expect(recorded()).toContain(node);
   for (const pid of recorded()) process.kill(pid, 0);
+  ready = true;
 }, 10000);
 afterEach(async () => {
   listener.stop(true);
-  if (node === undefined) console.error(setupState());
   const removeTempTree = cleanup.removeTempTree;
   const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
     expect(existsSync(root)).toBe(true);
     for (const pid of recorded()) expect(() => process.kill(pid, 0)).toThrow();
     await removeTempTree(root);
   });
-  try { await scope.close(); } finally { removal.mockRestore(); }
+  if (!ready) console.error(setupState());
+  try {
+    await scope.close();
+  } finally {
+    removal.mockRestore();
+  }
   expect(existsSync(scope.root)).toBe(false);
   writeFileSync(${JSON.stringify(proof)}, 'closed');
 }, 10000);
