@@ -138,74 +138,93 @@ function readBody(req) {
   });
 }
 
+// ── Route handlers ────────────────────────────────────────────────────────────
+// GET /verify — Caddy forward_auth calls this for every protected request
+function handleVerify(req, res) {
+  const cookies = parseCookies(req.headers['cookie']);
+  const session = verifyCookie(cookies[COOKIE_NAME] ?? '');
+  if (session === 'authenticated') {
+    res.writeHead(200, { 'X-Auth-User': USERNAME });
+    return res.end();
+  }
+  const originalUri = req.headers['x-forwarded-uri'] ?? '/';
+  const safeRd = isSafeRedirect(originalUri) ? originalUri : '/';
+  res.writeHead(302, { Location: `/login?rd=${encodeURIComponent(safeRd)}` });
+  res.end();
+}
+
+// GET /login — serve the styled login form
+function handleLoginPage(req, res, url) {
+  const rd = url.searchParams.get('rd') ?? '/';
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(loginPage(encodeURIComponent(rd), null));
+}
+
+// POST /login — validate credentials, issue session cookie
+async function handleLogin(req, res) {
+  const body = await readBody(req);
+  const params = new URLSearchParams(body);
+  const username = params.get('username') ?? '';
+  const password = params.get('password') ?? '';
+  const rd = decodeURIComponent(params.get('rd') ?? '/');
+  const safeRd = isSafeRedirect(rd) ? rd : '/';
+
+  const usernameOk = username === USERNAME;
+  const passwordOk = await bcrypt.compare(password, PASSWORD_HASH);
+
+  if (!usernameOk || !passwordOk) {
+    res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
+    return res.end(loginPage(encodeURIComponent(safeRd), 'Invalid username or password.'));
+  }
+
+  const cookieValue = signCookie('authenticated');
+  res.writeHead(302, {
+    Location: safeRd,
+    'Set-Cookie': `${COOKIE_NAME}=${cookieValue}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${COOKIE_MAX_AGE}`,
+  });
+  res.end();
+}
+
+// /logout (any method) — clear the session cookie
+function handleLogout(req, res) {
+  res.writeHead(302, {
+    Location: '/login',
+    'Set-Cookie': `${COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
+  });
+  res.end();
+}
+
+function handleNotFound(req, res) {
+  res.writeHead(404);
+  res.end();
+}
+
+function handleError(req, res, err) {
+  console.error('[auth-service] Unhandled error on %s %s:', req.method, req.url, err);
+  if (!res.headersSent) {
+    res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Internal server error. Check auth-service logs.');
+  }
+}
+
 // ── Request handler ───────────────────────────────────────────────────────────
+const ROUTES = new Map([
+  ['GET /verify', handleVerify],
+  ['GET /login', handleLoginPage],
+  ['POST /login', handleLogin],
+]);
+
+function routeFor(method, pathname) {
+  if (pathname === '/logout') return handleLogout;
+  return ROUTES.get(`${method} ${pathname}`) ?? handleNotFound;
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
-
-    // GET /verify — Caddy forward_auth calls this for every protected request
-    if (req.method === 'GET' && url.pathname === '/verify') {
-      const cookies = parseCookies(req.headers['cookie']);
-      const session = verifyCookie(cookies[COOKIE_NAME] ?? '');
-      if (session === 'authenticated') {
-        res.writeHead(200, { 'X-Auth-User': USERNAME });
-        return res.end();
-      }
-      const originalUri = req.headers['x-forwarded-uri'] ?? '/';
-      const safeRd = isSafeRedirect(originalUri) ? originalUri : '/';
-      res.writeHead(302, { Location: `/login?rd=${encodeURIComponent(safeRd)}` });
-      return res.end();
-    }
-
-    // GET /login — serve the styled login form
-    if (req.method === 'GET' && url.pathname === '/login') {
-      const rd = url.searchParams.get('rd') ?? '/';
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      return res.end(loginPage(encodeURIComponent(rd), null));
-    }
-
-    // POST /login — validate credentials, issue session cookie
-    if (req.method === 'POST' && url.pathname === '/login') {
-      const body = await readBody(req);
-      const params = new URLSearchParams(body);
-      const username = params.get('username') ?? '';
-      const password = params.get('password') ?? '';
-      const rd = decodeURIComponent(params.get('rd') ?? '/');
-      const safeRd = isSafeRedirect(rd) ? rd : '/';
-
-      const usernameOk = username === USERNAME;
-      const passwordOk = await bcrypt.compare(password, PASSWORD_HASH);
-
-      if (!usernameOk || !passwordOk) {
-        res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
-        return res.end(loginPage(encodeURIComponent(safeRd), 'Invalid username or password.'));
-      }
-
-      const cookieValue = signCookie('authenticated');
-      res.writeHead(302, {
-        Location: safeRd,
-        'Set-Cookie': `${COOKIE_NAME}=${cookieValue}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${COOKIE_MAX_AGE}`,
-      });
-      return res.end();
-    }
-
-    // GET /logout — clear the session cookie
-    if (url.pathname === '/logout') {
-      res.writeHead(302, {
-        Location: '/login',
-        'Set-Cookie': `${COOKIE_NAME}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`,
-      });
-      return res.end();
-    }
-
-    res.writeHead(404);
-    res.end();
+    await routeFor(req.method, url.pathname)(req, res, url);
   } catch (err) {
-    console.error('[auth-service] Unhandled error on %s %s:', req.method, req.url, err);
-    if (!res.headersSent) {
-      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Internal server error. Check auth-service logs.');
-    }
+    handleError(req, res, err);
   }
 });
 
