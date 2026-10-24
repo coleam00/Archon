@@ -65,11 +65,7 @@ const listRunArtifactsRoute = createRoute({
   },
 });
 
-interface FileEntry {
-  path: string;
-  size: number;
-  modifiedAt: string;
-}
+type FileEntry = z.infer<typeof listArtifactsResponseSchema>['files'][number];
 async function readArtifactFileEntry(child: string, path: string): Promise<FileEntry | undefined> {
   try {
     const s = await stat(child);

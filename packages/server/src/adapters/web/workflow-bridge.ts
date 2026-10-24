@@ -332,7 +332,7 @@ function mapWorkflowStatusRow(
 
 function mapApprovalRow(
   row: WorkflowEventRow,
-  approvalStatus: 'paused' | 'running',
+  approvalStatus: NonNullable<(typeof ROW_APPROVAL_STATUS)[string]>,
   timestamp: number
 ): string {
   const runId = row.workflow_run_id;

@@ -79,6 +79,40 @@ test('WebAdapter supports durable conversation project detachment', () => {
   expect(makeAdapter().adapter.capabilities.canDetachProject).toBe(true);
 });
 
+test('structured events retain their wire bytes and emission order', async () => {
+  const { adapter, emitted } = makeAdapter();
+  const clock = spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'tool_call',
+      toolCallId: 'call',
+      name: 'Bash',
+    });
+    await adapter.sendStructuredEvent('conv-1', { type: 'system_status', content: 'Working' });
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'workflow_dispatch',
+      workerConversationId: 'worker',
+      workflowName: 'build',
+    });
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'tool_call_update',
+      toolCallId: 'call',
+      status: 'failed',
+      exitCode: 1,
+      output: 'error',
+    });
+    await adapter.sendStructuredEvent('conv-1', { type: 'result', sessionId: 'private' });
+    expect(emitted).toEqual([
+      '{"type":"tool_call","toolCallId":"call","name":"Bash","input":{},"timestamp":1000}',
+      '{"type":"system_status","content":"Working","timestamp":1000}',
+      '{"type":"workflow_dispatch","workerConversationId":"worker","workflowName":"build","timestamp":1000}',
+      '{"type":"tool_result","toolCallId":"call","name":"Bash","output":"error","status":"failed","exitCode":1,"duration":0,"timestamp":1000}',
+    ]);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 describe('WebAdapter.sendStructuredEvent — provider results', () => {
   test('does not emit a provider session id on SSE', async () => {
     const { adapter, emitted } = makeAdapter();
