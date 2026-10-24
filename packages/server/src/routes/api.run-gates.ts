@@ -420,12 +420,7 @@ export function registerRunGateRoutes(
 
       // A stale occurrence is reported before the current gate judges the decision: the
       // caller answered an earlier pause and must hear that, not "undeclared decision".
-      try {
-        assertAnswerAdmissible(run, origin);
-      } catch (staleError) {
-        if (staleError instanceof StaleGateAnswerError) return apiError(c, 409, staleError.message);
-        throw staleError;
-      }
+      assertAnswerAdmissible(run, origin);
 
       const respondRefusal = answerRefusal(run, decision);
       if (respondRefusal !== null) return apiError(c, 400, respondRefusal);
