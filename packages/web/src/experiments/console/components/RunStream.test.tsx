@@ -444,6 +444,33 @@ describe('RunStream tool rendering', () => {
   });
 });
 
+test('RunStream renders the diagnostic message of an error event', () => {
+  const diagnostic = 'Provider rejected the run because the token expired';
+  const event = toRunEvent({
+    id: 'error',
+    workflow_run_id: 'r1',
+    event_type: 'error',
+    step_index: null,
+    step_name: null,
+    data: { error: diagnostic },
+    created_at: '2026-10-02T10:00:00.000Z',
+  });
+  const html = renderToStaticMarkup(
+    <StreamContextProvider value={{ runStartedAt: event.timestamp }}>
+      <RunStream
+        messages={[]}
+        events={[event]}
+        nodes={[]}
+        providerEvents={new Map()}
+        showToolCalls={false}
+        showSystem
+        selectedNodeId="all"
+      />
+    </StreamContextProvider>
+  );
+  expect(html).toContain(diagnostic);
+});
+
 describe('RunStream cleanup warnings', () => {
   test.each([false, true])('renders full normalized warning with showSystem=%s', showSystem => {
     const warnings = [
