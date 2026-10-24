@@ -415,11 +415,18 @@ const scope = new CliTestScope(${JSON.stringify(f.root)});
 const logs = ${JSON.stringify(join(f.home, 'logs'))};
 let ready = false;
 // The node records itself with the owners, then signals here, so teardown stops it by its own PID.
+// TCP may split the PID across data callbacks; the node ends its side once the PID is sent.
 const started = Promise.withResolvers<number>();
+let signal = '';
 const listener = Bun.listen({
   hostname: '127.0.0.1',
   port: 0,
-  socket: { data: (_socket, data) => started.resolve(Number(data.toString())) },
+  socket: {
+    data: (_socket, data) => {
+      signal += data.toString();
+    },
+    end: () => started.resolve(Number(signal)),
+  },
 });
 function pids(records: string): number[] {
   return records.split(String.fromCharCode(10)).filter(Boolean).map(Number);
@@ -443,14 +450,23 @@ function liveness(pid: number): string {
     return (error as NodeJS.ErrnoException).code ?? String(error);
   }
 }
+function runLogs(): string[] {
+  let names: string[];
+  try {
+    names = existsSync(logs) ? readdirSync(logs) : [];
+  } catch (error) {
+    return [logs + ' unreadable: ' + ((error as NodeJS.ErrnoException).code ?? String(error))];
+  }
+  if (!names.length) return ['no run log in ' + logs];
+  return names.map(name => '--- ' + name + ' ---' + String.fromCharCode(10) + read(join(logs, name)));
+}
 function setupState(): string {
   const records = existsSync(scope.detachedPids) ? read(scope.detachedPids) : undefined;
-  const runLogs = existsSync(logs) ? readdirSync(logs) : [];
   return [
     'Detached timeout setup did not finish. State before teardown:',
     'recorded PIDs file: ' + (records === undefined ? 'missing' : JSON.stringify(records)),
     ...pids(records ?? '').map(pid => 'PID ' + pid + ': ' + liveness(pid)),
-    ...(runLogs.length ? runLogs.map(name => '--- ' + name + ' ---' + String.fromCharCode(10) + read(join(logs, name))) : ['no run log in ' + logs]),
+    ...runLogs(),
   ].join(String.fromCharCode(10));
 }
 beforeEach(async () => {
