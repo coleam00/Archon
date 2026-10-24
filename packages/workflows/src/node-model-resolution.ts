@@ -252,6 +252,11 @@ export function resolveWorkflowModelScope(
 ): WorkflowModelScope {
   const workflowModel = selectModelRef(workflow.model, aiProfile);
   let provider = workflow.provider ?? defaultAssistant;
+  let providerOrigin: ResolutionOrigin = workflow.provider
+    ? 'workflow'
+    : defaultAssistant === undefined
+      ? 'unset'
+      : 'default assistant';
   let model: string | undefined;
   let preset: ModelAliasPreset | undefined;
   if (workflowModel && aiProfile) {
@@ -261,6 +266,7 @@ export function resolveWorkflowModelScope(
     } else {
       preset = spec;
       provider = spec.provider;
+      providerOrigin = 'model ref';
       model = spec.model;
     }
   } else if (workflowModel) {
@@ -273,19 +279,8 @@ export function resolveWorkflowModelScope(
     preset,
     tier: workflowModel && isTierName(workflowModel) ? workflowModel : undefined,
     effort: workflow.effort,
-    providerOrigin: workflowProviderOrigin(preset, workflow.provider, defaultAssistant),
+    providerOrigin,
   };
-}
-
-function workflowProviderOrigin(
-  preset: ModelAliasPreset | undefined,
-  workflowProvider: string | undefined,
-  defaultAssistant: string | undefined
-): ResolutionOrigin {
-  // A resolved preset overrides even an explicitly declared workflow provider.
-  if (preset) return 'model ref';
-  if (workflowProvider) return 'workflow';
-  return defaultAssistant === undefined ? 'unset' : 'default assistant';
 }
 
 /**
