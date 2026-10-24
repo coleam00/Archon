@@ -60,11 +60,7 @@ import { closeOpenToolCalls } from '../shared/tool-calls';
 import { diagnoseBinary } from '../shared/binary-diagnostics';
 import { buildPluginListCommand, readClaudePluginIds, withPluginScopeCheck } from './plugins';
 import type { SETTING_SOURCES } from '@archon/paths/skills';
-import {
-  ClaudeFirstEventTimeoutError,
-  classifyClaudeThrownError,
-  failureResultChunk,
-} from './failure';
+import { ClaudeFirstEventTimeoutError, thrownErrorChunks } from './failure';
 import { applyNodeConfig, isWorkflowNode } from './node-config';
 import { requireMcpConnections } from '../mcp/readiness';
 import { streamClaudeMessages, type ToolResultEntry } from './stream';
@@ -602,6 +598,34 @@ function createQueryInput(
   };
 }
 
+/**
+ * A silent CLI never initializes, so initialization is held to the first-event deadline.
+ * Server readiness is not: a slow server stays pending until the CLI's own MCP connect
+ * timeout resolves it.
+ */
+async function* awaitMcpReadiness(
+  rawEvents: ReturnType<typeof query>,
+  mcpNames: string[],
+  controller: AbortController,
+  firstEventTimeoutMs: number,
+  diagnostics: Record<string, unknown>
+): AsyncGenerator<MessageChunk> {
+  const initialization = rawEvents.initializationResult();
+  await withinFirstEventDeadline(initialization, controller, firstEventTimeoutMs, diagnostics);
+  yield* requireMcpConnections(
+    mcpNames,
+    async () =>
+      (await rawEvents.mcpServerStatus()).map(({ name, status, error }) => ({
+        type: 'mcp_server_status' as const,
+        server: name,
+        status: status === 'needs-auth' ? ('needs_auth' as const) : status,
+        ...(error !== undefined ? { error } : {}),
+      })),
+    controller.signal
+  );
+  controller.signal.throwIfAborted();
+}
+
 // ─── Claude Provider ───────────────────────────────────────────────────────
 
 /**
@@ -612,7 +636,7 @@ function createQueryInput(
  * - buildQueryOptions: SDK option construction, including applyNodeConfig
  *   (./node-config.ts) for workflow nodeConfig → SDK options + warnings
  * - streamClaudeMessages (./stream.ts): raw SDK event normalization into MessageChunks
- * - classifyClaudeThrownError (./failure.ts): typed failure for an error thrown by the SDK
+ * - thrownErrorChunks (./failure.ts): cancellation or a typed failure for an error the SDK throws
  */
 export class ClaudeProvider implements IAgentProvider {
   async diagnose(
@@ -662,6 +686,7 @@ export class ClaudeProvider implements IAgentProvider {
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
     const isContainerRun = requestOptions?.execContext?.kind === 'container';
+    const hostCwd = isContainerRun ? undefined : cwd;
     const stderrLines: string[] = [];
     const controller = new AbortController();
     const onAbort = (): void => {
@@ -707,27 +732,7 @@ export class ClaudeProvider implements IAgentProvider {
       const firstEventTimeoutMs = getFirstEventTimeoutMs();
       if (mcpNames.length > 0) {
         preparedQuery = rawEvents;
-        // A silent CLI never initializes, so initialization is held to the first-event
-        // deadline. Server readiness is not: a slow server stays pending until the CLI's
-        // own MCP connect timeout resolves it.
-        await withinFirstEventDeadline(
-          rawEvents.initializationResult(),
-          controller,
-          firstEventTimeoutMs,
-          diagnostics
-        );
-        yield* requireMcpConnections(
-          mcpNames,
-          async () =>
-            (await rawEvents.mcpServerStatus()).map(({ name, status, error }) => ({
-              type: 'mcp_server_status' as const,
-              server: name,
-              status: status === 'needs-auth' ? ('needs_auth' as const) : status,
-              ...(error !== undefined ? { error } : {}),
-            })),
-          controller.signal
-        );
-        controller.signal.throwIfAborted();
+        yield* awaitMcpReadiness(rawEvents, mcpNames, controller, firstEventTimeoutMs, diagnostics);
       }
       input.admit();
       const nodeConfig = requestOptions?.nodeConfig;
@@ -762,28 +767,14 @@ export class ClaudeProvider implements IAgentProvider {
         yield chunk;
       }
     } catch (error) {
-      const err = error as Error;
-      // Cancellation is not a failure: the caller asked for it and already knows.
-      // The first-event timeout aborts the same controller, so it is told apart by type.
-      if (
-        requestOptions?.abortSignal?.aborted === true ||
-        (controller.signal.aborted && !(err instanceof ClaudeFirstEventTimeoutError))
-      ) {
-        throw new Error('Query aborted');
-      }
-      const stderr = stderrLines.join('\n');
-      const failure = classifyClaudeThrownError(err, stderr, isContainerRun ? undefined : cwd);
-      getLog().error(
-        { err, stderrContext: stderr, failureClass: failure.class, resultReported },
-        'query_error'
-      );
-      // Lost observation of live work belongs to the engine's unsettled-stream
-      // failure, which names the tasks. Keep the vendor evidence in the log above.
-      if (!resultReported && openSubtaskIds.size === 0) {
-        resultReported = true;
-        yield failureResultChunk(failure);
-        yield { type: 'settled' };
-      }
+      yield* thrownErrorChunks(error as Error, {
+        callerAborted: requestOptions?.abortSignal?.aborted === true,
+        controller,
+        stderr: stderrLines.join('\n'),
+        hostCwd,
+        resultReported,
+        subtasksOpen: openSubtaskIds.size > 0,
+      });
     } finally {
       closeInput?.();
       preparedQuery?.close();
