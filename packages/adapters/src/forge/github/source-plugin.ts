@@ -75,7 +75,8 @@ function evaluateBindings(configuredBindings: z.infer<typeof bindingSchema>[], e
   > = [];
   for (const binding of configuredBindings) {
     const bindingRevision = createHash('sha256').update(JSON.stringify(binding)).digest('hex');
-    if (!matchForgeEvent(binding.selector, event)) {
+    const { selector, inputMapping, ...intent } = binding;
+    if (!matchForgeEvent(selector, event)) {
       evaluatedBindings.push({
         bindingId: binding.bindingId,
         bindingRevision,
@@ -84,7 +85,7 @@ function evaluateBindings(configuredBindings: z.infer<typeof bindingSchema>[], e
       });
       continue;
     }
-    const mapped = mapForgeInputs(binding.inputMapping, event);
+    const mapped = mapForgeInputs(inputMapping, event);
     if (!mapped.ok) {
       evaluatedBindings.push({
         bindingId: binding.bindingId,
@@ -98,16 +99,11 @@ function evaluateBindings(configuredBindings: z.infer<typeof bindingSchema>[], e
     const literalInputs: Record<string, JsonValue> = {};
     const eventInputs: Record<string, JsonValue> = {};
     for (const [name, value] of Object.entries(mapped.inputs))
-      (binding.inputMapping[name]?.source === 'field' ? eventInputs : literalInputs)[name] = value;
+      (inputMapping[name]?.source === 'field' ? eventInputs : literalInputs)[name] = value;
     bindings.push(
       resourceStartBindingIntentSchema.parse({
-        bindingId: binding.bindingId,
+        ...intent,
         bindingRevision,
-        hostId: binding.hostId,
-        runAsUserId: binding.runAsUserId,
-        resource: binding.resource,
-        capacity: binding.capacity,
-        overlap: binding.overlap,
         launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...literalInputs } },
         eventInputs,
       })

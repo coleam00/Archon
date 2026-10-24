@@ -26,7 +26,12 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildApplyScript, buildSummaryScript } from './overlay';
+import {
+  applyOverlayChanges,
+  summarizeOverlayChanges,
+  buildApplyScript,
+  buildSummaryScript,
+} from './overlay';
 
 // These scripts ONLY ever execute inside the Linux runner container in production.
 // Git-Bash on Windows can't create real symlinks (`ln -s` copies) and MSYS mangles
@@ -520,5 +525,67 @@ describe('summary script — faithful representation (M1)', () => {
     // An empty `dir` would report the top-level name and invite the approver to
     // sign off on deleting a different file.
     expect(records.some(r => r.tag === 'D' && r.fields[0] === 'gone.txt')).toBe(false);
+  });
+});
+
+describe('walk record producer/consumer conformance', () => {
+  test.each([
+    { name: 'summary', script: buildSummaryScript, arities: { A: 1, M: 1, D: 1, L: 3, S: 2 } },
+    { name: 'apply', script: buildApplyScript, arities: { D: 1, K: 1, W: 1, S: 2 } },
+  ])('$name emits only records with the decoder tag and arity', ({ script, arities }) => {
+    // Check every NUL-delimited printf site, including branches requiring privileged devices.
+    const formats = [...script().matchAll(/printf '([^']*\\0)'/g)].map(match => match[1] ?? '');
+    expect(formats.length).toBeGreaterThan(0);
+    const tags = new Set<string>();
+    for (const format of formats) {
+      const [tag, ...fields] = format.replace(/\\0$/, '').split('\\t');
+      const arity = Object.entries(arities).find(([name]) => name === tag)?.[1];
+      expect(arity).toBeDefined();
+      expect(fields).toHaveLength(arity ?? -1);
+      expect(fields[0]).toBe('%s');
+      tags.add(tag ?? '');
+    }
+    expect([...tags].sort()).toEqual(Object.keys(arities).sort());
+  });
+
+  test.skipIf(isWin)('decodes every record family emitted by both actual scripts', async () => {
+    const { upper, dest, ws } = makeDirs();
+    writeFileSync(join(upper, 'added'), 'new');
+    writeFileSync(join(upper, 'modified'), 'new');
+    writeFileSync(join(dest, 'modified'), 'old');
+    writeFileSync(join(upper, '.wh.deleted'), '');
+    writeFileSync(join(dest, 'deleted'), 'old');
+    writeFileSync(join(upper, '.wh..wh..opq'), '');
+    symlinkSync('added', join(upper, 'link'));
+    symlinkSync('/etc/shadow', join(upper, 'escape'));
+    const target = { volume: 'fixture', hostRoot: ws, image: 'fixture' };
+
+    const summaryOutput = runScript(buildSummaryScript(), upper, dest, ws);
+    expect(summaryOutput.code).toBe(0);
+    const summary = await summarizeOverlayChanges(async () => summaryOutput, target);
+    expect(summary).toEqual({
+      added: ['added'],
+      modified: ['modified'],
+      deleted: ['deleted'],
+      symlinks: expect.arrayContaining([
+        { path: 'link', target: 'added', escapes: false },
+        { path: 'escape', target: '/etc/shadow', escapes: true },
+      ]),
+      skipped: [{ path: '.wh..wh..opq', reason: 'opaque-dir-marker' }],
+      totalCount: 5,
+      truncated: false,
+    });
+    expect(summary.symlinks).toHaveLength(2);
+
+    const applyOutput = runScript(buildApplyScript(), upper, dest, ws);
+    expect(applyOutput.code).toBe(0);
+    expect(await applyOverlayChanges(async () => applyOutput, target)).toEqual({
+      filesApplied: 3,
+      filesDeleted: 1,
+      warnings: expect.arrayContaining([
+        'skipped .wh..wh..opq: opaque-dir-marker',
+        'skipped escape: escaping-symlink',
+      ]),
+    });
   });
 });

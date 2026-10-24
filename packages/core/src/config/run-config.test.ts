@@ -12,6 +12,10 @@ import {
   workflowRunConfigFromRun,
   workflowRunConfigKeys,
 } from './run-config';
+import {
+  workflowRunConfigLayerSchema,
+  type WorkflowRunConfigLayer,
+} from '@archon/workflows/schemas/run-config';
 import { decodeWorkflowRunConfigHandoff } from './run-config-handoff';
 
 const TEST_KEY = 'ab'.repeat(32);
@@ -294,6 +298,50 @@ describe('workflow run config', () => {
       assistants: { pi: { model: 'openai/gpt-5.6' } },
       tiers: { large: { provider: 'pi', model: 'openai/gpt-5.6' } },
     });
+  });
+
+  it('attributes every schema layer field with its established key paths', () => {
+    const cases = {
+      assistant: { value: 'pi', paths: ['assistant'] },
+      assistants: {
+        value: { pi: { model: 'openai/gpt-5.6' }, codex: {} },
+        paths: ['assistants.codex', 'assistants.pi.model'],
+      },
+      aliases: {
+        value: { '@planner': { provider: 'claude', model: 'opus' } },
+        paths: ['aliases.@planner'],
+      },
+      tiers: {
+        value: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
+        paths: ['tiers.large'],
+      },
+      workflows: {
+        value: { autoResumeOnQuotaReset: false },
+        paths: ['workflows.autoResumeOnQuotaReset'],
+      },
+      docsPath: { value: 'handbook', paths: ['docs.path'] },
+      envVars: { value: { TOKEN: 'secret' }, paths: ['env.TOKEN'] },
+    } satisfies {
+      [K in keyof WorkflowRunConfigLayer]-?: {
+        value: NonNullable<WorkflowRunConfigLayer[K]>;
+        paths: string[];
+      };
+    };
+    expect(Object.keys(cases).sort()).toEqual(
+      [...workflowRunConfigLayerSchema.keyof().options].sort()
+    );
+    for (const [key, { value, paths }] of Object.entries(cases)) {
+      const layer = workflowRunConfigLayerSchema.parse({ [key]: value });
+      expect(sealWorkflowRunConfig(layer, { kind: 'http', label: 'inline' }).keys).toEqual(paths);
+    }
+    const layer = workflowRunConfigLayerSchema.parse(
+      Object.fromEntries(Object.entries(cases).map(([key, entry]) => [key, entry.value]))
+    );
+    expect(sealWorkflowRunConfig(layer, { kind: 'http', label: 'inline' }).keys).toEqual(
+      Object.values(cases)
+        .flatMap(entry => entry.paths)
+        .sort()
+    );
   });
 
   it('seals secrets for replay while exposing only attribution and key paths', () => {
