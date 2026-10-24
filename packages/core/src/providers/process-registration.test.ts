@@ -849,6 +849,27 @@ test.each([
     expect(registration.parseConfig(raw, scope)).toEqual(raw);
 });
 
+function assertSelectedProjection(
+  registration: ReturnType<typeof processProviderRegistration>,
+  nested: boolean
+): void {
+  for (const kind of ['left', 'right']) {
+    const fields = {
+      kind,
+      left: 'left',
+      right: 'right',
+      shared: 'shared',
+      conjunct: 'conjunct',
+      unknown: true,
+    };
+    const expected = { kind, [kind]: kind, shared: 'shared', conjunct: 'conjunct' };
+    for (const scope of ['install', 'run', 'snapshot'] as const)
+      expect(registration.parseConfig(nested ? { choice: fields } : fields, scope)).toEqual(
+        nested ? { choice: expected } : expected
+      );
+  }
+}
+
 test.each(['anyOf', 'oneOf'] as const)(
   '%s projection retains only the selected alternative plus enclosing and conjunct fields',
   keyword => {
@@ -880,21 +901,7 @@ test.each(['anyOf', 'oneOf'] as const)(
         }),
         argv
       );
-      for (const kind of ['left', 'right']) {
-        const fields = {
-          kind,
-          left: 'left',
-          right: 'right',
-          shared: 'shared',
-          conjunct: 'conjunct',
-          unknown: true,
-        };
-        const expected = { kind, [kind]: kind, shared: 'shared', conjunct: 'conjunct' };
-        for (const scope of ['install', 'run', 'snapshot'] as const)
-          expect(registration.parseConfig(nested ? { choice: fields } : fields, scope)).toEqual(
-            nested ? { choice: expected } : expected
-          );
-      }
+      assertSelectedProjection(registration, nested);
     }
   }
 );

@@ -227,9 +227,38 @@ describe('workflow dispatch routing', () => {
     ).toHaveLength(1);
   });
 
-  test.each(['missing', 'mismatched', 'replaced', 'switched', 'detached'] as const)(
+  test.each([
+    ['missing', null, 'Isolation environment env-1 not found', undefined],
+    [
+      'mismatched',
+      makeIsolationEnvironment({ working_path: '/wt/from-branch' }),
+      'does not match',
+      undefined,
+    ],
+    [
+      'replaced',
+      makeIsolationEnvironment({
+        working_path: '/wt/adopted',
+        metadata: { worktree_registration_id: 'replacement' },
+      }),
+      'changed during adoption',
+      undefined,
+    ],
+    [
+      'switched',
+      makeIsolationEnvironment({ working_path: '/wt/adopted' }),
+      'expected branch',
+      'other',
+    ],
+    [
+      'detached',
+      makeIsolationEnvironment({ working_path: '/wt/adopted' }),
+      'expected branch',
+      null,
+    ],
+  ] as const)(
     'foreground adoption refuses a %s environment before capture',
-    async reason => {
+    async (_reason, environment, message, branch) => {
       mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
       mockGetCodebase.mockResolvedValueOnce(makeCodebase());
       mockHandleCommand.mockResolvedValueOnce(makeWorkflowResult());
@@ -240,21 +269,8 @@ describe('workflow dispatch routing', () => {
           environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
         },
       });
-      if (reason === 'switched' || reason === 'detached') {
-        mockGetCurrentBranchStrict.mockResolvedValueOnce(reason === 'switched' ? 'other' : null);
-      }
-      mockAdoptedEnvironment.mockResolvedValueOnce(
-        reason === 'missing'
-          ? null
-          : reason === 'replaced'
-            ? makeIsolationEnvironment({
-                working_path: '/wt/adopted',
-                metadata: { worktree_registration_id: 'replacement' },
-              })
-            : makeIsolationEnvironment({
-                working_path: reason === 'mismatched' ? '/wt/from-branch' : '/wt/adopted',
-              })
-      );
+      if (branch !== undefined) mockGetCurrentBranchStrict.mockResolvedValueOnce(branch);
+      mockAdoptedEnvironment.mockResolvedValueOnce(environment);
       mockPrepareWorkflowSource.mockClear();
       mockAdoptionMetadata.mockClear();
       mockLogger.warn.mockClear();
@@ -263,18 +279,7 @@ describe('workflow dispatch routing', () => {
         actor: operator,
         workflowAdoptRunId: 'prior-run',
       });
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'conv-1',
-        expect.stringContaining(
-          reason === 'missing'
-            ? 'Isolation environment env-1 not found'
-            : reason === 'replaced'
-              ? 'changed during adoption'
-              : reason === 'switched' || reason === 'detached'
-                ? 'expected branch'
-                : 'does not match'
-        )
-      );
+      expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining(message));
       expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
       expect(mockExecuteWorkflow).not.toHaveBeenCalled();
       expect(mockAdoptionMetadata).not.toHaveBeenCalled();
