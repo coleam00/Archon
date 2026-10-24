@@ -301,32 +301,12 @@ async function stampPreCreatedRun(
   cwd: string,
   preCreatedRun: WorkflowRun,
   opts: ExecuteWorkflowOptions,
-  { isContinuation, prepared, dispatchMetadata }: RunDispatch,
+  dispatch: RunDispatch,
   executionOwner: ExecutionOwnerRecord
 ): Promise<RunPhase<WorkflowRun>> {
-  const { modelBindingsMetadata, runConfigMetadata } = prepared;
-  const containerCtx = opts.container;
-  // The stamps a fresh row would have received at creation, for a row someone
-  // else created. `isolation` + `isolation_env_id` are what a later resume reads
-  // to rediscover a container (see createWorkflowRunRow), and `working_path`
-  // is null on a row created before its checkout existed (#2872, `run --detach`)
-  // — write-once in the store, so re-running this can never repoint a live run.
-  // A continuation keeps what its first execution recorded and restamps only the
-  // execution owner, which is now this process.
+  const { isContinuation } = dispatch;
   const invocationMetadata: Record<string, unknown> = {
-    ...(isContinuation
-      ? {}
-      : {
-          ...(Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY)
-            ? {}
-            : { [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot }),
-          [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
-          [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
-          ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
-          ...(opts.execContext?.kind === 'container' ? { isolation: 'container' } : {}),
-          ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
-          ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
-        }),
+    ...preCreatedInvocationMetadata(preCreatedRun, opts, dispatch),
     [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
   };
   try {
@@ -376,6 +356,29 @@ async function stampPreCreatedRun(
         ...invocationMetadata,
       },
     },
+  };
+}
+
+// A continuation preserves its invocation settings. Container stamps let resume
+// rediscover the original environment, just as for a freshly created row.
+function preCreatedInvocationMetadata(
+  preCreatedRun: WorkflowRun,
+  opts: ExecuteWorkflowOptions,
+  { isContinuation, prepared, dispatchMetadata }: RunDispatch
+): Record<string, unknown> {
+  if (isContinuation) return {};
+  const { modelBindingsMetadata, runConfigMetadata } = prepared;
+  const containerCtx = opts.container;
+  return {
+    ...(Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY)
+      ? {}
+      : { [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot }),
+    [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
+    [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
+    ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
+    ...(opts.execContext?.kind === 'container' ? { isolation: 'container' } : {}),
+    ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+    ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
   };
 }
 
