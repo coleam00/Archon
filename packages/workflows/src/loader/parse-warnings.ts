@@ -1,4 +1,4 @@
-import type { DagNode, IncludeDirective } from '../schemas';
+import type { DagNode, IncludeDirective, LoopGroupNode } from '../schemas';
 import {
   isGateNode,
   isInteractiveSink,
@@ -248,43 +248,7 @@ export function collectLoopGroupSinkWarnings(
       enclosingOwnerSessions ||
       node.loop_group.nodes.some(n => !isIncludeDirective(n) && isNodeContextResume(n.context));
 
-    // A gate or attention wait that is the body's sole terminal sink (any other
-    // placement is a load error in `validateDagStructure`). The group's own
-    // 'until_bash' is the completion channel, and it either reads the pause's
-    // '$<id>.output' or it doesn't. If it doesn't, the answer is recorded but never
-    // consulted for completion — the loop just runs to max_iterations, silently
-    // ignoring every answer. Structural check (does the until_bash string reference
-    // the pause's node id), not prose-sniffing. A pause with its own `when:` is exempt:
-    // when it skips it has no output, so an until_bash reading it would fail the
-    // group (#4043).
-    if (
-      soleSink !== undefined &&
-      !isIncludeDirective(soleSink) &&
-      (isGateNode(soleSink) || (isWaitNode(soleSink) && soleSink.wait.attention !== undefined)) &&
-      soleSink.when === undefined
-    ) {
-      const untilBash = node.loop_group.until_bash;
-      const untilBashRefsPause =
-        untilBash !== undefined &&
-        Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
-          m => m[1] === soleSink.id
-        );
-      if (!untilBashRefsPause) {
-        const pauseRef = `$${soleSink.id}.output`;
-        const message =
-          `Node '${soleSink.id}': this pause is the loop_group's terminal sink, but ` +
-          `'loop_group.until_bash' does not reference '${pauseRef}' — the answer is ` +
-          'recorded but never consulted for completion, so the loop only ends via ' +
-          `max_iterations. Declare 'until_bash' checking '${pauseRef}' (e.g. ` +
-          `'decision=${pauseRef}.decision; [ "$decision" = "approve" ]') so the answer ` +
-          'drives completion.';
-        warnings.push(message);
-        getLog().debug(
-          { id: soleSink.id, warning: message },
-          'loop_group_pause_completion_not_referenced'
-        );
-      }
-    }
+    collectTerminalPauseCompletionWarning(node, soleSink, warnings);
 
     // Interactive plain loops and ambient-only nested groups can pause
     // without stopping THIS group (#2753) — a bare gate sink is excluded here since
@@ -312,6 +276,50 @@ export function collectLoopGroupSinkWarnings(
     }
 
     collectLoopGroupSinkWarnings(node.loop_group.nodes, warnings, hasOwnerSessions);
+  }
+}
+
+function collectTerminalPauseCompletionWarning(
+  node: LoopGroupNode,
+  soleSink: DagNode | IncludeDirective | undefined,
+  warnings: string[]
+): void {
+  // A gate or attention wait that is the body's sole terminal sink (any other
+  // placement is a load error in `validateDagStructure`). The group's own
+  // 'until_bash' is the completion channel, and it either reads the pause's
+  // '$<id>.output' or it doesn't. If it doesn't, the answer is recorded but never
+  // consulted for completion — the loop just runs to max_iterations, silently
+  // ignoring every answer. Structural check (does the until_bash string reference
+  // the pause's node id), not prose-sniffing. A pause with its own `when:` is exempt:
+  // when it skips it has no output, so an until_bash reading it would fail the
+  // group (#4043).
+  if (
+    soleSink !== undefined &&
+    !isIncludeDirective(soleSink) &&
+    (isGateNode(soleSink) || (isWaitNode(soleSink) && soleSink.wait.attention !== undefined)) &&
+    soleSink.when === undefined
+  ) {
+    const untilBash = node.loop_group.until_bash;
+    const untilBashRefsPause =
+      untilBash !== undefined &&
+      Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
+        m => m[1] === soleSink.id
+      );
+    if (!untilBashRefsPause) {
+      const pauseRef = `$${soleSink.id}.output`;
+      const message =
+        `Node '${soleSink.id}': this pause is the loop_group's terminal sink, but ` +
+        `'loop_group.until_bash' does not reference '${pauseRef}' — the answer is ` +
+        'recorded but never consulted for completion, so the loop only ends via ' +
+        `max_iterations. Declare 'until_bash' checking '${pauseRef}' (e.g. ` +
+        `'decision=${pauseRef}.decision; [ "$decision" = "approve" ]') so the answer ` +
+        'drives completion.';
+      warnings.push(message);
+      getLog().debug(
+        { id: soleSink.id, warning: message },
+        'loop_group_pause_completion_not_referenced'
+      );
+    }
   }
 }
 
