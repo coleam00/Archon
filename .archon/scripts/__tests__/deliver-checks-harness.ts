@@ -72,6 +72,12 @@ export interface GhFake {
   /** Drop the write instead of applying it, so the read-back disagrees. */
   readonly writeLost?: boolean;
   /**
+   * The HTTP failures the first comment writes answer with, one per write, before
+   * writes succeed again. A `landed` failure applies the write and still fails, as a
+   * gateway timeout can after the forge has accepted the request.
+   */
+  readonly commentWriteFaults?: readonly GhHttpFault[];
+  /**
    * Existing tracker issues; `issue create` appends to them. `gh api` reads them
    * too, beside the one issue `issue` describes.
    */
@@ -82,6 +88,13 @@ export interface GhFake {
   readonly authFail?: string | Readonly<Record<string, string>>;
   /** stderr for a refused repository read, keyed by host/path. */
   readonly repoReadFail?: Readonly<Record<string, string>>;
+}
+
+/** One failed HTTP response, as `gh api --include` reports it. */
+export interface GhHttpFault {
+  readonly status: number;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly landed?: boolean;
 }
 
 /** The issue facts `gh api .../issues/<n>` reports. */
@@ -176,15 +189,17 @@ const subject = { number: 7, title: 'An issue', body: 'An issue body', author: '
 const issues = (fake.issues ?? []).map(row => ({ ...row }));
 let exists = fake.noOpenPr !== true;
 let nextId = 900;
+const faults = [...(fake.commentWriteFaults ?? [])];
 const labels = new Set(fake.repositoryLabels ?? ['operator', 'archon-blocked', 'area']);
 let issueLabels = [...(fake.issueLabels ?? ['operator', 'archon-blocked'])];
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] !== 'gh') return original(argv, settings);
   const text = argv.slice(1).join(' ');
   appendFileSync(${JSON.stringify(ghLog)}, text + '\\n');
-  // gh appends an update notice to stderr on successful calls too.
-  const result = (exitCode, stdout = '', stderr = 'gh: A new release of gh is available') =>
-    ({ exitCode, stdout: Buffer.from(stdout), stderr: Buffer.from(stderr) });
+  // gh appends an update notice to stderr on successful calls too. \`gh api --include\`
+  // prints the response's status line and headers before its body, failed or not.
+  const result = (exitCode, stdout = '', stderr = 'gh: A new release of gh is available', status = exitCode === 0 ? 200 : 422, headers = {}) =>
+    ({ exitCode, stdout: Buffer.from(argv.includes('--include') ? ['HTTP/2.0 ' + String(status), ...Object.entries(headers).map(([name, value]) => name + ': ' + value), '', stdout].join('\\r\\n') : stdout), stderr: Buffer.from(stderr) });
   const selector = argv[argv.indexOf('--repo') + 1] ?? 'github.com/owner/repo';
   const host = selector.split('/')[0];
   const path = selector.split('/').slice(1).join('/');
@@ -240,9 +255,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       return result(0, issueUrl(number));
     }
   }
-  // Real gh refuses this combination before any request (gh 2.92).
-  if (argv.includes('--slurp') && (argv.includes('--jq') || argv.includes('--template')))
-    return result(1, '', 'the \`--slurp\` option is not supported with \`--jq\` or \`--template\`');
   if (text.startsWith('pr ready')) {
     if (fake.readyFail !== undefined) return result(1, '', fake.readyFail);
     if (!fake.writeLost) pr.isDraft = argv.includes('--undo');
@@ -317,7 +329,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         return result(0, JSON.stringify({ number, html_url: issueUrl(number) }));
       }
       const rows = issues.map(row => ({ number: row.number, title: row.title, body: row.body, state: row.state.toLowerCase(), ...(row.pull ? { pull_request: {} } : {}) }));
-      return result(0, JSON.stringify(argv.includes('--slurp') ? [rows] : rows));
+      return result(0, JSON.stringify(rows));
     }
     if (endpoint.endsWith('/issues/' + String(subject.number))) {
       if (method === 'PATCH' && argv.includes('--input')) {
@@ -356,6 +368,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       return result(0, JSON.stringify(rows));
     }
     if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
+    const fault = faults.shift();
+    const failed = () => result(1, JSON.stringify({ message: 'failed' }), 'gh: failed (HTTP ' + String(fault.status) + ')', fault.status, fault.headers);
+    if (fault !== undefined && fault.landed !== true) return failed();
     const body = input().body;
     const id = method === 'PATCH' ? Number(endpoint.split('/').pop()) : nextId++;
     let row = comments.find(entry => entry.id === id);
@@ -364,7 +379,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       else { row = { id, body, ...(onIssue === undefined ? {} : { issue: onIssue }) }; comments.push(row); }
     }
     appendFileSync(${JSON.stringify(ghLog)} + '.comments', JSON.stringify({ issue: row?.issue ?? onIssue ?? pr.number, body }) + '\\n');
-    return result(0, JSON.stringify({ id, body, html_url: commentUrl(row ?? { id, issue: onIssue }) }));
+    if (fault !== undefined) return failed();
+    return result(0, JSON.stringify({ id, body, html_url: commentUrl(row ?? { id, issue: onIssue }) }), undefined, method === 'POST' ? 201 : 200);
   }
   return result(95, '', 'unexpected gh call');
 } });

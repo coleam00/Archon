@@ -10,6 +10,12 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
+import {
+  ForgeOperationError,
+  ghRetryWait,
+  retryTransient,
+  TransientForgeError,
+} from '../../workflows/sdlc/.shared/forge';
 import { trackTempRoots } from './temp-roots';
 import {
   PACK,
@@ -979,6 +985,116 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('outcome_unknown');
+  });
+});
+
+// A forge that fails a request it may answer the next time (a gateway timeout, a
+// rate limit) must not end a run that has done hours of work. The repeat is safe
+// only because the comment write starts from the marker read, so a first attempt
+// that landed is found rather than written twice.
+describe('publish-review repeats a comment write the forge failed transiently', () => {
+  const report = { INPUTS_REPORT: '{ARTIFACTS}/review-report.md' };
+  const posts = (result: ScriptRun): number => result.gh.filter(call => call.includes('--method POST')).length;
+
+  it('publishes exactly one comment after a 504 on the first write', () => {
+    const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 504 }] } });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ready: true });
+    expect(posts(result)).toBe(2);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('finds a 504 write that landed instead of writing it again', () => {
+    const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 504, landed: true }] } });
+    expect(result.code).toBe(0);
+    expect(posts(result)).toBe(1);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('fails at once with the forge evidence on a permanent error', () => {
+    const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 404 }] } });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('(HTTP 404)');
+    expect(posts(result)).toBe(1);
+    expect(result.comments).toEqual([]);
+  });
+
+  it('repeats the plugin upsert after a 504 on the forge source', () => {
+    const applied = forgeOperation('comment.upsert', {
+      target: PR,
+      outcome: 'applied',
+      changed: true,
+      comment: { ref: PR, id: '900', url: `${PR_URL}#issuecomment-900`, bodyDigest: 'digest' },
+    });
+    const timedOut = JSON.stringify({
+      operationId: 'op-comment.upsert',
+      ok: false,
+      error: { kind: 'forge_error', message: 'gateway timeout', status: 504 },
+      mutation: { op: 'comment.upsert', target: PR, outcome: 'outcome_unknown' },
+    });
+    const result = publishReview({
+      source: 'forge',
+      inputs: report,
+      forge: { kind: 'fake', response: [prView, timedOut, applied] },
+    });
+    expect(result.code).toBe(0);
+    expect(result.forge.filter(call => call.includes('forge comment.upsert'))).toHaveLength(2);
+  });
+
+  it('fails at once on a permanent plugin error', () => {
+    const result = publishReview({
+      source: 'forge',
+      inputs: report,
+      forge: { kind: 'fake', response: [prView, forgeFailure('comment.upsert', 'refused', 'not found', {}), prView] },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.forge.filter(call => call.includes('forge comment.upsert'))).toHaveLength(1);
+  });
+});
+
+describe('a gh api failure is classified from its HTTP status and headers', () => {
+  const at = (status: number, headers: Record<string, string> = {}) =>
+    ghRetryWait(1, { status, headers: new Map(Object.entries(headers)) }, 1_000_000);
+
+  it('repeats a 5xx or a request that got no response, but not missing authentication', () => {
+    expect(at(502)).toBe(0);
+    expect(at(504)).toBe(0);
+    expect(ghRetryWait(1, undefined, 0)).toBe(0);
+    expect(ghRetryWait(4, undefined, 0)).toBeUndefined();
+  });
+
+  it('waits out a rate limit for the time GitHub names, or a minute', () => {
+    expect(at(429, { 'retry-after': '30' })).toBe(30_000);
+    expect(at(403, { 'retry-after': '5' })).toBe(5_000);
+    expect(at(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1030' })).toBe(30_000);
+    expect(at(429)).toBe(60_000);
+  });
+
+  it('fails a permission refusal or any other 4xx at once', () => {
+    expect(at(403)).toBeUndefined();
+    expect(at(404)).toBeUndefined();
+    expect(at(422)).toBeUndefined();
+  });
+
+  it('stops repeating after its last wait and never repeats another failure', () => {
+    const waits: number[] = [];
+    let attempts = 0;
+    const transient = () => {
+      attempts++;
+      throw new TransientForgeError('gh api failed (HTTP 504)', undefined, 0);
+    };
+    expect(() => retryTransient(transient, ms => waits.push(ms))).toThrow('HTTP 504');
+    expect(attempts).toBe(5);
+    expect(waits).toEqual([1_000, 2_000, 4_000, 8_000]);
+
+    attempts = 0;
+    const permanent = () => {
+      attempts++;
+      throw new ForgeOperationError('forge comment.upsert refused', undefined);
+    };
+    expect(() => retryTransient(permanent, () => {})).toThrow('refused');
+    expect(attempts).toBe(1);
   });
 });
 

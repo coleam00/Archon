@@ -152,7 +152,9 @@ export function record(value: unknown): Record<string, unknown> | undefined {
  *
  * `mutation` carries the evidence a write owes its caller: which of `refused`,
  * `verification_failed` or `outcome_unknown` happened, and what may remain on the
- * forge. A caller may report it; it may never retry past an unknown outcome.
+ * forge. A caller may report it. It may repeat past an unknown outcome only through
+ * {@link retryTransient}, for an operation that reads first whether an earlier
+ * attempt landed.
  */
 export class ForgeOperationError extends Error {
   constructor(
@@ -162,6 +164,116 @@ export class ForgeOperationError extends Error {
     super(message);
     this.name = 'ForgeOperationError';
   }
+}
+
+/**
+ * A forge failure the forge typed as passing: a 5xx, a rate limit, or no answer in
+ * time. Only {@link retryTransient} repeats the operation that raised it.
+ */
+export class TransientForgeError extends ForgeOperationError {
+  constructor(
+    message: string,
+    mutation: Record<string, unknown> | undefined,
+    /** The least time the forge asked to be left alone, in ms; 0 when it named none. */
+    readonly waitMs: number
+  ) {
+    super(message, mutation);
+    this.name = 'TransientForgeError';
+  }
+}
+
+/** The waits before each repeat; their count is the number of repeats. */
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000];
+
+/**
+ * Run `operation`, repeating it while it fails with a {@link TransientForgeError}.
+ * Every other failure, and the last transient one, is thrown as it is.
+ *
+ * Wrap only an operation that is safe to repeat from its start: a read, or a write
+ * that first reads whether an earlier attempt already landed (a marker, a state, a
+ * body section). A write that cannot tell must not be wrapped: a gateway timeout
+ * can arrive after the forge has applied the request.
+ */
+export function retryTransient<T>(
+  operation: () => T,
+  sleep: (ms: number) => void = Bun.sleepSync
+): T {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return operation();
+    } catch (error) {
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (!(error instanceof TransientForgeError) || delay === undefined) throw error;
+      const wait = Math.max(delay, error.waitMs);
+      note(`${error.message}; repeating in ${String(Math.ceil(wait / 1000))}s`);
+      sleep(wait);
+    }
+  }
+}
+
+/** One HTTP response as `gh api --include` prints it: status line, headers, body. */
+interface GhResponse {
+  readonly status: number;
+  /** Header names lowercased. */
+  readonly headers: ReadonlyMap<string, string>;
+  readonly body: string;
+}
+
+function ghResponse(stdout: string): GhResponse | undefined {
+  const status = /^HTTP\/[\d.]+ (\d{3})/.exec(stdout);
+  if (!status) return undefined;
+  const lines = stdout.split('\n');
+  const end = lines.findIndex(line => line.trim() === '');
+  const headers = new Map<string, string>();
+  for (const line of lines.slice(1, end === -1 ? undefined : end)) {
+    const colon = line.indexOf(':');
+    if (colon > 0) headers.set(line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim());
+  }
+  return { status: Number(status[1]), headers, body: end === -1 ? '' : lines.slice(end + 1).join('\n') };
+}
+
+/**
+ * How long GitHub asked to wait before a failed `gh api` request may be repeated, in
+ * ms (0 when it named no time), or undefined when the failure is permanent.
+ *
+ * A 5xx is transient. A 429, or a 403 carrying `retry-after` or an exhausted
+ * `x-ratelimit-remaining`, is a rate limit: it waits for the time GitHub names, or a
+ * minute, as GitHub documents for a secondary limit without one. A failure with no
+ * HTTP response at all is a connection that failed or timed out, except gh's exit 4,
+ * which is missing authentication. Everything else, a 404 or a 422, is permanent.
+ */
+export function ghRetryWait(
+  exitCode: number,
+  response: Pick<GhResponse, 'status' | 'headers'> | undefined,
+  now: number
+): number | undefined {
+  if (response === undefined) return exitCode === 4 ? undefined : 0;
+  const { status, headers } = response;
+  const retryAfter = headers.get('retry-after');
+  const exhausted = headers.get('x-ratelimit-remaining') === '0';
+  if (status === 429 || (status === 403 && (retryAfter !== undefined || exhausted))) {
+    if (retryAfter !== undefined && Number.isFinite(Number(retryAfter))) return Number(retryAfter) * 1000;
+    const reset = Number(headers.get('x-ratelimit-reset'));
+    if (exhausted && Number.isFinite(reset)) return Math.max(0, reset * 1000 - now);
+    return 60_000;
+  }
+  return status >= 500 ? 0 : undefined;
+}
+
+/**
+ * Run `gh api <args>` and return the response body. gh names a failed request's
+ * status only in stderr prose, so `--include` asks for the status line and headers
+ * on stdout, and {@link ghRetryWait} classifies the failure from those. `what`
+ * names the request in the error, which carries gh's own message.
+ */
+export function ghApi(what: string, args: readonly string[]): string {
+  const result = Bun.spawnSync(['gh', 'api', ...args, '--include'], { stdout: 'pipe', stderr: 'pipe' });
+  const response = ghResponse(result.stdout.toString());
+  if (result.exitCode === 0 && response) return response.body;
+  const message = `${what} failed: ${result.stderr.toString().trim()}`;
+  if (result.exitCode === 0) throw new Error(`${what} returned no HTTP response`);
+  const wait = ghRetryWait(result.exitCode, response, Date.now());
+  throw wait === undefined ? new Error(message) : new TransientForgeError(message, undefined, wait);
 }
 
 /**
@@ -198,6 +310,31 @@ export function invokeForge(
   }
 }
 
+/** The typed error a failed forge response carries, with its evidence and remedy. */
+function failureOf(
+  op: string,
+  response: Record<string, unknown>,
+  source: string | undefined
+): ForgeOperationError {
+  const mutation = record(response.mutation);
+  const error = record(response.error);
+  const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
+  const message = typeof error?.message === 'string' ? error.message : 'operation failed';
+  const kind = typeof error?.kind === 'string' ? error.kind : undefined;
+  const remedy =
+    kind !== undefined && Object.hasOwn(REMEDY, kind)
+      ? ` ${REMEDY[kind as keyof typeof REMEDY]}`
+      : '';
+  const evidence = `forge ${op} ${outcome ?? 'failed'}: ${message}${source ? ` (source: ${source})` : ''}${mutation ? ` ${JSON.stringify(mutation)}` : ''}${remedy}`;
+  // The contract types a plugin that did not answer in time as `timeout`, and
+  // carries the forge's HTTP status beside the error.
+  const status = typeof error?.status === 'number' ? error.status : undefined;
+  if (kind === 'timeout' || (status !== undefined && (status >= 500 || status === 429))) {
+    return new TransientForgeError(evidence, mutation, 0);
+  }
+  return new ForgeOperationError(evidence, mutation);
+}
+
 export function forgeResult(
   op: string,
   parsed: unknown,
@@ -217,19 +354,7 @@ export function forgeResult(
   if (response.ok === true && exitCode === 2) {
     note(`forge ${op} completed but the host could not record it in the run's audit log.`);
   } else if (response.ok !== true || exitCode !== 0) {
-    const mutation = record(response.mutation);
-    const error = record(response.error);
-    const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
-    const message = typeof error?.message === 'string' ? error.message : 'operation failed';
-    const kind = typeof error?.kind === 'string' ? error.kind : undefined;
-    const remedy =
-      kind !== undefined && Object.hasOwn(REMEDY, kind)
-        ? ` ${REMEDY[kind as keyof typeof REMEDY]}`
-        : '';
-    throw new ForgeOperationError(
-      `forge ${op} ${outcome ?? 'failed'}: ${message}${source ? ` (source: ${source})` : ''}${mutation ? ` ${JSON.stringify(mutation)}` : ''}${remedy}`,
-      mutation
-    );
+    throw failureOf(op, response, source);
   }
   const body = record(response.result);
   if (body?.op !== op) throw new Error(`forge ${op} returned the wrong result`);

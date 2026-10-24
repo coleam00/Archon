@@ -5,8 +5,9 @@
  * Every write here is performed and then read back before it is reported as
  * applied. On the forge path the plugin owns that verification and reports which
  * of the four outcomes happened; on `gh` this module performs the same read-back
- * and raises the failure itself. Neither path falls back to the other, and an
- * operation whose outcome could not be established is never retried here.
+ * and raises the failure itself. Neither path falls back to the other. Only an
+ * operation that reads first whether an earlier attempt landed is repeated, and only
+ * after a failure the forge typed as transient (./forge.ts `retryTransient`).
  *
  * Authored content — a pull-request body, a comment — travels in a request file
  * on both paths, so it never reaches any process's argv.
@@ -16,10 +17,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  ghApi,
   invokeForge,
   parsePrRecord,
   qualifiedRepo,
   record,
+  retryTransient,
   sameRepo,
   type ForgeSource,
   type PrRecord,
@@ -385,13 +388,13 @@ export function ghIssueComments(ref: QualifiedPr): GhComment[] {
   // Paged explicitly rather than through `gh api --paginate`, so what this reads
   // does not depend on how gh chooses to join pages of a JSON array.
   for (let page = 1; ; page++) {
-    const result = gh(
-      'api',
-      '--hostname',
-      ref.repo.host,
-      `repos/${ref.repo.path}/issues/${String(ref.number)}/comments?per_page=100&page=${String(page)}`
+    const rows: unknown = JSON.parse(
+      ghApi('gh api issue comments', [
+        '--hostname',
+        ref.repo.host,
+        `repos/${ref.repo.path}/issues/${String(ref.number)}/comments?per_page=100&page=${String(page)}`,
+      ])
     );
-    const rows: unknown = JSON.parse(required(result, 'gh api issue comments'));
     if (!Array.isArray(rows)) throw new Error('gh api returned an unexpected comment payload');
     for (const row of rows) {
       const comment = record(row);
@@ -425,8 +428,21 @@ export interface CommentSubject {
  * not there yet and replacing it in place when it is. More than one marked
  * comment is a conflict: guessing which one is canonical would silently abandon
  * the other.
+ *
+ * A transient forge failure repeats the whole upsert. Both sources find the marked
+ * comment first, so an attempt that landed before its failure is edited or left as
+ * it is, never written a second time.
  */
 export function upsertComment(
+  subject: CommentSubject,
+  marker: string,
+  body: string,
+  source: ForgeSource
+): { readonly url: string } {
+  return retryTransient(() => upsertCommentOnce(subject, marker, body, source));
+}
+
+function upsertCommentOnce(
   subject: CommentSubject,
   marker: string,
   body: string,
@@ -458,12 +474,11 @@ export function upsertComment(
   // gh reads the body from a JSON request file: `-f body=@path` would post the
   // literal string, and argv is not where authored content belongs.
   const directory = mkdtempSync(join(tmpdir(), 'archon-comment-'));
-  let written: Ran;
+  let written: string;
   try {
     const payload = join(directory, 'comment.json');
     writeFileSync(payload, JSON.stringify({ body }), { mode: 0o600 });
-    written = gh(
-      'api',
+    written = ghApi('gh api comment write', [
       '--hostname',
       ref.repo.host,
       '--method',
@@ -472,13 +487,12 @@ export function upsertComment(
         ? `repos/${ref.repo.path}/issues/comments/${previous.id}`
         : `repos/${ref.repo.path}/issues/${String(ref.number)}/comments`,
       '--input',
-      payload
-    );
+      payload,
+    ]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-  if (!written.ok) throw new Error(`gh api comment write failed: ${written.stderr}`);
-  const id = record(JSON.parse(written.stdout))?.id;
+  const id = record(JSON.parse(written))?.id;
   if (typeof id !== 'number' && typeof id !== 'string') {
     throw new Error('gh api returned no comment identity; a comment may have changed');
   }
