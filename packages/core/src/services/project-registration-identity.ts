@@ -34,22 +34,31 @@ export async function isCheckoutRegistered(
 ): Promise<boolean> {
   const checkout = (await existingPhysicalPath(path)) ?? resolve(path);
   for (const project of registered) {
-    // An invalid relative stored path names no checkout; resolving it would claim this process's directory.
-    if (!isAbsolute(project.default_cwd)) continue;
-    const physicalCwd = await readablePhysicalPath(project);
-    const cwd = physicalCwd ?? resolve(project.default_cwd);
-    if (
-      isPathInside(checkout, cwd, { includeRoot: true }) ||
-      isPathInside(cwd, checkout, { includeRoot: true })
-    )
-      return true;
-    if (project.kind !== 'folder' && physicalCwd) {
-      for (const metadata of await readableGitMetadata(physicalCwd)) {
-        if (isPathInside(checkout, metadata, { includeRoot: true })) return true;
-      }
-    }
+    if (await projectClaimsCheckout(project, checkout)) return true;
   }
   return false;
+}
+
+/**
+ * A project claims a checkout that contains, or sits inside, its path, and a repository
+ * also claims the Git directories its checkout keeps elsewhere.
+ */
+async function projectClaimsCheckout(
+  project: Pick<ProjectIdentity, 'kind' | 'name' | 'default_cwd'>,
+  checkout: string
+): Promise<boolean> {
+  // An invalid relative stored path names no checkout; resolving it would claim this process's directory.
+  if (!isAbsolute(project.default_cwd)) return false;
+  const physicalCwd = await readablePhysicalPath(project);
+  const cwd = physicalCwd ?? resolve(project.default_cwd);
+  if (
+    isPathInside(checkout, cwd, { includeRoot: true }) ||
+    isPathInside(cwd, checkout, { includeRoot: true })
+  )
+    return true;
+  if (project.kind === 'folder' || !physicalCwd) return false;
+  const metadata = await readableGitMetadata(physicalCwd);
+  return metadata.some(dir => isPathInside(checkout, dir, { includeRoot: true }));
 }
 
 /**
