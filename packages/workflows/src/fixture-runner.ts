@@ -479,6 +479,32 @@ export async function runFixtures(options: RunFixturesOptions): Promise<FixtureR
   ]);
 
   const byName = new Map(options.workflows.map(ws => [ws.workflow.name, ws]));
+  const selected = await selectFixtures(all, byName, options);
+
+  const results = await withCapturedFixtureSource(
+    options.cwd,
+    options.sourceConfig,
+    async captured => {
+      const collected: FixtureCheckResult[] = [];
+      for (const fixture of selected) {
+        collected.push(...(await runOneFixture(fixture, byName, options, captured)));
+      }
+      return collected;
+    }
+  );
+
+  return Object.freeze({
+    results,
+    passed: results.filter(r => r.pass).length,
+    failed: results.filter(r => !r.pass).length,
+  });
+}
+
+async function selectFixtures(
+  all: DiscoveredFixture[],
+  byName: ReadonlyMap<string, WorkflowWithSource>,
+  options: RunFixturesOptions
+): Promise<DiscoveredFixture[]> {
   let selected = all;
   if (options.target !== undefined) {
     const targetName = options.target;
@@ -523,24 +549,7 @@ export async function runFixtures(options: RunFixturesOptions): Promise<FixtureR
       throw new Error(`No fixtures found for '${targetName}'.${hint}`);
     }
   }
-
-  const results = await withCapturedFixtureSource(
-    options.cwd,
-    options.sourceConfig,
-    async captured => {
-      const collected: FixtureCheckResult[] = [];
-      for (const fixture of selected) {
-        collected.push(...(await runOneFixture(fixture, byName, options, captured)));
-      }
-      return collected;
-    }
-  );
-
-  return Object.freeze({
-    results,
-    passed: results.filter(r => r.pass).length,
-    failed: results.filter(r => !r.pass).length,
-  });
+  return selected;
 }
 
 async function runOneFixture(

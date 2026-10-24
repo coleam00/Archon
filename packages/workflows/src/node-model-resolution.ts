@@ -273,19 +273,19 @@ export function resolveWorkflowModelScope(
     preset,
     tier: workflowModel && isTierName(workflowModel) ? workflowModel : undefined,
     effort: workflow.effort,
-    // The preset is checked FIRST because when one resolves, its provider is what won —
-    // `provider` was reassigned from `spec.provider` above, overriding any `provider:` the
-    // workflow declared (the executor warns about exactly that case). Reporting the
-    // overridden value as the origin would name the loser. Matches `resolveNodeModel`,
-    // which sets 'model ref' inside its own preset branch for the same reason.
-    providerOrigin: preset
-      ? 'model ref'
-      : workflow.provider
-        ? 'workflow'
-        : defaultAssistant === undefined
-          ? 'unset'
-          : 'default assistant',
+    providerOrigin: workflowProviderOrigin(preset, workflow.provider, defaultAssistant),
   };
+}
+
+function workflowProviderOrigin(
+  preset: ModelAliasPreset | undefined,
+  workflowProvider: string | undefined,
+  defaultAssistant: string | undefined
+): ResolutionOrigin {
+  // A resolved preset overrides even an explicitly declared workflow provider.
+  if (preset) return 'model ref';
+  if (workflowProvider) return 'workflow';
+  return defaultAssistant === undefined ? 'unset' : 'default assistant';
 }
 
 /**
