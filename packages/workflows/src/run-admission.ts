@@ -158,19 +158,18 @@ async function createWorkflowRunRow(
   userMessage: string,
   origin: WorkflowRunOrigin | undefined,
   opts: ExecuteWorkflowOptions,
-  { prepared, dispatchMetadata, runSource }: RunDispatch,
+  dispatch: RunDispatch,
   executionOwner: ExecutionOwnerRecord
 ): Promise<RunPhase<WorkflowRun>> {
   const {
     preparedSource,
     codebaseId,
     issueContext,
-    container: containerCtx,
     inputs: suppliedInputs,
     adoptedFromRunId,
     continuationMode,
   } = opts;
-  const { modelBindingsMetadata, runConfigMetadata } = prepared;
+  const { prepared, runSource } = dispatch;
   try {
     const workflowRun = await deps.store.createWorkflowRun({
       // Reserved by `prepareWorkflowSource` so the row and its already-written source
@@ -181,15 +180,8 @@ async function createWorkflowRunRow(
       codebase_id: codebaseId,
       user_message: userMessage,
       working_path: cwd,
-      // Record container isolation on the run itself so a later resume — a
-      // SEPARATE process with no --container flag in hand — can detect it and
-      // rediscover the container. `isolation_env_id` is the handle the resume
-      // path passes to `backend.resumeEnv()` (Phase C).
       metadata: {
         ...(issueContext ? { github_context: issueContext } : {}),
-        ...(opts.execContext?.kind === 'container' ? { isolation: 'container' } : {}),
-        ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
-        ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
         // Declared inputs supplied by a direct top-level invocation (#2554), already
         // validated by the invocation gate. Written only on creation, so a resume, which
         // arrives with `preCreatedRun` set and never creates a row, can never re-stamp or
@@ -202,10 +194,7 @@ async function createWorkflowRunRow(
         ...(adoptedFromRunId
           ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? 'adopt' } }
           : {}),
-        [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot,
-        [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
-        [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
-        ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
+        ...freshInvocationMetadata(opts, dispatch),
         [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
       },
       ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
@@ -306,7 +295,7 @@ async function stampPreCreatedRun(
 ): Promise<RunPhase<WorkflowRun>> {
   const { isContinuation } = dispatch;
   const invocationMetadata: Record<string, unknown> = {
-    ...preCreatedInvocationMetadata(preCreatedRun, opts, dispatch),
+    ...(!isContinuation ? freshInvocationMetadata(opts, dispatch, preCreatedRun.metadata) : {}),
     [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
   };
   try {
@@ -359,18 +348,16 @@ async function stampPreCreatedRun(
   };
 }
 
-// A continuation preserves its invocation settings. Container stamps let resume
-// rediscover the original environment, just as for a freshly created row.
-function preCreatedInvocationMetadata(
-  preCreatedRun: WorkflowRun,
+// Container stamps let a later process rediscover the environment through backend.resumeEnv.
+function freshInvocationMetadata(
   opts: ExecuteWorkflowOptions,
-  { isContinuation, prepared, dispatchMetadata }: RunDispatch
-): Record<string, unknown> {
-  if (isContinuation) return {};
+  { prepared, dispatchMetadata }: RunDispatch,
+  existingMetadata: WorkflowRun['metadata'] = {}
+) {
   const { modelBindingsMetadata, runConfigMetadata } = prepared;
   const containerCtx = opts.container;
   return {
-    ...(Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY)
+    ...(Object.hasOwn(existingMetadata, RUN_AI_CONFIGURATION_METADATA_KEY)
       ? {}
       : { [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot }),
     [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
