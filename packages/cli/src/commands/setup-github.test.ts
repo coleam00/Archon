@@ -204,15 +204,12 @@ describe('GitHub setup wizard', () => {
 
   function expectSavedAuthentication(
     env: ReturnType<typeof read>,
-    selectedMode: 'app' | 'pat',
+    mode: typeof authMode,
     force: boolean
   ) {
-    expect(selectGitHubAuthMode(env)).toEqual({ kind: selectedMode });
-    if (selectedMode === 'app') {
-      expect(loadGitHubAppConfig(env)).toMatchObject({
-        appId: force ? '123' : '999',
-        privateKey,
-      });
+    expect(selectGitHubAuthMode(env)).toEqual({ kind: mode });
+    if (mode === 'app') {
+      expect(loadGitHubAppConfig(env)).toMatchObject({ appId: force ? '123' : '999', privateKey });
       expect(env.GITHUB_TOKEN).toBeUndefined();
       expect(env.GH_TOKEN).toBeUndefined();
     } else {
@@ -1171,14 +1168,16 @@ describe('GitHub setup wizard', () => {
   );
 
   async function collectBlankAuthentication(key: string, whitespace: string) {
-    const original = serializeEnv({
-      ...(authMode === 'pat'
+    const inline = key === 'GITHUB_APP_PRIVATE_KEY';
+    const credentials =
+      authMode === 'pat'
         ? { GITHUB_TOKEN: pat }
         : {
             GITHUB_APP_ID: '999',
-            [key === 'GITHUB_APP_PRIVATE_KEY' ? key : 'GITHUB_APP_PRIVATE_KEY_PATH']:
-              key === 'GITHUB_APP_PRIVATE_KEY' ? privateKey : keyPath,
-          }),
+            [inline ? key : 'GITHUB_APP_PRIVATE_KEY_PATH']: inline ? privateKey : keyPath,
+          };
+    const original = serializeEnv({
+      ...credentials,
       WEBHOOK_SECRET: webhookSecret,
       CUSTOM_KEY: 'keep',
       [key]: whitespace,

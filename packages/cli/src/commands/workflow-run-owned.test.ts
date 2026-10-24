@@ -1973,26 +1973,16 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     );
   });
 
-  const adoptionRefusalMessage = {
-    missing: 'Isolation environment env-9 not found',
-    replaced: 'changed during adoption',
-    switched: 'expected branch',
-    detached: 'expected branch',
-    mismatched: 'does not match',
-  };
-  type AdoptionRefusal = keyof typeof adoptionRefusalMessage;
-  function refusedEnvironment(reason: AdoptionRefusal) {
-    return reason === 'missing'
-      ? null
-      : reason === 'replaced'
-        ? { ...adoptedEnvironment(), metadata: { worktree_registration_id: 'replacement' } }
-        : {
-            ...adoptedEnvironment(),
-            working_path: reason === 'mismatched' ? '/foreign/worktree' : '/wt/adopted',
-          };
+  const adoptionRefusals = ['missing', 'mismatched', 'replaced', 'switched', 'detached'] as const;
+  function refusedEnvironment(reason: (typeof adoptionRefusals)[number]) {
+    if (reason === 'missing') return null;
+    const environment = adoptedEnvironment();
+    if (reason === 'replaced') environment.metadata = { worktree_registration_id: 'replacement' };
+    if (reason === 'mismatched') environment.working_path = '/foreign/worktree';
+    return environment;
   }
 
-  it.each(['missing', 'mismatched', 'replaced', 'switched', 'detached'] as const)(
+  it.each(adoptionRefusals)(
     'refuses a %s adoption environment before lane capture or execution',
     async reason => {
       setupAdoptMocks();
@@ -2010,7 +2000,15 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
         workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
           adoptRunId: 'run-old',
         })
-      ).rejects.toThrow(adoptionRefusalMessage[reason]);
+      ).rejects.toThrow(
+        reason === 'missing'
+          ? 'Isolation environment env-9 not found'
+          : reason === 'replaced'
+            ? 'changed during adoption'
+            : reason === 'switched' || reason === 'detached'
+              ? 'expected branch'
+              : 'does not match'
+      );
       expect(executeWorkflow).not.toHaveBeenCalled();
       expect(isolationDb.updateMetadata).not.toHaveBeenCalled();
       const captures = (prepareWorkflowSource as ReturnType<typeof mock>).mock.calls;

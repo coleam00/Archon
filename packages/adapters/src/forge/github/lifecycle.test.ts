@@ -12,16 +12,16 @@ import { prRecord } from './pull-requests';
 const repo = { host: 'github.com', path: 'archon/test' };
 const ref = { repo, number: 7 };
 
+test('pull request head repositories retain the authorizing HTTPS host claim', () => {
+  const hostClaim = true;
+  const record = prRecord({ host: 'ghes.example.test:443', path: repo.path, hostClaim }, pull());
+  expect(record.head_repo).toEqual({ host: 'ghes.example.test:443', path: repo.path, hostClaim });
+});
+
 const marker = '<!-- archon-review-report -->';
 const report = `${marker}\nRound 1`;
 
 describe('GitHub lifecycle reads', () => {
-  test('pull request head repositories retain the authorizing HTTPS host claim', () => {
-    const hostClaim = true;
-    const record = prRecord({ host: 'ghes.example.test:443', path: repo.path, hostClaim }, pull());
-    expect(record.head_repo).toEqual({ host: 'ghes.example.test:443', path: repo.path, hostClaim });
-  });
-
   test('reads a work item and distinguishes a pull request from an issue', async () => {
     const response = await run(
       { operationId: 'view-item', op: 'workitem.view', ref },
