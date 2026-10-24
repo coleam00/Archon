@@ -249,33 +249,7 @@ function selectSession(
   isParallelLayer: boolean
 ): SessionSelection {
   if (isNodeContextResume(node.context)) {
-    const sourceNodeId = node.context.resume;
-    const ownerCursor = ctx.bodySessionCursors?.get(node.id);
-    const resumeIntent: SessionResumeIntent =
-      ownerCursor !== undefined ? 'owner-continuation' : 'source-fork';
-    const sourceHandle = ownerCursor ?? ctx.nodeSessionHandles?.get(sourceNodeId);
-    if (sourceHandle === undefined) {
-      throw new Error(
-        `Node '${node.id}' cannot resume '${sourceNodeId}': the completed source has no available provider session.`
-      );
-    }
-    if (sourceHandle.sessionId.trim() === '') {
-      throw new Error(
-        `Node '${node.id}' cannot resume '${sourceNodeId}': the completed source has no available provider session.`
-      );
-    }
-    if (sourceHandle.provider !== provider) {
-      throw new Error(
-        `Node '${node.id}' cannot resume '${sourceNodeId}': source provider '${sourceHandle.provider}' does not match resolved provider '${provider}'.`
-      );
-    }
-    const caps = requireProvider(ctx.deps.providers, provider).capabilities;
-    if (!caps.sessionResume || (resumeIntent === 'source-fork' && caps.sessionFork !== true)) {
-      throw new Error(
-        `Node '${node.id}' cannot resume '${sourceNodeId}': resolved provider '${provider}' does not support immutable session forks.`
-      );
-    }
-    return { resumeSessionId: sourceHandle.sessionId, resumeIntent, named: true };
+    return selectNamedSession(ctx, node, provider, node.context.resume);
   }
 
   // Legacy scalar/default selection — parallel or context:fresh → always fresh.
@@ -309,6 +283,40 @@ function selectSession(
     'dag.session_provider_boundary_fresh'
   );
   return { resumeSessionId: undefined, resumeIntent: 'ordinary', named: false };
+}
+
+function selectNamedSession(
+  ctx: RunLayersContext,
+  node: AgentNode,
+  provider: string,
+  sourceNodeId: string
+): SessionSelection {
+  const ownerCursor = ctx.bodySessionCursors?.get(node.id);
+  const resumeIntent: SessionResumeIntent =
+    ownerCursor !== undefined ? 'owner-continuation' : 'source-fork';
+  const sourceHandle = ownerCursor ?? ctx.nodeSessionHandles?.get(sourceNodeId);
+  if (sourceHandle === undefined) {
+    throw new Error(
+      `Node '${node.id}' cannot resume '${sourceNodeId}': the completed source has no available provider session.`
+    );
+  }
+  if (sourceHandle.sessionId.trim() === '') {
+    throw new Error(
+      `Node '${node.id}' cannot resume '${sourceNodeId}': the completed source has no available provider session.`
+    );
+  }
+  if (sourceHandle.provider !== provider) {
+    throw new Error(
+      `Node '${node.id}' cannot resume '${sourceNodeId}': source provider '${sourceHandle.provider}' does not match resolved provider '${provider}'.`
+    );
+  }
+  const caps = requireProvider(ctx.deps.providers, provider).capabilities;
+  if (!caps.sessionResume || (resumeIntent === 'source-fork' && caps.sessionFork !== true)) {
+    throw new Error(
+      `Node '${node.id}' cannot resume '${sourceNodeId}': resolved provider '${provider}' does not support immutable session forks.`
+    );
+  }
+  return { resumeSessionId: sourceHandle.sessionId, resumeIntent, named: true };
 }
 
 /**

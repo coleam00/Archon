@@ -598,6 +598,26 @@ export function resolveNodeOutputField(
   // payload with no contract (legacy rows, an object schema without `properties`) stays
   // lenient for a single field, because nothing tells an optional field from a typo.
   const absentIsEmpty = paths !== undefined || (structured !== undefined && segments.length === 1);
+  return resolveOutputPath(
+    root,
+    segments,
+    nodeId,
+    field,
+    reference,
+    absentIsEmpty,
+    paths !== undefined
+  );
+}
+
+function resolveOutputPath(
+  root: Record<string, unknown>,
+  segments: readonly string[],
+  nodeId: string,
+  field: string,
+  reference: string,
+  absentIsEmpty: boolean,
+  declared: boolean
+): FieldResolution {
   let value: unknown = root;
   for (const segment of segments) {
     const object = asPlainObject(value);
@@ -611,7 +631,7 @@ export function resolveNodeOutputField(
     value = object[segment];
     // Required fields were validated present, so a declared null is an optional value
     // left empty, at any depth.
-    if (paths !== undefined && (value === undefined || value === null)) return { kind: 'empty' };
+    if (declared && (value === undefined || value === null)) return { kind: 'empty' };
   }
   return { kind: 'value', value };
 }
