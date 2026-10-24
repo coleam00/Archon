@@ -207,6 +207,29 @@ describe('SqliteAdapter upgrades from released schema vintages', () => {
   });
 
   test('every released vintage converges on the fresh-install schema', async () => {
+    const freshObjects: Catalog = {
+      tables: new Map(),
+      objects: new Map([
+        ['missing_index', 'items|CREATE INDEX missing_index ON items (id)'],
+        ['changed_trigger', 'items|CREATE TRIGGER changed_trigger BEFORE INSERT ON items'],
+      ]),
+    };
+    const upgradedObjects: Catalog = {
+      tables: new Map(),
+      objects: new Map([
+        ['changed_trigger', 'items|CREATE TRIGGER changed_trigger AFTER INSERT ON items'],
+        ['extra_index', 'items|CREATE INDEX extra_index ON items (name)'],
+      ]),
+    };
+    expect(diffCatalogs(freshObjects, upgradedObjects)).toEqual({
+      diffs: [
+        'missing after upgrade [index/trigger]: missing_index (items|CREATE INDEX missing_index ON items (id))',
+        'changed after upgrade [index/trigger]: changed_trigger: fresh=items|CREATE TRIGGER changed_trigger BEFORE INSERT ON items upgraded=items|CREATE TRIGGER changed_trigger AFTER INSERT ON items',
+        'extra after upgrade [index/trigger]: extra_index (items|CREATE INDEX extra_index ON items (name))',
+      ],
+      excused: [],
+    });
+
     const fixtureFiles = existsSync(FIXTURES_DIR)
       ? readdirSync(FIXTURES_DIR)
           .filter(f => f.endsWith('.sql'))
