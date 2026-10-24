@@ -114,6 +114,13 @@ export function loadArchonEnv(
 
   options.afterUserLoad?.();
 
+  loadRepoEnv(cwd, homePath, env);
+
+  // The logger fixed its level before these files loaded; hand it a LOG_LEVEL they set.
+  if (process.env.LOG_LEVEL !== logLevelBefore) applyEnvLogLevel();
+}
+
+function loadRepoEnv(cwd: string, homePath: string, env: NodeJS.ProcessEnv): void {
   const repoPath = getRepoArchonEnvPath(cwd);
   if (existsSync(repoPath)) {
     // Parse without applying, so a refused file changes nothing.
@@ -144,9 +151,6 @@ export function loadArchonEnv(
       );
     }
   }
-
-  // The logger fixed its level before these files loaded; hand it a LOG_LEVEL they set.
-  if (process.env.LOG_LEVEL !== logLevelBefore) applyEnvLogLevel();
 }
 
 function envFileKeyNames(path: string): string[] {

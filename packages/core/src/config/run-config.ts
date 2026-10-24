@@ -244,17 +244,25 @@ function serializeLayer(layer: WorkflowRunConfigLayer): string {
 function configuredKeyPaths(layer: WorkflowRunConfigLayer): string[] {
   const paths: string[] = [];
   if (layer.assistant !== undefined) paths.push('assistant');
-  for (const [provider, defaults] of Object.entries(layer.assistants ?? {})) {
-    const fields = Object.keys(defaults);
-    if (fields.length === 0) paths.push(`assistants.${provider}`);
-    else for (const field of fields) paths.push(`assistants.${provider}.${field}`);
-  }
+  paths.push(...assistantKeyPaths(layer.assistants ?? {}));
   for (const name of Object.keys(layer.aliases ?? {})) paths.push(`aliases.${name}`);
   for (const name of Object.keys(layer.tiers ?? {})) paths.push(`tiers.${name}`);
   for (const field of Object.keys(layer.workflows ?? {})) paths.push(`workflows.${field}`);
   if (layer.docsPath !== undefined) paths.push('docs.path');
   for (const name of Object.keys(layer.envVars ?? {})) paths.push(`env.${name}`);
   return paths.sort();
+}
+
+function assistantKeyPaths(
+  assistants: NonNullable<WorkflowRunConfigLayer['assistants']>
+): string[] {
+  const paths: string[] = [];
+  for (const [provider, defaults] of Object.entries(assistants)) {
+    const fields = Object.keys(defaults);
+    if (fields.length === 0) paths.push(`assistants.${provider}`);
+    else for (const field of fields) paths.push(`assistants.${provider}.${field}`);
+  }
+  return paths;
 }
 
 export function sealWorkflowRunConfig(

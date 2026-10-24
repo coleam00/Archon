@@ -390,15 +390,22 @@ export function assertEffectiveGitHubAuth(
         GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(layer[key]))
       ))
   ) {
-    if (mode.kind !== 'app') {
-      throw new Error(
-        mode.kind === 'conflict'
-          ? mode.message
-          : 'Effective GitHub configuration does not activate App mode. Check App ID, private key, and webhook secret in the environment and both Archon env files.'
-      );
-    }
-    if (!loadGitHubAppConfig(effective)) {
-      throw new Error('Effective GitHub App configuration could not be loaded.');
-    }
+    assertEffectiveGitHubAppAuth(mode, effective);
+  }
+}
+
+function assertEffectiveGitHubAppAuth(
+  mode: ReturnType<typeof selectGitHubAuthMode>,
+  effective: NodeJS.ProcessEnv
+): void {
+  if (mode.kind !== 'app') {
+    throw new Error(
+      mode.kind === 'conflict'
+        ? mode.message
+        : 'Effective GitHub configuration does not activate App mode. Check App ID, private key, and webhook secret in the environment and both Archon env files.'
+    );
+  }
+  if (!loadGitHubAppConfig(effective)) {
+    throw new Error('Effective GitHub App configuration could not be loaded.');
   }
 }

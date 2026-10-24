@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import {
+  type ForgeEvent,
   createForgeInputBindingSchema,
   createForgeBindingSchema,
   forgeEventSelectorSchema,
@@ -67,6 +68,50 @@ export const githubWebhookSourceConfigSchema = z
         });
     }
   });
+function evaluateBindings(configuredBindings: z.infer<typeof bindingSchema>[], event: ForgeEvent) {
+  const bindings: ResourceStartBindingIntent[] = [];
+  const evaluatedBindings: NonNullable<
+    Extract<WebhookSourceResult, { status: 'received' }>['acceptance']['evaluatedBindings']
+  > = [];
+  for (const binding of configuredBindings) {
+    const bindingRevision = createHash('sha256').update(JSON.stringify(binding)).digest('hex');
+    const { selector, inputMapping, ...intent } = binding;
+    if (!matchForgeEvent(selector, event)) {
+      evaluatedBindings.push({
+        bindingId: binding.bindingId,
+        bindingRevision,
+        status: 'unmatched',
+        reason: 'selector_did_not_match',
+      });
+      continue;
+    }
+    const mapped = mapForgeInputs(inputMapping, event);
+    if (!mapped.ok) {
+      evaluatedBindings.push({
+        bindingId: binding.bindingId,
+        bindingRevision,
+        status: 'rejected',
+        reason: `Input '${mapped.input}': ${mapped.reason}`,
+      });
+      continue;
+    }
+    // Field mappings carry event content; literal mappings are the operator's own values.
+    const literalInputs: Record<string, JsonValue> = {};
+    const eventInputs: Record<string, JsonValue> = {};
+    for (const [name, value] of Object.entries(mapped.inputs))
+      (inputMapping[name]?.source === 'field' ? eventInputs : literalInputs)[name] = value;
+    bindings.push(
+      resourceStartBindingIntentSchema.parse({
+        ...intent,
+        bindingRevision,
+        launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...literalInputs } },
+        eventInputs,
+      })
+    );
+  }
+  return { bindings, evaluatedBindings };
+}
+
 /** Configured source plugins run as trusted operator-installed code. */
 const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
   sourceInstanceId,
@@ -137,51 +182,10 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
           id: normalized.envelope.sourceActor.id,
         };
       }
-      const bindings: ResourceStartBindingIntent[] = [];
-      const evaluatedBindings: NonNullable<
-        Extract<WebhookSourceResult, { status: 'received' }>['acceptance']['evaluatedBindings']
-      > = [];
-      for (const binding of config.bindings) {
-        const bindingRevision = createHash('sha256').update(JSON.stringify(binding)).digest('hex');
-        if (!matchForgeEvent(binding.selector, normalized.envelope.event)) {
-          evaluatedBindings.push({
-            bindingId: binding.bindingId,
-            bindingRevision,
-            status: 'unmatched',
-            reason: 'selector_did_not_match',
-          });
-          continue;
-        }
-        const mapped = mapForgeInputs(binding.inputMapping, normalized.envelope.event);
-        if (!mapped.ok) {
-          evaluatedBindings.push({
-            bindingId: binding.bindingId,
-            bindingRevision,
-            status: 'rejected',
-            reason: `Input '${mapped.input}': ${mapped.reason}`,
-          });
-          continue;
-        }
-        // Field mappings carry event content; literal mappings are the operator's own values.
-        const literalInputs: Record<string, JsonValue> = {};
-        const eventInputs: Record<string, JsonValue> = {};
-        for (const [name, value] of Object.entries(mapped.inputs))
-          (binding.inputMapping[name]?.source === 'field' ? eventInputs : literalInputs)[name] =
-            value;
-        bindings.push(
-          resourceStartBindingIntentSchema.parse({
-            bindingId: binding.bindingId,
-            bindingRevision,
-            hostId: binding.hostId,
-            runAsUserId: binding.runAsUserId,
-            resource: binding.resource,
-            capacity: binding.capacity,
-            overlap: binding.overlap,
-            launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...literalInputs } },
-            eventInputs,
-          })
-        );
-      }
+      const { bindings, evaluatedBindings } = evaluateBindings(
+        config.bindings,
+        normalized.envelope.event
+      );
       const [first, ...rest] = bindings;
       return {
         status: 'received',

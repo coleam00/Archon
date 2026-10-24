@@ -26,7 +26,13 @@ import {
 } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildApplyScript, buildSummaryScript } from './overlay';
+import { IsolationFailure } from '../errors';
+import {
+  applyOverlayChanges,
+  summarizeOverlayChanges,
+  buildApplyScript,
+  buildSummaryScript,
+} from './overlay';
 
 // These scripts ONLY ever execute inside the Linux runner container in production.
 // Git-Bash on Windows can't create real symlinks (`ln -s` copies) and MSYS mangles
@@ -520,5 +526,141 @@ describe('summary script — faithful representation (M1)', () => {
     // An empty `dir` would report the top-level name and invite the approver to
     // sign off on deleting a different file.
     expect(records.some(r => r.tag === 'D' && r.fields[0] === 'gone.txt')).toBe(false);
+  });
+});
+
+describe('walk record producer/consumer conformance', () => {
+  const target = { volume: 'fixture', hostRoot: '/fixture', image: 'fixture' };
+  const emptySummary = {
+    added: [],
+    modified: [],
+    deleted: [],
+    symlinks: [],
+    skipped: [],
+    totalCount: 0,
+    truncated: false,
+  };
+  const emptyApply = { filesApplied: 0, filesDeleted: 0, warnings: [] };
+
+  test.each([
+    {
+      name: 'summary',
+      script: buildSummaryScript,
+      decode: summarizeOverlayChanges,
+      empty: emptySummary,
+      records: [
+        { tag: 'A', fields: ['path'], expected: () => ({ added: ['path'], totalCount: 1 }) },
+        { tag: 'M', fields: ['path'], expected: () => ({ modified: ['path'], totalCount: 1 }) },
+        { tag: 'D', fields: ['path'], expected: () => ({ deleted: ['path'], totalCount: 1 }) },
+        {
+          tag: 'L',
+          fields: ['path', 'target', '1'],
+          expected: () => ({
+            symlinks: [{ path: 'path', target: 'target', escapes: true }],
+            totalCount: 1,
+          }),
+        },
+        {
+          tag: 'S',
+          fields: ['path', 'reason'],
+          expected: (fields: string[]) => ({
+            skipped: [{ path: 'path', reason: fields[1] }],
+          }),
+        },
+      ],
+    },
+    {
+      name: 'apply',
+      script: buildApplyScript,
+      decode: applyOverlayChanges,
+      empty: emptyApply,
+      records: [
+        { tag: 'D', fields: ['path'], completed: 1, expected: () => ({ filesDeleted: 1 }) },
+        { tag: 'K', fields: ['path'], completed: 1, expected: () => ({ filesApplied: 1 }) },
+        { tag: 'W', fields: ['path'], completed: 1, expected: () => ({ filesApplied: 1 }) },
+        {
+          tag: 'S',
+          fields: ['path', 'reason'],
+          completed: 0,
+          expected: (fields: string[]) => ({
+            warnings: [`skipped path: ${fields[1]}`],
+          }),
+        },
+      ],
+    },
+  ])(
+    '$name decodes every emitted format with its actual tag, arity and meaning',
+    async ({ script, decode, empty, records }) => {
+      // Inspect every printf, including branches requiring privileged devices, then
+      // pass its record through the public reader rather than a second parser alone.
+      const formats = [...script().matchAll(/printf '([^']*\\0)'/g)].map(match => match[1] ?? '');
+      expect(formats.length).toBeGreaterThan(0);
+      const tags = new Set<string>();
+      for (const format of formats) {
+        const [tag, ...slots] = format.replace(/\\0$/, '').split('\\t');
+        const record = records.find(record => record.tag === tag);
+        if (!record) throw new Error(`No decoder expectation for ${format}`);
+        expect(slots).toHaveLength(record.fields.length);
+        expect(slots[0]).toBe('%s');
+        const fields = slots.map((slot, index) => (slot === '%s' ? record.fields[index] : slot));
+        const stdout = [tag, ...fields].join('\t') + '\0';
+        expect(await decode(async () => ({ stdout, stderr: '' }), target)).toEqual({
+          ...empty,
+          ...record.expected(fields.map(field => field ?? '')),
+        });
+        if ('completed' in record) {
+          const cause = Object.assign(new Error('apply failed'), { stdout });
+          const failure = new IsolationFailure('unclassified', 'apply failed', cause);
+          await expect(
+            applyOverlayChanges(async () => {
+              throw failure;
+            }, target)
+          ).rejects.toThrow(`${record.completed} path(s) confirmed completed`);
+        }
+        tags.add(tag ?? '');
+      }
+      expect([...tags].sort()).toEqual(records.map(record => record.tag).sort());
+    }
+  );
+
+  test.skipIf(isWin)('decodes every record family emitted by both actual scripts', async () => {
+    const { upper, dest, ws } = makeDirs();
+    writeFileSync(join(upper, 'added'), 'new');
+    writeFileSync(join(upper, 'modified'), 'new');
+    writeFileSync(join(dest, 'modified'), 'old');
+    writeFileSync(join(upper, '.wh.deleted'), '');
+    writeFileSync(join(dest, 'deleted'), 'old');
+    writeFileSync(join(upper, '.wh..wh..opq'), '');
+    symlinkSync('added', join(upper, 'link'));
+    symlinkSync('/etc/shadow', join(upper, 'escape'));
+    const target = { volume: 'fixture', hostRoot: ws, image: 'fixture' };
+
+    const summaryOutput = runScript(buildSummaryScript(), upper, dest, ws);
+    expect(summaryOutput.code).toBe(0);
+    const summary = await summarizeOverlayChanges(async () => summaryOutput, target);
+    expect(summary).toEqual({
+      added: ['added'],
+      modified: ['modified'],
+      deleted: ['deleted'],
+      symlinks: expect.arrayContaining([
+        { path: 'link', target: 'added', escapes: false },
+        { path: 'escape', target: '/etc/shadow', escapes: true },
+      ]),
+      skipped: [{ path: '.wh..wh..opq', reason: 'opaque-dir-marker' }],
+      totalCount: 5,
+      truncated: false,
+    });
+    expect(summary.symlinks).toHaveLength(2);
+
+    const applyOutput = runScript(buildApplyScript(), upper, dest, ws);
+    expect(applyOutput.code).toBe(0);
+    expect(await applyOverlayChanges(async () => applyOutput, target)).toEqual({
+      filesApplied: 3,
+      filesDeleted: 1,
+      warnings: expect.arrayContaining([
+        'skipped .wh..wh..opq: opaque-dir-marker',
+        'skipped escape: escaping-symlink',
+      ]),
+    });
   });
 });

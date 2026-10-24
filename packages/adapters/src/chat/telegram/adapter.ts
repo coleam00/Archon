@@ -85,19 +85,7 @@ export class TelegramAdapter implements IPlatformAdapter {
     // If chunk is still too long after paragraph splitting, fall back to plain text
     if (chunk.length > MAX_LENGTH) {
       getLog().debug({ chunkLength: chunk.length }, 'telegram.chunk_too_long_plain_text');
-      const plainText = stripMarkdown(chunk);
-      // Split by lines if still too long
-      const lines = plainText.split('\n');
-      let subChunk = '';
-      for (const line of lines) {
-        if (subChunk.length + line.length + 1 > MAX_LENGTH - 100) {
-          if (subChunk) await this.bot.api.sendMessage(id, subChunk);
-          subChunk = line;
-        } else {
-          subChunk += (subChunk ? '\n' : '') + line;
-        }
-      }
-      if (subChunk) await this.bot.api.sendMessage(id, subChunk);
+      await this.sendPlainTextLines(id, stripMarkdown(chunk));
       return;
     }
 
@@ -110,6 +98,20 @@ export class TelegramAdapter implements IPlatformAdapter {
       getLog().warn({ chunkLength: chunk.length }, 'telegram.markdownv2_failed');
       await this.bot.api.sendMessage(id, stripMarkdown(chunk));
     }
+  }
+
+  private async sendPlainTextLines(id: number, plainText: string): Promise<void> {
+    const lines = plainText.split('\n');
+    let subChunk = '';
+    for (const line of lines) {
+      if (subChunk.length + line.length + 1 > MAX_LENGTH - 100) {
+        if (subChunk) await this.bot.api.sendMessage(id, subChunk);
+        subChunk = line;
+      } else {
+        subChunk += (subChunk ? '\n' : '') + line;
+      }
+    }
+    if (subChunk) await this.bot.api.sendMessage(id, subChunk);
   }
 
   /**
