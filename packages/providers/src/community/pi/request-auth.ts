@@ -55,6 +55,37 @@ const ENV_VAR_NAME_PREFIX_RE = /^[A-Za-z_][A-Za-z0-9_]*/;
 
 type TemplatePart = { type: 'literal'; value: string } | { type: 'env'; name: string };
 
+/** A parsed part and the index just past the text it was read from. */
+interface ParsedPart {
+  part: TemplatePart;
+  next: number;
+}
+
+function literalAt(value: string, next: number): ParsedPart {
+  return { part: { type: 'literal', value }, next };
+}
+
+/** The part a `${` at `dollarIndex` opens. An unclosed brace leaves a literal `$`. */
+function bracedPartAt(config: string, dollarIndex: number): ParsedPart {
+  const endIndex = config.indexOf('}', dollarIndex + 2);
+  if (endIndex < 0) return literalAt('$', dollarIndex + 1);
+  const name = config.slice(dollarIndex + 2, endIndex);
+  if (!ENV_VAR_NAME_RE.test(name)) {
+    return literalAt(config.slice(dollarIndex, endIndex + 1), endIndex + 1);
+  }
+  return { part: { type: 'env', name }, next: endIndex + 1 };
+}
+
+/** The part the `$` at `dollarIndex` starts: an escape, a reference, or a literal `$`. */
+function dollarPartAt(config: string, dollarIndex: number): ParsedPart {
+  const nextChar = config[dollarIndex + 1];
+  if (nextChar === '$' || nextChar === '!') return literalAt(nextChar, dollarIndex + 2);
+  if (nextChar === '{') return bracedPartAt(config, dollarIndex);
+  const match = ENV_VAR_NAME_PREFIX_RE.exec(config.slice(dollarIndex + 1));
+  if (!match) return literalAt('$', dollarIndex + 1);
+  return { part: { type: 'env', name: match[0] }, next: dollarIndex + 1 + match[0].length };
+}
+
 function parseTemplate(config: string): TemplatePart[] {
   const parts: TemplatePart[] = [];
   let index = 0;
@@ -67,36 +98,9 @@ function parseTemplate(config: string): TemplatePart[] {
     if (dollarIndex > index) {
       parts.push({ type: 'literal', value: config.slice(index, dollarIndex) });
     }
-    const nextChar = config[dollarIndex + 1];
-    if (nextChar === '$' || nextChar === '!') {
-      parts.push({ type: 'literal', value: nextChar });
-      index = dollarIndex + 2;
-      continue;
-    }
-    if (nextChar === '{') {
-      const endIndex = config.indexOf('}', dollarIndex + 2);
-      if (endIndex < 0) {
-        parts.push({ type: 'literal', value: '$' });
-        index = dollarIndex + 1;
-        continue;
-      }
-      const name = config.slice(dollarIndex + 2, endIndex);
-      if (ENV_VAR_NAME_RE.test(name)) {
-        parts.push({ type: 'env', name });
-      } else {
-        parts.push({ type: 'literal', value: config.slice(dollarIndex, endIndex + 1) });
-      }
-      index = endIndex + 1;
-      continue;
-    }
-    const match = ENV_VAR_NAME_PREFIX_RE.exec(config.slice(dollarIndex + 1));
-    if (match) {
-      parts.push({ type: 'env', name: match[0] });
-      index = dollarIndex + 1 + match[0].length;
-      continue;
-    }
-    parts.push({ type: 'literal', value: '$' });
-    index = dollarIndex + 1;
+    const { part, next } = dollarPartAt(config, dollarIndex);
+    parts.push(part);
+    index = next;
   }
   return parts;
 }
@@ -145,13 +149,7 @@ function resolveProviderConfigValue(
   // one, so the template survives and the SDK surfaces its actionable
   // "Failed to resolve from environment variable: NAME" error instead of a
   // schema-invalid empty apiKey silently dropping the whole provider.
-  let hasProtected = false;
-  let hasMissing = false;
-  for (const part of parts) {
-    if (part.type !== 'env') continue;
-    if (protectedKeys.has(part.name)) hasProtected = true;
-    else if (!env[part.name]) hasMissing = true;
-  }
+  const { hasProtected, hasMissing } = classifyReferences(parts, env, protectedKeys);
   if (hasMissing && !hasProtected) {
     // Unresolvable reference and nothing to block: leave the original
     // template unchanged so Pi surfaces its standard error. This is the
@@ -160,38 +158,51 @@ function resolveProviderConfigValue(
     return { resolved: value, didSubstitute: false };
   }
 
-  const resolvedParts: string[] = [];
-  let didSubstitute = false;
+  const substituted = parts.map(part => substitutePart(part, env, protectedKeys));
+  if (!substituted.some(part => part.didSubstitute))
+    return { resolved: value, didSubstitute: false };
+  return { resolved: substituted.map(part => part.resolved).join(''), didSubstitute: true };
+}
+
+function classifyReferences(
+  parts: readonly TemplatePart[],
+  env: Readonly<Record<string, string>>,
+  protectedKeys: ReadonlySet<string>
+): { hasProtected: boolean; hasMissing: boolean } {
+  let hasProtected = false;
+  let hasMissing = false;
   for (const part of parts) {
-    if (part.type === 'literal') {
-      resolvedParts.push(part.value);
-      continue;
-    }
-    if (protectedKeys.has(part.name)) {
-      // Placeholder is one valid identifier the SDK's parser recognises;
-      // the SDK attempts to resolve `__ARCHON_BLOCKED_<VAR>` at request
-      // time and fails (the name is provably absent from any context —
-      // neither the substitution env nor process.env can supply it). The literal
-      // protected value never appears in the per-call file. This
-      // substitution is UNCONDITIONAL — a different, merely-missing ref in
-      // the same template must never cancel it (the bail-out above only
-      // fires when no protected ref is present).
-      resolvedParts.push(`\${__ARCHON_BLOCKED_${part.name}__}`);
-      didSubstitute = true;
-      continue;
-    }
-    if (!env[part.name]) {
-      // Reachable only alongside a protected ref (see bail-out above): keep
-      // the missing ref as template text so the SDK still reports it, while
-      // the protected placeholder above survives into the per-call file.
-      resolvedParts.push(`\${${part.name}}`);
-      continue;
-    }
-    resolvedParts.push(env[part.name]);
-    didSubstitute = true;
+    if (part.type !== 'env') continue;
+    if (protectedKeys.has(part.name)) hasProtected = true;
+    else if (!env[part.name]) hasMissing = true;
   }
-  if (!didSubstitute) return { resolved: value, didSubstitute: false };
-  return { resolved: resolvedParts.join(''), didSubstitute: true };
+  return { hasProtected, hasMissing };
+}
+
+function substitutePart(
+  part: TemplatePart,
+  env: Readonly<Record<string, string>>,
+  protectedKeys: ReadonlySet<string>
+): SubstitutionResult {
+  if (part.type === 'literal') return { resolved: part.value, didSubstitute: false };
+  if (protectedKeys.has(part.name)) {
+    // Placeholder is one valid identifier the SDK's parser recognises;
+    // the SDK attempts to resolve `__ARCHON_BLOCKED_<VAR>` at request
+    // time and fails (the name is provably absent from any context —
+    // neither the substitution env nor process.env can supply it). The literal
+    // protected value never appears in the per-call file. This
+    // substitution is UNCONDITIONAL — a different, merely-missing ref in
+    // the same template must never cancel it (the bail-out in
+    // resolveProviderConfigValue only fires when no protected ref is present).
+    return { resolved: `\${__ARCHON_BLOCKED_${part.name}__}`, didSubstitute: true };
+  }
+  if (!env[part.name]) {
+    // Reachable only alongside a protected ref (see the bail-out in
+    // resolveProviderConfigValue): keep the missing ref as template text so the
+    // SDK still reports it, while the protected placeholder survives into the per-call file.
+    return { resolved: `\${${part.name}}`, didSubstitute: false };
+  }
+  return { resolved: env[part.name], didSubstitute: true };
 }
 
 /**
