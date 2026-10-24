@@ -504,16 +504,11 @@ function transcriptUsage(record: NodeExecutionRecord) {
 }
 
 function transcriptNodeContent(node: NodeExecutionRecord['node']): string {
-  return;
-  node.kind === 'agent'
-    ? node.source.kind === 'command'
-      ? node.source.name
-      : '<inline>'
-    : node.kind === 'exec'
-      ? node.runtime === 'sh'
-        ? '<bash>'
-        : '<script>'
-      : `<${node.kind}>`;
+  if (node.kind === 'agent') {
+    return node.source.kind === 'command' ? node.source.name : '<inline>';
+  }
+  if (node.kind === 'exec') return node.runtime === 'sh' ? '<bash>' : '<script>';
+  return `<${node.kind}>`;
 }
 
 export function serializeNodeEmitter(
