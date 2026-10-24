@@ -1,9 +1,9 @@
+// @archon-test-isolated
 import {
   postgresArchonColumns,
   stripSqlComments,
   readBalancedParens,
 } from './sqlite-schema-test-helpers';
-// @archon-test-isolated
 import { describe, test, expect, afterEach, spyOn } from 'bun:test';
 import {
   resourceStartOverlapSchema,
