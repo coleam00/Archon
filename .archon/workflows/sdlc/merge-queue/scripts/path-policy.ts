@@ -4,6 +4,8 @@
 // anchored at the repository root: `*` and `?` stay inside one path segment, `**`
 // spans segments, and a trailing `/` covers everything under that directory.
 
+import { declared, patternRegex } from '../../.shared/protected-paths.ts';
+
 type JsonObject = Record<string, unknown>;
 
 interface Match {
@@ -41,37 +43,6 @@ function emit(policy: Policy): void {
 
 function unknown(reason: string, patterns: string[] = []): void {
   emit({ state: 'unknown', patterns, heads: [], matches: [], reason });
-}
-
-function declared(raw: string): string[] | 'invalid' {
-  const value = raw.trim();
-  if (value === '' || value.toLowerCase() === 'none') return [];
-  const patterns = value.split(',').map(pattern => pattern.trim());
-  if (patterns.some(pattern => pattern === '' || pattern === '/' || /\p{Cc}/u.test(pattern))) {
-    return 'invalid';
-  }
-  return [...new Set(patterns)];
-}
-
-function patternRegex(pattern: string): RegExp {
-  let glob = pattern.replace(/^\/+/, '');
-  if (glob.endsWith('/')) glob += '**';
-  let source = '';
-  for (let index = 0; index < glob.length; index += 1) {
-    const char = glob[index];
-    if (char === '*' && glob[index + 1] === '*') {
-      const slashAfter = glob[index + 2] === '/';
-      source += slashAfter ? '(?:.*/)?' : '.*';
-      index += slashAfter ? 2 : 1;
-    } else if (char === '*') {
-      source += '[^/]*';
-    } else if (char === '?') {
-      source += '[^/]';
-    } else {
-      source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-    }
-  }
-  return new RegExp(`^${source}$`);
 }
 
 function main(): void {

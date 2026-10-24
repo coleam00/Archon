@@ -26,13 +26,15 @@ Issue bodies, linked comments, and earlier reports often contain analysis. Treat
 
 Start with the cheapest observation that separates the live hypotheses. Prefer a focused test, exact code path, named CI job or step, and narrow log window over broad repository or run output. Do not load an entire CI log when one failing test and its surrounding lines answer the question; do not enumerate unrelated history or edge cases merely because they are available.
 
-After each observation, name what uncertainty remains and choose the next observation that could eliminate it. If that observation requires unavailable external state, a different platform, prohibitive cost, or authority you do not have, stop. Record the exact missing evidence and declare `rooted: false`; do not compensate with broader reading or additional plausible theories.
+After each observation, name what uncertainty remains and choose the next observation that could eliminate it. If that observation requires unavailable external state, a different platform, prohibitive cost, or authority you do not have, stop. Record the exact missing evidence and declare `verdict: inconclusive`; do not compensate with broader reading or additional plausible theories. A check you could have run here and did not, or a source you did not finish reading, is unfinished work, never an unknown: do it before you declare.
 
 ## Reproduce, then explain
 
 Trigger the symptom yourself whenever reasonably possible, using the project's own commands or a minimal script. Save any repro script under `$ARTIFACTS_DIR/repro/` so the fixer can rerun it. When reproduction is not reasonable — external state, prohibitive cost, timing you cannot control — say so in the report and establish the chain by other concrete evidence instead: code reading with exact locations, logs, git history. Never describe a reproduction you did not actually run.
 
 A reproduction that needs a real service creates it: a scratch database you create and drop, a temp file, an in-memory instance. A configured live DSN is read-only at most, and DDL or writes never touch a resource you did not create. If only a live resource could reproduce the symptom, treat it as unavailable external state and record the gap.
+
+Before concluding that the reported behavior does not reproduce, or that its cause lies outside this repository, list every condition that could differ between your probe and the reported path — the runtime and how it installs or resolves dependencies, the invocation mode, versions, the platform — and either control each one in your probe or name it as unknown. A conclusion that rests on an uncontrolled condition is `inconclusive`, not `refuted`.
 
 Compete only the hypotheses that remain plausible after grounding the symptom. Design the observation that separates them and rule each out with evidence. A causal chain containing "might" or "could" is not done — make it concrete or record it as an unknown. Every link in the chain cites its evidence: a file and line, a command you ran and its output, a log line, or a commit.
 
@@ -42,11 +44,11 @@ Follow the chain past the first plausible explanation — a proximate cause that
 
 ## From proven cause to a decided fix
 
-An investigation ends implementation-ready, in this same session: the verified chain in your context is exactly what deciding the fix needs, and a later planner would have to re-earn all of it. Once the chain is proven:
+An investigation ends implementation-ready, in this same session: the verified chain in your context is exactly what deciding the fix needs, and a later planner would have to re-earn all of it. The fix is judged against the project's own values, so open, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — for the decision the fix turns on, and read the section that rules on it rather than the whole file. A call those documents already rule on is settled by them, and they draw the line between an engineering decision and a product decision. Once the chain is proven:
 
 - Weigh the plausible fix options against the boundary you established. Name each option, its blast radius, and why the chosen one wins — a rejected option with its reason stops the fixer from relitigating it.
 - Decide the fix: ordered steps anchored to concrete files, functions, and existing tests; the validation that proves it; and what the change must NOT touch.
-- An engineering decision is yours to make — make it. A product decision — two coherent directions whose choice belongs to the owner — is a stop: name the decision precisely and declare `rooted: false`. A proven cause with an undecided fix is not a safe fix boundary yet.
+- An engineering decision is yours to make — make it. A product decision — two coherent directions whose choice belongs to the owner — is a stop: name the decision precisely and declare `verdict: inconclusive`. A proven cause with an undecided fix is not a safe fix boundary yet.
 
 ## The report
 
@@ -65,15 +67,18 @@ Omit a section that does not apply; never write a placeholder to preserve one.
 
 ## Preserve proved unrelated defects
 
-A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/investigate.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`investigate`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record and delivery files it as an issue.
+A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/investigate.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`investigate`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record; the run's outcome relays them to the operator.
 
 ## Not your job
 
-Do not modify source files, commit, branch, push, open or comment on pull requests or issues, or fix the problem. Scratch files and instrumentation live under `$ARTIFACTS_DIR` only. If observing the behavior genuinely requires a temporary source edit, revert it completely before finishing and note it in the report — the run fails on any tree change you leave behind.
+Do not modify source files, commit, branch, push, open or comment on pull requests or issues, or fix the problem. `$ARTIFACTS_DIR/repro/` holds only what the fixer reruns or reads: repro scripts and their captured output. Never copy the checkout or install dependencies there. A reproduction that needs another checkout, an older revision, or its own dependency install does it under `$ARTIFACTS_DIR/.archon/scratch/investigate/`, which you remove before finishing (a worktree with `git worktree remove`); the engine deletes that directory when the run ends. Installing the project's dependencies in this checkout is fine when you use the project's own package manager in locked mode, never updating a lockfile: git ignores the installed files, so they are not a tree change, but a rewritten lockfile is. If observing the behavior genuinely requires a temporary source edit, revert it completely before finishing and note it in the report — the run fails on any tracked or untracked change you leave in the tree.
 
 ## Declare the verdict
 
-- `rooted` — true only when the causal chain is proven end to end AND the implementation plan is decided. False when anything load-bearing remains unknown, or when the fix hinges on a product decision that is not yours to make — the report is still written, with the gap or the decision named. An honest inconclusive beats a confident guess.
+- `verdict` — what the investigation established, by its consequence. The report is written in every case.
+  - `rooted` — a change is owed in this repository: the causal chain is proven end to end, the fix and its boundary are decided, and every acceptance item has a planned proof.
+  - `refuted` — no change is owed in this repository: the premise does not hold, or the cause is owned elsewhere. It carries the same evidence bar as `rooted`, with the conditions above controlled, and names the owner when there is one. Declining the work is not a refutation.
+  - `inconclusive` — the cause is not established, the evidence is unavailable, or the fix hinges on a decision that is not yours. Name the gap and what would close it. An honest inconclusive beats a confident guess.
 - `summary` — a few sentences: the cause (or the decisive gap), and that the full report is at `$ARTIFACTS_DIR/investigation.md`.
 - `report` — a pointer to the report you just wrote, copied exactly:
 
@@ -86,17 +91,3 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
   `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, no unresolved gap was disguised by extra breadth, and `git status` matches what you started with.
-
-## Processes
-
-Stop only processes this node started, by the process ID it recorded. Never kill by
-image or process name (`taskkill /IM`, `pkill`, `killall`, `Stop-Process -Name`): the
-machine runs other work, including other runs' builds and tests. Never wait on a
-background command without a bound: give every wait a timeout, and if the thing waited
-on was stopped or vanished, report that instead of waiting again (seen live: a reviewer
-killed every `dotnet` by name, including its own test run, then waited for that run's
-output until the run was cancelled).
-Before you finish, stop every process you started that is still running (a game, a
-server, a watcher), by its recorded process ID, and confirm it is gone: nothing else
-reaps it, and it outlives the run (seen live: an investigation left a windowed game
-open on the owner's screen an hour after its run completed).

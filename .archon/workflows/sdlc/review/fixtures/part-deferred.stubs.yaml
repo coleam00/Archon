@@ -1,0 +1,37 @@
+# Dry-run fixture: the change delivers part 1 of a two-part plan. The real mode script
+# certifies the part assignment and scope and synthesis read it. Part 1 reaches ready,
+# the item the assignment gives to part 2 stays open as deferred, and no discovery is
+# filed for it.
+route: { seams: false, code: false, tests: false, errors: false, docs: true, reason: "stub: only shipped prose changed" }
+review-dir: ""
+scope:
+  head_matches: true
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
+docs: "0 findings"
+review-complete: "settled"
+synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: ["acceptance: the console shows the new state (deferred to part 2 by the part assignment)"]
+publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+  contract_left: ["acceptance: the console shows the new state (deferred to part 2 by the part assignment)"]
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+fixture:
+  inputs:
+    part: '{"delivers":1,"parts":[{"part":1,"items":["the API returns the new state"]},{"part":2,"items":["the console shows the new state"]}]}'
+  expect: completed
+  reached: [mode, synthesize]
+  resolved-text-contains:
+    scope: '"delivers":1,"parts":[{"part":1'
+    synthesize: '"delivers":1,"parts":[{"part":1'
+exec-code: true

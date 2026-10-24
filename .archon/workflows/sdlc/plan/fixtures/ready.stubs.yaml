@@ -1,9 +1,14 @@
-# Dry-run fixture: the ready path. Fully stubbed — proves the DAG wiring and
-# that the verdict fields bind. Structured stubs are YAML mappings (they hydrate
+# Dry-run fixture: the ready path. The planner declares ready with an empty
+# open_questions list. Structured stubs are YAML mappings (they hydrate
 # structuredOutput); plain-string stubs stay strings.
 plan:
   ready: true
+  open_questions: []
   summary: "stub: approach chosen — full plan at plan.md"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
+policy: { defaults: "fixture-policy-defaults" }
 fixture:
   expect: completed
+  # The policy node's output reaches the planner as the pack's default rulings.
+  resolved-text-contains:
+    plan: "the pack's defaults are in `fixture-policy-defaults`"

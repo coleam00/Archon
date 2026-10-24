@@ -72,6 +72,12 @@ in your output as `{line, action, file, issue, reason}`, where `line` is the id 
 - `issue`: a `QUESTION` worth doing later, or a failure the app check already proved pre-existing, with `issue` the open issue that tracks it (existing, or one you open now with what a user sees, never quoting a holdout).
 - `accepted`: only for a `QUESTION` you judge is not a defect and a user would not notice, or that the work item, the product document or an owner decision already settles. `reason` says why, in a sentence a reader can check against them. Something a user sees and could take for a fault goes to an `issue` instead.
 
+A holdout line is re-checked, or shown pre-existing, only through the `holdout-verifier` agent: never
+open, list or search the scenario file yourself. Dispatch it with the scenario file ($INPUTS.holdout),
+the scenario ids to run, the target (your checkout of what you would merge), the base, how to run the
+app, and an evidence folder in `$ARTIFACTS_DIR`; save its reply lines in a file there, written now,
+and cite that file.
+
 No observation leaves this review without one of these. When the evidence check above is not ok,
 the lines it names are not evidence: check them yourself and record `rechecked` with your own
 file, or send the change back for another check.

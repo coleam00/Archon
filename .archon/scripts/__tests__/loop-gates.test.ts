@@ -16,6 +16,7 @@ import {
   type CitedFile,
   type Proofs,
 } from '../../workflows/sdlc/.shared/merge-gate';
+import { protectedFiles } from '../../workflows/sdlc/.shared/protected-paths';
 
 const pack = resolve(import.meta.dir, '../../workflows/sdlc');
 const STARTED = 1_000_000;
@@ -370,5 +371,37 @@ describe('loop wiring', () => {
   it('the manager runs the holdouts once per pass, not again each time the default branch moves', () => {
     const manage = readFileSync(resolve(pack, 'manager/commands/manage.md'), 'utf8');
     expect(manage).toContain('When the default branch moves during your pass, do not rerun anything');
+  });
+});
+
+describe('holdouts behind a fence', () => {
+  it('owner-only paths are matched from the repository root', () => {
+    const declared = '.factory/**,MISSION.md,.claude/settings.json';
+    expect(protectedFiles(declared, ['.factory/holdout/HOLDOUT.md', 'src/app.ts', 'MISSION.md', 'docs/MISSION.md']))
+      .toEqual(['.factory/holdout/HOLDOUT.md', 'MISSION.md']);
+    expect(protectedFiles('none', ['MISSION.md'])).toEqual([]);
+    expect(protectedFiles('a,,b', ['a'])).toBe('invalid');
+  });
+
+  it('the merge gate is given the protected paths', () => {
+    const yaml = readFileSync(resolve(pack, 'loop/archon-loop.yaml'), 'utf8');
+    expect(yaml).toContain('protected_paths: "$INPUTS.protected_paths"');
+    expect(readFileSync(resolve(pack, 'loop/scripts/land.ts'), 'utf8')).toContain('INPUTS_PROTECTED_PATHS');
+  });
+
+  it('the app check, the reviewer and the manager reach the scenarios only through the holdout agents', () => {
+    for (const file of ['loop/archon-loop.yaml', 'manager/archon-manager.yaml', 'holdouts/archon-holdouts.yaml']) {
+      const yaml = readFileSync(resolve(pack, file), 'utf8');
+      expect(yaml).toContain('script: briefs');
+      expect(yaml).toContain('$ARTIFACTS_DIR/agents/holdout-');
+    }
+    for (const file of ['loop/commands/loop-check-app.md', 'loop/commands/loop-review.md', 'manager/commands/manage.md']) {
+      const prompt = readFileSync(resolve(pack, file), 'utf8');
+      expect(prompt).toContain('`holdout-verifier` agent');
+      expect(prompt).not.toContain('holdout-baseline.md');
+    }
+    for (const brief of ['holdout-verifier', 'holdout-writer']) {
+      expect(readFileSync(resolve(pack, `holdouts/commands/${brief}.md`), 'utf8')).toContain('whoever asks');
+    }
   });
 });

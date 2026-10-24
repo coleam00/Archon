@@ -25,6 +25,7 @@ import {
   shipFailuresInLog,
   untestedMerge,
 } from '../../.shared/merge-gate.ts';
+import { protectedFiles } from '../../.shared/protected-paths.ts';
 
 const prUrl = trimmed(process.env.INPUTS_PR);
 const named = trimmed(process.env.INPUTS_SHA);
@@ -74,6 +75,11 @@ const refusals = recordRefusals({
 if (route === 'complex' && !existsSync(logPath)) refusals.push('the run log is missing, so a failed shipping step cannot be ruled out');
 const prNumber = (url: string): string => /\/pull\/(\d+)/.exec(url)?.[1] ?? url;
 if (report.pr !== '' && prNumber(report.pr) !== prNumber(prUrl)) refusals.push(`the app check tested ${report.pr}, not ${prUrl}`);
+// Files only the owner may change (governance, holdouts and the fence around them) never merge
+// through the loop, whatever the review said: a reviewed change once rewrote a governance file.
+const owned = protectedFiles(text(process.env.INPUTS_PROTECTED_PATHS), prFiles);
+if (owned === 'invalid') refusals.push('protected_paths cannot be read, so a change to an owner-only file cannot be ruled out');
+else if (owned.length > 0) refusals.push(`it changes ${owned.slice(0, 5).join(', ')}, which only the owner changes; the owner merges it by hand if it is intended`);
 
 /** A commit's tree id, or '' when git does not know it. */
 const treeOf = (commit: string): string => {

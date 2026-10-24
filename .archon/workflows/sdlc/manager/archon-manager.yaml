@@ -23,15 +23,43 @@ inputs:
   holdout:
     default: ""
     description: >-
-      Optional path to the reviewer-only holdout scenarios kept outside the
-      repository. The manager adds a scenario for each defect that got past
-      review.
+      Optional path to the holdout scenarios. The manager runs them on the
+      default branch through the holdout-verifier agent and adds scenarios
+      through the holdout-writer agent (for each defect that got past review,
+      and before a new section of the product is built); it never reads them
+      itself.
 
 nodes:
+  # The holdout agents' instructions are command files in this pack; an inline agent cannot
+  # reach the pack, so this copies them where the agents' prompts point.
+  - id: briefs
+    script: briefs
+    runtime: bun
+
   - id: manage
     command: manage
     context: fresh
     idle_timeout: 2700000
+    depends_on: [briefs]
+    agents:
+      holdout-verifier:
+        description: >-
+          Runs the project's holdout scenarios against a checkout and returns a
+          verdict and what a user sees per scenario id, never the scenarios. The
+          only agent, with holdout-writer, allowed to read them.
+        prompt: >-
+          You are the holdout verifier. Before anything else, read your
+          instructions in $ARTIFACTS_DIR/agents/holdout-verifier.md with your
+          Read tool, and follow them exactly.
+      holdout-writer:
+        description: >-
+          Writes and tightens the project's holdout scenarios from the product
+          document or an escaped defect, commits them, and returns one line per
+          scenario id. The only agent, with holdout-verifier, allowed to read them.
+        prompt: >-
+          You are the holdout writer. Before anything else, read your
+          instructions in $ARTIFACTS_DIR/agents/holdout-writer.md with your Read
+          tool, and follow them exactly.
     with:
       runtime: "$INPUTS.runtime"
       holdout: "$INPUTS.holdout"

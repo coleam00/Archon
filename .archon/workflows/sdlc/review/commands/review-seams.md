@@ -1,8 +1,8 @@
 # Seam Review — Missing Types at Boundaries
 
-Hunt one defect: **a type is missing at a seam, and something downstream pays for it** — a parser that mis-reads, a hand-synced copy of a set, type, or table whose owner it could import or derive from, a second route that skips the validator, a value that silently loses fields across a re-entry. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree (`git worktree add --detach "$(mktemp -d)" HEAD`, removed when you are done), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile.
+Hunt this defect class wherever the change exposes it, in any language: **a type is missing at a seam, and something downstream pays for it** — a parser that mis-reads, a hand-synced copy of a set, type, or table whose owner it could import or derive from, a second route that skips the validator, a value that silently loses fields across a re-entry. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree under this run (`git worktree add --detach "$(mkdir -p "$ARTIFACTS_DIR/.archon/scratch/seams" && mktemp -d "$ARTIFACTS_DIR/.archon/scratch/seams/XXXXXX")" HEAD`; the workflow removes it), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile. Any other scratch file you write — a probe script, a note, captured output — goes under `$ARTIFACTS_DIR`, never in this checkout.
 
-Read `$ARTIFACTS_DIR/review/scope.md` first, and, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point; look in those places once, and treat a file that is not there as absent rather than searching for it. Those are the project's own values: a preference one of them states is a finding you cite, and one none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and apply the supplied full-review policy: **$mode.output.risks**. In light mode, verify prior seam findings first, then examine only the delta.
+Read `$ARTIFACTS_DIR/review/scope.md` first. The project's own values are in its steering documents: open, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — only when a finding depends on a value one of them states, and read the section you cite, not the whole file. A preference one of them states is a finding you cite, and one none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and apply the supplied full-review policy: **$mode.output.risks**. In light mode, scope.md names the prior report and the correction delta: read the prior report and `$ARTIFACTS_DIR/implementation.md`, judge each prior finding assigned to this lens as resolved by the delta, validly declined (the implementer's evidence holds), or still open, then examine only the delta.
 
 **A seam** is where a value crosses to something that must interpret it: serialization, process/language boundaries, events, persisted formats, pause/resume re-entry, load-time→run-time handoffs. A plain function call is not a seam.
 
@@ -17,6 +17,9 @@ The added code is usually correct in isolation; what is wrong is the counterpart
 - Verifies a counterpart that dispatches on a discriminant (a `kind`, `surface`, or spec-table lookup) → open the discriminant's **defining table**. The table owns the set; changed code that re-enumerates its members by hand disagrees with the owner in structure even while the values agree.
 - Adds a validation → count **every route in** to what it guards; one validator and three ways in is two holes.
 - Writes a value something else reads → read **the reader**; a formatter/parser pair written at different times and nowhere checked to be inverses.
+- Changes how a credential travels (a URL, a host, a header) → **credentials only over HTTPS**: an `http://` form, or a scheme the code never checks, that still carries a token is a finding.
+- Reads fields from a schema built by composition (an extend, a merge, an `allOf`, a reference) → **resolve the composition first**; the outer layer alone misses the fields its parts carry.
+- Puts a new mode beside an old one → list **every input the old path collects or rejects** and show the new path handles each. Matching the base is not clearance once a field changes meaning.
 
 Two heuristics do most of the work: **"this is the Nth"** — if the change edits the Nth thing of a kind, N−1 others exist; check them. And **a sync comment is the defect documenting itself** — "keep in sync", "must match", "also update" mean the author found the owner, did not derive from it, and left discipline where a type belongs: report the relationship it names. When two sync comments describe the same set, check they agree: **a contradiction between them is drift already shipped**, your strongest possible finding.
 
@@ -45,7 +48,7 @@ Also report a seam defect when a changed type permits a reachable invalid state 
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/seams.md`: each in-scope finding begins with `sources: [seams]`, followed by what it costs if it merges — whether the sides already disagree or fail silently on a supported path — without a severity label, which synthesis assigns; then **both sides quoted with `file:line`**, what the missing type would carry, the concrete failure, and the smallest change that keeps the type. Then carve-outs applied, and the examined-and-clean list with its quotations. In light mode, a verdict per prior finding. No findings is a valid result — but only quoted silence.
+Write `$ARTIFACTS_DIR/review/seams.md`: each in-scope finding begins with `sources: [seams]`, followed by what it costs if it merges — whether the sides already disagree or fail silently on a supported path — without a severity label, which synthesis assigns; then **both sides quoted with `file:line`**, what the missing type would carry, the concrete failure, and the smallest change that keeps the type. Then carve-outs applied, and the examined-and-clean list with its quotations. In light mode, a verdict per prior finding: resolved, validly declined, or still open. No findings is a valid result — but only quoted silence.
 
 A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding, even when the contract never named it. A proved defect you meet that does not touch the change — unrelated or pre-existing — is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/review-seams.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`seams`). Write no file for no discovery; never append to another lens's file or record suspicion.
 
@@ -57,10 +60,7 @@ Stop only processes this node started, by the process ID it recorded. Never kill
 image or process name (`taskkill /IM`, `pkill`, `killall`, `Stop-Process -Name`): the
 machine runs other work, including other runs' builds and tests. Never wait on a
 background command without a bound: give every wait a timeout, and if the thing waited
-on was stopped or vanished, report that instead of waiting again (seen live: a reviewer
-killed every `dotnet` by name, including its own test run, then waited for that run's
-output until the run was cancelled).
-Before you finish, stop every process you started that is still running (a game, a
+on was stopped or vanished, report that instead of waiting again.
+Before you finish, stop every process you started that is still running (an app, a
 server, a watcher), by its recorded process ID, and confirm it is gone: nothing else
-reaps it, and it outlives the run (seen live: an investigation left a windowed game
-open on the owner's screen an hour after its run completed).
+reaps it, and it outlives the run.

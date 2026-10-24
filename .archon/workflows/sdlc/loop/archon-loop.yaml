@@ -3,7 +3,7 @@ description: |
   One unattended move on a repository. A pick agent reads the whole board (open
   pull requests, CI, review comments, issues) and chooses the single most
   valuable move and its route: finish an open pull request or build a contained
-  change in the loop, or take complex work through archon-ship. Two independent
+  change in the loop, or take complex work through archon-ship-block. Two independent
   reviewers then check the result: one runs the app as a user would, against the
   acceptance contract and any reviewer-only holdout scenarios, without reading
   the diff first; the other reads the diff and decides to merge it head-pinned,
@@ -26,8 +26,16 @@ inputs:
   holdout:
     default: ""
     description: >-
-      Optional path to reviewer-only acceptance scenarios kept outside the
-      repository. Only the app check reads it; builders never see it.
+      Optional path to the holdout scenarios: acceptance checks the builders
+      never see. Only the holdout-verifier agent reads them, for the app check
+      and the reviewer; a project can fence them inside the repository with a
+      hook that refuses every other agent.
+  protected_paths:
+    default: ""
+    description: >-
+      Root-anchored path patterns only the owner may change (`*` within a
+      segment, `**` across segments), comma-separated. The merge gate refuses a
+      pull request that touches one. Empty or "none" protects nothing.
   merge:
     default: auto
     description: >-
@@ -117,11 +125,13 @@ nodes:
       reason: "$pick.output.reason"
       runtime: "$INPUTS.runtime"
 
-  # Complex work: the full shipping pipeline (triage, investigate or plan,
-  # implement, multi-lens review, CI) up to a ready pull request. Ordered after
-  # build only so the two never run together; pick makes them exclusive.
+  # Complex work: the full shipping pipeline (triage, investigate or plan, delivery
+  # rounds with review threads handled as work, CI) up to a ready pull request. The
+  # building block, not the archon-ship entry: the entry pauses for a person when it
+  # runs out of next steps, which would hang an unattended lap. Ordered after build
+  # only so the two never run together; pick makes them exclusive.
   - id: ship
-    include: archon-ship
+    include: archon-ship-block
     depends_on: [claim, build]
     trigger_rule: none_failed_min_one_success
     when: "$claim.output.held == 'true' && $pick.output.route == 'complex'"
@@ -157,11 +167,28 @@ nodes:
   # Black-box check: runs the app against the contract and the holdout before it
   # reads any diff, on the pull request merged with the current default branch. Its
   # report is structured, so the evidence check and the merge gate read lines, not prose.
+  # The holdout verifier's instructions are a command file in this pack; an inline agent
+  # cannot reach the pack, so this copies them where the agent's prompt points.
+  - id: briefs
+    script: briefs
+    runtime: bun
+    depends_on: [subject]
+
   - id: check-app
     command: loop-check-app
     context: fresh
     idle_timeout: 2700000
-    depends_on: [subject]
+    depends_on: [subject, briefs]
+    agents: &holdout-agents
+      holdout-verifier:
+        description: >-
+          Runs the project's holdout scenarios against a checkout and returns a
+          verdict and what a user sees per scenario id, never the scenarios. The
+          only agent allowed to read them.
+        prompt: >-
+          You are the holdout verifier. Before anything else, read your
+          instructions in $ARTIFACTS_DIR/agents/holdout-verifier.md with your
+          Read tool, and follow them exactly.
     with:
       route: "$pick.output.route"
       target: "$pick.output.target"
@@ -223,6 +250,7 @@ nodes:
     context: fresh
     idle_timeout: 2700000
     depends_on: [check-app, evidence]
+    agents: *holdout-agents
     with:
       route: "$pick.output.route"
       target: "$pick.output.target"
@@ -236,6 +264,7 @@ nodes:
       evidence_ok: "$evidence.output.ok"
       evidence_problems: "$evidence.output.problems"
       runtime: "$INPUTS.runtime"
+      holdout: "$INPUTS.holdout"
       merge: "$INPUTS.merge"
       rejections: "$INPUTS.rejections"
     output_format:
@@ -289,6 +318,7 @@ nodes:
       evidence_problems: "$evidence.output.problems"
       review_started: "$evidence.output.checked_at"
       files: "$subject.output.files"
+      protected_paths: "$INPUTS.protected_paths"
     output_format:
       type: object
       properties:

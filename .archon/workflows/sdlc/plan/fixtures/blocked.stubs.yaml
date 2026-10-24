@@ -1,8 +1,15 @@
-# Dry-run fixture: the blocked path. ready:false is a VALID outcome — the run
-# must COMPLETE (consumers gate on the field), never fail on honesty.
+# Dry-run fixture: a change to what an existing configuration value means. That is a
+# shipped-contract change no document rules on, so the planner names it as a call
+# only a person can make. Not ready is a VALID outcome: the run must COMPLETE
+# (consumers gate on the field), never fail on honesty.
 plan:
   ready: false
-  summary: "stub: blocked on missing intent — the plan names the owner's open question"
+  open_questions:
+    - "stub: blocks — a relative MCP path would resolve against the workflow file instead of the checkout, changing what every existing relative path means; no project document rules on it"
+  summary: "stub: stopped on one open question — the plan names it"
   report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
+policy: { defaults: "fixture-policy-defaults" }
 fixture:
+  inputs:
+    work: "Resolve relative MCP config paths against the workflow file's directory instead of the checkout."
   expect: completed

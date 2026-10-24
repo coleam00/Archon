@@ -1,8 +1,10 @@
 # Prepare the Pull Request
 
-Prepare a clear, reviewer-friendly pull request for the committed work on the current branch. You never modify source files, and you never create, edit, or comment on the pull request yourself: your writes are the git push and the files below. The node that follows performs the one public write and verifies it, through whichever forge source this run selected.
+Prepare a clear, reviewer-friendly pull request for the committed work on the current branch. You never modify source files, and you never push, create, edit, or comment on the pull request yourself: your only writes are the body file and the description file below. The node that follows owns the branch push and PR writes, and verifies the description edit through whichever forge source the run selected. You do not merge the base: a conflict with it is found by CI and resolved by the implementer.
 
 Draft mode: **$INPUTS.draft** — `true` opens as a draft; anything else, ready for review. A pull request that already exists keeps the draft state its author gave it.
+
+Description section: **$INPUTS.publish_description** — `true` lets this run publish content it prepared for the pull request's description; anything else, it prepares none.
 
 Context from the run that may narrow this (often empty):
 
@@ -10,13 +12,11 @@ $ARGUMENTS
 
 ## 1. Establish the target
 
-Record `HEAD_BRANCH=$(git branch --show-current)` before doing anything public; an empty value is a hard failure, as is a `HEAD` with no commits. Read the origin remote once and resolve its canonical forge identity as `REPO_HOST` plus `REPO_PATH` (`owner/repo`). Strip transport syntax, credentials, and a trailing `.git`; normalize GitHub's ordinary HTTPS, `git@github.com:...`, and `ssh://git@ssh.github.com/...` forms to `REPO_HOST=github.com`. An origin that does not identify one repository is a hard failure. Never persist or print a credential-bearing raw remote.
+Record `HEAD_BRANCH=$(git branch --show-current)` before doing anything else; an empty value is a hard failure, as is a `HEAD` with no commits. Resolve the repository the pull request opens against from the checkout's remotes (`git remote -v`): the repository this work is proposed to, which in a fork setup is the upstream the fork was made from, not the fork. Whatever the remotes are named, declare its canonical forge identity as `host` plus `path` (`owner/repo`), with transport syntax, credentials, and a trailing `.git` stripped; GitHub's HTTPS, `git@github.com:...`, and `ssh://git@ssh.github.com/...` forms all declare host `github.com`. Remotes that do not identify one repository are a hard failure. Never persist or print a credential-bearing raw remote.
 
 Determine the base branch from evidence, in order: the repository's documented development flow (steering files, CONTRIBUTING); branch ancestry against likely integration branches (`dev`, `development`, the remote default); an existing pull request for this exact branch. Never assume `main`. Use the same resolved base for every diff.
 
-When this run was launched onto an existing pull request — the run's context names its number, and for a pull request from a fork the run sits on a review branch at that pull request's head — record that number and the qualified head repository it belongs to. Confirm `HEAD` descends from the recorded head revision. If the head lives in a fork and the author did not allow maintainer edits, this run cannot publish to it: stop and report, and do not prepare a replacement.
-
-A current branch named `pr-<number>-review`, optionally prefixed `archon/`, is such a synthetic review branch even when the run's context does not name the pull request: its number is the pull request this run sits on. Record it as above and follow the same rules. Never push that branch to `origin` under its own name and never open a pull request from it; the publishing node refuses one.
+When this run continues an existing pull request — the caller resolved it (`$INPUTS.pull_request`; empty or `null` when it named none), the run's context names its number, or the run was launched onto it — record that number and the qualified head repository and head branch it belongs to. Read that pull request through the source this run selected, `$INPUTS.source`: with `forge`, `<argv...> forge pr.view --json --data '{"selector":{"kind":"number","ref":{"repo":{"host":…,"path":…},"number":…}}}'`, where `<argv...>` is the JSON string array in `$ARCHON_CLI_COMMAND`; with `gh`, `gh pr view <number> --repo <host>/<owner>/<repo> --json headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,maintainerCanModify`. Either way name the repository: `gh` otherwise resolves it from the working directory's git remotes. A failed read is the answer: report it, and never repeat it through `gh`. `HEAD` must descend from that pull request's current head revision; if it does not, stop and report rather than prepare a replacement. If the head lives in a fork and the author did not allow maintainer edits, this run cannot publish to it: stop and report.
 
 You do not look up whether this branch already has a pull request. The publishing node does that deterministically and never opens a second one.
 
@@ -29,33 +29,32 @@ You do not look up whether this branch already has a pull request. The publishin
 
 - Read the run's artifacts for content: `$ARTIFACTS_DIR/implementation.md` and anything else relevant under `$ARTIFACTS_DIR/`.
 - Find the repository's PR template (`.github/pull_request_template.md` and its supported variants). Use it; fill every applicable section with concrete information and delete instructional comments. No template → problem first, then solution focused on behavior, then validation that actually ran.
+- When the plan this work delivers lists contract additions, flag each one in the body as a contract addition: what it adds to the shipped surface, and why every existing value keeps its meaning, so the reviewer can check that claim.
 - Title: concise, human, the meaningful outcome — never an implementation inventory.
-- Link the issue with `Closes #N` only when the PR fully resolves it; `Relates to #N` otherwise. Never infer linkage from a bare number. A PR that does everything the run's work order asked for, with nothing deliberately left for later, fully resolves it: say `Closes #N`. Use `Relates to #N` only when part of the issue is knowingly left open, and say in the body which part and why.
+- Link the issue with a non-closing reference (`Refs #N`), never a closing keyword, even where the template offers a `Closes #` line. A pull request closes its issue only when a review's contract coverage marks the required outcome and every acceptance item met, and no review has judged this work yet; delivery applies the closing keyword after its final review. Never infer linkage from a bare number.
 - Include an `Evidence` section: for each acceptance criterion of the work order, the evidence that proves it, named the way the criterion asks for it (the command and its result, the report or frame path, the check output line), taken from the run's artifacts at the commit you push. A criterion with no evidence says so plainly.
 - Never add AI attribution, generated-by footers, or robot emoji.
-- Check whether a gate passed red: read the typed-artifact listing at `$TYPED_ARTIFACTS_FILE`, take its `artifactsByType["green-gate"]` entries in the order the engine recorded them, and open each entry's `path` relative to `$ARTIFACTS_DIR` for that gate's JSON result. Any with a non-empty `red_cause` means this branch is being delivered while a project check is red. Add a short, plainly-titled section near the top of the body giving each such gate's `stage`, `red_cause`, and `summary`, and say that the PR's own CI is the check that still decides. Surface every listing `errors` entry and every gate body you cannot read as a caveat, never as "no gates". A reviewer must not have to discover this from a red badge.
-- Write the complete body to `$ARTIFACTS_DIR/pr-body.md` — never inside the repository.
+- Write no body only when `existing` is a number and either the caller named a pull request or selected no branch. A named pull request means `$INPUTS.pull_request` is neither empty nor `null`; no selected branch means `$INPUTS.branch` is empty. In that case, the description stays as its author left it, apart from the section the last bullet below prepares, and inside delivery `update-pr-body` brings it up to date once the rounds end. Skip the rest of this section except the title and the description file below.
+- Otherwise, write the complete body to `$ARTIFACTS_DIR/pr-body.md` — never inside the repository — with your file-writing tool or a quoted heredoc, not by redirecting a command's output: a pipeline whose first command fails can leave the file empty and still exit 0. When the caller selected a branch without naming a pull request, write the body even if `existing` is a number: publish may need it to open a new pull request from that branch. It is published only when a new pull request opens. Then read the file back. It must hold the whole body, with the template's required sections. If you cannot produce that body, stop and report why; never declare the pointer below for a file you have not read back.
+- When the description section is `true` and the run's artifacts (normally `implementation.md`) carry content the work requires in the pull request's description — evidence, measurements, results — write that content, complete and not summarized, to `$ARTIFACTS_DIR/pr-description.md` with your file-writing tool, then read it back. Never put it in `pr-body.md` as well: the publishing node places it in its own marked section of the description, on a pull request this run opens or continues, and leaves the rest of the description as it is. Raw delivery markers are reserved; put literal marker examples in Markdown code. Otherwise write no such file.
 
-## 4. Push
+## 4. Declare the target
 
-Push the recorded branch with upstream tracking (`git push -u origin "$HEAD_BRANCH"`). For an existing fork pull request whose author allowed maintainer edits, push to the fork instead, by explicit URL and ref: `git push "https://github.com/<headRepositoryOwner>/<headRepository>.git" "HEAD:refs/heads/<headRefName>"`. If the push is rejected or the remote diverged, stop and report — never rebase or force-push here.
+- `repo`: `{ "host", "path" }` of the repository the pull request opens against.
+- `head_repo`: the same shape for the repository the head branch lives in — `repo` itself unless the head is in a fork.
+- `head`: the head branch name, unqualified: the recorded branch, or the existing pull request's head branch.
+- `base`: the resolved base branch.
+- `existing`: the number of the pull request found for this work, or `null`. When the caller selected a branch without naming a pull request, publish reuses only an open pull request with that head.
+- `title`: the title you wrote.
+- `body`: `null` only when `existing` is a number and either the caller named a pull request or selected no branch, as in section 3; otherwise `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "pr-body.md"}`, copied exactly.
+- `description`: `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "pr-description.md"}`, copied exactly, when you wrote and read back that file; otherwise `null`.
+- `summary`: the target in one sentence.
 
-## 5. Record the intent
+Before declaring, check every required field, including `description`. Writing
+`pr-description.md` without its non-null pointer does not publish anything. For a
+continued PR, `body: null` skips only the opening body; it never skips required
+description content. When the work requires live publication evidence, include
+the tested commit and results in that content. The publisher performs the live
+write and read-back before review judges it.
 
-Write `$ARTIFACTS_DIR/pr-intent.json` with exactly these fields:
-
-- `repo`: `{ "host": REPO_HOST, "path": REPO_PATH }`, the repository the pull request opens against;
-- `headRepo`: the same shape for the repository the head branch lives in — `repo` itself unless the head is in a fork;
-- `head`: the recorded branch name, unqualified;
-- `headRevision`: the full `HEAD` object id you pushed;
-- `base`: the resolved base branch;
-- `title`: the title you wrote;
-- `bodyPath`: `$ARTIFACTS_DIR/pr-body.md`;
-- `draft`: `true` or `false` as a JSON boolean, from `$INPUTS.draft`;
-- `existing`: the pull request number this run was launched onto, as a JSON integer — omit this field entirely otherwise.
-
-The file must contain no credential and no raw remote URL. Write it with a JSON serializer, never by hand: a Windows path such as `C:\Users\...` written by hand leaves backslashes JSON cannot read.
-
-Also write `$ARTIFACTS_DIR/pr-action.md` with `REPO_HOST`, `REPO_PATH`, the recorded branch, the explicit push target, and the push result. This is the durable action evidence for what you did; the publishing node records what it did with the intent.
-
-Return only `{"intent": "$ARTIFACTS_DIR/pr-intent.json"}` through the node's structured output.
+Declare no credential and no raw remote URL.

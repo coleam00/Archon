@@ -1,0 +1,57 @@
+name: archon-holdouts
+description: |
+  Write a project's holdout scenarios: acceptance checks, written from the
+  product document, that the agents building the code never see. A holdout-writer
+  agent reads the product document and the scenario file, adds or tightens
+  scenarios, commits them, and reports one line per scenario id. Nobody else in
+  the run reads the scenarios.
+
+  Use when: before a product document (or a new section of it) is sliced and
+  built, or after a defect got past review and a scenario should catch its kind.
+  NOT for: running the scenarios (the loop's app check and the manager do, through
+  the holdout-verifier agent).
+model: large
+
+inputs:
+  holdout:
+    description: >-
+      Path to the scenario file to write (created if missing). A project can
+      fence it inside the repository with a hook that refuses every agent but
+      the holdout agents.
+  source:
+    description: >-
+      What to write from: paths to the product document or its section, or a
+      defect's issue and the product rules for that area.
+
+nodes:
+  # The writer's instructions are a command file in this pack; an inline agent cannot reach
+  # the pack, so this copies them where the agent's prompt points.
+  - id: briefs
+    script: briefs
+    runtime: bun
+
+  - id: write
+    depends_on: [briefs]
+    context: fresh
+    idle_timeout: 2700000
+    agents:
+      holdout-writer:
+        description: >-
+          Writes and tightens the project's holdout scenarios from the product
+          document or an escaped defect, commits them, and returns one line per
+          scenario id. The only agent, with holdout-verifier, allowed to read them.
+        prompt: >-
+          You are the holdout writer. Before anything else, read your
+          instructions in $ARTIFACTS_DIR/agents/holdout-writer.md with your Read
+          tool, and follow them exactly.
+    prompt: |
+      Dispatch the `holdout-writer` agent to write holdout scenarios, and relay
+      its reply. Give it:
+
+      - The scenario file: $INPUTS.holdout
+      - What to write from: $INPUTS.source
+
+      Do not open, list or search the scenario file or its folder yourself, and do
+      not read the product code: in a project that fences the scenarios, every
+      agent but the holdout agents is refused them. Your reply is the writer's
+      one line per scenario id, and nothing about a scenario's text.

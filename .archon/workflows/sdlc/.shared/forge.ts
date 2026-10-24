@@ -3,14 +3,13 @@
  *
  * One switch selects the source for every forge read and write this pack makes:
  *
- *   gh     the default. The GitHub CLI, as the pack has always used it.
+ *   gh     the default. The GitHub CLI.
  *   forge  opt-in with `ARCHON_SDLC_FORGE=forge`. An installed forge plugin,
- *          reached through the host command (`ARCHON_CLI_COMMAND`) the CLI and
- *          server publish.
+ *          reached through the host command (`ARCHON_CLI_COMMAND`).
  *
  * The source is never inferred from what happens to be installed, and a selected
  * source that cannot answer fails the operation rather than falling back to the
- * other. A container execution receives neither variable, so it uses `gh`.
+ * other.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -18,17 +17,47 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { note } from './io.ts';
 
-export type ForgeSource = 'gh' | 'forge';
+export const FORGE_SOURCES = ['gh', 'forge'] as const;
+export type ForgeSource = (typeof FORGE_SOURCES)[number];
 
 // Read here, not in each calling script: the unbound-env checker scans a node-bound
 // script's own text but never follows its imports, so a bare process.env read in a
 // shared module like this one never trips a false "unbound variable" warning.
-export function forgeSource(): ForgeSource {
-  const selected = (process.env.ARCHON_SDLC_FORGE ?? '').trim();
-  if (selected === '' || selected === 'gh') return 'gh';
-  if (selected === 'forge') return 'forge';
+export function forgeSource(env: NodeJS.ProcessEnv = process.env): ForgeSource {
+  const selected = (env.ARCHON_SDLC_FORGE ?? '').trim();
+  if (selected === '') return 'gh';
+  const source = FORGE_SOURCES.find(source => source === selected);
+  if (source) return source;
   throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
 }
+
+/** The GitHub forge plugin install id. */
+export const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';
+
+const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
+// Per-user GitHub mode scrubs the shared token from a run started by a user who has
+// not connected their own identity, so a shared `GH_TOKEN` cannot fix that refusal.
+const SETUP =
+  'The SDLC pack reaches the forge through a forge plugin. For github.com, install it with ' +
+  `\`archon plugin add ${GITHUB_FORGE_PLUGIN}\`, and set \`GH_TOKEN\` in ` +
+  "Archon's env file (`~/.archon/.env`, `ARCHON_HOME/.env` when configured, or `/.archon/.env` in Docker), " +
+  'set `GITHUB_TOKEN`, use `gh auth login`, or configure GitHub App mode. When per-user GitHub ' +
+  'is enabled, connect your own GitHub identity instead of setting `GH_TOKEN`: ' +
+  '`archon auth github` or the Web UI Settings page. ' +
+  USE_GH;
+
+/**
+ * The operator's next step for each refusal the forge contract types as their setup's,
+ * keyed by its `error.kind`.
+ */
+export const REMEDY = {
+  no_plugin_for_host: SETUP,
+  no_credential: SETUP,
+  unsupported_op:
+    `For github.com, \`archon plugin update ${GITHUB_FORGE_PLUGIN}\` installs the ` +
+    'latest released plugin, which may not support this operation either. ' +
+    USE_GH,
+} as const;
 
 export interface QualifiedPr {
   readonly repo: { readonly host: string; readonly path: string };
@@ -49,50 +78,6 @@ export interface PrRecord extends QualifiedPr {
   readonly maintainer_can_modify: boolean | null;
 }
 
-// This standalone boundary is checked against @archon/forge by forge-contract.test.ts.
-export const CHECK_STATES = ['none', 'pending', 'green', 'red', 'gated', 'unknown'] as const;
-export type CheckState = (typeof CHECK_STATES)[number];
-
-/**
- * How a concluded check's result gates: @archon/forge's `concludedCheckStates`,
- * which the forge plugins classify through. The gh reader in ./checks.ts uses
- * this copy so both sources classify a GitHub conclusion the same way.
- */
-export const CONCLUDED_CHECK_STATES = {
-  success: 'green',
-  neutral: 'green',
-  skipped: 'green',
-  action_required: 'gated',
-  failure: 'red',
-  cancelled: 'red',
-  timed_out: 'red',
-  stale: 'red',
-  startup_failure: 'red',
-  unknown: 'unknown',
-} as const satisfies Record<string, Exclude<CheckState, 'none' | 'pending'>>;
-
-export interface CheckUnit {
-  readonly unit: { readonly name: string };
-  readonly phase: 'pending' | 'running' | 'completed' | 'unknown';
-  readonly result: string | null;
-  readonly state: Exclude<CheckState, 'none'>;
-}
-
-export interface RerunGroup {
-  readonly id: string;
-  readonly attempt: number;
-}
-export interface ForgeCheckUnit extends CheckUnit {
-  readonly unit: {
-    readonly kind: 'check' | 'commit_status';
-    readonly id: string;
-    readonly name: string;
-  };
-  readonly rerun?: RerunGroup | null;
-}
-export interface ForgeCheckSet extends CheckSet {
-  readonly units: readonly ForgeCheckUnit[];
-}
 export interface MergeRequest {
   readonly ref: QualifiedPr;
   readonly method: 'merge' | 'squash';
@@ -110,20 +95,6 @@ export interface MergeResult extends Omit<MergeRequest, 'ref'> {
   readonly pr: PrRecord;
   readonly enforcedConditions: readonly (keyof MergeRequest['conditions'])[];
   readonly landed: Landed;
-}
-export interface SelectedCheck {
-  readonly unit: ForgeCheckUnit['unit'];
-  readonly rerun: RerunGroup | null;
-}
-export interface RerunRequest {
-  readonly ref: QualifiedPr;
-  readonly revision: string;
-  readonly units: readonly SelectedCheck[];
-}
-export interface RerunResult extends RerunRequest {
-  readonly target: QualifiedPr;
-  readonly outcome: 'applied';
-  readonly changed: true;
 }
 export interface ReviewItem {
   readonly kind: 'review' | 'review_comment';
@@ -154,23 +125,6 @@ export interface MutationFailure {
     readonly conditions: MergeRequest['conditions'];
     readonly landed?: Landed;
   };
-  readonly rerun?: {
-    readonly revision: string;
-    readonly requested: readonly SelectedCheck[];
-    readonly observed: readonly SelectedCheck[];
-  };
-}
-
-export interface CheckSet {
-  readonly units: readonly CheckUnit[];
-  readonly summary: { readonly state: CheckState };
-}
-
-export interface ChecksObservation extends ForgeCheckSet {
-  readonly approvalPending?: boolean | null;
-  readonly ref: QualifiedPr;
-  readonly revision: string;
-  readonly required: ForgeCheckSet | null;
 }
 
 /**
@@ -218,14 +172,16 @@ export class ForgeOperationError extends Error {
  */
 export function invokeForge(
   op: string,
-  request: Record<string, unknown>
+  request: Record<string, unknown>,
+  credential?: (source: string) => void
 ): Record<string, unknown> | null {
-  const command = parseCommand(process.env.ARCHON_CLI_COMMAND);
+  const command = archonCommand();
   const directory = mkdtempSync(join(tmpdir(), 'archon-forge-'));
   const path = join(directory, 'request.json');
   try {
     writeFileSync(path, JSON.stringify(request), { mode: 0o600 });
     const result = Bun.spawnSync([...command, 'forge', op, '--json', '--data-file', path], {
+      env: process.env,
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -236,39 +192,56 @@ export function invokeForge(
       const detail = result.stderr.toString().trim();
       throw new Error(`forge ${op} failed${detail === '' ? '' : `: ${detail}`}`);
     }
-    const response = record(parsed);
-    if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
-      throw new Error(`forge ${op} returned an unexpected response envelope`);
-    }
-    // Exit 2 is the host saying it could not audit an operation that did complete.
-    // The response on stdout is the real outcome, so the result is still a result;
-    // losing it here would report a performed write as a failure.
-    if (response.ok === true && result.exitCode === 2) {
-      note(`forge ${op} completed but the host could not record it in the run's audit log.`);
-    } else if (response.ok !== true || result.exitCode !== 0) {
-      const mutation = record(response.mutation);
-      const error = record(response.error);
-      const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
-      const message = typeof error?.message === 'string' ? error.message : 'operation failed';
-      throw new ForgeOperationError(
-        `forge ${op} ${outcome ?? 'failed'}: ${message}${mutation ? ` ${JSON.stringify(mutation)}` : ''}`,
-        mutation
-      );
-    }
-    const body = record(response.result);
-    if (body?.op !== op) throw new Error(`forge ${op} returned the wrong result`);
-    // A read may answer "there is none": `pr.view` by head returns null when the
-    // branch has no open pull request.
-    if (body.value === null) return null;
-    const value = record(body.value);
-    if (!value) throw new Error(`forge ${op} returned the wrong result`);
-    return value;
+    return forgeResult(op, parsed, result.exitCode, credential);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 }
 
-function qualifiedRepo(value: unknown): QualifiedPr['repo'] | undefined {
+export function forgeResult(
+  op: string,
+  parsed: unknown,
+  exitCode: number,
+  credential?: (source: string) => void
+): Record<string, unknown> | null {
+  const response = record(parsed);
+  if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
+    throw new Error(`forge ${op} returned an unexpected response envelope`);
+  }
+  const source =
+    typeof response.credentialSource === 'string' ? response.credentialSource : undefined;
+  if (source) credential?.(source);
+  // Exit 2 is the host saying it could not audit an operation that did complete.
+  // The response on stdout is the real outcome, so the result is still a result;
+  // losing it here would report a performed write as a failure.
+  if (response.ok === true && exitCode === 2) {
+    note(`forge ${op} completed but the host could not record it in the run's audit log.`);
+  } else if (response.ok !== true || exitCode !== 0) {
+    const mutation = record(response.mutation);
+    const error = record(response.error);
+    const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
+    const message = typeof error?.message === 'string' ? error.message : 'operation failed';
+    const kind = typeof error?.kind === 'string' ? error.kind : undefined;
+    const remedy =
+      kind !== undefined && Object.hasOwn(REMEDY, kind)
+        ? ` ${REMEDY[kind as keyof typeof REMEDY]}`
+        : '';
+    throw new ForgeOperationError(
+      `forge ${op} ${outcome ?? 'failed'}: ${message}${source ? ` (source: ${source})` : ''}${mutation ? ` ${JSON.stringify(mutation)}` : ''}${remedy}`,
+      mutation
+    );
+  }
+  const body = record(response.result);
+  if (body?.op !== op) throw new Error(`forge ${op} returned the wrong result`);
+  // A read may answer "there is none": `pr.view` by head returns null when the
+  // branch has no open pull request.
+  if (body.value === null) return null;
+  const value = record(body.value);
+  if (!value) throw new Error(`forge ${op} returned the wrong result`);
+  return value;
+}
+
+export function qualifiedRepo(value: unknown): QualifiedPr['repo'] | undefined {
   const repo = record(value);
   return typeof repo?.host === 'string' &&
     repo.host.trim() !== '' &&
@@ -345,7 +318,9 @@ export function parseQualifiedPr(value: string | undefined): QualifiedPr {
   return { repo: { host: repo.host, path: repo.path }, number: pr.number };
 }
 
-function parseCommand(value: string | undefined): readonly string[] {
+/** The host's `archon` argv, as the CLI and server publish it to every exec node. */
+export function archonCommand(): readonly string[] {
+  const value = process.env.ARCHON_CLI_COMMAND;
   if (value === undefined || value === '') {
     throw new Error(
       'ARCHON_CLI_COMMAND is not set; the host that started this run did not publish its CLI command'
@@ -353,7 +328,7 @@ function parseCommand(value: string | undefined): readonly string[] {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(value ?? '');
+    parsed = JSON.parse(value);
   } catch {
     throw new Error('ARCHON_CLI_COMMAND is not a JSON string array');
   }
@@ -367,164 +342,10 @@ function parseCommand(value: string | undefined): readonly string[] {
   return parsed as string[];
 }
 
-function parseUnit(value: unknown): ForgeCheckUnit | undefined {
-  const item = record(value);
-  const unit = record(item?.unit);
-  const states: readonly CheckState[] = CHECK_STATES.filter(state => state !== 'none');
-  const phases = ['pending', 'running', 'completed', 'unknown'] as const;
-  if (
-    (unit?.kind !== 'check' && unit?.kind !== 'commit_status') ||
-    typeof unit.id !== 'string' ||
-    unit.id === '' ||
-    typeof unit?.name !== 'string' ||
-    unit.name === '' ||
-    !states.includes(item?.state as CheckState) ||
-    !phases.includes(item?.phase as (typeof phases)[number]) ||
-    !(typeof item?.result === 'string' || item?.result === null)
-  )
-    return undefined;
-  let rerun: RerunGroup | null | undefined;
-  if (item.rerun === null) rerun = null;
-  else if (item.rerun !== undefined) {
-    const group = record(item.rerun);
-    if (
-      !group ||
-      typeof group.id !== 'string' ||
-      group.id === '' ||
-      typeof group.attempt !== 'number' ||
-      !Number.isInteger(group.attempt) ||
-      group.attempt <= 0
-    )
-      return undefined;
-    rerun = { id: group.id, attempt: group.attempt };
-  }
-  return {
-    unit: { kind: unit.kind, id: unit.id, name: unit.name },
-    ...(rerun === undefined ? {} : { rerun }),
-    phase: item.phase as CheckUnit['phase'],
-    result: item.result,
-    state: item.state as CheckUnit['state'],
-  };
-}
-
-function parseSet(value: unknown): ForgeCheckSet | undefined {
-  const set = record(value);
-  const summary = record(set?.summary);
-  const states: readonly CheckState[] = CHECK_STATES;
-  if (!Array.isArray(set?.units) || !states.includes(summary?.state as CheckState))
-    return undefined;
-  const units = set.units.map(parseUnit);
-  if (units.some(unit => unit === undefined)) return undefined;
-  return { units: units as ForgeCheckUnit[], summary: { state: summary?.state as CheckState } };
-}
-
-function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
+export function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
   return left.number === right.number && sameRepo(left.repo, right.repo);
 }
 
-/** Invoke `archon forge checks` and validate only the fields pack policy consumes. */
-export function readChecks(ref: QualifiedPr): ChecksObservation {
-  const command = parseCommand(process.env.ARCHON_CLI_COMMAND);
-  const result = Bun.spawnSync(
-    [...command, 'forge', 'checks', '--json', '--data', JSON.stringify({ ref })],
-    {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    }
-  );
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(result.stdout.toString());
-  } catch {
-    if (result.exitCode !== 0)
-      throw new Error(`forge check read failed: ${result.stderr.toString().trim()}`);
-    throw new Error('forge check read returned invalid JSON');
-  }
-  const response = record(parsed);
-  if (response?.ok === false) {
-    const error = record(response.error);
-    throw new Error(
-      `forge check read failed: ${typeof error?.message === 'string' ? error.message : 'unknown error'}`
-    );
-  }
-  if (result.exitCode !== 0) {
-    const detail = result.stderr.toString().trim();
-    throw new Error(`forge check read failed${detail === '' ? '' : `: ${detail}`}`);
-  }
-  const resultBody = record(response?.result);
-  const value = record(resultBody?.value);
-  const observedRef = record(value?.ref);
-  const observedRepo = record(observedRef?.repo);
-  const observed =
-    observedRepo && typeof observedRef?.number === 'number'
-      ? { repo: { host: observedRepo.host, path: observedRepo.path }, number: observedRef.number }
-      : undefined;
-  const full = parseSet(value);
-  const required = value?.required === null ? null : parseSet(value?.required);
-  if (
-    typeof response?.operationId !== 'string' ||
-    response.operationId === '' ||
-    response.ok !== true ||
-    resultBody?.op !== 'checks.state' ||
-    !(
-      value?.approvalPending === undefined ||
-      value.approvalPending === null ||
-      typeof value.approvalPending === 'boolean'
-    ) ||
-    typeof value?.revision !== 'string' ||
-    value.revision === '' ||
-    !observed ||
-    typeof observed.repo.host !== 'string' ||
-    typeof observed.repo.path !== 'string' ||
-    !samePr(ref, observed as QualifiedPr) ||
-    !full ||
-    (value?.required !== null && !required)
-  ) {
-    throw new Error('forge check read returned an unexpected response shape or target');
-  }
-  return {
-    ref,
-    revision: value.revision,
-    approvalPending: value.approvalPending,
-    units: full.units,
-    summary: full.summary,
-    required: required ?? null,
-  };
-}
-
-export function preferredChecks(observation: ChecksObservation): CheckSet {
-  return observation.required ?? observation;
-}
-
-export function parseCreatedWorkItem(value: unknown, repo: QualifiedPr['repo']): string {
-  const result = record(value);
-  const item = record(result?.workitem);
-  const ref = parseQualifiedPr(JSON.stringify(item?.ref));
-  if (
-    result?.outcome !== 'applied' ||
-    typeof result.changed !== 'boolean' ||
-    item?.kind !== 'issue' ||
-    !sameRepo(ref.repo, repo) ||
-    typeof item.url !== 'string' ||
-    !URL.canParse(item.url) ||
-    (item.state !== 'open' && item.state !== 'closed')
-  )
-    throw new Error('forge returned an invalid created work item');
-  return item.url;
-}
-export function readWorkItemLabels(ref: QualifiedPr): string[] {
-  const value = invokeForge('workitem.view', { ref });
-  const observed = parseQualifiedPr(JSON.stringify(value?.ref));
-  if (!samePr(ref, observed) || value?.kind !== 'issue' || !Array.isArray(value.labels))
-    throw new Error('forge work item has no verified issue identity and label facts');
-  const labels: unknown[] = value.labels;
-  return labels.map(name => {
-    if (typeof name !== 'string' || name === '')
-      throw new Error('forge returned an invalid issue label');
-    return name;
-  });
-}
 export function readRepositoryLabels(repo: QualifiedPr['repo']): string[] {
   const value = invokeForge('repo.labels.list', { repo });
   const observed = qualifiedRepo(value?.repo);

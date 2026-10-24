@@ -8,11 +8,14 @@
  * what makes a review true.
  *
  * A report goes public only about the commit its round fixed at the start
- * (review-round): the checkout must still be at it, the pull request's remote
- * head must be it. Any mismatch refuses, so a verdict about one commit can
- * never stand as the verdict on another. A report that does not repeat the SHA
- * is stamped with it, not refused: the round, not the prose, fixes the commit. Once
- * published, the commit is recorded beside the report as the next round's cursor.
+ * (review-round): the checkout must still be at it and the pull request's remote
+ * head must be it. The head is checked before the scope agent's declaration, so a
+ * correction that was never pushed is named as that rather than as a scope
+ * mismatch. Any mismatch refuses, so a verdict about one commit can never
+ * stand as the verdict on another. This node stamps that commit and the certified
+ * verdict on the comment itself (../../.shared/review-comment.ts) rather than trusting
+ * the report's text to name them; the merge queue's gate reads both. Once published, the
+ * commit is recorded beside the report as the next round's cursor.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
@@ -21,12 +24,12 @@
  *   or `null` for a working diff. It names the target of a standalone review.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
- * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER: the
- *   certified verdict fields this node forwards.
+ * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
+ *   INPUTS_DISCOVERIES / INPUTS_CONTRACT_LEFT: the certified verdict fields this
+ *   node forwards.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
@@ -38,8 +41,7 @@ import {
   type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
-
-const MARKER = '<!-- archon-review-report -->';
+import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
 
 /** The pull request delivery recorded, when the scope is that JSON record. */
 function recordedPr(scope: string): QualifiedPr | undefined {
@@ -74,17 +76,11 @@ try {
     action: text(process.env.INPUTS_ACTION),
     findings_summary: text(process.env.INPUTS_SUMMARY),
     report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
+    discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
+    contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
   };
   const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
   const declared = declaredPr(text(process.env.INPUTS_PR));
-  if (
-    recorded &&
-    (declared?.number !== recorded.number || !sameRepo(declared.repo, recorded.repo))
-  ) {
-    throw new Error(
-      `the review scope declared ${label(declared)}, but delivery recorded ${label(recorded)}`
-    );
-  }
   const pr = recorded ?? declared;
   const head = text(process.env.INPUTS_HEAD).trim();
   const reportPath = text(process.env.INPUTS_REPORT);
@@ -94,38 +90,32 @@ try {
   if (checkout !== head) {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
-  // The round fixed the head, so the report is about it whether or not the
-  // reviewer's prose repeats the SHA (a short SHA, or none at all). Stamp it rather
-  // than refuse a sound review. Only a report that declares another commit refuses.
-  const declaredHead = /Reviewed head SHA:\**\s*`?([^\s`*]+)/i.exec(report)?.[1];
-  if (!report.includes(head) && declaredHead && !head.startsWith(declaredHead)) {
-    throw new Error(
-      `the review report says it reviewed ${declaredHead}, but this round reviewed ${head}`
-    );
+  if (pr) {
+    const remote = viewPr(pr, source).pr.head_revision;
+    if (remote !== head) {
+      throw new Error(
+        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: the commits under review were not pushed`
+      );
+    }
   }
-  const stamped = report.includes(head) ? report : `**Reviewed head SHA:** ${head}\n\n${report}`;
-  if (stamped !== report) {
-    writeFileSync(reportPath, stamped);
-    note(`publish-review: the report did not name ${head}; stamped it.`);
+  if (
+    recorded &&
+    (declared?.number !== recorded.number || !sameRepo(declared.repo, recorded.repo))
+  ) {
+    throw new Error(
+      `the review scope declared ${label(declared)}, but delivery recorded ${label(recorded)}`
+    );
   }
   if (!pr) {
     note('publish-review: the review scope is a working diff, so no comment was published.');
   } else {
-    const remote = viewPr(pr, source).pr.head_revision;
-    if (remote !== head) {
-      throw new Error(
-        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}`
-      );
-    }
-    const directory = mkdtempSync(join(tmpdir(), 'archon-review-'));
-    try {
-      const marked = join(directory, 'comment.md');
-      writeFileSync(marked, `${MARKER}\n${stamped}`);
-      const comment = upsertComment(pr, MARKER, marked, source);
-      note(`publish-review: canonical review comment at ${comment.url}`);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
+    const comment = upsertComment(
+      { kind: 'pr', ref: pr },
+      REVIEW_MARKER,
+      reviewCommentBody(head, verdict.ready, report),
+      source
+    );
+    note(`publish-review: canonical review comment at ${comment.url}`);
   }
   // review-round reads this as the next round's cursor.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);

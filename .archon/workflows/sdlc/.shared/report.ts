@@ -1,229 +1,259 @@
 /**
- * Everything a terminal report owes its reader beyond the result itself.
+ * The discoveries a run recorded outside its own scope: which records a run relays,
+ * and the terminal report's section that lists them.
  *
- * Two sections, both existing because their channel is otherwise write-only: red a
- * green gate deliberately accepted, and discoveries a run recorded outside its own
- * scope. The engine collects neither. The terminal record it assembles is built from
- * the durable event log when a run reaches a terminal status, and is readable only
- * after that, while these sections have to reach the reader from inside the run. So
- * composing them is the pack's, and this module is where all three SDLC tails
- * compose them.
+ * A run's discoveries are the latest review verdict's certified records, plus any raw
+ * record under `discoveries/` that a node wrote after that review, or every raw
+ * record when no review ran. The last review judged every earlier raw record and may
+ * have rejected some, so a rejected record is never raised again. The terminal report
+ * and the discoveries workflow read the same set through `relayedDiscoveries`.
  *
- * Presentation only. Discoveries and caveats never gate readiness, so nothing here
+ * The report is presentation only. Discoveries never gate readiness, so nothing in it
  * may fail a tail that has already done its irreversible work: an unreadable record
- * degrades to a pointer at the file, never to silence and never to a throw. The
- * reader of the report is exactly the person who can go open it.
+ * degrades to a named problem, never to silence and never to a throw.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseAgentJson } from './agent-json.ts';
+import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
+import { isObject, readTyped } from './typed.ts';
 
 const DISCOVERY_RELAY =
-  'If you are an agent reading this: open discoveries.md and surface each discovery to your human. ' +
-  "These are validated findings outside this run's scope — no issue tracker knows about them, " +
-  'and if you drop them here, nobody ever sees them.';
+  'If you are an agent reading this: surface each discovery to your human. ' +
+  "These are validated findings outside this run's scope; the pack's discoveries workflow drains them " +
+  'into issues only where a project runs it, so if you drop them here, nobody may ever see them.';
 
-const RED_CAUSE_CAVEAT =
-  "The project's own checks did not pass locally on this branch. The pull request's " +
-  'own CI is the gate that still stands — read it before merging, and if the red is ' +
-  'inherited, the base branch is what needs the fix.';
-
-/**
- * A field an agent wrote from prose against no schema, as display text.
- *
- * Coerced rather than trusted: a JSON-legal non-string value must not raise past the
- * caller and fail an already-delivered run. Only the shapes that have a single
- * obvious rendering get one — a title that arrives as an object or an array has no
- * honest short form, so it reads as absent and the caller supplies its placeholder.
- */
-function display(value: unknown): string {
-  if (typeof value === 'string') return value.trim();
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  return '';
+/** One discovery record a run relays, with a reference stable within its run. */
+export interface DiscoveryRecord {
+  /** `review#<index>` for a certified record, `discoveries/<file>#<index>` for a raw one. */
+  readonly ref: string;
+  readonly title: string;
+  readonly claim: string;
+  readonly evidence: readonly string[];
+  /** The review's relation for a certified record; whatever the producer wrote, or null, for a raw one. */
+  readonly relation: string | null;
+  readonly reviewed: boolean;
 }
 
-/** `undefined` when the path is not a readable regular file. */
-function readJson(path: string): { value: unknown } | { error: string } | undefined {
+export interface RelayedDiscoveries {
+  readonly records: readonly DiscoveryRecord[];
+  /** Records that could not be read, each naming its file. */
+  readonly problems: readonly string[];
+}
+
+/** The latest review verdict a run produced: its records, and when it was written. */
+export interface LatestVerdict {
+  readonly discoveries: readonly unknown[];
+  /** Milliseconds since the epoch; undefined when its time is unknown. */
+  readonly at: number | undefined;
+}
+
+function modified(path: string): number | undefined {
   try {
-    if (!statSync(path).isFile()) return undefined;
+    return statSync(path).mtimeMs;
   } catch {
     return undefined;
   }
+}
+
+function asText(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  return value === undefined || value === null ? '' : JSON.stringify(value);
+}
+
+function asRecord(value: unknown, ref: string, reviewed: boolean): DiscoveryRecord {
+  const entry = isObject(value) ? value : {};
+  const evidence = Array.isArray(entry.evidence)
+    ? entry.evidence.map(asText)
+    : asText(entry.evidence) === ''
+      ? []
+      : [asText(entry.evidence)];
+  return {
+    ref,
+    title: asText(entry.title) || '(untitled discovery)',
+    claim: asText(entry.claim),
+    evidence,
+    relation: typeof entry.relation === 'string' ? entry.relation : null,
+    reviewed,
+  };
+}
+
+/**
+ * The records a run relays, given its latest review verdict (undefined when no review
+ * ran). Raw records are read from `<artifacts>/discoveries/*.json`.
+ */
+export function relayedDiscoveries(
+  artifacts: string,
+  verdict: LatestVerdict | undefined
+): RelayedDiscoveries {
+  const records: DiscoveryRecord[] = (verdict?.discoveries ?? []).map((entry, index) =>
+    asRecord(entry, `review#${String(index)}`, true)
+  );
+  const problems: string[] = [];
+  const dir = join(artifacts, 'discoveries');
+  let names: string[];
   try {
-    return { value: parseAgentJson(readFileSync(path, 'utf-8')) };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    names = readdirSync(dir).filter(name => name.endsWith('.json'));
+  } catch {
+    names = [];
   }
+  for (const name of names.sort()) {
+    const path = join(dir, name);
+    const at = modified(path);
+    if (at === undefined || (verdict?.at !== undefined && at <= verdict.at)) continue;
+    try {
+      const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
+      // A producer that had one record sometimes wrote it bare rather than in an array.
+      const entries = Array.isArray(value) ? value : isObject(value) ? [value] : undefined;
+      if (entries === undefined) throw new Error('not a JSON array of records');
+      entries.forEach((entry: unknown, index) => {
+        records.push(asRecord(entry, `discoveries/${name}#${String(index)}`, false));
+      });
+    } catch (error) {
+      problems.push(`could not read ${path} (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+  return { records, problems };
 }
 
-/** A JSON object: not null, not an array. `typeof` alone admits both. */
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+/**
+ * Another run's latest review verdict, located by type in its `nodes/*.meta.json`
+ * sidecars, the engine's record of each typed output. Throws when a sidecar or the
+ * verdict cannot be read, so a caller never mistakes an unreadable review for none.
+ */
+export function latestVerdictOf(artifacts: string): LatestVerdict | undefined {
+  const dir = join(artifacts, 'nodes');
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter(name => name.endsWith('.meta.json'));
+  } catch {
+    return undefined;
+  }
+  let latest: { path: string; at: number } | undefined;
+  for (const name of names) {
+    const meta: unknown = JSON.parse(readFileSync(join(dir, name), 'utf8'));
+    if (!isObject(meta) || meta.outputType !== 'review-report') continue;
+    const at = typeof meta.producedAt === 'string' ? Date.parse(meta.producedAt) : Number.NaN;
+    if (typeof meta.path !== 'string' || Number.isNaN(at)) {
+      throw new Error(`${join(dir, name)} names no content path and production time`);
+    }
+    if (latest === undefined || at > latest.at) latest = { path: meta.path, at };
+  }
+  if (latest === undefined) return undefined;
+  const content = join(artifacts, latest.path);
+  const value: unknown = JSON.parse(readFileSync(content, 'utf8'));
+  if (!isObject(value)) throw new Error(`${content} is not a review verdict`);
+  return verdictFrom(value, content);
 }
 
-function records(value: unknown): readonly Record<string, unknown>[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isJsonObject);
+/**
+ * The verdict a review-report value is, for the relay rule. A verdict that declares
+ * no discoveries list consolidated none, so it judged no raw record either: every raw
+ * record stands, as when no review ran.
+ */
+function verdictFrom(value: unknown, content: string): LatestVerdict | undefined {
+  const discoveries = isObject(value) ? value.discoveries : undefined;
+  return Array.isArray(discoveries) ? { discoveries, at: modified(content) } : undefined;
+}
+
+/** This run's latest review verdict, from the engine's typed-artifact listing. */
+function latestVerdictFromListing(
+  artifacts: string,
+  listingFile: string | undefined
+): { verdict: LatestVerdict | undefined } | { listingProblem: string } {
+  const read = readTyped<unknown>(listingFile, artifacts, 'review-report');
+  if (read.listingProblem !== undefined) return { listingProblem: read.listingProblem };
+  const entry = read.entries?.at(-1);
+  if (entry === undefined) return { verdict: undefined };
+  return { verdict: verdictFrom(read.values.at(-1), join(artifacts, entry.path)) };
 }
 
 /** The discoveries section, or empty when there is nothing to report. */
-function discoveries(artifacts: string): string {
-  const path = join(artifacts, 'discoveries.json');
-  const read = readJson(path);
-  if (read === undefined) return '';
-  if ('error' in read) {
-    return `\n\nDiscoveries: could not read ${path} (${read.error}). Open it directly.`;
+function discoveries(artifacts: string, listingFile: string | undefined): string {
+  const latest = latestVerdictFromListing(artifacts, listingFile);
+  if ('listingProblem' in latest) {
+    return `\n\nDiscoveries could not be listed: ${latest.listingProblem} Open ${join(artifacts, 'discoveries.md')} and ${join(artifacts, 'discoveries')} directly.`;
   }
-  if (!Array.isArray(read.value)) {
-    return `\n\nDiscoveries: ${path} is not a JSON array of records. Open it directly.`;
-  }
-  if (read.value.length === 0) return '';
-
-  // Delivery files each record as an issue and writes its URL back as `issue`.
-  // Once every record has one, the tracker knows about them and the relay is moot.
-  const entries = read.value.map(entry => {
-    const record = records([entry])[0];
-    const title = (record === undefined ? '' : display(record.title)) || '(untitled discovery)';
-    const issue = record !== undefined && typeof record.issue === 'string' ? record.issue : '';
-    return { title, issue };
-  });
-  const listed = entries
-    .map(entry => `- ${entry.title}${entry.issue === '' ? '' : ` — ${entry.issue}`}`)
-    .join('\n');
-  const relay = entries.every(entry => entry.issue !== '') ? '' : `\n\n${DISCOVERY_RELAY}`;
+  const relayed = relayedDiscoveries(artifacts, latest.verdict);
+  const lines = [
+    ...relayed.records.map(
+      record => `- ${record.title} [${record.reviewed ? (record.relation ?? 'unrelated') : 'unreviewed'}]`
+    ),
+    ...relayed.problems.map(problem => `- ${problem}. Open it directly.`),
+  ];
+  if (lines.length === 0) return '';
   return (
-    `\n\nDiscoveries (${read.value.length}):\n${listed}\n\n` +
-    `Report: ${join(artifacts, 'discoveries.md')}${relay}`
-  );
-}
-
-function listedGates(
-  artifactsByType: unknown
-):
-  | { readonly gates: readonly Record<string, unknown>[] }
-  | { readonly limitation: string } {
-  if (!isJsonObject(artifactsByType)) {
-    return { limitation: 'its `artifactsByType` is not a JSON object' };
-  }
-  const gates = artifactsByType['green-gate'];
-  if (gates === undefined) return { gates: [] };
-  if (!Array.isArray(gates)) {
-    return { limitation: "its `artifactsByType['green-gate']` is not an array" };
-  }
-  const objects = gates.filter(isJsonObject);
-  if (objects.length !== gates.length) {
-    return { limitation: "an `artifactsByType['green-gate']` entry is not a JSON object" };
-  }
-  return { gates: objects };
-}
-
-function listingLimitation(message: string): string {
-  return (
-    `\n\nRed-cause disclosures could not be verified: ${message} ` +
-    'If a green gate accepted red, this report cannot show it.'
+    `\n\nDiscoveries:\n${lines.join('\n')}\n\n` +
+    `Records: ${join(artifacts, 'discoveries.md')}, ${join(artifacts, 'discoveries')}\n\n${DISCOVERY_RELAY}`
   );
 }
 
 /**
- * The caveat for red this run's green gates deliberately let through.
- *
- * The engine hands every exec node a typed-artifact listing at
- * `TYPED_ARTIFACTS_FILE`: one JSON document naming the current run's readable
- * artifacts grouped by their exact `outputType`, each carrying the relative path of
- * its content, plus every record the engine could not read. Selecting
- * `artifactsByType['green-gate']` reads every gate that ran this run, loop
- * iterations included, with no directory walk and no filename guess; the engine has
- * already ordered them by production time. Lookup errors are shown here because a
- * corrupt sidecar could have been a gate, and it has no trustworthy type to hide
- * behind. A missing or unreadable listing is a named limitation, never silence: the
- * reader is exactly the person who can go open the run's records.
- */
-function redCauses(artifacts: string, listingFile: string | undefined): string {
-  if (listingFile === undefined || listingFile === '') {
-    return listingLimitation('no typed-artifact listing reached this node.');
-  }
-  const listing = readJson(listingFile);
-  if (listing === undefined) {
-    return listingLimitation(
-      `the typed-artifact listing ${listingFile} is not a readable regular file.`
-    );
-  }
-  if ('error' in listing) {
-    return listingLimitation(
-      `the typed-artifact listing ${listingFile} could not be read (${listing.error}).`
-    );
-  }
-  const envelope = records([listing.value])[0];
-  if (envelope === undefined) {
-    return listingLimitation(`the typed-artifact listing ${listingFile} is not a JSON object.`);
-  }
-
-  const reds: string[] = [];
-  const unreadable: string[] = [];
-  const gates = listedGates(envelope.artifactsByType);
-  if ('limitation' in gates) {
-    return listingLimitation(
-      `the typed-artifact listing ${listingFile} is malformed: ${gates.limitation}.`
-    );
-  }
-  for (const gate of gates.gates) {
-    const outputPath = join(artifacts, display(gate.path));
-    const body = readJson(outputPath);
-    if (body === undefined || 'error' in body) {
-      unreadable.push(`- ${outputPath}: could not read the gate's record. Open it directly.`);
-      continue;
-    }
-    const result = records([body.value])[0];
-    if (result === undefined) {
-      unreadable.push(`- ${outputPath}: not a gate record. Open it directly.`);
-      continue;
-    }
-    const cause = display(result.red_cause);
-    if (cause === '') continue;
-    const stage = display(result.stage) || 'A stage';
-    const summary = display(result.summary);
-    reds.push(`- ${stage}: ${cause} red${summary ? `\n  ${summary}` : ''}`);
-  }
-
-  // Listing diagnostics name every record the engine could not turn into an
-  // artifact — including a gate whose sidecar or content it could not read. A
-  // present-but-non-array `errors` value is itself a shape failure, not silence.
-  const listingErrors = envelope.errors;
-  if (listingErrors !== undefined && !Array.isArray(listingErrors)) {
-    unreadable.push(
-      `- ${listingFile} (errors): the listing's \`errors\` value is not an array. ` +
-        'Its diagnostics cannot be read; open the listing directly.'
-    );
-  } else {
-    for (const error of records(listingErrors)) {
-      const path = display(error.path) || '(unknown record)';
-      const kind = display(error.kind) || 'unreadable';
-      const code = display(error.code);
-      unreadable.push(
-        `- ${path} (${kind}${code ? `, ${code}` : ''}): the engine could not read this record. ` +
-          'Open it directly.'
-      );
-    }
-  }
-
-  if (reds.length === 0 && unreadable.length === 0) return '';
-  return (
-    `\n\nDelivered on red (${reds.length}) — a gate accepted red this change did ` +
-    `not cause:\n${[...reds, ...unreadable].join('\n')}\n\n${RED_CAUSE_CAVEAT}`
-  );
-}
-
-/**
- * Both sections, composed in one place so that no branch of a tail's report can
- * print one and quietly drop the other. A caller that reached for the discovery
- * section alone would lose the red-cause caveat that makes passing red safe.
- * `listingFile` is passed in rather than read from the environment here, so the
- * reusable report never silently depends on ambient state.
+ * The report's closing section. `listingFile` is passed in rather than read from the
+ * environment here, so the reusable report never silently depends on ambient state.
  */
 export function caveats(
   artifacts: string,
   options: { readonly listingFile: string | undefined }
 ): string {
-  return redCauses(artifacts, options.listingFile) + discoveries(artifacts);
+  return discoveries(artifacts, options.listingFile);
+}
+
+/** A verified publication can outlive a failed node with no typed output. */
+function createdPr(artifacts: string): { url: string; at?: number; unresolvedAt?: number; problem?: string } {
+  const path = join(artifacts, PR_CREATE_RECORD);
+  try {
+    const claim = decodePrPublicationRecord(JSON.parse(readFileSync(path, 'utf8')));
+    const at = modified(path);
+    return claim.state === 'verified' ? { url: claim.pr.url, at } : { url: '', unresolvedAt: at };
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
+    return {
+      url: '',
+      unresolvedAt: modified(path) ?? Infinity,
+      problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
+/**
+ * Verified publication records outlive failed nodes that produced no typed output.
+ * An unresolved creation claim must not look like permission to open another PR.
+ */
+export function failedPublication(
+  artifacts: string,
+  options: { readonly listingFile: string | undefined }
+): { reason: string; pr_url: string } {
+  const read = readTyped<unknown>(options.listingFile, artifacts, 'pull-request');
+  const latest = read.values.at(-1);
+  const entry = read.entries?.at(-1);
+  const created = createdPr(artifacts);
+  const publishedAt = entry === undefined ? undefined : modified(join(artifacts, entry.path));
+  const { url, at } = isObject(latest) && typeof latest.url === 'string' &&
+    (created.url === '' || (publishedAt ?? 0) >= (created.at ?? 0))
+    ? { url: latest.url, at: publishedAt } : created;
+  if (created.unresolvedAt !== undefined && (url === '' || created.unresolvedAt > (at ?? 0))) {
+    return { reason: PR_CREATE_UNRESOLVED, pr_url: '' };
+  }
+  return { reason: RUN_FAILED, pr_url: url };
+}
+
+/**
+ * The summary a tail's report node writes when a node failure kept the run from
+ * reaching its outcome. It names no result: the engine's terminal record names the
+ * failed node, and nothing here may read as a delivery.
+ */
+export function failed(
+  artifacts: string,
+  options: { readonly listingFile: string | undefined }
+): string {
+  const { problem } = createdPr(artifacts);
+  const unresolved = failedPublication(artifacts, options).reason === PR_CREATE_UNRESOLVED;
+  return (
+    'Not done: a node failed before this run reported its result. The run\'s terminal record names the node and its error. ' +
+    'Anything the run already published, such as a pushed branch or a pull request, is left as it is.' +
+    (!unresolved ? '' : `\n\nReconcile the PR create recorded at ${join(artifacts, PR_CREATE_RECORD)} before continuing; its identity may not have been saved.`) +
+    (problem ? `\n\n${problem}` : '') +
+    caveats(artifacts, options)
+  );
 }

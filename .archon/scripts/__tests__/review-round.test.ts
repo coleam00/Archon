@@ -11,8 +11,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { trackTempRoots } from '@archon/paths/test-utils';
-import { runPackScript, type ScriptRun } from './deliver-checks-harness';
+import { trackTempRoots } from './temp-roots';
+import { packScriptRunner, type ScriptRun } from './deliver-checks-harness';
+
+const { runPackScript } = packScriptRunner();
 
 const trackTempRoot = trackTempRoots();
 
@@ -48,21 +50,36 @@ function history(): { cwd: string; older: string; newer: string } {
   return { cwd, older, newer };
 }
 
-function round(cwd: string, head: string, cursor?: string): ScriptRun {
+/** The engine identity review-round passes through for synthesis to count lenses by. */
+function execution(head: string): object {
+  return {
+    path: 'review__mode',
+    invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
+    attempt: { checkoutStart: { kind: 'git', commit: head } },
+  };
+}
+
+function round(
+  cwd: string,
+  head: string,
+  cursor?: string,
+  extra: { light?: boolean; part?: string } = {}
+): ScriptRun {
   return runPackScript('review/scripts/review-round', {
     cwd,
     inputs: {
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
-      ARCHON_NODE_EXECUTION: JSON.stringify({
-        path: 'review__mode',
-        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
-        attempt: { checkoutStart: { kind: 'git', commit: head } },
-      }),
+      INPUTS_LIGHT: extra.light ? 'true' : 'false',
+      INPUTS_PART: extra.part ?? '',
+      ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)),
     },
     artifacts:
       cursor === undefined
         ? {}
-        : { 'review/report.md': 'Round 1', 'review/reviewed-head': `${cursor}\n` },
+        : {
+            'review/report.md': 'Round 1',
+            'review/reviewed-head': `${cursor}\n`,
+          },
   });
 }
 
@@ -73,31 +90,53 @@ describe('review-round', () => {
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: false,
+      light: false,
       head: newer,
       cursor: '',
       risks: FULL_REVIEW_RISKS,
-      execution: {
-        path: 'review__mode',
-        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
-        attempt: { checkoutStart: { kind: 'git', commit: newer } },
-      },
+      execution: execution(newer),
+      seams: false, code: false, tests: false, errors: false, docs: false,
+      part: null,
     });
   });
 
-  it("continues from the previous round's reviewed commit to a head that descends from it", () => {
+  // The route agent adds every other lens a continuation earns; the code lens is
+  // the one this round always reruns, whatever an earlier round ran.
+  it("continues from the previous round's reviewed commit with the code lens alone", () => {
     const { cwd, older, newer } = history();
-    const run = round(cwd, newer, older);
+    const part = { delivers: 1, parts: [{ part: 2, items: ['later'] }] };
+    const run = round(cwd, newer, older, { part: JSON.stringify(part) });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: true,
+      light: false,
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
-      execution: {
-        path: 'review__mode',
-        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
-        attempt: { checkoutStart: { kind: 'git', commit: newer } },
-      },
+      execution: execution(newer),
+      seams: false, code: true, tests: false, errors: false, docs: false,
+      part,
+    });
+  });
+
+  it('refuses a part assignment that is not JSON without echoing it', () => {
+    const { cwd, newer } = history();
+    const run = round(cwd, newer, undefined, { part: 'deliver chunk 1 of #42' });
+    expect(run.code).not.toBe(0);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toContain('the part input is not JSON');
+    for (const fragment of ['deliver', 'chunk', '#42']) expect(run.stderr).not.toContain(fragment);
+  });
+
+  it('runs the code lens alone on a light continuation', () => {
+    const { cwd, older, newer } = history();
+    expect(JSON.parse(round(cwd, newer, older, { light: true }).stdout)).toMatchObject({
+      light: true,
+      seams: false,
+      code: true,
+      tests: false,
+      errors: false,
+      docs: false,
     });
   });
 
