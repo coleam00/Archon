@@ -353,9 +353,10 @@ else {
     'workitem.view': editReply,
     'pr.view': editReply,
   } satisfies Record<(typeof OPS)[number], () => unknown>;
-  const readReplies = new Map(Object.entries(readHandlers));
-  const appliedReplies = new Map(Object.entries(replies));
-  const applied = (): unknown => appliedReplies.get(input.op)?.() ?? editReply();
+  const readReplies: Record<string, () => unknown> = readHandlers;
+  const appliedReplies: Record<string, () => unknown> = replies;
+  const applied = (): unknown =>
+    Object.hasOwn(appliedReplies, input.op) ? appliedReplies[input.op]() : editReply();
 
   if (mode === 'view-content' || mode === 'closed') {
     process.stdout.write(
@@ -390,7 +391,9 @@ else {
       )
     );
   } else if (mode === 'mismatch') {
-    process.stdout.write(JSON.stringify(readReplies.get(input.op)?.() ?? mismatched()));
+    process.stdout.write(
+      JSON.stringify(Object.hasOwn(readReplies, input.op) ? readReplies[input.op]() : mismatched())
+    );
   } else if (mode === 'registered-case') {
     // The forge answers in the case it has registered, whatever case was asked with.
     const registered = { host: repo.host.toUpperCase(), path: repo.path.toUpperCase() };
