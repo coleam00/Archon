@@ -16,6 +16,7 @@ import { recordDerivedExecution, recordNodeState } from '../../../node-event-wri
 import { spellWorkflowCommand } from '../../../deps';
 import { approvalContextSchema, gateOccurrence } from '../../../schemas/workflow-run';
 import type { GateNode } from '../../../schemas';
+import type { NodeExecutionRecord } from '../../../schemas/node-execution';
 import { isApprovalContext } from '../../../schemas';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { requireTerminalStatusWrite } from '../../../terminal-status-write';
@@ -162,17 +163,7 @@ export async function executeApprovalNode(
   // Resolve $nodeId.output[.field] references so the human sees concrete values
   // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
   const renderedMessage = substituteNodeOutputRefs(node.message, nodeOutputs, ctx.loopBodyScopes);
-  const choices = node.decisions.map(decision => {
-    const label =
-      decision.label ??
-      (decision.id === 'approve' ? 'Approve' : decision.id === 'reject' ? 'Reject' : decision.id);
-    const display = decision.label ? `${label} (${decision.id})` : label;
-    const command =
-      decision.id === 'approve' || decision.id === 'reject'
-        ? `${decision.id} ${workflowRun.id}`
-        : `respond ${workflowRun.id} ${decision.id} [text]`;
-    return `${display}: \`${spellWorkflowCommand(platform, command)}\``;
-  });
+  const choices = approvalChoices(ctx, node);
   const suspended = finishNodeExecution(
     execution,
     { status: 'suspended', point: 'approval' },
@@ -181,33 +172,7 @@ export async function executeApprovalNode(
       diagnostics: { iteration },
     }
   );
-  const bodyGateOwner = ctx.bodyGateOwner?.bodyGateId === node.id ? ctx.bodyGateOwner : undefined;
-  const approvalContext = approvalContextSchema.parse({
-    execution: executionMetadata(suspended),
-    message: renderedMessage,
-    nodeId: bodyGateOwner?.nodeId ?? node.id,
-    ...(bodyGateOwner
-      ? {
-          bodyGateId: bodyGateOwner.bodyGateId,
-          iteration: bodyGateOwner.iteration,
-          sessionId: ctx.lastSequentialSession?.sessionId ?? null,
-          sessionProvider: ctx.lastSequentialSession?.provider ?? null,
-          ...(ctx.bodySessionCursors !== undefined
-            ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
-            : {}),
-          ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
-        }
-      : {}),
-    type: 'approval',
-    captureResponse: node.captureResponse,
-    onRejectPrompt: rework?.prompt,
-    onRejectMaxAttempts: rework?.maxAttempts,
-    decisions: node.decisions.map(d => ({
-      id: d.id,
-      ...(d.label !== undefined ? { label: d.label } : {}),
-    })),
-    decisionsAuthored: node.decisionsAuthored,
-  });
+  const approvalContext = buildApprovalContext(ctx, node, suspended, renderedMessage, rework);
   return runOrStagePause(
     ctx,
     async () => {
@@ -256,4 +221,54 @@ export async function executeApprovalNode(
       return { ...serializeNodeOutput(execution), ...reworkUsage };
     }
   );
+}
+
+function approvalChoices(ctx: RunLayersContext, node: GateNode): string[] {
+  return node.decisions.map(decision => {
+    const label =
+      decision.label ??
+      (decision.id === 'approve' ? 'Approve' : decision.id === 'reject' ? 'Reject' : decision.id);
+    const display = decision.label ? `${label} (${decision.id})` : label;
+    const command =
+      decision.id === 'approve' || decision.id === 'reject'
+        ? `${decision.id} ${ctx.workflowRun.id}`
+        : `respond ${ctx.workflowRun.id} ${decision.id} [text]`;
+    return `${display}: \`${spellWorkflowCommand(ctx.platform, command)}\``;
+  });
+}
+
+function buildApprovalContext(
+  ctx: RunLayersContext,
+  node: GateNode,
+  suspended: NodeExecutionRecord,
+  renderedMessage: string,
+  rework: GateNode['decisions'][number]['rework']
+) {
+  const bodyGateOwner = ctx.bodyGateOwner?.bodyGateId === node.id ? ctx.bodyGateOwner : undefined;
+  return approvalContextSchema.parse({
+    execution: executionMetadata(suspended),
+    message: renderedMessage,
+    nodeId: bodyGateOwner?.nodeId ?? node.id,
+    ...(bodyGateOwner
+      ? {
+          bodyGateId: bodyGateOwner.bodyGateId,
+          iteration: bodyGateOwner.iteration,
+          sessionId: ctx.lastSequentialSession?.sessionId ?? null,
+          sessionProvider: ctx.lastSequentialSession?.provider ?? null,
+          ...(ctx.bodySessionCursors !== undefined
+            ? { bodySessionCursors: Object.fromEntries(ctx.bodySessionCursors) }
+            : {}),
+          ...snapshotBodySessionCursorAncestry(ctx.bodySessionCursorAncestry),
+        }
+      : {}),
+    type: 'approval',
+    captureResponse: node.captureResponse,
+    onRejectPrompt: rework?.prompt,
+    onRejectMaxAttempts: rework?.maxAttempts,
+    decisions: node.decisions.map(d => ({
+      id: d.id,
+      ...(d.label !== undefined ? { label: d.label } : {}),
+    })),
+    decisionsAuthored: node.decisionsAuthored,
+  });
 }

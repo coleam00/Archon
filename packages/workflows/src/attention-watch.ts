@@ -458,6 +458,21 @@ export async function watchAttentionQueue(
   let blocked: { cursor: WorkflowEventCursor; warned: boolean } | undefined;
   const isolated = new Set<string>();
 
+  const probeRunWitness = async (event: WorkflowRunDelivery['event']): Promise<boolean> => {
+    try {
+      // A cached success says nothing about whether reads work now.
+      await projectRun(event.workflow_run_id);
+      return true;
+    } catch (error) {
+      if (error instanceof WorkflowEventCursorError) throw error;
+      getLog().debug(
+        { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
+        'workflow.attention_watch_probe_failed'
+      );
+      return false;
+    }
+  };
+
   const hasReadableWitness = async (delivery: WorkflowRunDelivery): Promise<boolean> => {
     let cursor = delivery.cursor;
     const probed = new Set([delivery.event.workflow_run_id]);
@@ -468,17 +483,7 @@ export async function watchAttentionQueue(
         if (closed) return false;
         if (probed.has(event.workflow_run_id)) continue;
         probed.add(event.workflow_run_id);
-        try {
-          // A cached success says nothing about whether reads work now.
-          await projectRun(event.workflow_run_id);
-          return !closed;
-        } catch (error) {
-          if (error instanceof WorkflowEventCursorError) throw error;
-          getLog().debug(
-            { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
-            'workflow.attention_watch_probe_failed'
-          );
-        }
+        if (await probeRunWitness(event)) return !closed;
       }
       cursor = page.next;
     }
