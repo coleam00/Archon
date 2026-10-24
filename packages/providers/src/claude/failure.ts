@@ -227,7 +227,8 @@ export interface ThrownAt {
 }
 
 /** Ends a query that threw: rethrows cancellation, otherwise logs and reports the failure. */
-export function* thrownErrorChunks(err: Error, at: ThrownAt): Generator<MessageChunk> {
+export function* thrownErrorChunks(thrown: unknown, at: ThrownAt): Generator<MessageChunk> {
+  const err = thrown instanceof Error ? thrown : new Error(String(thrown));
   // Cancellation is not a failure: the caller asked for it and already knows.
   // The first-event timeout aborts the same controller, so it is told apart by type.
   const timedOut = err instanceof ClaudeFirstEventTimeoutError;

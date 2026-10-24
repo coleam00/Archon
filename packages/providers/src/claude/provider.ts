@@ -767,7 +767,7 @@ export class ClaudeProvider implements IAgentProvider {
         yield chunk;
       }
     } catch (error) {
-      yield* thrownErrorChunks(error as Error, {
+      yield* thrownErrorChunks(error, {
         callerAborted: requestOptions?.abortSignal?.aborted === true,
         controller,
         stderr: stderrLines.join('\n'),
