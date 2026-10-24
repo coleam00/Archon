@@ -1,0 +1,10 @@
+# An incomplete charter pauses on one clarifying question before any spend.
+charter:
+  complete: false
+  question: "Which package should this change?"
+  brief: { problem: p, why: "", why_now: "", outcome: "", invariants: [], acceptance: [] }
+  approach: ""
+  missions: []
+fixture:
+  expect: paused
+  reached: [charter]

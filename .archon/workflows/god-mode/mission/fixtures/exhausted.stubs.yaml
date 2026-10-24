@@ -1,0 +1,12 @@
+# An acceptance command keeps failing. The real verify script reports FAIL each
+# attempt, the attempt script retries with the evidence as feedback, and after the
+# last attempt the mission ends as a typed failure instead of failing the run.
+recall: { lessons: "- none yet" }
+execute: { summary: tried, blocked: false, blocker: "" }
+judge: { approve: false, findings: still broken }
+fixture:
+  inputs:
+    mission: '{"id":"demo","objective":"o","context":"c","done_when":"d","acceptance":["false"]}'
+  expect: completed
+  reached: [parse, attempts, result]
+exec-code: true

@@ -1,0 +1,200 @@
+name: god-mode
+description: |
+  Use when: you have an ambitious goal and want Archon to drive it end to end with as
+  much autonomy as its track record has earned.
+
+  Hand it a goal in plain words. It writes a full brief (problem, why, why now,
+  outcome, invariants, acceptance), asks once if anything is missing, and breaks the
+  goal into independent missions, each with its own acceptance commands. Each mission
+  then runs as its own governed child run on its own branch. A mission succeeds only
+  when its acceptance commands pass and an independent reviewer approves. The run
+  records every outcome on the trust ladder, writes a debrief, and remembers what it
+  learned for the next run.
+
+  How much it does without asking is earned, not configured. A new install is
+  `supervised`: a person approves every plan. A sustained record of verified successes
+  unlocks `trusted` (larger plans) and then `autonomous` (no plan gate). Two failures
+  in the last three missions trip a circuit breaker back to supervised.
+
+  Usage: archon workflow run god-mode "<goal>"
+
+# The verdict is the tally's, never the debrief agent's: a run succeeds when every
+# mission's acceptance commands passed and its reviewer approved.
+returns: remember
+outcome_field: succeeded
+
+nodes:
+  - id: charter
+    command: charter
+    mutates_checkout: false
+    with:
+      answer: ""
+    output_format: &charter
+      type: object
+      additionalProperties: false
+      properties:
+        complete: { type: boolean }
+        question: { type: string }
+        brief:
+          type: object
+          additionalProperties: false
+          properties:
+            problem: { type: string }
+            why: { type: string }
+            why_now: { type: string }
+            outcome: { type: string }
+            invariants: { type: array, items: { type: string } }
+            acceptance: { type: array, items: { type: string } }
+          required: [problem, why, why_now, outcome, invariants, acceptance]
+        approach: { type: string }
+        missions:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+              objective: { type: string, pattern: '\S' }
+              context: { type: string }
+              done_when: { type: string, pattern: '\S' }
+              acceptance:
+                type: array
+                minItems: 1
+                items: { type: string, pattern: '\S' }
+            required: [id, objective, context, done_when, acceptance]
+      required: [complete, question, brief, approach, missions]
+
+  # The input is the contract: a run that starts from a thin brief produces a confident
+  # answer to the wrong question. So an incomplete charter asks, once, before any spend
+  # on missions.
+  - id: clarify
+    depends_on: [charter]
+    when: "$charter.output.complete == false"
+    wait:
+      attention: "$charter.output.question"
+      labels:
+        god-mode: charter
+
+  - id: recharter
+    depends_on: [clarify]
+    command: charter
+    mutates_checkout: false
+    with:
+      answer: "$clarify.output.text"
+    output_format: *charter
+
+  - id: plan
+    depends_on: [charter, recharter]
+    trigger_rule: all_done
+    script: plan
+    runtime: bun
+    mutates_checkout: false
+    with:
+      charter: { from: "$charter.output" }
+      recharter: { from: "$recharter.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        missions: { type: array, items: { type: object } }
+        count: { type: integer }
+        gate: { type: boolean }
+        level: { type: string }
+        trust: { type: string }
+        message: { type: string }
+      required: [missions, count, gate, level, trust, message]
+
+  - id: approve
+    depends_on: [plan]
+    when: "$plan.output.gate == true"
+    wait:
+      attention: "$plan.output.message"
+      form: approval
+      labels:
+        god-mode: plan
+        trust: "$plan.output.level"
+
+  - id: go
+    depends_on: [plan, approve]
+    trigger_rule: all_done
+    script: go
+    runtime: bun
+    mutates_checkout: false
+    with:
+      gate: "$plan.output.gate"
+      answer: { from: "$approve.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        go: { type: boolean }
+        reason: { type: string }
+      required: [go, reason]
+
+  - id: halt
+    depends_on: [go]
+    when: "$go.output.go == false"
+    cancel: "God mode stopped before any mission ran: $go.output.reason"
+
+  # One governed child run per mission, each on its own worktree. A failed mission is
+  # data (join: all_done), not the end of its siblings.
+  - id: missions
+    depends_on: [go]
+    when: "$go.output.go == true"
+    workflow: god-mode-mission
+    isolation: worktree
+    fan_out:
+      items: "$plan.output.missions"
+      as: mission
+      max_parallel: 3
+      join: all_done
+
+  - id: tally
+    depends_on: [missions]
+    script: tally
+    runtime: bun
+    mutates_checkout: false
+    with:
+      missions: { from: "$plan.output.missions" }
+      results: { from: "$missions.output" }
+    output_format:
+      type: object
+      properties:
+        total: { type: integer }
+        succeeded: { type: integer }
+        failed: { type: integer }
+        all_succeeded: { type: boolean }
+        report: { type: string }
+      required: [total, succeeded, failed, all_succeeded, report]
+
+  - id: debrief
+    depends_on: [tally]
+    command: debrief
+    context: fresh
+    mutates_checkout: false
+    with:
+      report: "$tally.output.report"
+      all_succeeded: "$tally.output.all_succeeded"
+      trust: "$plan.output.trust"
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        summary: { type: string }
+        lessons: { type: array, items: { type: string }, maxItems: 5 }
+      required: [summary, lessons]
+
+  - id: remember
+    depends_on: [debrief]
+    script: remember
+    runtime: bun
+    mutates_checkout: false
+    with:
+      lessons: { from: "$debrief.output.lessons" }
+      succeeded: "$tally.output.all_succeeded"
+      summary: "$debrief.output.summary"
+    output_format:
+      type: object
+      properties:
+        succeeded: { type: boolean }
+        summary: { type: string }
+        remembered: { type: integer }
+      required: [succeeded, summary, remembered]

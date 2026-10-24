@@ -1,0 +1,160 @@
+name: god-mode-mission
+description: |
+  One god-mode mission, run as its own governed child run: the conductor fans out one
+  of these per mission in its plan. Each mission carries its own acceptance commands,
+  and it succeeds only when those commands pass AND an independent reviewer with fresh
+  context approves. The implementer can never grade its own work.
+
+  Every mission reads god mode's memory (lessons from earlier runs) before it starts,
+  and its typed outcome is what the trust ladder learns from.
+
+  Runs standalone too:
+    archon workflow run god-mode-mission --input mission='{"id":"...","objective":"...",
+      "context":"...","done_when":"...","acceptance":["bun run type-check"]}'
+
+inputs:
+  mission:
+    required: true
+    description: >-
+      One mission as JSON: id (kebab-case), objective, context, done_when, and
+      acceptance, a list of shell commands that must all exit 0.
+
+returns: result
+outcome_field: succeeded
+
+nodes:
+  - id: parse
+    script: parse
+    runtime: bun
+    with:
+      mission: "$INPUTS.mission"
+    output_format:
+      type: object
+      properties:
+        id: { type: string }
+        objective: { type: string }
+        context: { type: string }
+        done_when: { type: string }
+        acceptance: { type: array, items: { type: string } }
+        acceptance_text: { type: string }
+      required: [id, objective, context, done_when, acceptance, acceptance_text]
+
+  - id: recall
+    script: recall
+    runtime: bun
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        lessons: { type: string }
+      required: [lessons]
+
+  # One attempt per iteration: build, prove, judge, decide. `attempt` caps itself one
+  # below max_iterations, so running out of attempts ends as a typed failure the
+  # conductor can count, instead of failing the child run.
+  - id: attempts
+    depends_on: [parse, recall]
+    loop_group:
+      until_bash: |
+        done=$attempt.output.done
+        test "$done" = "true"
+      max_iterations: 4
+      fresh_context: true
+      nodes:
+        - id: execute
+          command: execute
+          with:
+            objective: "$parse.output.objective"
+            context: "$parse.output.context"
+            done_when: "$parse.output.done_when"
+            acceptance: "$parse.output.acceptance_text"
+            lessons: "$recall.output.lessons"
+            feedback: "$LOOP_PREV.attempt.output.feedback"
+          output_format:
+            type: object
+            properties:
+              summary: { type: string }
+              blocked: { type: boolean }
+              blocker: { type: string }
+            required: [summary, blocked, blocker]
+
+        # Always exits 0: a failing body node would end the loop that exists to fix
+        # the failure. It reports a typed verdict and `attempt` acts on it.
+        - id: verify
+          depends_on: [execute]
+          script: verify
+          runtime: bun
+          with:
+            acceptance: "$parse.output.acceptance"
+          output_format:
+            type: object
+            properties:
+              pass: { type: boolean }
+              report: { type: string }
+            required: [pass, report]
+
+        - id: judge
+          depends_on: [verify]
+          command: judge
+          context: fresh
+          with:
+            objective: "$parse.output.objective"
+            done_when: "$parse.output.done_when"
+            verification: "$verify.output.report"
+            verified: "$verify.output.pass"
+            summary: "$execute.output.summary"
+          output_format:
+            type: object
+            properties:
+              approve: { type: boolean }
+              findings: { type: string }
+            required: [approve, findings]
+
+        - id: attempt
+          depends_on: [execute, verify, judge]
+          trigger_rule: all_done
+          script: attempt
+          runtime: bun
+          with:
+            previous: "$LOOP_PREV.attempt.output.attempt"
+            blocked: { from: "$execute.output.blocked", if_skipped: null }
+            blocker: { from: "$execute.output.blocker", if_skipped: null }
+            summary: { from: "$execute.output.summary", if_skipped: null }
+            pass: { from: "$verify.output.pass", if_skipped: null }
+            report: { from: "$verify.output.report", if_skipped: null }
+            approve: { from: "$judge.output.approve", if_skipped: null }
+            findings: { from: "$judge.output.findings", if_skipped: null }
+          output_format:
+            type: object
+            properties:
+              attempt: { type: integer }
+              done: { type: boolean }
+              succeeded: { type: boolean }
+              reason: { type: string }
+              summary: { type: string }
+              feedback: { type: string }
+              evidence: { type: string }
+            required: [attempt, done, succeeded, reason, summary, feedback, evidence]
+
+  - id: result
+    depends_on: [attempts]
+    script: result
+    runtime: bun
+    with:
+      id: "$parse.output.id"
+      succeeded: "$attempts.output.succeeded"
+      reason: "$attempts.output.reason"
+      attempts: "$attempts.output.attempt"
+      summary: "$attempts.output.summary"
+      evidence: "$attempts.output.evidence"
+    output_format:
+      type: object
+      properties:
+        mission: { type: string }
+        succeeded: { type: boolean }
+        reason: { type: string }
+        attempts: { type: integer }
+        summary: { type: string }
+        evidence: { type: string }
+        branch: { type: string }
+      required: [mission, succeeded, reason, attempts, summary, evidence, branch]

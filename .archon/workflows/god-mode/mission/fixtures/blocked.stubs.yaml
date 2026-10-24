@@ -1,0 +1,10 @@
+# The implementer reports a block: the mission ends at once as a typed failure.
+recall: { lessons: "- none yet" }
+execute: { summary: "", blocked: true, blocker: needs a product decision }
+judge: { approve: false, findings: "" }
+fixture:
+  inputs:
+    mission: '{"id":"demo","objective":"o","context":"c","done_when":"d","acceptance":["true"]}'
+  expect: completed
+  reached: [parse, attempts, result]
+exec-code: true

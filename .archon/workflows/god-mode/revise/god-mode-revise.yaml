@@ -1,0 +1,140 @@
+name: god-mode-revise
+description: |
+  Use when: an existing workflow, prompt, script or policy document under `.archon/`
+  should change, for example an SDLC stage whose prompt keeps producing the same
+  failure, or a policy document the evidence shows is wrong. God mode's learner
+  launches it when it finds such a change; you can run it by hand too.
+
+  It snapshots the repository's automation health (the workflows the engine rejects
+  and the fixtures that fail), lets an agent make the revision, and accepts it only if
+  every rule below holds:
+  - it touches nothing outside `.archon/`, nothing in god mode itself, and not the
+    repository config;
+  - it makes no workflow invalid and no fixture fail that passed before;
+  - every acceptance command the revision declares passes.
+
+  A person then reads the full diff. On approval the change is pushed and opened as a
+  draft pull request, so it goes through the project's normal review and merge path
+  like any other change. Nothing merges here.
+
+  Usage: archon workflow run god-mode-revise --input need="<what should change, and why>"
+
+inputs:
+  need:
+    required: true
+    description: >-
+      A complete brief: the problem, why it matters, why now, the outcome, the
+      invariants, and what acceptance looks like, with the evidence behind it.
+
+returns: publish
+outcome_field: published
+
+nodes:
+  - id: baseline
+    script: baseline
+    runtime: bun
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        start: { type: string }
+        invalid: { type: array, items: { type: string } }
+        failing: { type: array, items: { type: string } }
+      required: [start, invalid, failing]
+
+  - id: revisions
+    depends_on: [baseline]
+    loop_group:
+      until_bash: |
+        done=$check.output.done
+        test "$done" = "true"
+      max_iterations: 4
+      nodes:
+        - id: revise
+          command: revise
+          with:
+            need: "$INPUTS.need"
+            feedback: "$LOOP_PREV.check.output.report"
+          output_format:
+            type: object
+            additionalProperties: false
+            properties:
+              title: { type: string, pattern: '\S' }
+              summary: { type: string, pattern: '\S' }
+              acceptance: { type: array, items: { type: string, pattern: '\S' } }
+            required: [title, summary, acceptance]
+
+        - id: check
+          depends_on: [revise]
+          script: check
+          runtime: bun
+          with:
+            start: "$baseline.output.start"
+            baseline: { from: "$baseline.output" }
+            acceptance: "$revise.output.acceptance"
+            title: "$revise.output.title"
+            summary: "$revise.output.summary"
+            previous: "$LOOP_PREV.check.output.attempt"
+          output_format:
+            type: object
+            properties:
+              attempt: { type: integer }
+              done: { type: boolean }
+              valid: { type: boolean }
+              report: { type: string }
+              paths: { type: array, items: { type: string } }
+              title: { type: string }
+              summary: { type: string }
+            required: [attempt, done, valid, report, paths, title, summary]
+
+  - id: ineligible
+    depends_on: [revisions]
+    when: "$revisions.output.valid == false"
+    cancel: "The revision never met its acceptance: $revisions.output.report"
+
+  - id: present
+    depends_on: [revisions]
+    when: "$revisions.output.valid == true"
+    script: present
+    runtime: bun
+    mutates_checkout: false
+    with:
+      start: "$baseline.output.start"
+      title: "$revisions.output.title"
+      summary: "$revisions.output.summary"
+      report: "$revisions.output.report"
+    output_format:
+      type: object
+      properties:
+        message: { type: string }
+      required: [message]
+
+  - id: review
+    depends_on: [present]
+    wait:
+      attention: "$present.output.message"
+      form: approval
+      labels:
+        god-mode: revise
+
+  - id: publish
+    depends_on: [review]
+    script: publish
+    runtime: bun
+    with:
+      decision: "$review.output.decision"
+      note: "$review.output.text"
+      paths: { from: "$revisions.output.paths" }
+      title: "$revisions.output.title"
+      summary: "$revisions.output.summary"
+      report: "$revisions.output.report"
+      need: "$INPUTS.need"
+    output_format:
+      type: object
+      properties:
+        published: { type: boolean }
+        branch: { type: string }
+        commit: { type: string }
+        pr_url: { type: string }
+        reason: { type: string }
+      required: [published, branch, commit, pr_url, reason]
