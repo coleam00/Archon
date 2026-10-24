@@ -79,27 +79,13 @@
       "src/commands/workflow.test.ts"
     ],
     [
-      "src/commands/workflow-run-owned.test.ts"
-    ],
-    [
-      "src/commands/workflow-run-inputs.test.ts"
-    ],
-    [
-      "src/commands/workflow-run-resume.test.ts"
-    ],
-    [
-      "src/commands/workflow-run-config.test.ts"
-    ],
-    [
-      "src/commands/workflow-run-capture.test.ts"
-    ],
-    [
-      "src/commands/workflow-run-signals.test.ts"
-    ],
-    [
-      "src/commands/workflow-run-adoption.test.ts"
-    ],
-    [
+      "src/commands/workflow-run-owned.test.ts",
+      "src/commands/workflow-run-inputs.test.ts",
+      "src/commands/workflow-run-resume.test.ts",
+      "src/commands/workflow-run-config.test.ts",
+      "src/commands/workflow-run-capture.test.ts",
+      "src/commands/workflow-run-signals.test.ts",
+      "src/commands/workflow-run-adoption.test.ts",
       "src/commands/workflow-run-credentials.test.ts"
     ],
     [

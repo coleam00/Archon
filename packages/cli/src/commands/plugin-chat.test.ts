@@ -57,18 +57,6 @@ let latest = 'v1';
 const commits = new Map<string, string>();
 const manifests = new Map<string, ChatManifest>();
 
-function checksumResponse(manifest: ChatManifest, data: Uint8Array<ArrayBuffer>): Response {
-  const digest = brokenChecksum ? '0'.repeat(64) : createHash('sha256').update(data).digest('hex');
-  return new Response(
-    [manifest.executable, 'archon-chat-alternate']
-      .map(
-        name =>
-          `${digest}  ${pluginReleaseAsset(name, `bun-${windows ? 'windows' : process.platform}-${process.arch}`)}\n`
-      )
-      .join('')
-  );
-}
-
 function releaseResponse(path: string): Response {
   const release = /^\/owner\/repo\/releases\/download\/([^/]+)\/(.+)$/.exec(path);
   if (!release) return new Response(null, { status: 404 });
@@ -83,7 +71,17 @@ function releaseResponse(path: string): Response {
   );
   const data = brokenExecutable ? new TextEncoder().encode('broken executable') : bytes;
   if (release[2] === 'checksums.txt') {
-    return checksumResponse(manifest, data);
+    const digest = brokenChecksum
+      ? '0'.repeat(64)
+      : createHash('sha256').update(data).digest('hex');
+    return new Response(
+      [manifest.executable, 'archon-chat-alternate']
+        .map(
+          name =>
+            `${digest}  ${pluginReleaseAsset(name, `bun-${windows ? 'windows' : process.platform}-${process.arch}`)}\n`
+        )
+        .join('')
+    );
   }
   if (release[2] === asset) return new Response(data);
   return new Response(null, { status: 404 });
