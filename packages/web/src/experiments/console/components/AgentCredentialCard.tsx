@@ -155,7 +155,28 @@ export function AgentCredentialCard({
 
       {pickedAddable ? row(pickedAddable) : null}
 
-      <AmbientCredentials credentials={groups?.ambient ?? []} />
+      {groups && groups.ambient.length > 0 ? (
+        <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
+          {groups.ambient.map(cred => (
+            <div
+              key={cred.vendor}
+              className="flex items-center justify-between gap-3 px-1 text-[11.5px]"
+            >
+              <span className="text-text-secondary">
+                {cred.displayName}{' '}
+                <span className="font-mono text-[10px] text-text-tertiary">{cred.vendor}</span>
+              </span>
+              {cred.ambientConfigured === true ? (
+                <span className="font-mono text-[10.5px] text-success">
+                  configured via {ambientSource(cred.vendor)}
+                </span>
+              ) : (
+                <span className="font-mono text-[10.5px] text-text-tertiary">not detected</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
     </>
   );
 
@@ -556,36 +577,6 @@ function OpencodeBackends(): ReactElement {
           </button>
         </>
       ) : null}
-    </div>
-  );
-}
-
-function AmbientCredentials({
-  credentials,
-}: {
-  credentials: AgentCredentialStatus[];
-}): ReactElement | null {
-  if (credentials.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
-      {credentials.map(cred => (
-        <div
-          key={cred.vendor}
-          className="flex items-center justify-between gap-3 px-1 text-[11.5px]"
-        >
-          <span className="text-text-secondary">
-            {cred.displayName}{' '}
-            <span className="font-mono text-[10px] text-text-tertiary">{cred.vendor}</span>
-          </span>
-          {cred.ambientConfigured === true ? (
-            <span className="font-mono text-[10.5px] text-success">
-              configured via {ambientSource(cred.vendor)}
-            </span>
-          ) : (
-            <span className="font-mono text-[10.5px] text-text-tertiary">not detected</span>
-          )}
-        </div>
-      ))}
     </div>
   );
 }
