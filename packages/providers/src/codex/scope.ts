@@ -154,29 +154,54 @@ export async function readCodexInventory(
   };
   if (plugins.length === 0) return inventory;
 
+  const installed = await readInstalledPlugins(connection, cwd);
+  inventory.installedPlugins = [...installed.keys()];
+  requireNamedPluginsInstalled(plugins, inventory);
+  inventory.namedPluginServers = await readNamedPluginServers(connection, plugins, installed);
+  return inventory;
+}
+
+type InstalledPlugins = Map<string, { pluginName: string; marketplace: Marketplace }>;
+
+/** The installed plugins of every marketplace, by plugin id. */
+async function readInstalledPlugins(
+  connection: AppServerConnection,
+  cwd: string
+): Promise<InstalledPlugins> {
   const { marketplaces } = await requestScoped(
     connection,
     'plugin/installed',
     { cwds: [cwd] },
     pluginInstalledSchema
   );
-  const installed = new Map<string, { pluginName: string; marketplace: Marketplace }>();
+  const installed: InstalledPlugins = new Map();
   for (const marketplace of marketplaces) {
     for (const plugin of marketplace.plugins) {
       if (plugin.installed) installed.set(plugin.id, { pluginName: plugin.name, marketplace });
     }
   }
-  inventory.installedPlugins = [...installed.keys()];
+  return installed;
+}
 
-  const missing = plugins.filter(id => !installed.has(id));
-  if (missing.length > 0) {
-    throw new ClassifiedProviderError(
-      'misconfigured',
-      `Codex plugin${missing.length === 1 ? '' : 's'} not installed in ${codexHome}: ${missing.join(', ')}. ` +
-        `Installed: ${inventory.installedPlugins.length > 0 ? inventory.installedPlugins.join(', ') : 'none'}. ` +
-        'Name plugins by their exact `name@marketplace` id from `codex plugin list`.'
-    );
-  }
+function requireNamedPluginsInstalled(plugins: readonly string[], inventory: CodexInventory): void {
+  const { codexHome, installedPlugins } = inventory;
+  const missing = plugins.filter(id => !installedPlugins.includes(id));
+  if (missing.length === 0) return;
+  throw new ClassifiedProviderError(
+    'misconfigured',
+    `Codex plugin${missing.length === 1 ? '' : 's'} not installed in ${codexHome}: ${missing.join(', ')}. ` +
+      `Installed: ${installedPlugins.length > 0 ? installedPlugins.join(', ') : 'none'}. ` +
+      'Name plugins by their exact `name@marketplace` id from `codex plugin list`.'
+  );
+}
+
+/** Each named plugin's MCP servers, read in installed order. */
+async function readNamedPluginServers(
+  connection: AppServerConnection,
+  plugins: readonly string[],
+  installed: InstalledPlugins
+): Promise<CodexInventory['namedPluginServers']> {
+  const servers: CodexInventory['namedPluginServers'] = {};
   for (const [id, { pluginName, marketplace }] of installed) {
     if (!plugins.includes(id)) continue;
     const detail = await requestScoped(
@@ -187,9 +212,9 @@ export async function readCodexInventory(
         : { pluginName, remoteMarketplaceName: marketplace.name },
       pluginReadSchema
     );
-    inventory.namedPluginServers[id] = detail.plugin.mcpServers;
+    servers[id] = detail.plugin.mcpServers;
   }
-  return inventory;
+  return servers;
 }
 
 /**

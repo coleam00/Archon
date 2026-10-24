@@ -16,6 +16,12 @@ export interface CodebaseCheckoutResolverDeps {
   getGitCheckoutIdentity: (path: string) => Promise<GitCheckoutIdentity>;
 }
 
+type CheckoutLookupDeps = Pick<
+  CodebaseCheckoutResolverDeps,
+  'findCodebaseByDefaultCwd' | 'listCodebaseClaims'
+> &
+  Partial<Pick<CodebaseCheckoutResolverDeps, 'getCanonicalRepoPath' | 'getGitCheckoutIdentity'>>;
+
 /**
  * Resolve a checkout to an existing codebase without remote or branch inference.
  *
@@ -26,13 +32,24 @@ export interface CodebaseCheckoutResolverDeps {
  */
 export async function findCodebaseForCheckoutPath(
   cwd: string,
-  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebaseClaims'> &
-    Partial<Pick<CodebaseCheckoutResolverDeps, 'getCanonicalRepoPath' | 'getGitCheckoutIdentity'>>
+  deps: CheckoutLookupDeps
 ): Promise<Codebase | null> {
   cwd = await canonicalizeProjectPath(cwd);
   const exact = await deps.findCodebaseByDefaultCwd(cwd);
   if (exact) return exact;
+  const primary = await findPrimaryCheckoutCodebase(cwd, deps);
+  if (primary !== undefined) return primary;
+  return findCodebaseByCommonGitDir(cwd, deps);
+}
 
+/**
+ * The repository codebase registered at the checkout's primary path, or null when there
+ * is none. Undefined when Git cannot name a primary path (`--separate-git-dir`).
+ */
+async function findPrimaryCheckoutCodebase(
+  cwd: string,
+  deps: CheckoutLookupDeps
+): Promise<Codebase | null | undefined> {
   try {
     const canonicalCwd = await (deps.getCanonicalRepoPath ?? getCanonicalRepoPath)(cwd);
     if (canonicalCwd === cwd) return null;
@@ -44,23 +61,20 @@ export async function findCodebaseForCheckoutPath(
     return primary?.kind === 'repo' ? primary : null;
   } catch (error) {
     if (!(error instanceof CanonicalRepoPathUnavailableError)) throw error;
+    return undefined;
   }
+}
 
-  const checkoutIdentity = await (deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity)(cwd);
+/** The one registered repository checkout that shares the checkout's Git common directory. */
+async function findCodebaseByCommonGitDir(
+  cwd: string,
+  deps: CheckoutLookupDeps
+): Promise<Codebase | null> {
+  const readIdentity = deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity;
+  const checkoutIdentity = await readIdentity(cwd);
   const matches: Codebase[] = [];
   for (const codebase of await deps.listCodebaseClaims()) {
-    // A relative stored path would resolve against this process's directory.
-    if (codebase.kind === 'folder' || !isAbsolute(codebase.default_cwd)) continue;
-    try {
-      const registeredIdentity = await (deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity)(
-        codebase.default_cwd
-      );
-      if (resolve(registeredIdentity.commonGitDir) === resolve(checkoutIdentity.commonGitDir)) {
-        matches.push(codebase);
-      }
-    } catch {
-      // A stale registered path cannot own the live checkout identity.
-    }
+    if (await sharesCommonGitDir(codebase, checkoutIdentity, readIdentity)) matches.push(codebase);
   }
 
   if (matches.length > 1) {
@@ -73,9 +87,25 @@ export async function findCodebaseForCheckoutPath(
   return matches[0] ?? null;
 }
 
+async function sharesCommonGitDir(
+  codebase: Codebase,
+  checkoutIdentity: GitCheckoutIdentity,
+  readIdentity: (path: string) => Promise<GitCheckoutIdentity>
+): Promise<boolean> {
+  // A relative stored path would resolve against this process's directory.
+  if (codebase.kind === 'folder' || !isAbsolute(codebase.default_cwd)) return false;
+  try {
+    const registeredIdentity = await readIdentity(codebase.default_cwd);
+    return resolve(registeredIdentity.commonGitDir) === resolve(checkoutIdentity.commonGitDir);
+  } catch {
+    // A stale registered path cannot own the live checkout identity.
+    return false;
+  }
+}
+
 export async function resolveCodebaseForPath(
   cwd: string,
-  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebaseClaims'> & {
+  deps: CheckoutLookupDeps & {
     findCodebaseByPathPrefix: (cwd: string) => Promise<Codebase | null>;
   }
 ): Promise<{ codebase: Codebase | null; repoRoot: string | null }> {

@@ -2936,6 +2936,18 @@ describe('typed failures (#1797, #3524)', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
+  test.each([null, 'plain string rejection'])(
+    'a thrown non-Error value (%p) still ends in a typed failure carrying its text',
+    async thrown => {
+      mockQuery.mockImplementation(async function* () {
+        throw thrown;
+      });
+
+      const failure = await failureOf(client.sendQuery('test', '/workspace'));
+      expect(failure).toEqual({ class: 'unknown', evidence: String(thrown) });
+    }
+  );
+
   // The SDK reports a spawn failure caused by a MISSING WORKING DIRECTORY as a
   // libc/architecture mismatch, because posix_spawn returns ENOENT against the
   // executable's path and the SDK only checks that the executable exists.
