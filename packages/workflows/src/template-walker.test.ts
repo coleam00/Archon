@@ -254,46 +254,24 @@ function collectStringFields(
     stringFields.add(options.opaqueRecordPaths?.has(path) === true ? `${path}.*` : path);
   };
 
-  const walk = (value: unknown, path: string, activeReferences: ReadonlySet<string>): void => {
-    if (value === true) {
-      addOpaquePosition(path);
-      return;
-    }
-    if (!isRecord(value)) return;
-
-    const reference = value.$ref;
-    if (reference !== undefined) {
-      if (typeof reference !== 'string')
-        throw new Error(`Invalid JSON Schema reference at ${path}`);
-      followedReferences.add(path);
-      if (activeReferences.has(reference)) return;
-      const nextReferences = new Set(activeReferences);
-      nextReferences.add(reference);
-      walk(
-        resolveLocalReference(root, reference),
-        reference === '#' ? rootPath : path,
-        nextReferences
-      );
-      return;
-    }
-
-    if (Object.keys(value).length === 0) {
-      addOpaquePosition(path);
-      return;
-    }
-
-    const type = value.type;
-    if (type === 'string' || (Array.isArray(type) && type.includes('string'))) {
-      if (path !== '') stringFields.add(path);
-    }
-
+  function walkVariants(
+    value: Record<string, unknown>,
+    path: string,
+    activeReferences: ReadonlySet<string>
+  ): void {
     for (const keyword of ['anyOf', 'oneOf', 'allOf'] as const) {
       const variants = value[keyword];
       if (variants === undefined) continue;
       if (!Array.isArray(variants)) throw new Error(`Invalid JSON Schema ${keyword} at ${path}`);
       for (const variant of variants) walk(variant, path, activeReferences);
     }
+  }
 
+  function walkProperties(
+    value: Record<string, unknown>,
+    path: string,
+    activeReferences: ReadonlySet<string>
+  ): void {
     const properties = value.properties;
     if (properties !== undefined) {
       if (!isRecord(properties)) throw new Error(`Invalid JSON Schema properties at ${path}`);
@@ -301,7 +279,13 @@ function collectStringFields(
         walk(property, childPath(path, name), activeReferences);
       }
     }
+  }
 
+  function walkItems(
+    value: Record<string, unknown>,
+    path: string,
+    activeReferences: ReadonlySet<string>
+  ): void {
     const items = value.items;
     if (Array.isArray(items)) {
       for (const item of items) walk(item, childPath(path, '*'), activeReferences);
@@ -315,6 +299,51 @@ function collectStringFields(
         throw new Error(`Invalid JSON Schema prefixItems at ${path}`);
       for (const item of prefixItems) walk(item, childPath(path, '*'), activeReferences);
     }
+  }
+
+  function followReference(
+    reference: unknown,
+    path: string,
+    activeReferences: ReadonlySet<string>
+  ): void {
+    if (typeof reference !== 'string') throw new Error(`Invalid JSON Schema reference at ${path}`);
+    followedReferences.add(path);
+    if (activeReferences.has(reference)) return;
+    const nextReferences = new Set(activeReferences);
+    nextReferences.add(reference);
+    walk(
+      resolveLocalReference(root, reference),
+      reference === '#' ? rootPath : path,
+      nextReferences
+    );
+  }
+
+  const walk = (value: unknown, path: string, activeReferences: ReadonlySet<string>): void => {
+    if (value === true) {
+      addOpaquePosition(path);
+      return;
+    }
+    if (!isRecord(value)) return;
+
+    const reference = value.$ref;
+    if (reference !== undefined) {
+      followReference(reference, path, activeReferences);
+      return;
+    }
+
+    if (Object.keys(value).length === 0) {
+      addOpaquePosition(path);
+      return;
+    }
+
+    const type = value.type;
+    if (type === 'string' || (Array.isArray(type) && type.includes('string'))) {
+      if (path !== '') stringFields.add(path);
+    }
+
+    walkVariants(value, path, activeReferences);
+    walkProperties(value, path, activeReferences);
+    walkItems(value, path, activeReferences);
 
     const additionalProperties = value.additionalProperties;
     if (additionalProperties !== undefined && additionalProperties !== false) {

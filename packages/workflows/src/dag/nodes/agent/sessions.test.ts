@@ -2284,6 +2284,10 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     };
     let ownerPass = 0;
     let reviews = 0;
+    function ownerSessionId(): string {
+      if (ownerPass <= 2) return `O${ownerPass}`;
+      return ownerPass === 4 ? 'repair' : 'O2';
+    }
     mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session, options) {
       const isOwner = prompt.startsWith('owner');
       if (isOwner) ownerPass++;
@@ -2296,16 +2300,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       };
       yield {
         type: 'result',
-        sessionId:
-          prompt === 'source'
-            ? 'S'
-            : isOwner
-              ? ownerPass <= 2
-                ? `O${ownerPass}`
-                : ownerPass === 4
-                  ? 'repair'
-                  : 'O2'
-              : `R${reviews}`,
+        sessionId: prompt === 'source' ? 'S' : isOwner ? ownerSessionId() : `R${reviews}`,
         ...(options?.outputFormat ? { structuredOutput: output } : {}),
         ...(session ? { resumed: true } : {}),
       };
@@ -2328,6 +2323,10 @@ describe('executeDagWorkflow -- addressable session resume', () => {
   for (const failure of ['cold', 'missing', 'replacement']) {
     it(`fails owner continuation on ${failure} rather than replaying the source`, async () => {
       let owners = 0;
+      function ownerSessionId(): string | undefined {
+        if (owners === 2 && failure === 'missing') return undefined;
+        return owners === 2 && failure === 'replacement' ? 'replacement' : 'O';
+      }
       mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, session, options) {
         if (prompt === 'owner') owners++;
         yield {
@@ -2336,16 +2335,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
         };
         yield {
           type: 'result',
-          sessionId:
-            prompt === 'source'
-              ? 'S'
-              : prompt === 'owner'
-                ? owners === 2 && failure === 'missing'
-                  ? undefined
-                  : owners === 2 && failure === 'replacement'
-                    ? 'replacement'
-                    : 'O'
-                : 'R',
+          sessionId: prompt === 'source' ? 'S' : prompt === 'owner' ? ownerSessionId() : 'R',
           ...(options?.outputFormat ? { structuredOutput: { done: false } } : {}),
           ...(session ? { resumed: !(owners === 2 && failure === 'cold') } : {}),
         };

@@ -667,6 +667,39 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   });
 
+  function assertJoinProvenance(
+    run: Awaited<ReturnType<typeof executeExpanded>>,
+    mode: 'failed' | 'condition',
+    cause: SkipCause
+  ): void {
+    for (const id of ['deliver__checks', 'deliver__result']) {
+      expect(
+        run.events.find(event => event.step_name === id && event.event_type === 'node_skipped')
+          ?.data?.cause
+      ).toEqual(cause);
+    }
+    for (const id of ['flip-ready', 'action__entry', 'action__tail']) {
+      if (mode === 'failed') {
+        expect(
+          run.events.find(event => event.step_name === id && event.event_type === 'node_skipped')
+            ?.data?.cause
+        ).toEqual(cause);
+        expect(
+          run.events.some(event => event.step_name === id && event.event_type === 'node_started')
+        ).toBe(false);
+      } else {
+        expect(
+          run.events.some(event => event.step_name === id && event.event_type === 'node_completed')
+        ).toBe(true);
+      }
+    }
+    expect(
+      run.events.find(
+        event => event.step_name === 'report' && event.event_type === 'node_completed'
+      )?.data?.node_output
+    ).toContain('fallback');
+  }
+
   it.each(['failed', 'condition'] as const)(
     '#3156: honors %s skip provenance through direct joins, include boundaries, and resume',
     async mode => {
@@ -744,7 +777,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
           action__tail: 'tail',
         },
       });
-      const cause = {
+      const cause: SkipCause = {
         kind: mode === 'failed' ? 'upstream_failed' : 'upstream_skipped',
         origin: 'deliver__gate-validated',
       };
@@ -763,39 +796,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
           )
         );
       }
-      for (const run of runs) {
-        for (const id of ['deliver__checks', 'deliver__result']) {
-          expect(
-            run.events.find(event => event.step_name === id && event.event_type === 'node_skipped')
-              ?.data?.cause
-          ).toEqual(cause);
-        }
-        for (const id of ['flip-ready', 'action__entry', 'action__tail']) {
-          if (mode === 'failed') {
-            expect(
-              run.events.find(
-                event => event.step_name === id && event.event_type === 'node_skipped'
-              )?.data?.cause
-            ).toEqual(cause);
-            expect(
-              run.events.some(
-                event => event.step_name === id && event.event_type === 'node_started'
-              )
-            ).toBe(false);
-          } else {
-            expect(
-              run.events.some(
-                event => event.step_name === id && event.event_type === 'node_completed'
-              )
-            ).toBe(true);
-          }
-        }
-        expect(
-          run.events.find(
-            event => event.step_name === 'report' && event.event_type === 'node_completed'
-          )?.data?.node_output
-        ).toContain('fallback');
-      }
+      for (const run of runs) assertJoinProvenance(run, mode, cause);
       for (const id of ['flip-ready', 'action__entry', 'action__tail']) {
         expect(dryRun.trace.find(entry => entry.nodeId === id)).toMatchObject(
           mode === 'failed' ? { state: 'skipped', cause } : { state: 'stubbed' }

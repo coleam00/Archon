@@ -388,6 +388,49 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     }
   }
 
+  function assertRetryWaits(
+    store: ReturnType<typeof createMockStore>,
+    mode: string,
+    isLoop: boolean,
+    expectedCalls: number
+  ): void {
+    const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
+    const waits = events.filter(event => event.event_type === 'node_retry_scheduled');
+    expect(waits).toHaveLength(expectedCalls - 1);
+    for (const [index, wait] of waits.entries()) {
+      const capacity = mode === 'overloaded' || (mode === 'mixed' && index === 0);
+      expect(wait.step_name).toBe('my-node');
+      expect(wait.data).toMatchObject({
+        nodeId: 'my-node',
+        retry_class: capacity ? 'overloaded' : 'transient',
+        retry_attempt: index + 1,
+        max_retries: capacity ? 5 : 2,
+        delay_ms: capacity ? [45000, 90000, 180000, 300000, 300000][index] : 3000 * 2 ** index,
+      });
+      expect(wait.data?.iteration).toBe(isLoop ? 1 : undefined);
+    }
+  }
+
+  function assertFinalFailure(
+    store: ReturnType<typeof createMockStore>,
+    mode: string,
+    calls: number
+  ): void {
+    const final = store.persistWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .filter(event => event.event_type === 'node_failed')
+      .at(-1);
+    const failureClass = mode === 'mixed' ? 'transient' : mode;
+    expect(final?.data).toMatchObject({
+      failure_kind: failureClass,
+      provider_failure: {
+        class: failureClass,
+        evidence: `Selected model is at capacity: attempt ${String(calls)}`,
+      },
+      error: expect.stringContaining(`Selected model is at capacity: attempt ${String(calls)}`),
+    });
+  }
+
   it.each([
     ['capacity exhaustion', 'overloaded', 0, 6, true],
     ['capacity recovery', 'overloaded', 4, 5, false],
@@ -450,40 +493,8 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
           );
           expect(calls).toBe(expectedCalls);
           expect(store.failWorkflowRun.mock.calls.length > 0).toBe(fails);
-          const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
-          const waits = events.filter(event => event.event_type === 'node_retry_scheduled');
-          expect(waits).toHaveLength(expectedCalls - 1);
-          for (const [index, wait] of waits.entries()) {
-            const capacity = mode === 'overloaded' || (mode === 'mixed' && index === 0);
-            expect(wait.step_name).toBe('my-node');
-            expect(wait.data).toMatchObject({
-              nodeId: 'my-node',
-              retry_class: capacity ? 'overloaded' : 'transient',
-              retry_attempt: index + 1,
-              max_retries: capacity ? 5 : 2,
-              delay_ms: capacity
-                ? [45000, 90000, 180000, 300000, 300000][index]
-                : 3000 * 2 ** index,
-            });
-            expect(wait.data?.iteration).toBe(isLoop ? 1 : undefined);
-          }
-          if (fails) {
-            const final = store.persistWorkflowEvent.mock.calls
-              .map(([event]) => event)
-              .filter(event => event.event_type === 'node_failed')
-              .at(-1);
-            const failureClass = mode === 'mixed' ? 'transient' : mode;
-            expect(final?.data).toMatchObject({
-              failure_kind: failureClass,
-              provider_failure: {
-                class: failureClass,
-                evidence: `Selected model is at capacity: attempt ${String(calls)}`,
-              },
-              error: expect.stringContaining(
-                `Selected model is at capacity: attempt ${String(calls)}`
-              ),
-            });
-          }
+          assertRetryWaits(store, mode, isLoop, expectedCalls);
+          if (fails) assertFinalFailure(store, mode, calls);
         }
       } finally {
         globalThis.setTimeout = realSetTimeout;

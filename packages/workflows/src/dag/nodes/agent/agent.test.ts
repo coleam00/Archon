@@ -944,8 +944,8 @@ describe('executeDagWorkflow -- output_format structured output', () => {
           properties: { done: { type: 'boolean' } },
           required: ['done'],
         };
-        const node: DagNode =
-          kind === 'agent'
+        function unknownTokenNode(): DagNode {
+          return kind === 'agent'
             ? {
                 id: 'work',
                 kind: 'agent',
@@ -963,11 +963,12 @@ describe('executeDagWorkflow -- output_format structured output', () => {
                   ...(reask ? { until_field: 'done' } : { until: 'COMPLETE' }),
                 },
               };
+        }
         await executeDagWorkflow(
           dagOptions({
             deps: createMockDeps(store),
             cwd: testDir,
-            workflow: { name: 'unknown-node-tokens', nodes: [node] },
+            workflow: { name: 'unknown-node-tokens', nodes: [unknownTokenNode()] },
             workflowRun: makeWorkflowRun('unknown-node-tokens-run'),
             workflowProvider: reask ? 'pi' : 'claude',
             config: { ...minimalConfig, assistant: reask ? 'pi' : 'claude' },
