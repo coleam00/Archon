@@ -415,17 +415,34 @@ const scope = new CliTestScope(${JSON.stringify(f.root)});
 const logs = ${JSON.stringify(join(f.home, 'logs'))};
 let ready = false;
 // The node records itself with the owners, then signals here, so teardown stops it by its own PID.
-// TCP may split the PID across data callbacks; the node ends its side once the PID is sent.
+// TCP may split the PID across data callbacks, so the signal is complete at its newline. It does not
+// wait for the node's half-close: a Windows setup once stalled with the node running and the
+// listener never seeing that end.
 const started = Promise.withResolvers<number>();
 let signal = '';
+// What the listener saw, so a setup timeout names the step that never happened.
+const events: string[] = [];
 const listener = Bun.listen({
   hostname: '127.0.0.1',
   port: 0,
   socket: {
-    data: (_socket, data) => {
-      signal += data.toString();
+    open: () => {
+      events.push('open');
     },
-    end: () => started.resolve(Number(signal)),
+    data: (_socket, data) => {
+      events.push('data ' + JSON.stringify(data.toString()));
+      signal += data.toString();
+      if (signal.includes(String.fromCharCode(10))) started.resolve(Number(signal));
+    },
+    end: () => {
+      events.push('end');
+    },
+    close: (_socket, error) => {
+      events.push('close' + (error ? ' ' + String(error) : ''));
+    },
+    error: (_socket, error) => {
+      events.push('error ' + String(error));
+    },
   },
 });
 function pids(records: string): number[] {
@@ -466,6 +483,7 @@ function setupState(): string {
     'Detached timeout setup did not finish. State before teardown:',
     'recorded PIDs file: ' + (records === undefined ? 'missing' : JSON.stringify(records)),
     ...pids(records ?? '').map(pid => 'PID ' + pid + ': ' + liveness(pid)),
+    'listener events: ' + (events.length ? events.join(', ') : 'none, the node never connected'),
     ...runLogs(),
   ].join(String.fromCharCode(10));
 }
@@ -475,7 +493,11 @@ beforeEach(async () => {
   writeFileSync(${JSON.stringify(join(f.project, 'hold.ts'))}, [
     "import { appendFileSync } from 'node:fs';",
     'appendFileSync(' + JSON.stringify(scope.detachedPids) + ', process.pid + String.fromCharCode(10));',
-    "await Bun.connect({ hostname: '127.0.0.1', port: " + listener.port + ", socket: { open: socket => { socket.end(String(process.pid)); }, data: () => {} } });",
+    // Bun does not buffer a short socket write; the rest goes out on drain.
+    'const signal = process.pid + String.fromCharCode(10);',
+    'let sent = 0;',
+    'const send = socket => { sent += Math.max(0, socket.write(signal.slice(sent))); };',
+    "await Bun.connect({ hostname: '127.0.0.1', port: " + listener.port + ", socket: { open: send, drain: send, data: () => {} } });",
     'setInterval(() => {}, 1000);',
   ].join(String.fromCharCode(10)));
   const result = await scope.run(${JSON.stringify([process.execPath, f.entry, ...args])}, ${JSON.stringify(f.project)}, { ...process.env, ARCHON_HOME: ${JSON.stringify(f.home)}, LOG_LEVEL: 'info' });
@@ -486,6 +508,7 @@ beforeEach(async () => {
   ready = true;
 }, 10000);
 afterEach(async () => {
+  if (!ready) console.error(setupState());
   listener.stop(true);
   const removeTempTree = cleanup.removeTempTree;
   const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
@@ -493,7 +516,6 @@ afterEach(async () => {
     for (const pid of recorded()) expect(() => process.kill(pid, 0)).toThrow();
     await removeTempTree(root);
   });
-  if (!ready) console.error(setupState());
   try {
     await scope.close();
   } finally {
