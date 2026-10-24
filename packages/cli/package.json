@@ -57,6 +57,8 @@
       "src/commands/setup.test.ts",
       "src/commands/setup-ai.test.ts",
       "src/commands/setup-github.test.ts",
+      "src/commands/setup-github-overlays.test.ts",
+      "src/commands/setup-github-authentication.test.ts",
       "src/commands/setup-env.test.ts",
       "src/commands/setup-provider-auth.test.ts",
       "src/commands/skill.test.ts",
@@ -78,6 +80,27 @@
     ],
     [
       "src/commands/workflow-run-owned.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-inputs.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-resume.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-config.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-capture.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-signals.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-adoption.test.ts"
+    ],
+    [
+      "src/commands/workflow-run-credentials.test.ts"
     ],
     [
       "src/commands/workflow-control.test.ts"
