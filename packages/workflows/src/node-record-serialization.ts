@@ -468,24 +468,8 @@ export function serializeNodeTranscript(
   const lifecycle = record.lifecycle;
   const execution = executionMetadata(record);
   const base = { step: record.node.id, execution };
-  const usage = reportsOwnSpend(record)
-    ? {
-        ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
-        ...(record.spend.costUsd.source === 'provider'
-          ? { cost_usd: record.spend.costUsd.value }
-          : {}),
-      }
-    : {};
-  const content =
-    record.node.kind === 'agent'
-      ? record.node.source.kind === 'command'
-        ? record.node.source.name
-        : '<inline>'
-      : record.node.kind === 'exec'
-        ? record.node.runtime === 'sh'
-          ? '<bash>'
-          : '<script>'
-        : `<${record.node.kind}>`;
+  const usage = transcriptUsage(record);
+  const content = transcriptNodeContent(record.node);
   switch (lifecycle.status) {
     case 'started':
       return { ...base, type: 'node_start', content };
@@ -506,6 +490,30 @@ export function serializeNodeTranscript(
     case 'suspended':
       return { ...base, type: 'node_suspended', content: lifecycle.point };
   }
+}
+
+function transcriptUsage(record: NodeExecutionRecord) {
+  return reportsOwnSpend(record)
+    ? {
+        ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
+        ...(record.spend.costUsd.source === 'provider'
+          ? { cost_usd: record.spend.costUsd.value }
+          : {}),
+      }
+    : {};
+}
+
+function transcriptNodeContent(node: NodeExecutionRecord['node']): string {
+  return;
+  node.kind === 'agent'
+    ? node.source.kind === 'command'
+      ? node.source.name
+      : '<inline>'
+    : node.kind === 'exec'
+      ? node.runtime === 'sh'
+        ? '<bash>'
+        : '<script>'
+      : `<${node.kind}>`;
 }
 
 export function serializeNodeEmitter(
