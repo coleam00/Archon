@@ -40,7 +40,7 @@ const OPS = [
   'workitem.comments',
   'checks.commit',
   'pr.merge-state',
-];
+] as const;
 
 if (command === 'metadata') {
   process.stdout.write(
@@ -236,146 +236,125 @@ else {
     enforcedConditions: mode === 'unenforced' ? [] : ['head'],
     landed: { commit: 'landed', tree: 'tree', parents: ['base', 'head'] },
   });
-  const appliedReplies = new Map<string, () => unknown>([
-    [
-      'workitem.create',
-      () =>
-        answer(repo, {
-          changed: mode !== 'recovery',
-          workitem: {
-            ref: { repo, number: ref.number },
-            kind: 'issue',
-            url: `https://forge.example/${repo.path}/issues/${String(ref.number)}`,
-            state: mode === 'recovery' ? 'closed' : 'open',
-          },
-          markerDigest: digest(input.marker ?? ''),
-          titleDigest: digest(mode === 'recovery' ? 'edited' : (input.title ?? '')),
-          bodyDigest: digest(mode === 'recovery' ? 'edited' : (input.body ?? '')),
-        }),
-    ],
-    [
-      'workitem.labels.set',
-      () =>
-        answer(ref, {
-          workitem: {
-            ref,
-            kind: 'issue',
-            url: `https://forge.example/${repo.path}/issues/${String(ref.number)}`,
-            state: 'open',
-          },
-          labels: input.labels,
-        }),
-    ],
-    ['workitem.label.add', () => answer(ref, { workitem: subject, labels: ['other', input.name] })],
-    ['workitem.label.remove', () => answer(ref, { workitem: subject, labels: ['other'] })],
-    [
-      'workitem.list',
-      () => listed([subject, { ...subject, ref: { ...ref, number: ref.number + 1 }, kind: 'pr' }]),
-    ],
-    [
-      'repo.label.ensure',
-      () =>
-        answer(repo, {
-          label: {
-            name: input.name,
-            color: input.color,
-            descriptionDigest: digest(input.description ?? ''),
-          },
-        }),
-    ],
-    [
-      'repo.labels.list',
-      () => ({
-        operationId: input.operationId,
-        ok: true,
-        result: { op: input.op, value: { repo, labels: [{ name: 'a' }] } },
+  const editReply = (): unknown => answer(ref, { pr, bodyDigest: digest(input.body ?? '') });
+  const replies = {
+    'workitem.create': () =>
+      answer(repo, {
+        changed: mode !== 'recovery',
+        workitem: {
+          ref: { repo, number: ref.number },
+          kind: 'issue',
+          url: `https://forge.example/${repo.path}/issues/${String(ref.number)}`,
+          state: mode === 'recovery' ? 'closed' : 'open',
+        },
+        markerDigest: digest(input.marker ?? ''),
+        titleDigest: digest(mode === 'recovery' ? 'edited' : (input.title ?? '')),
+        bodyDigest: digest(mode === 'recovery' ? 'edited' : (input.body ?? '')),
       }),
-    ],
-    ['pr.merge', () => answer(ref, mergeValue())],
-    [
-      'checks.rerun',
-      () =>
-        answer(ref, {
+    'workitem.labels.set': () =>
+      answer(ref, {
+        workitem: {
           ref,
-          revision: input.revision,
-          units: (mode === 'subset' ? input.units?.slice(0, 1) : input.units)?.map(selected => ({
-            ...selected,
-            rerun: selected.rerun
-              ? { ...selected.rerun, attempt: selected.rerun.attempt + 1 }
-              : null,
-          })),
-        }),
-    ],
-    [
-      'pr.reviews',
-      () => ({
-        operationId: input.operationId,
-        ok: true,
-        result: {
-          op: input.op,
-          value: {
-            ref,
-            items: [
-              {
-                kind: 'review_comment',
-                id: '1',
-                author: null,
-                commit: 'head',
-                state: null,
-                createdAt: null,
-                url: pr.url,
-                body: 'private review body',
-              },
-            ],
-          },
+          kind: 'issue',
+          url: `https://forge.example/${repo.path}/issues/${String(ref.number)}`,
+          state: 'open',
+        },
+        labels: input.labels,
+      }),
+    'workitem.label.add': () => answer(ref, { workitem: subject, labels: ['other', input.name] }),
+    'workitem.label.remove': () => answer(ref, { workitem: subject, labels: ['other'] }),
+    'workitem.list': () =>
+      listed([subject, { ...subject, ref: { ...ref, number: ref.number + 1 }, kind: 'pr' }]),
+    'repo.label.ensure': () =>
+      answer(repo, {
+        label: {
+          name: input.name,
+          color: input.color,
+          descriptionDigest: digest(input.description ?? ''),
         },
       }),
-    ],
-    ['pr.create', () => answer(repo, { pr })],
-    ['pr.ready', () => answer(ref, { pr })],
-    ['pr.draft', () => answer(ref, { pr })],
-    ['comment.upsert', () => answer(ref, { comment })],
-    ['workitem.comment.upsert', () => answer(ref, { workitem: subject, comment })],
-    [
-      'workitem.close',
-      () => answer(ref, { workitem: { ...subject, state: 'closed' }, reason: input.reason }),
-    ],
-    [
-      'pr.threads',
-      () => ({
-        operationId: input.operationId,
-        ok: true,
-        result: {
-          op: input.op,
-          value: {
-            ref,
-            threads: [
-              {
-                id: 'thread-1',
-                resolved: false,
-                outdated: false,
-                path: 'src/a.ts',
-                line: 3,
-                comments: [{ id: 'c1', author: null, body: 'private thread body', url: pr.url }],
-              },
-            ],
-          },
-        },
+    'repo.labels.list': () => ({
+      operationId: input.operationId,
+      ok: true,
+      result: { op: input.op, value: { repo, labels: [{ name: 'a' }] } },
+    }),
+    'pr.merge': () => answer(ref, mergeValue()),
+    'checks.rerun': () =>
+      answer(ref, {
+        ref,
+        revision: input.revision,
+        units: (mode === 'subset' ? input.units?.slice(0, 1) : input.units)?.map(selected => ({
+          ...selected,
+          rerun: selected.rerun ? { ...selected.rerun, attempt: selected.rerun.attempt + 1 } : null,
+        })),
       }),
-    ],
-    ['pr.thread.reply', () => answer(ref, { thread: input.thread, comment })],
-    ['pr.thread.resolve', () => answer(ref, { thread: input.thread, resolved: true })],
-    [
-      'workitem.edit-body',
-      () =>
-        answer(ref, {
-          workitem: { ...subject, kind: 'issue' },
-          bodyDigest: digest(input.body ?? ''),
-        }),
-    ],
-  ]);
-  const applied = (): unknown =>
-    appliedReplies.get(input.op)?.() ?? answer(ref, { pr, bodyDigest: digest(input.body ?? '') });
+    'pr.reviews': () => ({
+      operationId: input.operationId,
+      ok: true,
+      result: {
+        op: input.op,
+        value: {
+          ref,
+          items: [
+            {
+              kind: 'review_comment',
+              id: '1',
+              author: null,
+              commit: 'head',
+              state: null,
+              createdAt: null,
+              url: pr.url,
+              body: 'private review body',
+            },
+          ],
+        },
+      },
+    }),
+    'pr.create': () => answer(repo, { pr }),
+    'pr.ready': () => answer(ref, { pr }),
+    'pr.draft': () => answer(ref, { pr }),
+    'comment.upsert': () => answer(ref, { comment }),
+    'workitem.comment.upsert': () => answer(ref, { workitem: subject, comment }),
+    'workitem.close': () =>
+      answer(ref, { workitem: { ...subject, state: 'closed' }, reason: input.reason }),
+    'pr.threads': () => ({
+      operationId: input.operationId,
+      ok: true,
+      result: {
+        op: input.op,
+        value: {
+          ref,
+          threads: [
+            {
+              id: 'thread-1',
+              resolved: false,
+              outdated: false,
+              path: 'src/a.ts',
+              line: 3,
+              comments: [{ id: 'c1', author: null, body: 'private thread body', url: pr.url }],
+            },
+          ],
+        },
+      },
+    }),
+    'pr.thread.reply': () => answer(ref, { thread: input.thread, comment }),
+    'pr.thread.resolve': () => answer(ref, { thread: input.thread, resolved: true }),
+    'workitem.edit-body': () =>
+      answer(ref, {
+        workitem: { ...subject, kind: 'issue' },
+        bodyDigest: digest(input.body ?? ''),
+      }),
+    'checks.commit': () => mergeQueueRead(false),
+    'pr.merge-state': () => mergeQueueRead(false),
+    'workitem.comments': () => mergeQueueRead(false),
+    'pr.edit-body': editReply,
+    resolve: editReply,
+    'checks.state': editReply,
+    'workitem.view': editReply,
+    'pr.view': editReply,
+  } satisfies Record<(typeof OPS)[number], () => unknown>;
+  const appliedReplies = new Map(Object.entries(replies));
+  const applied = (): unknown => appliedReplies.get(input.op)?.() ?? editReply();
 
   if (mode === 'view-content' || mode === 'closed') {
     process.stdout.write(
@@ -437,6 +416,6 @@ else {
     );
     process.exit(1);
   } else {
-    process.stdout.write(JSON.stringify(mergeQueueRead(false) ?? applied()));
+    process.stdout.write(JSON.stringify(applied()));
   }
 }
