@@ -9,7 +9,7 @@ import {
 } from '../test/api-workflow-runs-harness';
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { mkdir, mkdtemp, symlink, writeFile, realpath } from 'fs/promises';
+import { mkdir, mkdtemp, symlink, writeFile, realpath, utimes } from 'fs/promises';
 import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -102,7 +102,10 @@ describe('GET /api/runs/:runId/artifacts', () => {
     const runId = 'run-local-listing';
     const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, 'plan.md'), '# plan');
+    const target = join(dir, 'plan.md');
+    await writeFile(target, '# plan café');
+    const modifiedAt = '2026-09-22T10:00:25.000Z';
+    await utimes(target, new Date(modifiedAt), new Date(modifiedAt));
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
       id: runId,
@@ -116,9 +119,9 @@ describe('GET /api/runs/:runId/artifacts', () => {
     const { app } = makeApp();
     const response = await app.request(`/api/runs/${runId}/artifacts`);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { files: { path: string }[] };
-    // Before #2200 this returned an empty list — parseOwnerRepo(name) was null.
-    expect(body.files.map(f => f.path)).toEqual(['plan.md']);
+    expect(await response.json()).toEqual({
+      files: [{ path: 'plan.md', size: 12, modifiedAt }],
+    });
   });
 
   test('resolves a folder project to _folder/<slug> storage', async () => {
