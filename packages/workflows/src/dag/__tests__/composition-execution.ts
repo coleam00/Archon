@@ -1,23 +1,10 @@
-import { removeTempTree } from '@archon/paths/test-utils';
-import type { SendQueryOptions } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
-import { executeDagWorkflow } from '../../dag-executor';
-import type { WorkflowConfig, WorkflowDeps } from '../../deps';
-import { expandWorkflowIncludes } from '../../include-expander';
-import {
-  buildAiProfile,
-  isLiteralSpec,
-  resolveModelSpec,
-  selectModelRef,
-  type ModelAliasPreset,
-  type RawTiersConfig,
-} from '../../model-validation';
-import type { DagNode, LoopGroupNode, WorkflowDefinition } from '../../schemas';
-import { dagNodeSchema } from '../../schemas';
+import { tmpdir } from 'os';
+import type { SendQueryOptions } from '@archon/provider-contract';
 import {
   createMockDeps,
   createMockStore,
@@ -31,6 +18,19 @@ import {
   type MockWorkflowStore,
   type TestWorkflowDefinition,
 } from '../test-utils';
+import { executeDagWorkflow } from '../../dag-executor';
+import type { DagNode, LoopGroupNode, WorkflowDefinition } from '../../schemas';
+import { dagNodeSchema } from '../../schemas';
+import { expandWorkflowIncludes } from '../../include-expander';
+import type { WorkflowConfig, WorkflowDeps } from '../../deps';
+import {
+  buildAiProfile,
+  isLiteralSpec,
+  resolveModelSpec,
+  selectModelRef,
+  type ModelAliasPreset,
+  type RawTiersConfig,
+} from '../../model-validation';
 
 export function registerAuthoredConfigTests() {
   // ---------------------------------------------------------------------------

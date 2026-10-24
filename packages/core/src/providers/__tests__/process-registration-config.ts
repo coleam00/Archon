@@ -1,11 +1,11 @@
-import { InvalidProviderRunConfigError, normalizedConfigString } from '@archon/provider-contract';
-import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
 import { assertRunCredentials, prepareRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { expect, mock, test } from 'bun:test';
 import { z } from 'zod';
-import { descriptor, parseConfig } from '../fixtures/process-provider-data';
+import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
+import { InvalidProviderRunConfigError, normalizedConfigString } from '@archon/provider-contract';
 import { processProviderRegistration } from '../process-registration';
+import { descriptor, parseConfig } from '../fixtures/process-provider-data';
 import { argv, modelLookupRegistration, objectModelRules } from './process-registration-fixtures';
 export function registerConfigTests() {
   test('session fork requires resume at descriptor conversion', () => {

@@ -1,10 +1,10 @@
-import type { DockerExecResult, DockerRunner } from '../../container/docker-exec';
 import type { IIsolationStore } from '../../store';
 import type {
   ContainerBackendConfig,
   CreateEnvironmentParams,
   IsolationEnvironmentRow,
 } from '../../types';
+import type { DockerExecResult, DockerRunner } from '../../container/docker-exec';
 
 export const CONFIG: ContainerBackendConfig = {
   image: 'archon-runner:test',

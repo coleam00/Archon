@@ -1,5 +1,3 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
-import { hostname } from 'node:os';
 import {
   MOCK_PAUSED_RUN,
   MOCK_RUNNING_RUN,
@@ -13,6 +11,8 @@ import {
   mockResolveApprovalGate,
   mockUpdateWorkflowRun,
 } from '../../test/api-workflow-runs-harness';
+import { beforeEach, describe, expect, test } from 'bun:test';
+import { hostname } from 'node:os';
 
 export function registerApproveTests() {
   describe('POST /api/workflows/runs/:runId/approve', () => {

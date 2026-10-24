@@ -1,10 +1,10 @@
+import { describe, expect, spyOn, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { resolveBashPath } from '@archon/git';
 import { OVERLAY_MODES } from '@archon/workflows/container-context';
-import { describe, expect, spyOn, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { IsolationFailure, isKnownIsolationError } from '../../errors';
 import { ContainerBackend } from '../container';
+import { IsolationFailure, isKnownIsolationError } from '../../errors';
 import { CONFIG, FOLDER, fakeDocker, fakeStore } from './container-fixtures';
 
 export function registerOverlayTests() {

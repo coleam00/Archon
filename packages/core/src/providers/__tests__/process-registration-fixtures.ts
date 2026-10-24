@@ -1,8 +1,8 @@
-import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
 import { expect } from 'bun:test';
 import { z } from 'zod';
-import { descriptor } from '../fixtures/process-provider-data';
+import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
 import { processProviderRegistration } from '../process-registration';
+import { descriptor } from '../fixtures/process-provider-data';
 
 export const argv = [process.execPath, 'fixture.ts'] as const;
 

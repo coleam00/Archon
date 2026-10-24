@@ -1,21 +1,10 @@
-import { removeTempTree } from '@archon/paths/test-utils';
-import type { SendQueryOptions } from '@archon/provider-contract';
-import { type ProviderEvent } from '@archon/provider-contract';
 import { afterEach, beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { mkdir, readFile, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
-import { readNodeArtifacts } from '../../../../artifacts-index';
-import { executeDagWorkflow } from '../../../../dag-executor';
-import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from '../../../../event-emitter';
-import { expandWorkflowIncludes } from '../../../../include-expander';
-import type { DagNode, WorkflowDefinition } from '../../../../schemas';
-import { dagNodeSchema } from '../../../../schemas';
-import {
-  providerEventEnvelopeSchema,
-  providerEventLineSchema,
-} from '../../../../schemas/provider-event';
-import type { IWorkflowStore } from '../../../../store';
+import { tmpdir } from 'os';
+import type { SendQueryOptions } from '@archon/provider-contract';
+import { type ProviderEvent } from '@archon/provider-contract';
 import {
   createMockDeps,
   createMockPlatform,
@@ -33,6 +22,17 @@ import {
   ready,
   runUsageWrites,
 } from '../../../test-utils';
+import { executeDagWorkflow } from '../../../../dag-executor';
+import { readNodeArtifacts } from '../../../../artifacts-index';
+import {
+  providerEventEnvelopeSchema,
+  providerEventLineSchema,
+} from '../../../../schemas/provider-event';
+import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from '../../../../event-emitter';
+import type { DagNode, WorkflowDefinition } from '../../../../schemas';
+import { dagNodeSchema } from '../../../../schemas';
+import { expandWorkflowIncludes } from '../../../../include-expander';
+import type { IWorkflowStore } from '../../../../store';
 
 export function registerProviderEventsTests() {
   describe('executeDagWorkflow -- provider event recording', () => {

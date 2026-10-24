@@ -1,11 +1,11 @@
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { join } from 'path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { getArchonHome, getRunScratchDir } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'path';
-import type { DockerExecResult } from '../../container/docker-exec';
 import * as containerModule from '../container';
 import { ContainerBackend } from '../container';
+import type { DockerExecResult } from '../../container/docker-exec';
 import { CONFIG, FOLDER, fakeDocker, fakeStore } from './container-fixtures';
 
 export function registerSourceMountTests() {

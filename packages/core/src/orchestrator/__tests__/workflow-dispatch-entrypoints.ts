@@ -1,12 +1,13 @@
-import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
-import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import type { IPlatformAdapter } from '../../types';
+import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { captureWorkflowSource } from '../../../../workflows/src/workflow-source';
+import type { trackTempRoots } from '@archon/paths/test-utils';
 import {
   CAPTURED_SOURCE_ROOTS,
   makeCodebase,
@@ -31,10 +32,9 @@ import {
   realDiscoverWorkflowsWithConfig,
   realResolveContinuationWorkflow,
 } from '../../test/orchestrator-agent-harness';
-import type { IPlatformAdapter } from '../../types';
 import { handleMessage } from '../orchestrator-agent';
 import { continueResolvedGateRun } from '../workflow-dispatch';
-import type { trackTempRoots } from '@archon/paths/test-utils';
+import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 
 export function registerNoProjectTests() {
   // ─── handleWorkflowRunCommand — no project attached ──────────────────────────

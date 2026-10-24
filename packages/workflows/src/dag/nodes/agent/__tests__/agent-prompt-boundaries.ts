@@ -1,10 +1,8 @@
-import { removeTempTree } from '@archon/paths/test-utils';
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { mkdir } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
-import { executeDagWorkflow } from '../../../../dag-executor';
-import { buildAiProfile } from '../../../../model-validation';
+import { tmpdir } from 'os';
 import {
   createMockDeps,
   createMockPlatform,
@@ -16,6 +14,8 @@ import {
   mockGetAgentProviderDag,
   mockSendQueryDag,
 } from '../../../test-utils';
+import { executeDagWorkflow } from '../../../../dag-executor';
+import { buildAiProfile } from '../../../../model-validation';
 import type { setupToolRestrictionsTests } from './agent-tool-config';
 
 export function registerToolPromptTests(fixture: ReturnType<typeof setupToolRestrictionsTests>) {

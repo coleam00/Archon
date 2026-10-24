@@ -1,18 +1,11 @@
-import { removeTempTree } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { existsSync } from 'fs';
-import { mkdir, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { executeDagWorkflow } from '../../dag-executor';
-import type { WorkflowDeps } from '../../deps';
-import { expandWorkflowIncludes } from '../../include-expander';
-import type { ResolvedWorkflow, WorkflowDefinition } from '../../schemas';
-import { dagNodeSchema } from '../../schemas';
-import type { PersistedNodeOutput } from '../../store';
 import { settlingProvider } from '../../test-settling-provider';
-import { discoverWorkflows } from '../../workflow-discovery';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { mkdir, writeFile } from 'fs/promises';
+import { removeTempTree } from '@archon/paths/test-utils';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import {
   composeScope,
   createMockDeps,
@@ -28,6 +21,13 @@ import {
   ready,
   setMockArtifactHome,
 } from '../test-utils';
+import { executeDagWorkflow } from '../../dag-executor';
+import type { ResolvedWorkflow, WorkflowDefinition } from '../../schemas';
+import { dagNodeSchema } from '../../schemas';
+import { discoverWorkflows } from '../../workflow-discovery';
+import { expandWorkflowIncludes } from '../../include-expander';
+import type { WorkflowDeps } from '../../deps';
+import type { PersistedNodeOutput } from '../../store';
 
 export function registerGovernanceTests() {
   // ---------------------------------------------------------------------------

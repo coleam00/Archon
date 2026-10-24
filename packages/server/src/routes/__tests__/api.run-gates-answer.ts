@@ -1,4 +1,3 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
 import {
   MOCK_PAUSED_RUN,
   MOCK_RUNNING_RUN,
@@ -12,6 +11,7 @@ import {
   mockUpdateWorkflowRun,
   type MockWorkflowRun,
 } from '../../test/api-workflow-runs-harness';
+import { beforeEach, describe, expect, test } from 'bun:test';
 
 export function registerLegacyAttentionTests() {
   // ---------------------------------------------------------------------------

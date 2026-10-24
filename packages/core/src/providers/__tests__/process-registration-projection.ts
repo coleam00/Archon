@@ -1,15 +1,15 @@
-import { InvalidProviderRunConfigError, normalizedConfigString } from '@archon/provider-contract';
-import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
-import { claudeDescriptor, codexDescriptor, piDescriptor } from '@archon/providers';
-import { parseClaudeConfigStrict } from '@archon/providers/claude/config';
-import { parseCodexConfigStrict } from '@archon/providers/codex/config';
-import { parsePiConfigStrict } from '@archon/providers/pi/config';
 import { assertRunCredentials, prepareRunAiConfiguration } from '@archon/workflows/run-preflight';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { expect, mock, test } from 'bun:test';
 import { z } from 'zod';
-import { descriptor } from '../fixtures/process-provider-data';
+import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin';
+import { InvalidProviderRunConfigError, normalizedConfigString } from '@archon/provider-contract';
 import { processProviderRegistration } from '../process-registration';
+import { claudeDescriptor, codexDescriptor, piDescriptor } from '@archon/providers';
+import { parseClaudeConfigStrict } from '@archon/providers/claude/config';
+import { parseCodexConfigStrict } from '@archon/providers/codex/config';
+import { parsePiConfigStrict } from '@archon/providers/pi/config';
+import { descriptor } from '../fixtures/process-provider-data';
 import {
   argv,
   assertSelectedProjection,

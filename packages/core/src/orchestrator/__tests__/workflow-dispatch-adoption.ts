@@ -1,8 +1,8 @@
-import { toBranchName } from '@archon/git';
+import { beforeEach, expect, mock, spyOn, test } from 'bun:test';
+import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
-import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import { beforeEach, expect, mock, spyOn, test } from 'bun:test';
+import { toBranchName } from '@archon/git';
 import {
   makeCodebase,
   makeDispatchConversation,

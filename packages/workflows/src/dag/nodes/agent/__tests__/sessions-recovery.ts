@@ -1,11 +1,8 @@
-import { removeTempTree } from '@archon/paths/test-utils';
 import { afterEach, beforeEach, describe, expect, it, mock, type Mock } from 'bun:test';
 import { mkdir } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
-import { executeDagWorkflow } from '../../../../dag-executor';
-import type { WorkflowNodeSession } from '../../../../schemas';
-import type { WorkflowNodeSessionKey } from '../../../../store';
+import { tmpdir } from 'os';
 import {
   createMockDeps,
   createMockPlatform,
@@ -21,6 +18,9 @@ import {
   type MockWorkflowPlatform,
   type MockWorkflowStore,
 } from '../../../test-utils';
+import { executeDagWorkflow } from '../../../../dag-executor';
+import type { WorkflowNodeSession } from '../../../../schemas';
+import type { WorkflowNodeSessionKey } from '../../../../store';
 import type { setupPersistTests } from './sessions-persistence';
 
 export function registerPersistRecoveryTests(fixture: ReturnType<typeof setupPersistTests>) {

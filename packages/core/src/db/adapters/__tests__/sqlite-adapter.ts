@@ -1,24 +1,24 @@
 import {
+  postgresArchonColumns,
+  readBalancedParens,
+  stripSqlComments,
+} from '../sqlite-schema-test-helpers';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import {
   resourceStartOverlapSchema,
   resourceStartRequestStatusSchema,
   sourceReceiptOutcomeSchema,
   startBindingPreparationStatusSchema,
 } from '@archon/workflows/schemas/resource-start';
-import { Database, SQLiteError } from 'bun:sqlite';
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { unlinkSync } from 'fs';
-import { resolve } from 'node:path';
-import { join } from 'path';
-import { webPushSubscriptionRowSchema } from '../../../schemas/web-push';
+import { SqliteAdapter } from '../sqlite';
 import { getSchemaSQL } from '../../bundled-schema';
 import { APP_VERSION, readSchemaVersion } from '../../schema-version';
-import { SqliteAdapter } from '../sqlite';
-import {
-  postgresArchonColumns,
-  readBalancedParens,
-  stripSqlComments,
-} from '../sqlite-schema-test-helpers';
+import { webPushSubscriptionRowSchema } from '../../../schemas/web-push';
+import { Database, SQLiteError } from 'bun:sqlite';
+import { unlinkSync } from 'fs';
+import { join } from 'path';
 import { raw_indexes, raw_pragma, raw_query } from '../sqlite-test-harness';
+import { resolve } from 'node:path';
 import type { setupSqliteTests } from './sqlite-fixtures';
 
 export function registerFailureLoggingTests(shared: ReturnType<typeof setupSqliteTests>) {

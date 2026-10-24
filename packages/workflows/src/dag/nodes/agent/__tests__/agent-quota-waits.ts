@@ -1,13 +1,9 @@
-import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { afterEach, beforeEach, expect, it, mock, type Mock } from 'bun:test';
 import { mkdir } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { join } from 'path';
-import { executeDagWorkflow } from '../../../../dag-executor';
-import type { WorkflowConfig, WorkflowDeps } from '../../../../deps';
+import { tmpdir } from 'os';
 import { RATE_LIMIT_MAX_RETRIES, RATE_LIMIT_PAUSE_DELAY_MS } from '../../../../executor-shared';
-import type { DagNode } from '../../../../schemas';
-import type { IWorkflowStore } from '../../../../store';
 import {
   createMockDeps,
   createMockPlatform,
@@ -20,6 +16,10 @@ import {
   mockSendQueryDag,
   persistedEvents,
 } from '../../../test-utils';
+import { executeDagWorkflow } from '../../../../dag-executor';
+import type { DagNode } from '../../../../schemas';
+import type { WorkflowConfig, WorkflowDeps } from '../../../../deps';
+import type { IWorkflowStore } from '../../../../store';
 
 export function setupCreditExhaustionTests() {
   let testDir: string;

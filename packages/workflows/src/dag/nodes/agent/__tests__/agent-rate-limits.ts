@@ -1,7 +1,5 @@
-import { testTimeout } from '@archon/paths/test-utils';
 import { expect, it } from 'bun:test';
-import { executeDagWorkflow } from '../../../../dag-executor';
-import type { DagNode } from '../../../../schemas';
+import { testTimeout } from '@archon/paths/test-utils';
 import {
   createMockDeps,
   createMockStore,
@@ -10,6 +8,8 @@ import {
   persistedEvents,
   stubMissingContainer,
 } from '../../../test-utils';
+import { executeDagWorkflow } from '../../../../dag-executor';
+import type { DagNode } from '../../../../schemas';
 import type { setupCreditExhaustionTests } from './agent-quota-waits';
 
 export function registerRateLimitTests(fixture: ReturnType<typeof setupCreditExhaustionTests>) {

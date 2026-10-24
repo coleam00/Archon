@@ -1,17 +1,8 @@
-import { removeTempTree } from '@archon/paths/test-utils';
 import { expect, it, type Mock } from 'bun:test';
 import { mkdir } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
-import { executeDagWorkflow } from '../../dag-executor';
-import { dryRunWorkflow } from '../../dry-run';
-import { getWorkflowEventEmitter } from '../../event-emitter';
-import { resolvedBodyNodes } from '../../graph-plan';
-import { expandWorkflowIncludes } from '../../include-expander';
-import type { DagNode, NodeOutput, SkipCause } from '../../schemas';
-import { skipCauseSchema } from '../../schemas';
-import type { IWorkflowStore } from '../../store';
-import { loopBodyScope } from '../loop-scope';
+import { tmpdir } from 'os';
 import {
   createMockDeps,
   createMockPlatform,
@@ -20,7 +11,16 @@ import {
   makeWorkflowRun,
   resolveTestWorkflow,
 } from '../test-utils';
+import { executeDagWorkflow } from '../../dag-executor';
 import { checkComposedBlockBoundaries } from '../trigger-rule';
+import { resolvedBodyNodes } from '../../graph-plan';
+import { loopBodyScope } from '../loop-scope';
+import { dryRunWorkflow } from '../../dry-run';
+import { getWorkflowEventEmitter } from '../../event-emitter';
+import type { DagNode, NodeOutput, SkipCause } from '../../schemas';
+import { skipCauseSchema } from '../../schemas';
+import { expandWorkflowIncludes } from '../../include-expander';
+import type { IWorkflowStore } from '../../store';
 import type { setupIncludeExpansionTests } from './composition-include-resume';
 
 export function registerResultContractTests() {

@@ -1,12 +1,10 @@
-import { removeTempTree } from '@archon/paths/test-utils';
+import { readNodeRecordEvent } from '../../../../node-record-reader';
+import { foldDagResumeSnapshot } from '../../../../dag-resume-snapshot';
 import { afterEach, beforeEach, describe, expect, it, type Mock } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
-import { executeDagWorkflow } from '../../../../dag-executor';
-import { foldDagResumeSnapshot } from '../../../../dag-resume-snapshot';
-import { readNodeRecordEvent } from '../../../../node-record-reader';
-import type { DagNode, WorkflowDefinition } from '../../../../schemas';
+import { tmpdir } from 'os';
 import {
   createMockDeps,
   createMockPlatform,
@@ -22,6 +20,8 @@ import {
   persistedEvents,
   runUsageWrites,
 } from '../../../test-utils';
+import { executeDagWorkflow } from '../../../../dag-executor';
+import type { DagNode, WorkflowDefinition } from '../../../../schemas';
 
 export function registerStructuredOutputTests() {
   describe('executeDagWorkflow -- output_format structured output', () => {

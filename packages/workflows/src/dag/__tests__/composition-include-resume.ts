@@ -1,15 +1,15 @@
-import { removeTempTree } from '@archon/paths/test-utils';
 import { afterEach, beforeEach, expect, it, mock } from 'bun:test';
 import { mkdir } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
+import { tmpdir } from 'os';
+import { createMockDeps, createMockPlatform, dagOptions, makeWorkflowRun } from '../test-utils';
 import { executeDagWorkflow } from '../../dag-executor';
-import type { WorkflowDeps } from '../../deps';
-import { expandWorkflowIncludes } from '../../include-expander';
 import type { DagNode, ResolvedWorkflow, SkipCause, WorkflowDefinition } from '../../schemas';
 import { dagNodeSchema } from '../../schemas';
+import { expandWorkflowIncludes } from '../../include-expander';
+import type { WorkflowDeps } from '../../deps';
 import type { PersistedNodeOutput } from '../../store';
-import { createMockDeps, createMockPlatform, dagOptions, makeWorkflowRun } from '../test-utils';
 
 export function setupIncludeExpansionTests() {
   let testDir: string;

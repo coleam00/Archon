@@ -1,12 +1,8 @@
-import { removeTempTree } from '@archon/paths/test-utils';
 import { afterEach, beforeEach, describe, expect, it, type Mock } from 'bun:test';
 import { mkdir } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
-import { executeDagWorkflow } from '../../../../dag-executor';
-import type { WorkflowDeps } from '../../../../deps';
-import type { DagNode, WorkflowRun } from '../../../../schemas';
-import type { IWorkflowStore } from '../../../../store';
+import { tmpdir } from 'os';
 import {
   createMockDeps,
   createMockPlatform,
@@ -16,6 +12,10 @@ import {
   mockGetAgentProviderDag,
   mockSendQueryDag,
 } from '../../../test-utils';
+import { executeDagWorkflow } from '../../../../dag-executor';
+import type { DagNode, WorkflowRun } from '../../../../schemas';
+import type { WorkflowDeps } from '../../../../deps';
+import type { IWorkflowStore } from '../../../../store';
 
 export function registerProviderThreadingTests() {
   describe('executeDagWorkflow -- provider-boundary session threading (#1992)', () => {

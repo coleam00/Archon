@@ -1,13 +1,3 @@
-import * as sqlHost from '@archon/core/workflows/sql-host';
-import type { IWorkflowPlatform } from '@archon/workflows/deps';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { answeredPauseContinuation } from '@archon/workflows/schemas/workflow-run';
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import {
-  startWorkflowContinuationScheduler,
-  stopWorkflowContinuationScheduler,
-  workflowResumeTargetForRun,
-} from '../../services/workflow-resume-service';
 import {
   MOCK_PAUSED_RUN,
   makeApp,
@@ -23,6 +13,16 @@ import {
   mockResolveRunWorkflow,
   mockUpdateWorkflowRun,
 } from '../../test/api-workflow-runs-harness';
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import * as sqlHost from '@archon/core/workflows/sql-host';
+import type { IWorkflowPlatform } from '@archon/workflows/deps';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { answeredPauseContinuation } from '@archon/workflows/schemas/workflow-run';
+import {
+  startWorkflowContinuationScheduler,
+  stopWorkflowContinuationScheduler,
+  workflowResumeTargetForRun,
+} from '../../services/workflow-resume-service';
 
 export function registerRespondTests() {
   // #2707 step 2 — the general drive verb. 'approve'/'reject' produce the exact same

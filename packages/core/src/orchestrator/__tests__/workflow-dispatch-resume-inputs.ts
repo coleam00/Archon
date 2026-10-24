@@ -1,5 +1,5 @@
-import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { expect, mock, test } from 'bun:test';
+import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import {
   CAPTURED_SOURCE_ROOTS,
   makeCodebase,

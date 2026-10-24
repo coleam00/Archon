@@ -1,12 +1,12 @@
-import { Database, SQLiteError, type Statement } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { readFileSync, unlinkSync } from 'fs';
-import { mkdtemp } from 'fs/promises';
-import { resolve } from 'node:path';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { SqliteAdapter, sqliteDialect } from '../sqlite';
+import { Database, SQLiteError, type Statement } from 'bun:sqlite';
+import { readFileSync, unlinkSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { mkdtemp } from 'fs/promises';
 import { raw_query } from '../sqlite-test-harness';
+import { resolve } from 'node:path';
 import type { setupSqliteTests } from './sqlite-fixtures';
 
 export function registerFinalizationTests(shared: ReturnType<typeof setupSqliteTests>) {

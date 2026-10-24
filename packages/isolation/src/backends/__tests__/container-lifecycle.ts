@@ -1,9 +1,9 @@
-import { OVERLAY_MODES } from '@archon/workflows/container-context';
 import { describe, expect, spyOn, test } from 'bun:test';
-import type { DockerRunner } from '../../container/docker-exec';
-import { IsolationFailure, isKnownIsolationError } from '../../errors';
+import { OVERLAY_MODES } from '@archon/workflows/container-context';
 import * as containerModule from '../container';
 import { ContainerBackend } from '../container';
+import type { DockerRunner } from '../../container/docker-exec';
+import { IsolationFailure, isKnownIsolationError } from '../../errors';
 import { CONFIG, FOLDER, fakeDocker, fakeStore, seedContainerRow } from './container-fixtures';
 
 export function registerDestroyTests() {

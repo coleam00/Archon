@@ -1,11 +1,9 @@
-import { removeTempTree } from '@archon/paths/test-utils';
-import type { ResultChunk } from '@archon/provider-contract';
 import { afterEach, beforeEach, expect, it, mock, type Mock } from 'bun:test';
 import { mkdir, readFile, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
-import { writeNodeArtifact } from '../../../../artifacts-index';
-import { executeDagWorkflow } from '../../../../dag-executor';
+import { tmpdir } from 'os';
+import type { ResultChunk } from '@archon/provider-contract';
 import {
   createMockDeps,
   createMockPlatform,
@@ -17,6 +15,8 @@ import {
   mockGetAgentProviderDag,
   mockSendQueryDag,
 } from '../../../test-utils';
+import { executeDagWorkflow } from '../../../../dag-executor';
+import { writeNodeArtifact } from '../../../../artifacts-index';
 
 export function setupPersistTests() {
   let testDir: string;

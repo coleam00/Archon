@@ -1,5 +1,4 @@
 import { expect, it, mock, type Mock } from 'bun:test';
-import type { DagNode } from '../../../../schemas';
 import {
   createMockStore,
   mockClaudeCapabilities,
@@ -8,6 +7,7 @@ import {
   mockSendQueryDag,
   withProviderCapabilities,
 } from '../../../test-utils';
+import type { DagNode } from '../../../../schemas';
 import type { setupAddressableTests } from './sessions-owner-branches';
 
 export function registerNamedForkTests(fixture: ReturnType<typeof setupAddressableTests>) {
