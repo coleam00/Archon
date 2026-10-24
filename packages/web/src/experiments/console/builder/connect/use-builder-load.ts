@@ -4,7 +4,7 @@
  * carried in router state instead of a server load).
  */
 import { useMemo } from 'react';
-import { fromWorkflowDefinition } from '../model';
+import { fromWorkflowDefinition, type ImportResult } from '../model';
 import type { BuilderWorkflow, Issue } from '../types';
 import {
   isInstalledPackWorkflow,
@@ -29,11 +29,6 @@ export interface BuilderNavState {
 
 const IDLE_LIST_KEY = 'workflows:idle';
 
-export interface ImportedWorkflow {
-  workflow: BuilderWorkflow;
-  issues: Issue[];
-}
-
 export interface BuilderLoad {
   projects: Project[];
   selectedProject: Project | undefined;
@@ -41,7 +36,7 @@ export interface BuilderLoad {
   existingNames: string[];
   isCreateMode: boolean;
   /** The workflow under edit: the create-mode seed, else the server load. */
-  imported: ImportedWorkflow | null;
+  imported: ImportResult | null;
   loadedSource: Workflow['source'];
   installedPack: boolean;
   notFound: boolean;
@@ -119,7 +114,7 @@ export function useBuilderLoad(
 
   // Memoized on stable inputs (location-state seed, cache object) so it does NOT
   // produce a fresh identity every render — that would thrash the reset effect.
-  const imported = useMemo<ImportedWorkflow | null>(() => {
+  const imported = useMemo<ImportResult | null>(() => {
     if (isCreateMode && createSeed !== undefined) return { workflow: createSeed, issues: [] };
     if (loadedDefinition !== null) return fromWorkflowDefinition(loadedDefinition.definition);
     return null;

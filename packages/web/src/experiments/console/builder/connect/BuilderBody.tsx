@@ -8,7 +8,7 @@ import { BuilderPage } from '../BuilderPage';
 import type { BuilderWorkflow, Issue } from '../types';
 import { errorDetail } from '../../lib/http';
 import type { Project } from '../../primitives/project';
-import type { ImportedWorkflow } from './use-builder-load';
+import type { ImportResult } from '../model';
 
 const SECONDARY_BUTTON_CLASS =
   'mt-3 rounded-[8px] border border-border bg-surface px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
@@ -108,7 +108,7 @@ export interface BuilderBodyProps {
   notFound: boolean;
   installedPack: boolean;
   existingNames: readonly string[];
-  imported: ImportedWorkflow | null;
+  imported: ImportResult | null;
   currentWorkflow: BuilderWorkflow | null;
   editorKey: string;
   extraIssues: Issue[];

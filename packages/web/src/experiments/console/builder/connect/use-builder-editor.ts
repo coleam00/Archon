@@ -7,10 +7,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BuilderWorkflow, Issue } from '../types';
 import type { Workflow } from '../../primitives/workflow';
 import { isReadOnlySource } from './save-logic';
-import type { ImportedWorkflow } from './use-builder-load';
+import type { ImportResult } from '../model';
 
 export interface BuilderEditorInput {
-  imported: ImportedWorkflow | null;
+  imported: ImportResult | null;
   /** Editor identity (cwd + name + mode); BuilderPage is keyed by it too. */
   editorKey: string;
   isCreateMode: boolean;
