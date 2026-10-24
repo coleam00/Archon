@@ -1,4 +1,3 @@
-import { writeWaitOutcome } from './workflow-wait-output';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -48,6 +47,7 @@ import {
 import {
   printStatusRun,
   announceWaitAttached,
+  writeWaitOutcome,
   type LeaveBehind,
   buildLeaveBehind,
   readParseWarningEvents,
