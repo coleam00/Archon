@@ -216,7 +216,31 @@ else {
     landed: { commit: 'landed', tree: 'tree', parents: ['base', 'head'] },
   });
   const editReply = (): unknown => answer(ref, { pr, bodyDigest: digest(input.body ?? '') });
+  const readHandlers = {
+    'checks.commit': () =>
+      commitChecks(
+        mode === 'mismatch'
+          ? 'another-revision'
+          : input.at?.kind === 'revision'
+            ? input.at.revision
+            : 'devsha'
+      ),
+    'pr.merge-state': () => mergeState(mode === 'mismatch' ? ref.number + 1 : ref.number),
+    'workitem.comments': () =>
+      read({
+        workitem: subject,
+        comments: [
+          {
+            id: '7',
+            author: { host: 'forge.example', id: '1', login: 'maintainer' },
+            url: `${subject.url}#issuecomment-7`,
+            body: 'private conversation comment',
+          },
+        ],
+      }),
+  };
   const replies = {
+    ...readHandlers,
     'workitem.create': () =>
       answer(repo, {
         changed: mode !== 'recovery',
@@ -323,32 +347,13 @@ else {
         workitem: { ...subject, kind: 'issue' },
         bodyDigest: digest(input.body ?? ''),
       }),
-    'checks.commit': () =>
-      commitChecks(input.at?.kind === 'revision' ? input.at.revision : 'devsha'),
-    'pr.merge-state': () => mergeState(ref.number),
-    'workitem.comments': () =>
-      read({
-        workitem: subject,
-        comments: [
-          {
-            id: '7',
-            author: { host: 'forge.example', id: '1', login: 'maintainer' },
-            url: `${subject.url}#issuecomment-7`,
-            body: 'private conversation comment',
-          },
-        ],
-      }),
     'pr.edit-body': editReply,
     resolve: editReply,
     'checks.state': editReply,
     'workitem.view': editReply,
     'pr.view': editReply,
   } satisfies Record<(typeof OPS)[number], () => unknown>;
-  const mismatchedReads = new Map<string, () => unknown>([
-    ['checks.commit', () => commitChecks('another-revision')],
-    ['pr.merge-state', () => mergeState(ref.number + 1)],
-    ['workitem.comments', replies['workitem.comments']],
-  ]);
+  const readReplies = new Map(Object.entries(readHandlers));
   const appliedReplies = new Map(Object.entries(replies));
   const applied = (): unknown => appliedReplies.get(input.op)?.() ?? editReply();
 
@@ -385,7 +390,7 @@ else {
       )
     );
   } else if (mode === 'mismatch') {
-    process.stdout.write(JSON.stringify(mismatchedReads.get(input.op)?.() ?? mismatched()));
+    process.stdout.write(JSON.stringify(readReplies.get(input.op)?.() ?? mismatched()));
   } else if (mode === 'registered-case') {
     // The forge answers in the case it has registered, whatever case was asked with.
     const registered = { host: repo.host.toUpperCase(), path: repo.path.toUpperCase() };
