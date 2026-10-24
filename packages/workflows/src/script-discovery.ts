@@ -200,19 +200,20 @@ export async function discoverScripts(
   return scripts;
 }
 
-async function isPackDirectory(
-  packPath: string,
+async function isPackagedDirectory(
+  path: string,
+  label: 'workflow pack' | 'workflow',
   onMissing?: (path: string, error: unknown) => void
 ): Promise<boolean> {
   try {
-    return (await stat(packPath)).isDirectory();
+    return (await stat(path)).isDirectory();
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') {
-      onMissing?.(packPath, error);
+      onMissing?.(path, error);
       return false;
     }
-    throw new Error(`Failed to inspect packaged workflow pack "${packPath}": ${err.message}`, {
+    throw new Error(`Failed to inspect packaged ${label} "${path}": ${err.message}`, {
       cause: err,
     });
   }
@@ -249,7 +250,7 @@ async function discoverPackagedScripts(
     )
       continue;
     const packPath = join(workflowsRoot, pack);
-    if (!(await isPackDirectory(packPath, onMissing))) continue;
+    if (!(await isPackagedDirectory(packPath, 'workflow pack', onMissing))) continue;
     await discoverPackScripts(packPath, pack, source, scripts, requestedNames, onMissing);
   }
   return scripts;
@@ -293,7 +294,7 @@ async function discoverPackScripts(
         })
       );
     if (localNames?.size === 0) continue;
-    if (!(await isPackWorkflowDirectory(join(packPath, workflow), onMissing))) continue;
+    if (!(await isPackagedDirectory(join(packPath, workflow), 'workflow', onMissing))) continue;
     const owner = { source, pack, workflow };
     const localScripts = await discoverScripts(
       join(packPath, workflow, 'scripts'),
@@ -304,24 +305,6 @@ async function discoverPackScripts(
       const qualifiedName = formatPackagedResourceReference(owner, name);
       scripts.set(qualifiedName, { ...definition, name: qualifiedName });
     }
-  }
-}
-
-async function isPackWorkflowDirectory(
-  workflowPath: string,
-  onMissing?: (path: string, error: unknown) => void
-): Promise<boolean> {
-  try {
-    return (await stat(workflowPath)).isDirectory();
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      onMissing?.(workflowPath, error);
-      return false;
-    }
-    throw new Error(`Failed to inspect packaged workflow "${workflowPath}": ${err.message}`, {
-      cause: err,
-    });
   }
 }
 
