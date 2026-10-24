@@ -45,7 +45,7 @@ export function useBuilderProject(): BuilderProjectState {
 
   // Follow later `?project=` changes while the route stays mounted (browser
   // back/forward, or a link to another builder project). Without this the hook
-  // would keep the stale seed and `BuilderConnected`'s sync effect would push it
+  // would keep the stale seed and `useProjectSearchParam` would push it
   // back into the URL, fighting the navigation.
   useEffect((): void => {
     if (paramProject === undefined || paramProject === projectId) return;
@@ -59,4 +59,19 @@ export function useBuilderProject(): BuilderProjectState {
   }, []);
 
   return { projectId, setProjectId };
+}
+
+/**
+ * Keep `?project=` in sync with the selected project so a deep-link reload
+ * restores the cwd. Guarded to only write when it actually differs (no loop).
+ */
+export function useProjectSearchParam(projectId: string | undefined): void {
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (projectId !== undefined && searchParams.get('project') !== projectId) {
+      const next = new URLSearchParams(searchParams);
+      next.set('project', projectId);
+      setSearchParams(next, { replace: true });
+    }
+  }, [projectId, searchParams, setSearchParams]);
 }
