@@ -132,6 +132,10 @@ export async function summarizeOverlayChanges(
     });
   }
 
+  return summarizeRecords(parseRecords(stdout));
+}
+
+function summarizeRecords(records: WalkRecord[]): OverlayChangeSummary {
   const added: string[] = [];
   const modified: string[] = [];
   const deleted: string[] = [];
@@ -139,25 +143,28 @@ export async function summarizeOverlayChanges(
   const skipped: { path: string; reason: string }[] = [];
   let total = 0;
 
-  for (const { tag, fields } of parseRecords(stdout)) {
+  for (const { tag, fields } of records) {
     const path = fields[0] ?? '';
-    if (tag === 'A') {
-      total++;
-      pushCapped(added, path);
-    } else if (tag === 'M') {
-      total++;
-      pushCapped(modified, path);
-    } else if (tag === 'D') {
-      total++;
-      pushCapped(deleted, path);
-    } else if (tag === 'L') {
-      total++;
-      const entry = { path, target: fields[1] ?? '', escapes: fields[2] === '1' };
-      if (symlinks.length < SUMMARY_ENTRY_CAP) symlinks.push(entry);
-    } else if (tag === 'S') {
-      if (skipped.length < SUMMARY_ENTRY_CAP) {
-        skipped.push({ path, reason: fields[1] ?? 'skipped' });
-      }
+    switch (tag) {
+      case 'A':
+        total++;
+        pushCapped(added, path);
+        break;
+      case 'M':
+        total++;
+        pushCapped(modified, path);
+        break;
+      case 'D':
+        total++;
+        pushCapped(deleted, path);
+        break;
+      case 'L':
+        total++;
+        pushCapped(symlinks, { path, target: fields[1] ?? '', escapes: fields[2] === '1' });
+        break;
+      case 'S':
+        pushCapped(skipped, { path, reason: fields[1] ?? 'skipped' });
+        break;
     }
   }
 
@@ -239,8 +246,8 @@ export async function applyOverlayChanges(
   return { filesApplied, filesDeleted, warnings };
 }
 
-function pushCapped(list: string[], path: string): void {
-  if (list.length < SUMMARY_ENTRY_CAP) list.push(path);
+function pushCapped<T>(list: T[], entry: T): void {
+  if (list.length < SUMMARY_ENTRY_CAP) list.push(entry);
 }
 
 // ---------------------------------------------------------------------------
