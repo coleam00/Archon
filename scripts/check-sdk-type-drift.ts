@@ -120,6 +120,16 @@ export function checkSources(
     }
     visit(source);
   }
+  return [...failures, ...checkLedger(sources, sdkTypes, ledger, collisions)];
+}
+
+function checkLedger(
+  sources: ReadonlyMap<string, string>,
+  sdkTypes: SdkTypeNames,
+  ledger: readonly SdkTypeException[],
+  collisions: ReadonlyMap<string, number>
+): string[] {
+  const failures: string[] = [];
   const recorded = new Set<string>();
   for (const entry of ledger) {
     const key = `${entry.file}:${entry.name}`;
@@ -129,20 +139,29 @@ export function checkSources(
     if (!collisions.has(key)) failures.push(`${key}: stale SDK type ledger entry; remove it`);
     if ((collisions.get(key) ?? 0) > 1)
       failures.push(`${key}: multiple declarations cannot share one ledger entry`);
-    if (entry.kind === 'boundary') {
-      if (entry.conformanceTest !== CONFORMANCE) {
-        failures.push(`${key}: boundary comparisons must use ${CONFORMANCE}`);
-      } else if (!sources.has(CONFORMANCE)) {
-        failures.push(`${key}: conformance test does not exist: ${CONFORMANCE}`);
-      }
-      if (
-        !sdkTypes
-          .get(entry.name)
-          ?.some(sdk => entry.sdkModule === sdk || entry.sdkModule.startsWith(`${sdk}/`))
-      ) {
-        failures.push(`${key}: comparison must import this type from its installed SDK owner`);
-      }
-    }
+    if (entry.kind === 'boundary') failures.push(...checkBoundary(entry, sources, sdkTypes));
+  }
+  return failures;
+}
+
+function checkBoundary(
+  entry: Extract<SdkTypeException, { kind: 'boundary' }>,
+  sources: ReadonlyMap<string, string>,
+  sdkTypes: SdkTypeNames
+): string[] {
+  const failures: string[] = [];
+  const key = `${entry.file}:${entry.name}`;
+  if (entry.conformanceTest !== CONFORMANCE) {
+    failures.push(`${key}: boundary comparisons must use ${CONFORMANCE}`);
+  } else if (!sources.has(CONFORMANCE)) {
+    failures.push(`${key}: conformance test does not exist: ${CONFORMANCE}`);
+  }
+  if (
+    !sdkTypes
+      .get(entry.name)
+      ?.some(sdk => entry.sdkModule === sdk || entry.sdkModule.startsWith(`${sdk}/`))
+  ) {
+    failures.push(`${key}: comparison must import this type from its installed SDK owner`);
   }
   return failures;
 }

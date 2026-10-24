@@ -159,18 +159,7 @@ function score(unit: FunctionUnit): number {
   const visit = (node: ts.Node, nesting: number): void => {
     if (isFunctionUnit(node)) return;
     if (ts.isIfStatement(node)) {
-      const isElseIf = ts.isIfStatement(node.parent) && node.parent.elseStatement === node;
-      total += isElseIf ? 1 : 1 + nesting;
-      visit(node.expression, nesting);
-      visit(node.thenStatement, nesting + 1);
-      const otherwise = node.elseStatement;
-      if (otherwise === undefined) return;
-      if (ts.isIfStatement(otherwise)) {
-        visit(otherwise, nesting);
-      } else {
-        total += 1;
-        visit(otherwise, nesting + 1);
-      }
+      visitIf(node, nesting);
       return;
     }
     if (isNestingStructure(node)) {
@@ -186,6 +175,20 @@ function score(unit: FunctionUnit): number {
       if (!continuesRun) total += 1;
     }
     node.forEachChild(child => visit(child, nesting));
+  };
+  const visitIf = (node: ts.IfStatement, nesting: number): void => {
+    const isElseIf = ts.isIfStatement(node.parent) && node.parent.elseStatement === node;
+    total += isElseIf ? 1 : 1 + nesting;
+    visit(node.expression, nesting);
+    visit(node.thenStatement, nesting + 1);
+    const otherwise = node.elseStatement;
+    if (otherwise === undefined) return;
+    if (ts.isIfStatement(otherwise)) {
+      visit(otherwise, nesting);
+    } else {
+      total += 1;
+      visit(otherwise, nesting + 1);
+    }
   };
   unit.forEachChild(child => visit(child, 0));
   return total;

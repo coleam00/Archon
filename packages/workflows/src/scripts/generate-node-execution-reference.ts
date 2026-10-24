@@ -38,13 +38,7 @@ function fieldType(schema: JsonSchema): string {
   return schema.type ?? 'unknown';
 }
 
-function walk(
-  schema: JsonSchema,
-  path: string,
-  presence: string,
-  condition: string,
-  rows: Row[]
-): void {
+function assertSupportedSchema(schema: JsonSchema, path: string): void {
   for (const keyword of [
     '$ref',
     '$defs',
@@ -57,21 +51,19 @@ function walk(
     if (keyword in schema)
       throw new Error(`Unsupported JSON Schema construct: ${keyword} at ${path}`);
   }
+}
+
+function walk(
+  schema: JsonSchema,
+  path: string,
+  presence: string,
+  condition: string,
+  rows: Row[]
+): void {
+  assertSupportedSchema(schema, path);
   const alternatives = schema.oneOf ?? schema.anyOf;
   if (alternatives) {
-    for (const [index, alternative] of alternatives.entries()) {
-      const discriminants = Object.entries(alternative.properties ?? {})
-        // An optional constant (`partial: true`) qualifies a branch; it does not select it.
-        .filter(
-          ([key, value]) =>
-            typeof value !== 'boolean' &&
-            value.const !== undefined &&
-            alternative.required?.includes(key) === true
-        )
-        .map(([key, value]) => `${path}.${key} = ${fieldType(schemaObject(value))}`);
-      const branch = discriminants.join(', ') || `${path} alternative ${String(index + 1)}`;
-      walk(alternative, path, presence, [condition, branch].filter(Boolean).join('; '), rows);
-    }
+    walkAlternatives(alternatives, path, presence, condition, rows);
     return;
   }
   if (path) rows.push([path, fieldType(schema), presence, condition || '—']);
@@ -90,6 +82,28 @@ function walk(
   }
   if (typeof schema.additionalProperties === 'object') {
     walk(schema.additionalProperties, `${path}.*`, 'entry', condition, rows);
+  }
+}
+
+function walkAlternatives(
+  alternatives: JsonSchema[],
+  path: string,
+  presence: string,
+  condition: string,
+  rows: Row[]
+): void {
+  for (const [index, alternative] of alternatives.entries()) {
+    const discriminants = Object.entries(alternative.properties ?? {})
+      // An optional constant (`partial: true`) qualifies a branch; it does not select it.
+      .filter(
+        ([key, value]) =>
+          typeof value !== 'boolean' &&
+          value.const !== undefined &&
+          alternative.required?.includes(key) === true
+      )
+      .map(([key, value]) => `${path}.${key} = ${fieldType(schemaObject(value))}`);
+    const branch = discriminants.join(', ') || `${path} alternative ${String(index + 1)}`;
+    walk(alternative, path, presence, [condition, branch].filter(Boolean).join('; '), rows);
   }
 }
 

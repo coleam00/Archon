@@ -68,17 +68,9 @@ function parseArgs(argv: readonly string[]): { apply: boolean; cwd: string } | u
       continue;
     }
     if (arg === '--cwd') {
-      if (cwd !== undefined) {
-        // Silently taking the last would let a copy-paste slip operate on a
-        // different project than the one the operator is reading in their shell.
-        return invalid('--cwd was given more than once; pass it exactly once.');
-      }
       const value = argv[i + 1];
-      if (value === undefined || value.startsWith('-')) {
-        return invalid(
-          `--cwd requires a directory path${value === undefined ? '' : `, got '${value}'`}.`
-        );
-      }
+      const error = cwdArgumentError(cwd, value);
+      if (error !== undefined) return invalid(error);
       cwd = value;
       i++; // consume the value
       continue;
@@ -87,6 +79,17 @@ function parseArgs(argv: readonly string[]): { apply: boolean; cwd: string } | u
   }
 
   return { apply, cwd: resolve(cwd ?? '.') };
+}
+
+function cwdArgumentError(cwd: string | undefined, value: string | undefined): string | undefined {
+  if (cwd !== undefined) {
+    // Taking the last value could move state for a different project than the operator intended.
+    return '--cwd was given more than once; pass it exactly once.';
+  }
+  if (value === undefined || value.startsWith('-')) {
+    return `--cwd requires a directory path${value === undefined ? '' : `, got '${value}'`}.`;
+  }
+  return undefined;
 }
 
 /**
