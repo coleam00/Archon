@@ -131,6 +131,10 @@ async function checkPointer(
     return `${where} resolves outside this run's artifacts directory`;
   }
 
+  return checkPointerFile(full, where);
+}
+
+async function checkPointerFile(full: string, where: string): Promise<string | null> {
   // Lexical containment plus existence. Real-path resolution belongs to the read side by
   // design and is not implemented anywhere yet (#3160); see the module comment.
   let stats: Awaited<ReturnType<typeof stat>>;

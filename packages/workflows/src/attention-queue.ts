@@ -533,34 +533,44 @@ export function countAttentionQueue(
 ): AttentionQueueCounts {
   const selected = items.filter(item => inQuery(item, query));
   const { countBy } = query;
-  if (countBy.by === 'project') {
-    const groups = new Map<string, { project: ProjectRef | null; count: number }>();
-    for (const item of selected) {
-      const id =
-        item.project === null
-          ? 'none'
-          : item.project.codebaseId !== null
-            ? `codebase:${item.project.codebaseId}`
-            : `key:${item.project.key}`;
-      const group = groups.get(id) ?? { project: item.project, count: 0 };
-      group.count += 1;
-      groups.set(id, group);
-    }
-    return {
-      by: 'project',
-      counts: [...groups.values()].sort(
-        (a, b) => b.count - a.count || compareStrings(a.project?.key ?? '', b.project?.key ?? '')
-      ),
-    };
+  return countBy.by === 'project'
+    ? countQueueByProject(selected)
+    : countQueueByLabel(selected, countBy.key);
+}
+
+function countQueueByProject(items: readonly AttentionQueueItem[]): AttentionQueueCounts {
+  const groups = new Map<string, { project: ProjectRef | null; count: number }>();
+  for (const item of items) {
+    const id =
+      item.project === null
+        ? 'none'
+        : item.project.codebaseId !== null
+          ? `codebase:${item.project.codebaseId}`
+          : `key:${item.project.key}`;
+    const group = groups.get(id) ?? { project: item.project, count: 0 };
+    group.count += 1;
+    groups.set(id, group);
   }
+  return {
+    by: 'project',
+    counts: [...groups.values()].sort(
+      (a, b) => b.count - a.count || compareStrings(a.project?.key ?? '', b.project?.key ?? '')
+    ),
+  };
+}
+
+function countQueueByLabel(
+  items: readonly AttentionQueueItem[],
+  key: string
+): AttentionQueueCounts {
   const groups = new Map<string | null, number>();
-  for (const item of selected) {
-    const value = Object.hasOwn(item.labels, countBy.key) ? (item.labels[countBy.key] ?? '') : null;
+  for (const item of items) {
+    const value = Object.hasOwn(item.labels, key) ? (item.labels[key] ?? '') : null;
     groups.set(value, (groups.get(value) ?? 0) + 1);
   }
   return {
     by: 'label',
-    key: countBy.key,
+    key,
     counts: [...groups.entries()]
       .map(([value, count]) => ({ value, count }))
       .sort((a, b) => b.count - a.count || compareStrings(a.value ?? '', b.value ?? '')),
