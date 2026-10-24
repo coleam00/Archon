@@ -105,65 +105,9 @@ export class WebAdapter implements IPlatformAdapter {
     let event: string;
 
     if (chunk.type === 'tool_call') {
-      const now = Date.now();
-      const name = toolCallDisplayName(chunk);
-      const input = chunk.rawInput === undefined ? {} : chunk.rawInput;
-
-      // Buffer tool call for direct chat persistence (message metadata)
-      this.persistence.appendToolCall(conversationId, {
-        toolCallId: chunk.toolCallId,
-        name,
-        input,
-      });
-
-      // Track this tool's start for duration computation (supports parallel DAG nodes)
-      let convTools = this.runningTools.get(conversationId);
-      if (!convTools) {
-        convTools = new Map();
-        this.runningTools.set(conversationId, convTools);
-      }
-      convTools.set(chunk.toolCallId, { toolCallId: chunk.toolCallId, name, startedAt: now });
-
-      event = JSON.stringify({
-        type: 'tool_call',
-        toolCallId: chunk.toolCallId,
-        name,
-        input,
-        timestamp: now,
-      });
+      event = this.mapToolCall(conversationId, chunk);
     } else if (chunk.type === 'tool_call_update') {
-      const now = Date.now();
-      const convTools = this.runningTools.get(conversationId);
-      const tool = convTools?.get(chunk.toolCallId);
-      if (!tool) {
-        // The SSE event still goes out, but the UI cannot pair it to a running card.
-        getLog().warn(
-          { conversationId, toolCallId: chunk.toolCallId },
-          'web_adapter.tool_result_unmatched'
-        );
-      }
-      convTools?.delete(chunk.toolCallId);
-      const duration = now - (tool?.startedAt ?? now);
-      // The provider already capped the output (TOOL_OUTPUT_MAX_CHARS).
-      const output = chunk.output ?? '';
-      try {
-        this.persistence.appendToolResult(conversationId, chunk.toolCallId, output, duration, {
-          status: chunk.status,
-          exitCode: chunk.exitCode,
-        });
-      } catch (e: unknown) {
-        getLog().error({ conversationId, err: e }, 'tool_result_persist_failed');
-      }
-      event = JSON.stringify({
-        type: 'tool_result',
-        toolCallId: chunk.toolCallId,
-        name: tool?.name,
-        output,
-        status: chunk.status,
-        ...(chunk.exitCode !== undefined ? { exitCode: chunk.exitCode } : {}),
-        duration,
-        timestamp: now,
-      });
+      event = this.mapToolResult(conversationId, chunk);
     } else if (chunk.type === 'result') {
       return;
     } else if (chunk.type === 'workflow_dispatch') {
@@ -185,6 +129,76 @@ export class WebAdapter implements IPlatformAdapter {
     }
 
     await this.transport.emit(conversationId, event);
+  }
+
+  private mapToolCall(
+    conversationId: string,
+    chunk: Extract<PlatformStructuredEvent, { type: 'tool_call' }>
+  ): string {
+    const now = Date.now();
+    const name = toolCallDisplayName(chunk);
+    const input = chunk.rawInput === undefined ? {} : chunk.rawInput;
+
+    // Buffer tool call for direct chat persistence (message metadata)
+    this.persistence.appendToolCall(conversationId, {
+      toolCallId: chunk.toolCallId,
+      name,
+      input,
+    });
+
+    // Track this tool's start for duration computation (supports parallel DAG nodes)
+    let convTools = this.runningTools.get(conversationId);
+    if (!convTools) {
+      convTools = new Map();
+      this.runningTools.set(conversationId, convTools);
+    }
+    convTools.set(chunk.toolCallId, { toolCallId: chunk.toolCallId, name, startedAt: now });
+
+    return JSON.stringify({
+      type: 'tool_call',
+      toolCallId: chunk.toolCallId,
+      name,
+      input,
+      timestamp: now,
+    });
+  }
+
+  private mapToolResult(
+    conversationId: string,
+    chunk: Extract<PlatformStructuredEvent, { type: 'tool_call_update' }>
+  ): string {
+    const now = Date.now();
+    const convTools = this.runningTools.get(conversationId);
+    const tool = convTools?.get(chunk.toolCallId);
+    if (!tool) {
+      // The SSE event still goes out, but the UI cannot pair it to a running card.
+      getLog().warn(
+        { conversationId, toolCallId: chunk.toolCallId },
+        'web_adapter.tool_result_unmatched'
+      );
+    }
+    convTools?.delete(chunk.toolCallId);
+    const duration = now - (tool?.startedAt ?? now);
+    // The provider already capped the output (TOOL_OUTPUT_MAX_CHARS).
+    const output = chunk.output ?? '';
+    try {
+      this.persistence.appendToolResult(conversationId, chunk.toolCallId, output, duration, {
+        status: chunk.status,
+        exitCode: chunk.exitCode,
+      });
+    } catch (e: unknown) {
+      getLog().error({ conversationId, err: e }, 'tool_result_persist_failed');
+    }
+    return JSON.stringify({
+      type: 'tool_result',
+      toolCallId: chunk.toolCallId,
+      name: tool?.name,
+      output,
+      status: chunk.status,
+      ...(chunk.exitCode !== undefined ? { exitCode: chunk.exitCode } : {}),
+      duration,
+      timestamp: now,
+    });
   }
 
   async ensureThread(originalConversationId: string): Promise<string> {

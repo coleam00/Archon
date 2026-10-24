@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { TERMINAL_RUN_EVENT_TYPE } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import {
@@ -94,6 +94,40 @@ const emittedIds = (t: FakeTransport): string[] =>
   t.emitted.map(({ event }) => (JSON.parse(event) as { runId: string }).runId);
 
 describe('mapWorkflowEventRow', () => {
+  test('retains replay frame bytes for workflow, approval, and node events', () => {
+    const clock = spyOn(Date, 'now').mockReturnValue(1000);
+    const cases: [Partial<WorkflowEventRow>, string][] = [
+      [
+        { event_type: 'workflow_failed', data: { workflowName: 'build', error: 'oops' } },
+        '{"type":"workflow_status","runId":"r1","workflowName":"build","status":"failed","error":"oops","timestamp":1000}',
+      ],
+      [
+        {
+          event_type: 'approval_requested',
+          step_name: null,
+          data: { node_id: 'gate', message: 'Choose' },
+        },
+        '{"type":"workflow_status","runId":"r1","workflowName":"","status":"paused","timestamp":1000,"approval":{"nodeId":"gate","message":"Choose"}}',
+      ],
+      [
+        { event_type: 'approval_received' },
+        '{"type":"workflow_status","runId":"r1","workflowName":"","status":"running","timestamp":1000}',
+      ],
+      [
+        {
+          event_type: 'node_skipped',
+          data: { reason: 'trigger_rule', cause: { kind: 'upstream_failed', origin: 'check' } },
+        },
+        '{"type":"dag_node","runId":"r1","nodeId":"build","name":"build","status":"skipped","reason":"trigger_rule","cause":{"kind":"upstream_failed","origin":"check"},"timestamp":1000}',
+      ],
+    ];
+    try {
+      for (const [input, expected] of cases) expect(mapWorkflowEventRow(row(input))).toBe(expected);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   test.each(Object.entries(TERMINAL_RUN_EVENT_TYPE))(
     'polls and projects the terminal status %s',
     (status, eventType) => {

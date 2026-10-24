@@ -9,7 +9,7 @@ import {
 } from '../test/api-workflow-runs-harness';
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { mkdir, mkdtemp, symlink, writeFile, realpath } from 'fs/promises';
+import { mkdir, mkdtemp, symlink, writeFile, realpath, utimes } from 'fs/promises';
 import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -33,6 +33,42 @@ describe('GET /api/runs/:runId/artifacts', () => {
     const used = mockArchonHome;
     setMockArchonHome(originalMockHome);
     await removeTempTree(used);
+  });
+
+  test.each([
+    ['ENOENT', 200],
+    ['EACCES', 200],
+    ['EIO', 500],
+  ] as const)('handles file metadata failure %s with status %d', async (code, status) => {
+    const runId = 'run-stat-error';
+    const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+    await mkdir(dir, { recursive: true });
+    const target = join(dir, 'report.md');
+    await writeFile(target, '# report');
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_RUNNING_RUN,
+      id: runId,
+      codebase_id: 'cb-local',
+    });
+    mockGetCodebase.mockResolvedValueOnce({
+      name: 'workspace',
+      kind: 'repo',
+      default_cwd: '/home/u/workspace',
+    });
+    const { app } = makeApp();
+    const metadata = spyOn(fsPromises, 'stat').mockRejectedValueOnce(
+      Object.assign(new Error('artifact stat failed'), { code })
+    );
+    try {
+      const response = await app.request(`/api/runs/${runId}/artifacts`);
+      expect(metadata).toHaveBeenCalledWith(target);
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual(
+        status === 200 ? { files: [] } : { error: 'Failed to list artifacts' }
+      );
+    } finally {
+      metadata.mockRestore();
+    }
   });
 
   test('returns 400 for invalid run ids (regex guard)', async () => {
@@ -66,7 +102,10 @@ describe('GET /api/runs/:runId/artifacts', () => {
     const runId = 'run-local-listing';
     const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
     await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, 'plan.md'), '# plan');
+    const target = join(dir, 'plan.md');
+    await writeFile(target, '# plan café');
+    const modifiedAt = '2026-09-22T10:00:25.000Z';
+    await utimes(target, new Date(modifiedAt), new Date(modifiedAt));
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
       id: runId,
@@ -80,9 +119,9 @@ describe('GET /api/runs/:runId/artifacts', () => {
     const { app } = makeApp();
     const response = await app.request(`/api/runs/${runId}/artifacts`);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { files: { path: string }[] };
-    // Before #2200 this returned an empty list — parseOwnerRepo(name) was null.
-    expect(body.files.map(f => f.path)).toEqual(['plan.md']);
+    expect(await response.json()).toEqual({
+      files: [{ path: 'plan.md', size: 12, modifiedAt }],
+    });
   });
 
   test('resolves a folder project to _folder/<slug> storage', async () => {
