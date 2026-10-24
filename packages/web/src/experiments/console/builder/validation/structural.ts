@@ -3,7 +3,14 @@
  * required-field checks. Hand-rolled to match the engine's superRefine intent
  * without depending on a runtime schema.
  */
-import type { BuilderNode, BuilderWorkflow, Issue } from '../types';
+import type {
+  BuilderNode,
+  BuilderWorkflow,
+  Issue,
+  LoopNodeData,
+  ScriptNodeData,
+  WaitNodeData,
+} from '../types';
 import { OUTPUT_REF_SOURCE } from '@/lib/node-ref';
 import { makeIssue } from './make-issue';
 
@@ -96,156 +103,193 @@ function checkUntilField(field: string, schema: Record<string, unknown> | undefi
   return issues;
 }
 
+/** Records field issues against one node, in the order the checks run. */
+interface FieldReport {
+  missing(field: string, message: string): void;
+  /**
+   * Distinct from `missing`: the field is present but holds an invalid value, so
+   * the UI shouldn't render it as a required-but-empty field.
+   */
+  invalid(field: string, message: string): void;
+}
+
+function fieldReport(nodeId: string, issues: Issue[]): FieldReport {
+  const push =
+    (rule: 'structural.field.missing' | 'structural.field.invalid') =>
+    (field: string, message: string): void => {
+      issues.push(
+        makeIssue({
+          rule,
+          severity: 'error',
+          source: 'client-instant',
+          message,
+          path: { nodeId, field },
+        })
+      );
+    };
+  return { missing: push('structural.field.missing'), invalid: push('structural.field.invalid') };
+}
+
+function requireText(report: FieldReport, field: string, value: string, message: string): void {
+  if (value.trim().length === 0) report.missing(field, message);
+}
+
+function checkScript(data: ScriptNodeData, report: FieldReport): void {
+  requireText(report, 'script', data.script, 'script must not be empty');
+  if (data.runtime !== 'bun' && data.runtime !== 'uv')
+    report.invalid('runtime', "script requires runtime 'bun' or 'uv'");
+}
+
+/**
+ * One-of rule (mirrors the engine schema): exactly one prompt source, and
+ * whichever is present must be non-empty.
+ */
+function checkLoopPromptSource(data: LoopNodeData, report: FieldReport): void {
+  if (data.prompt !== undefined && data.command !== undefined)
+    report.invalid('loop.command', "loop accepts exactly one of 'prompt' or 'command', not both");
+  else if (data.command !== undefined)
+    requireText(report, 'loop.command', data.command, 'loop requires a command name');
+  else
+    requireText(
+      report,
+      'loop.prompt',
+      data.prompt ?? '',
+      'loop requires a prompt (or a command file)'
+    );
+}
+
+/**
+ * Completion channels (#2563) — a hand-written mirror of the two rules in the
+ * engine's `loopNodeConfigSchema`, because @archon/web cannot import
+ * @archon/workflows. `scripts/node-ref-parity.test.ts` derives its cases from
+ * the engine's channel tuple to enforce agreement in CI.
+ */
+function checkLoopChannels(
+  data: LoopNodeData,
+  outputFormat: Record<string, unknown> | undefined,
+  report: FieldReport
+): void {
+  // 1. A declared channel must be non-blank. Blank is broken at runtime, not
+  //    just untidy: `bash -c "   "` exits 0, and a blank signal matches any
+  //    whitespace-only line in the model's output.
+  if (data.until?.trim().length === 0)
+    report.missing('loop.until', "loop requires a non-blank 'until' signal");
+  if (data.until_bash?.trim().length === 0)
+    report.missing('loop.until_bash', "loop requires a non-blank 'until_bash' check");
+  if (data.until_field?.trim().length === 0)
+    report.missing('loop.until_field', "loop requires a non-blank 'until_field' name");
+  if (data.until_field !== undefined) {
+    for (const message of checkUntilField(data.until_field.trim(), outputFormat)) {
+      report.invalid('loop.until_field', message);
+    }
+  }
+  // 2. At least one channel must be declared at all.
+  if (data.until === undefined && data.until_bash === undefined && data.until_field === undefined)
+    report.missing(
+      'loop.until',
+      "loop requires a completion channel: an 'until' signal, an 'until_bash' check, or an 'until_field' name"
+    );
+}
+
+function checkLoop(
+  data: LoopNodeData,
+  outputFormat: Record<string, unknown> | undefined,
+  report: FieldReport
+): void {
+  checkLoopPromptSource(data, report);
+  checkLoopChannels(data, outputFormat, report);
+  if (!Number.isInteger(data.max_iterations) || data.max_iterations <= 0)
+    report.invalid('loop.max_iterations', 'loop requires a positive integer max_iterations');
+}
+
+/** A positive integer number of milliseconds no greater than `MAX_DURABLE_WAIT_MS`. */
+function isDurableWaitMs(value: number | undefined): boolean {
+  return (
+    value !== undefined && Number.isInteger(value) && value > 0 && value <= MAX_DURABLE_WAIT_MS
+  );
+}
+
+function checkWaitCondition(data: WaitNodeData, report: FieldReport): void {
+  const conditions = [data.duration_ms, data.until, data.event, data.attention].filter(
+    value => value !== undefined
+  );
+  if (conditions.length !== 1) {
+    report.invalid(
+      'wait',
+      "wait requires exactly one of 'duration_ms', 'until', 'event', or 'attention'"
+    );
+  }
+}
+
+function checkWaitUntil(until: string | undefined, report: FieldReport): void {
+  if (until?.trim().length === 0) {
+    report.missing('wait.until', 'wait timestamp must not be empty');
+  } else if (until !== undefined && !isValidWaitTimestamp(until)) {
+    report.invalid(
+      'wait.until',
+      'wait timestamp must be an ISO-8601 UTC timestamp or contain a runtime reference'
+    );
+  }
+}
+
+function checkWaitEvent(data: WaitNodeData, report: FieldReport): void {
+  if (data.event?.trim().length === 0) report.missing('wait.event', 'wait event must not be empty');
+  if (data.event !== undefined && !isDurableWaitMs(data.deadline_ms)) {
+    report.invalid(
+      'wait.deadline_ms',
+      'event waits require a positive integer deadline no greater than 1000 years'
+    );
+  }
+  if (data.event === undefined && data.deadline_ms !== undefined) {
+    report.invalid('wait.deadline_ms', 'deadline is only supported for event waits');
+  }
+}
+
+function checkWait(data: WaitNodeData, report: FieldReport): void {
+  checkWaitCondition(data, report);
+  if (data.duration_ms !== undefined && !isDurableWaitMs(data.duration_ms)) {
+    report.invalid(
+      'wait.duration_ms',
+      'wait duration must be a positive integer no greater than 1000 years'
+    );
+  }
+  checkWaitUntil(data.until, report);
+  checkWaitEvent(data, report);
+  if (data.attention?.trim().length === 0) {
+    report.missing('wait.attention', 'wait action message must not be empty');
+  }
+}
+
 /** Per-variant required-field checks (mirrors the engine's mode-field rules). */
 function checkRequiredFields(node: BuilderNode): Issue[] {
   const issues: Issue[] = [];
-  const missing = (field: string, message: string): void => {
-    issues.push(
-      makeIssue({
-        rule: 'structural.field.missing',
-        severity: 'error',
-        source: 'client-instant',
-        message,
-        path: { nodeId: node.id, field },
-      })
-    );
-  };
-  // Distinct from `missing`: the field is present but holds an invalid value, so
-  // the UI shouldn't render it as a required-but-empty field.
-  const invalid = (field: string, message: string): void => {
-    issues.push(
-      makeIssue({
-        rule: 'structural.field.invalid',
-        severity: 'error',
-        source: 'client-instant',
-        message,
-        path: { nodeId: node.id, field },
-      })
-    );
-  };
-
+  const report = fieldReport(node.id, issues);
   // Messages omit the node id — `path.nodeId` carries it, and display layers
   // render the path, so an embedded prefix would double-print.
   switch (node.variant) {
     case 'prompt':
-      if (node.data.prompt.trim().length === 0) missing('prompt', 'prompt must not be empty');
+      requireText(report, 'prompt', node.data.prompt, 'prompt must not be empty');
       break;
     case 'command':
-      if (node.data.command.trim().length === 0) missing('command', 'command must not be empty');
+      requireText(report, 'command', node.data.command, 'command must not be empty');
       break;
     case 'bash':
-      if (node.data.bash.trim().length === 0) missing('bash', 'bash script must not be empty');
+      requireText(report, 'bash', node.data.bash, 'bash script must not be empty');
       break;
     case 'script':
-      if (node.data.script.trim().length === 0) missing('script', 'script must not be empty');
-      if (node.data.runtime !== 'bun' && node.data.runtime !== 'uv')
-        invalid('runtime', "script requires runtime 'bun' or 'uv'");
+      checkScript(node.data, report);
       break;
     case 'loop':
-      // One-of rule (mirrors the engine schema): exactly one prompt source,
-      // and whichever is present must be non-empty.
-      if (node.data.prompt !== undefined && node.data.command !== undefined)
-        invalid('loop.command', "loop accepts exactly one of 'prompt' or 'command', not both");
-      else if (node.data.command !== undefined) {
-        if (node.data.command.trim().length === 0)
-          missing('loop.command', 'loop requires a command name');
-      } else if ((node.data.prompt ?? '').trim().length === 0)
-        missing('loop.prompt', 'loop requires a prompt (or a command file)');
-      // Completion channels (#2563) — a hand-written mirror of the two rules in
-      // the engine's `loopNodeConfigSchema`, because @archon/web cannot import
-      // @archon/workflows. `scripts/node-ref-parity.test.ts` derives its cases
-      // from the engine's channel tuple to enforce agreement in CI.
-      //
-      // 1. A declared channel must be non-blank. Blank is broken at runtime, not
-      //    just untidy: `bash -c "   "` exits 0, and a blank signal matches any
-      //    whitespace-only line in the model's output.
-      if (node.data.until?.trim().length === 0)
-        missing('loop.until', "loop requires a non-blank 'until' signal");
-      if (node.data.until_bash?.trim().length === 0)
-        missing('loop.until_bash', "loop requires a non-blank 'until_bash' check");
-      if (node.data.until_field?.trim().length === 0)
-        missing('loop.until_field', "loop requires a non-blank 'until_field' name");
-      if (node.data.until_field !== undefined) {
-        for (const message of checkUntilField(
-          node.data.until_field.trim(),
-          node.base.output_format
-        )) {
-          invalid('loop.until_field', message);
-        }
-      }
-      // 2. At least one channel must be declared at all.
-      if (
-        node.data.until === undefined &&
-        node.data.until_bash === undefined &&
-        node.data.until_field === undefined
-      )
-        missing(
-          'loop.until',
-          "loop requires a completion channel: an 'until' signal, an 'until_bash' check, or an 'until_field' name"
-        );
-      if (!Number.isInteger(node.data.max_iterations) || node.data.max_iterations <= 0)
-        invalid('loop.max_iterations', 'loop requires a positive integer max_iterations');
+      checkLoop(node.data, node.base.output_format, report);
       break;
     case 'approval':
-      if (node.data.message.trim().length === 0)
-        missing('approval.message', 'approval requires a message');
+      requireText(report, 'approval.message', node.data.message, 'approval requires a message');
       break;
-    case 'wait': {
-      const conditions = [
-        node.data.duration_ms,
-        node.data.until,
-        node.data.event,
-        node.data.attention,
-      ].filter(value => value !== undefined);
-      if (conditions.length !== 1) {
-        invalid(
-          'wait',
-          "wait requires exactly one of 'duration_ms', 'until', 'event', or 'attention'"
-        );
-      }
-      if (
-        node.data.duration_ms !== undefined &&
-        (!Number.isInteger(node.data.duration_ms) ||
-          node.data.duration_ms <= 0 ||
-          node.data.duration_ms > MAX_DURABLE_WAIT_MS)
-      ) {
-        invalid(
-          'wait.duration_ms',
-          'wait duration must be a positive integer no greater than 1000 years'
-        );
-      }
-      if (node.data.until?.trim().length === 0) {
-        missing('wait.until', 'wait timestamp must not be empty');
-      } else if (node.data.until !== undefined && !isValidWaitTimestamp(node.data.until)) {
-        invalid(
-          'wait.until',
-          'wait timestamp must be an ISO-8601 UTC timestamp or contain a runtime reference'
-        );
-      }
-      if (node.data.event?.trim().length === 0)
-        missing('wait.event', 'wait event must not be empty');
-      if (
-        node.data.event !== undefined &&
-        (node.data.deadline_ms === undefined ||
-          !Number.isInteger(node.data.deadline_ms) ||
-          node.data.deadline_ms <= 0 ||
-          node.data.deadline_ms > MAX_DURABLE_WAIT_MS)
-      ) {
-        invalid(
-          'wait.deadline_ms',
-          'event waits require a positive integer deadline no greater than 1000 years'
-        );
-      }
-      if (node.data.event === undefined && node.data.deadline_ms !== undefined) {
-        invalid('wait.deadline_ms', 'deadline is only supported for event waits');
-      }
-      if (node.data.attention?.trim().length === 0) {
-        missing('wait.attention', 'wait action message must not be empty');
-      }
+    case 'wait':
+      checkWait(node.data, report);
       break;
-    }
     case 'cancel':
-      if (node.data.reason.trim().length === 0) missing('cancel', 'cancel requires a reason');
+      requireText(report, 'cancel', node.data.reason, 'cancel requires a reason');
       break;
     case 'opaque':
       // Carried verbatim from a file the engine already parsed; the server's
