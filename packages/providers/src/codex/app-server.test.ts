@@ -399,17 +399,30 @@ describe('AppServerConnection', () => {
 
 describe('Codex native credential check', () => {
   const env = { CODEX_API_KEY: '', TEST_SECRET: 'planted-codex-secret' };
-  const check = async (script: import('../test/codex-app-server-fake').FakeTurnScript) => {
+  const check = async (
+    script:
+      | import('../test/codex-app-server-fake').FakeTurnScript
+      | import('../test/codex-app-server-fake').FakeTurnScript[]
+  ) => {
     const { CodexProvider } = await import('./provider');
     const { createFakeAppServer } = await import('../test/codex-app-server-fake');
-    const server = createFakeAppServer(() => script);
+    const scripts = Array.isArray(script) ? script : [script];
+    let attempt = 0;
+    const server = createFakeAppServer(() => scripts[attempt++] ?? {});
     const status = await new CodexProvider(server, 1).checkCredential({
       env,
       signal: AbortSignal.timeout(1000),
     });
-    expect(server.processes[0]?.methods).toEqual(['initialize', 'account/read']);
-    expect(server.processes[0]?.requests[1]?.params).toEqual({ refreshToken: true });
-    expect(server.processes[0]?.stdinEnded).toBe(true);
+    expect(server.processes).toHaveLength(scripts.length);
+    for (const process of server.processes) {
+      expect(process.methods).toEqual(['initialize', 'account/read']);
+      expect(process.requests[1]?.params).toEqual({ refreshToken: true });
+      expect(process.stdinEnded).toBe(true);
+    }
+    if (server.processes.length > 1) {
+      expect(server.processes[1]?.env).toEqual(server.processes[0]?.env);
+      expect(server.processes[1]?.binary).toBe(server.processes[0]?.binary);
+    }
     return status;
   };
 
@@ -448,10 +461,40 @@ describe('Codex native credential check', () => {
       });
     });
   }
-  test('no account is unusable', async () => {
-    expect(await check({ account: null })).toMatchObject({
+  test('no account remains unusable after one fresh process recheck', async () => {
+    expect(await check([{ account: null }, { account: null }])).toMatchObject({
       state: 'unusable',
       evidence: expect.stringContaining('codex login'),
+    });
+  });
+  test('a fresh process sees the login saved by a concurrent refresh', async () => {
+    expect(
+      await check([
+        { account: null },
+        { account: { type: 'chatgpt', email: null, planType: 'pro' } },
+      ])
+    ).toEqual({ state: 'usable', source: 'native' });
+  });
+  test('an inconclusive fresh recheck fails closed and redacts its evidence', async () => {
+    expect(
+      await check([
+        { account: null },
+        { errors: { 'account/read': { code: -32603, message: `unreachable ${env.TEST_SECRET}` } } },
+      ])
+    ).toMatchObject({
+      state: 'check_failed',
+      evidence: expect.stringContaining('unreachable [REDACTED]'),
+    });
+  });
+  test('a malformed fresh recheck cannot certify the login', async () => {
+    expect(await check([{ account: null }, { accountResponse: {} }])).toMatchObject({
+      state: 'check_failed',
+      evidence: expect.stringContaining('account/read'),
+    });
+  });
+  test('the fresh recheck shares the caller deadline', async () => {
+    expect(await check([{ account: null }, { ignoreAccountRead: true }])).toMatchObject({
+      state: 'check_failed',
     });
   });
   test('no account is not_checked when Codex needs no OpenAI login', async () => {
