@@ -122,6 +122,7 @@ function routeIssueCollection(
     }
     return Response.json(state.issues.slice((page - 1) * 100, page * 100));
   }
+  return undefined;
 }
 
 function routeLabels(
@@ -147,6 +148,7 @@ function routeLabels(
     );
     return label ? Response.json(label) : Response.json({}, { status: 404 });
   }
+  return undefined;
 }
 
 function routeIssue(
@@ -170,6 +172,7 @@ function routeIssue(
     }
     return Response.json(issue);
   }
+  return undefined;
 }
 
 function routePull(
@@ -214,6 +217,7 @@ function routePull(
     if (method === 'PATCH' && typeof body?.body === 'string') pull.body = body.body;
     return Response.json(pull);
   }
+  return undefined;
 }
 
 function routeCommentCollection(
@@ -239,6 +243,7 @@ function routeCommentCollection(
     const rows = state.comments.filter(row => row.issue === on);
     return Response.json(page === 1 ? rows.map(comment) : []);
   }
+  return undefined;
 }
 
 function routeComment(
@@ -255,6 +260,7 @@ function routeComment(
     if (method === 'PATCH' && typeof body?.body === 'string') row.body = body.body;
     return Response.json(comment(row));
   }
+  return undefined;
 }
 
 function routeChecks(state: FakeGitHubState, url: URL): Response | undefined {
@@ -269,6 +275,7 @@ function routeChecks(state: FakeGitHubState, url: URL): Response | undefined {
     return Response.json({ check_runs: page === 1 ? state.checkRuns : [] });
   }
   if (path === `${ROOT}/commits/${state.headSha}/statuses`) return Response.json([]);
+  return undefined;
 }
 
 function route(
