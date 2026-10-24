@@ -61,6 +61,6 @@ for (const mode of ['end', 'line'] as const) {
     if (result !== 'ok') console.log(`${mode} #${i}: ${result}`);
   }
   console.log(`mode ${mode} on ${process.platform}:`, Object.fromEntries(tally));
-  if (mode === 'line' && tally.size > 1) lineFailed = true;
+  if (mode === 'line' && tally.get('ok') !== iterations) lineFailed = true;
 }
 process.exit(lineFailed ? 1 : 0);
