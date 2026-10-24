@@ -309,6 +309,8 @@ describe('workflowRunCommand', () => {
 
   it('should resolve workflow by substring match', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const executionError = new Error('Execution failed after workflow resolution');
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
@@ -317,18 +319,23 @@ describe('workflowRunCommand', () => {
       ],
       errors: [],
     });
+    (executeWorkflow as ReturnType<typeof mock>).mockRejectedValueOnce(executionError);
 
-    // "smart" substring-matches only "acme-smart-pr-review"
-    // Will fail downstream at executeWorkflow mock, but must NOT throw "not found"
     const error = await workflowRunCommand(
       createTestWorkflowHost(),
       '/test/path',
       'smart',
-      'hello'
+      'hello',
+      { noWorktree: true }
     ).catch((e: unknown) => e as Error);
+    expect(error).toBe(executionError);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).not.toContain('not found');
     expect((error as Error).message).not.toContain('Did you mean');
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ requested: 'smart', matched: 'acme-smart-pr-review' }),
+      'workflow.resolve_substring_match'
+    );
   });
 
   it('should prefer case-insensitive exact match over suffix match', async () => {
