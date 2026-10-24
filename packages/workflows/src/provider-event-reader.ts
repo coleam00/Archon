@@ -124,6 +124,32 @@ function translateLegacyRow(
   return parsed.success ? parsed.data : undefined;
 }
 
+function readProviderEventRow(
+  runId: string,
+  row: WorkflowEventRow,
+  eventType: (typeof PROVIDER_EVENT_ROW_TYPES)[number],
+  legacySeq: Map<string, number>
+): ProviderEventRecord | undefined {
+  const stepName = row.step_name;
+  if (stepName === null) return undefined;
+  if (eventType === 'provider_event') {
+    const envelope = providerEventEnvelopeSchema.safeParse(row.data);
+    return envelope.success ? { runId, stepName, ...envelope.data } : undefined;
+  }
+  const event = translateLegacyRow(eventType, row.data);
+  if (event === undefined) return undefined;
+  const seq = legacySeq.get(stepName) ?? 0;
+  legacySeq.set(stepName, seq + 1);
+  return {
+    runId,
+    stepName,
+    attemptId: null,
+    seq,
+    observedAt: new Date(row.created_at).toISOString(),
+    event,
+  };
+}
+
 export function readProviderEventRows(
   runId: string,
   rows: readonly WorkflowEventRow[],
@@ -134,26 +160,7 @@ export function readProviderEventRows(
   for (const row of rows) {
     const eventType = PROVIDER_EVENT_ROW_TYPES.find(type => type === row.event_type);
     if (eventType === undefined) continue;
-    const stepName = row.step_name;
-    let record: ProviderEventRecord | undefined;
-    if (stepName !== null && eventType !== 'provider_event') {
-      const event = translateLegacyRow(eventType, row.data);
-      if (event !== undefined) {
-        const seq = legacySeq.get(stepName) ?? 0;
-        legacySeq.set(stepName, seq + 1);
-        record = {
-          runId: runId,
-          stepName,
-          attemptId: null,
-          seq,
-          observedAt: new Date(row.created_at).toISOString(),
-          event,
-        };
-      }
-    } else if (stepName !== null) {
-      const envelope = providerEventEnvelopeSchema.safeParse(row.data);
-      if (envelope.success) record = { runId: runId, stepName, ...envelope.data };
-    }
+    const record = readProviderEventRow(runId, row, eventType, legacySeq);
     if (record === undefined) {
       createLogger('workflow-provider-events').warn(
         { eventId: row.id, runId: runId, eventType: row.event_type },

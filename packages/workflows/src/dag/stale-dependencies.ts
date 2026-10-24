@@ -33,6 +33,18 @@ function isReplayedFailure(
   return nodeOutputs.get(depId)?.state === 'failed' && replayedFailures?.has(depId) === true;
 }
 
+function cachedOutputIsStale(
+  prior: PersistedNodeOutput | undefined,
+  current: NodeOutput | undefined
+): boolean {
+  if (current?.state === 'failed') return true;
+  if (prior === undefined) return current?.state === 'completed';
+  if (current?.output !== prior.output) return true;
+  const currentStructured =
+    current !== undefined && 'structuredOutput' in current ? current.structuredOutput : undefined;
+  return !structuredOutputsEqual(prior.structuredOutput, currentStructured);
+}
+
 /**
  * Return the IDs of `node`'s dependencies whose current `nodeOutputs` value no
  * longer matches their cached `priorCompletedNodes` snapshot (#2402). A
@@ -89,43 +101,7 @@ export function getStaleCachedDependencies(
   const deps = (node.depends_on ?? []).filter(
     depId => !isReplayedFailure(depId, nodeOutputs, replayedFailures)
   );
-  if (deps.length === 0) return [];
-  const stale: string[] = [];
-  for (const depId of deps) {
-    const prior = priorCompletedNodes.get(depId);
-    const current = nodeOutputs.get(depId);
-    // A dep that failed fresh this resume is always stale, checked before — and
-    // independently of — the prior-cache lookup below. See the docstring above.
-    if (current?.state === 'failed') {
-      stale.push(depId);
-      continue;
-    }
-    // Case 1: dep was never cached; if it is now complete it ran fresh this resume.
-    // Missing-current (the dep is still pending or running) is intentionally left out:
-    // pending/running cannot reach this helper via the resume-skip arm in
-    // runLayers (`priorCompletedNodes?.has(node.id)` only fires when the
-    // CONSUMER itself was cached, but its dep would be addressed by case 2/3 once it
-    // finishes).
-    if (prior === undefined) {
-      if (current?.state === 'completed') {
-        stale.push(depId);
-      }
-      continue;
-    }
-    // Case 2: dep's text output differs from the prior snapshot.
-    if (current?.output !== prior.output) {
-      stale.push(depId);
-      continue;
-    }
-    // Case 3: dep's structured value differs even though text did not — only matters
-    // for `$dep.output.field` consumers, but those are exactly the surfaces that would
-    // silently read stale structured data through the cached downstream.
-    const priorStructured = prior.structuredOutput;
-    const currentStructured =
-      current !== undefined && 'structuredOutput' in current ? current.structuredOutput : undefined;
-    if (!structuredOutputsEqual(priorStructured, currentStructured)) {
-      stale.push(depId);
-    }
-  }
-  return stale;
+  return deps.filter(depId =>
+    cachedOutputIsStale(priorCompletedNodes.get(depId), nodeOutputs.get(depId))
+  );
 }

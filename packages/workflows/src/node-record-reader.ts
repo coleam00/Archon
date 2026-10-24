@@ -71,6 +71,20 @@ function projectSerializedData(raw: Record<string, unknown>): SerializedNodeData
   return data;
 }
 
+function failedLifecycle(
+  data: SerializedNodeData
+): Extract<NodeExecutionMetadata['lifecycle'], { status: 'failed' }> | undefined {
+  return typeof data.error === 'string'
+    ? {
+        status: 'failed',
+        error: data.error,
+        ...(data.retryable === false ? { retryable: false } : {}),
+        ...(data.failure_kind !== undefined ? { failureKind: data.failure_kind } : {}),
+        ...(data.provider_failure !== undefined ? { providerFailure: data.provider_failure } : {}),
+      }
+    : undefined;
+}
+
 function lifecycleFor(
   eventType: SerializedNodeEvent['event_type'],
   data: SerializedNodeData
@@ -81,17 +95,7 @@ function lifecycleFor(
     case 'node_completed':
       return { status: 'completed' };
     case 'node_failed':
-      return typeof data.error === 'string'
-        ? {
-            status: 'failed',
-            error: data.error,
-            ...(data.retryable === false ? { retryable: false } : {}),
-            ...(data.failure_kind !== undefined ? { failureKind: data.failure_kind } : {}),
-            ...(data.provider_failure !== undefined
-              ? { providerFailure: data.provider_failure }
-              : {}),
-          }
-        : undefined;
+      return failedLifecycle(data);
     case 'node_skipped':
       return data.reason !== undefined &&
         data.reason !== 'stale_dependency' &&

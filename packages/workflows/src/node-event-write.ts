@@ -69,6 +69,13 @@ function transcriptContent(node: NodeStateSubject, record: ReadNodeRecordEvent):
   return node.id;
 }
 
+function transcriptUsage(data: ReadNodeRecordEvent['data']) {
+  return {
+    ...(data.cost_usd !== undefined ? { cost_usd: data.cost_usd } : {}),
+    ...(data.tokens !== undefined ? { tokens: data.tokens } : {}),
+  };
+}
+
 export function deriveTranscriptEvent(
   node: NodeStateSubject,
   event: NodeStateEventInput
@@ -86,16 +93,14 @@ export function deriveTranscriptEvent(
         step: node.id,
         content,
         ...(record.data.duration_ms !== undefined ? { duration_ms: record.data.duration_ms } : {}),
-        ...(record.data.cost_usd !== undefined ? { cost_usd: record.data.cost_usd } : {}),
-        ...(record.data.tokens !== undefined ? { tokens: record.data.tokens } : {}),
+        ...transcriptUsage(record.data),
       };
     case 'node_failed':
       return {
         type: 'node_error',
         step: node.id,
         error: record.data.error ?? '',
-        ...(record.data.cost_usd !== undefined ? { cost_usd: record.data.cost_usd } : {}),
-        ...(record.data.tokens !== undefined ? { tokens: record.data.tokens } : {}),
+        ...transcriptUsage(record.data),
       };
     case 'node_skipped':
       return {

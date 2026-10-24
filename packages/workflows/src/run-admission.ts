@@ -71,11 +71,7 @@ export async function admitWorkflowRun(
   };
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {
-    const resumeMsg =
-      priorCompletedNodes.size > 0
-        ? `▶️ **Resuming** workflow \`${workflow.name}\` — skipping ${String(priorCompletedNodes.size)} already-completed node(s).`
-        : `▶️ **Resuming** workflow \`${workflow.name}\` — continuing interactive loop.`;
-    await safeSendMessage(platform, conversationId, resumeMsg);
+    await notifyResumingRun(platform, conversationId, workflow.name, priorCompletedNodes);
   }
 
   let workflowRun: WorkflowRun;
@@ -138,6 +134,19 @@ export async function admitWorkflowRun(
   );
   if (blocked) return { stopped: true, result: blocked };
   return { stopped: false, value: { workflowRun, checkoutBaselineSample } };
+}
+
+async function notifyResumingRun(
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflowName: string,
+  priorCompletedNodes: NonNullable<ExecuteWorkflowOptions['priorCompletedNodes']>
+): Promise<void> {
+  const resumeMsg =
+    priorCompletedNodes.size > 0
+      ? `▶️ **Resuming** workflow \`${workflowName}\` — skipping ${String(priorCompletedNodes.size)} already-completed node(s).`
+      : `▶️ **Resuming** workflow \`${workflowName}\` — continuing interactive loop.`;
+  await safeSendMessage(platform, conversationId, resumeMsg);
 }
 
 async function createWorkflowRunRow(

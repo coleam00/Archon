@@ -69,6 +69,18 @@ function measurement<T>(
   };
 }
 
+function defaultNodeAccounting(node: NodeDescriptor): NodeExecutionRecord['accounting'] {
+  switch (node.kind) {
+    case 'compose_fan_out_instance':
+      return 'instance';
+    case 'loop_group':
+    case 'compose_fan_out':
+      return 'aggregate';
+    default:
+      return 'node';
+  }
+}
+
 export function startNodeExecution(input: {
   runId: string;
   path: string;
@@ -128,13 +140,7 @@ export function startNodeExecution(input: {
       stopReason: measurement<string>(undefined, caps?.stopReasonReporting, hasProvider),
       numTurns: measurement<number>(undefined, caps?.turnCountReporting, hasProvider),
     },
-    accounting:
-      input.accounting ??
-      (node.kind === 'compose_fan_out_instance'
-        ? 'instance'
-        : node.kind === 'loop_group' || node.kind === 'compose_fan_out'
-          ? 'aggregate'
-          : 'node'),
+    accounting: input.accounting ?? defaultNodeAccounting(node),
     lifecycle: { status: 'started' },
   };
 }
