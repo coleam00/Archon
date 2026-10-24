@@ -116,31 +116,30 @@ export class SqliteAdapter implements IDatabase {
       if (isSelect) {
         const rows = prepareAll<T>(this.db, convertedSql, sqliteParams);
         return { rows, rowCount: rows.length };
-      } else {
-        const upperSql = sql.toUpperCase();
-
-        // Handle INSERT with RETURNING using native SQLite RETURNING (3.35+)
-        // We must use .all() instead of .run() because .run() discards
-        // RETURNING results, and its lastInsertRowid is unreliable when
-        // ON CONFLICT DO UPDATE fires.
-        if (upperSql.includes('RETURNING') && upperSql.includes('INSERT')) {
-          const rows = prepareAll<T>(this.db, convertedSql, sqliteParams);
-          return { rows, rowCount: rows.length };
-        }
-
-        // UPDATE/DELETE with RETURNING not supported
-        if (upperSql.includes('RETURNING')) {
-          throw new Error(
-            'SQLite adapter does not support RETURNING clause on UPDATE/DELETE statements. ' +
-              `Query: ${convertedSql.substring(0, 100)}... ` +
-              'Hint: Use a SELECT before the mutation if you need the row data.'
-          );
-        }
-
-        // Standard INSERT/UPDATE/DELETE without RETURNING
-        const rowCount = this.prepareRun(convertedSql, sqliteParams);
-        return { rows: [], rowCount };
       }
+      const upperSql = sql.toUpperCase();
+
+      // Handle INSERT with RETURNING using native SQLite RETURNING (3.35+)
+      // We must use .all() instead of .run() because .run() discards
+      // RETURNING results, and its lastInsertRowid is unreliable when
+      // ON CONFLICT DO UPDATE fires.
+      if (upperSql.includes('RETURNING') && upperSql.includes('INSERT')) {
+        const rows = prepareAll<T>(this.db, convertedSql, sqliteParams);
+        return { rows, rowCount: rows.length };
+      }
+
+      // UPDATE/DELETE with RETURNING not supported
+      if (upperSql.includes('RETURNING')) {
+        throw new Error(
+          'SQLite adapter does not support RETURNING clause on UPDATE/DELETE statements. ' +
+            `Query: ${convertedSql.substring(0, 100)}... ` +
+            'Hint: Use a SELECT before the mutation if you need the row data.'
+        );
+      }
+
+      // Standard INSERT/UPDATE/DELETE without RETURNING
+      const rowCount = this.prepareRun(convertedSql, sqliteParams);
+      return { rows: [], rowCount };
     } catch (error) {
       // A busy statement is retried by query() or withTransaction(), which log the wait.
       if (!isSqliteBusy(error)) {

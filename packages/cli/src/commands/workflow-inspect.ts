@@ -26,7 +26,7 @@ import type {
 } from '@archon/workflows/schemas/workflow-run';
 import { attentionAnswerLines } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
-import { writeStderr } from '../utils/stdout';
+import { writeJsonLine, writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
 import { formatRunUsage } from './workflow-usage';
 import {
@@ -85,6 +85,37 @@ export function formatToolAttention(
       .join('\n') +
     `\nInspect with archon workflow logs ${attention.runId}, or request recovery with archon workflow end-turn ${attention.runId}.`
   );
+}
+
+export async function writeWaitOutcome(
+  runId: string,
+  resolvedId: string,
+  result: RunWaitResult,
+  json: boolean | undefined
+): Promise<void> {
+  if (result.kind === 'not_found') {
+    if (json) {
+      await writeJsonLine({ ok: false, runId, action: 'wait', error: 'not_found' });
+    } else {
+      console.log(formatWaitOutcome(resolvedId, result));
+    }
+    return;
+  }
+
+  if (json) {
+    await writeJsonLine({
+      ok: true,
+      action: 'wait',
+      runId: resolvedId,
+      result: result.kind,
+      ...(result.kind === 'attention' ? { attention: result.attention } : {}),
+      ...(result.kind === 'deadline' || result.kind === 'owner_lost'
+        ? { observedStatus: result.observedStatus }
+        : {}),
+    });
+  } else {
+    console.log(formatWaitOutcome(resolvedId, result));
+  }
 }
 
 /**

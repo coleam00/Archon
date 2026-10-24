@@ -67,41 +67,34 @@ function expandEnvVars(
       );
     }
     const server = { ...(serverConfig as Record<string, unknown>) };
-    if (server.env !== undefined) {
-      if (typeof server.env !== 'object' || server.env === null || Array.isArray(server.env)) {
-        throw new ClassifiedProviderError(
-          'misconfigured',
-          `MCP config ${serverName}.env must be a JSON object of string values (got ${describeJsonType(server.env)})`
-        );
-      }
-      server.env = expandEnvVarsInRecord(
-        server.env as Record<string, unknown>,
+    for (const field of ['env', 'headers'] as const) {
+      if (server[field] === undefined) continue;
+      server[field] = expandServerRecord(
+        server[field],
         missingVars,
         envSource,
-        `${serverName}.env`
+        `${serverName}.${field}`
       );
     }
-    if (server.headers !== undefined) {
-      if (
-        typeof server.headers !== 'object' ||
-        server.headers === null ||
-        Array.isArray(server.headers)
-      ) {
-        throw new ClassifiedProviderError(
-          'misconfigured',
-          `MCP config ${serverName}.headers must be a JSON object of string values (got ${describeJsonType(server.headers)})`
-        );
-      }
-      server.headers = expandEnvVarsInRecord(
-        server.headers as Record<string, unknown>,
-        missingVars,
-        envSource,
-        `${serverName}.headers`
-      );
-    }
+
     result[serverName] = server;
   }
   return { expanded: result, missingVars };
+}
+
+function expandServerRecord(
+  value: unknown,
+  missingVars: string[],
+  envSource: EnvSource,
+  fieldPath: string
+): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `MCP config ${fieldPath} must be a JSON object of string values (got ${describeJsonType(value)})`
+    );
+  }
+  return expandEnvVarsInRecord(value as Record<string, unknown>, missingVars, envSource, fieldPath);
 }
 
 /**

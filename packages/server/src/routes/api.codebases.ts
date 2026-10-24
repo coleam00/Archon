@@ -1,3 +1,4 @@
+import type { Context } from 'hono';
 import { type OpenAPIHono, createRoute, type z } from '@hono/zod-openapi';
 import { rm, stat } from 'fs/promises';
 import { normalize } from 'path';
@@ -434,23 +435,8 @@ export function registerCodebaseRoutes(
 
       await codebaseDb.deleteCodebase(id, { requireWorktreeCleanup: true });
 
-      // Remove workspace directory from disk — only for Archon-managed repos
-      const normalizedCwd = normalize(codebase.default_cwd);
-      if (isInsideArchonWorkspaces(normalizedCwd)) {
-        try {
-          await rm(normalizedCwd, { recursive: true, force: true });
-          getLog().info({ path: normalizedCwd }, 'workspace_removed');
-        } catch (rmErr) {
-          getLog().warn({ err: rmErr, path: codebase.default_cwd }, 'workspace_remove_failed');
-          return apiError(
-            c,
-            500,
-            `Project registration deleted, but workspace removal failed at ${normalizedCwd}. Remove this directory manually after resolving the filesystem error.`
-          );
-        }
-      } else {
-        getLog().info({ path: codebase.default_cwd }, 'external_repo_skip_deletion');
-      }
+      const removalError = await removeManagedWorkspace(c, codebase.default_cwd);
+      if (removalError) return removalError;
 
       return c.json({ success: true });
     } catch (error) {
@@ -529,4 +515,25 @@ export function registerCodebaseEnvironmentRoute(app: OpenAPIHono): void {
       return apiError(c, 500, 'Failed to list environments');
     }
   });
+}
+
+async function removeManagedWorkspace(c: Context, cwd: string): Promise<Response | undefined> {
+  // Remove workspace directory from disk — only for Archon-managed repos
+  const normalizedCwd = normalize(cwd);
+  if (isInsideArchonWorkspaces(normalizedCwd)) {
+    try {
+      await rm(normalizedCwd, { recursive: true, force: true });
+      getLog().info({ path: normalizedCwd }, 'workspace_removed');
+    } catch (rmErr) {
+      getLog().warn({ err: rmErr, path: cwd }, 'workspace_remove_failed');
+      return apiError(
+        c,
+        500,
+        `Project registration deleted, but workspace removal failed at ${normalizedCwd}. Remove this directory manually after resolving the filesystem error.`
+      );
+    }
+  } else {
+    getLog().info({ path: cwd }, 'external_repo_skip_deletion');
+  }
+  return undefined;
 }

@@ -62,30 +62,7 @@ export async function serveCommand(
   // is no release tagged `dev` to fetch from, and the tree already holds the
   // dist that `bun run build:web` produces.
   if (!BUNDLED_IS_BINARY) {
-    const webDistDir = getSourceWebDistDir();
-
-    if (opts.downloadOnly) {
-      console.error(
-        'Error: --download-only is for binary installs. A source checkout has nothing to download.'
-      );
-      console.error('Build the web UI instead: bun run build:web');
-      return 1;
-    }
-
-    if (!existsSync(webDistDir)) {
-      log.error({ webDistDir }, 'web_dist.source_build_missing');
-      console.error(`Error: Web UI is not built at ${webDistDir}.`);
-      console.error('Build it first: bun run build:web');
-      return 1;
-    }
-
-    log.info({ webDistDir }, 'web_dist.source_build_found');
-    return launchServer(
-      [process.execPath, '--no-env-file', getSourceServerEntry()],
-      webDistDir,
-      opts.port,
-      spawn
-    );
+    return serveSourceCheckout(opts, spawn);
   }
 
   const version = BUNDLED_VERSION;
@@ -312,4 +289,31 @@ export function parseChecksum(checksums: string, filename: string): string {
     }
   }
   throw new Error(`Checksum not found for ${filename} in checksums.txt`);
+}
+
+function serveSourceCheckout(opts: ServeOptions, spawn: SpawnServer): Promise<number> | number {
+  const webDistDir = getSourceWebDistDir();
+
+  if (opts.downloadOnly) {
+    console.error(
+      'Error: --download-only is for binary installs. A source checkout has nothing to download.'
+    );
+    console.error('Build the web UI instead: bun run build:web');
+    return 1;
+  }
+
+  if (!existsSync(webDistDir)) {
+    log.error({ webDistDir }, 'web_dist.source_build_missing');
+    console.error(`Error: Web UI is not built at ${webDistDir}.`);
+    console.error('Build it first: bun run build:web');
+    return 1;
+  }
+
+  log.info({ webDistDir }, 'web_dist.source_build_found');
+  return launchServer(
+    [process.execPath, '--no-env-file', getSourceServerEntry()],
+    webDistDir,
+    opts.port,
+    spawn
+  );
 }

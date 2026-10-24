@@ -101,21 +101,7 @@ export async function githubRequest(
     });
   }
   if (!response.ok) {
-    throw new GitHubError(
-      {
-        kind:
-          response.status === 404
-            ? 'not_found'
-            : response.status === 401 || response.status === 403
-              ? 'authorization'
-              : response.status === 409 || response.status === 422
-                ? 'conflict'
-                : 'forge_error',
-        message: `GitHub API request failed with HTTP ${String(response.status)}`,
-        status: response.status,
-      },
-      response.status >= 400 && response.status < 500
-    );
+    throw githubResponseError(response);
   }
   acknowledge?.();
   if (responseMode === 'empty') return undefined;
@@ -257,4 +243,22 @@ export function githubErrorDetail(cause: unknown): ForgeError {
     kind: 'forge_error',
     message: cause instanceof Error ? cause.message : String(cause),
   };
+}
+
+function githubResponseError(response: Response): GitHubError {
+  return new GitHubError(
+    {
+      kind:
+        response.status === 404
+          ? 'not_found'
+          : response.status === 401 || response.status === 403
+            ? 'authorization'
+            : response.status === 409 || response.status === 422
+              ? 'conflict'
+              : 'forge_error',
+      message: `GitHub API request failed with HTTP ${String(response.status)}`,
+      status: response.status,
+    },
+    response.status >= 400 && response.status < 500
+  );
 }
