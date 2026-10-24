@@ -121,48 +121,46 @@ async function waitUntilGone(exists: () => boolean, timeoutMs: number): Promise<
   return true;
 }
 
-/** Terminate the process tree while its exact-run owner holds the IPC lease open. */
-async function terminateDetachedProcessTree(
-  pid: number,
-  ownsLiveLease: () => boolean,
-  windowsJob: WindowsRunJob | undefined
-): Promise<void> {
+function assertTerminableOwner(pid: number, ownsLiveLease: () => boolean): void {
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
     throw new Error(`Refusing to terminate invalid detached owner PID ${String(pid)}`);
   }
   if (!ownsLiveLease()) {
     throw new Error(`Detached workflow owner ${String(pid)} released its termination lease`);
   }
+}
 
+/** Signal the owner's process group. False when the group is already gone. */
+function signalOwnerGroup(pid: number, signal: NodeJS.Signals): boolean {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    if (processExists(pid)) {
+      throw new Error(
+        `Detached workflow owner ${String(pid)} is alive but does not own process group ${String(pid)}`
+      );
+    }
+    return false;
+  }
+}
+
+/** Terminate the process tree while its exact-run owner holds the IPC lease open. */
+async function terminateDetachedProcessTree(
+  pid: number,
+  ownsLiveLease: () => boolean,
+  windowsJob: WindowsRunJob | undefined
+): Promise<void> {
+  assertTerminableOwner(pid, ownsLiveLease);
   if (windowsJob) {
     await windowsJob.terminate();
     return;
   }
 
-  try {
-    process.kill(-pid, 'SIGTERM');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-    if (processExists(pid)) {
-      throw new Error(
-        `Detached workflow owner ${String(pid)} is alive but does not own process group ${String(pid)}`
-      );
-    }
-    return;
-  }
+  if (!signalOwnerGroup(pid, 'SIGTERM')) return;
   if (await waitUntilGone(() => processGroupExists(pid), TERMINATION_GRACE_MS)) return;
-
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-    if (processExists(pid)) {
-      throw new Error(
-        `Detached workflow owner ${String(pid)} is alive but does not own process group ${String(pid)}`
-      );
-    }
-    return;
-  }
+  if (!signalOwnerGroup(pid, 'SIGKILL')) return;
   if (!(await waitUntilGone(() => processGroupExists(pid), TERMINATION_CONFIRM_MS))) {
     throw new Error(`Detached workflow process group ${String(pid)} is still running`);
   }
