@@ -49,6 +49,10 @@ export interface LensTally {
   readonly disproved: number;
 }
 
+type LensCounts = {
+  -readonly [Key in Exclude<keyof LensTally, 'lens'>]: LensTally[Key];
+};
+
 // Synthesis labels findings `blocking` or `note`. Older findings files carry
 // `Critical`/`Important`/`Suggestion`, and the tally still reads them.
 const BLOCKING = new Set(['blocking', 'critical', 'important']);
@@ -137,7 +141,7 @@ export async function collectFindings(
 }
 
 export function tallyLenses(files: readonly FindingsFile[]): LensTally[] {
-  const tallies = new Map<string, Omit<LensTally, 'lens'>>();
+  const tallies = new Map<string, LensCounts>();
   for (const file of files) {
     for (const finding of file.findings) {
       tallyFinding(finding, tallies);
@@ -148,7 +152,7 @@ export function tallyLenses(files: readonly FindingsFile[]): LensTally[] {
     .sort((a, b) => b.findings - a.findings || a.lens.localeCompare(b.lens));
 }
 
-function tallyFinding(finding: FindingRecord, tallies: Map<string, Omit<LensTally, 'lens'>>): void {
+function tallyFinding(finding: FindingRecord, tallies: Map<string, LensCounts>): void {
   const lenses = [...new Set(finding.sources)];
   // A declined finding is one the owner refused with a reason synthesis accepted:
   // like a disproved one, it was never a valid finding to act on.
