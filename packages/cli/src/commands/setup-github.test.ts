@@ -1169,7 +1169,7 @@ describe('GitHub setup wizard', () => {
 
   async function collectBlankAuthentication(key: string, whitespace: string) {
     const inline = key === 'GITHUB_APP_PRIVATE_KEY';
-    const credentials =
+    const credentials: Record<string, string> =
       authMode === 'pat'
         ? { GITHUB_TOKEN: pat }
         : {

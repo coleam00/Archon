@@ -1982,7 +1982,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     return environment;
   }
 
-  it.each(adoptionRefusals)(
+  it.each([...adoptionRefusals])(
     'refuses a %s adoption environment before lane capture or execution',
     async reason => {
       setupAdoptMocks();
