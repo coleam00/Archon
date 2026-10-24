@@ -1973,6 +1973,25 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     );
   });
 
+  const adoptionRefusalMessage = {
+    missing: 'Isolation environment env-9 not found',
+    replaced: 'changed during adoption',
+    switched: 'expected branch',
+    detached: 'expected branch',
+    mismatched: 'does not match',
+  };
+  type AdoptionRefusal = keyof typeof adoptionRefusalMessage;
+  function refusedEnvironment(reason: AdoptionRefusal) {
+    return reason === 'missing'
+      ? null
+      : reason === 'replaced'
+        ? { ...adoptedEnvironment(), metadata: { worktree_registration_id: 'replacement' } }
+        : {
+            ...adoptedEnvironment(),
+            working_path: reason === 'mismatched' ? '/foreign/worktree' : '/wt/adopted',
+          };
+  }
+
   it.each(['missing', 'mismatched', 'replaced', 'switched', 'detached'] as const)(
     'refuses a %s adoption environment before lane capture or execution',
     async reason => {
@@ -1983,16 +2002,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       if (reason === 'switched' || reason === 'detached') {
         mockGetCurrentBranchStrict.mockResolvedValueOnce(reason === 'switched' ? 'other' : null);
       }
-      getById.mockResolvedValueOnce(
-        reason === 'missing'
-          ? null
-          : reason === 'replaced'
-            ? { ...adoptedEnvironment(), metadata: { worktree_registration_id: 'replacement' } }
-            : {
-                ...adoptedEnvironment(),
-                working_path: reason === 'mismatched' ? '/foreign/worktree' : '/wt/adopted',
-              }
-      );
+      getById.mockResolvedValueOnce(refusedEnvironment(reason));
       (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
       const { executeWorkflow } = await import('@archon/workflows/executor');
       (executeWorkflow as ReturnType<typeof mock>).mockClear();
@@ -2000,15 +2010,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
         workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
           adoptRunId: 'run-old',
         })
-      ).rejects.toThrow(
-        reason === 'missing'
-          ? 'Isolation environment env-9 not found'
-          : reason === 'replaced'
-            ? 'changed during adoption'
-            : reason === 'switched' || reason === 'detached'
-              ? 'expected branch'
-              : 'does not match'
-      );
+      ).rejects.toThrow(adoptionRefusalMessage[reason]);
       expect(executeWorkflow).not.toHaveBeenCalled();
       expect(isolationDb.updateMetadata).not.toHaveBeenCalled();
       const captures = (prepareWorkflowSource as ReturnType<typeof mock>).mock.calls;

@@ -202,6 +202,24 @@ describe('GitHub setup wizard', () => {
   const run = (force = false) => setupCommand({ repoPath: root, scope, providers: [], force });
   const read = () => parseDotenv(readFileSync(target, 'utf8'));
 
+  function expectSavedAuthentication(
+    env: ReturnType<typeof read>,
+    selectedMode: 'app' | 'pat',
+    force: boolean
+  ) {
+    expect(selectGitHubAuthMode(env)).toEqual({ kind: selectedMode });
+    if (selectedMode === 'app') {
+      expect(loadGitHubAppConfig(env)).toMatchObject({
+        appId: force ? '123' : '999',
+        privateKey,
+      });
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.GH_TOKEN).toBeUndefined();
+    } else {
+      expect(env.GITHUB_TOKEN).toBe(force ? pat : 'old-token');
+    }
+  }
+
   it.each(['telegram', 'slack'] as const)(
     'Add keeps existing %s credentials and prompts only for the newly selected connection',
     async existingPlatform => {
@@ -285,17 +303,7 @@ describe('GitHub setup wizard', () => {
         expect(passwordMessages.includes('Enter your Slack Bot Token (xoxb-...):')).toBe(force);
         expect(passwordMessages.includes('Enter your Slack App Token (xapp-...):')).toBe(force);
         const env = read();
-        expect(selectGitHubAuthMode(env)).toEqual({ kind: selectedMode });
-        if (selectedMode === 'app') {
-          expect(loadGitHubAppConfig(env)).toMatchObject({
-            appId: force ? '123' : '999',
-            privateKey,
-          });
-          expect(env.GITHUB_TOKEN).toBeUndefined();
-          expect(env.GH_TOKEN).toBeUndefined();
-        } else {
-          expect(env.GITHUB_TOKEN).toBe(force ? pat : 'old-token');
-        }
+        expectSavedAuthentication(env, selectedMode, force);
         expect(env.WEBHOOK_SECRET).toBeTruthy();
         expect(env.TELEGRAM_BOT_TOKEN).toBe(force ? '123456:new-telegram' : '123456:old-telegram');
         expect(env.TELEGRAM_ALLOWED_USER_IDS).toBe(force ? '222' : '111');
@@ -1162,6 +1170,31 @@ describe('GitHub setup wizard', () => {
     }
   );
 
+  async function collectBlankAuthentication(key: string, whitespace: string) {
+    const original = serializeEnv({
+      ...(authMode === 'pat'
+        ? { GITHUB_TOKEN: pat }
+        : {
+            GITHUB_APP_ID: '999',
+            [key === 'GITHUB_APP_PRIVATE_KEY' ? key : 'GITHUB_APP_PRIVATE_KEY_PATH']:
+              key === 'GITHUB_APP_PRIVATE_KEY' ? privateKey : keyPath,
+          }),
+      WEBHOOK_SECRET: webhookSecret,
+      CUSTOM_KEY: 'keep',
+      [key]: whitespace,
+    });
+    writeFileSync(target, original);
+    expect(checkExistingConfig(target)?.platforms.github).toBe(false);
+    initialAuthMode = undefined;
+    expect(await run()).toBe(0);
+    expect(initialAuthMode).toBe('pat');
+    expect(selectGitHubAuthMode(read())).toEqual({ kind: authMode });
+    expect(read().CUSTOM_KEY).toBe('keep');
+    if (authMode === 'app')
+      expect(loadGitHubAppConfig(read())).toMatchObject({ appId: '123', privateKey });
+    else expect(read().GITHUB_TOKEN).toBe(pat);
+  }
+
   it.each(['home', 'project'] as const)(
     'Add collects credentials for each blank authentication field in %s',
     async selectedScope => {
@@ -1176,28 +1209,7 @@ describe('GitHub setup wizard', () => {
       ]) {
         authMode = key === 'GITHUB_TOKEN' ? 'pat' : 'app';
         for (const whitespace of [' ', '   ', '\t']) {
-          const original = serializeEnv({
-            ...(authMode === 'pat'
-              ? { GITHUB_TOKEN: pat }
-              : {
-                  GITHUB_APP_ID: '999',
-                  [key === 'GITHUB_APP_PRIVATE_KEY' ? key : 'GITHUB_APP_PRIVATE_KEY_PATH']:
-                    key === 'GITHUB_APP_PRIVATE_KEY' ? privateKey : keyPath,
-                }),
-            WEBHOOK_SECRET: webhookSecret,
-            CUSTOM_KEY: 'keep',
-            [key]: whitespace,
-          });
-          writeFileSync(target, original);
-          expect(checkExistingConfig(target)?.platforms.github).toBe(false);
-          initialAuthMode = undefined;
-          expect(await run()).toBe(0);
-          expect(initialAuthMode).toBe('pat');
-          expect(selectGitHubAuthMode(read())).toEqual({ kind: authMode });
-          expect(read().CUSTOM_KEY).toBe('keep');
-          if (authMode === 'app')
-            expect(loadGitHubAppConfig(read())).toMatchObject({ appId: '123', privateKey });
-          else expect(read().GITHUB_TOKEN).toBe(pat);
+          await collectBlankAuthentication(key, whitespace);
         }
       }
     }
