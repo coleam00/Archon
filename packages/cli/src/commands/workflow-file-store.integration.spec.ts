@@ -493,11 +493,7 @@ beforeEach(async () => {
   writeFileSync(${JSON.stringify(join(f.project, 'hold.ts'))}, [
     "import { appendFileSync } from 'node:fs';",
     'appendFileSync(' + JSON.stringify(scope.detachedPids) + ', process.pid + String.fromCharCode(10));',
-    // Bun does not buffer a short socket write; the rest goes out on drain.
-    'const signal = process.pid + String.fromCharCode(10);',
-    'let sent = 0;',
-    'const send = socket => { sent += Math.max(0, socket.write(signal.slice(sent))); };',
-    "await Bun.connect({ hostname: '127.0.0.1', port: " + listener.port + ", socket: { open: send, drain: send, data: () => {} } });",
+    "await Bun.connect({ hostname: '127.0.0.1', port: " + listener.port + ", socket: { open: socket => { socket.write(process.pid + String.fromCharCode(10)); }, data: () => {} } });",
     'setInterval(() => {}, 1000);',
   ].join(String.fromCharCode(10)));
   const result = await scope.run(${JSON.stringify([process.execPath, f.entry, ...args])}, ${JSON.stringify(f.project)}, { ...process.env, ARCHON_HOME: ${JSON.stringify(f.home)}, LOG_LEVEL: 'info' });
