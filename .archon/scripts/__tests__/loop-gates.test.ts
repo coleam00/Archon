@@ -324,7 +324,7 @@ describe('loop wiring', () => {
     expect(prompt).toContain('`noticed`');
     expect(prompt).not.toContain('When unsure, test more');
     expect(prompt).toContain('QUESTION');
-    expect(prompt).toContain("What the default\nbranch brought in is not this change's");
+    expect(prompt.replace(/\r\n/g, '\n')).toContain("What the default\nbranch brought in is not this change's");
     expect(prompt).toContain('change no code at all (only the pull request');
   });
 
