@@ -9,8 +9,8 @@ is watching: decide, do not wait for a human.
 
 GitHub is the only state. Read it fresh:
 
-- Open pull requests: `gh pr list --state open --json number,title,headRefName,isDraft,mergeStateStatus,body,comments,labels,updatedAt`, plus `gh pr checks <n>` for each.
-- Open issues: `gh issue list --state open --limit 200 --json number,title,labels,body,comments`. A `Depends on: #n` line means wait until #n is closed.
+- Open pull requests: `gh pr list --state open --json number,url,title,headRefName,isDraft,mergeStateStatus,body,comments,labels,updatedAt`, plus `gh pr checks <n>` for each.
+- Open issues: `gh issue list --state open --limit 200 --json number,url,title,labels,body,comments`. The `url` field is the item's address; `target` and `pr` below are copied from it byte for byte, never composed from a guessed owner or repository name and never from a shell expression. A `Depends on: #n` line means wait until #n is closed.
 - The product's direction and conventions: `engineering.md`, the mission and the product document the repository keeps (look once at the root and in `docs/`; treat a file that is not there as absent). How the app is run: $INPUTS.runtime
 - This loop's history on each item: its comments on issues and pull requests (builder reports, `Loop review:` comments, `Contract` comments) say what was already tried and what came back.
 
@@ -81,8 +81,8 @@ Before new work starts on an issue (routes `simple` and `complex`), make sure it
 Return the structured verdict:
 
 - `route`: `continue`, `simple`, `complex`, or `none` when nothing is actionable.
-- `target`: the issue URL for new work, or the issue the pull request closes for `continue` (the pull request URL if it closes none). Empty for `none`.
-- `pr`: the pull request URL for `continue`, otherwise empty.
+- `target`: the issue's `url` from the listing for new work, or the `url` of the issue the pull request closes for `continue` (the pull request's `url` if it closes none). Empty for `none`.
+- `pr`: the pull request's `url` from the listing for `continue`, otherwise empty.
 - `confidence`: `high`, `medium` or `low`.
 - `depth`: `light`, `normal` or `deep` (above). `normal` for `none`.
 - `area`: the files, directories or modules the work will most likely change (one line, for example `app/notes.py, templates/list.html`). Other runs use it to stay out of your way. Empty for `none`.
