@@ -255,6 +255,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       return result(0, issueUrl(number));
     }
   }
+  // Real gh refuses this combination before any request (gh 2.92).
+  if (argv.includes('--slurp') && (argv.includes('--jq') || argv.includes('--template')))
+    return result(1, '', 'the \`--slurp\` option is not supported with \`--jq\` or \`--template\`');
   if (text.startsWith('pr ready')) {
     if (fake.readyFail !== undefined) return result(1, '', fake.readyFail);
     if (!fake.writeLost) pr.isDraft = argv.includes('--undo');
@@ -329,7 +332,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         return result(0, JSON.stringify({ number, html_url: issueUrl(number) }));
       }
       const rows = issues.map(row => ({ number: row.number, title: row.title, body: row.body, state: row.state.toLowerCase(), ...(row.pull ? { pull_request: {} } : {}) }));
-      return result(0, JSON.stringify(rows));
+      return result(0, JSON.stringify(argv.includes('--slurp') ? [rows] : rows));
     }
     if (endpoint.endsWith('/issues/' + String(subject.number))) {
       if (method === 'PATCH' && argv.includes('--input')) {

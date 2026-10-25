@@ -13,11 +13,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   forgeSource,
-  ghApi,
   invokeForge,
   parseQualifiedPr,
   record,
-  retryTransient,
   samePr,
   type QualifiedPr,
 } from './forge.ts';
@@ -44,7 +42,7 @@ export class NotAnIssueError extends Error {
 }
 
 export function viewIssue(item: QualifiedPr): IssueView {
-  return retryTransient(() => (forgeSource() === 'forge' ? forgeView(item) : ghView(item)));
+  return forgeSource() === 'forge' ? forgeView(item) : ghView(item);
 }
 
 function labelNames(values: unknown[]): string[] {
@@ -63,15 +61,22 @@ function login(value: unknown): string | null {
 function ghIssue(
   item: QualifiedPr
 ): Record<string, unknown> & { readonly html_url: string; readonly state: IssueView['state'] } {
-  const issue = record(
-    JSON.parse(
-      ghApi(`gh api issues/${String(item.number)}`, [
-        '--hostname',
-        item.repo.host,
-        `repos/${item.repo.path}/issues/${String(item.number)}`,
-      ])
-    )
+  const result = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      '--hostname',
+      item.repo.host,
+      `repos/${item.repo.path}/issues/${String(item.number)}`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
   );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `gh api issues/${String(item.number)} failed: ${result.stderr.toString().trim()}`
+    );
+  }
+  const issue = record(JSON.parse(result.stdout.toString()));
   const url = `https://${item.repo.host}/${item.repo.path}/issues/${String(item.number)}`;
   if (issue?.number === item.number && 'pull_request' in issue) throw new NotAnIssueError(url);
   if (
@@ -143,7 +148,6 @@ function firstLine(body: string): string {
  * sources look across every issue, open or closed, and refuse when more than one
  * carries the marker. A recovered issue is returned as it is, never edited or
  * reopened. A new one must read back open with the requested title and body.
- * The marker read is also what makes a repeat after a transient failure safe.
  */
 export function createIssue(
   repo: QualifiedPr['repo'],
@@ -152,48 +156,6 @@ export function createIssue(
   marker: string
 ): CreatedIssue {
   if (firstLine(body) !== marker) throw new Error('the issue body must begin with its marker');
-  return retryTransient(() => createIssueOnce(repo, title, body, marker));
-}
-
-/** The one issue, open or closed, whose body begins with `marker`, if there is one. */
-function ghMarkedIssue(
-  repo: QualifiedPr['repo'],
-  marker: string
-): Record<string, unknown> | undefined {
-  // Paged explicitly: `--include` prints each page's headers inside a
-  // `--paginate --slurp` array, so gh's own paging cannot carry the status.
-  const rows: unknown[] = [];
-  for (let page = 1; ; page++) {
-    const listed: unknown = JSON.parse(
-      ghApi('gh api issue listing', [
-        '--hostname',
-        repo.host,
-        `repos/${repo.path}/issues?state=all&per_page=100&page=${String(page)}`,
-      ])
-    );
-    if (!Array.isArray(listed)) throw new Error('gh api returned an unexpected issue listing');
-    rows.push(...listed);
-    if (listed.length < 100) break;
-  }
-  const marked = rows
-    .map(record)
-    .filter(
-      row =>
-        row !== undefined &&
-        !('pull_request' in row) &&
-        typeof row.body === 'string' &&
-        firstLine(row.body) === marker
-    );
-  if (marked.length > 1) throw new Error(`more than one issue carries ${marker}`);
-  return marked[0];
-}
-
-function createIssueOnce(
-  repo: QualifiedPr['repo'],
-  title: string,
-  body: string,
-  marker: string
-): CreatedIssue {
   if (forgeSource() === 'forge') {
     const value = invokeForge('workitem.create', { repo, title, body, marker });
     const item = record(value?.workitem);
@@ -208,31 +170,69 @@ function createIssueOnce(
     }
     return { issue: ref, url: item.url };
   }
-  const found = ghMarkedIssue(repo, marker);
+  const listed = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      '--hostname',
+      repo.host,
+      '--paginate',
+      '--slurp',
+      `repos/${repo.path}/issues?state=all&per_page=100`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (listed.exitCode !== 0) {
+    throw new Error(`gh api issue listing failed: ${listed.stderr.toString().trim()}`);
+  }
+  const pages: unknown = JSON.parse(listed.stdout.toString());
+  if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
+    throw new Error('gh api returned an unexpected issue listing');
+  }
+  const marked = (pages as unknown[][])
+    .flat()
+    .map(record)
+    .filter(
+      row =>
+        row !== undefined &&
+        !('pull_request' in row) &&
+        typeof row.body === 'string' &&
+        firstLine(row.body) === marker
+    );
+  if (marked.length > 1) throw new Error(`more than one issue carries ${marker}`);
+  const found = marked[0];
   if (found !== undefined) {
     if (typeof found.number !== 'number') throw new Error('gh api listed an issue with no number');
     const issue = { repo, number: found.number };
     return { issue, url: ghIssue(issue).html_url };
   }
   const directory = mkdtempSync(join(tmpdir(), 'archon-issue-'));
-  let created: string;
+  let created: { exitCode: number; stdout: Buffer; stderr: Buffer };
   try {
     // The body travels in a request file: argv is not where authored content belongs.
     const payload = join(directory, 'issue.json');
     writeFileSync(payload, JSON.stringify({ title, body }), { mode: 0o600 });
-    created = ghApi('gh api issue create', [
-      '--hostname',
-      repo.host,
-      '--method',
-      'POST',
-      `repos/${repo.path}/issues`,
-      '--input',
-      payload,
-    ]);
+    created = Bun.spawnSync(
+      [
+        'gh',
+        'api',
+        '--hostname',
+        repo.host,
+        '--method',
+        'POST',
+        `repos/${repo.path}/issues`,
+        '--input',
+        payload,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' }
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-  const number = record(JSON.parse(created))?.number;
+  if (created.exitCode !== 0) {
+    throw new Error(`gh api issue create failed: ${created.stderr.toString().trim()}`);
+  }
+  const number = record(JSON.parse(created.stdout.toString()))?.number;
   if (typeof number !== 'number') {
     throw new Error('gh api returned no issue number; an issue may have been created');
   }
@@ -251,13 +251,9 @@ export type CloseReason = (typeof CLOSE_REASONS)[number];
 /**
  * Close the issue with a reason and read the result back. An issue already closed
  * for that reason is left as it is; one closed for another reason is refused, as the
- * forge contract does. That makes a repeat after a transient failure safe.
+ * forge contract does.
  */
 export function closeIssue(item: QualifiedPr, reason: CloseReason): void {
-  retryTransient(() => closeIssueOnce(item, reason));
-}
-
-function closeIssueOnce(item: QualifiedPr, reason: CloseReason): void {
   if (forgeSource() === 'forge') {
     const value = invokeForge('workitem.close', { ref: item, reason });
     if (record(value?.workitem)?.state !== 'closed' || value?.reason !== reason)
@@ -269,17 +265,27 @@ function closeIssueOnce(item: QualifiedPr, reason: CloseReason): void {
     if (before.state_reason === reason) return;
     throw new Error(`${before.html_url} is already closed for another reason`);
   }
-  ghApi(`gh api close of issue ${String(item.number)}`, [
-    '--hostname',
-    item.repo.host,
-    '--method',
-    'PATCH',
-    `repos/${item.repo.path}/issues/${String(item.number)}`,
-    '-f',
-    'state=closed',
-    '-f',
-    `state_reason=${reason}`,
-  ]);
+  const result = Bun.spawnSync(
+    [
+      'gh',
+      'api',
+      '--hostname',
+      item.repo.host,
+      '--method',
+      'PATCH',
+      `repos/${item.repo.path}/issues/${String(item.number)}`,
+      '-f',
+      'state=closed',
+      '-f',
+      `state_reason=${reason}`,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `gh api close of issue ${String(item.number)} failed: ${result.stderr.toString().trim()}`
+    );
+  }
   const after = ghIssue(item);
   if (after.state !== 'closed' || after.state_reason !== reason) {
     throw new Error(`${after.html_url} does not read back closed as ${reason}; it may be closed`);
@@ -290,14 +296,9 @@ function closeIssueOnce(item: QualifiedPr, reason: CloseReason): void {
  * Append `## <heading>` and `text` to the issue's body and read it back. A body that
  * already ends with that section is left as it is, so a repeated write adds nothing.
  * Neither source has a conditional body write: an edit someone saves between the read
- * here and the write is lost, and the read-back cannot tell. The section check makes a
- * repeat after a transient failure safe.
+ * here and the write is lost, and the read-back cannot tell.
  */
 export function appendSection(item: QualifiedPr, heading: string, text: string): void {
-  retryTransient(() => appendSectionOnce(item, heading, text));
-}
-
-function appendSectionOnce(item: QualifiedPr, heading: string, text: string): void {
   const section = `## ${heading}\n\n${text.trim()}\n`;
   if (forgeSource() === 'forge') {
     const body = forgeView(item).body;
@@ -313,15 +314,25 @@ function appendSectionOnce(item: QualifiedPr, heading: string, text: string): vo
   try {
     const request = join(dir, 'body.json');
     writeFileSync(request, JSON.stringify({ body: `${body.trimEnd()}\n\n\n${section}` }));
-    ghApi(`gh api body write of issue ${String(item.number)}`, [
-      '--hostname',
-      item.repo.host,
-      '--method',
-      'PATCH',
-      `repos/${item.repo.path}/issues/${String(item.number)}`,
-      '--input',
-      request,
-    ]);
+    const result = Bun.spawnSync(
+      [
+        'gh',
+        'api',
+        '--hostname',
+        item.repo.host,
+        '--method',
+        'PATCH',
+        `repos/${item.repo.path}/issues/${String(item.number)}`,
+        '--input',
+        request,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' }
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `gh api body write of issue ${String(item.number)} failed: ${result.stderr.toString().trim()}`
+      );
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

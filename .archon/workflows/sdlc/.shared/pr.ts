@@ -5,9 +5,10 @@
  * Every write here is performed and then read back before it is reported as
  * applied. On the forge path the plugin owns that verification and reports which
  * of the four outcomes happened; on `gh` this module performs the same read-back
- * and raises the failure itself. Neither path falls back to the other. Only an
- * operation that reads first whether an earlier attempt landed is repeated, and only
- * after a failure the forge typed as transient (./forge.ts `retryTransient`).
+ * and raises the failure itself. Neither path falls back to the other. Only the
+ * comment upsert, which reads first whether an earlier attempt landed, is repeated,
+ * and only after a `gh api` failure GitHub typed as transient (./forge.ts
+ * `retryTransient`).
  *
  * Authored content — a pull-request body, a comment — travels in a request file
  * on both paths, so it never reaches any process's argv.
@@ -429,9 +430,9 @@ export interface CommentSubject {
  * comment is a conflict: guessing which one is canonical would silently abandon
  * the other.
  *
- * A transient forge failure repeats the whole upsert. Both sources find the marked
- * comment first, so an attempt that landed before its failure is edited or left as
- * it is, never written a second time.
+ * A transient `gh api` failure repeats the whole upsert. It finds the marked
+ * comment first, so an attempt that landed before its failure is left as it is or
+ * edited, never written a second time.
  */
 export function upsertComment(
   subject: CommentSubject,

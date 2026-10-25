@@ -1019,55 +1019,22 @@ describe('publish-review repeats a comment write the forge failed transiently', 
     expect(posts(result)).toBe(1);
     expect(result.comments).toEqual([]);
   });
-
-  it('repeats the plugin upsert after a 504 on the forge source', () => {
-    const applied = forgeOperation('comment.upsert', {
-      target: PR,
-      outcome: 'applied',
-      changed: true,
-      comment: { ref: PR, id: '900', url: `${PR_URL}#issuecomment-900`, bodyDigest: 'digest' },
-    });
-    const timedOut = JSON.stringify({
-      operationId: 'op-comment.upsert',
-      ok: false,
-      error: { kind: 'forge_error', message: 'gateway timeout', status: 504 },
-      mutation: { op: 'comment.upsert', target: PR, outcome: 'outcome_unknown' },
-    });
-    const result = publishReview({
-      source: 'forge',
-      inputs: report,
-      forge: { kind: 'fake', response: [prView, timedOut, applied] },
-    });
-    expect(result.code).toBe(0);
-    expect(result.forge.filter(call => call.includes('forge comment.upsert'))).toHaveLength(2);
-  });
-
-  it('fails at once on a permanent plugin error', () => {
-    const result = publishReview({
-      source: 'forge',
-      inputs: report,
-      forge: { kind: 'fake', response: [prView, forgeFailure('comment.upsert', 'refused', 'not found', {}), prView] },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.forge.filter(call => call.includes('forge comment.upsert'))).toHaveLength(1);
-  });
 });
 
 describe('a gh api failure is classified from its HTTP status and headers', () => {
   const at = (status: number, headers: Record<string, string> = {}) =>
-    ghRetryWait(1, { status, headers: new Map(Object.entries(headers)) }, 1_000_000);
+    ghRetryWait(1, { status, headers: new Map(Object.entries(headers)) });
 
   it('repeats a 5xx or a request that got no response, but not missing authentication', () => {
     expect(at(502)).toBe(0);
     expect(at(504)).toBe(0);
-    expect(ghRetryWait(1, undefined, 0)).toBe(0);
-    expect(ghRetryWait(4, undefined, 0)).toBeUndefined();
+    expect(ghRetryWait(1, undefined)).toBe(0);
+    expect(ghRetryWait(4, undefined)).toBeUndefined();
   });
 
   it('waits out a rate limit for the time GitHub names, or a minute', () => {
     expect(at(429, { 'retry-after': '30' })).toBe(30_000);
     expect(at(403, { 'retry-after': '5' })).toBe(5_000);
-    expect(at(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1030' })).toBe(30_000);
     expect(at(429)).toBe(60_000);
   });
 
@@ -1082,11 +1049,11 @@ describe('a gh api failure is classified from its HTTP status and headers', () =
     let attempts = 0;
     const transient = () => {
       attempts++;
-      throw new TransientForgeError('gh api failed (HTTP 504)', undefined, 0);
+      throw new TransientForgeError('gh api failed (HTTP 504)', 0);
     };
     expect(() => retryTransient(transient, ms => waits.push(ms))).toThrow('HTTP 504');
-    expect(attempts).toBe(5);
-    expect(waits).toEqual([1_000, 2_000, 4_000, 8_000]);
+    expect(attempts).toBe(4);
+    expect(waits).toEqual([1_000, 2_000, 4_000]);
 
     attempts = 0;
     const permanent = () => {
