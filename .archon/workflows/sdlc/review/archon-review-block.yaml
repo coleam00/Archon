@@ -188,9 +188,12 @@ nodes:
   # summary and the work order and answers, with seams on by default. Every round
   # but a light one routes; on a continuation route adds to the code lens every lens
   # whose finding the previous report leaves open or whose area the delta touches.
+  # Medium, not small: on the first mission-control lap (2026-10-24) the small tier wrote its
+  # lens choices as prose and claimed it had called the structured-output tool, failing the
+  # node and skipping every lens of the delivery's review.
   - id: route
     command: route-review
-    model: small
+    model: medium
     context: fresh
     mutates_checkout: false
     depends_on: [mode, scope]
