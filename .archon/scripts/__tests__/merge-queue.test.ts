@@ -1394,6 +1394,14 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
     expect(ok(on(at, 'facts', {}, { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
   }, 60_000);
 
+  test("a trusted Ready review stamped open reaches the sweep's facts as open coverage", () => {
+    const at = install();
+    seed(at, item());
+    const open = { ...REVIEWED, body: reviewCommentBody(HEAD, true, 'open', '# Review report') };
+    const output = ok(on(at, 'facts', { comments: [open] })) as { items: { facts: PrFacts }[] };
+    expect(output.items[0]?.facts.verdict).toMatchObject({ state: 'ready', contract: 'open' });
+  }, 60_000);
+
   test('a review comment from anyone but a listed maintainer is no verdict', () => {
     const at = install();
     seed(at, item());
