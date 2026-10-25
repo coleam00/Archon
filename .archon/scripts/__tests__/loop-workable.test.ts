@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   closes,
+  references,
   dependencies,
   workability,
   type BoardItem,
@@ -115,5 +116,17 @@ describe('loop launch gate', () => {
       now
     );
     expect(parked.workable).toEqual([]);
+  });
+
+  it('a pull request that only references its issue (Refs #n, until its final review) shares the claim too', () => {
+    expect(references('Refs #1. Relates to #2; see also #3')).toEqual([1, 2]);
+    const held = workability(
+      { issues: [item(1, { comments: [claim('run-a')] })], pulls: [item(28, { body: 'Refs #1' })] },
+      6,
+      now
+    );
+    expect(held.workable).toEqual([]);
+    const free = workability({ issues: [item(1)], pulls: [item(28, { body: 'Refs #1' })] }, 6, now);
+    expect(free.workable).toEqual([{ kind: 'pull', number: 28 }]);
   });
 });

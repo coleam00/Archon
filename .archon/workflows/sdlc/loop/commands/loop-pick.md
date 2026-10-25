@@ -21,7 +21,7 @@ its work item with a comment that starts `Loop claim: run <id>` and states the `
 to touch. A claim is live until it is edited to `Loop claim released` or `Loop claim withdrawn`,
 or until it is more than $INPUTS.claim_hours hours old.
 
-- Never choose an item with a live claim, or an open pull request whose work item has one.
+- Never choose an item with a live claim, or an open pull request whose work item (the issue it closes or references) has one.
 - Avoid an item whose change would rewrite the same code files as a live claim's area: two runs
   rewriting one file produce merge conflicts and undo each other's work. Choose independent work
   instead, and say in `reason` which claim you stayed clear of. Files every change only adds a
@@ -81,7 +81,7 @@ Before new work starts on an issue (routes `simple` and `complex`), make sure it
 Return the structured verdict:
 
 - `route`: `continue`, `simple`, `complex`, or `none` when nothing is actionable.
-- `target`: the issue URL for new work, or the issue the pull request closes for `continue` (the pull request URL if it closes none). Empty for `none`.
+- `target`: the issue URL for new work, or the issue the pull request closes or references (`Refs #n`) for `continue` (the pull request URL if it names none). Empty for `none`.
 - `pr`: the pull request URL for `continue`, otherwise empty.
 - `confidence`: `high`, `medium` or `low`.
 - `depth`: `light`, `normal` or `deep` (above). `normal` for `none`.

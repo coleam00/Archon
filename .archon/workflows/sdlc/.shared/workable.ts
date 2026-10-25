@@ -77,6 +77,16 @@ export function closes(body: string): number[] {
   return [...body.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi)].map(m => Number(m[1]));
 }
 
+/**
+ * Issues a pull request is the work for: the ones it closes, and the ones it only references
+ * (`Refs #n`, `Relates to #n`). A delivery links its issue with `Refs` until its final review
+ * adds the closing keyword, and while it does, a lap holding the issue holds the pull request too.
+ */
+export function references(body: string): number[] {
+  const refs = [...body.matchAll(/\b(?:refs?|relates? to|references?)\s+#(\d+)/gi)].map(m => Number(m[1]));
+  return [...new Set([...closes(body), ...refs])];
+}
+
 /** Unexpired claim comments on an item, oldest first, with the run each names. */
 export function liveClaimComments(
   comments: readonly BoardComment[],
@@ -125,15 +135,15 @@ export function workability(
       }
     }
   }
-  // An open pull request is the work for the issues it closes: pick continues the
+  // An open pull request is the work for the issues it closes or references: pick continues the
   // pull request instead of starting the issue, and claims the issue for it.
   const deliveredBy = new Map<number, number>();
-  for (const pull of board.pulls) for (const issue of closes(pull.body)) deliveredBy.set(issue, pull.number);
+  for (const pull of board.pulls) for (const issue of references(pull.body)) deliveredBy.set(issue, pull.number);
 
   const workable: WorkableItem[] = [];
   const waiting: Workability['waiting'] = [];
   for (const pull of board.pulls) {
-    const linked = closes(pull.body).filter(n => openIssues.has(n));
+    const linked = references(pull.body).filter(n => openIssues.has(n));
     const owner = pull.labels.includes(OWNER_LABEL) ||
       linked.some(n => board.issues.find(i => i.number === n)?.labels.includes(OWNER_LABEL));
     const holder = claimed.get(`pull:${pull.number}`) ?? linked.map(n => claimed.get(`issue:${n}`)).find(Boolean);
