@@ -16,7 +16,7 @@ import { forgeSource, invokeForge, record, REMEDY, type QualifiedPr } from './fo
 import { isOwnPr } from './own-prs.ts';
 import { ghGraphql, ghIssueComments, viewPr } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
-import { readReviewStamp } from './review-comment.ts';
+import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
 /** What a merge choice does when a person picks it; archon-merge-queue.yaml declares the same enum. */
@@ -209,6 +209,8 @@ export interface Verdict {
   /** The commit the verdict is about. */
   readonly reviewed: string | null;
   readonly url: string | null;
+  /** The stamped contract coverage; null when the comment predates the stamp or none is trusted. */
+  readonly contract: ContractCoverage | null;
 }
 
 const MERGEABLE = ['clean', 'conflict', 'unknown'] as const;
@@ -353,10 +355,10 @@ function trustedReview(comments: readonly Comment[], maintainers: ReadonlySet<st
     return stamp !== null && trusted ? [{ stamp, url: comment.url }] : [];
   });
   const [review, ...others] = reviews;
-  if (review === undefined) return { state: 'none', reviewed: null, url: null };
-  if (others.length > 0) return { state: 'duplicate', reviewed: null, url: null };
+  if (review === undefined) return { state: 'none', reviewed: null, url: null, contract: null };
+  if (others.length > 0) return { state: 'duplicate', reviewed: null, url: null, contract: null };
   const state = review.stamp.ready === null ? 'unstamped' : review.stamp.ready ? 'ready' : 'not_ready';
-  return { state, reviewed: review.stamp.reviewed, url: review.url };
+  return { state, reviewed: review.stamp.reviewed, url: review.url, contract: review.stamp.contract };
 }
 
 const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {

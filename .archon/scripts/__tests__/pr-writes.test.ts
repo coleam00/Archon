@@ -936,6 +936,8 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     // The comment names the commit it reviewed from the round's own record, not the report text.
     expect(request.body.split('\n')[1]).toBe(`Reviewed commit: \`${REVIEWED}\``);
     expect(request.body.split('\n')[2]).toBe('Verdict: ready');
+    // A Ready verdict whose review left an acceptance item open is stamped open, so no merge closes the issue on it.
+    expect(request.body.split('\n')[3]).toBe('Contract: open');
     expect(result.forge.join(' ')).not.toContain(REPORT);
   });
 
