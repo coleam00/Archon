@@ -8,7 +8,8 @@
  * a claim one of them still holds is released the way the run's own release step would
  * have, because a run killed before that step never frees its item.
  *
- * Output: `{ "workable": [{kind, number}], "claims": [{kind, number, run}], "ended": [...], "waiting": [...] }`.
+ * Output: `{ "workable": [{kind, number}], "claims": [{kind, number, run}], "ended": [...], "waiting": [...],
+ * "updated" }`, `updated` being the newest `updatedAt` of any open item.
  */
 
 import { expiryHours } from '../../.shared/claims.ts';
@@ -47,11 +48,16 @@ function items(raw: unknown): BoardItem[] {
   }));
 }
 
-const fields = 'number,title,body,labels,comments';
-const board = {
-  issues: items(gh(['issue', 'list', '--state', 'open', '--limit', '200', '--json', fields])),
-  pulls: items(gh(['pr', 'list', '--state', 'open', '--limit', '100', '--json', fields])),
-};
+const fields = 'number,title,body,labels,comments,updatedAt';
+const rawIssues = gh(['issue', 'list', '--state', 'open', '--limit', '200', '--json', fields]);
+const rawPulls = gh(['pr', 'list', '--state', 'open', '--limit', '100', '--json', fields]);
+const board = { issues: items(rawIssues), pulls: items(rawPulls) };
+// The newest change to any open item (a comment, a label): an answer that lifts a park leaves
+// the same items workable, and the scheduler must still see the board as changed.
+const updated = [rawIssues, rawPulls]
+  .flatMap(rows => (Array.isArray(rows) ? (rows as Record<string, unknown>[]) : []))
+  .map(row => str(row.updatedAt))
+  .reduce((newest, at) => (at > newest ? at : newest), '');
 const endedRuns = new Set(
   trimmed(process.env.INPUTS_ENDED_RUNS)
     .split(',')
@@ -71,4 +77,4 @@ for (const claim of result.ended) {
     `body=Loop claim released: run ${claim.run} ended. Its \`Loop review:\` comment, if any, says what it did. (Released by the scheduler: the run ended without releasing it.)`,
   ]);
 }
-process.stdout.write(`${JSON.stringify(result)}\n`);
+process.stdout.write(`${JSON.stringify({ ...result, updated })}\n`);
