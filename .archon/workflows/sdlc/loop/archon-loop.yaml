@@ -245,24 +245,35 @@ nodes:
 
   # White-box review and the merge decision. The reviewer decides; the merge gate
   # below merges, so a decision the record does not support never lands.
-  - id: review
-    command: loop-review
-    context: fresh
-    idle_timeout: 2700000
+  # What the builder, the shipping pipeline, the app check and the evidence check wrote, as
+  # files for the reviewer. Agent text bound straight into another agent's prompt is resolved again
+  # there, so a report quoting a workflow (`$review.output...`) failed the review (2026-10-24).
+  - id: handoff
+    script: handoff
+    runtime: bun
     depends_on: [check-app, evidence]
-    agents: *holdout-agents
+    trigger_rule: all_done
     with:
-      route: "$pick.output.route"
-      target: "$pick.output.target"
-      pr: "$subject.output.pr"
       builder: { from: "$build.output", if_skipped: "" }
       # A complex lap that stopped short of a pull request still produced a
       # finding (its triage, plan or investigation in this run's artifacts);
       # the reviewer posts it so the next lap starts from it.
       ship: { from: "$ship.output", if_skipped: "" }
       app_check: "$check-app.output"
-      evidence_ok: "$evidence.output.ok"
       evidence_problems: "$evidence.output.problems"
+
+  - id: review
+    command: loop-review
+    context: fresh
+    idle_timeout: 2700000
+    depends_on: [check-app, evidence, handoff]
+    agents: *holdout-agents
+    with:
+      route: "$pick.output.route"
+      target: "$pick.output.target"
+      pr: "$subject.output.pr"
+      handoff: "$handoff.output.dir"
+      evidence_ok: "$evidence.output.ok"
       runtime: "$INPUTS.runtime"
       holdout: "$INPUTS.holdout"
       merge: "$INPUTS.merge"

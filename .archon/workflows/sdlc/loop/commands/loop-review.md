@@ -11,19 +11,17 @@ The move this run:
 - Route: $INPUTS.route
 - Work item: $INPUTS.target
 - Pull request: $INPUTS.pr
-- Builder's report (empty when the shipping pipeline built it): $INPUTS.builder
-- Shipping pipeline's outcome (empty unless the route was complex): $INPUTS.ship
+- Builder's report (empty when the shipping pipeline built it): `$INPUTS.handoff/builder.md`
+- Shipping pipeline's outcome (empty unless the route was complex): `$INPUTS.handoff/ship.json`
 
 The app check's structured report (read `summary` first, then every line):
 
-$INPUTS.app_check
+`$INPUTS.handoff/app-check.json` (read it first)
 
 The evidence check on that report (no model: every line must cite a file written during the check,
 every cited image must have been opened, and Overall must agree with the lines): ok = $INPUTS.evidence_ok
 
-```
-$INPUTS.evidence_problems
-```
+Its problems, if any: `$INPUTS.handoff/evidence-problems.txt`.
 
 ## When there is nothing to review
 
