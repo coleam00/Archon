@@ -1400,6 +1400,12 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
     const open = { ...REVIEWED, body: reviewCommentBody(HEAD, true, 'open', '# Review report') };
     const output = ok(on(at, 'facts', { comments: [open] })) as { items: { facts: PrFacts }[] };
     expect(output.items[0]?.facts.verdict).toMatchObject({ state: 'ready', contract: 'open' });
+    // A Ready review published before coverage was stamped has none, so no merge closes the issue on it.
+    const unstamped = { ...REVIEWED, body: `${REVIEW_MARKER}\nReviewed commit: \`${HEAD}\`\nVerdict: ready\n\n# Review report` };
+    const fresh = install();
+    seed(fresh, item());
+    const old = ok(on(fresh, 'facts', { comments: [unstamped] })) as { items: { facts: PrFacts }[] };
+    expect(old.items[0]?.facts.verdict).toMatchObject({ state: 'ready', contract: null });
   }, 60_000);
 
   test('a review comment from anyone but a listed maintainer is no verdict', () => {

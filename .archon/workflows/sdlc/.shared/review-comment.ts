@@ -10,7 +10,8 @@
 
 export const REVIEW_MARKER = '<!-- archon-review-report -->';
 
-export type ContractCoverage = 'complete' | 'open';
+export const CONTRACT_COVERAGES = ['complete', 'open'] as const;
+export type ContractCoverage = (typeof CONTRACT_COVERAGES)[number];
 
 export function reviewCommentBody(head: string, ready: boolean, contract: ContractCoverage, report: string): string {
   return `${REVIEW_MARKER}\nReviewed commit: \`${head}\`\nVerdict: ${ready ? 'ready' : 'not ready'}\nContract: ${contract}\n\n${report}`;
@@ -32,12 +33,13 @@ export function readReviewStamp(body: string): ReviewStamp | null {
   const reviewed = /^Reviewed commit: `([0-9a-f]{7,64})`$/.exec(lines[1] ?? '')?.[1];
   if (reviewed === undefined) return null;
   const verdict = /^Verdict: (ready|not ready)$/.exec(lines[2] ?? '')?.[1];
-  const contract = verdict === undefined ? undefined : /^Contract: (complete|open)$/.exec(lines[3] ?? '')?.[1];
-  const rest = lines.slice(2 + (verdict === undefined ? 0 : 1) + (contract === undefined ? 0 : 1)).join('\n');
+  const stamped = verdict === undefined ? undefined : /^Contract: (\S+)$/.exec(lines[3] ?? '')?.[1];
+  const contract = CONTRACT_COVERAGES.find(coverage => coverage === stamped) ?? null;
+  const rest = lines.slice(2 + (verdict === undefined ? 0 : 1) + (contract === null ? 0 : 1)).join('\n');
   return {
     reviewed,
     ready: verdict === undefined ? null : verdict === 'ready',
-    contract: contract === 'complete' || contract === 'open' ? contract : null,
+    contract,
     report: rest.replace(/^\n+/, ''),
   };
 }
