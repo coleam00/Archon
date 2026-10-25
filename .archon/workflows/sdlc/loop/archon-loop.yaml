@@ -252,7 +252,6 @@ nodes:
     script: handoff
     runtime: bun
     depends_on: [check-app, evidence]
-    trigger_rule: all_done
     with:
       builder: { from: "$build.output", if_skipped: "" }
       # A complex lap that stopped short of a pull request still produced a

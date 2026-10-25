@@ -68,11 +68,16 @@ claim:
   holder: fixture-run
   reason: "stub: this run holds the work item"
 release: "released 1 claim(s)"
+# The holdout briefs copy and the reviewer handoff are scripts with no decision in them.
+briefs: ""
+handoff:
+  dir: "stub/handoff"
+
 fixture:
   expect: completed
-  reached: [pick, claim, build, subject, check-app, evidence, review, release]
+  reached: [pick, claim, build, subject, check-app, evidence, handoff, review, release]
   resolved-text-contains:
-    review: "Overall says PASS over D1"
+    review: "handoff/app-check.json"
   inputs:
     runtime: "/private/run-the-app.md"
 exec-code: true

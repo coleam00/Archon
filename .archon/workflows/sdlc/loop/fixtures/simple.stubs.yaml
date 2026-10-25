@@ -55,13 +55,18 @@ claim:
   holder: fixture-run
   reason: "stub: this run holds the work item"
 release: "released 1 claim(s)"
+# The holdout briefs copy and the reviewer handoff are scripts with no decision in them.
+briefs: ""
+handoff:
+  dir: "stub/handoff"
+
 fixture:
   expect: completed
-  reached: [pick, claim, build, subject, check-app, evidence, review, land, release]
+  reached: [pick, claim, build, subject, check-app, evidence, handoff, review, land, release]
   resolved-text-contains:
     build: "Route: simple"
     check-app: "/private/holdout.md"
-    review: "saves a note: POST /notes returned 201"
+    review: "handoff/app-check.json"
   inputs:
     runtime: "/private/run-the-app.md"
     holdout: "/private/holdout.md"

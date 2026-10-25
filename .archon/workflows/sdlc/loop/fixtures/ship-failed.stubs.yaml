@@ -69,6 +69,11 @@ claim:
   holder: fixture-run
   reason: "stub: this run holds the work item"
 release: "released 1 claim(s)"
+# The holdout briefs copy and the reviewer handoff are scripts with no decision in them.
+briefs: ""
+handoff:
+  dir: "stub/handoff"
+
 fixture:
   expect: failed
   fail-node: ship__deliver__gate-green
