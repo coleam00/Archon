@@ -135,6 +135,17 @@ describe('merge gate', () => {
     ]);
   });
 
+  it('a decided question needs no evidence; an undecided one still refuses', () => {
+    const question = report([...CLEAN_LINES, line('D1', 'defect', 'QUESTION', { evidence: [] })]);
+    const problems = ['D1 cites no evidence'];
+    expect(gate(question, { evidenceProblems: problems })[0]).toContain('D1 cites no evidence');
+    const accepted = disp({ line: 'D1', action: 'accepted', file: '', issue: '', reason: 'the work item settles it already' });
+    expect(gate(question, { evidenceProblems: problems, dispositions: accepted })).toEqual([]);
+    const filed = disp({ line: 'D1', action: 'issue', file: '', issue: '#42', reason: '' });
+    expect(gate(question, { evidenceProblems: problems, dispositions: filed, issueExists: () => true })).toEqual([]);
+    expect(gate(CLEAN, { evidenceProblems: ['C1 cites no evidence'], dispositions: accepted })).toHaveLength(1);
+  });
+
   it('a new defect blocks unless the reviewer re-checked it with a file it wrote', () => {
     expect(gate(defect)).toEqual(['D1 (DEFECT) has no re-check or default-branch proof the reviewer wrote']);
     const claimed = disp({ line: 'd1', action: 'rechecked', file: '/run/review-d1.txt', issue: '', reason: '' });

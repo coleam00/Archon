@@ -225,9 +225,17 @@ export function recordRefusals(facts: GateFacts): string[] {
   const tracked = (id: string): boolean => facts.issueExists(disposition(id)?.issue ?? '');
   const refusals: string[] = [];
   // A flagged line stands only on the reviewer's own fresh re-check; a problem with the whole report has none.
+  // A question the review decided (filed as an issue, or accepted with a reason) supports nothing
+  // the merge relies on, so its evidence does not have to hold (seen live: PR #631 refused on that alone).
+  const decidedQuestion = (id: string): boolean => {
+    const line = facts.report.lines.find(l => l.id === id);
+    const mine = disposition(id);
+    return line !== undefined && isQuestion(line) &&
+      (tracked(id) || (mine?.action === 'accepted' && mine.reason.length >= 12));
+  };
   const unresolved = facts.evidenceProblems.filter(problem => {
     const id = /^([A-Z]+\d+)\b/.exec(problem)?.[1];
-    return id === undefined || !rechecked(id);
+    return id === undefined || !(rechecked(id) || decidedQuestion(id));
   });
   if (unresolved.length > 0) refusals.push(`the app check's report did not hold up: ${unresolved.join('; ')}`);
   if (facts.report.pr === '') refusals.push('the app check found no pull request to test');
