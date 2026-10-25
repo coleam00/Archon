@@ -339,7 +339,7 @@ export async function compareComposition(
         });
         writeFileSync(path, JSON.stringify(evidence, null, 2));
       } finally {
-        git(cwd, ['worktree', 'remove', '--force', worktree]);
+        git(cwd, ['-c', 'core.longpaths=true', 'worktree', 'remove', '--force', worktree]);
       }
     }
   }
