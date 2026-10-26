@@ -440,4 +440,32 @@ describe('credential preflight lifecycle', () => {
     expect(getUserProviderEnv.mock.calls[0]?.slice(2)).toEqual([['anthropic'], ['anthropic']]);
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
+
+  it('a stored check that stays inconclusive at delivery refuses without a run-started warning', async () => {
+    const store = makeStore();
+    const inconclusive = {
+      state: 'check_failed',
+      source: 'archon',
+      evidence: 'refresh unavailable',
+    } as const;
+    const getUserProviderEnv = mock<NonNullable<WorkflowDeps['getUserProviderEnv']>>(async () => {
+      throw new StoredCredentialDeliveryError('anthropic', inconclusive);
+    });
+    const result = await startWorkflow({
+      deps: {
+        ...withProviderEnv(getUserProviderEnv, makeDeps(store)),
+        getUserProviderCredential: mock(
+          async (): Promise<StoredProviderCredential> => ({
+            kind: 'oauth',
+            getStatus: async () => inconclusive,
+          })
+        ),
+      },
+      origin: { conversationId: 'db', userId: 'origin' },
+    });
+    if (result.success) throw new Error('Expected credential refusal');
+    expect(result.error).toEndWith('could not verify: refresh unavailable');
+    expect(recordedEvents(store, 'credential_check_inconclusive')).toEqual([]);
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
 });

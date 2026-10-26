@@ -315,14 +315,16 @@ export async function layerRunCredentials(
       cwd: run.cwd,
       execContext: dispatch.execution.execContext,
     });
-    for (const check of inconclusive) await recordInconclusiveCheck(deps, run.runId, check);
-    return resolveUserProviderEnvForWorkflow(
+    const delivered = await resolveUserProviderEnvForWorkflow(
       deps,
       executionUserId,
       run.artifactsDir,
       prepared.requirements,
       prepared.connectedVendors
     );
+    // Recorded only once delivery succeeds: the event tells the operator the run started.
+    for (const check of inconclusive) await recordInconclusiveCheck(deps, run.runId, check);
+    return delivered;
   });
   config.envVars = { ...config.envVars, ...userProviderEnv };
   config.userCredentialEnvKeys = Object.keys(userProviderEnv);
