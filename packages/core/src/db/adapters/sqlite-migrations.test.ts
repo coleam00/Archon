@@ -6,7 +6,11 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { mkdtemp } from 'fs/promises';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { LEGACY_VENDOR_ALIASES } from '@archon/providers';
+import { getSchemaSQL } from '../bundled-schema';
 import { SqliteAdapter } from './sqlite';
+import { isSqliteSchemaCurrent } from './sqlite-schema-state';
+import { prepareAll, prepareGet } from './sqlite-statements';
 import { raw_indexes, raw_pragma, raw_query } from './sqlite-test-harness';
 
 const trackTempRoot = trackTempRoots();
@@ -206,14 +210,6 @@ describe('SqliteAdapter upgrade path', () => {
 describe('migrateColumns on an existing database', () => {
   let db: SqliteAdapter;
   let currentDbPath = '';
-
-  function createTestDb(): SqliteAdapter {
-    currentDbPath = join(
-      import.meta.dir,
-      `.test-sqlite-adapter-${Date.now()}-${Math.random().toString(36).slice(2)}.db`
-    );
-    return new SqliteAdapter(currentDbPath);
-  }
 
   afterEach(async () => {
     if (db) {
@@ -438,44 +434,81 @@ describe('migrateColumns on an existing database', () => {
   });
 
   describe('provider-key vendor-id migration (#1955)', () => {
-    test('renames legacy rows and lets an existing vendor row win on conflict', async () => {
-      db = createTestDb();
-      const dbPath = currentDbPath;
-      // Seed users + legacy/vendor credential rows post-construction…
-      await db.query(`INSERT INTO remote_agent_users (id) VALUES ('u1'), ('u2')`, []);
-      await db.query(
-        `INSERT INTO remote_agent_user_provider_keys (id, user_id, provider, kind, api_key_encrypted, label)
-         VALUES
-           ('k1', 'u1', 'claude',  'api_key', 'enc-legacy-claude', 'legacy'),
-           ('k2', 'u1', 'anthropic', 'api_key', 'enc-vendor-anthropic', 'vendor'),
-           ('k3', 'u2', 'codex',   'api_key', 'enc-legacy-codex', NULL),
-           ('k4', 'u2', 'copilot', 'oauth',   NULL, 'subscription')`,
-        []
-      );
-      await db.close();
-
-      // …then reopen: migrateColumns() runs the idempotent vendor-id data fix.
-      db = new SqliteAdapter(dbPath);
-      const rows = raw_query(
-        dbPath,
-        'SELECT user_id, provider, label FROM remote_agent_user_provider_keys ORDER BY user_id, provider'
-      ) as { user_id: string; provider: string; label: string | null }[];
-      expect(rows).toEqual([
-        // u1: legacy 'claude' row dropped — the explicit 'anthropic' row wins.
-        { user_id: 'u1', provider: 'anthropic', label: 'vendor' },
-        // u2: no conflicts — legacy ids renamed in place.
-        { user_id: 'u2', provider: 'github-copilot', label: 'subscription' },
-        { user_id: 'u2', provider: 'openai', label: null },
-      ]);
-
-      // Idempotent: a third open changes nothing.
-      await db.close();
-      db = new SqliteAdapter(dbPath);
-      const again = raw_query(
-        dbPath,
-        'SELECT COUNT(*) AS n FROM remote_agent_user_provider_keys'
-      ) as { n: number }[];
-      expect(again).toEqual([{ n: 3 }]);
-    });
+    test.each(
+      Object.entries(LEGACY_VENDOR_ALIASES).flatMap(([legacy, vendor]) =>
+        ['sqlite', 'postgres DML'].map(migration => [migration, legacy, vendor] as const)
+      )
+    )(
+      '%s normalizes %s to %s and preserves the vendor row on conflict',
+      async (migration, legacy, vendor) => {
+        const path = await upgradeFixturePath();
+        await new SqliteAdapter(path).close();
+        const raw = new Database(path);
+        try {
+          const cookie = () => prepareGet(raw, 'PRAGMA main.schema_version');
+          const before = cookie();
+          raw.run("INSERT INTO remote_agent_users (id) VALUES ('legacy'), ('conflict')");
+          const kind = vendor === 'github-copilot' ? 'oauth' : 'api_key';
+          const encrypted = kind === 'api_key' ? 'legacy-key' : null;
+          for (const user of ['legacy', 'conflict']) {
+            raw.run(
+              `INSERT INTO remote_agent_user_provider_keys (id, user_id, provider, kind, api_key_encrypted, label)
+                VALUES (?, ?, ?, ?, ?, 'legacy')`,
+              [`${user}-${legacy}`, user, legacy, kind, encrypted]
+            );
+          }
+          raw.run(
+            `INSERT INTO remote_agent_user_provider_keys (id, user_id, provider, kind, api_key_encrypted, label)
+              VALUES (?, 'conflict', ?, 'api_key', 'vendor-key', 'vendor')`,
+            [`vendor-${vendor}`, vendor]
+          );
+          expect(cookie()).toEqual(before);
+          expect(raw.transaction(() => isSqliteSchemaCurrent(raw)).deferred()).toBe(false);
+          const apply = async () => {
+            if (migration === 'sqlite') {
+              await new SqliteAdapter(path).close();
+            } else {
+              // This portable DML is executed verbatim to enforce SQL/catalog conformance.
+              const sql = getSchemaSQL();
+              const start = sql.indexOf('DELETE FROM remote_agent_user_provider_keys');
+              const end = sql.indexOf('-- Phase 3:', start);
+              expect(start).toBeGreaterThan(-1);
+              expect(end).toBeGreaterThan(start);
+              raw.exec(sql.slice(start, end));
+            }
+          };
+          await apply();
+          const expected = [
+            {
+              user_id: 'conflict',
+              provider: vendor,
+              label: 'vendor',
+              kind: 'api_key',
+              api_key_encrypted: 'vendor-key',
+            },
+            {
+              user_id: 'legacy',
+              provider: vendor,
+              label: 'legacy',
+              kind,
+              api_key_encrypted: encrypted,
+            },
+          ];
+          const rows = () =>
+            prepareAll(
+              raw,
+              'SELECT user_id, provider, label, kind, api_key_encrypted FROM remote_agent_user_provider_keys ORDER BY user_id, provider'
+            );
+          expect(rows()).toEqual(expected);
+          expect(raw.transaction(() => isSqliteSchemaCurrent(raw)).deferred()).toBe(true);
+          const convergedCookie = cookie();
+          await apply();
+          expect(rows()).toEqual(expected);
+          expect(cookie()).toEqual(convergedCookie);
+        } finally {
+          raw.close();
+        }
+      }
+    );
   });
 });

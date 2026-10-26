@@ -6,6 +6,7 @@
  */
 import type { Database } from 'bun:sqlite';
 import { createLogger } from '@archon/paths';
+import { LEGACY_VENDOR_ALIASES } from '@archon/providers';
 import { isSqliteBusy } from './sqlite-busy';
 import { prepareAll, prepareGet } from './sqlite-statements';
 
@@ -21,9 +22,10 @@ function getLog(): ReturnType<typeof createLogger> {
  * so one bad table cannot abort schema init. A `required` step's failure aborts the
  * open.
  */
-type Migration =
-  | { kind: 'tolerated'; failureEvent: string; apply: (db: Database) => void }
-  | { kind: 'required'; apply: (db: Database) => void };
+type Migration = {
+  apply: (db: Database, resourceSlotHoldersTable: (name: string) => string) => void;
+} & ({ kind: 'tolerated'; failureEvent: string } | { kind: 'required' }) &
+  ({ scope: 'schema' } | { scope: 'data'; pending: (db: Database) => boolean });
 
 function columnNames(db: Database, table: string): Set<string> {
   return new Set(
@@ -45,13 +47,13 @@ export function migrateColumns(
   resourceSlotHoldersTable: (name: string) => string
 ): boolean {
   let allApplied = true;
-  for (const migration of sqliteMigrations(resourceSlotHoldersTable)) {
+  for (const migration of sqliteMigrations) {
     if (migration.kind === 'required') {
-      migration.apply(db);
+      migration.apply(db, resourceSlotHoldersTable);
       continue;
     }
     try {
-      migration.apply(db);
+      migration.apply(db, resourceSlotHoldersTable);
     } catch (e: unknown) {
       if (isSqliteBusy(e)) throw e;
       getLog().warn({ err: e as Error }, migration.failureEvent);
@@ -62,83 +64,98 @@ export function migrateColumns(
 }
 
 /** The migrations, in the order they run. */
-function sqliteMigrations(
-  resourceSlotHoldersTable: (name: string) => string
-): readonly Migration[] {
-  return [
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_schema_fingerprint_failed',
-      apply: db => {
-        if (!columnNames(db, 'remote_agent_schema_version').has('schema_fingerprint')) {
-          db.run('ALTER TABLE remote_agent_schema_version ADD COLUMN schema_fingerprint TEXT');
-        }
-      },
+const sqliteMigrations: readonly Migration[] = [
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_schema_fingerprint_failed',
+    apply: db => {
+      if (!columnNames(db, 'remote_agent_schema_version').has('schema_fingerprint')) {
+        db.run('ALTER TABLE remote_agent_schema_version ADD COLUMN schema_fingerprint TEXT');
+      }
     },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_users_columns_failed',
-      apply: addUserRole,
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_codebases_columns_failed',
-      apply: addCodebaseColumns,
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_conversations_columns_failed',
-      apply: addConversationColumns,
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_workflow_runs_columns_failed',
-      apply: addWorkflowRunColumns,
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_session_columns_failed',
-      apply: addSessionColumns,
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_messages_columns_failed',
-      apply: addMessageColumns,
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_isolation_environments_columns_failed',
-      apply: addIsolationEnvironmentColumns,
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_user_ai_prefs_columns_failed',
-      apply: addUserAiPrefsColumns,
-    },
-    { kind: 'required', apply: addWorkflowEventOrder },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_provider_key_vendor_ids_failed',
-      apply: renameProviderKeysToVendorIds,
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_resource_slot_holders_failed',
-      apply: db => widenResourceSlotHolders(db, resourceSlotHoldersTable),
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_receipt_bindings_columns_failed',
-      apply: addReceiptBindingColumns,
-    },
-    {
-      kind: 'tolerated',
-      failureEvent: 'db.sqlite_migration_state_revisions_columns_failed',
-      apply: addStateRevisionColumns,
-    },
-    { kind: 'required', apply: alignEventArchiveColumns },
-  ];
-}
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_users_columns_failed',
+    apply: addUserRole,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_codebases_columns_failed',
+    apply: addCodebaseColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_conversations_columns_failed',
+    apply: addConversationColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_workflow_runs_columns_failed',
+    apply: addWorkflowRunColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_session_columns_failed',
+    apply: addSessionColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_messages_columns_failed',
+    apply: addMessageColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_isolation_environments_columns_failed',
+    apply: addIsolationEnvironmentColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_user_ai_prefs_columns_failed',
+    apply: addUserAiPrefsColumns,
+  },
+  {
+    kind: 'required',
+    scope: 'data',
+    apply: addWorkflowEventOrder,
+    pending: hasPendingEventSequence,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'data',
+    pending: hasLegacyProviderKeys,
+    failureEvent: 'db.sqlite_migration_provider_key_vendor_ids_failed',
+    apply: renameProviderKeysToVendorIds,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_resource_slot_holders_failed',
+    apply: widenResourceSlotHolders,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_receipt_bindings_columns_failed',
+    apply: addReceiptBindingColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_state_revisions_columns_failed',
+    apply: addStateRevisionColumns,
+  },
+  { kind: 'required', scope: 'schema', apply: alignEventArchiveColumns },
+];
 
 // Keep 'admin' for older writers and existing rows; new writers insert 'member'.
 // Changing a SQLite column default would require a table rebuild.
@@ -341,31 +358,20 @@ function addWorkflowEventOrder(db: Database): void {
   }).immediate();
 }
 
-// #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
-// copilot→github-copilot). Idempotent data fix mirroring
-// migrations/000_combined.sql: where both a legacy and a vendor row exist
-// for the same user, the vendor row wins; then legacy rows are renamed.
-// Transactional so a mid-sequence failure can't leave partial renames
-// (matches the Postgres path, which runs inside the schema-apply txn);
-// a failed run is also survivable — reads normalize legacy ids.
-const legacyProviderVendors = {
-  claude: 'anthropic',
-  codex: 'openai',
-  copilot: 'github-copilot',
-} as const;
-
-// These repairs can become pending without DDL. New data migrations must extend
-// this probe as well: schema-cookie equality alone cannot prove convergence.
 export function hasPendingSqliteDataRepairs(db: Database): boolean {
-  const legacyProviders = Object.keys(legacyProviderVendors);
-  if (
-    prepareGet(
-      db,
-      `SELECT 1 FROM remote_agent_user_provider_keys WHERE provider IN (${legacyProviders.map(() => '?').join(',')}) LIMIT 1`,
-      legacyProviders
-    )
-  )
-    return true;
+  return sqliteMigrations.some(migration => migration.scope === 'data' && migration.pending(db));
+}
+
+function hasLegacyProviderKeys(db: Database): boolean {
+  const legacyProviders = Object.keys(LEGACY_VENDOR_ALIASES);
+  return !!prepareGet(
+    db,
+    `SELECT 1 FROM remote_agent_user_provider_keys WHERE provider IN (${legacyProviders.map(() => '?').join(',')}) LIMIT 1`,
+    legacyProviders
+  );
+}
+
+function hasPendingEventSequence(db: Database): boolean {
   return !prepareGet(
     db,
     `SELECT 1 FROM remote_agent_workflow_event_sequence
@@ -373,9 +379,11 @@ export function hasPendingSqliteDataRepairs(db: Database): boolean {
   );
 }
 
+// Vendor rows win conflicts with legacy rows. The SQL counterpart is checked
+// against the provider catalog in sqlite-migrations.test.ts.
 function renameProviderKeysToVendorIds(db: Database): void {
   db.transaction(() => {
-    for (const [legacy, vendor] of Object.entries(legacyProviderVendors)) {
+    for (const [legacy, vendor] of Object.entries(LEGACY_VENDOR_ALIASES)) {
       db.run(
         `DELETE FROM remote_agent_user_provider_keys
         WHERE provider = ? AND EXISTS (
