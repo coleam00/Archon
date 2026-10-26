@@ -52,6 +52,7 @@ import {
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
+import { isPathFacts, type PathFacts } from '../../.shared/merge-paths.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
 
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -79,6 +80,7 @@ interface Item {
   readonly record: MergeRecord | null;
   /** An enrolled maintainer's own pull request: its work item has no build record of its own. */
   readonly own_pr?: boolean;
+  readonly paths: PathFacts;
 }
 
 interface Decision {
@@ -291,9 +293,26 @@ function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
   }
 }
 
-/** The summary lines facts listed for items this run did not claim. */
+/**
+ * The items facts claimed, refused unless each carries the path facts facts emits: a
+ * missed binding or a reshaped producer fails here instead of reaching the record.
+ */
+function claimedItems(value: string | undefined): Item[] {
+  const items = nullableJson(value);
+  if (!Array.isArray(items)) throw new Error('items must be the list facts emits; the binding is missing or malformed');
+  for (const item of items as Item[]) {
+    if (!isPathFacts(item.paths)) throw new Error(`the item for ${String(item.url)} carries no path facts from facts`);
+  }
+  return items as Item[];
+}
+
+/** The summary lines facts listed for items this run did not claim; a missing binding refuses. */
 function heldLines(value: string | undefined): string[] {
-  return (nullableJson(value) ?? []) as string[];
+  const held = nullableJson(value);
+  if (!Array.isArray(held) || !held.every(line => typeof line === 'string')) {
+    throw new Error('held must be the list of lines facts emits; the binding is missing or malformed');
+  }
+  return held;
 }
 
 /** An idle run's summary: what other runs hold and what is stuck, as facts listed them. */
@@ -309,7 +328,7 @@ function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], bas
 function main(): void {
   const path = MERGE_PATHS.find(candidate => candidate === trimmed(process.env.INPUTS_PATH));
   if (path === undefined) throw new Error(`path must be one of ${MERGE_PATHS.join(', ')}`);
-  const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
+  const items = claimedItems(process.env.INPUTS_ITEMS);
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
   const held = heldLines(process.env.INPUTS_HELD);
   const baseError = text(process.env.INPUTS_BASE_ERROR);

@@ -40,6 +40,21 @@ export type PathFacts =
   | { readonly changed: number; readonly sensitive: readonly SensitivePaths[] }
   | { readonly error: string };
 
+/** Whether `value` is the path facts `pathFacts` produces, for a consumer to refuse anything else. */
+export function isPathFacts(value: unknown): value is PathFacts {
+  if (typeof value !== 'object' || value === null) return false;
+  const facts = value as Record<string, unknown>;
+  if (typeof facts.error === 'string') return true;
+  return (
+    typeof facts.changed === 'number' &&
+    Array.isArray(facts.sensitive) &&
+    facts.sensitive.every(entry => {
+      const found = entry as Record<string, unknown> | null;
+      return typeof found?.category === 'string' && Array.isArray(found.paths) && found.paths.every(path => typeof path === 'string');
+    })
+  );
+}
+
 /** A `category: [glob, ...]` document; anything else refuses, naming the file. */
 export function parsePathCategories(name: string, text: string): Map<string, string[]> {
   const parsed: unknown = Bun.YAML.parse(text);

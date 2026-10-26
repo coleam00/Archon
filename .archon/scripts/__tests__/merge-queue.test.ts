@@ -447,7 +447,8 @@ function ghCalls(result: ScriptRun): string[] {
 }
 
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
-const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null }]);
+const PATHS = { changed: 1, sensitive: [] };
+const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null, paths: PATHS }]);
 const BASE_GREEN = { summary: 'dev is green', reran: false, attention: null };
 
 const ATTENTION: MergeAttention = {
@@ -473,7 +474,7 @@ const FACTS_BASE_RED = { branch: 'dev', head: OLD, checks: { state: 'red', faili
 function recordFacts(output: Record<string, unknown>): Record<string, string> {
   return {
     INPUTS_PATH: String(output.path), INPUTS_ITEMS: JSON.stringify(output.items),
-    INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_BASE: JSON.stringify(output.base),
+    INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_HELD: JSON.stringify(output.held), INPUTS_BASE: JSON.stringify(output.base),
     INPUTS_BASE_ERROR: String(output.base_error), INPUTS_SWEEP: 'null',
   };
 }
@@ -487,6 +488,7 @@ function recordInputs(
     INPUTS_PATH: 'sweep',
     INPUTS_ITEMS: ITEMS,
     INPUTS_SETTLED: '[]',
+    INPUTS_HELD: '[]',
     INPUTS_BASE: JSON.stringify(factsBase),
     INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept' }),
   };
@@ -497,7 +499,7 @@ const OTHER = { repo: PR.repo, number: 8 };
 const OTHER_PR = { repo: PR.repo, number: 43 };
 const OTHER_URL = PR_URL.replace(/42$/, '43');
 const BOTH_ITEMS = JSON.stringify([
-  { item: OTHER, pr: OTHER_PR, url: OTHER_URL, facts: { ...FACTS, pr: OTHER_PR, url: OTHER_URL }, record: null },
+  { item: OTHER, pr: OTHER_PR, url: OTHER_URL, facts: { ...FACTS, pr: OTHER_PR, url: OTHER_URL }, record: null, paths: PATHS },
   ...JSON.parse(ITEMS),
 ]);
 const HOLD = { id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', effect: 'hold', ruling: '' };
@@ -593,7 +595,7 @@ describe('the merge queue scripts', () => {
         const inputs = recordInputs([decision({ action: 'ask', head, attention })]);
         const recorded = ok(run(at, 'record', {
           ...inputs,
-          INPUTS_ITEMS: JSON.stringify([{ item: PR, pr: PR, url: PR_URL, facts: { ...FACTS, head_revision: head }, record: null, own_pr: true }]),
+          INPUTS_ITEMS: JSON.stringify([{ item: PR, pr: PR, url: PR_URL, facts: { ...FACTS, head_revision: head }, record: null, own_pr: true, paths: PATHS }]),
         }, { pr: { headRefOid: head } })) as { asked: { attention: MergeAttention } };
         // The queue owns `other`'s text; the sweep writes what its own `park` does.
         if (choice === 'other') expect(recorded.asked.attention.choices.find(entry => entry.id === 'other')?.does).toContain('different head');
@@ -972,7 +974,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       const output = ok(run(at, 'facts', {}, { pr: { unreadable: [PR.number] } })) as { settled: MergeSettled[] };
       expect(output.settled).toMatchObject([{ item: SUBJECT, status, decision: UNREADABLE }]);
       ok(run(at, 'record', {
-        INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null',
+        INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_HELD: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null',
       }));
       expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status } } });
       expect(mergeWaits(stored(at).value as WorkItem)).toBe(status === 'waiting');
@@ -985,7 +987,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const failAndRecord = () => {
       const output = ok(run(at, 'facts', {}, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
       expect(output.settled).toMatchObject([{ status: 'waiting', decision: UNREADABLE }]);
-      ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null' }));
+      ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_HELD: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null' }));
     };
     failAndRecord();
     const readable = ok(run(at, 'facts', {}));
@@ -1003,7 +1005,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     seed(at, item());
     const first = ok(run(at, 'facts', {}, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
-    ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(first.settled), INPUTS_SWEEP: 'null' }));
+    ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_HELD: '[]', INPUTS_SETTLED: JSON.stringify(first.settled), INPUTS_SWEEP: 'null' }));
     const before = stored(at).value as WorkItem;
     const readable = run(at, 'facts', { WORKFLOW_ID: 'readable-run' }, { pr: { baseUnreadable: failure === 'base read failed' } });
     if (failure === 'base read failed') {
@@ -1193,6 +1195,20 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, item(BUILT, undefined, CLAIMED));
     const output = ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'CI is pending at its head' })])));
     expect(String(output.summary).split('\n')).toEqual(['swept', 'PR 42: waiting (clear): CI is pending at its head']);
+  }, 60_000);
+
+  test("record refuses facts' payload without its held lines or an item's path facts, before writing", () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const { INPUTS_HELD: _held, ...unbound } = recordInputs([decision({ action: 'wait', reason: 'CI pending' })]);
+    const missing = run(at, 'record', unbound);
+    expect(missing.code).not.toBe(0);
+    expect(missing.stderr).toContain('held must be the list of lines facts emits');
+    const bare = JSON.stringify([{ ...JSON.parse(ITEMS)[0], paths: undefined }]);
+    const pathless = run(at, 'record', { ...recordInputs([decision({ action: 'wait', reason: 'CI pending' })]), INPUTS_ITEMS: bare });
+    expect(pathless.code).not.toBe(0);
+    expect(pathless.stderr).toContain(`the item for ${PR_URL} carries no path facts`);
+    expect(stored(at).value?.claim?.run_id).toBe('run-1');
   }, 60_000);
 
   test('the summary says what was recorded when the read-back fails, not what the sweep proposed', () => {
