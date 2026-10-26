@@ -286,10 +286,16 @@ export function shipFailuresInLog(log: string): string[] {
     .map(e => `${e.step}${e.error ? `: ${e.error.slice(0, 200)}` : ''}`);
 }
 
-/** Files a node opened with its Read tool, from a run's event log. */
-export function filesReadInLog(log: string, step: string, key: (path: string) => string): Set<string> {
-  const opened = eventsOf(log)
-    .filter(e => e.step === step && e.event?.name === 'Read' && typeof e.event.rawInput?.file_path === 'string')
+/**
+ * Files a node opened with its Read tool, from a run's event log. Null when the log cannot say:
+ * the node logged no named tool calls at all, as a Codex node does (its image views are not
+ * logged), so a cited image there is neither opened nor unopened (mission control, 2026-10-26).
+ */
+export function filesReadInLog(log: string, step: string, key: (path: string) => string): Set<string> | null {
+  const named = eventsOf(log).filter(e => e.step === step && typeof e.event?.name === 'string');
+  if (named.length === 0) return null;
+  const opened = named
+    .filter(e => e.event?.name === 'Read' && typeof e.event.rawInput?.file_path === 'string')
     .map(e => key(e.event?.rawInput?.file_path as string));
   return new Set(opened);
 }

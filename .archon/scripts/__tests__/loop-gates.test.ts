@@ -119,7 +119,17 @@ describe('evidence check', () => {
       '{"partial',
     ].join('\n');
     const key = (path: string): string => path.replace(/\\/g, '/').toLowerCase();
-    expect([...filesReadInLog(log, 'check-app', key)]).toEqual(['c:/run/shot.png']);
+    expect([...(filesReadInLog(log, 'check-app', key) ?? [])]).toEqual(['c:/run/shot.png']);
+  });
+
+  it('cannot say what a node opened when its log names no tool calls (a Codex node)', () => {
+    // Codex logs commands as subtasks and does not log its image views, so every cited image
+    // read as unopened and every screen lap failed on Codex (mission control, 2026-10-26).
+    const log = [
+      JSON.stringify({ step: 'check-app', type: 'provider_event', event: { type: 'subtask', taskType: 'command_execution', description: 'bun run check' } }),
+      JSON.stringify({ step: 'check-app', type: 'provider_event', event: { type: 'agent_message_chunk', text: 'viewed shot.png' } }),
+    ].join('\n');
+    expect(filesReadInLog(log, 'check-app', (path: string): string => path)).toBeNull();
   });
 });
 
