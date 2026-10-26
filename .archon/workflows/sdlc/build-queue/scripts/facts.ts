@@ -9,6 +9,11 @@
  * It also resolves the item's pull request as the forge reports it now. An open one
  * whose head is in the item's repository is the candidate the round continues;
  * otherwise the round opens one from a new branch named after the issue.
+ *
+ * Before claiming, it wakes the items a `wait` answer parked whose blockers the forge
+ * now reports all closed or merged, back to `next`. A woken item this run does not
+ * claim gets a build-queue run of its own at once, as a continue does. `wake` reports
+ * them, and each item a blocker it could not read keeps parked.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -20,10 +25,13 @@ import {
   claimNamed,
   countedRounds,
   itemPullRequest,
+  type BlockerState,
+  wakeSettled,
 } from '../../.shared/build.ts';
 import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
-import { viewIssue } from '../../.shared/issue.ts';
+import { NotAnIssueError, viewIssue } from '../../.shared/issue.ts';
+import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { claimNext, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
@@ -70,6 +78,34 @@ function resolvePr(
   return { pull_request: pr, continues: null, branch };
 }
 
+function issueOrPrState(ref: QualifiedPr): 'open' | 'closed' | 'merged' {
+  try {
+    return viewIssue(ref).state;
+  } catch (error) {
+    if (error instanceof NotAnIssueError) return viewPr(ref, forgeSource()).pr.state;
+    throw error;
+  }
+}
+
+function blockerState(ref: QualifiedPr): BlockerState {
+  try {
+    return issueOrPrState(ref);
+  } catch (error) {
+    return { unreadable: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Launch each woken item this run did not claim; one summary line per woken or still-parked item. */
+function wakeLines(settled: { woken: number[]; unreadable: string[] }, claimed: QualifiedPr | null, repo: QualifiedPr['repo'], runId: string): string {
+  const selections: BuildQueueSelections = { retriage_as: text(process.env.INPUTS_RETRIAGE_AS), round_limit: text(process.env.INPUTS_ROUND_LIMIT) };
+  const woken = settled.woken.map(number =>
+    number === claimed?.number
+      ? `issue ${String(number)}: its blockers settled, and this run builds it`
+      : `issue ${String(number)}: its blockers settled; ${launchNextRound({ repo, number }, runId, selections)}`
+  );
+  return [...woken, ...settled.unreadable].join('\n');
+}
+
 function emitItem(
   path: 'closed' | 'route',
   subject: QualifiedPr,
@@ -77,9 +113,11 @@ function emitItem(
   doc: WorkItem | null,
   rounds: readonly BuildRound[],
   atCap: boolean,
-  itemPr: ItemPr
+  itemPr: ItemPr,
+  wake: string
 ): void {
   emit({
+    wake,
     path,
     item: subject,
     url,
@@ -103,12 +141,15 @@ function main(): void {
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
   const number = trimmed(process.env.INPUTS_NUMBER);
+  const settled = wakeSettled(new Date().toISOString(), runId, blockerState);
   const doc =
     number === ''
       ? claimNext(new Date().toISOString(), runId, BUILD_PICKUP)
       : claimNamed(positive('number', number), new Date().toISOString(), runId);
+  const wake = wakeLines(settled, doc?.subject ?? null, repo, runId);
   if (doc === null) {
     emit({
+      wake,
       path: 'idle',
       item: null,
       url: '',
@@ -132,7 +173,8 @@ function main(): void {
     doc,
     rounds,
     countedRounds(doc) + 1 >= limit,
-    closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId)
+    closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId),
+    wake
   );
 }
 

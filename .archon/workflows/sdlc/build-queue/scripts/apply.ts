@@ -13,7 +13,8 @@
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
- * node, "null" when it was skipped; INPUTS_AT_CAP and INPUTS_PULL_REQUEST from facts;
+ * node, "null" when it was skipped; INPUTS_AT_CAP, INPUTS_PULL_REQUEST and INPUTS_WAKE
+ * from facts;
  * INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
  */
 
@@ -179,12 +180,18 @@ function afterWrite(
   return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId, selections)}` : written;
 }
 
+/** The summary with facts' wake lines, for waits this run woke or found unreadable. */
+function withWake(summary: string): string {
+  const wake = trimmed(process.env.INPUTS_WAKE);
+  return wake === '' ? summary : `${summary}\n${wake}`;
+}
+
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
   if (path === 'idle') {
     emit({
       decision: 'idle',
-      summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
+      summary: withWake(idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID)))),
       attention: '',
       options: [],
       class: '',
@@ -252,7 +259,7 @@ function main(): void {
     retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
     round_limit: text(process.env.INPUTS_ROUND_LIMIT),
   };
-  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId, selections) });
+  emit({ ...result, summary: withWake(afterWrite(result.summary, wrote, decision, item, runId, selections)) });
 }
 
 try {

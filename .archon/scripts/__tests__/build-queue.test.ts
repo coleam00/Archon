@@ -31,7 +31,7 @@ import {
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
 import {
-  type GhApiIssue, type GhPr, type ScriptOptions, type ScriptRun,
+  type GhApiIssue, type GhIssue, type GhPr, type ScriptOptions, type ScriptRun,
   forgePrRecord, gitCheckout, hostCli, PACK, packScriptRunner, PR,
 } from './deliver-checks-harness';
 
@@ -280,6 +280,7 @@ function run(
     issue?: GhApiIssue;
     pr?: GhPr;
     writeLost?: boolean;
+    issues?: readonly GhIssue[];
     source?: ScriptOptions['source'];
     preload?: ScriptOptions['preload'];
   } = {}
@@ -295,6 +296,7 @@ function run(
       repositoryLabels: [],
       pr: { state: 'OPEN', headRefName: 'feature', ...options.pr },
       writeLost: options.writeLost,
+      issues: options.issues,
     },
     inputs: {
       ...at.env,
@@ -882,6 +884,48 @@ describe('the build queue scripts', () => {
     expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
     expect(ruled.bodies).toEqual([]);
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', brief: '' } } });
+  }, 60_000);
+
+  const WAIT = { id: 'wait-for-fix', label: 'Wait for #5 and #6', does: 'waits for both', effect: 'wait' as const, ruling: '', blockers: [5, 6] };
+  const WAIT_ASKED = JSON.stringify({ attention: { ...ATTENTION, choices: [...ATTENTION.choices, WAIT] }, brief: 'b', by: 'stop' });
+  // #5 is a closed issue; #6 is a pull request, read for whether it merged.
+  const BLOCKERS: GhIssue[] = [{ number: 5, title: 'fix', body: '', state: 'CLOSED' }, { number: 6, title: 'pr', body: '', state: 'OPEN', pull: true }];
+
+  test('a wait parks the item on its blockers, and the first run after they all settle builds it, with no intake run', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
+    ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: WAIT_ASKED, INPUTS_CHOICE: 'wait-for-fix', INPUTS_TEXT: '' }));
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', blockers: [5, 6] } } });
+    expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2' }, { issues: BLOCKERS, pr: { state: 'OPEN' } }))).toMatchObject({ path: 'idle' });
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const woken = ok(run(at, 'facts', { WORKFLOW_ID: 'run-3', ARCHON_CALL_LOG: calls }, { issues: BLOCKERS, pr: { state: 'MERGED' } }));
+    expect(woken).toMatchObject({ path: 'route', item: SUBJECT, wake: 'issue 7: its blockers settled, and this run builds it' });
+    expect(woken.brief).toContain('#5 closed, #6 merged');
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-3' }, facts: { build: { status: 'next' } } });
+    expect(readFileSync(calls, 'utf8')).not.toContain('archon-intake');
+  }, 60_000);
+
+  test('a blocker that cannot be read keeps the item parked and says so', () => {
+    const at = install();
+    seed(at, triaged({}, record({ status: 'parked', brief: '', blockers: [5, 6] })));
+    // #6 is not on the tracker, so its read fails.
+    const result = ok(run(at, 'facts', {}, { issues: [BLOCKERS[0]!] }));
+    expect(result).toMatchObject({ path: 'idle' });
+    expect(result.wake).toContain('issue 7 stays parked: blocker #6:');
+    expect(stored(at).value?.facts.build).toMatchObject({ status: 'parked', blockers: [5, 6] });
+  }, 60_000);
+
+  test('a ready answer on an item with no pull request is refused before the issue body or the work item changes', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
+    const before = stored(at);
+    const ready = { id: 'operator-finishes', label: 'Done by hand', does: 'hands the PR on', effect: 'ready' as const, ruling: 'Done by hand.', blockers: [] };
+    const asked = JSON.stringify({ attention: { ...ATTENTION, choices: [...ATTENTION.choices, ready] }, brief: 'b', by: 'stop' });
+    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: asked, INPUTS_CHOICE: 'operator-finishes', INPUTS_TEXT: '' });
+    expect(ruled.code).not.toBe(0);
+    expect(ruled.stderr).toContain('has no pull request');
+    expect(ruled.bodies).toEqual([]);
+    expect(stored(at)).toEqual(before);
   }, 60_000);
 
   test('an answer that is not a declared choice, or a section that does not read back, records nothing', () => {

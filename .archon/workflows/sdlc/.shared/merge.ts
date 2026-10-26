@@ -12,6 +12,7 @@
  * refusals do not depend on which one answered.
  */
 
+import { itemPullRequest } from './build.ts';
 import { forgeSource, invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
 import { isOwnPr } from './own-prs.ts';
 import { ghGraphql, ghIssueComments, viewPr } from './pr.ts';
@@ -132,11 +133,14 @@ export interface MergeSettled {
 
 export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
 
-/** The pull request the build queue's last round delivered on the item, or the enrolled own pull request, or null. */
+/**
+ * The item's pull request as the build queue resolves it (its latest round's, else the
+ * one triage routed it to continue), or the enrolled own pull request, or null.
+ */
 export function itemPr(doc: WorkItem): QualifiedPr | null {
-  const url =
-    [...(doc.facts.build?.rounds ?? [])].reverse().find(round => round.pr_url !== '')?.pr_url ?? doc.facts.own_pr?.url;
-  return url === undefined ? null : prFromUrl(url);
+  const built = itemPullRequest(doc.facts.build?.rounds ?? [], doc.facts.triage, doc.subject.repo);
+  if (built !== null) return built;
+  return doc.facts.own_pr === undefined ? null : prFromUrl(doc.facts.own_pr.url);
 }
 
 /** `https://<host>/<owner>/<name>/pull/<number>`; anything else refuses. */
