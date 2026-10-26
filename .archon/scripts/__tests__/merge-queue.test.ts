@@ -782,15 +782,19 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     git(at.checkout, 'checkout', '-q', '-b', 'pr-42');
     mkdirSync(join(at.checkout, 'lib'));
     git(at.checkout, 'mv', 'src/old-secret.ts', 'lib/plain.ts');
-    commit({ 'src/keys/a.ts': 'k\n', 'src/keys/nøkkel\tfil.ts': 'u\n', 'src/OAuthFlow.ts': 'o\n', 'docs/guide.md': 'd\n' }, 'change');
+    // The pull request also drops the project's glob from its own copy of the policy.
+    commit({
+      'src/keys/a.ts': 'k\n', 'src/keys/nøkkel\tfil.ts': 'u\n', 'src/OAuthFlow.ts': 'o\n', 'docs/guide.md': 'd\n',
+      '.archon/sdlc/policy/merge-paths.yaml': "credentials: ['nothing/**']\n",
+    }, 'change');
     git(at.checkout, 'push', '-q', 'upstream', 'HEAD:refs/pull/42/head');
     const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
     seed(at, item());
     const output = ok(run(at, 'facts', {}, { pr: { headRefOid: head } })) as { items: { paths: unknown }[] };
-    // The project's glob adds to the defaults' (oauth, secret), matching ignores case, a name git would quote
-    // still matches, and a rename counts its old path.
+    // The default branch's glob adds to the defaults' (oauth, secret) whatever the pull request's copy says,
+    // matching ignores case, a name git would quote still matches, and a rename counts its old path.
     expect(output.items[0]?.paths).toEqual({
-      changed: 6,
+      changed: 7,
       sensitive: [{ category: 'credentials', paths: ['src/OAuthFlow.ts', 'src/keys/a.ts', 'src/keys/nøkkel\tfil.ts', 'src/old-secret.ts'] }],
     });
   }, 60_000);
