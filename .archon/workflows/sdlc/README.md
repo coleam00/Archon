@@ -736,11 +736,15 @@ then the project's file, whose lines win where the two conflict.
   approval pinned to the head it approved, and
   the last twenty decisions), and a return sets the build record to `next` with the
   brief, so the build queue picks it up.
-  The run's summary prints each decision with its class and reason, and every
-  settlement with its reason. It also names each pull request the merge queue would
-  take that another live run holds, with that run and its status (`not mine`), so a
-  sweep that cannot claim a waiting pull request, as while another run asks about
-  it, says why.
+  A record that completes prints a summary: each decision with its class and reason,
+  and every settlement with its reason. It also prints the lines facts listed for
+  items the run did not claim, using pickup's own eligibility and claim rule: each
+  pull request the merge queue would take that another live run holds, with that run
+  and its status (`not mine`), so a sweep that cannot claim a waiting pull request,
+  as while another run asks about it, says why; and each stuck item. A failed listing
+  is a summary line, not a failed run. A record that fails prints no summary: its
+  decisions are on the work items' merge records, and the failure names what it
+  refused.
 - **Merged issues.** A pull request that links its issue with `Refs #N` merges
   without closing it, and the issue keeps its intake stage, so the build queue could
   claim it again. When `retriage_as` names a maintainer login, `retriage` reads the

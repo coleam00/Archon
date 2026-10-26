@@ -22,8 +22,11 @@
  * or the maintainer refresh fails, record settlements without further forge reads,
  * leaving open companions untouched, then fail with the original diagnostic.
  *
- * The summary gives every decision its class and reason, and the lines facts listed for
- * items this run did not claim: those another live run holds, and those stuck.
+ * A record that completes emits a summary giving every decision its class and reason,
+ * every settlement its reason, and the lines facts listed for items this run did not
+ * claim: those another live run holds, and those stuck. A record that fails emits no
+ * summary; its decisions are on the work items' merge records and the failure names
+ * what it refused.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_HELD, INPUTS_BASE and
  * INPUTS_BASE_ERROR from facts; INPUTS_SWEEP,
