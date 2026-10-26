@@ -43,7 +43,9 @@ mock.module('./connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
-const { create, getById, withWorktreeRegistration } = await import('./isolation-environments');
+const { create, getById, markWorktreeDestroyed, updateMetadata, withWorktreeRegistration } =
+  await import('./isolation-environments');
+const { claimPendingWorkflowRun } = await import('./workflow-run-transitions');
 
 afterAll(async () => {
   await db.close();
@@ -64,6 +66,22 @@ function createEnv(workflowId: string, workingPath = `/tmp/claims/${workflowId}`
     working_path: workingPath,
     branch_name: 'claims-branch' as never,
   });
+}
+
+async function seedPendingRun(workingPath: string): Promise<string> {
+  const id = crypto.randomUUID();
+  await db.query(
+    `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+     VALUES ($1, 'cli', $1)`,
+    [id]
+  );
+  await db.query(
+    `INSERT INTO remote_agent_workflow_runs
+       (id, conversation_id, workflow_name, user_message, status, metadata, codebase_id, working_path)
+     VALUES ($1, $1, 'claims-wf', 'test', 'pending', '{}', 'cb-1', $2)`,
+    [id, workingPath]
+  );
+  return id;
 }
 
 async function setClaim(env: IsolationEnvironmentRow, owner: Record<string, unknown>) {
@@ -107,6 +125,25 @@ describe('worktree removal claims on SQLite', () => {
     const fresh = await createEnv('replacement', '/tmp/claims/elsewhere');
     expect(fresh.status).toBe('active');
     expect(fresh.id).not.toBe(env.id);
+  });
+
+  test('adoption, other retirement and run activation refuse while the claim is held', async () => {
+    const env = await createEnv('fenced');
+    const runId = await seedPendingRun(env.working_path);
+    await expect(
+      withWorktreeRegistration(env, async () => {
+        await expect(markWorktreeDestroyed(env)).rejects.toBeInstanceOf(
+          WorktreeRemovalInProgressError
+        );
+        await expect(updateMetadata(env.id, { adopted: true }, env)).rejects.toBeInstanceOf(
+          WorktreeRemovalInProgressError
+        );
+        expect(await claimPendingWorkflowRun(runId)).toBeNull();
+        throw new Error('removal failed');
+      })
+    ).rejects.toThrow('removal failed');
+    expect((await getById(env.id))?.metadata).toEqual(env.metadata);
+    expect((await claimPendingWorkflowRun(runId))?.status).toBe('running');
   });
 
   test('a failed removal releases the claim and leaves the registration active', async () => {
