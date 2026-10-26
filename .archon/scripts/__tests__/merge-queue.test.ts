@@ -691,8 +691,14 @@ describe('the merge queue scripts', () => {
       expect(picked.code).toBe(0);
       if (status === 'unknown') expect(picked.stderr).toContain('the engine reports no status');
       else expect(picked.stderr).toBe('');
-      expect(JSON.parse(picked.stdout)).toMatchObject({ path: status === 'failed' ? 'sweep' : 'idle' });
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(status === 'failed' ? 1 : 0);
+      const output = JSON.parse(picked.stdout) as { path: string; held: string[] };
+      expect(output.path).toBe(status === 'failed' ? 'sweep' : 'idle');
+      // A live owner keeps its claim; only the summary reads the head, to say the park would recover.
+      expect(output.held).toEqual(
+        status === 'running' ? ['PR 42: not mine: run owner holds it (running)']
+          : status === 'unknown' ? ['work/42: stuck: claimed by run owner, which the engine reports no status for'] : [],
+      );
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(status === 'unknown' ? 0 : 1);
       expect(stored(at, PR.number).value?.claim?.run_id).toBe(status === 'failed' ? 'run-1' : 'owner');
     }, 60_000);
   }
@@ -1189,21 +1195,30 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(String(output.summary).split('\n')).toEqual(['swept', 'PR 42: wait (clear): CI is pending at its head']);
   }, 60_000);
 
-  test('a pull request another live run holds is named with that run in every sweep, idle or not', () => {
+  test("facts names the items its pickup left by pickup's own rule, and record prints them in every summary", () => {
     const at = install();
-    const held = { claim: { run_id: 'run-asking', at: AT, requests: [] } };
-    seed(at, item(BUILT, merge('asking'), held));
-    seed(at, item(BUILT, undefined, { ...CLAIMED, subject: OTHER }));
-    const statuses = { INTAKE_RUN_STATUSES: '{"run-asking":"paused"}' };
-    const idle = ok(run(at, 'record', { INPUTS_PATH: 'idle', INPUTS_ITEMS: '[]', INPUTS_SETTLED: '[]', INPUTS_BASE: 'null', INPUTS_SWEEP: 'null', ...statuses }));
-    expect(String(idle.summary).split('\n')).toEqual([
-      'No pull request waits for this run.',
+    const builtFor = (url: string): BuildRecord => ({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: url })) });
+    const claim = (run_id: string) => ({ claim: { run_id, at: AT, requests: [] } });
+    // Asked about by a paused run; claimed by a run the engine does not know; claimed by a finished run.
+    seed(at, item(BUILT, merge('asking'), claim('run-asking')));
+    seed(at, item(builtFor(OTHER_URL), undefined, { ...claim('run-gone'), subject: OTHER }));
+    seed(at, item(builtFor(PR_URL.replace(/42$/, '44')), undefined, { ...claim('run-done'), subject: { repo: PR.repo, number: 9 } }));
+    const picked = run(at, 'facts', { INTAKE_RUN_STATUSES: '{"run-asking":"paused","run-done":"completed"}' });
+    expect(picked.code).toBe(0);
+    expect(picked.stderr).toContain('merge leaves work/8 claimed: the engine reports no status for run run-gone');
+    const output = JSON.parse(picked.stdout) as { held: string[]; items: { item: { number: number } }[] };
+    expect(output.held).toEqual([
       'PR 42: not mine: run run-asking holds it (paused)',
+      'work/8: stuck: claimed by run run-gone, which the engine reports no status for',
     ]);
-    const swept = ok(run(at, 'record', { ...recordInputs([decision({ number: 43, action: 'wait', reason: 'CI is pending' })]), INPUTS_ITEMS: JSON.stringify(JSON.parse(BOTH_ITEMS).slice(0, 1)), ...statuses }));
-    expect(String(swept.summary)).toContain('PR 42: not mine: run run-asking holds it (paused)');
-    // A claim whose run the engine reports no status for is stuck, and named as stuck.
-    expect(String(ok(run(at, 'record', { INPUTS_PATH: 'idle', INPUTS_ITEMS: '[]', INPUTS_SETTLED: '[]', INPUTS_BASE: 'null', INPUTS_SWEEP: 'null' })).summary)).not.toContain('not mine');
+    // Pickup released the finished run's claim and took the item, so it is this run's, not held.
+    expect(output.items.map(entry => entry.item.number)).toEqual([9]);
+    const held = JSON.stringify(output.held);
+    const idle = ok(run(at, 'record', { INPUTS_PATH: 'idle', INPUTS_ITEMS: '[]', INPUTS_SETTLED: '[]', INPUTS_HELD: held, INPUTS_BASE: 'null', INPUTS_SWEEP: 'null' }));
+    expect(String(idle.summary).split('\n')).toEqual(['No pull request waits for this run.', ...output.held]);
+    seed(at, item(BUILT, undefined, { ...CLAIMED, subject: OTHER }));
+    const swept = ok(run(at, 'record', { ...recordInputs([decision({ number: 43, action: 'wait', reason: 'CI is pending' })]), INPUTS_ITEMS: JSON.stringify(JSON.parse(BOTH_ITEMS).slice(0, 1)), INPUTS_HELD: held }));
+    expect(String(swept.summary).split('\n').slice(-2)).toEqual(output.held);
   }, 60_000);
 
   test('a return hands the item back to the build queue with its brief', () => {

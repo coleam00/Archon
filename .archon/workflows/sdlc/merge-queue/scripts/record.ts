@@ -22,11 +22,11 @@
  * or the maintainer refresh fails, record settlements without further forge reads,
  * leaving open companions untouched, then fail with the original diagnostic.
  *
- * The summary gives every decision its class and reason, and names each pull request
- * the queue would take that another live run holds, so no sweep skips one in silence.
+ * The summary gives every decision its class and reason, and the lines facts listed for
+ * items this run did not claim: those another live run holds, and those stuck.
  *
- * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
- * from facts; INPUTS_SWEEP,
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_HELD, INPUTS_BASE and
+ * INPUTS_BASE_ERROR from facts; INPUTS_SWEEP,
  * the sweep's whole output, "null" when it was skipped.
  */
 
@@ -35,9 +35,7 @@ import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   type BaseAttention,
-  itemPr,
   MERGE_PATHS,
-  MERGE_PICKUP,
   type MergeAsked,
   type MergeAttention,
   type MergeDecisionEntry,
@@ -53,10 +51,8 @@ import {
 } from '../../.shared/merge.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
 
-import { runStatus, stateDocuments } from '../../.shared/state.ts';
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { parseWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 /**
  * The asked item with the queue's `other`, whose effect is what the item can take: a
@@ -289,36 +285,14 @@ function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
   }
 }
 
-/**
- * The pull requests the merge queue would take that another live run holds, one line
- * each with that run and its status, so a sweep that skips one says why. A claim whose
- * run reports no status, or a document that does not parse, is `stuckItems`' to name.
- */
-function heldElsewhere(runId: string): string[] {
-  const lines: string[] = [];
-  for (const stored of stateDocuments('work/')) {
-    let doc: WorkItem;
-    let pr: QualifiedPr | null;
-    try {
-      doc = parseWorkItem(stored.value);
-      pr = itemPr(doc);
-    } catch {
-      continue;
-    }
-    if (doc.claim === null || doc.claim.run_id === runId || !MERGE_PICKUP.waits(doc)) continue;
-    const status = runStatus(doc.claim.run_id);
-    if (status === null) continue;
-    const name = pr === null ? `Issue ${String(doc.subject.number)}` : `PR ${String(pr.number)}`;
-    lines.push(`${name}: not mine: run ${doc.claim.run_id} holds it (${status})`);
-  }
-  return lines;
+/** The summary lines facts listed for items this run did not claim. */
+function heldLines(value: string | undefined): string[] {
+  return (nullableJson(value) ?? []) as string[];
 }
 
-/** An idle run's summary: what other runs hold, and what no pickup can act on. */
-function idleRecord(runId: string): string {
-  const held = heldElsewhere(runId);
-  const idle = held.length === 0 ? 'No pull request waits for the merge queue.' : 'No pull request waits for this run.';
-  return [idleSummary(idle, stuckItems(runId)), ...held].join('\n');
+/** An idle run's summary: what other runs hold and what is stuck, as facts listed them. */
+function idleRecord(held: readonly string[]): string {
+  return [held.length === 0 ? 'No pull request waits for the merge queue.' : 'No pull request waits for this run.', ...held].join('\n');
 }
 
 function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], baseError: string): never {
@@ -331,6 +305,7 @@ function main(): void {
   if (path === undefined) throw new Error(`path must be one of ${MERGE_PATHS.join(', ')}`);
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
+  const held = heldLines(process.env.INPUTS_HELD);
   const baseError = text(process.env.INPUTS_BASE_ERROR);
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
@@ -339,7 +314,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       merged: [],
-      summary: idleRecord(runId),
+      summary: idleRecord(held),
       attention: '',
       options: [],
       class: '',
@@ -404,7 +379,7 @@ function main(): void {
 
   emit({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
-    summary: [sweep?.summary ?? '', ...writes.lines, ...heldElsewhere(runId)].filter(line => line !== '').join('\n'),
+    summary: [sweep?.summary ?? '', ...writes.lines, ...held].filter(line => line !== '').join('\n'),
     attention: render(asked),
     options: asked === null ? [] : attentionOptions<string>(asked.attention),
     class: asked?.by ?? '',

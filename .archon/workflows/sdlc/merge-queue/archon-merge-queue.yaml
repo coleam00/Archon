@@ -59,10 +59,12 @@ nodes:
         items: { type: array, items: { type: object } }
         # Claimed items settled without the sweep: merged or closed already, or no pull request.
         settled: { type: array, items: { type: object } }
+        # One summary line per item the run did not claim: held by another live run, or stuck.
+        held: { type: array, items: { type: string } }
         # The gate command the sweep runs to merge.
         gate: { type: string }
         policy_defaults: { type: string }
-      required: [path, base, base_error, items, settled, gate, policy_defaults]
+      required: [path, base, base_error, items, settled, held, gate, policy_defaults]
 
   - id: sweep
     command: sweep
@@ -173,6 +175,7 @@ nodes:
       base_error: "$facts.output.base_error"
       items: { from: "$facts.output.items" }
       settled: { from: "$facts.output.settled" }
+      held: { from: "$facts.output.held" }
       base: { from: "$facts.output.base" }
       sweep: { from: "$sweep.output", if_skipped: null }
     output_format:

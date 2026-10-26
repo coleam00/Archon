@@ -38,6 +38,7 @@ import { pathFacts, type PathFacts, readPathCategories } from '../../.shared/mer
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
 import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
+import { unclaimedItems } from '../../.shared/stuck.ts';
 import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
@@ -157,7 +158,36 @@ function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem 
   }));
 }
 
-function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: readonly MergeSettled[], gate: string): void {
+function prName(doc: WorkItem): string {
+  try {
+    const pr = itemPr(doc);
+    if (pr !== null) return `PR ${String(pr.number)}`;
+  } catch {
+    // A malformed pull request URL still has its work item to name it by.
+  }
+  return `Issue ${String(doc.subject.number)}`;
+}
+
+/**
+ * One summary line for each item this run's pickup left that a person may look for:
+ * one it would take that a live run holds (`not mine`), and one stuck, from the same
+ * eligibility and claim rule the claim used.
+ */
+function unclaimedLines(runId: string, pickup: Pickup): string[] {
+  const { stuck, held } = unclaimedItems(runId, pickup);
+  return [
+    ...held.map(entry => `${prName(entry.doc)}: not mine: run ${entry.run_id} holds it (${entry.status})`),
+    ...stuck.map(entry => `${entry.name}: stuck: ${entry.reason}`),
+  ];
+}
+
+function emitFacts(
+  repo: QualifiedPr['repo'],
+  items: readonly Item[],
+  settled: readonly MergeSettled[],
+  held: readonly string[],
+  gate: string,
+): void {
   // The default branch is read on every run: a red one after the last merge needs the
   // sweep's question even when no pull request waits.
   let inspection: { base: ReturnType<typeof readBase>; error: '' } | { base: null; error: string };
@@ -178,6 +208,7 @@ function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: r
     base_error: inspection.error,
     items,
     settled,
+    held,
     gate,
     policy_defaults: POLICY_DEFAULTS,
   });
@@ -239,7 +270,7 @@ function main(): void {
   ]
     .map(quoted)
     .join(' ');
-  emitFacts(repo, items, settled, gate);
+  emitFacts(repo, items, settled, unclaimedLines(runId, pickup), gate);
 }
 
 try {
