@@ -5,7 +5,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { Database, SQLiteError, type SQLQueryBindings } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
-import type { IDatabase, QueryResult, SqlDialect, TransactionOptions } from './types';
+import type { IDatabase, QueryResult, SqlDialect } from './types';
 import { createLogger } from '@archon/paths';
 import { APP_VERSION } from '../schema-version';
 import { migrateColumns } from './sqlite-migrations';
@@ -161,8 +161,7 @@ export class SqliteAdapter implements IDatabase {
   }
 
   async withTransaction<T>(
-    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>,
-    options?: TransactionOptions
+    fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
   ): Promise<T> {
     this.assertNotInOwnTransaction();
     // A busy snapshot requires replaying the whole transaction, never a single statement.
@@ -170,16 +169,9 @@ export class SqliteAdapter implements IDatabase {
     const runOnce = async (): Promise<T> => {
       // Remember busy errors even when the callback catches or wraps them.
       let busy: SQLiteError | undefined;
-      let firstStatement = true;
       const blockQuery = async <U>(sql: string, params?: unknown[]): Promise<QueryResult<U>> => {
         try {
-          const attempt = () => execute<U>(sql, params);
-          const result =
-            firstStatement && options?.retryOnBusy === 'first-statement'
-              ? await retryWhileBusy('statement', attempt)
-              : await attempt();
-          firstStatement = false;
-          return result;
+          return await execute<U>(sql, params);
         } catch (error) {
           if (isSqliteBusy(error)) busy = error;
           throw error;
@@ -201,13 +193,8 @@ export class SqliteAdapter implements IDatabase {
       }
     };
     // A busy failure anywhere in the block, COMMIT included, has already rolled back,
-    // so replayable blocks rerun from BEGIN against fresh state. Non-replayable
-    // blocks retry only the initial write that acquires the reservation.
-    return this.serialize(() =>
-      options?.retryOnBusy === 'first-statement'
-        ? runOnce()
-        : retryWhileBusy('transaction', runOnce)
-    );
+    // so the block reruns from BEGIN against fresh state.
+    return this.serialize(() => retryWhileBusy('transaction', runOnce));
   }
 
   /**

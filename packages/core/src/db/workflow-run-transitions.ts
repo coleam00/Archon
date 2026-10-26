@@ -4,6 +4,7 @@
  * durable events. Re-exported from the `./workflows` entry.
  */
 import type { IWorkflowStore } from '@archon/workflows/store';
+import { WORKTREE_REMOVAL_OWNER } from '@archon/isolation/types';
 import {
   sourceReleaseMetadata,
   DETACHED_LAUNCH_METADATA_KEY,
@@ -150,10 +151,11 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
 }
 
 /**
- * A run whose checkout belongs only to destroyed worktree records cannot start.
- * Abandonment marks the record destroyed before its final claimant check, so a run
- * that reused the record too late to be seen fails here instead of starting in a
- * checkout that is being removed.
+ * A run whose checkout belongs only to destroyed worktree records, or to any record
+ * being removed, cannot start. Cleanup's removal claim commits before its final
+ * claimant check, so a run that reused the checkout too late to be seen, even through
+ * another registration of the same path, fails here instead of starting in a checkout
+ * that is being removed.
  *
  * `workingPath` is stamped by the claim itself on a row created without one
  * (`run --detach`), so the check and the claimant lookup see the checkout the
@@ -176,6 +178,7 @@ export async function claimPendingWorkflowRun(
                AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
              GROUP BY e.working_path
             HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
+                OR SUM(CASE WHEN e.status = 'active' AND ${getDialect().jsonText('e.metadata', WORKTREE_REMOVAL_OWNER)} IS NOT NULL THEN 1 ELSE 0 END) > 0
           )
           AND (
             NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)

@@ -16,6 +16,8 @@ import {
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
 } from '@archon/isolation/types';
 import { createMockLogger } from '../../test/mocks/logger';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../../types';
@@ -423,6 +425,8 @@ mock.module('@archon/isolation', () => ({
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
   WorktreeUncommittedChangesError,
   worktreeRegistrationMetadata,
   readWorktreeCreationId,
