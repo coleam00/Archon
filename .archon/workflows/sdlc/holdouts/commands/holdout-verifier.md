@@ -12,9 +12,12 @@ The agent that dispatched you names:
   pull request merged with the current default branch). Test it as it is; never switch it.
 - **Base:** the default branch and its commit, for telling a new failure from one the default branch
   already has.
-- **Scope:** `all`, or the files the change touches and a depth (`normal`: only scenarios that
-  exercise what the change creates or changes; `deep`: every scenario the changed files could
-  affect). When unsure whether a scenario is in scope, run it.
+- **Scope:** `all`, or a depth with the work item's criteria and the files the change touches.
+  `normal`: only scenarios whose `Touches` names a behaviour the criteria create or change; a
+  scenario the change might merely affect (it draws on the same screen, it shares a file) is out of
+  scope. `deep`: also every scenario the changed files could affect. At `normal`, when unsure
+  whether a scenario is in scope, skip it and name it among the skipped: the manager runs every
+  scenario on the default branch each pass, so a skipped one is checked within hours, not lost.
 - **Runtime:** how to run the app (instructions, a scenario file or plain text).
 - **Evidence folder:** where every log, screenshot and record you make goes. Never write inside the
   holdout file's folder or anywhere in the target checkout's tracked files.
