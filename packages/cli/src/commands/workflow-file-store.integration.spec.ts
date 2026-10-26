@@ -225,7 +225,7 @@ afterEach(async () => {
 });
 let running: ReturnType<CliTestScope['run']>;
 beforeEach(async () => {
-  running = scope.run([process.execPath, '-e', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => process.exit(0), 1500);`)}], scope.root, process.env);
+  running = scope.run([process.execPath, '-e', ${JSON.stringify(`const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid)); fs.renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)}); setTimeout(() => process.exit(0), 1500);`)}], scope.root, process.env);
   while (!existsSync(${JSON.stringify(pidFile)})) await Bun.sleep(10);
 });
 test('forced timeout', async () => {
@@ -316,14 +316,6 @@ for (const launch of ['workflow', 'fire', 'drain'] as const) {
     setLogLevel('error');
     const outer = fixture();
     const f = fixture();
-    const nodePid = join(f.project, 'node.pid');
-    writeFileSync(
-      join(f.project, 'hold.ts'),
-      `import { writeFileSync } from 'node:fs';
-writeFileSync('node.pid', String(process.pid));
-setInterval(() => {}, 1000);
-`
-    );
     const executable = "'" + process.execPath.replaceAll("'", "'\\''") + "'";
     writeFileSync(
       join(f.project, '.archon/workflows/hold.yaml'),
@@ -409,44 +401,135 @@ nodes:
       }
     }
     const proof = join(outer.root, 'closed');
+    const bodyStarted = join(outer.root, 'body-started');
     const spec = join(outer.root, 'detached-timeout.test.ts');
     writeFileSync(
       spec,
       `
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import * as cleanup from ${JSON.stringify(join(repo, 'packages/paths/src/test-utils.ts'))};
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
 const scope = new CliTestScope(${JSON.stringify(f.root)});
-let owners;
-let node;
-beforeEach(async () => {
-  const result = await scope.run(${JSON.stringify([process.execPath, f.entry, ...args])}, ${JSON.stringify(f.project)}, { ...process.env, ARCHON_HOME: ${JSON.stringify(f.home)}, LOG_LEVEL: 'silent' });
-  expect(result, result.output + result.error).toMatchObject({ code: 0 });
-  while (!existsSync(${JSON.stringify(nodePid)})) await Bun.sleep(10);
-  owners = readFileSync(scope.detachedPids, 'utf8').trim().split(String.fromCharCode(10)).map(Number);
-  node = Number(readFileSync(${JSON.stringify(nodePid)}, 'utf8').trim());
-  for (const owner of owners) process.kill(owner, 0);
-  process.kill(node, 0);
+const logs = ${JSON.stringify(join(f.home, 'logs'))};
+let ready = false;
+// The node records itself with the owners, then signals here, so teardown stops it by its own PID.
+// TCP may split the PID across data callbacks, so the signal is complete at its newline. It does not
+// wait for the node's half-close: a Windows setup once stalled with the node running and the
+// listener never seeing that end.
+const started = Promise.withResolvers<number>();
+let signal = '';
+// What the listener saw, so a setup timeout names the step that never happened.
+const events: string[] = [];
+const listener = Bun.listen({
+  hostname: '127.0.0.1',
+  port: 0,
+  socket: {
+    open: () => {
+      events.push('open');
+    },
+    data: (_socket, data) => {
+      events.push('data ' + JSON.stringify(data.toString()));
+      signal += data.toString();
+      if (signal.includes(String.fromCharCode(10))) started.resolve(Number(signal));
+    },
+    end: () => {
+      events.push('end');
+    },
+    close: (_socket, error) => {
+      events.push('close' + (error ? ' ' + String(error) : ''));
+    },
+    error: (_socket, error) => {
+      events.push('error ' + String(error));
+    },
+  },
 });
+function pids(records: string): number[] {
+  return records.split(String.fromCharCode(10)).filter(Boolean).map(Number);
+}
+function recorded(): number[] {
+  return existsSync(scope.detachedPids) ? pids(readFileSync(scope.detachedPids, 'utf8')) : [];
+}
+// The diagnostic must not throw, or teardown would leave the detached processes running.
+function read(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (error) {
+    return 'unreadable: ' + ((error as NodeJS.ErrnoException).code ?? String(error));
+  }
+}
+function liveness(pid: number): string {
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code ?? String(error);
+  }
+}
+function runLogs(): string[] {
+  let names: string[];
+  try {
+    names = existsSync(logs) ? readdirSync(logs) : [];
+  } catch (error) {
+    return [logs + ' unreadable: ' + ((error as NodeJS.ErrnoException).code ?? String(error))];
+  }
+  if (!names.length) return ['no run log in ' + logs];
+  return names.map(name => '--- ' + name + ' ---' + String.fromCharCode(10) + read(join(logs, name)));
+}
+function setupState(): string {
+  const records = existsSync(scope.detachedPids) ? read(scope.detachedPids) : undefined;
+  return [
+    'Detached timeout setup did not finish. State before teardown:',
+    'recorded PIDs file: ' + (records === undefined ? 'missing' : JSON.stringify(records)),
+    ...pids(records ?? '').map(pid => 'PID ' + pid + ': ' + liveness(pid)),
+    'listener events: ' + (events.length ? events.join(', ') : 'none, the node never connected'),
+    ...runLogs(),
+  ].join(String.fromCharCode(10));
+}
+beforeEach(async () => {
+  // Exercise setup that exceeds the forced body timeout.
+  await Bun.sleep(100);
+  writeFileSync(${JSON.stringify(join(f.project, 'hold.ts'))}, [
+    "import { appendFileSync } from 'node:fs';",
+    'appendFileSync(' + JSON.stringify(scope.detachedPids) + ', process.pid + String.fromCharCode(10));',
+    "await Bun.connect({ hostname: '127.0.0.1', port: " + listener.port + ", socket: { open: socket => { socket.write(process.pid + String.fromCharCode(10)); }, data: () => {} } });",
+    'setInterval(() => {}, 1000);',
+  ].join(String.fromCharCode(10)));
+  const result = await scope.run(${JSON.stringify([process.execPath, f.entry, ...args])}, ${JSON.stringify(f.project)}, { ...process.env, ARCHON_HOME: ${JSON.stringify(f.home)}, LOG_LEVEL: 'info' });
+  expect(result, result.output + result.error).toMatchObject({ code: 0 });
+  const node = await started.promise;
+  expect(recorded()).toContain(node);
+  for (const pid of recorded()) process.kill(pid, 0);
+  ready = true;
+}, 10000);
 afterEach(async () => {
+  if (!ready) console.error(setupState());
+  listener.stop(true);
   const removeTempTree = cleanup.removeTempTree;
   const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
     expect(existsSync(root)).toBe(true);
-    for (const owner of owners) expect(() => process.kill(owner, 0)).toThrow();
-    expect(() => process.kill(node, 0)).toThrow();
+    for (const pid of recorded()) expect(() => process.kill(pid, 0)).toThrow();
     await removeTempTree(root);
   });
-  try { await scope.close(); } finally { removal.mockRestore(); }
+  try {
+    await scope.close();
+  } finally {
+    removal.mockRestore();
+  }
   expect(existsSync(scope.root)).toBe(false);
   writeFileSync(${JSON.stringify(proof)}, 'closed');
-});
-test('forced detached timeout', async () => { await Bun.sleep(60000); }, 50);
+}, 10000);
+test('forced detached timeout', async () => {
+  writeFileSync(${JSON.stringify(bodyStarted)}, 'started');
+  await Bun.sleep(60000);
+}, 50);
 `
     );
     const result = await outer.scope.run([process.execPath, 'test', spec], repo, f.env);
     expect(result.code).toBe(1);
     expect(result.output + result.error).toContain('timed out');
+    expect(existsSync(bodyStarted), result.output + result.error).toBe(true);
     expect(existsSync(proof), result.output + result.error).toBe(true);
     expect(readFileSync(proof, 'utf8')).toBe('closed');
     expect(existsSync(f.root)).toBe(false);

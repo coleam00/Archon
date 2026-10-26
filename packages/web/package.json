@@ -66,6 +66,9 @@
     ],
     [
       "src/experiments/ApprovalPanelResponse.test.tsx"
+    ],
+    [
+      "src/experiments/SubscriptionLoginFlow.test.tsx"
     ]
   ]
 }

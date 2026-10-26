@@ -293,7 +293,7 @@ function nodeKindFields(node: NodeDescriptor): SerializedNodeData {
   }
 }
 
-function bindingFields(binding: NodeExecutionRecord['binding']): SerializedNodeData {
+function bindingFields(binding: NodeExecutionRecord['binding']) {
   return {
     ...(binding.provider !== undefined ? { provider: binding.provider } : {}),
     ...(binding.model?.requested !== undefined ? { model: binding.model.requested } : {}),
@@ -406,24 +406,7 @@ export function serializeNodeOutput(
   record: NodeExecutionRecord,
   continuation: { resumed?: boolean } = {}
 ): NodeExecutionResult {
-  const common = {
-    output: record.output?.text ?? '',
-    ...(record.output?.structured !== undefined
-      ? { structuredOutput: record.output.structured }
-      : {}),
-    ...(record.output?.declaredOutputPaths !== undefined
-      ? { declaredOutputPaths: record.output.declaredOutputPaths }
-      : {}),
-    ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
-    ...(record.spend.tokens.source === 'unavailable' && record.spend.tokens.reason === 'incomplete'
-      ? { tokensUnknown: true }
-      : {}),
-    ...(record.spend.costUsd.source === 'provider' ? { costUsd: record.spend.costUsd.value } : {}),
-    ...(record.diagnostics?.loopIterations !== undefined
-      ? { loopIterations: record.diagnostics.loopIterations }
-      : {}),
-    execution: executionMetadata(record),
-  };
+  const common = nodeOutputFields(record);
   const session = record.sessionId !== undefined ? { sessionId: record.sessionId } : {};
   const lifecycle = record.lifecycle;
   switch (lifecycle.status) {
@@ -448,6 +431,27 @@ export function serializeNodeOutput(
   }
 }
 
+function nodeOutputFields(record: NodeExecutionRecord) {
+  return {
+    output: record.output?.text ?? '',
+    ...(record.output?.structured !== undefined
+      ? { structuredOutput: record.output.structured }
+      : {}),
+    ...(record.output?.declaredOutputPaths !== undefined
+      ? { declaredOutputPaths: record.output.declaredOutputPaths }
+      : {}),
+    ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
+    ...(record.spend.tokens.source === 'unavailable' && record.spend.tokens.reason === 'incomplete'
+      ? { tokensUnknown: true }
+      : {}),
+    ...(record.spend.costUsd.source === 'provider' ? { costUsd: record.spend.costUsd.value } : {}),
+    ...(record.diagnostics?.loopIterations !== undefined
+      ? { loopIterations: record.diagnostics.loopIterations }
+      : {}),
+    execution: executionMetadata(record),
+  };
+}
+
 /**
  * The label progress surfaces show for a node: the command name for a command node, else
  * the node id. A packaged command's internal reference is reduced to its bare name; the
@@ -468,24 +472,8 @@ export function serializeNodeTranscript(
   const lifecycle = record.lifecycle;
   const execution = executionMetadata(record);
   const base = { step: record.node.id, execution };
-  const usage = reportsOwnSpend(record)
-    ? {
-        ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
-        ...(record.spend.costUsd.source === 'provider'
-          ? { cost_usd: record.spend.costUsd.value }
-          : {}),
-      }
-    : {};
-  const content =
-    record.node.kind === 'agent'
-      ? record.node.source.kind === 'command'
-        ? record.node.source.name
-        : '<inline>'
-      : record.node.kind === 'exec'
-        ? record.node.runtime === 'sh'
-          ? '<bash>'
-          : '<script>'
-        : `<${record.node.kind}>`;
+  const usage = transcriptUsage(record);
+  const content = transcriptNodeContent(record.node);
   switch (lifecycle.status) {
     case 'started':
       return { ...base, type: 'node_start', content };
@@ -508,6 +496,25 @@ export function serializeNodeTranscript(
   }
 }
 
+function transcriptUsage(record: NodeExecutionRecord) {
+  return reportsOwnSpend(record)
+    ? {
+        ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
+        ...(record.spend.costUsd.source === 'provider'
+          ? { cost_usd: record.spend.costUsd.value }
+          : {}),
+      }
+    : {};
+}
+
+function transcriptNodeContent(node: NodeExecutionRecord['node']): string {
+  if (node.kind === 'agent') {
+    return node.source.kind === 'command' ? node.source.name : '<inline>';
+  }
+  if (node.kind === 'exec') return node.runtime === 'sh' ? '<bash>' : '<script>';
+  return `<${node.kind}>`;
+}
+
 export function serializeNodeEmitter(
   record: NodeStateRecord
 ): import('./event-emitter').WorkflowEmitterEvent | undefined {
@@ -528,28 +535,14 @@ export function serializeNodeEmitter(
         ...base,
         execution,
         type: 'node_started',
-        ...(record.binding.provider !== undefined ? { provider: record.binding.provider } : {}),
-        ...(record.binding.model?.requested !== undefined
-          ? { model: record.binding.model.requested }
-          : {}),
-        ...(record.binding.tier !== undefined ? { tier: record.binding.tier } : {}),
-        ...(record.binding.effort !== undefined ? { effort: record.binding.effort } : {}),
+        ...bindingFields(record.binding),
       };
     case 'completed':
       return {
         ...base,
         execution,
         type: 'node_completed',
-        ...(record.timing.durationMs !== undefined ? { duration: record.timing.durationMs } : {}),
-        ...(reportsOwnSpend(record) && record.spend.costUsd.source === 'provider'
-          ? { costUsd: record.spend.costUsd.value }
-          : {}),
-        ...(record.spend.stopReason.source === 'provider'
-          ? { stopReason: record.spend.stopReason.value }
-          : {}),
-        ...(record.spend.numTurns.source === 'provider'
-          ? { numTurns: record.spend.numTurns.value }
-          : {}),
+        ...emitterCompletion(record),
       };
     case 'failed':
       return { ...base, execution, type: 'node_failed', error: lifecycle.error };
@@ -566,4 +559,19 @@ export function serializeNodeEmitter(
     case 'suspended':
       return { ...base, execution, type: 'node_suspended' };
   }
+}
+
+function emitterCompletion(record: NodeExecutionRecord) {
+  return {
+    ...(record.timing.durationMs !== undefined ? { duration: record.timing.durationMs } : {}),
+    ...(reportsOwnSpend(record) && record.spend.costUsd.source === 'provider'
+      ? { costUsd: record.spend.costUsd.value }
+      : {}),
+    ...(record.spend.stopReason.source === 'provider'
+      ? { stopReason: record.spend.stopReason.value }
+      : {}),
+    ...(record.spend.numTurns.source === 'provider'
+      ? { numTurns: record.spend.numTurns.value }
+      : {}),
+  };
 }

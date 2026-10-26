@@ -56,19 +56,7 @@ export async function isolationListCommand(): Promise<void> {
 
   for (const codebase of codebases) {
     console.log(`\n${codebase.repositoryUrl ?? codebase.defaultCwd}:`);
-
-    for (const env of codebase.environments) {
-      const age =
-        env.days_since_activity !== null
-          ? `${Math.floor(env.days_since_activity)}d ago`
-          : 'unknown';
-      const platform = env.created_by_platform ?? 'unknown';
-
-      console.log(`  ${env.branch_name ?? env.workflow_id}`);
-      console.log(`    Path: ${env.working_path}`);
-      console.log(`    Type: ${env.workflow_type} | Platform: ${platform} | Last activity: ${age}`);
-      if (env.cleanupSkipReason) console.log(`    Cleanup skipped: ${env.cleanupSkipReason}`);
-    }
+    printWorktreeEnvironments(codebase.environments);
   }
 
   if (ghostsReconciled > 0) {
@@ -89,6 +77,27 @@ export async function isolationListCommand(): Promise<void> {
   const containers = await listContainerEnvironments();
   if (containers.length === 0) return;
 
+  printContainerEnvironments(containers);
+}
+
+function printWorktreeEnvironments(
+  environments: Awaited<ReturnType<typeof listEnvironments>>['codebases'][number]['environments']
+): void {
+  for (const env of environments) {
+    const age =
+      env.days_since_activity !== null ? `${Math.floor(env.days_since_activity)}d ago` : 'unknown';
+    const platform = env.created_by_platform ?? 'unknown';
+
+    console.log(`  ${env.branch_name ?? env.workflow_id}`);
+    console.log(`    Path: ${env.working_path}`);
+    console.log(`    Type: ${env.workflow_type} | Platform: ${platform} | Last activity: ${age}`);
+    if (env.cleanupSkipReason) console.log(`    Cleanup skipped: ${env.cleanupSkipReason}`);
+  }
+}
+
+function printContainerEnvironments(
+  containers: Awaited<ReturnType<typeof listContainerEnvironments>>
+): void {
   console.log('\nContainer environments (folder projects):');
   for (const c of containers) {
     let runPart = 'no run (orphan)';

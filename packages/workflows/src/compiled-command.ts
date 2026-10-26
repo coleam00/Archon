@@ -206,6 +206,16 @@ function preserveEngineMetadata(
   const bindings = readComposedBindings(source);
   if (bindings !== undefined) attachComposedBindings(target, structuredClone(bindings));
   setIncludeOutputAliases(target, readIncludeOutputAliases(source));
+  preserveCompiledLoopCommand(source, target);
+  if (isLoopGroupNode(source) && isLoopGroupNode(target)) {
+    for (const [index, sourceChild] of source.loop_group.nodes.entries()) {
+      const targetChild = target.loop_group.nodes[index];
+      if (targetChild !== undefined) preserveEngineMetadata(sourceChild, targetChild);
+    }
+  }
+}
+
+function preserveCompiledLoopCommand(source: DagNode, target: DagNode): void {
   if (isLoopNode(source) && isLoopNode(target)) {
     const compiled = (source.loop as typeof source.loop & LoopWithCompiledCommand)[
       COMPILED_LOOP_COMMAND
@@ -213,12 +223,6 @@ function preserveEngineMetadata(
     if (compiled !== undefined) {
       (target.loop as typeof target.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] =
         structuredClone(compiled);
-    }
-  }
-  if (isLoopGroupNode(source) && isLoopGroupNode(target)) {
-    for (const [index, sourceChild] of source.loop_group.nodes.entries()) {
-      const targetChild = target.loop_group.nodes[index];
-      if (targetChild !== undefined) preserveEngineMetadata(sourceChild, targetChild);
     }
   }
 }

@@ -130,16 +130,7 @@ export async function workflowRunCommand(
         error as Error
       );
       if (isResumeSuperseded(error)) {
-        getLog().info(
-          { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },
-          'cli.wait_continuation_superseded'
-        );
-        // Without this line an approve that lost the claim to `archon serve` reads as a
-        // resume that stopped mid-dispatch. The --json contract owns its own stdout.
-        const runId = attempt.options.continuationRun?.id;
-        if (runId !== undefined && !options.json) {
-          console.log(`Run ${runId} is already continuing in another process.`);
-        }
+        reportSupersededResume(attempt, options.json);
         return;
       }
       throw error;
@@ -147,5 +138,18 @@ export async function workflowRunCommand(
     if (pending === undefined) return;
     if ((await awaitDurableWaitDeadline(host, pending.run.id, pending.wait)) === 'stop') return;
     attempt = await buildWaitResumeAttempt(host, pending.run, pending.destination, pending.wait);
+  }
+}
+
+function reportSupersededResume(attempt: WaitResumeAttempt, json: boolean | undefined): void {
+  getLog().info(
+    { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },
+    'cli.wait_continuation_superseded'
+  );
+  // Without this line an approve that lost the claim to `archon serve` reads as a
+  // resume that stopped mid-dispatch. The --json contract owns its own stdout.
+  const runId = attempt.options.continuationRun?.id;
+  if (runId !== undefined && !json) {
+    console.log(`Run ${runId} is already continuing in another process.`);
   }
 }

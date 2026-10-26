@@ -243,86 +243,10 @@ export async function runContainerWriteBackGate(
   // carries no decision → must not apply). Unresolved ⇒ FAIL CLOSED (re-pause).
   if (pending && isWriteBackGate) {
     if (approval.resolved === 'approved') {
-      // Retry-safe apply (R2-F4). CLAIM the apply atomically BEFORE mutating the live
-      // root. Semantics:
-      //  - `claimed` false ⇒ a concurrent/prior resume already claimed the apply (or a
-      //    crash left it claimed AFTER a successful apply). Do NOT re-apply — no path
-      //    applies twice — and complete as applied (the resume CAS already serializes
-      //    resumes; the only skipped-apply window is a sub-ms crash between claim and
-      //    the apply call, which leaves the volume preserved by H2 for manual recovery).
-      //  - `claimed` true ⇒ we own the apply. On SUCCESS record `writeback_resolved`;
-      //    on FAILURE release the claim so `workflow resume` can retry (H2), keep the
-      //    volume, and rethrow so the run fails with the reconcile teardown message.
-      const { claimed } = await deps.store.claimWriteback(runId);
-      if (!claimed) {
-        getLog().warn({ runId }, 'dag.writeback_apply_already_claimed');
-        await deps.store
-          .updateWorkflowRun(runId, {
-            metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
-          })
-          .catch((err: unknown) => {
-            // The independent apply claim stays set even if resolution bookkeeping fails.
-            // Retaining it prevents another apply; it does not prove the overlay landed.
-            getLog().warn(
-              {
-                runId,
-                operation: 'updateWorkflowRun',
-                err,
-                recovery:
-                  'Resolution metadata was not recorded; the apply claim is retained. ' +
-                  'Before manual reconciliation, inspect the run and live-folder changes; ' +
-                  'do not release the claim or automatically apply again.',
-              },
-              'dag.writeback_resolution_persist_failed'
-            );
-          });
-        return 'applied';
-      }
-      let applied;
-      try {
-        applied = await containerCtx.backend.applyChanges(containerCtx.envId);
-      } catch (applyErr) {
-        await deps.store.releaseWritebackClaim(runId).catch((relErr: unknown) => {
-          getLog().error({ err: relErr as Error, runId }, 'dag.writeback_release_claim_failed');
-        });
-        throw applyErr;
-      }
-      await deps.store.updateWorkflowRun(runId, {
-        metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
-      });
-      emitContainerLifecycleEvent(
-        deps,
-        runId,
-        'writeback_applied',
-        'writeback_applied',
-        undefined,
-        {
-          files_applied: applied.filesApplied,
-          files_deleted: applied.filesDeleted,
-        }
-      );
-      await safeSendMessage(
-        platform,
-        conversationId,
-        `✅ Applied to the live folder: ${applied.filesApplied} file(s) written, ${applied.filesDeleted} deleted.` +
-          (applied.warnings.length > 0 ? `\n⚠️ ${applied.warnings.join('; ')}` : ''),
-        { workflowId: runId }
-      );
-      return 'applied';
+      return applyApprovedWriteBack(deps, platform, conversationId, runId, containerCtx);
     }
     if (approval.resolved === 'rejected') {
-      await containerCtx.backend.discardChanges(containerCtx.envId);
-      await deps.store.updateWorkflowRun(runId, {
-        metadata: { writeback_resolved: true, writeback_outcome: 'discarded' },
-      });
-      emitContainerLifecycleEvent(deps, runId, 'writeback_discarded', 'writeback_discarded');
-      await safeSendMessage(
-        platform,
-        conversationId,
-        '🗑️ Changes discarded — the live folder was left untouched. (The run itself succeeded; artifacts remain.)',
-        { workflowId: runId }
-      );
-      return 'discarded';
+      return discardWriteBack(deps, platform, conversationId, runId, containerCtx);
     }
     // FAIL CLOSED: a resume reached the still-open gate with no decision (e.g. a bare
     // `/workflow resume`). Re-raise the gate rather than touching the live root.
@@ -350,34 +274,7 @@ export async function runContainerWriteBackGate(
 
   // `auto` policy: apply without pausing (logged). For unattended workflows.
   if (containerCtx.writeBack === 'auto') {
-    // N1 — set the `pending_writeback` preserve marker BEFORE mutating the live root,
-    // even in auto mode (which never pauses). If applyChanges throws partway, the run
-    // fails with the marker set + unresolved, so the teardown PRESERVES the volume
-    // (the un-applied remainder is recoverable) instead of destroying it. Cleared to
-    // resolved on success so normal teardown cleanup proceeds. (No claim CAS here:
-    // auto runs in one process; a resume of a failed auto run re-enters this first-
-    // arrival path and re-applies idempotently.)
-    await deps.store.updateWorkflowRun(runId, {
-      metadata: { pending_writeback: { envId: containerCtx.envId } },
-    });
-    const applied = await containerCtx.backend.applyChanges(containerCtx.envId);
-    await deps.store.updateWorkflowRun(runId, {
-      metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
-    });
-    emitContainerLifecycleEvent(deps, runId, 'writeback_applied', 'writeback_applied', undefined, {
-      files_applied: applied.filesApplied,
-      files_deleted: applied.filesDeleted,
-      auto: true,
-    });
-    await safeSendMessage(
-      platform,
-      conversationId,
-      `✅ Auto-applied ${applied.filesApplied} file(s) to the live folder (${applied.filesDeleted} deleted). ` +
-        '(`container.write_back: auto` — no approval gate.)',
-      { workflowId: runId }
-    );
-    getLog().info({ runId, filesApplied: applied.filesApplied }, 'dag.writeback_auto_applied');
-    return 'applied';
+    return autoApplyWriteBack(deps, platform, conversationId, runId, containerCtx);
   }
 
   // `approve` policy (default): suspend, then raise the write-back gate.
@@ -390,6 +287,132 @@ export async function runContainerWriteBackGate(
     execContext,
     summary
   );
+}
+
+async function applyApprovedWriteBack(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  runId: string,
+  containerCtx: ContainerRunContext
+): Promise<'applied'> {
+  // Retry-safe apply (R2-F4). CLAIM the apply atomically BEFORE mutating the live
+  // root. Semantics:
+  //  - `claimed` false ⇒ a concurrent/prior resume already claimed the apply (or a
+  //    crash left it claimed AFTER a successful apply). Do NOT re-apply — no path
+  //    applies twice — and complete as applied (the resume CAS already serializes
+  //    resumes; the only skipped-apply window is a sub-ms crash between claim and
+  //    the apply call, which leaves the volume preserved by H2 for manual recovery).
+  //  - `claimed` true ⇒ we own the apply. On SUCCESS record `writeback_resolved`;
+  //    on FAILURE release the claim so `workflow resume` can retry (H2), keep the
+  //    volume, and rethrow so the run fails with the reconcile teardown message.
+  const { claimed } = await deps.store.claimWriteback(runId);
+  if (!claimed) {
+    getLog().warn({ runId }, 'dag.writeback_apply_already_claimed');
+    await deps.store
+      .updateWorkflowRun(runId, {
+        metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
+      })
+      .catch((err: unknown) => {
+        // The independent apply claim stays set even if resolution bookkeeping fails.
+        // Retaining it prevents another apply; it does not prove the overlay landed.
+        getLog().warn(
+          {
+            runId,
+            operation: 'updateWorkflowRun',
+            err,
+            recovery:
+              'Resolution metadata was not recorded; the apply claim is retained. ' +
+              'Before manual reconciliation, inspect the run and live-folder changes; ' +
+              'do not release the claim or automatically apply again.',
+          },
+          'dag.writeback_resolution_persist_failed'
+        );
+      });
+    return 'applied';
+  }
+  let applied;
+  try {
+    applied = await containerCtx.backend.applyChanges(containerCtx.envId);
+  } catch (applyErr) {
+    await deps.store.releaseWritebackClaim(runId).catch((relErr: unknown) => {
+      getLog().error({ err: relErr as Error, runId }, 'dag.writeback_release_claim_failed');
+    });
+    throw applyErr;
+  }
+  await deps.store.updateWorkflowRun(runId, {
+    metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
+  });
+  emitContainerLifecycleEvent(deps, runId, 'writeback_applied', 'writeback_applied', undefined, {
+    files_applied: applied.filesApplied,
+    files_deleted: applied.filesDeleted,
+  });
+  await safeSendMessage(
+    platform,
+    conversationId,
+    `✅ Applied to the live folder: ${applied.filesApplied} file(s) written, ${applied.filesDeleted} deleted.` +
+      (applied.warnings.length > 0 ? `\n⚠️ ${applied.warnings.join('; ')}` : ''),
+    { workflowId: runId }
+  );
+  return 'applied';
+}
+
+async function discardWriteBack(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  runId: string,
+  containerCtx: ContainerRunContext
+): Promise<'discarded'> {
+  await containerCtx.backend.discardChanges(containerCtx.envId);
+  await deps.store.updateWorkflowRun(runId, {
+    metadata: { writeback_resolved: true, writeback_outcome: 'discarded' },
+  });
+  emitContainerLifecycleEvent(deps, runId, 'writeback_discarded', 'writeback_discarded');
+  await safeSendMessage(
+    platform,
+    conversationId,
+    '🗑️ Changes discarded — the live folder was left untouched. (The run itself succeeded; artifacts remain.)',
+    { workflowId: runId }
+  );
+  return 'discarded';
+}
+
+async function autoApplyWriteBack(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  runId: string,
+  containerCtx: ContainerRunContext
+): Promise<'applied'> {
+  // N1 — set the `pending_writeback` preserve marker BEFORE mutating the live root,
+  // even in auto mode (which never pauses). If applyChanges throws partway, the run
+  // fails with the marker set + unresolved, so the teardown PRESERVES the volume
+  // (the un-applied remainder is recoverable) instead of destroying it. Cleared to
+  // resolved on success so normal teardown cleanup proceeds. (No claim CAS here:
+  // auto runs in one process; a resume of a failed auto run re-enters this first-
+  // arrival path and re-applies idempotently.)
+  await deps.store.updateWorkflowRun(runId, {
+    metadata: { pending_writeback: { envId: containerCtx.envId } },
+  });
+  const applied = await containerCtx.backend.applyChanges(containerCtx.envId);
+  await deps.store.updateWorkflowRun(runId, {
+    metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
+  });
+  emitContainerLifecycleEvent(deps, runId, 'writeback_applied', 'writeback_applied', undefined, {
+    files_applied: applied.filesApplied,
+    files_deleted: applied.filesDeleted,
+    auto: true,
+  });
+  await safeSendMessage(
+    platform,
+    conversationId,
+    `✅ Auto-applied ${applied.filesApplied} file(s) to the live folder (${applied.filesDeleted} deleted). ` +
+      '(`container.write_back: auto` — no approval gate.)',
+    { workflowId: runId }
+  );
+  getLog().info({ runId, filesApplied: applied.filesApplied }, 'dag.writeback_auto_applied');
+  return 'applied';
 }
 
 /**

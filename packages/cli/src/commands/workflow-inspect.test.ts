@@ -642,6 +642,52 @@ describe('workflowStatusCommand', () => {
     expect(calls.some(c => c.includes('Compilation failed'))).toBe(true);
   });
 
+  it('shows failed and unstarted fan-out children in verbose status', async () => {
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    mockListDashboardRuns.mockResolvedValueOnce(
+      statusRuns([
+        {
+          id: 'run-fan',
+          workflow_name: 'implement',
+          working_path: '/path/to/worktree',
+          status: 'failed',
+          started_at: new Date('2026-10-22T10:00:00.000Z'),
+          active_nodes: [],
+        },
+      ])
+    );
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'work-failed',
+        workflow_run_id: 'run-fan',
+        event_type: 'node_failed',
+        step_name: 'work',
+        step_index: null,
+        data: {
+          error: 'children failed',
+          fan_out: true,
+          fan_out_outcome: fanOutOutcome([
+            { index: 0, outcome: 'failed', child_run_id: 'child-failed', error: 'exit 1' },
+            { index: 1, outcome: 'not_started', error: 'refused' },
+          ]),
+        },
+        created_at: '2026-10-22T10:00:01.000Z',
+      },
+    ]);
+
+    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', {
+      verbose: true,
+      all: true,
+    });
+
+    const lines = consoleSpy.mock.calls.map((call: unknown[]) => call[0]);
+    expect(lines).toContain(
+      '        Fan-out work: 2 of 2 children did not complete (1 failed, 1 not started)'
+    );
+    expect(lines).toContain('          item 0: failed — run child-failed — exit 1');
+    expect(lines).toContain('          item 1: not started — refused');
+  });
+
   it('should not show nodes section when no events in verbose mode', async () => {
     const workflowEventsDb = await import('@archon/core/db/workflow-events');
 

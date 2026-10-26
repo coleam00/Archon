@@ -124,6 +124,58 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
     }
   };
 
+  const handleToolCall = async (
+    event: Extract<ProviderEvent, { type: 'tool_call' }>,
+    streaming: boolean
+  ): Promise<void> => {
+    if (!streaming) return;
+    await safeSendMessage(
+      platform,
+      conversationId,
+      formatToolCall(toolCallDisplayName(event), event.rawInput),
+      messageContext,
+      { category: 'tool_call_formatted' } as WorkflowMessageMetadata
+    );
+    if (platform.sendStructuredEvent) {
+      await platform.sendStructuredEvent(conversationId, event);
+    }
+  };
+
+  const handleToolCallUpdate = async (
+    event: Extract<ProviderEvent, { type: 'tool_call_update' }>,
+    streaming: boolean
+  ): Promise<void> => {
+    if (streaming && platform.sendStructuredEvent) {
+      await platform.sendStructuredEvent(conversationId, event);
+    }
+  };
+
+  const handleMcpServerStatus = async (
+    event: Extract<ProviderEvent, { type: 'mcp_server_status' }>
+  ): Promise<void> => {
+    // Only the node's declared servers surface. The provider decides whether the
+    // node can run without one: Claude and Codex fail it before the first turn.
+    if (
+      (event.status === 'failed' || event.status === 'needs_auth') &&
+      deps.configuredMcpServers.has(event.server)
+    ) {
+      await sendWarning(
+        `MCP server connection failed: ${event.server} (${event.status})${event.error ? `: ${event.error}` : ''}`,
+        { mcpServer: event.server, mcpStatus: event.status }
+      );
+    } else {
+      getLog().debug(
+        { nodeId, mcpServer: event.server, mcpStatus: event.status },
+        'dag.mcp_server_status'
+      );
+    }
+  };
+
+  const handleSubtask = (event: Extract<ProviderEvent, { type: 'subtask' }>): void => {
+    if (terminalSubtaskStatuses.has(event.status)) liveSubtasks.delete(event.taskId);
+    else liveSubtasks.add(event.taskId);
+  };
+
   return {
     async handle(event): Promise<void> {
       await deps.toolAttention.observe(event);
@@ -134,49 +186,20 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           await deps.onMessageText(event.text);
           return;
         case 'tool_call':
-          if (streaming) {
-            await safeSendMessage(
-              platform,
-              conversationId,
-              formatToolCall(toolCallDisplayName(event), event.rawInput),
-              messageContext,
-              { category: 'tool_call_formatted' } as WorkflowMessageMetadata
-            );
-            if (platform.sendStructuredEvent) {
-              await platform.sendStructuredEvent(conversationId, event);
-            }
-          }
+          await handleToolCall(event, streaming);
           return;
         case 'tool_call_update':
-          if (streaming && platform.sendStructuredEvent) {
-            await platform.sendStructuredEvent(conversationId, event);
-          }
+          await handleToolCallUpdate(event, streaming);
           return;
         case 'warning':
           // The ⚠️ is display formatting at the platform edge; nothing reads it back.
           await sendWarning(`⚠️ ${event.message}`, { code: event.code });
           return;
         case 'mcp_server_status':
-          // Only the node's declared servers surface. The provider decides whether the
-          // node can run without one: Claude and Codex fail it before the first turn.
-          if (
-            (event.status === 'failed' || event.status === 'needs_auth') &&
-            deps.configuredMcpServers.has(event.server)
-          ) {
-            await sendWarning(
-              `MCP server connection failed: ${event.server} (${event.status})${event.error ? `: ${event.error}` : ''}`,
-              { mcpServer: event.server, mcpStatus: event.status }
-            );
-          } else {
-            getLog().debug(
-              { nodeId, mcpServer: event.server, mcpStatus: event.status },
-              'dag.mcp_server_status'
-            );
-          }
+          await handleMcpServerStatus(event);
           return;
         case 'subtask':
-          if (terminalSubtaskStatuses.has(event.status)) liveSubtasks.delete(event.taskId);
-          else liveSubtasks.add(event.taskId);
+          handleSubtask(event);
           return;
         case 'hook':
         case 'agent_thought_chunk':

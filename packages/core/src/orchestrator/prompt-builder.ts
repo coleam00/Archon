@@ -17,6 +17,7 @@ import {
   isApprovalContext,
   isContainerRun,
   runAttention,
+  type RunAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import {
   attentionAnswerLines,
@@ -134,6 +135,8 @@ export interface PausedGateContext {
   surface?: WorkflowCommandSurface;
 }
 
+const PAUSED_GATE_HEADER = '## Paused Approval Gate\n\n';
+
 /**
  * Format the "there is a human gate waiting in this conversation" section.
  *
@@ -147,7 +150,6 @@ export interface PausedGateContext {
  * gate is awaiting resume, not a human.
  */
 export function formatPausedGateSection(gate: PausedGateContext): string {
-  const header = '## Paused Approval Gate\n\n';
   const runId = gate.run.id;
   const workflowName = gate.run.workflow_name;
   const attention = runAttention(gate.run);
@@ -165,7 +167,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'unreadable' && attention.reason === 'source_release_not_continued') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) has no gate: it is ${attention.detail}. ` +
       `Tell the user to resume it with \`${cmd(`resume ${runId}`)}\` once a host can read ` +
       `its source, or to abandon it with \`${cmd(`abandon ${runId}`)}\`.`
@@ -174,7 +176,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'unreadable') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) is paused, but its approval context is ` +
       'missing or malformed, so the gate cannot be described. Do not resolve it. ' +
       `Tell the user to inspect it with \`${cmd(`get ${runId}`)}\` before choosing an action` +
@@ -186,7 +188,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'blocked_on_child') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) is paused waiting on its sub-run ` +
       `\`${attention.childRunId}\`, which has a gate of its own. This run has no gate you can resolve — ` +
       'the decision belongs to the child run, and this one continues on its own once the child ' +
@@ -196,7 +198,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'blocked_on_children') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) is paused waiting on its fan-out sub-runs ` +
       `${attention.childRunIds.map(id => `\`${id}\``).join(', ')}. This run has no gate you can ` +
       'resolve — each sub-run that is waiting is answered by its own run id, and this one ' +
@@ -206,7 +208,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'usage_limit') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) is paused on a provider usage or rate limit and ` +
       `tries again on its own at ${attention.resumeAt}; if the limit persists, it pauses ` +
       `again. It has no gate you can resolve. Resume it only if the user wants to try sooner: \`${cmd(`resume ${runId}`)}\`. ` +
@@ -224,6 +226,17 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
       '\n\nOnly answer what the user actually decided; an undeclared option is refused.'
     );
   }
+
+  return formatAwaitingResponse(gate, attention);
+}
+
+function formatAwaitingResponse(
+  gate: PausedGateContext,
+  attention: Extract<RunAttention, { kind: 'awaiting_response' }>
+): string {
+  const runId = gate.run.id;
+  const workflowName = gate.run.workflow_name;
+  const cmd = (command: string): string => spellWorkflowCommand(gate.surface ?? {}, command);
 
   // `awaiting_response`. The projection reports it only for a well-formed, unresolved
   // gate; the context read here carries the DETAIL the attention value omits.
@@ -249,7 +262,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     : `\`${cmd(`approve ${runId} [comment]`)}\` or \`${cmd(`reject ${runId} <reason>`)}\``;
 
   const preamble =
-    header +
+    PAUSED_GATE_HEADER +
     'A workflow run in this conversation is PAUSED waiting for a human decision. It does not ' +
     'continue until the gate is resolved.\n\n' +
     facts.join('\n') +

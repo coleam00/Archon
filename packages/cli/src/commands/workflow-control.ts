@@ -1,3 +1,4 @@
+import { formatAbandonResult } from './workflow-abandon-output';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -159,36 +160,8 @@ export async function workflowAbandonCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const {
-        run,
-        cascadeFailures,
-        cleanupWarnings,
-        releasedWorktrees,
-        blockedParentRunId,
-        owner,
-      } = await abandonWorkflow(resolvedId, { kind: 'operator' });
-      await writeJsonLine({
-        ok: true,
-        runId: resolvedId,
-        action: 'abandon',
-        status: 'cancelled',
-        workflowName: run.workflow_name,
-        owner:
-          owner.kind === 'stopped'
-            ? { outcome: 'stopped', pid: owner.pid }
-            : {
-                outcome: 'no_owner_answered',
-                thisHost: owner.thisHost,
-                recordedHost: owner.recordedOwner?.host ?? null,
-                recordedPid: owner.recordedOwner?.pid ?? null,
-                recordedUid: owner.recordedOwner?.uid ?? null,
-                lastActivityAt: owner.lastActivityAt?.toISOString() ?? null,
-              },
-        ...(releasedWorktrees ? { releasedWorktrees } : {}),
-        ...(cleanupWarnings ? { cleanupWarnings } : {}),
-        ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
-        ...(blockedParentRunId ? { blockedParentRunId } : {}),
-      });
+      const result = await abandonWorkflow(resolvedId, { kind: 'operator' });
+      await writeJsonLine(formatAbandonResult(resolvedId, result));
       return 0;
     } catch (error) {
       await printJsonWriteError(runId, 'abandon', error);

@@ -113,23 +113,7 @@ export function generateEnvContent(config: SetupConfig): string {
   // AI Assistants
   lines.push('# AI Assistants');
 
-  if (config.ai.claude) {
-    if (config.ai.claudeAuthType === 'global') {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'true']);
-    } else if (config.ai.claudeAuthType === 'apiKey' && config.ai.claudeApiKey) {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
-      lines.push(['CLAUDE_API_KEY', config.ai.claudeApiKey]);
-    } else if (config.ai.claudeAuthType === 'oauthToken' && config.ai.claudeOauthToken) {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
-      lines.push(['CLAUDE_CODE_OAUTH_TOKEN', config.ai.claudeOauthToken]);
-    }
-    if (config.ai.claudeBinaryPath) {
-      lines.push(['CLAUDE_BIN_PATH', config.ai.claudeBinaryPath]);
-    }
-  } else {
-    lines.push('# Claude not configured');
-  }
-  lines.push('');
+  appendClaudeEnv(lines, config.ai);
 
   if (config.ai.codex && config.ai.codexTokens) {
     lines.push('# Codex Authentication');
@@ -238,6 +222,26 @@ export function generateEnvContent(config: SetupConfig): string {
   return serializeEnvDocument(lines);
 }
 
+function appendClaudeEnv(lines: EnvLine[], ai: SetupConfig['ai']): void {
+  if (ai.claude) {
+    if (ai.claudeAuthType === 'global') {
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'true']);
+    } else if (ai.claudeAuthType === 'apiKey' && ai.claudeApiKey) {
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_API_KEY', ai.claudeApiKey]);
+    } else if (ai.claudeAuthType === 'oauthToken' && ai.claudeOauthToken) {
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_CODE_OAUTH_TOKEN', ai.claudeOauthToken]);
+    }
+    if (ai.claudeBinaryPath) {
+      lines.push(['CLAUDE_BIN_PATH', ai.claudeBinaryPath]);
+    }
+  } else {
+    lines.push('# Claude not configured');
+  }
+  lines.push('');
+}
+
 /**
  * Resolve the target path for the selected scope. Delegates to `@archon/paths`
  * so Docker (`/.archon`), the `ARCHON_HOME` override, and the "undefined"
@@ -270,23 +274,7 @@ function serializeEnvDocument(document: EnvLine[]): string {
     }
     const [key, value] = entry;
     entries[key] = value;
-    const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-    const candidates: string[] = [];
-    // Prefer quoted forms for leading quotes, which can consume later entries.
-    if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
-    for (const [quote, contents] of [
-      ['"', encodedLineBreaks],
-      ["'", value],
-      ['`', value],
-    ]) {
-      if (!contents.replaceAll(`\\${quote}`, '').includes(quote)) {
-        candidates.push(`${key}=${quote}${contents}${quote}`);
-      }
-    }
-    candidates.push(`${key}=${value}`);
-    const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
-    if (line === undefined)
-      throw new Error(`Cannot serialize env key ${key} without changing its value`);
+    const line = serializeEnvEntry(key, value);
     // An unmatched opening quote can close in a later entry, even in a comment.
     // Put values requiring this bare representation after the rest of the document.
     if (/^["'`]/.test(value) && line === `${key}=${value}`) trailing.push(line);
@@ -302,6 +290,27 @@ function serializeEnvDocument(document: EnvLine[]): string {
     throw new Error('Cannot serialize env without changing its values');
   }
   return content;
+}
+
+function serializeEnvEntry(key: string, value: string): string {
+  const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+  const candidates: string[] = [];
+  // Prefer quoted forms for leading quotes, which can consume later entries.
+  if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
+  for (const [quote, contents] of [
+    ['"', encodedLineBreaks],
+    ["'", value],
+    ['`', value],
+  ]) {
+    if (!contents.replaceAll(`\\${quote}`, '').includes(quote)) {
+      candidates.push(`${key}=${quote}${contents}${quote}`);
+    }
+  }
+  candidates.push(`${key}=${value}`);
+  const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
+  if (line === undefined)
+    throw new Error(`Cannot serialize env key ${key} without changing its value`);
+  return line;
 }
 
 /**

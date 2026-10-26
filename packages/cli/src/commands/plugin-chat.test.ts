@@ -57,6 +57,36 @@ let latest = 'v1';
 const commits = new Map<string, string>();
 const manifests = new Map<string, ChatManifest>();
 
+function releaseResponse(path: string): Response {
+  const release = /^\/owner\/repo\/releases\/download\/([^/]+)\/(.+)$/.exec(path);
+  if (!release) return new Response(null, { status: 404 });
+  const manifest = manifests.get(commits.get(release[1]) ?? '');
+  if (!manifest) return new Response(null, { status: 404 });
+  const executable = release[2].startsWith('archon-chat-alternate')
+    ? 'archon-chat-alternate'
+    : manifest.executable;
+  const asset = pluginReleaseAsset(
+    executable,
+    `bun-${windows ? 'windows' : process.platform}-${process.arch}`
+  );
+  const data = brokenExecutable ? new TextEncoder().encode('broken executable') : bytes;
+  if (release[2] === 'checksums.txt') {
+    const digest = brokenChecksum
+      ? '0'.repeat(64)
+      : createHash('sha256').update(data).digest('hex');
+    return new Response(
+      [manifest.executable, 'archon-chat-alternate']
+        .map(
+          name =>
+            `${digest}  ${pluginReleaseAsset(name, `bun-${windows ? 'windows' : process.platform}-${process.arch}`)}\n`
+        )
+        .join('')
+    );
+  }
+  if (release[2] === asset) return new Response(data);
+  return new Response(null, { status: 404 });
+}
+
 beforeAll(async () => {
   if (!enabled) return;
   root = await mkdtemp(join(tmpdir(), 'archon-chat-release-'));
@@ -137,35 +167,7 @@ setInterval(() => {}, 1000);
             : manifest
         );
       }
-      const release = /^\/owner\/repo\/releases\/download\/([^/]+)\/(.+)$/.exec(path);
-      if (release) {
-        const manifest = manifests.get(commits.get(release[1]) ?? '');
-        if (manifest) {
-          const executable = release[2].startsWith('archon-chat-alternate')
-            ? 'archon-chat-alternate'
-            : manifest.executable;
-          const asset = pluginReleaseAsset(
-            executable,
-            `bun-${windows ? 'windows' : process.platform}-${process.arch}`
-          );
-          const data = brokenExecutable ? new TextEncoder().encode('broken executable') : bytes;
-          if (release[2] === 'checksums.txt') {
-            const digest = brokenChecksum
-              ? '0'.repeat(64)
-              : createHash('sha256').update(data).digest('hex');
-            return new Response(
-              [manifest.executable, 'archon-chat-alternate']
-                .map(
-                  name =>
-                    `${digest}  ${pluginReleaseAsset(name, `bun-${windows ? 'windows' : process.platform}-${process.arch}`)}\n`
-                )
-                .join('')
-            );
-          }
-          if (release[2] === asset) return new Response(data);
-        }
-      }
-      return new Response(null, { status: 404 });
+      return releaseResponse(path);
     },
   });
 }, testTimeout(60_000));
@@ -311,6 +313,19 @@ integration(
   120_000
 );
 
+async function configureFailure(failure: string): Promise<void> {
+  if (failure === 'checksum') brokenChecksum = true;
+  else if (failure === 'executable') brokenExecutable = true;
+  else if (failure === 'protocol' || failure === 'policy')
+    await writeFile(
+      config,
+      JSON.stringify({
+        descriptor: { ...descriptor, [failure]: failure === 'protocol' ? sentinel : {} },
+      })
+    );
+  else await configure('slack', failure);
+}
+
 integration(
   'checksum, executable, descriptor and remote failures leave fresh installs and updates unchanged without leaking payloads',
   async () => {
@@ -324,16 +339,7 @@ integration(
         const previousMarker = await Bun.file(marker)
           .text()
           .catch(() => undefined);
-        if (failure === 'checksum') brokenChecksum = true;
-        else if (failure === 'executable') brokenExecutable = true;
-        else if (failure === 'protocol' || failure === 'policy')
-          await writeFile(
-            config,
-            JSON.stringify({
-              descriptor: { ...descriptor, [failure]: failure === 'protocol' ? sentinel : {} },
-            })
-          );
-        else await configure('slack', failure);
+        await configureFailure(failure);
         const result = await command(
           env,
           update ? 'update' : 'add',

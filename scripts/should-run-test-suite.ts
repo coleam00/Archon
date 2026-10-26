@@ -114,15 +114,7 @@ export function workspaceTestInputs(
     [...tracked, ...extraCandidates].filter(file => file.startsWith(ROOT_SCRIPTS))
   );
 
-  const named = new Set<string>();
-  for (const file of tracked) {
-    if (!file.startsWith('packages/') || file.endsWith('.md') || file.endsWith('.mdx')) continue;
-    const source = readFileSync(join(repo, file), 'utf8');
-    for (const match of source.matchAll(/scripts\/[\w./-]+/g)) {
-      const path = match[0].replace(/\.+$/, '');
-      if (candidates.has(path)) named.add(path);
-    }
-  }
+  const named = namedWorkspaceInputs(repo, tracked, candidates);
 
   const inputs = new Set<string>();
   const queue = [...named, ...WORKSPACE_RUNNER_ENTRY_POINTS];
@@ -141,6 +133,24 @@ export function workspaceTestInputs(
     }
   }
   return inputs;
+}
+
+function namedWorkspaceInputs(
+  repo: string,
+  tracked: readonly string[],
+  candidates: ReadonlySet<string>
+): Set<string> {
+  const named = new Set<string>();
+  for (const file of tracked) {
+    if (!file.startsWith('packages/') || file.endsWith('.md') || file.endsWith('.mdx')) continue;
+    const source = readFileSync(join(repo, file), 'utf8');
+    for (const match of source.matchAll(/scripts\/[\w./-]+/g)) {
+      const path = match[0].replace(/\.+$/, '');
+      if (candidates.has(path)) named.add(path);
+    }
+  }
+
+  return named;
 }
 
 /**

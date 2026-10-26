@@ -188,15 +188,10 @@ function fixtureName(tag: string): string {
   return `${tag}.sql`;
 }
 
-/** Regenerates the vintage fixtures, or with `--check` verifies they are current. */
-function main(): void {
-  const expected = new Map<string, string>();
-  for (const [sql, tag] of vintages()) expected.set(fixtureName(tag), sql);
-
-  // No-exist is the normal first run; recursive keeps this idempotent afterwards.
-  mkdirSync(FIXTURES_DIR, { recursive: true });
-  const existing = new Set(readdirSync(FIXTURES_DIR).filter(f => f.endsWith('.sql')));
-
+function changedFixtures(
+  expected: ReadonlyMap<string, string>,
+  existing: ReadonlySet<string>
+): string[] {
   const changed: string[] = [];
   for (const [name, sql] of expected) {
     let current: string | undefined;
@@ -210,6 +205,20 @@ function main(): void {
   for (const name of existing) {
     if (!expected.has(name)) changed.push(name);
   }
+
+  return changed;
+}
+
+/** Regenerates the vintage fixtures, or with `--check` verifies they are current. */
+function main(): void {
+  const expected = new Map<string, string>();
+  for (const [sql, tag] of vintages()) expected.set(fixtureName(tag), sql);
+
+  // No-exist is the normal first run; recursive keeps this idempotent afterwards.
+  mkdirSync(FIXTURES_DIR, { recursive: true });
+  const existing = new Set(readdirSync(FIXTURES_DIR).filter(f => f.endsWith('.sql')));
+
+  const changed = changedFixtures(expected, existing);
 
   if (CHECK_ONLY) {
     if (changed.length > 0) {

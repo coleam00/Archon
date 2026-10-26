@@ -233,6 +233,20 @@ async function refuseContainerResumeWithoutBackend(
   return undefined;
 }
 
+async function findAdoptedAiRun(
+  deps: WorkflowDeps,
+  opts: ExecuteWorkflowOptions,
+  isContinuation: boolean,
+  recorded: boolean
+) {
+  const { preCreatedRun } = opts;
+  const aiAncestorId = opts.adoptedFromRunId ?? preCreatedRun?.adopted_from_run_id;
+  const aiContinuationMode = opts.continuationMode ?? readContinuationMode(preCreatedRun?.metadata);
+  return !isContinuation && !recorded && aiAncestorId && aiContinuationMode !== 'supersede'
+    ? await deps.store.getWorkflowRun(aiAncestorId)
+    : undefined;
+}
+
 /**
  * A run with a recorded AI configuration restores it, and a fresh adoption inherits its
  * ancestor's; only otherwise does a caller-prepared configuration apply as is.
@@ -249,26 +263,21 @@ async function prepareDispatchAiConfiguration(
   try {
     const recorded =
       preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    const aiAncestorId = opts.adoptedFromRunId ?? preCreatedRun?.adopted_from_run_id;
-    const aiContinuationMode =
-      opts.continuationMode ?? readContinuationMode(preCreatedRun?.metadata);
-    const adoptedAiRun =
-      !isContinuation && !recorded && aiAncestorId && aiContinuationMode !== 'supersede'
-        ? await deps.store.getWorkflowRun(aiAncestorId)
-        : undefined;
+    const adoptedAiRun = await findAdoptedAiRun(deps, opts, isContinuation, !!recorded);
     const inherited =
       adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    return !recorded && !inherited && opts.preparedAiConfiguration
-      ? opts.preparedAiConfiguration
-      : await prepareRunAiConfiguration(deps, workflow, cwd, {
-          codebaseId: opts.codebaseId,
-          userId: executionUserId,
-          runConfig: opts.runConfig,
-          modelOverrideLayer: opts.modelOverrideLayer,
-          ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
-          aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
-          ...(recorded ? { inheritAiConfiguration: true } : {}),
-        });
+    if (!recorded && !inherited && opts.preparedAiConfiguration) {
+      return opts.preparedAiConfiguration;
+    }
+    return await prepareRunAiConfiguration(deps, workflow, cwd, {
+      codebaseId: opts.codebaseId,
+      userId: executionUserId,
+      runConfig: opts.runConfig,
+      modelOverrideLayer: opts.modelOverrideLayer,
+      ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
+      aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
+      ...(recorded ? { inheritAiConfiguration: true } : {}),
+    });
   } catch (error) {
     if (error instanceof TerminalStatusWriteError) throw error;
     if (preCreatedRun)

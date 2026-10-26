@@ -56,6 +56,24 @@ describe('MCP path selection', () => {
     );
   });
 
+  test('a missing candidate guard failure is returned with its original cause', async () => {
+    const candidates = [join(checkout, 'servers.json'), join(home, 'servers.json')];
+    for (const [index, guardedPath] of candidates.entries()) {
+      const sentinel = new Error('Verified captured config disappeared');
+      const missing: { path: string; error: unknown }[] = [];
+      const result = await resolveMcpPath('servers.json', checkout, home, (path, error) => {
+        missing.push({ path, error });
+        if (path === guardedPath) throw sentinel;
+      });
+
+      expect(result).toEqual({ kind: 'read_error', path: guardedPath, error: sentinel });
+      if (result.kind !== 'read_error') throw new Error('Expected guard failure');
+      expect(result.error).toBe(sentinel);
+      expect(missing.map(({ path }) => path)).toEqual(candidates.slice(0, index + 1));
+      for (const { error } of missing) expect(error).toMatchObject({ code: 'ENOENT' });
+    }
+  });
+
   test('absolute declarations bypass both bases and identical candidates are tried once', async () => {
     const absolute = join(root, 'absent.json');
     expect(await resolveMcpPath(absolute, checkout, home)).toEqual({

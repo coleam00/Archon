@@ -103,6 +103,19 @@ const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
   skipped: 'text-text-tertiary',
 };
 
+// Per-node spend, surfaced inline next to the status. Sub-cent costs keep
+// more precision so cheap nodes don't all read "$0.00". A scope total restates
+// spend other nodes already show, so it is labelled rather than read as this
+// node's own.
+function formatNodeCost(
+  costUsd: NodeDividerProps['costUsd'],
+  costScope: NodeDividerProps['costScope']
+): string {
+  return typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd >= 0
+    ? ` · ${costScope === 'total' ? 'total ' : ''}$${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
+    : '';
+}
+
 /**
  * Thin divider heading one DAG node — exactly one per node.
  *   left gutter:  relative timestamp (mono)
@@ -134,14 +147,7 @@ export function NodeDivider({
     durationMs !== null && durationMs > 0
       ? ` · ${formatElapsed(Math.floor(durationMs / 1000))}`
       : '';
-  // Per-node spend, surfaced inline next to the status. Sub-cent costs keep
-  // more precision so cheap nodes don't all read "$0.00". A scope total restates
-  // spend other nodes already show, so it is labelled rather than read as this
-  // node's own.
-  const cost =
-    typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd >= 0
-      ? ` · ${costScope === 'total' ? 'total ' : ''}$${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
-      : '';
+  const cost = formatNodeCost(costUsd, costScope);
   const turns =
     numTurns !== null && numTurns !== undefined && numTurns > 0 ? ` · ${numTurns}t` : '';
 

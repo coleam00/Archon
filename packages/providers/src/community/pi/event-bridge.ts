@@ -298,74 +298,108 @@ export { tryParseStructuredOutput };
  */
 export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
   switch (event.type) {
-    case 'message_update': {
-      const amEvent = event.assistantMessageEvent;
-      if (amEvent.type === 'text_delta' && amEvent.delta) {
-        return [{ type: 'agent_message_chunk', text: amEvent.delta }];
-      }
-      if (amEvent.type === 'thinking_delta' && amEvent.delta) {
-        return [{ type: 'agent_thought_chunk', text: amEvent.delta }];
-      }
-      return [];
-    }
-    case 'tool_execution_start': {
-      const call: MessageChunk = {
-        type: 'tool_call',
-        toolCallId: event.toolCallId,
-        name: event.toolName,
-        ...(event.toolName === 'bash' &&
-        typeof event.args === 'object' &&
-        event.args !== null &&
-        'command' in event.args &&
-        typeof event.args.command === 'string'
-          ? { title: event.args.command }
-          : {}),
-      };
-      if (event.args !== undefined) {
-        call.rawInput = toolCallSchema.shape.rawInput.parse(event.args);
-      }
-      return [call];
-    }
+    case 'message_update':
+      return mapMessageUpdate(event);
+    case 'tool_execution_start':
+      return mapToolExecutionStart(event);
     case 'tool_execution_end':
-      return [
-        {
-          type: 'tool_call_update',
-          toolCallId: event.toolCallId,
-          status: event.isError ? 'failed' : 'completed',
-          ...truncateToolOutput(serializeToolResult(event.result)),
-        },
-      ];
+      return mapToolExecutionEnd(event);
     case 'auto_retry_start':
-      return [
-        {
-          type: 'warning',
-          code: 'pi.auto_retry',
-          message: `retry ${String(event.attempt)}/${String(event.maxAttempts)}: ${event.errorMessage}`,
-        },
-      ];
+      return mapAutoRetryStart(event);
     case 'compaction_start':
-      return [
-        {
-          type: 'compaction',
-          phase: 'started',
-          trigger: event.reason === 'manual' ? 'manual' : 'auto',
-        },
-      ];
+      return mapCompactionStart(event);
     case 'compaction_end':
-      // An aborted or failed compaction has no result; the session goes on uncompacted.
-      return event.result
-        ? [
-            {
-              type: 'compaction',
-              phase: 'completed',
-              trigger: event.reason === 'manual' ? 'manual' : 'auto',
-              tokensBefore: event.result.tokensBefore,
-            },
-          ]
-        : [];
+      return mapCompactionEnd(event);
     default:
       return [];
   }
+}
+
+function mapMessageUpdate(
+  event: Extract<AgentSessionEvent, { type: 'message_update' }>
+): MessageChunk[] {
+  const amEvent = event.assistantMessageEvent;
+  if (amEvent.type === 'text_delta' && amEvent.delta) {
+    return [{ type: 'agent_message_chunk', text: amEvent.delta }];
+  }
+  if (amEvent.type === 'thinking_delta' && amEvent.delta) {
+    return [{ type: 'agent_thought_chunk', text: amEvent.delta }];
+  }
+  return [];
+}
+
+function mapToolExecutionStart(
+  event: Extract<AgentSessionEvent, { type: 'tool_execution_start' }>
+): MessageChunk[] {
+  const call: MessageChunk = {
+    type: 'tool_call',
+    toolCallId: event.toolCallId,
+    name: event.toolName,
+    ...(event.toolName === 'bash' &&
+    typeof event.args === 'object' &&
+    event.args !== null &&
+    'command' in event.args &&
+    typeof event.args.command === 'string'
+      ? { title: event.args.command }
+      : {}),
+  };
+  if (event.args !== undefined) {
+    call.rawInput = toolCallSchema.shape.rawInput.parse(event.args);
+  }
+  return [call];
+}
+
+function mapToolExecutionEnd(
+  event: Extract<AgentSessionEvent, { type: 'tool_execution_end' }>
+): MessageChunk[] {
+  return [
+    {
+      type: 'tool_call_update',
+      toolCallId: event.toolCallId,
+      status: event.isError ? 'failed' : 'completed',
+      ...truncateToolOutput(serializeToolResult(event.result)),
+    },
+  ];
+}
+
+function mapAutoRetryStart(
+  event: Extract<AgentSessionEvent, { type: 'auto_retry_start' }>
+): MessageChunk[] {
+  return [
+    {
+      type: 'warning',
+      code: 'pi.auto_retry',
+      message: `retry ${String(event.attempt)}/${String(event.maxAttempts)}: ${event.errorMessage}`,
+    },
+  ];
+}
+
+function mapCompactionStart(
+  event: Extract<AgentSessionEvent, { type: 'compaction_start' }>
+): MessageChunk[] {
+  return [
+    {
+      type: 'compaction',
+      phase: 'started',
+      trigger: event.reason === 'manual' ? 'manual' : 'auto',
+    },
+  ];
+}
+
+function mapCompactionEnd(
+  event: Extract<AgentSessionEvent, { type: 'compaction_end' }>
+): MessageChunk[] {
+  // An aborted or failed compaction has no result; the session goes on uncompacted.
+  return event.result
+    ? [
+        {
+          type: 'compaction',
+          phase: 'completed',
+          trigger: event.reason === 'manual' ? 'manual' : 'auto',
+          tokensBefore: event.result.tokensBefore,
+        },
+      ]
+    : [];
 }
 
 /**

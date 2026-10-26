@@ -498,62 +498,55 @@ async function handleDeterministicCommand(
     );
     return true;
   }
-  if (parsed) {
-    const { command } = parsed;
-    const deterministicCommands = [
-      'help',
-      'status',
-      'reset',
-      'workflow',
-      'register-project',
-      'update-project',
-      'remove-project',
-      'setproject',
-      'commands',
-      'init',
-      'worktree',
-    ];
+  if (!parsed) return false;
+  const { command } = parsed;
+  const deterministicCommands = [
+    'help',
+    'status',
+    'reset',
+    'workflow',
+    'register-project',
+    'update-project',
+    'remove-project',
+    'setproject',
+    'commands',
+    'init',
+    'worktree',
+  ];
 
-    if (deterministicCommands.includes(command)) {
-      if (command === 'register-project') {
-        getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await handleRegisterProject(message);
-        await platform.sendMessage(conversationId, result);
-        return true;
-      }
-
-      if (command === 'update-project') {
-        getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await handleUpdateProject(message);
-        await platform.sendMessage(conversationId, result);
-        return true;
-      }
-
-      if (command === 'remove-project') {
-        getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await handleRemoveProject(message);
-        await platform.sendMessage(conversationId, result);
-        return true;
-      }
-
-      if (command === 'setproject') {
-        getLog().debug({ command, conversationId }, 'deterministic_command');
-        // Pass the full Conversation — handleSetProject updates by the DB
-        // primary key (conversation.id, not the platform conversation id)
-        // and needs the prior cwd/isolation state for the detach note.
-        const result = await handleSetProject(message, conversation);
-        await platform.sendMessage(conversationId, result);
-        return true;
-      }
-
-      getLog().debug({ command, conversationId }, 'deterministic_command');
-      await deliverCommandResult(
-        await commandHandler.handleCommand(conversation, message, actor, platform)
-      );
-      return true;
-    }
+  if (!deterministicCommands.includes(command)) return false;
+  getLog().debug({ command, conversationId }, 'deterministic_command');
+  if (command === 'register-project') {
+    const result = await handleRegisterProject(message);
+    await platform.sendMessage(conversationId, result);
+    return true;
   }
-  return false;
+
+  if (command === 'update-project') {
+    const result = await handleUpdateProject(message);
+    await platform.sendMessage(conversationId, result);
+    return true;
+  }
+
+  if (command === 'remove-project') {
+    const result = await handleRemoveProject(message);
+    await platform.sendMessage(conversationId, result);
+    return true;
+  }
+
+  if (command === 'setproject') {
+    // Pass the full Conversation — handleSetProject updates by the DB
+    // primary key (conversation.id, not the platform conversation id)
+    // and needs the prior cwd/isolation state for the detach note.
+    const result = await handleSetProject(message, conversation);
+    await platform.sendMessage(conversationId, result);
+    return true;
+  }
+
+  await deliverCommandResult(
+    await commandHandler.handleCommand(conversation, message, actor, platform)
+  );
+  return true;
 }
 
 // A conversation's `cwd` override can outlive the directory it names. Every

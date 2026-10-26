@@ -66,7 +66,14 @@ try {
         [probe, ...(scope === undefined ? [] : ['--chat-project-id', scope])],
         { cwd, env, encoding: 'utf8' }
       );
-      expect(result.status, result.stderr).toBe(0);
+      const failure = {
+        status: result.status,
+        signal: result.signal,
+        error: result.error?.message ?? null,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+      expect(result.status, JSON.stringify(failure, null, 2)).toBe(0);
       const output = JSON.parse(result.stdout);
       expect(output.preloaded).toBe(oldValue);
       expect(output.scope).toBe(scope);

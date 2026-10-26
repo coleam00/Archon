@@ -6,6 +6,7 @@ import {
   PluginRemoteError,
   PluginRpc,
   serveProvider,
+  type ProviderLogSink,
 } from '@archon/provider-contract/plugin';
 import type {
   ProviderChunk,
@@ -13,6 +14,7 @@ import type {
   IAgentProvider,
   ProviderDiagnostics,
   ProviderModelList,
+  SendQueryOptions,
 } from '@archon/provider-contract';
 import { descriptor as fixtureDescriptor, chunks, invalidMessages } from './process-provider-data';
 
@@ -79,6 +81,115 @@ if (mode === 'protocol') {
   await rpc.close();
   process.exit(0);
 }
+async function* gatedQuery(
+  prompt: string,
+  options?: SendQueryOptions
+): AsyncGenerator<ProviderChunk> {
+  writeFileSync(`${process.argv[3]}.${prompt}.pid`, String(process.pid));
+  yield { type: 'agent_message_chunk', text: 'started' };
+  while (!existsSync(`${process.argv[3]}.${prompt}.release`)) {
+    options?.abortSignal?.throwIfAborted();
+    await Bun.sleep(5);
+  }
+  yield { type: 'result' };
+  yield { type: 'settled' };
+}
+
+async function* prepareQueryProcess(
+  prompt: string,
+  options?: SendQueryOptions
+): AsyncGenerator<ProviderChunk> {
+  if (mode === 'slow-exit') {
+    const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    grandchild.unref();
+    writeFileSync(`${process.argv[3]}.pids`, JSON.stringify([process.pid, grandchild.pid]));
+  }
+  if (mode === 'mismatch') writeFileSync(process.argv[3], 'session started');
+  if (mode === 'tree') {
+    const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    writeFileSync(process.argv[3], JSON.stringify([process.pid, grandchild.pid]));
+    options?.abortSignal?.addEventListener(
+      'abort',
+      () => {
+        writeFileSync(`${process.argv[3]}.cancelled`, 'cancel received');
+      },
+      { once: true }
+    );
+    yield { type: 'state_update', state: 'running' };
+    await new Promise<void>(() => undefined);
+  }
+  if (mode === 'crash') {
+    yield { type: 'state_update', state: 'running' };
+    process.stderr.write(`${prompt.split('\n')[0]}\n${process.env.REQUEST_AUTH ?? ''}\n`);
+    const secret = process.env.TEST_CREDENTIAL ?? '';
+    process.stderr.write(secret.slice(0, 6));
+    await Bun.sleep(30);
+    process.stderr.write(`${secret.slice(6)} crash evidence\n`);
+    process.exit(7);
+  }
+}
+
+async function writeQueryLogs(
+  prompt: string,
+  options: SendQueryOptions | undefined,
+  log: ProviderLogSink
+): Promise<void> {
+  if (mode === 'logs') {
+    await log({
+      level: 'warn',
+      msg: `provider.ready ${options?.env?.CONTAINER_TOKEN ?? ''} ${prompt}`,
+      bindings: {
+        failureClass: 'auth',
+        module: 'provider.forged',
+        token: options?.env?.CONTAINER_TOKEN ?? '',
+        hostToken: process.env.CONTAINER_TOKEN ?? '',
+        custom: options?.env?.CUSTOM_AUTH ?? '',
+        nested: { message: prompt, lines: prompt.split('\n'), count: 1 },
+        excerpt: prompt.slice(0, 7),
+        escaped: JSON.stringify(prompt),
+        system: options?.systemPrompt ?? '',
+        numeric: Number(options?.env?.NUMERIC_TOKEN),
+        [prompt]: [true, null],
+      },
+    });
+  }
+  if (mode === 'logs-untrusted') {
+    process.stdout.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        method: '_archon/log',
+        params: {
+          level: process.argv[3],
+          msg: 'credential-secret private message',
+          bindings: {
+            ...(prompt ? { failureClass: prompt, lifecycle: prompt } : {}),
+            waitedMs: 60_000,
+            forgedCount: 7,
+            module: 'provider.forged',
+          },
+        },
+      })}\n`
+    );
+  }
+}
+
+async function* scriptedChunks(): AsyncGenerator<ProviderChunk> {
+  if (mode === 'background') writeFileSync(process.argv[3], 'running');
+  for (const chunk of chunks) {
+    if (chunk.type === 'subtask' && chunk.status === 'completed') {
+      if (mode === 'background') {
+        while (!existsSync(`${process.argv[3]}.ack`)) await Bun.sleep(5);
+        writeFileSync(process.argv[3], 'completed');
+      } else await Bun.sleep(50);
+    }
+    yield chunk;
+  }
+}
+
 await serveProvider(
   {
     descriptor,
@@ -157,14 +268,7 @@ await serveProvider(
       },
       async *sendQuery(prompt, _cwd, resume, options): AsyncGenerator<ProviderChunk> {
         if (mode === 'pi-gated') {
-          writeFileSync(`${process.argv[3]}.${prompt}.pid`, String(process.pid));
-          yield { type: 'agent_message_chunk', text: 'started' };
-          while (!existsSync(`${process.argv[3]}.${prompt}.release`)) {
-            options?.abortSignal?.throwIfAborted();
-            await Bun.sleep(5);
-          }
-          yield { type: 'result' };
-          yield { type: 'settled' };
+          yield* gatedQuery(prompt, options);
           return;
         }
         if (mode === 'live-eof') return await closeOutput();
@@ -173,75 +277,8 @@ await serveProvider(
           yield { type: 'settled' };
           return;
         }
-        if (mode === 'slow-exit') {
-          const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-            stdio: 'ignore',
-          });
-          grandchild.unref();
-          writeFileSync(`${process.argv[3]}.pids`, JSON.stringify([process.pid, grandchild.pid]));
-        }
-        if (mode === 'mismatch') writeFileSync(process.argv[3], 'session started');
-        if (mode === 'tree') {
-          const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-            stdio: 'ignore',
-          });
-          writeFileSync(process.argv[3], JSON.stringify([process.pid, grandchild.pid]));
-          options?.abortSignal?.addEventListener(
-            'abort',
-            () => {
-              writeFileSync(`${process.argv[3]}.cancelled`, 'cancel received');
-            },
-            { once: true }
-          );
-          yield { type: 'state_update', state: 'running' };
-          await new Promise<void>(() => undefined);
-        }
-        if (mode === 'crash') {
-          yield { type: 'state_update', state: 'running' };
-          process.stderr.write(`${prompt.split('\n')[0]}\n${process.env.REQUEST_AUTH ?? ''}\n`);
-          const secret = process.env.TEST_CREDENTIAL ?? '';
-          process.stderr.write(secret.slice(0, 6));
-          await Bun.sleep(30);
-          process.stderr.write(`${secret.slice(6)} crash evidence\n`);
-          process.exit(7);
-        }
-        if (mode === 'logs') {
-          await log({
-            level: 'warn',
-            msg: `provider.ready ${options?.env?.CONTAINER_TOKEN ?? ''} ${prompt}`,
-            bindings: {
-              failureClass: 'auth',
-              module: 'provider.forged',
-              token: options?.env?.CONTAINER_TOKEN ?? '',
-              hostToken: process.env.CONTAINER_TOKEN ?? '',
-              custom: options?.env?.CUSTOM_AUTH ?? '',
-              nested: { message: prompt, lines: prompt.split('\n'), count: 1 },
-              excerpt: prompt.slice(0, 7),
-              escaped: JSON.stringify(prompt),
-              system: options?.systemPrompt ?? '',
-              numeric: Number(options?.env?.NUMERIC_TOKEN),
-              [prompt]: [true, null],
-            },
-          });
-        }
-        if (mode === 'logs-untrusted') {
-          process.stdout.write(
-            `${JSON.stringify({
-              jsonrpc: '2.0',
-              method: '_archon/log',
-              params: {
-                level: process.argv[3],
-                msg: 'credential-secret private message',
-                bindings: {
-                  ...(prompt ? { failureClass: prompt, lifecycle: prompt } : {}),
-                  waitedMs: 60_000,
-                  forgedCount: 7,
-                  module: 'provider.forged',
-                },
-              },
-            })}\n`
-          );
-        }
+        yield* prepareQueryProcess(prompt, options);
+        await writeQueryLogs(prompt, options, log);
         if (mode === 'plugin-env') {
           yield {
             type: 'result',
@@ -264,16 +301,7 @@ await serveProvider(
           yield { type: 'settled' };
           return;
         }
-        if (mode === 'background') writeFileSync(process.argv[3], 'running');
-        for (const chunk of chunks) {
-          if (chunk.type === 'subtask' && chunk.status === 'completed') {
-            if (mode === 'background') {
-              while (!existsSync(`${process.argv[3]}.ack`)) await Bun.sleep(5);
-              writeFileSync(process.argv[3], 'completed');
-            } else await Bun.sleep(50);
-          }
-          yield chunk;
-        }
+        yield* scriptedChunks();
       },
     }),
   },

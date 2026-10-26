@@ -159,18 +159,7 @@ function score(unit: FunctionUnit): number {
   const visit = (node: ts.Node, nesting: number): void => {
     if (isFunctionUnit(node)) return;
     if (ts.isIfStatement(node)) {
-      const isElseIf = ts.isIfStatement(node.parent) && node.parent.elseStatement === node;
-      total += isElseIf ? 1 : 1 + nesting;
-      visit(node.expression, nesting);
-      visit(node.thenStatement, nesting + 1);
-      const otherwise = node.elseStatement;
-      if (otherwise === undefined) return;
-      if (ts.isIfStatement(otherwise)) {
-        visit(otherwise, nesting);
-      } else {
-        total += 1;
-        visit(otherwise, nesting + 1);
-      }
+      visitIf(node, nesting);
       return;
     }
     if (isNestingStructure(node)) {
@@ -186,6 +175,20 @@ function score(unit: FunctionUnit): number {
       if (!continuesRun) total += 1;
     }
     node.forEachChild(child => visit(child, nesting));
+  };
+  const visitIf = (node: ts.IfStatement, nesting: number): void => {
+    const isElseIf = ts.isIfStatement(node.parent) && node.parent.elseStatement === node;
+    total += isElseIf ? 1 : 1 + nesting;
+    visit(node.expression, nesting);
+    visit(node.thenStatement, nesting + 1);
+    const otherwise = node.elseStatement;
+    if (otherwise === undefined) return;
+    if (ts.isIfStatement(otherwise)) {
+      visit(otherwise, nesting);
+    } else {
+      total += 1;
+      visit(otherwise, nesting + 1);
+    }
   };
   unit.forEachChild(child => visit(child, 0));
   return total;
@@ -332,23 +335,23 @@ export interface Ceilings {
   lines: number;
 }
 
-export function checkRatchet(
-  repo: string,
-  baseRef: string,
-  ceilings: Ceilings = { complexity: COMPLEXITY_CEILING, lines: LINE_CEILING }
-): RatchetResult {
-  let mergeBase: string;
+function findMergeBase(repo: string, baseRef: string): string {
   try {
-    mergeBase = git(['merge-base', baseRef, 'HEAD'], repo).trim();
+    return git(['merge-base', baseRef, 'HEAD'], repo).trim();
   } catch (error) {
     const branch = baseRef.replace(/^origin\//, '');
     throw new Error(
       `Cannot find the merge base with ${baseRef}. Fetch it first: git fetch origin ${branch}\n${(error as Error).message}`
     );
   }
-  const inScope = biomeScope(git(['show', `${mergeBase}:biome.jsonc`], repo));
+}
 
-  const touched = touchedPaths(mergeBase, repo);
+function scoreTouchedFiles(
+  repo: string,
+  mergeBase: string,
+  touched: ReadonlyMap<string, string | null>,
+  inScope: (path: string) => boolean
+): ScoredFile[] {
   const files: ScoredFile[] = [];
   for (const [headPath, basePath] of touched) {
     const base =
@@ -359,8 +362,14 @@ export function checkRatchet(
     if (base !== null || head !== null) files.push({ path: headPath, base, head });
   }
 
+  return files;
+}
+
+type MovedUnits = Map<string, { file: string; scores: number[] }>;
+
+function findMovedUnits(files: readonly ScoredFile[]): MovedUnits {
   // Base units whose identity left their file: the candidates a moved function is compared with.
-  const moved = new Map<string, { file: string; scores: number[] }>();
+  const moved: MovedUnits = new Map();
   for (const file of files) {
     for (const [identity, before] of file.base?.units ?? []) {
       if (file.head?.units.has(identity)) continue;
@@ -370,6 +379,51 @@ export function checkRatchet(
       }
     }
   }
+
+  return moved;
+}
+
+function complexityGrowth(
+  { path, base, head }: ScoredFile,
+  moved: MovedUnits,
+  ceiling: number
+): { finding: string; key: string }[] {
+  const findings: { finding: string; key: string }[] = [];
+  if (head === null) return findings;
+  for (const [identity, afterScores] of head.units) {
+    const sameFile = base?.units.get(identity) ?? [];
+    // Head units beyond the file's own base count may have moved in, so the moved base scores
+    // join the comparison; with no surplus they stay out and cannot excuse a raise.
+    const origin = afterScores.length > sameFile.length ? moved.get(identity) : undefined;
+    const before = [
+      ...sameFile.map(score => ({ score, file: path })),
+      ...(origin?.scores.map(score => ({ score, file: origin.file })) ?? []),
+    ].sort((a, b) => b.score - a.score);
+    // A unit with no base counterpart in its position starts from 0.
+    const position = afterScores.findIndex(
+      (after, index) => after > ceiling && after > (before[index]?.score ?? 0)
+    );
+    if (position === -1) continue;
+    const { score, file } = before[position] ?? { score: 0, file: path };
+    const from = file === path ? '' : ` (base: ${file})`;
+    findings.push({
+      finding: `${path}: \`${identity}\` cognitive complexity ${score} -> ${afterScores[position]}${from}`,
+      key: `${path}:${identity}`,
+    });
+  }
+  return findings;
+}
+
+export function checkRatchet(
+  repo: string,
+  baseRef: string,
+  ceilings: Ceilings = { complexity: COMPLEXITY_CEILING, lines: LINE_CEILING }
+): RatchetResult {
+  const mergeBase = findMergeBase(repo, baseRef);
+  const inScope = biomeScope(git(['show', `${mergeBase}:biome.jsonc`], repo));
+  const touched = touchedPaths(mergeBase, repo);
+  const files = scoreTouchedFiles(repo, mergeBase, touched, inScope);
+  const moved = findMovedUnits(files);
 
   const allow = allowances(mergeBase, repo);
   const result: RatchetResult = { failures: [], allowed: [], remedies: [] };
@@ -384,26 +438,12 @@ export function checkRatchet(
 
   for (const { path, base, head } of files) {
     if (head === null) continue;
-    for (const [identity, afterScores] of head.units) {
-      const sameFile = base?.units.get(identity) ?? [];
-      // Head units beyond the file's own base count may have moved in, so the moved base scores
-      // join the comparison; with no surplus they stay out and cannot excuse a raise.
-      const origin = afterScores.length > sameFile.length ? moved.get(identity) : undefined;
-      const before = [
-        ...sameFile.map(score => ({ score, file: path })),
-        ...(origin?.scores.map(score => ({ score, file: origin.file })) ?? []),
-      ].sort((a, b) => b.score - a.score);
-      // A unit with no base counterpart in its position starts from 0.
-      const position = afterScores.findIndex(
-        (after, index) => after > ceilings.complexity && after > (before[index]?.score ?? 0)
-      );
-      if (position === -1) continue;
-      const { score, file } = before[position] ?? { score: 0, file: path };
-      const from = file === path ? '' : ` (base: ${file})`;
-      report(
-        `${path}: \`${identity}\` cognitive complexity ${score} -> ${afterScores[position]}${from}`,
-        `${path}:${identity}`
-      );
+    for (const { finding, key } of complexityGrowth(
+      { path, base, head },
+      moved,
+      ceilings.complexity
+    )) {
+      report(finding, key);
     }
     const grown = lineGrowth(path, base, head, ceilings.lines);
     if (grown !== null) report(grown, path);

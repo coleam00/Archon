@@ -75,21 +75,14 @@ export function resolveSkillDirectoriesFromRoots(
     const name = rawName.trim();
     if (name.length === 0) continue;
     // Name-only contract: reject path traversal, nested paths, and absolute paths.
-    if (isAbsolute(name) || basename(name) !== name || name === '.' || name === '..') {
+    if (!isSkillName(name)) {
       missing.push(rawName);
       continue;
     }
     if (seen.has(name)) continue;
     seen.add(name);
 
-    let found: string | undefined;
-    for (const root of roots) {
-      const candidate = join(root, name);
-      if (existsSync(join(candidate, 'SKILL.md'))) {
-        found = candidate;
-        break;
-      }
-    }
+    const found = findSkillDirectory(roots, name);
 
     if (found) {
       paths.push(found);
@@ -99,6 +92,18 @@ export function resolveSkillDirectoriesFromRoots(
   }
 
   return { paths, missing };
+}
+
+function isSkillName(name: string): boolean {
+  return !isAbsolute(name) && basename(name) === name && name !== '.' && name !== '..';
+}
+
+function findSkillDirectory(roots: string[], name: string): string | undefined {
+  for (const root of roots) {
+    const candidate = join(root, name);
+    if (existsSync(join(candidate, 'SKILL.md'))) return candidate;
+  }
+  return undefined;
 }
 
 /**
@@ -118,7 +123,7 @@ export function findInstalledSkillNames(roots: string[], skillNames: string[]): 
     if (typeof rawName !== 'string') continue;
     const name = rawName.trim();
     if (name.length === 0) continue;
-    if (isAbsolute(name) || basename(name) !== name || name === '.' || name === '..') continue;
+    if (!isSkillName(name)) continue;
     if (roots.some(root => existsSync(join(root, name)))) installed.push(rawName);
   }
   return installed;

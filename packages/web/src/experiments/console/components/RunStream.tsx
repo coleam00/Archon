@@ -371,93 +371,7 @@ export function RunStream({
     );
   }
 
-  return (
-    <div className="flex flex-col">
-      {visible.map(entry => {
-        if (entry.kind === 'message') {
-          return (
-            <div key={entry.key} className="py-4">
-              <MessageItem message={entry.message} variant="log" />
-            </div>
-          );
-        }
-        if (entry.kind === 'tool') {
-          return <ToolCallItem key={entry.key} call={entry.call} timestamp={entry.timestamp} />;
-        }
-        if (entry.kind === 'hook') {
-          return <HookEventItem key={entry.key} event={entry.event} timestamp={entry.timestamp} />;
-        }
-        if (entry.kind === 'node') {
-          return (
-            <NodeDivider
-              key={entry.key}
-              nodeId={entry.node.nodeId}
-              nodeName={entry.node.nodeName}
-              status={entry.node.status}
-              durationMs={entry.node.durationMs}
-              timestamp={entry.node.startedAt}
-              costUsd={entry.node.costUsd}
-              costScope={entry.node.costScope}
-              numTurns={entry.node.numTurns}
-              tokens={entry.node.tokens}
-              stopReason={entry.node.stopReason}
-              skipReason={entry.node.skipReason}
-              skipExpr={entry.node.skipExpr}
-              fanOutOutcome={entry.node.fanOutOutcome}
-              showDetail={entry.showDetail}
-            />
-          );
-        }
-        if (entry.kind === 'system') {
-          const ev = entry.event;
-          const isError = ev.kind === 'error';
-          const label = isError ? 'Error' : ev.label;
-          const detail = isError ? ev.message : ev.detail;
-          return (
-            <div key={entry.key} className="py-1">
-              <StreamCard
-                timestamp={ev.timestamp}
-                kind={isError ? 'error' : 'system'}
-                compact
-                label={label}
-                headerRight={
-                  detail.length > 0 ? (
-                    <span className="truncate font-mono text-[11px] text-text-secondary">
-                      {detail}
-                    </span>
-                  ) : null
-                }
-              />
-            </div>
-          );
-        }
-        if (entry.kind === 'system_row') {
-          return (
-            <div key={entry.key} className="py-1">
-              <StreamCard
-                timestamp={entry.row.timestamp}
-                kind="system"
-                compact
-                label={entry.row.label}
-                headerRight={
-                  entry.row.detail.length > 0 ? (
-                    <span className="truncate font-mono text-[11px] text-text-secondary">
-                      {entry.row.detail}
-                    </span>
-                  ) : null
-                }
-              />
-            </div>
-          );
-        }
-        return (
-          <div key={entry.key} className="py-1">
-            <ContentEventItem event={entry.event} />
-          </div>
-        );
-      })}
-    </div>
-  );
+  return <div className="flex flex-col">{visible.map(renderTimelineEntry)}</div>;
 }
 
 function runEventEntries(events: RunEvent[]): TimelineEntry[] {
@@ -481,4 +395,89 @@ function ContentEventItem({ event }: { event: TextEvent | ArtifactEvent }): Reac
   ) : (
     <ArtifactItem event={event} />
   );
+}
+
+function renderTimelineEntry(entry: TimelineEntry): ReactElement {
+  switch (entry.kind) {
+    case 'message': {
+      return (
+        <div key={entry.key} className="py-4">
+          <MessageItem message={entry.message} variant="log" />
+        </div>
+      );
+    }
+    case 'tool': {
+      return <ToolCallItem key={entry.key} call={entry.call} timestamp={entry.timestamp} />;
+    }
+    case 'hook': {
+      return <HookEventItem key={entry.key} event={entry.event} timestamp={entry.timestamp} />;
+    }
+    case 'node': {
+      return (
+        <NodeDivider
+          key={entry.key}
+          nodeId={entry.node.nodeId}
+          nodeName={entry.node.nodeName}
+          status={entry.node.status}
+          durationMs={entry.node.durationMs}
+          timestamp={entry.node.startedAt}
+          costUsd={entry.node.costUsd}
+          costScope={entry.node.costScope}
+          numTurns={entry.node.numTurns}
+          tokens={entry.node.tokens}
+          stopReason={entry.node.stopReason}
+          skipReason={entry.node.skipReason}
+          skipExpr={entry.node.skipExpr}
+          fanOutOutcome={entry.node.fanOutOutcome}
+          showDetail={entry.showDetail}
+        />
+      );
+    }
+    case 'system': {
+      const ev = entry.event;
+      const isError = ev.kind === 'error';
+      const label = isError ? 'Error' : ev.label;
+      const detail = isError ? ev.message : ev.detail;
+      return (
+        <div key={entry.key} className="py-1">
+          <StreamCard
+            timestamp={ev.timestamp}
+            kind={isError ? 'error' : 'system'}
+            compact
+            label={label}
+            headerRight={
+              detail.length > 0 ? (
+                <span className="truncate font-mono text-[11px] text-text-secondary">{detail}</span>
+              ) : null
+            }
+          />
+        </div>
+      );
+    }
+    case 'system_row': {
+      return (
+        <div key={entry.key} className="py-1">
+          <StreamCard
+            timestamp={entry.row.timestamp}
+            kind="system"
+            compact
+            label={entry.row.label}
+            headerRight={
+              entry.row.detail.length > 0 ? (
+                <span className="truncate font-mono text-[11px] text-text-secondary">
+                  {entry.row.detail}
+                </span>
+              ) : null
+            }
+          />
+        </div>
+      );
+    }
+    default:
+      return (
+        <div key={entry.key} className="py-1">
+          <ContentEventItem event={entry.event} />
+        </div>
+      );
+  }
 }

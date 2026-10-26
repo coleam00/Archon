@@ -214,34 +214,7 @@ export async function syncWorkspace(
   const remote = options?.remote ?? 'origin';
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath, remote));
 
-  // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date.
-  try {
-    await fetchWithRetry(workspacePath, [remote, branchToSync], {
-      timeout: 60000,
-    });
-  } catch (error) {
-    const err = error as Error;
-    if (baseBranch) {
-      const inspection = await inspectRemoteBranches({
-        kind: 'local',
-        repoPath: workspacePath,
-        remote,
-      }).catch((inspectionError: unknown) => {
-        getLog().warn(
-          { err: inspectionError, workspacePath, remote },
-          'workspace.fetch_failure_inspection_failed'
-        );
-        return null;
-      });
-      if (inspection?.status === 'available' && !inspection.branches.includes(baseBranch)) {
-        throw new ConfiguredBaseBranchNotFoundError(baseBranch, remote);
-      }
-    }
-
-    throw new Error(`Sync fetch from ${remote}/${branchToSync} failed: ${err.message}`, {
-      cause: error,
-    });
-  }
+  await fetchWorkspaceBranch(workspacePath, branchToSync, remote, baseBranch);
 
   const previousHead = await readShortSha(workspacePath, 'HEAD');
 
@@ -271,32 +244,21 @@ export async function syncWorkspace(
         cause: err,
       });
     }
-
-    const newHead = await readShortSha(workspacePath, 'HEAD');
-    return {
-      branch: branchToSync,
-      synced: true,
-      mode,
-      state: 'in_sync',
-      previousHead,
-      newHead,
-      updated: previousHead !== newHead && previousHead !== '',
-    };
-  }
-
-  // Hard-reset local working tree to match the remote — only safe for Archon-managed
-  // clones, never for a user's local working directory.
-  try {
-    await execFileAsync(
-      'git',
-      ['-C', workspacePath, 'reset', '--hard', `${remote}/${branchToSync}`],
-      {
-        timeout: 30000,
-      }
-    );
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Reset to ${remote}/${branchToSync} failed: ${err.message}`, { cause: err });
+  } else {
+    // Hard-reset local working tree to match the remote — only safe for Archon-managed
+    // clones, never for a user's local working directory.
+    try {
+      await execFileAsync(
+        'git',
+        ['-C', workspacePath, 'reset', '--hard', `${remote}/${branchToSync}`],
+        {
+          timeout: 30000,
+        }
+      );
+    } catch (error) {
+      const err = error as Error;
+      throw new Error(`Reset to ${remote}/${branchToSync} failed: ${err.message}`, { cause: err });
+    }
   }
 
   const newHead = await readShortSha(workspacePath, 'HEAD');
@@ -310,6 +272,41 @@ export async function syncWorkspace(
     newHead,
     updated: previousHead !== newHead && previousHead !== '',
   };
+}
+
+async function fetchWorkspaceBranch(
+  workspacePath: RepoPath,
+  branchToSync: BranchName,
+  remote: string,
+  baseBranch: BranchName | undefined
+): Promise<void> {
+  try {
+    await fetchWithRetry(workspacePath, [remote, branchToSync], {
+      timeout: 60000,
+    });
+  } catch (error) {
+    const err = error as Error;
+    if (baseBranch) {
+      const inspection = await inspectRemoteBranches({
+        kind: 'local',
+        repoPath: workspacePath,
+        remote,
+      }).catch((inspectionError: unknown) => {
+        getLog().warn(
+          { err: inspectionError, workspacePath, remote },
+          'workspace.fetch_failure_inspection_failed'
+        );
+        return null;
+      });
+      if (inspection?.status === 'available' && !inspection.branches.includes(baseBranch)) {
+        throw new ConfiguredBaseBranchNotFoundError(baseBranch, remote);
+      }
+    }
+
+    throw new Error(`Sync fetch from ${remote}/${branchToSync} failed: ${err.message}`, {
+      cause: error,
+    });
+  }
 }
 
 function unchangedSyncResult(
@@ -716,6 +713,36 @@ async function newPathOwnedByCurrentUser(path: string): Promise<boolean> {
   }
 }
 
+async function readGlobalSafeDirectories(): Promise<{ source: string; value: string }[]> {
+  let fields: string[];
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        'config',
+        '--includes',
+        '--show-scope',
+        '--show-origin',
+        '--null',
+        '--get-all',
+        'safe.directory',
+      ],
+      { timeout: 10000 }
+    );
+    fields = stdout.split('\0').slice(0, -1);
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 1)) throw error;
+    fields = [];
+  }
+  const entries: { source: string; value: string }[] = [];
+  for (let i = 0; i < fields.length; i += 3) {
+    if (fields[i] === 'global') {
+      entries.push({ source: fields[i + 1].slice('file:'.length), value: fields[i + 2] });
+    }
+  }
+  return entries;
+}
+
 /**
  * Add a directory to git's global safe.directory config when git will need it.
  * Skipping new paths this user will own keeps concurrent setups off the global
@@ -727,32 +754,7 @@ async function newPathOwnedByCurrentUser(path: string): Promise<boolean> {
 export async function addSafeDirectory(path: RepoPath): Promise<void> {
   if (await newPathOwnedByCurrentUser(path)) return;
   try {
-    let fields: string[];
-    try {
-      const { stdout } = await execFileAsync(
-        'git',
-        [
-          'config',
-          '--includes',
-          '--show-scope',
-          '--show-origin',
-          '--null',
-          '--get-all',
-          'safe.directory',
-        ],
-        { timeout: 10000 }
-      );
-      fields = stdout.split('\0').slice(0, -1);
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 1)) throw error;
-      fields = [];
-    }
-    const entries: { source: string; value: string }[] = [];
-    for (let i = 0; i < fields.length; i += 3) {
-      if (fields[i] === 'global') {
-        entries.push({ source: fields[i + 1].slice('file:'.length), value: fields[i + 2] });
-      }
-    }
+    const entries = await readGlobalSafeDirectories();
     const values = entries.map(entry => entry.value);
     const grants = entries.filter(entry => entry.value === path);
     if (grants.length === 1 && values.indexOf(path) > values.lastIndexOf('')) return;

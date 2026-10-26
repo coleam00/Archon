@@ -37,8 +37,6 @@ export function RunDetailHeader({
 }: RunDetailHeaderProps): ReactElement {
   const isLive = isRunLive(run);
   const elapsed = useLiveElapsed(run, isLive);
-  const isPaused = run.status === 'paused';
-  const isRunning = run.status === 'running';
   const isDocker = useIsDocker();
   const ideEnv = useIdeEnv();
   const canOpenIde = !isDocker && run.workingPath !== null && run.workingPath !== '';
@@ -87,22 +85,7 @@ export function RunDetailHeader({
 
       {/* Status pill */}
       <div className="flex items-center gap-2">
-        {isRunning ? (
-          <RunningDot live={isLive} />
-        ) : isPaused ? (
-          <span aria-hidden className="h-2.5 w-2.5 animate-pulse rounded-full bg-warning" />
-        ) : (
-          <span
-            aria-hidden
-            className={`h-2 w-2 rounded-full ${
-              run.status === 'failed'
-                ? 'bg-error'
-                : run.status === 'completed'
-                  ? 'bg-success'
-                  : 'bg-text-tertiary'
-            }`}
-          />
-        )}
+        <RunStatusDot run={run} live={isLive} />
         <span
           className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${statusTextClass[run.status]}`}
         >
@@ -164,5 +147,26 @@ export function RunDetailHeader({
         </div>
       ) : null}
     </header>
+  );
+}
+
+function RunStatusDot({ run, live }: { run: Run; live: boolean }): ReactElement {
+  const isRunning = run.status === 'running';
+  const isPaused = run.status === 'paused';
+  return isRunning ? (
+    <RunningDot live={live} />
+  ) : isPaused ? (
+    <span aria-hidden className="h-2.5 w-2.5 animate-pulse rounded-full bg-warning" />
+  ) : (
+    <span
+      aria-hidden
+      className={`h-2 w-2 rounded-full ${
+        run.status === 'failed'
+          ? 'bg-error'
+          : run.status === 'completed'
+            ? 'bg-success'
+            : 'bg-text-tertiary'
+      }`}
+    />
   );
 }

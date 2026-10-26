@@ -13,9 +13,17 @@ import type {
   SDKStartupFailureReason,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { ProviderFailure, ProviderFailureClass } from '@archon/provider-contract';
-import type { ResultChunk } from '../types';
+import { createLogger } from '@archon/paths';
+import type { MessageChunk, ResultChunk } from '../types';
 import { ClassifiedProviderError } from '../shared/failure';
 import { pathKind } from './binary-resolver';
+
+/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('provider.claude');
+  return cachedLog;
+}
 
 /**
  * Errors the Claude SDK throws carry a machine-readable `errorClass` it sets beside the
@@ -207,3 +215,39 @@ export function failureResultChunk(failure: ProviderFailure): ResultChunk {
 
 /** The subprocess produced no first event in time. Classified `transient` by type, not text. */
 export class ClaudeFirstEventTimeoutError extends Error {}
+
+/** How a query stood when it threw. */
+export interface ThrownAt {
+  callerAborted: boolean;
+  controller: AbortController;
+  stderr: string;
+  hostCwd: string | undefined;
+  resultReported: boolean;
+  subtasksOpen: boolean;
+}
+
+/** Ends a query that threw: rethrows cancellation, otherwise logs and reports the failure. */
+export function* thrownErrorChunks(thrown: unknown, at: ThrownAt): Generator<MessageChunk> {
+  const err = thrown instanceof Error ? thrown : new Error(String(thrown));
+  // Cancellation is not a failure: the caller asked for it and already knows.
+  // The first-event timeout aborts the same controller, so it is told apart by type.
+  const timedOut = err instanceof ClaudeFirstEventTimeoutError;
+  if (at.callerAborted || (at.controller.signal.aborted && !timedOut)) {
+    throw new Error('Query aborted');
+  }
+  const failure = classifyClaudeThrownError(err, at.stderr, at.hostCwd);
+  getLog().error(
+    {
+      err,
+      stderrContext: at.stderr,
+      failureClass: failure.class,
+      resultReported: at.resultReported,
+    },
+    'query_error'
+  );
+  // Lost observation of live work belongs to the engine's unsettled-stream
+  // failure, which names the tasks. Keep the vendor evidence in the log above.
+  if (at.resultReported || at.subtasksOpen) return;
+  yield failureResultChunk(failure);
+  yield { type: 'settled' };
+}

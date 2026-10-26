@@ -210,9 +210,6 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
           : frame;
       stdout.write(`${JSON.stringify(outgoing)}\n`);
     };
-    const completeTurn = (status: TurnStatus, error: TurnError | null = null): void => {
-      send(turnCompleted(status, error));
-    };
 
     // Like the real server, nothing but `initialize` is served before the client
     // acknowledges with the `initialized` notification.
@@ -221,7 +218,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       if (turn.exitCode !== undefined) close(turn.exitCode, null);
       else if (turn.completion !== null) {
         const completion = turn.completion ?? { status: 'completed' };
-        completeTurn(completion.status, completion.error ?? null);
+        send(turnCompleted(completion.status, completion.error ?? null));
       }
     };
     let callIndex = 0;
@@ -236,6 +233,132 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
     let initialized = false;
     let experimentalApi = false;
     let buffered = '';
+    const readAccount = (id: number): void => {
+      if (!turn.ignoreAccountRead)
+        send({
+          id,
+          result:
+            'accountResponse' in turn
+              ? turn.accountResponse
+              : ({
+                  workspaceRouting: null,
+                  account: turn.account ?? null,
+                  requiresOpenaiAuth: turn.requiresOpenaiAuth ?? true,
+                } satisfies GetAccountResponse),
+        });
+    };
+    const loginAccount = (id: number, params: unknown): void => {
+      const login = params as LoginAccountParams;
+      // The real binary's answer (codex-cli 0.162) to external tokens without the capability.
+      if (login.type === 'chatgptAuthTokens' && !experimentalApi) {
+        send({
+          id,
+          error: {
+            code: -32600,
+            message: 'account/login/start.chatgptAuthTokens requires experimentalApi capability',
+          },
+        });
+        return;
+      }
+      send({
+        id,
+        result: {
+          type: login.type === 'chatgptAuthTokens' ? 'chatgptAuthTokens' : 'apiKey',
+        } satisfies LoginAccountResponse,
+      });
+    };
+    const serveRequest = (id: number, method: Method, params: unknown): void => {
+      switch (method) {
+        case 'initialize':
+          experimentalApi = (params as InitializeParams).capabilities?.experimentalApi === true;
+          if (!turn.ignoreInitialize) send({ id, result: initializeResponse() });
+          break;
+        case 'thread/start':
+          send({ id, result: threadStartResponse(THREAD_ID) });
+          break;
+        case 'thread/resume':
+          send({
+            id,
+            result: threadResumeResponse((params as { threadId: string }).threadId),
+          });
+          break;
+        case 'thread/fork': {
+          forks += 1;
+          const source = (params as { threadId: string }).threadId;
+          send({ id, result: threadForkResponse(`${source}-fork-${String(forks)}`, source) });
+          break;
+        }
+        case 'turn/start':
+          activeThreadId = (params as { threadId: string }).threadId;
+          send({ id, result: { turn: turnOf('inProgress', null) } satisfies TurnStartResponse });
+          nextToolCall();
+          break;
+        case 'turn/interrupt':
+          if (turn.ignoreInterrupt) break;
+          send({ id, result: {} satisfies TurnInterruptResponse });
+          send(turnCompleted('interrupted'));
+          break;
+        case 'account/read':
+          readAccount(id);
+          break;
+        case 'account/login/start':
+          loginAccount(id, params);
+          break;
+        case 'config/read':
+          send({ id, result: configReadResponse(turn.configuredServers ?? []) });
+          break;
+        case 'plugin/installed':
+          send({ id, result: pluginInstalledResponse(turn.installedPlugins ?? {}) });
+          break;
+        case 'plugin/read': {
+          const { pluginName } = params as { pluginName: string };
+          const servers = turn.installedPlugins?.[`${pluginName}@fixture`] ?? [];
+          send({ id, result: pluginReadResponse(pluginName, servers) });
+          break;
+        }
+        case 'mcpServerStatus/list': {
+          const pages = turn.mcpStatusPages ?? [[]];
+          const { cursor } = params as { cursor?: string | null };
+          const index = cursor ? Number(cursor) : 0;
+          send({ id, result: mcpStatusResponse(pages, index) });
+          break;
+        }
+        default:
+          // What Codex answers for a method it does not serve. The fake serves only what
+          // the provider sends, so a new request fails the test until it is scripted here.
+          send({
+            id,
+            error: { code: -32600, message: `Invalid request: unknown variant \`${method}\`` },
+          });
+      }
+    };
+    const handleLine = (line: string): void => {
+      const message = JSON.parse(line) as { id?: number; method?: string; params?: unknown };
+      if (typeof message.method !== 'string') {
+        const response = JSON.parse(line) as { id: string; result: DynamicToolCallResponse };
+        record.toolResponses.push(response);
+        nextToolCall();
+        return;
+      }
+      if (message.id === undefined) {
+        record.notifications.push(message.method);
+        if (message.method === 'initialized') initialized = true;
+        return;
+      }
+      const id = message.id;
+      const method = message.method as Method;
+      record.requests.push({ method, params: message.params as Record<string, unknown> });
+      if (method !== 'initialize' && !initialized) {
+        send({ id, error: { code: -32600, message: 'Not initialized' } });
+        return;
+      }
+      const error = turn.errors?.[method];
+      if (error) {
+        send({ id, error });
+        return;
+      }
+      serveRequest(id, method, message.params);
+    };
     stdin.on('data', (chunk: Buffer) => {
       buffered += chunk.toString();
       let newline = buffered.indexOf('\n');
@@ -243,125 +366,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         const line = buffered.slice(0, newline);
         buffered = buffered.slice(newline + 1);
         newline = buffered.indexOf('\n');
-        const message = JSON.parse(line) as { id?: number; method?: string; params?: unknown };
-        if (typeof message.method !== 'string') {
-          const response = JSON.parse(line) as { id: string; result: DynamicToolCallResponse };
-          record.toolResponses.push(response);
-          nextToolCall();
-          continue;
-        }
-        if (message.id === undefined) {
-          record.notifications.push(message.method);
-          if (message.method === 'initialized') initialized = true;
-          continue;
-        }
-        const id = message.id;
-        // The cast types the cases below; a method outside the union reaches `default`.
-        const method = message.method as Method;
-        record.requests.push({ method, params: message.params as Record<string, unknown> });
-        if (method !== 'initialize' && !initialized) {
-          send({ id, error: { code: -32600, message: 'Not initialized' } });
-          continue;
-        }
-        const error = turn.errors?.[method];
-        if (error) {
-          send({ id, error });
-          continue;
-        }
-        switch (method) {
-          case 'initialize':
-            experimentalApi =
-              (message.params as InitializeParams).capabilities?.experimentalApi === true;
-            if (!turn.ignoreInitialize) send({ id, result: initializeResponse() });
-            break;
-          case 'thread/start':
-            send({ id, result: threadStartResponse(THREAD_ID) });
-            break;
-          case 'thread/resume':
-            send({
-              id,
-              result: threadResumeResponse((message.params as { threadId: string }).threadId),
-            });
-            break;
-          case 'thread/fork': {
-            forks += 1;
-            const source = (message.params as { threadId: string }).threadId;
-            send({ id, result: threadForkResponse(`${source}-fork-${String(forks)}`, source) });
-            break;
-          }
-          case 'turn/start':
-            activeThreadId = (message.params as { threadId: string }).threadId;
-            send({ id, result: { turn: turnOf('inProgress', null) } satisfies TurnStartResponse });
-            nextToolCall();
-            break;
-          case 'turn/interrupt':
-            if (turn.ignoreInterrupt) break;
-            send({ id, result: {} satisfies TurnInterruptResponse });
-            completeTurn('interrupted');
-            break;
-          case 'account/read':
-            if (!turn.ignoreAccountRead)
-              send({
-                id,
-                result:
-                  'accountResponse' in turn
-                    ? turn.accountResponse
-                    : ({
-                        workspaceRouting: null,
-                        account: turn.account ?? null,
-                        requiresOpenaiAuth: turn.requiresOpenaiAuth ?? true,
-                      } satisfies GetAccountResponse),
-              });
-            break;
-          case 'account/login/start': {
-            const login = message.params as LoginAccountParams;
-            // The real binary's answer (codex-cli 0.162) to external tokens without the capability.
-            if (login.type === 'chatgptAuthTokens' && !experimentalApi) {
-              send({
-                id,
-                error: {
-                  code: -32600,
-                  message:
-                    'account/login/start.chatgptAuthTokens requires experimentalApi capability',
-                },
-              });
-              break;
-            }
-            send({
-              id,
-              result: {
-                type: login.type === 'chatgptAuthTokens' ? 'chatgptAuthTokens' : 'apiKey',
-              } satisfies LoginAccountResponse,
-            });
-            break;
-          }
-          case 'config/read':
-            send({ id, result: configReadResponse(turn.configuredServers ?? []) });
-            break;
-          case 'plugin/installed':
-            send({ id, result: pluginInstalledResponse(turn.installedPlugins ?? {}) });
-            break;
-          case 'plugin/read': {
-            const { pluginName } = message.params as { pluginName: string };
-            const servers = turn.installedPlugins?.[`${pluginName}@fixture`] ?? [];
-            send({ id, result: pluginReadResponse(pluginName, servers) });
-            break;
-          }
-          case 'mcpServerStatus/list': {
-            const pages = turn.mcpStatusPages ?? [[]];
-            const { cursor } = message.params as { cursor?: string | null };
-            const index = cursor ? Number(cursor) : 0;
-            send({ id, result: mcpStatusResponse(pages, index) });
-            break;
-          }
-          default:
-            // What Codex answers for a method it does not serve. The fake serves only what
-            // the provider sends, so a new request fails the test until it is scripted here.
-            send({
-              id,
-              error: { code: -32600, message: `Invalid request: unknown variant \`${method}\`` },
-            });
-        }
+        handleLine(line);
       }
     });
     stdin.on('finish', () => {
@@ -375,8 +380,6 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
   spawner.processes = processes;
   return spawner;
 }
-
-// ─── Response builders ───────────────────────────────────────────────────
 
 function initializeResponse(): InitializeResponse {
   return {

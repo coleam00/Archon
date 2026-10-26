@@ -110,6 +110,49 @@ async function adapter(triggerConfig: GitHubTriggerConfig, intake: Intake) {
 }
 
 describe('GitHub source plugin', () => {
+  test('starts every matching binding in configuration order with its own mapped inputs', async () => {
+    const recorded = recorder();
+    const github = await adapter(
+      config([
+        binding({ bindingId: 'first' }),
+        binding({
+          bindingId: 'second',
+          capacity: 2,
+          inputMapping: {
+            status: { source: 'field', field: 'check.nativeState' },
+            lane: { source: 'literal', value: 'follow-up' },
+          },
+        }),
+      ]),
+      recorded.intake
+    );
+    const payload = JSON.stringify(checkRunPayload());
+
+    await expect(
+      github.receiveWebhook(payload, sign(payload), 'delivery-two-matches', 'check_run')
+    ).resolves.toBe('accepted');
+
+    expect(recorded.calls).toHaveLength(1);
+    expect(recorded.calls[0]?.bindings).toMatchObject([
+      {
+        bindingId: 'first',
+        launch: { inputs: { configured: true, lane: 'ci' } },
+        eventInputs: {
+          repository: 'owner/repo',
+          revision: 'opaque-revision-id',
+          checkName: 'build',
+        },
+      },
+      {
+        bindingId: 'second',
+        capacity: 2,
+        launch: { inputs: { configured: true, lane: 'follow-up' } },
+        eventInputs: { status: 'in_progress' },
+      },
+    ]);
+    expect(recorded.calls[0]?.bindings).toHaveLength(2);
+  });
+
   test('authenticates signed delivery and resolves its configured binding', async () => {
     const recorded = recorder();
     const github = await adapter(config(), recorded.intake);

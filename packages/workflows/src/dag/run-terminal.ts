@@ -139,53 +139,14 @@ async function failOnNodeOutcome(
   runTranscriptUsage: WorkflowUsage
 ): Promise<void> {
   const { deps, platform, conversationId, workflow, workflowRun, logDir, nodeOutputs } = ctx;
+  const noneCompleted = nodeCounts.completed === 0;
   const anyFailed = nodeCounts.failed > 0;
-  if (nodeCounts.completed === 0) {
-    if (await skipIfStatusChanged(deps, workflowRun, 'dag.skip_fail_status_changed')) return;
-    if (anyFailed && (await pauseForUsageLimit(ctx))) return;
-    const failedNodes: string[] = [];
-    for (const [nodeId, o] of nodeOutputs) {
-      if (o.state === 'failed') failedNodes.push(nodeId);
-    }
-    const failMsg =
-      failedNodes.length > 0
-        ? `DAG workflow '${workflow.name}' failed: node${failedNodes.length > 1 ? 's' : ''} ${failedNodes.join(', ')} failed. ` +
-          `${nodeCounts.skipped} downstream node${nodeCounts.skipped !== 1 ? 's were' : ' was'} skipped.`
-        : `DAG workflow '${workflow.name}' completed with no successful nodes. ` +
-          'Check node conditions, trigger rules, and upstream failures.';
-    // Note: nodeCounts not stored for failed runs — failWorkflowRun only stores { error }.
-    // Frontend guards with isValidNodeCounts so missing node_counts is safe. (Usage IS
-    // stored: persistRunUsage wrote it at the run tail, before this branch — #2469.)
-    await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
-      (logErr: Error) => {
-        getLog().error(
-          { err: logErr, workflowRunId: workflowRun.id },
-          'dag.workflow_error_log_write_failed'
-        );
-      }
-    );
-    await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
-      workflowId: workflowRun.id,
-    });
-    await failRun(
-      deps,
-      workflowRun,
-      workflow.name,
-      failMsg,
-      // A first-node failure completes nothing, but it is still a node failure.
-      anyFailed ? 'node_error' : 'no_nodes_completed',
-      'dag.no_nodes_completed_fail'
-    );
-    return;
-  }
-
   if (await skipIfStatusChanged(deps, workflowRun, 'dag.skip_fail_status_changed')) return;
-  if (await pauseForUsageLimit(ctx)) return;
-  const failedNodes = [...nodeOutputs.entries()]
-    .filter(([, o]) => o.state === 'failed')
-    .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
-    .join('; ');
-  const failMsg = `DAG workflow '${workflow.name}' completed with failures: ${failedNodes}`;
+  if ((!noneCompleted || anyFailed) && (await pauseForUsageLimit(ctx))) return;
+
+  const failMsg = noneCompleted
+    ? noSuccessfulNodesMessage(workflow.name, nodeOutputs, nodeCounts.skipped)
+    : partialFailureMessage(workflow.name, nodeOutputs);
   await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
     (logErr: Error) => {
       getLog().error(
@@ -197,7 +158,42 @@ async function failOnNodeOutcome(
   await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
     workflowId: workflowRun.id,
   });
-  await failRun(deps, workflowRun, workflow.name, failMsg, 'node_error', 'dag.node_failure_fail');
+  await failRun(
+    deps,
+    workflowRun,
+    workflow.name,
+    failMsg,
+    // A first-node failure completes nothing, but it is still a node failure.
+    noneCompleted && !anyFailed ? 'no_nodes_completed' : 'node_error',
+    noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail'
+  );
+}
+
+function noSuccessfulNodesMessage(
+  workflowName: string,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>,
+  skipped: number
+): string {
+  const failedNodes: string[] = [];
+  for (const [nodeId, output] of nodeOutputs) {
+    if (output.state === 'failed') failedNodes.push(nodeId);
+  }
+  return failedNodes.length > 0
+    ? `DAG workflow '${workflowName}' failed: node${failedNodes.length > 1 ? 's' : ''} ${failedNodes.join(', ')} failed. ` +
+        `${skipped} downstream node${skipped !== 1 ? 's were' : ' was'} skipped.`
+    : `DAG workflow '${workflowName}' completed with no successful nodes. ` +
+        'Check node conditions, trigger rules, and upstream failures.';
+}
+
+function partialFailureMessage(
+  workflowName: string,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>
+): string {
+  const failedNodes = [...nodeOutputs.entries()]
+    .filter(([, o]) => o.state === 'failed')
+    .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
+    .join('; ');
+  return `DAG workflow '${workflowName}' completed with failures: ${failedNodes}`;
 }
 
 /**
@@ -301,58 +297,31 @@ function selectTerminalOutput(
   workflowRun: WorkflowRun,
   nodeOutputs: ReadonlyMap<string, NodeOutput>
 ): TerminalOutput {
-  let terminalOutput: string | undefined;
-  // The selected terminal node's structured payload (#2637), stamped beside the text
-  // summary as `metadata.summary_value` so a parent `workflow:` node threads the
-  // LOGICAL value back (fan-out aggregation and `.field` access keep the type).
-  let terminalStructuredOutput: unknown;
-  // The selected node's declared field paths (#2453) — the callee-owned half of the
-  // result contract. Stamped beside `summary_value` so the parent's `workflow:` node can
-  // authorize `$<node>.output.a.b` from the CHILD's schema instead of requiring the
-  // caller to repeat it. Only the projection travels; the schema stays in captured source.
-  let terminalDeclaredOutputPaths: DeclaredOutputPaths | undefined;
   if (workflow.returns !== undefined && workflowRun.parent_run_id) {
-    const returnsOutput = nodeOutputs.get(workflow.returns);
-    const value = returnsOutput?.state === 'completed' ? returnsOutput.output : undefined;
-    if (value !== undefined && value.trim().length > 0) {
-      terminalOutput = value;
-      terminalStructuredOutput =
-        returnsOutput !== undefined && 'structuredOutput' in returnsOutput
-          ? returnsOutput.structuredOutput
-          : undefined;
-      // Taken from the completed node rather than re-derived from the definition: the
-      // node already resolved its own contract (a wait node's fixed schema, a resumed
-      // node's persisted projection), and re-deriving here would silently disagree.
-      terminalDeclaredOutputPaths =
-        returnsOutput?.state === 'completed' ? returnsOutput.declaredOutputPaths : undefined;
-    } else {
-      getLog().warn(
-        { workflowRunId: workflowRun.id, returns: workflow.returns },
-        'workflow.returns_node_blank_output'
-      );
-      terminalOutput = '';
+    const selected = nodeOutputs.get(workflow.returns);
+    if (selected?.state === 'completed' && selected.output.trim().length > 0) {
+      return terminalOutputFromNode(selected);
     }
-  } else {
-    const terminalSink = workflow.plan.sinks
-      .map(nodeId => nodeOutputs.get(nodeId))
-      .find(o => o?.state === 'completed' && o.output.trim().length > 0);
-    terminalOutput = terminalSink?.output;
-    // The sink scan's node owns its contract exactly as a `returns:` node does. Stamping
-    // it here too keeps the two channels together: a child without `returns:` has threaded
-    // its terminal LOGICAL value to the parent since #2637, and a value whose field
-    // authorization stayed behind would read as schemaless downstream.
-    terminalDeclaredOutputPaths =
-      terminalSink?.state === 'completed' ? terminalSink.declaredOutputPaths : undefined;
-    terminalStructuredOutput =
-      terminalSink !== undefined && 'structuredOutput' in terminalSink
-        ? terminalSink.structuredOutput
-        : undefined;
+    getLog().warn(
+      { workflowRunId: workflowRun.id, returns: workflow.returns },
+      'workflow.returns_node_blank_output'
+    );
+    return { output: '', structuredOutput: undefined, declaredOutputPaths: undefined };
   }
+  const terminalSink = workflow.plan.sinks
+    .map(nodeId => nodeOutputs.get(nodeId))
+    .find(output => output?.state === 'completed' && output.output.trim().length > 0);
+  return terminalOutputFromNode(terminalSink);
+}
 
+function terminalOutputFromNode(node: NodeOutput | undefined): TerminalOutput {
+  // Use the node's resolved contract, including fixed wait schemas and persisted
+  // resume projections, rather than reconstructing it from the workflow definition.
   return {
-    output: terminalOutput,
-    structuredOutput: terminalStructuredOutput,
-    declaredOutputPaths: terminalDeclaredOutputPaths,
+    output: node?.output,
+    structuredOutput:
+      node !== undefined && 'structuredOutput' in node ? node.structuredOutput : undefined,
+    declaredOutputPaths: node?.state === 'completed' ? node.declaredOutputPaths : undefined,
   };
 }
 

@@ -213,26 +213,26 @@ export function parseWhenAtom(expr: string): WhenAtom | null {
   return parseWhenAtomInternal(expr, false);
 }
 
+function parseLoopPrevWhenAtom(expr: string): WhenAtom | null {
+  const match = LOOP_PREV_WHEN_ATOM_PATTERN.exec(expr.trim());
+  if (!match) return null;
+  const [, nodeId, field, operator, quotedValue, unquotedValue] = match;
+  const expected = quotedValue !== undefined ? quotedValue : unquotedValue;
+  if (
+    nodeId === undefined ||
+    operator === undefined ||
+    !isWhenOperator(operator) ||
+    expected === undefined ||
+    !isComparableLiteral(operator, expected)
+  )
+    return null;
+  return { ref: { kind: 'loop_prev', nodeId, field }, operator, expected };
+}
+
 function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom | null {
   if (allowLoopPrev) {
-    const loopPrevMatch = LOOP_PREV_WHEN_ATOM_PATTERN.exec(expr.trim());
-    if (loopPrevMatch) {
-      const [, nodeId, field, operator, quotedValue, unquotedValue] = loopPrevMatch;
-      const expected = quotedValue !== undefined ? quotedValue : unquotedValue;
-      if (
-        nodeId !== undefined &&
-        operator !== undefined &&
-        isWhenOperator(operator) &&
-        expected !== undefined &&
-        isComparableLiteral(operator, expected)
-      ) {
-        return {
-          ref: { kind: 'loop_prev', nodeId, field },
-          operator,
-          expected,
-        };
-      }
-    }
+    const loopPrev = parseLoopPrevWhenAtom(expr);
+    if (loopPrev !== null) return loopPrev;
   }
   const match = WHEN_ATOM_PATTERN.exec(expr.trim());
   if (!match) return null;

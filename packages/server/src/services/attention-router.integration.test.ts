@@ -124,6 +124,11 @@ test('activation is quiet; new occurrences and terminal follow-ups survive repea
   await Promise.all([router.scan(), router.scan()]);
   await new AttentionRouter([destination], new Set()).scan();
   expect(sender).toHaveBeenCalledTimes(1);
+  expect(sender.mock.calls[0]?.[0]).toEqual(subscription('one'));
+  expect(sender.mock.calls[0]?.[2]).toEqual({
+    vapidDetails: { subject: 'https://archon.diy', ...loadVapidKeys() },
+    timeout: 10_000,
+  });
   expect(JSON.parse(String(sender.mock.calls[0]?.[1]))).toEqual({
     runId: current,
     workflowName: 'nightly',

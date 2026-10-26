@@ -244,19 +244,25 @@ export function substituteTemplate(template: string, tokens: readonly TemplateTo
 
 /** The runtime `$INPUTS.<name>` reference. An unknown name throws with a did-you-mean. */
 export function inputRefToken(inputs: Record<string, JsonValue> | undefined): TemplateToken {
-  return templateToken(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, match => {
-    const name = match[1];
-    if (inputs && Object.hasOwn(inputs, name)) return canonicalValueText(inputs[name]);
-    const known = inputs ? Object.keys(inputs) : [];
-    const hint = similarNodeIds(name, known);
-    const suffix =
-      hint.length > 0
-        ? ` Did you mean ${hint.map(candidate => `$INPUTS.${candidate}`).join(', ')}?`
-        : known.length > 0
-          ? ` Available inputs: ${known.map(candidate => `$INPUTS.${candidate}`).join(', ')}.`
-          : ' This run has no declared inputs.';
-    throw new Error(`Unknown input '$INPUTS.${name}'.${suffix}`);
-  });
+  return templateToken(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, match =>
+    canonicalValueText(resolveInputValue(match[1], inputs))
+  );
+}
+
+export function resolveInputValue(
+  name: string,
+  inputs: Record<string, JsonValue> | undefined
+): JsonValue {
+  if (inputs && Object.hasOwn(inputs, name)) return inputs[name];
+  const known = inputs ? Object.keys(inputs) : [];
+  const hint = similarNodeIds(name, known);
+  const suffix =
+    hint.length > 0
+      ? ` Did you mean ${hint.map(candidate => `$INPUTS.${candidate}`).join(', ')}?`
+      : known.length > 0
+        ? ` Available inputs: ${known.map(candidate => `$INPUTS.${candidate}`).join(', ')}.`
+        : ' This run has no declared inputs.';
+  throw new Error(`Unknown input '$INPUTS.${name}'.${suffix}`);
 }
 
 /** Anchored whole-value form: the ENTIRE (trimmed) string is one `$id.output[.path]` ref. */
@@ -592,6 +598,26 @@ export function resolveNodeOutputField(
   // payload with no contract (legacy rows, an object schema without `properties`) stays
   // lenient for a single field, because nothing tells an optional field from a typo.
   const absentIsEmpty = paths !== undefined || (structured !== undefined && segments.length === 1);
+  return resolveOutputPath(
+    root,
+    segments,
+    nodeId,
+    field,
+    reference,
+    absentIsEmpty,
+    paths !== undefined
+  );
+}
+
+function resolveOutputPath(
+  root: Record<string, unknown>,
+  segments: readonly string[],
+  nodeId: string,
+  field: string,
+  reference: string,
+  absentIsEmpty: boolean,
+  declared: boolean
+): FieldResolution {
   let value: unknown = root;
   for (const segment of segments) {
     const object = asPlainObject(value);
@@ -605,7 +631,7 @@ export function resolveNodeOutputField(
     value = object[segment];
     // Required fields were validated present, so a declared null is an optional value
     // left empty, at any depth.
-    if (paths !== undefined && (value === undefined || value === null)) return { kind: 'empty' };
+    if (declared && (value === undefined || value === null)) return { kind: 'empty' };
   }
   return { kind: 'value', value };
 }

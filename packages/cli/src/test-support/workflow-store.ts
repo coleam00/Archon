@@ -148,12 +148,7 @@ export function createInMemoryWorkflowStore(
   const sessions = new Map<string, WorkflowNodeSession>();
   const runSessions = new Map<string, WorkflowRunNodeSession>();
   const getCodebase: IWorkflowStore['getCodebase'] = id => records.codebases.getCodebase(id);
-  // Unqueued: admission calls it from inside its own queued operation.
-  const apply = async <T>(call: (view: TransactionView) => Promise<T>): Promise<T> => {
-    const nextRuns = structuredClone(runs);
-    const nextEvents = structuredClone(events);
-    const result = await call(createTransactionView(nextRuns, nextEvents, getCodebase));
-    const priorIds = new Set(events.map(event => event.id));
+  const clearDeletedRunSessions = (nextRuns: Map<string, WorkflowRun>): void => {
     for (const id of runs.keys()) {
       if (nextRuns.has(id)) continue;
       for (const [key, session] of runSessions)
@@ -161,6 +156,14 @@ export function createInMemoryWorkflowStore(
       for (const session of sessions.values())
         if (session.last_run_id === id) session.last_run_id = null;
     }
+  };
+  // Unqueued: admission calls it from inside its own queued operation.
+  const apply = async <T>(call: (view: TransactionView) => Promise<T>): Promise<T> => {
+    const nextRuns = structuredClone(runs);
+    const nextEvents = structuredClone(events);
+    const result = await call(createTransactionView(nextRuns, nextEvents, getCodebase));
+    const priorIds = new Set(events.map(event => event.id));
+    clearDeletedRunSessions(nextRuns);
     for (const event of nextEvents) {
       if (!priorIds.has(event.id))
         feed.push({ cursor: cursor(++eventOrder), event: structuredClone(event) });

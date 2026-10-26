@@ -51,6 +51,39 @@ export function SubscriptionLoginFlow({
     const stale = (): boolean => superseded || cancelledRef.current;
     let started = false;
 
+    const pollAndCheckCompletion = async (sessionId: string): Promise<boolean> => {
+      try {
+        const submit = pendingCodeRef.current;
+        pendingCodeRef.current = undefined;
+        const res = await skill.pollProviderOAuth(provider, sessionId, submit);
+        if (stale()) return true;
+        // The authorize URL / device code can arrive via POLL rather than
+        // start (supersede latency) — merge late signals or the manual
+        // panel stays linkless forever while polling "pending".
+        setStart(prev => (prev ? mergeOAuthSignals(prev, res) : prev));
+        const polledMode = res.mode;
+        if (polledMode) {
+          setPhase(p => (p === 'error' ? p : polledMode));
+        }
+        if (res.status === 'connected') {
+          invalidate(K.providerConnections);
+          onDoneRef.current();
+          return true;
+        }
+        if (res.status === 'error') {
+          setPhase('error');
+          setMessage(res.detail ?? 'Login failed.');
+          return true;
+        }
+        return false;
+      } catch (e: unknown) {
+        if (stale()) return true;
+        setPhase('error');
+        setMessage(e instanceof Error ? e.message : 'Login poll failed.');
+        return true;
+      }
+    };
+
     const pollLoop = async (sessionId: string): Promise<void> => {
       const deadline = Date.now() + 10 * 60 * 1000; // bridge SESSION_TTL_MS
       for (;;) {
@@ -62,36 +95,7 @@ export function SubscriptionLoginFlow({
         }
         await new Promise(r => setTimeout(r, 2000));
         if (stale()) return;
-        try {
-          const submit = pendingCodeRef.current;
-          pendingCodeRef.current = undefined;
-          const res = await skill.pollProviderOAuth(provider, sessionId, submit);
-          if (stale()) return;
-          // The authorize URL / device code can arrive via POLL rather than
-          // start (supersede latency) — merge late signals or the manual
-          // panel stays linkless forever while polling "pending".
-          setStart(prev => (prev ? mergeOAuthSignals(prev, res) : prev));
-          const polledMode = res.mode;
-          if (polledMode) {
-            setPhase(p => (p === 'error' ? p : polledMode));
-          }
-          if (res.status === 'connected') {
-            invalidate(K.providerConnections);
-            onDoneRef.current();
-            return;
-          }
-          if (res.status === 'error') {
-            setPhase('error');
-            setMessage(res.detail ?? 'Login failed.');
-            return;
-          }
-          // 'pending' → keep polling
-        } catch (e: unknown) {
-          if (stale()) return;
-          setPhase('error');
-          setMessage(e instanceof Error ? e.message : 'Login poll failed.');
-          return;
-        }
+        if (await pollAndCheckCompletion(sessionId)) return;
       }
     };
 

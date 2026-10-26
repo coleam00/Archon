@@ -244,28 +244,37 @@ function toModelAliasPreset(entry: RawAliasEntry): ModelAliasPreset {
   };
 }
 
-export interface BuildAiProfileOptions {
-  /** Tier overrides from ~/.archon/config.yaml */
-  globalTiers?: RawTiersConfig;
-  /** Tier overrides from .archon/config.yaml (repo) — override globalTiers on key collision */
-  repoTiers?: RawTiersConfig;
-  /** Aliases from ~/.archon/config.yaml */
-  globalAliases?: RawAliasesConfig;
-  /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
-  repoAliases?: RawAliasesConfig;
-  /** Per-user tier overrides (DB) — highest precedence, override repoTiers on key collision */
-  userTiers?: RawTiersConfig;
-  /** Per-user aliases (DB) — highest precedence, override repoAliases on key collision */
-  userAliases?: RawAliasesConfig;
-  /** One invocation's tier rebindings — highest precedence, sparse by key. */
-  runTiers?: RawTiersConfig;
-  /** One invocation's alias rebindings — highest precedence, sparse by key. */
-  runAliases?: RawAliasesConfig;
-}
+const TIER_LAYERS = [
+  /** Tier overrides from ~/.archon/config.yaml. */
+  'globalTiers',
+  /** Repository overrides from .archon/config.yaml, above global tiers. */
+  'repoTiers',
+  /** Per-user overrides from the database, above repository tiers. */
+  'userTiers',
+  /** One invocation's sparse rebindings, above user tiers. */
+  'runTiers',
+] as const;
+
+const ALIAS_LAYERS = [
+  /** Aliases from ~/.archon/config.yaml. */
+  'globalAliases',
+  /** Repository aliases from .archon/config.yaml, above global aliases. */
+  'repoAliases',
+  /** Per-user aliases from the database, above repository aliases. */
+  'userAliases',
+  /** One invocation's sparse rebindings, above user aliases. */
+  'runAliases',
+] as const;
+
+export type BuildAiProfileOptions = {
+  [Layer in (typeof TIER_LAYERS)[number]]?: RawTiersConfig;
+} & {
+  [Layer in (typeof ALIAS_LAYERS)[number]]?: RawAliasesConfig;
+};
 
 /**
  * Build a ResolvedAiProfile by layering tier defaults → global tiers → repo tiers
- * → per-user tiers → global aliases → repo aliases → per-user aliases.
+ * → per-user tiers → run tiers → global aliases → repo aliases → per-user aliases → run aliases.
  * Throws if any alias name collides with a reserved tier name, or if an alias
  * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
@@ -273,8 +282,22 @@ export function buildAiProfile(
   defaultProvider: string | undefined,
   options: BuildAiProfileOptions = {}
 ): ResolvedAiProfile {
-  const aliases: Record<string, ModelAliasPreset> = {};
+  const aliases = defaultTierAliases(defaultProvider);
+  applyTierLayers(
+    aliases,
+    TIER_LAYERS.map(key => options[key])
+  );
+  applyAliasLayers(
+    aliases,
+    ALIAS_LAYERS.map(key => options[key])
+  );
 
+  // Profiles are persisted in JSON run metadata, where `undefined` is invalid.
+  return { ...(defaultProvider !== undefined ? { defaultProvider } : {}), aliases };
+}
+
+function defaultTierAliases(defaultProvider: string | undefined): Record<string, ModelAliasPreset> {
+  const aliases: Record<string, ModelAliasPreset> = {};
   const tierEntries = defaultProvider === undefined ? undefined : TIER_DEFAULTS[defaultProvider];
   if (tierEntries && defaultProvider !== undefined) {
     for (const tier of TIER_NAMES) {
@@ -289,12 +312,14 @@ export function buildAiProfile(
     }
   }
 
-  for (const layer of [
-    options.globalTiers,
-    options.repoTiers,
-    options.userTiers,
-    options.runTiers,
-  ]) {
+  return aliases;
+}
+
+function applyTierLayers(
+  aliases: Record<string, ModelAliasPreset>,
+  layers: readonly (RawTiersConfig | undefined)[]
+): void {
+  for (const layer of layers) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertValidTierName(name);
@@ -302,13 +327,13 @@ export function buildAiProfile(
       aliases[name] = toModelAliasPreset(entry);
     }
   }
+}
 
-  for (const layer of [
-    options.globalAliases,
-    options.repoAliases,
-    options.userAliases,
-    options.runAliases,
-  ]) {
+function applyAliasLayers(
+  aliases: Record<string, ModelAliasPreset>,
+  layers: readonly (RawAliasesConfig | undefined)[]
+): void {
+  for (const layer of layers) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertNotReserved(name);
@@ -317,9 +342,6 @@ export function buildAiProfile(
       aliases[name] = toModelAliasPreset(entry);
     }
   }
-
-  // Profiles are persisted in JSON run metadata, where `undefined` is invalid.
-  return { ...(defaultProvider !== undefined ? { defaultProvider } : {}), aliases };
 }
 
 function presetForOverrideTarget(profile: ResolvedAiProfile, name: string): ModelAliasPreset {
@@ -527,6 +549,25 @@ export function createRunModelBindingsMetadata(
   };
 }
 
+function invalidModelBindingsMetadata(path: readonly PropertyKey[]): Error {
+  const bindingName = typeof path[2] === 'string' ? path[2] : 'unknown';
+  if (path.includes('thinking')) {
+    return new Error(
+      `Model binding '${bindingName}' uses removed 'thinking:'; use 'effort:' instead.`
+    );
+  }
+  if (path.includes('effort')) {
+    return new Error(`Model binding '${bindingName}' has an invalid effort.`);
+  }
+  if (path[0] === 'overrides' && (path[1] === 'tiers' || path[1] === 'aliases')) {
+    return new Error(`Workflow run has invalid model_bindings ${path[1]} metadata.`);
+  }
+  if (path[0] === 'effective') {
+    return new Error('Workflow run has invalid effective model bindings.');
+  }
+  return new Error('Workflow run has invalid model_bindings metadata.');
+}
+
 /** Read metadata written by this module; malformed external JSON fails explicitly. */
 export function readRunModelBindingsMetadata(
   providers: ProviderRegistry,
@@ -536,23 +577,7 @@ export function readRunModelBindingsMetadata(
   if (value === undefined) return undefined;
   const parsed = runModelBindingsMetadataSchema.safeParse(value);
   if (!parsed.success) {
-    const path = parsed.error.issues[0]?.path ?? [];
-    const bindingName = typeof path[2] === 'string' ? path[2] : 'unknown';
-    if (path.includes('thinking')) {
-      throw new Error(
-        `Model binding '${bindingName}' uses removed 'thinking:'; use 'effort:' instead.`
-      );
-    }
-    if (path.includes('effort')) {
-      throw new Error(`Model binding '${bindingName}' has an invalid effort.`);
-    }
-    if (path[0] === 'overrides' && (path[1] === 'tiers' || path[1] === 'aliases')) {
-      throw new Error(`Workflow run has invalid model_bindings ${path[1]} metadata.`);
-    }
-    if (path[0] === 'effective') {
-      throw new Error('Workflow run has invalid effective model bindings.');
-    }
-    throw new Error('Workflow run has invalid model_bindings metadata.');
+    throw invalidModelBindingsMetadata(parsed.error.issues[0]?.path ?? []);
   }
 
   const tiers = Object.fromEntries(

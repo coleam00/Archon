@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { subtaskSchema, subtaskTerminalStatusSchema } from '@archon/provider-contract';
 import type { IWorkflowPlatform } from './deps';
+import { getWorkflowEventEmitter } from './event-emitter';
 import {
   createAttemptEventSequence,
   createProviderEventHandler,
@@ -21,7 +22,11 @@ const trackTempRoot = trackTempRoots();
 type CreateEvent = IWorkflowStore['createWorkflowEvent'];
 
 async function makeHandler(
-  options: { configuredMcpServers?: string[]; attempt?: AttemptEventSequence } = {}
+  options: {
+    configuredMcpServers?: string[];
+    attempt?: AttemptEventSequence;
+    platform?: IWorkflowPlatform;
+  } = {}
 ): Promise<{
   handler: ReturnType<typeof createProviderEventHandler>;
   rows: Parameters<CreateEvent>[0][];
@@ -55,7 +60,7 @@ async function makeHandler(
         rows.push(event);
       }),
     },
-    platform,
+    platform: options.platform ?? platform,
     conversationId: 'conv-1',
     messageContext: {},
     logDir: trackTempRoot(await mkdtemp(join(tmpdir(), 'provider-events-'))),
@@ -70,6 +75,49 @@ async function makeHandler(
 }
 
 describe('createProviderEventHandler', () => {
+  test.each(['stream', 'batch'] as const)(
+    'records and emits tools before forwarding them in %s mode',
+    async mode => {
+      const actions: string[] = [];
+      const { handler, rows } = await makeHandler({
+        platform: {
+          getStreamingMode: () => mode,
+          getPlatformType: () => 'test',
+          sendMessage: async () => {
+            actions.push('formatted');
+          },
+          sendStructuredEvent: async (_conversationId, event) => {
+            actions.push(`structured:${event.type}`);
+          },
+        },
+      });
+      const recordedCounts: number[] = [];
+      const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+        if (event.type !== 'provider_event' || event.runId !== 'run-1') return;
+        recordedCounts.push(rows.length);
+        actions.push(`emitted:${event.event.type}`);
+      });
+      try {
+        await handler.handle({ type: 'tool_call', toolCallId: 'a', name: 'Read' });
+        await handler.handle({ type: 'tool_call_update', toolCallId: 'a', status: 'completed' });
+      } finally {
+        unsubscribe();
+      }
+      expect(recordedCounts).toEqual([1, 2]);
+      expect(actions).toEqual(
+        mode === 'stream'
+          ? [
+              'emitted:tool_call',
+              'formatted',
+              'structured:tool_call',
+              'emitted:tool_call_update',
+              'structured:tool_call_update',
+            ]
+          : ['emitted:tool_call', 'emitted:tool_call_update']
+      );
+    }
+  );
+
   test('typed open tools stay live until their own terminal update', async () => {
     const { handler } = await makeHandler();
     await handler.handle({ type: 'tool_call', toolCallId: 'a', name: 'Bash' });

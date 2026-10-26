@@ -71,7 +71,7 @@ import { ensureIsolationConfigured } from '../orchestrator/dispatch/isolation-re
 import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createCodebaseChildResolver } from './child-isolation-resolver';
-import { createRegisteredWorktree } from './registered-worktree';
+import { createRegisteredWorktree, type RegisteredWorktreeInput } from './registered-worktree';
 
 const log = createLogger('resource-start-host');
 
@@ -469,52 +469,77 @@ function queuedDrainResources(
   return [...new Set(queued.flatMap(request => ('error' in request ? [] : [request.resource])))];
 }
 
+type WorktreeLaneSpec = Extract<
+  PreparedWorkflowLaunch['execution']['isolation'],
+  { kind: 'worktree' }
+>;
+
+interface WorktreeLane {
+  cwd: string;
+  envId: string;
+  cutFromCommit?: string;
+  ownedWorktree?: OwnedWorktree;
+}
+
+/** An explicit branch names one reusable checkout, so repeated starts share it. */
+async function adoptBranchWorktree(
+  host: WorkflowHost,
+  lane: WorktreeLaneSpec,
+  codebase: Codebase
+): Promise<WorktreeLane | undefined> {
+  if (!lane.branch) return undefined;
+  const existing = await host.records.isolation.findActiveByWorkflow(
+    codebase.id,
+    'task',
+    lane.branch
+  );
+  if (!existing || !(await getIsolationProvider().healthCheck(existing.working_path)))
+    return undefined;
+  await recordWorktreeAdoption(host.records.isolation, existing, codebase.default_cwd);
+  return { cwd: existing.working_path, envId: existing.id };
+}
+
+function worktreeLaneRequest(
+  lane: WorktreeLaneSpec,
+  codebase: Codebase,
+  identifier: string
+): RegisteredWorktreeInput['request'] {
+  const fromBranch = lane.fromBranch ? toBranchName(lane.fromBranch) : undefined;
+  const defaultBranch = codebase.default_branch?.trim();
+  return {
+    workflowType: 'task',
+    identifier: lane.branch ?? identifier,
+    taskBranch:
+      lane.branch || fromBranch
+        ? {
+            kind: 'new',
+            ...(lane.branch ? { branch: toBranchName(lane.branch) } : {}),
+            ...(fromBranch ? { fromBranch } : {}),
+          }
+        : undefined,
+    baseBranch: defaultBranch ? toBranchName(defaultBranch) : undefined,
+    baseOverride: lane.baseOverride ? toBranchName(lane.baseOverride) : undefined,
+    codebaseId: codebase.id,
+    codebaseName: codebase.name,
+    canonicalRepoPath: toRepoPath(codebase.default_cwd),
+    description: `Resource start: ${identifier}`,
+  };
+}
+
 async function worktreeLane(
   host: WorkflowHost,
-  lane: Extract<PreparedWorkflowLaunch['execution']['isolation'], { kind: 'worktree' }>,
+  lane: WorktreeLaneSpec,
   codebase: Codebase,
   identifier: string,
   platformType: string,
   userId: string | undefined,
   setupExecutor: WorktreeSetupExecutor
-): Promise<{ cwd: string; envId: string; cutFromCommit?: string; ownedWorktree?: OwnedWorktree }> {
+): Promise<WorktreeLane> {
   ensureIsolationConfigured();
-  const provider = getIsolationProvider();
-  // An explicit branch names one reusable checkout, so repeated starts share it.
-  if (lane.branch) {
-    const existing = await host.records.isolation.findActiveByWorkflow(
-      codebase.id,
-      'task',
-      lane.branch
-    );
-    if (existing && (await provider.healthCheck(existing.working_path))) {
-      await recordWorktreeAdoption(host.records.isolation, existing, codebase.default_cwd);
-      return { cwd: existing.working_path, envId: existing.id };
-    }
-  }
-  const workflowId = lane.branch ?? identifier;
-  const fromBranch = lane.fromBranch ? toBranchName(lane.fromBranch) : undefined;
+  const adopted = await adoptBranchWorktree(host, lane, codebase);
+  if (adopted) return adopted;
   const created = await createRegisteredWorktree(host.records.isolation, {
-    request: {
-      workflowType: 'task',
-      identifier: workflowId,
-      taskBranch:
-        lane.branch || fromBranch
-          ? {
-              kind: 'new',
-              ...(lane.branch ? { branch: toBranchName(lane.branch) } : {}),
-              ...(fromBranch ? { fromBranch } : {}),
-            }
-          : undefined,
-      baseBranch: codebase.default_branch?.trim()
-        ? toBranchName(codebase.default_branch.trim())
-        : undefined,
-      baseOverride: lane.baseOverride ? toBranchName(lane.baseOverride) : undefined,
-      codebaseId: codebase.id,
-      codebaseName: codebase.name,
-      canonicalRepoPath: toRepoPath(codebase.default_cwd),
-      description: `Resource start: ${identifier}`,
-    },
+    request: worktreeLaneRequest(lane, codebase, identifier),
     setupExecutor,
     createdByPlatform: platformType,
     ...(userId ? { createdByUserId: userId } : {}),
@@ -568,19 +593,7 @@ export async function startAdmittedResourceStart(
   input: StartAdmittedResourceStartInput
 ): Promise<WorkflowExecutionResult> {
   const { host } = input;
-  const request = await host.deps.store.getResourceStartRequest(input.requestId);
-  if (request?.status !== 'admitted' || request.hostId !== input.hostId) {
-    throw new Error('Execution requires an admitted request for this configured host.');
-  }
-  const { launch } = request;
-  const run = await host.deps.store.getWorkflowRun(launch.run.id);
-  if (run?.status !== 'pending') {
-    throw new Error(`Admitted run '${launch.run.id}' is ${run?.status ?? 'missing'}, not pending.`);
-  }
-  const frozen = await resolveContinuationWorkflow(host.deps, run, launch.execution.cwd);
-  if (!frozen) throw new Error(`Admitted run '${run.id}' has no frozen workflow source.`);
-  const codebase = await host.records.codebases.getCodebase(launch.run.codebase_id);
-  if (!codebase) throw new Error(`Admitted run '${run.id}' names a missing project.`);
+  const { launch, run, frozen, codebase } = await loadAdmittedResourceStart(input);
 
   const platform = input.createPlatform({
     conversationId: launch.execution.conversationId,
@@ -614,18 +627,13 @@ export async function startAdmittedResourceStart(
           : {}),
       }
     );
-    try {
-      await assertRunCredentials(deps, preparedAiConfiguration, { cwd: launch.execution.cwd });
-    } catch (error) {
-      if (error instanceof WorkflowCredentialPreflightError) {
-        await requireTerminalStatusWrite(deps.store.failWorkflowRun(run.id, error.message), {
-          workflowRunId: run.id,
-          site: 'resource_start.credential_preflight_failed',
-        });
-        return { success: false, workflowRunId: run.id, error: error.message };
-      }
-      throw error;
-    }
+    const refusal = await checkAdmittedRunCredentials(
+      host,
+      run.id,
+      preparedAiConfiguration,
+      launch.execution.cwd
+    );
+    if (refusal) return refusal;
     const lane = launch.execution.isolation;
     const execution =
       lane.kind === 'worktree'
@@ -696,4 +704,44 @@ export async function startAdmittedResourceStart(
       log.error({ err: error as Error, runId: run.id }, 'resource_start.live_owner_close_failed');
     });
   }
+}
+
+async function loadAdmittedResourceStart(input: StartAdmittedResourceStartInput) {
+  const { host } = input;
+  const request = await host.deps.store.getResourceStartRequest(input.requestId);
+  if (request?.status !== 'admitted' || request.hostId !== input.hostId) {
+    throw new Error('Execution requires an admitted request for this configured host.');
+  }
+  const { launch } = request;
+  const run = await host.deps.store.getWorkflowRun(launch.run.id);
+  if (run?.status !== 'pending') {
+    throw new Error(`Admitted run '${launch.run.id}' is ${run?.status ?? 'missing'}, not pending.`);
+  }
+  const frozen = await resolveContinuationWorkflow(host.deps, run, launch.execution.cwd);
+  if (!frozen) throw new Error(`Admitted run '${run.id}' has no frozen workflow source.`);
+  const codebase = await host.records.codebases.getCodebase(launch.run.codebase_id);
+  if (!codebase) throw new Error(`Admitted run '${run.id}' names a missing project.`);
+
+  return { launch, run, frozen, codebase };
+}
+
+async function checkAdmittedRunCredentials(
+  host: WorkflowHost,
+  runId: string,
+  preparedAiConfiguration: PreparedRunAiConfiguration,
+  cwd: string
+): Promise<WorkflowExecutionResult | undefined> {
+  try {
+    await assertRunCredentials(host.deps, preparedAiConfiguration, { cwd });
+  } catch (error) {
+    if (error instanceof WorkflowCredentialPreflightError) {
+      await requireTerminalStatusWrite(host.deps.store.failWorkflowRun(runId, error.message), {
+        workflowRunId: runId,
+        site: 'resource_start.credential_preflight_failed',
+      });
+      return { success: false, workflowRunId: runId, error: error.message };
+    }
+    throw error;
+  }
+  return undefined;
 }

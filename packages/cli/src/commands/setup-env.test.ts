@@ -120,6 +120,35 @@ ARCHON_CODEX_ACCOUNT_ID=account1
       expect(content).not.toContain('DEFAULT_AI_ASSISTANT=');
     });
 
+    it.each([
+      { authType: 'apiKey' as const, key: 'CLAUDE_API_KEY', otherKey: 'CLAUDE_CODE_OAUTH_TOKEN' },
+      {
+        authType: 'oauthToken' as const,
+        key: 'CLAUDE_CODE_OAUTH_TOKEN',
+        otherKey: 'CLAUDE_API_KEY',
+      },
+    ])('writes only the selected Claude $authType credential', ({ authType, key, otherKey }) => {
+      const env = parseDotenv(
+        generateEnvContent({
+          ai: {
+            claude: true,
+            claudeAuthType: authType,
+            claudeApiKey: 'api-key-value',
+            claudeOauthToken: 'oauth-token-value',
+            codex: false,
+            pi: false,
+            defaultAssistant: 'claude',
+          },
+          platforms: { github: false, telegram: false, slack: false },
+          botDisplayName: 'Archon',
+        })
+      );
+
+      expect(env[key]).toBe(authType === 'apiKey' ? 'api-key-value' : 'oauth-token-value');
+      expect(env.CLAUDE_USE_GLOBAL_AUTH).toBe('false');
+      expect(env[otherKey]).toBeUndefined();
+    });
+
     it('should generate valid .env content for SQLite configuration', () => {
       const content = generateEnvContent({
         ai: {

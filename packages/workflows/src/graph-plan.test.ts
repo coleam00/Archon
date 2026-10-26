@@ -58,6 +58,20 @@ describe('planGraph', () => {
     expect(layers[2].map(n => n.id)).toEqual(['implement']);
   });
 
+  it('orders the next layer by when each dependent becomes ready', () => {
+    const plan = planGraph([
+      node('a'),
+      node('b'),
+      node('joint', ['a', 'b']),
+      node('only-b', ['b']),
+      node('only-a', ['a']),
+    ]);
+    expect(plan.layers.map(layer => layer.map(item => item.id))).toEqual([
+      ['a', 'b'],
+      ['only-a', 'joint', 'only-b'],
+    ]);
+  });
+
   it('throws on a cyclic graph', () => {
     const cyclic = [node('a', ['b']), node('b', ['a'])];
     expect(() => planGraph(cyclic)).toThrow('Cycle detected');

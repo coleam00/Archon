@@ -52,6 +52,39 @@ afterEach(() => {
   updateCodebase.mockClear();
 });
 
+type CheckoutState = 'matching' | 'configured' | 'unselected' | 'foreign' | 'no-remote' | 'invalid';
+async function prepareSavedCheckout(path: string, host: string, state: CheckoutState) {
+  await mkdir(path, { recursive: true });
+  if (state === 'invalid') {
+    await mkdir(join(path, '.git'));
+    return;
+  }
+  execFileSync('git', ['-C', path, 'init', '-q']);
+  if (state !== 'no-remote') {
+    const repo = state === 'foreign' ? 'other/repository' : 'acme/api';
+    execFileSync('git', [
+      '-C',
+      path,
+      'remote',
+      'add',
+      state === 'configured' ? 'upstream' : 'origin',
+      `git@${host}:${repo}.git`,
+    ]);
+  }
+  if (state === 'configured' || state === 'unselected') {
+    execFileSync('git', [
+      '-C',
+      path,
+      'remote',
+      'add',
+      state === 'configured' ? 'origin' : 'upstream',
+      `https://${host}/other/repository`,
+    ]);
+    await mkdir(join(path, '.archon'));
+    await writeFile(join(path, '.archon', 'config.yaml'), 'worktree:\n  remote: upstream\n');
+  }
+}
+
 for (const forge of forges) {
   describe(`${forge.name} saved checkout ownership`, () => {
     for (const layout of ['worktrees', 'checkouts']) {
@@ -65,38 +98,7 @@ for (const forge of forges) {
       ] as const)(`checks a real main checkout under ${layout}: %s`, async state => {
         const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-checkout-owner-')));
         const path = join(root, layout, 'api');
-        await mkdir(path, { recursive: true });
-        if (state === 'invalid') {
-          await mkdir(join(path, '.git'));
-        } else {
-          execFileSync('git', ['-C', path, 'init', '-q']);
-          if (state !== 'no-remote') {
-            const repo = state === 'foreign' ? 'other/repository' : 'acme/api';
-            execFileSync('git', [
-              '-C',
-              path,
-              'remote',
-              'add',
-              state === 'configured' ? 'upstream' : 'origin',
-              `git@${forge.host}:${repo}.git`,
-            ]);
-          }
-          if (state === 'configured' || state === 'unselected') {
-            execFileSync('git', [
-              '-C',
-              path,
-              'remote',
-              'add',
-              state === 'configured' ? 'origin' : 'upstream',
-              `https://${forge.host}/other/repository`,
-            ]);
-            await mkdir(join(path, '.archon'));
-            await writeFile(
-              join(path, '.archon', 'config.yaml'),
-              'worktree:\n  remote: upstream\n'
-            );
-          }
-        }
+        await prepareSavedCheckout(path, forge.host, state);
         const existing = codebaseRowSchema.parse({
           id: 'a5fc48f1-0c23-4e61-b5f6-eb3b0c6682fd',
           name: 'local-api',

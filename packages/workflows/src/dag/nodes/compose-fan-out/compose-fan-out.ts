@@ -1,11 +1,11 @@
 import { ParentStatusReadError } from '../../../parent-status-read';
 import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
-import { type NodeFailureKind } from '../../../schemas/node-execution';
+import { type NodeExecutionRecord, type NodeFailureKind } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
 import { discoverWorkflowsWithConfig } from '../../../workflow-discovery';
 import { resolveWorkflowCommandContents } from '../../../workflow-discovery/command-scan';
-import { findWorkflowLoadError } from '../../../schemas/workflow';
+import { findWorkflowLoadError, type WorkflowLoadError } from '../../../schemas/workflow';
 import {
   assertWorkflowSourceIntegrity,
   isSourceReadFailure,
@@ -36,6 +36,35 @@ import {
 } from './compose-fan-out-expansion';
 import { runComposeInstance } from './compose-fan-out-instance';
 import { joinComposeOutcomes } from './compose-fan-out-join';
+
+function unresolvedFanOutTarget(
+  errors: readonly WorkflowLoadError[],
+  targetName: string,
+  verifiedFiles: ReadonlySet<string> | undefined
+): { unresolved: string } {
+  const relevantError =
+    findWorkflowLoadError(errors, targetName) ??
+    errors.find(
+      error => error.workflowName === undefined && isSourceReadFailure(error.cause, verifiedFiles)
+    );
+  if (relevantError !== undefined && isSourceReadFailure(relevantError.cause, verifiedFiles)) {
+    throw relevantError.cause;
+  }
+  return {
+    unresolved: relevantError?.error ?? `no workflow named '${targetName}' was found`,
+  };
+}
+
+function assertFanOutCommandsReadable(
+  commandContents: ReadonlyMap<string, IncludeCommandContent>,
+  verifiedFiles: ReadonlySet<string> | undefined
+): void {
+  for (const content of commandContents.values()) {
+    if (isIncludeCommandReadError(content) && isSourceReadFailure(content.cause, verifiedFiles)) {
+      throw content.cause;
+    }
+  }
+}
 
 /**
  * Resolve a composed fan-out's `include:` target at run time. The body may be a support
@@ -74,29 +103,14 @@ export async function resolveFanOutChildDefinition(
     // resolveWorkflowName returns undefined for an unknown name and THROWS only on
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
     if (!definition) {
-      const relevantError =
-        findWorkflowLoadError(errors, targetName) ??
-        errors.find(
-          error =>
-            error.workflowName === undefined && isSourceReadFailure(error.cause, verifiedFiles)
-        );
-      if (relevantError !== undefined && isSourceReadFailure(relevantError.cause, verifiedFiles)) {
-        throw relevantError.cause;
-      }
-      return {
-        unresolved: relevantError?.error ?? `no workflow named '${targetName}' was found`,
-      };
+      return unresolvedFanOutTarget(errors, targetName, verifiedFiles);
     }
     const commandContents = await resolveWorkflowCommandContents(
       sourceRoots,
       [definition],
       verifiedFiles
     );
-    for (const content of commandContents.values()) {
-      if (isIncludeCommandReadError(content) && isSourceReadFailure(content.cause, verifiedFiles)) {
-        throw content.cause;
-      }
-    }
+    assertFanOutCommandsReadable(commandContents, verifiedFiles);
     return { definition, definitions, commandContents };
   } catch (err) {
     if (err instanceof WorkflowSourceIntegrityError || isSourceReadFailure(err)) throw err;
@@ -368,12 +382,7 @@ export async function executeComposeFanOutNode(
 
   const parent = await readParentStatus(ctx, node);
   if (parent === 'stopped') {
-    return {
-      ...serializeNodeOutput(execution),
-      ...(totalCostUsd !== undefined ? { costUsd: totalCostUsd } : {}),
-      ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
-      ...(tokensUnknown ? { tokensUnknown: true } : {}),
-    };
+    return interruptedFanOutResult(execution, totalCostUsd, totalTokens, tokensUnknown);
   }
 
   const joined = joinComposeOutcomes(node, fanOut.join, snapshots, outcomes);
@@ -393,4 +402,18 @@ export async function executeComposeFanOutNode(
     totalTokens,
     joined.elements
   );
+}
+
+function interruptedFanOutResult(
+  execution: NodeExecutionRecord,
+  costUsd: number | undefined,
+  tokens: TokenUsage | undefined,
+  tokensUnknown: boolean
+): NodeExecutionResult {
+  return {
+    ...serializeNodeOutput(execution),
+    ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(tokens !== undefined ? { tokens } : {}),
+    ...(tokensUnknown ? { tokensUnknown: true } : {}),
+  };
 }

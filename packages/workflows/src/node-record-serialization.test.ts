@@ -108,6 +108,23 @@ describe('node record serializers', () => {
     }
   });
 
+  it.each([
+    ['started', 'node_start'],
+    ['completed', 'node_complete'],
+  ] as const)('labels %s shell transcript rows as <bash>', (status, type) => {
+    const source: NodeExecutionRecord = {
+      ...record(),
+      node: { id: 'build', kind: 'exec', runtime: 'sh' },
+      lifecycle: { status },
+    };
+
+    expect(serializeNodeTranscript(source)).toMatchObject({
+      type,
+      step: 'build',
+      content: '<bash>',
+    });
+  });
+
   it('projects deferred usage without lifecycle, output or provider binding', () => {
     const source = {
       ...record(),
@@ -196,6 +213,20 @@ describe('node record serializers', () => {
     expect(restored?.metadata?.spend.costUsd).toEqual({ source: 'unavailable', reason: 'invalid' });
     expect(restored?.metadata?.spend.tokens).toEqual({ source: 'unavailable', reason: 'invalid' });
     expect(restored?.data).not.toHaveProperty('cost_usd');
+  });
+
+  it('projects the requested binding onto the started event', () => {
+    const source = record();
+    source.lifecycle = { status: 'started' };
+    source.binding.effort = 'high';
+
+    expect(serializeNodeEmitter(source)).toMatchObject({
+      type: 'node_started',
+      provider: 'claude',
+      model: 'large',
+      tier: 'large',
+      effort: 'high',
+    });
   });
 
   it('projects one canonical record truthfully through persistence, transcript, emitter and runtime', () => {

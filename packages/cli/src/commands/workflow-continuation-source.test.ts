@@ -25,6 +25,54 @@ const { workflowContinuationCommand, workflowWakeScheduleConfig } = await import
 );
 const trackTempRoot = trackTempRoots();
 
+async function wakeScheduled(host: WorkflowHost) {
+  const config = workflowWakeScheduleConfig();
+  expect(config.programArguments).toContain('--watch');
+  stdout.mockImplementation(async () => {
+    if (stdout.mock.calls.length === 8) process.emit('SIGTERM');
+  });
+  const originalTimeout = globalThis.setTimeout;
+  const timers: {
+    setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
+  } = globalThis;
+  const timer = spyOn(timers, 'setTimeout').mockImplementation(callback =>
+    originalTimeout(callback, 0)
+  );
+  try {
+    await workflowContinuationCommand(host, 'wake', [], {
+      json: true,
+      watch: config.programArguments.includes('--watch'),
+    });
+  } finally {
+    timer.mockRestore();
+    stdout.mockImplementation(async () => undefined);
+  }
+}
+
+function expectUnavailableOutputs(source: string, runId: string) {
+  expect(warn).not.toHaveBeenCalled();
+  expect(stdout).toHaveBeenCalledTimes(8);
+  for (const [output] of stdout.mock.calls) {
+    expect(JSON.parse(output)).toMatchObject({
+      ok: false,
+      accepted: 0,
+      outcomes: [
+        {
+          runId,
+          kind: 'unavailable',
+          reason: expect.stringContaining(
+            source.endsWith('foreign-origin')
+              ? 'CLI cannot deliver results'
+              : source.endsWith('missing-origin')
+                ? 'origin conversation no longer exists'
+                : 'recorded working path is unavailable:'
+          ),
+        },
+      ],
+    });
+  }
+}
+
 for (const source of [
   'missing',
   'missing-unrecorded-path',
@@ -124,27 +172,7 @@ for (const source of [
     warn.mockClear();
     stdout.mockClear();
     if (source === 'scheduled') {
-      const config = workflowWakeScheduleConfig();
-      expect(config.programArguments).toContain('--watch');
-      stdout.mockImplementation(async () => {
-        if (stdout.mock.calls.length === 8) process.emit('SIGTERM');
-      });
-      const originalTimeout = globalThis.setTimeout;
-      const timers: {
-        setTimeout(callback: () => void, delay?: number): ReturnType<typeof setTimeout>;
-      } = globalThis;
-      const timer = spyOn(timers, 'setTimeout').mockImplementation(callback =>
-        originalTimeout(callback, 0)
-      );
-      try {
-        await workflowContinuationCommand(host, 'wake', [], {
-          json: true,
-          watch: config.programArguments.includes('--watch'),
-        });
-      } finally {
-        timer.mockRestore();
-        stdout.mockImplementation(async () => undefined);
-      }
+      await wakeScheduled(host);
     } else {
       for (let i = 0; i < 8; i++)
         await workflowContinuationCommand(host, 'wake', [], { json: true });
@@ -153,27 +181,7 @@ for (const source of [
     expect(defer).toHaveBeenCalledTimes(validSource ? 8 : 2);
     expect(execute).not.toHaveBeenCalled();
     if (validSource) {
-      expect(warn).not.toHaveBeenCalled();
-      expect(stdout).toHaveBeenCalledTimes(8);
-      for (const [output] of stdout.mock.calls) {
-        expect(JSON.parse(output)).toMatchObject({
-          ok: false,
-          accepted: 0,
-          outcomes: [
-            {
-              runId: run.id,
-              kind: 'unavailable',
-              reason: expect.stringContaining(
-                source.endsWith('foreign-origin')
-                  ? 'CLI cannot deliver results'
-                  : source.endsWith('missing-origin')
-                    ? 'origin conversation no longer exists'
-                    : 'recorded working path is unavailable:'
-              ),
-            },
-          ],
-        });
-      }
+      expectUnavailableOutputs(source, run.id);
     } else {
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0]).toEqual([

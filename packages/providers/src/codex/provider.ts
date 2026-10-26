@@ -216,6 +216,33 @@ function stopFailureResult(
   return result;
 }
 
+/**
+ * Ends a call whose turn threw. A cancel rethrows; any other error is logged and, when no
+ * turn reported a result, becomes the call's failure result.
+ */
+async function* stoppedCallChunks(
+  error: unknown,
+  run: CodexRun,
+  call: CallState,
+  stop: {
+    abortSignal: AbortSignal | undefined;
+    model: string | undefined;
+    hasNativeTools: boolean;
+    catalogId: string | undefined;
+  }
+): AsyncGenerator<MessageChunk> {
+  await run.connection?.finishToolCalls();
+  if (stop.abortSignal?.aborted === true) throw new Error('Query aborted');
+  call.observationLost ||= error instanceof ConnectionClosedError || call.resultReported;
+  getLog().error({ err: error, resultReported: call.resultReported }, 'query_error');
+  if (call.resultReported) return;
+  const result = stopFailureResult(error, stop.model, stop.hasNativeTools, {
+    threadId: run.threadId,
+    catalogId: stop.catalogId,
+  });
+  yield withToolTurnOf(result, call.toolTurnResult);
+}
+
 // ─── Codex Provider ──────────────────────────────────────────────────────
 
 export class CodexProvider implements IAgentProvider {
@@ -450,19 +477,12 @@ export class CodexProvider implements IAgentProvider {
         );
       }
     } catch (error) {
-      await run.connection?.finishToolCalls();
-      if (abortSignal?.aborted === true) {
-        throw new Error('Query aborted');
-      }
-      call.observationLost ||= error instanceof ConnectionClosedError || call.resultReported;
-      getLog().error({ err: error, resultReported: call.resultReported }, 'query_error');
-      if (!call.resultReported) {
-        const result = stopFailureResult(error, model, Boolean(nativeTools?.length), {
-          threadId: run.threadId,
-          catalogId,
-        });
-        yield withToolTurnOf(result, call.toolTurnResult);
-      }
+      yield* stoppedCallChunks(error, run, call, {
+        abortSignal,
+        model,
+        hasNativeTools: Boolean(nativeTools?.length),
+        catalogId,
+      });
     } finally {
       abortSignal?.removeEventListener('abort', onAbort);
       if (run.connection && !(await this.shutDown(run.connection))) call.observationLost = true;

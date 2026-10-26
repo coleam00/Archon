@@ -91,6 +91,42 @@ async function fileHostWithWorktree() {
   return { home, repo, host, codebase, created, creationId: created.metadata.creationId, env };
 }
 
+async function createClaimant(
+  {
+    host,
+    codebase,
+    created,
+    env,
+  }: Pick<
+    Awaited<ReturnType<typeof fileHostWithWorktree>>,
+    'host' | 'codebase' | 'created' | 'env'
+  >,
+  claimant: string,
+  proof: { envId: string; creationId: string }
+): Promise<string | undefined> {
+  if (claimant === 'none') return undefined;
+  const row = await host.deps.store.createWorkflowRun({
+    workflow_name: 'other',
+    user_message: '',
+    codebase_id: codebase.id,
+    working_path: claimant === 'path' || claimant === 'completed' ? created.workingPath : undefined,
+    metadata:
+      claimant === 'proof'
+        ? { owned_worktree: proof }
+        : claimant === 'partial-proof'
+          ? { owned_worktree: { envId: env.id } }
+          : claimant === 'env'
+            ? { isolation_env_id: env.id }
+            : {},
+  });
+  if (claimant === 'proof') await host.deps.store.failWorkflowRun(row.id, 'failure');
+  if (claimant === 'env') await host.deps.store.updateWorkflowRun(row.id, { status: 'paused' });
+  if (claimant === 'completed') await host.deps.store.claimPendingWorkflowRun(row.id);
+  if (claimant === 'completed')
+    await host.deps.store.completeWorkflowRun(row.id, { duration_ms: 1 });
+  return row.id;
+}
+
 test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed'] as const)(
   'file abandonment reclaims its own checkout and respects a %s claimant without SQL',
   async claimant => {
@@ -112,30 +148,7 @@ test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed'] as cons
       pauseId: 'pause',
       message: 'Choose',
     });
-    let other: string | undefined;
-    if (claimant !== 'none') {
-      const row = await host.deps.store.createWorkflowRun({
-        workflow_name: 'other',
-        user_message: '',
-        codebase_id: codebase.id,
-        working_path:
-          claimant === 'path' || claimant === 'completed' ? created.workingPath : undefined,
-        metadata:
-          claimant === 'proof'
-            ? { owned_worktree: proof }
-            : claimant === 'partial-proof'
-              ? { owned_worktree: { envId: env.id } }
-              : claimant === 'env'
-                ? { isolation_env_id: env.id }
-                : {},
-      });
-      other = row.id;
-      if (claimant === 'proof') await host.deps.store.failWorkflowRun(row.id, 'failure');
-      if (claimant === 'env') await host.deps.store.updateWorkflowRun(row.id, { status: 'paused' });
-      if (claimant === 'completed') await host.deps.store.claimPendingWorkflowRun(row.id);
-      if (claimant === 'completed')
-        await host.deps.store.completeWorkflowRun(row.id, { duration_ms: 1 });
-    }
+    const other = await createClaimant({ host, codebase, created, env }, claimant, proof);
     const result = await host.operations.abandonWorkflow(run.id, { kind: 'operator' });
     if (claimant === 'none' || claimant === 'completed') {
       expect(result.releasedWorktrees, JSON.stringify(result)).toHaveLength(1);
