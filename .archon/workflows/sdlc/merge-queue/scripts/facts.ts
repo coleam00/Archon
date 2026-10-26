@@ -5,7 +5,8 @@
  * live claims, in intake's order, every item the build queue finished, up to `limit`,
  * including answered own-PR parks whose head changed, and reads each pull request
  * in one snapshot: its head, the trusted review
- * verdict, CI and review threads at that head, and whether it merges cleanly. An item
+ * verdict, CI and review threads at that head, and whether it merges cleanly, plus which
+ * of its changed paths fall in a merge-policy path category (`merge-paths.ts`). An item
  * whose pull request is already merged or closed, or that names none, is settled without
  * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
  * read with the reason, without stopping the rest of the batch. Successful reads reset
@@ -33,6 +34,7 @@ import {
   UNREADABLE,
   withMerge,
 } from '../../.shared/merge.ts';
+import { pathFacts, type PathFacts, readPathCategories } from '../../.shared/merge-paths.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
 import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
@@ -47,6 +49,8 @@ interface Item {
   readonly record: MergeRecord | null;
   /** A maintainer's own pull request the queue enrolled: no issue and no build round behind it. */
   readonly own_pr: boolean;
+  /** Which changed paths fall in a policy category, read at `facts.head_revision`. */
+  readonly paths: PathFacts;
 }
 
 function positive(name: string, value: string): number {
@@ -190,6 +194,8 @@ function main(): void {
   requireMergeSource(repo);
   const list = readMaintainerList(repo);
   const maintainers = list.logins;
+  // Read before any claim, so a malformed project file fails the run with nothing held.
+  const categories = readPathCategories(repo);
   enrollOrNote(repo, list.ownPrs);
   const snapshot = snapshotReader(maintainers);
   const pickup = recoveryPickup(snapshot);
@@ -222,6 +228,7 @@ function main(): void {
       facts,
       record: current.facts.merge ?? null,
       own_pr: isOwnPr(doc),
+      paths: pathFacts(facts, categories),
     });
   }
   const gate = [

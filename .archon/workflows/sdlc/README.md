@@ -668,6 +668,16 @@ then the project's file, whose lines win where the two conflict.
   reads its snapshot before claiming and reuses it in the sweep. A failed recovery
   read leaves that unclaimed item unchanged and reports the error. If the default branch
   cannot be read, facts passes its diagnostic and the batch to record without a sweep.
+- **Path facts.** For each pull request, facts lists the changed paths (against the
+  merge base, at the head it read, a rename counting both paths) that fall in a path
+  category of the merge policy. The pack's categories (`credentials`,
+  `persisted-format`) are globs in
+  [`.shared/merge-paths.ts`](.shared/merge-paths.ts); a project adds globs or
+  categories in `.archon/sdlc/policy/merge-paths.yaml`, read from the default branch,
+  as a map of category name to a list of globs. The sweep still classes each pull
+  request: a category says which policy line applies, and the sweep judges the change
+  against it. A malformed project file fails facts before it claims anything; paths
+  that cannot be read reach the sweep as their error.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   The queue never pushes, never changes its checkout and never waits for CI. A Ready
   pull request with green CI that the forge reports merges cleanly into the default
@@ -726,6 +736,11 @@ then the project's file, whose lines win where the two conflict.
   approval pinned to the head it approved, and
   the last twenty decisions), and a return sets the build record to `next` with the
   brief, so the build queue picks it up.
+  The run's summary prints each decision with its class and reason, and every
+  settlement with its reason. It also names each pull request the merge queue would
+  take that another live run holds, with that run and its status (`not mine`), so a
+  sweep that cannot claim a waiting pull request, as while another run asks about
+  it, says why.
 - **Merged issues.** A pull request that links its issue with `Refs #N` merges
   without closing it, and the issue keeps its intake stage, so the build queue could
   claim it again. When `retriage_as` names a maintainer login, `retriage` reads the

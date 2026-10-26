@@ -766,6 +766,53 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toEqual([]);
   }, 60_000);
 
+  test("facts gives the sweep each changed path in a policy category, with the project's globs read from the default branch", () => {
+    const at = install();
+    const commit = (files: Record<string, string>, message: string): void => {
+      for (const [path, body] of Object.entries(files)) {
+        mkdirSync(join(at.checkout, path, '..'), { recursive: true });
+        writeFileSync(join(at.checkout, path), body);
+      }
+      git(at.checkout, 'add', '-A');
+      git(at.checkout, 'commit', '-q', '-m', message);
+    };
+    git(at.checkout, 'checkout', '-q', 'dev');
+    commit({ '.archon/sdlc/policy/merge-paths.yaml': "credentials: ['src/keys/**']\n", 'src/old-secret.ts': 'x\n' }, 'policy');
+    git(at.checkout, 'push', '-q', 'upstream', 'HEAD:dev');
+    git(at.checkout, 'checkout', '-q', '-b', 'pr-42');
+    mkdirSync(join(at.checkout, 'lib'));
+    git(at.checkout, 'mv', 'src/old-secret.ts', 'lib/plain.ts');
+    commit({ 'src/keys/a.ts': 'k\n', 'src/OAuthFlow.ts': 'o\n', 'docs/guide.md': 'd\n' }, 'change');
+    git(at.checkout, 'push', '-q', 'upstream', 'HEAD:refs/pull/42/head');
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
+    seed(at, item());
+    const output = ok(run(at, 'facts', {}, { pr: { headRefOid: head } })) as { items: { paths: unknown }[] };
+    // The project's glob adds to the defaults' (oauth, secret), matching ignores case, and a rename counts its old path.
+    expect(output.items[0]?.paths).toEqual({
+      changed: 5,
+      sensitive: [{ category: 'credentials', paths: ['src/OAuthFlow.ts', 'src/keys/a.ts', 'src/old-secret.ts'] }],
+    });
+  }, 60_000);
+
+  test('path facts that cannot be read reach the sweep as their error; a malformed project file fails facts before any claim', () => {
+    const at = install();
+    seed(at, item());
+    const output = ok(run(at, 'facts', {})) as { items: { paths: { error?: string } }[] };
+    expect(output.items[0]?.paths.error).toStartWith('its changed paths could not be read: git fetch');
+    const broken = install();
+    git(broken.checkout, 'checkout', '-q', 'dev');
+    mkdirSync(join(broken.checkout, '.archon/sdlc/policy'), { recursive: true });
+    writeFileSync(join(broken.checkout, '.archon/sdlc/policy/merge-paths.yaml'), 'credentials: src/keys\n');
+    git(broken.checkout, 'add', '-A');
+    git(broken.checkout, 'commit', '-q', '-m', 'broken policy');
+    git(broken.checkout, 'push', '-q', 'upstream', 'HEAD:dev');
+    seed(broken, item());
+    const refused = run(broken, 'facts', {});
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain('.archon/sdlc/policy/merge-paths.yaml must map each category name to a list of path globs');
+    expect(stored(broken).value?.claim).toBeNull();
+  }, 60_000);
+
   test('an item whose pull request merged before the sweep is settled without it', () => {
     const at = install();
     seed(at, item());
@@ -1128,6 +1175,30 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     ok(run(at, 'record', recordInputs([decision({ action: 'wait', reran: true, reason: 'red in untouched code; re-ran' })])));
     const record = (stored(at).value as WorkItem).facts.merge as MergeRecord;
     expect(record.decisions.at(-1)).toMatchObject({ head: HEAD, reran: true });
+  }, 60_000);
+
+  test("the run's summary gives each considered pull request its decision, class and reason", () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const output = ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'CI is pending at its head' })])));
+    expect(String(output.summary).split('\n')).toEqual(['swept', 'PR 42: wait (clear): CI is pending at its head']);
+  }, 60_000);
+
+  test('a pull request another live run holds is named with that run in every sweep, idle or not', () => {
+    const at = install();
+    const held = { claim: { run_id: 'run-asking', at: AT, requests: [] } };
+    seed(at, item(BUILT, merge('asking'), held));
+    seed(at, item(BUILT, undefined, { ...CLAIMED, subject: OTHER }));
+    const statuses = { INTAKE_RUN_STATUSES: '{"run-asking":"paused"}' };
+    const idle = ok(run(at, 'record', { INPUTS_PATH: 'idle', INPUTS_ITEMS: '[]', INPUTS_SETTLED: '[]', INPUTS_BASE: 'null', INPUTS_SWEEP: 'null', ...statuses }));
+    expect(String(idle.summary).split('\n')).toEqual([
+      'No pull request waits for this run.',
+      'PR 42: not mine: run run-asking holds it (paused)',
+    ]);
+    const swept = ok(run(at, 'record', { ...recordInputs([decision({ number: 43, action: 'wait', reason: 'CI is pending' })]), INPUTS_ITEMS: JSON.stringify(JSON.parse(BOTH_ITEMS).slice(0, 1)), ...statuses }));
+    expect(String(swept.summary)).toContain('PR 42: not mine: run run-asking holds it (paused)');
+    // A claim whose run the engine reports no status for is stuck, and named as stuck.
+    expect(String(ok(run(at, 'record', { INPUTS_PATH: 'idle', INPUTS_ITEMS: '[]', INPUTS_SETTLED: '[]', INPUTS_BASE: 'null', INPUTS_SWEEP: 'null' })).summary)).not.toContain('not mine');
   }, 60_000);
 
   test('a return hands the item back to the build queue with its brief', () => {

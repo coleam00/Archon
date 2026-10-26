@@ -22,6 +22,9 @@
  * or the maintainer refresh fails, record settlements without further forge reads,
  * leaving open companions untouched, then fail with the original diagnostic.
  *
+ * The summary gives every decision its class and reason, and names each pull request
+ * the queue would take that another live run holds, so no sweep skips one in silence.
+ *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
  * from facts; INPUTS_SWEEP,
  * the sweep's whole output, "null" when it was skipped.
@@ -32,7 +35,9 @@ import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   type BaseAttention,
+  itemPr,
   MERGE_PATHS,
+  MERGE_PICKUP,
   type MergeAsked,
   type MergeAttention,
   type MergeDecisionEntry,
@@ -48,9 +53,10 @@ import {
 } from '../../.shared/merge.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
 
+import { runStatus, stateDocuments } from '../../.shared/state.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { parseWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 /**
  * The asked item with the queue's `other`, whose effect is what the item can take: a
@@ -262,10 +268,10 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   const links = [item.url, ...(decision.attention?.links ?? [])];
   const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran };
   if (item.item === null) {
-    writes.lines.push(`PR ${String(decision.number)}: ${label}, with no work item to record it on`);
+    writes.lines.push(`PR ${String(decision.number)}: ${decided}, with no work item to record it on: ${reason}`);
     return false;
   }
-  return write(writes, item.item, `PR ${String(decision.number)}`, label, doc => {
+  return write(writes, item.item, `PR ${String(decision.number)}`, `${decided}: ${reason}`, doc => {
     const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr, release: !raised });
     if (status !== 'returned') return recorded;
     const returned = { ...entry, decision: 'returned by the merge queue' };
@@ -276,10 +282,43 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
 function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
   for (const done of settled) {
     const entry = { at: writes.at, run_id: writes.runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false };
-    write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
+    const name = done.pr === null ? `Issue ${String(done.item.number)}` : `PR ${String(done.pr.number)}`;
+    write(writes, done.item, name, `${done.status}: ${done.reason}`, doc =>
       withMerge(doc, { at: writes.at, run_id: writes.runId, entry, status: done.status, pr: done.pr, release: true })
     );
   }
+}
+
+/**
+ * The pull requests the merge queue would take that another live run holds, one line
+ * each with that run and its status, so a sweep that skips one says why. A claim whose
+ * run reports no status, or a document that does not parse, is `stuckItems`' to name.
+ */
+function heldElsewhere(runId: string): string[] {
+  const lines: string[] = [];
+  for (const stored of stateDocuments('work/')) {
+    let doc: WorkItem;
+    let pr: QualifiedPr | null;
+    try {
+      doc = parseWorkItem(stored.value);
+      pr = itemPr(doc);
+    } catch {
+      continue;
+    }
+    if (doc.claim === null || doc.claim.run_id === runId || !MERGE_PICKUP.waits(doc)) continue;
+    const status = runStatus(doc.claim.run_id);
+    if (status === null) continue;
+    const name = pr === null ? `Issue ${String(doc.subject.number)}` : `PR ${String(pr.number)}`;
+    lines.push(`${name}: not mine: run ${doc.claim.run_id} holds it (${status})`);
+  }
+  return lines;
+}
+
+/** An idle run's summary: what other runs hold, and what no pickup can act on. */
+function idleRecord(runId: string): string {
+  const held = heldElsewhere(runId);
+  const idle = held.length === 0 ? 'No pull request waits for the merge queue.' : 'No pull request waits for this run.';
+  return [idleSummary(idle, stuckItems(runId)), ...held].join('\n');
 }
 
 function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], baseError: string): never {
@@ -300,7 +339,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       merged: [],
-      summary: idleSummary('No pull request waits for the merge queue.', stuckItems(text(process.env.WORKFLOW_ID))),
+      summary: idleRecord(runId),
       attention: '',
       options: [],
       class: '',
@@ -365,7 +404,7 @@ function main(): void {
 
   emit({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
-    summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
+    summary: [sweep?.summary ?? '', ...writes.lines, ...heldElsewhere(runId)].filter(line => line !== '').join('\n'),
     attention: render(asked),
     options: asked === null ? [] : attentionOptions<string>(asked.attention),
     class: asked?.by ?? '',
