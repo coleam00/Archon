@@ -1192,7 +1192,17 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const output = ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'CI is pending at its head' })])));
-    expect(String(output.summary).split('\n')).toEqual(['swept', 'PR 42: wait (clear): CI is pending at its head']);
+    expect(String(output.summary).split('\n')).toEqual(['swept', 'PR 42: waiting (clear): CI is pending at its head']);
+  }, 60_000);
+
+  test('the summary says what was recorded when the read-back fails, not what the sweep proposed', () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const output = ok(run(at, 'record', recordInputs([decision({ action: 'return', brief: 'Fix the thread.', reason: 'one open thread' })]), { pr: { unreadable: true } }));
+    const line = String(output.summary).split('\n')[1] ?? '';
+    expect(line).toStartWith(`PR 42: waiting (clear): ${PR_URL} could not be read back:`);
+    // Nothing went back to the build queue.
+    expect(stored(at).value?.facts.build?.status).toBe('ready');
   }, 60_000);
 
   test("facts names the items its pickup left by pickup's own rule, and record prints them in every summary", () => {

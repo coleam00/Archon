@@ -264,14 +264,17 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   const { decision, status, reason, head } = outcome;
   const label = labelOf(decision, outcome, raised);
   const decided = `${label} (${decision.class})`;
+  const stored = raised ? 'asking' : status;
+  // The summary says what was recorded after read-back, which can differ from the sweep's proposal.
+  const line = `${stored} (${decision.class}): ${reason}`;
   const links = [item.url, ...(decision.attention?.links ?? [])];
   const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran };
   if (item.item === null) {
-    writes.lines.push(`PR ${String(decision.number)}: ${decided}, with no work item to record it on: ${reason}`);
+    writes.lines.push(`PR ${String(decision.number)}: ${line}, with no work item to record it on`);
     return false;
   }
-  return write(writes, item.item, `PR ${String(decision.number)}`, `${decided}: ${reason}`, doc => {
-    const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr, release: !raised });
+  return write(writes, item.item, `PR ${String(decision.number)}`, line, doc => {
+    const recorded = withMerge(doc, { at, run_id: runId, entry, status: stored, pr: item.pr, release: !raised });
     if (status !== 'returned') return recorded;
     const returned = { ...entry, decision: 'returned by the merge queue' };
     return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief, release: true });
