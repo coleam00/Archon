@@ -290,7 +290,7 @@ interface FakePr {
   readonly merged?: readonly number[];
   readonly closed?: readonly number[];
   /** What `gh pr list --author` reports open. */
-  readonly ownPrs?: readonly { number: number; url: string; isDraft?: boolean; headRefName?: string }[];
+  readonly ownPrs?: readonly { number: number; url: string; isDraft?: boolean; headRefName?: string; isCrossRepository?: boolean }[];
   /** `gh pr list --author` fails. */
   readonly ownPrsFail?: boolean;
   readonly baseUnreadable?: boolean;
@@ -357,7 +357,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (forgePr.ownPrsFail) return out(1, '', 'HTTP 502');
     // Each row carries only the fields \`--json\` selected, as gh reports them.
     const selected = String(argv[argv.indexOf('--json') + 1]).split(',');
-    const rows = (forgePr.ownPrs ?? []).map(row => Object.fromEntries(selected.filter(field => field in row).map(field => [field, row[field]])));
+    // A row is on a hand-named branch in the repository itself unless the test says otherwise.
+    const rows = (forgePr.ownPrs ?? []).map(listed => ({ headRefName: 'hand-' + String(listed.number), isCrossRepository: false, ...listed }))
+      .map(row => Object.fromEntries(selected.filter(field => field in row).map(field => [field, row[field]])));
     return out(0, JSON.stringify(rows));
   }
   if (argv[1] === 'pr' && argv[2] === 'merge') {
@@ -508,19 +510,22 @@ const BASE_RED = {
 };
 
 describe('the merge queue scripts', () => {
-  test("a maintainer who opted in gets their own open pull requests enrolled, once, and drafts and delivered ones left alone", () => {
+  test("a maintainer who opted in gets their own open pull requests enrolled, once, and drafts, delivered ones and the build queue's left alone", () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     seed(at, item());
     const ownPrs = [
       { number: 42, url: PR_URL, isDraft: false },
-      // Hand-opened on a branch shaped like a build branch; no work item records it.
+      // A running round's pull request: a build/ branch in the repository, recorded nowhere yet.
       { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'build/7-fix-zzzzzzzz' },
       { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true },
+      // Hand-made: its own branch name, or a build/ name on a fork.
+      { number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false },
+      { number: 53, url: PR_URL.replace(/42$/, '53'), isDraft: false, headRefName: 'build/7-fix-zzzzzzzz', isCrossRepository: true },
     ];
     const picked = run(at, 'facts', {}, { pr: { ownPrs } });
     const output = ok(picked) as { items: { item: { number: number }; own_pr: boolean }[] };
-    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true]]);
-    expect(stored(at, 50).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '50'));
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [52, true], [53, true]]);
+    expect(stored(at, 50).value).toBeNull();
     expect(stored(at, 51).value).toBeNull();
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
   }, 60_000);
