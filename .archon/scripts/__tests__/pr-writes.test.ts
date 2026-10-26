@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
 import {
   ForgeOperationError,
+  ghApi,
   ghRetryWait,
   retryTransient,
   TransientForgeError,
@@ -1065,6 +1066,24 @@ describe('a gh api failure is classified from its HTTP status and headers', () =
     expect(at(403)).toBeUndefined();
     expect(at(404)).toBeUndefined();
     expect(at(422)).toBeUndefined();
+  });
+
+  it('reads a mixed-case Retry-After from the raw gh api response', () => {
+    const spawnSync = Bun.spawnSync;
+    const raw = 'HTTP/2.0 503 Service Unavailable\nRetry-After: 120\r\nContent-Type: application/json\r\n\r\n{}';
+    Object.defineProperty(Bun, 'spawnSync', {
+      value: () => ({ exitCode: 1, stdout: Buffer.from(raw), stderr: Buffer.from('gh: (HTTP 503)') }),
+    });
+    let thrown: unknown;
+    try {
+      ghApi('gh api comment write', ['repos/example/repo/issues/42/comments']);
+    } catch (error) {
+      thrown = error;
+    } finally {
+      Object.defineProperty(Bun, 'spawnSync', { value: spawnSync });
+    }
+    expect(thrown).toBeInstanceOf(TransientForgeError);
+    expect((thrown as TransientForgeError).waitMs).toBe(120_000);
   });
 
   it('waits at least the time the failure asked for', () => {

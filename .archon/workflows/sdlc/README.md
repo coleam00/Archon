@@ -439,7 +439,10 @@ request, never the state.
   outcome writes the work item and labels, then comments on the issue with a link to
   the original or the change and closes it as `duplicate` or `completed`. A
   duplicate's original gets a comment linking back. Each comment is one marked
-  comment, so a repeated run edits it rather than adding another. An item already
+  comment, so a repeated run edits it rather than adding another. The one exception:
+  a comment write that lands but returns a 5xx is repeated, and if the listing lags it
+  posts a second marked comment; the next upsert then refuses on the two, and an
+  operator deletes one. An item already
   closed for the verdict's reason (an earlier run that stopped after its close)
   still records the work item and its labels, but posts no comment and doesn't close
   it again; one closed for another reason fails the run before any comment. A demoted item and every other verdict close nothing.
@@ -815,7 +818,8 @@ terminal report lists.
   writes. A filed issue's body begins with `<!-- archon-discovery <key> -->`, and the
   create looks for that marker across every issue first; the evidence comment carries
   the same marker and is replaced in place. So a pass run again after a stop, or a key
-  filed twice, never opens a second issue or comment. Last it records the decided refs
+  filed twice, never opens a second issue, nor a second comment except as [Intake](#intake)
+  describes. Last it records the decided refs
   and the questions on each run's document. Filed issues carry no labels: intake
   triages them like any other issue, which it does only when the install's forge
   identity is on `maintainers.json`.
