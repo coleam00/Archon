@@ -159,7 +159,7 @@ The delivery tail, in capped rounds: implement the work with focused checks on w
 archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in .archon/plans/csv-export.md"
 ```
 
-**What it produces**: A PR marked ready for review, with one canonical review comment (on the `gh` source, a write that landed but returned a 5xx or no response can leave a second one while the listing lags; the next upsert then refuses).
+**What it produces**: A PR marked ready for review, with one canonical review comment (on the `gh` source, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one while the listing lags; the next upsert then refuses).
 
 ### Review and validation
 
@@ -182,7 +182,7 @@ archon workflow run archon-review --input scope=<PR-URL> --branch <fresh-review-
 
 Use the fork's actual clone URL, head ref and full head SHA, and choose a review branch absent locally, on the configured remote and from existing worktrees. `--from` only applies to a new branch; `--branch` alone cannot resolve a fork-only ref and would create it from the base. If the checkout commit differs from the PR head, the run stops before routing or any review lens and returns the exact rerun command, including the fetch prerequisite for a fork.
 
-**What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review (on the `gh` source, a write that landed but returned a 5xx or no response can leave a second one while the listing lags; the next upsert then refuses). Empty `scope` selects the current branch's open PR first, otherwise the working diff. A Ready verdict on a draft PR pauses the run as one attention item: `ready` takes the PR out of draft, and `finish` leaves it a draft.
+**What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review (on the `gh` source, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one while the listing lags; the next upsert then refuses). Empty `scope` selects the current branch's open PR first, otherwise the working diff. A Ready verdict on a draft PR pauses the run as one attention item: `ready` takes the PR out of draft, and `finish` leaves it a draft.
 
 #### `archon-validate`
 

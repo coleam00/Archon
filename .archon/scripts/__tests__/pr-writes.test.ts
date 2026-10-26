@@ -1032,6 +1032,15 @@ describe('publish-review repeats a comment write the forge failed transiently', 
     expect(result.comments).toHaveLength(1);
   });
 
+  it('gives up on a listing that never answers, with its evidence', () => {
+    const result = publishReview({ inputs: report, gh: { commentListDrops: [0, 1, 2, 3, 4, 5] } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('connection reset');
+    expect(result.gh.filter(call => call.includes('/comments?per_page=100'))).toHaveLength(4);
+    expect(posts(result)).toBe(0);
+    // The three waits (1s, 2s, 4s) outlast bun's default test timeout.
+  }, 15_000);
+
   it('finds a landed write when its read-back got no response', () => {
     const result = publishReview({ inputs: report, gh: { commentListDrops: [1] } });
     expect(result.code).toBe(0);

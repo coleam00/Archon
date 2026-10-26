@@ -6,7 +6,7 @@
  * writes: a filing creates or recovers its issue by the key's marker, and an evidence
  * comment is upserted by the same marker, so a pass that stops anywhere and is run
  * again never files twice, and comments twice only on the `gh` source, when a write that
- * landed returned a 5xx or no response and the listing lagged (the next upsert then refuses). Last, each run's document records the refs this
+ * landed returned a retryable response (5xx, or a rate limit) or no response and the listing lagged (the next upsert then refuses). Last, each run's document records the refs this
  * pass decided and the questions it asked, and its claim is released, except on a run
  * with an asked record: it stays claimed by this run until the question is answered and
  * the run ends.

@@ -430,8 +430,8 @@ export interface CommentSubject {
  * comment is a conflict: guessing which one is canonical would silently abandon
  * the other.
  *
- * On `gh`, each listing is repeated in place after a transient failure, and a write
- * that failed transiently is repeated from the marker read. A write that landed but
+ * On `gh`, a transient failure of the marker read or of the write repeats both from
+ * the marker read, and the read-back is repeated in place. A write that landed but
  * is missing from that listing is posted again (an accepted risk), and the second
  * marked comment makes the next upsert refuse loudly. A write that succeeded is
  * never repeated: a read-back that keeps failing fails the upsert.
@@ -482,7 +482,7 @@ function writeMarkedComment(
   marker: string,
   body: string
 ): { readonly url: string } | { readonly id: string } {
-  const marked = retryTransient(() => ghIssueComments(ref)).filter(
+  const marked = ghIssueComments(ref).filter(
     comment => (comment.body.split(/\r?\n/, 1)[0] ?? '') === marker
   );
   if (marked.length > 1) {

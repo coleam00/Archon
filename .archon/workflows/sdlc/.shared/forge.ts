@@ -235,8 +235,10 @@ function ghResponse(stdout: string): GhResponse | undefined {
  *
  * A 5xx is transient. A 429, or a 403 carrying `retry-after`, is a rate limit that
  * waits a minute when it names no time, as GitHub documents for a secondary limit.
- * A valid `retry-after` (delta seconds) is the least wait on any retryable status. A failure with no HTTP response at all is a connection that
- * failed or timed out, except gh's exit 4, which is missing authentication.
+ * A valid `retry-after` (delta seconds) is the least wait on any retryable status.
+ * A failure with no HTTP status is ambiguous (a dropped connection, a timeout, or a
+ * local gh error) and is deliberately retried, except gh's exit 4, which is missing
+ * authentication; on exhaustion the error keeps gh's own message.
  * Everything else, a 404 or a 422, is permanent.
  */
 export function ghRetryWait(
