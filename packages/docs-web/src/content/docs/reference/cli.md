@@ -604,6 +604,10 @@ for any run status. It reads stored totals without recalculating them or certify
 completeness. `--json` retains the raw usage values in `metadata`, including nulls or
 malformed historical values; it adds no formatted usage text.
 
+The text view also lists credential warnings: credential checks at run start that could
+not decide, with their evidence. The run started despite them, so they explain a first AI
+node that failed as `auth`.
+
 For a paused gate, human-readable output lists its declared decision IDs and optional
 labels, with an exact `archon workflow respond <run-id> <decision> [text]` command
 for each choice. JSON exposes these choices in `metadata.approval.decisions`.

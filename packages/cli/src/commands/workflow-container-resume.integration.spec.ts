@@ -89,7 +89,7 @@ async function prepare(root: string) {
   // The node-start checkout probe runs `docker exec` through execFileAsync; answer it as a
   // missing container would instead of spawning a real docker for the made-up container id.
   watch(spyOn(git, 'execFileAsync')).mockRejectedValue(new Error('No such container'));
-  const auth = watch(spyOn(credentials, 'assertRunCredentials')).mockResolvedValue();
+  const auth = watch(spyOn(credentials, 'assertRunCredentials')).mockResolvedValue([]);
   const execute = watch(spyOn(subprocess, 'runSubprocess')).mockImplementation(async context => {
     expect(context).toEqual({ kind: 'container', containerId: 'restarted' });
     return { stdout: 'second', stderr: '', credentialValues: [] };
@@ -285,7 +285,7 @@ test.each(['restart', 'credentials'] as const)(
         f.auth.mockImplementation(async (...args) => {
           if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
             throw new Error('credentials refused');
-          return;
+          return [];
         });
       }
       const error = await f.command(candidate).catch((e: unknown) => e);
@@ -309,7 +309,7 @@ test.each(['restart', 'credentials'] as const)(
       expect(f.apply).not.toHaveBeenCalled();
       expect(f.accepted).not.toHaveBeenCalled();
       expect(f.execute).not.toHaveBeenCalled();
-      f.auth.mockResolvedValue();
+      f.auth.mockResolvedValue([]);
       if (!failed) throw new Error('Missing failed run');
       await f.command(failed);
       expect(f.apply).toHaveBeenCalledTimes(1);
@@ -344,6 +344,7 @@ test.each(['restart', 'credentials'] as const)(
         f.auth.mockImplementation(async (...args) => {
           if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
             throw new Error('setup refused');
+          return [];
         });
       }
       await expect(f.command(candidate)).rejects.toThrow('setup refused');
@@ -356,7 +357,7 @@ test.each(['restart', 'credentials'] as const)(
       expect(f.suspend).not.toHaveBeenCalled();
       expect(f.overlay.contents).toBe('unapplied edits');
       expect((await f.store.listWorkflowEvents(run.id)).at(-1)?.event_type).toBe('workflow_failed');
-      f.auth.mockResolvedValue();
+      f.auth.mockResolvedValue([]);
       if (!failed) throw new Error('Missing failed run');
       await f.command(failed);
       expect(f.resume).toHaveBeenCalledTimes(2);
@@ -382,6 +383,7 @@ test.each(['restart', 'credentials'] as const)(
         f.auth.mockImplementation(async (...args) => {
           if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
             throw new Error('setup refused');
+          return [];
         });
       }
       await expect(f.command(candidate)).rejects.toThrow('setup refused');
@@ -389,7 +391,7 @@ test.each(['restart', 'credentials'] as const)(
       expect(failed?.status).toBe('failed');
       expect(failed?.metadata).not.toHaveProperty('pause_cause');
       expect(f.execute).not.toHaveBeenCalled();
-      f.auth.mockResolvedValue();
+      f.auth.mockResolvedValue([]);
       if (!failed) throw new Error('Missing failed run');
       await f.command(failed);
       expect(f.execute).toHaveBeenCalledTimes(1);
@@ -432,6 +434,7 @@ for (const stage of ['admission', 'restart', 'credentials', 'conversation'] as c
           f.auth.mockImplementation(async (...args) => {
             if (typeof args[2] === 'object' && args[2]?.execContext?.kind === 'container')
               await block();
+            return [];
           });
         } else watch(spyOn(launch, 'recordConversationLaunch')).mockImplementationOnce(block);
         const pending = f.command(candidate).catch(error => error);
@@ -460,7 +463,7 @@ for (const stage of ['admission', 'restart', 'credentials', 'conversation'] as c
         expect(f.accepted).not.toHaveBeenCalled();
         expect(f.execute).not.toHaveBeenCalled();
         expect(process.listeners(signal)).toEqual(baseline);
-        f.auth.mockResolvedValue();
+        f.auth.mockResolvedValue([]);
         if (!failed) throw new Error('Missing failed run');
         await f.command(failed);
         expect(f.apply).toHaveBeenCalledTimes(1);

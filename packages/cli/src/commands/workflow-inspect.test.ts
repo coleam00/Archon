@@ -1130,6 +1130,46 @@ describe('workflowGetCommand', () => {
     expect(code).toBe(0);
   });
 
+  it('lists credential checks that could not decide at run start without --verbose', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-cw',
+      checkout_baseline: null,
+      workflow_name: 'build',
+      working_path: '/repo',
+      status: 'failed',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'e1',
+        workflow_run_id: 'run-cw',
+        event_type: 'credential_check_inconclusive',
+        step_name: null,
+        step_index: null,
+        data: {
+          provider: 'codex',
+          vendor: 'openai',
+          source: 'native',
+          evidence: 'workspace routing discovery failed',
+        },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    const code = await workflowGetCommand(createTestWorkflowHost(), 'run-cw', false, false);
+
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(calls).toContain('  Credential warnings (1):');
+    expect(calls).toContain(
+      "    - provider 'codex' (vendor 'openai'): workspace routing discovery failed"
+    );
+    expect(code).toBe(0);
+  });
+
   it('carries recorded parse warnings on the verbose --json payload', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const workflowEventsDb = await import('@archon/core/db/workflow-events');

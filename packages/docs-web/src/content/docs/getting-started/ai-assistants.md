@@ -362,10 +362,11 @@ archon ai list
 
 A run checks the credentials its AI nodes need before it creates isolation, and again before any node runs when execution starts or resumes. Vendors the run does not use are not checked, and a child workflow checks its own graph when it starts.
 
-- With `store: database`, a connected credential that cannot be read, is rejected, or cannot be verified blocks the run. Archon never falls back to another account.
+- With `store: database`, a connected credential that cannot be read or is rejected blocks the run. Archon never falls back to another account.
 - With `store: files`, or with no connected credential, runs use the provider's native or environment account, and a missing login blocks launch. A host run checks that login before isolation; a container run checks it inside the container.
 - Claude checks account information in the target directory with each node's setting sources, without a model request. An `apiKeyHelper` must exit successfully with a non-empty credential, unless an environment credential authenticates instead.
 - Providers that cannot check without a model session, including Copilot, OpenCode and Claude cloud backends, report "not checked" and may proceed.
+- A check that cannot decide (the vendor or the provider's runtime gave no answer, or the 60 s check timed out) does not block the run. The run starts and records a `credential_check_inconclusive` event with the evidence, shown in the Web UI and in `archon workflow get`. A bad credential then fails the first AI node as `auth`, without retry. A connected credential is refreshed again when execution starts, and blocks the run then if it still cannot be used.
 
 A key that resolves is only usable; only a model request proves the vendor accepts it.
 

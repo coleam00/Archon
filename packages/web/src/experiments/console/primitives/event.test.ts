@@ -315,6 +315,27 @@ describe('toRunEvent — deprecation notice (#2781)', () => {
   });
 });
 
+describe('toRunEvent — inconclusive credential check (#5185)', () => {
+  test('renders the provider, vendor and evidence as visible text', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'credential_check_inconclusive',
+        data: {
+          provider: 'codex',
+          vendor: 'openai',
+          source: 'native',
+          evidence: 'workspace routing discovery failed',
+        },
+      })
+    );
+    expect(e.kind).toBe('text');
+    if (e.kind !== 'text') throw new Error('unreachable');
+    expect(e.content).toBe(
+      "⚠️ Could not verify the credential for provider 'codex' (vendor 'openai'): workspace routing discovery failed. The run started; a bad credential fails its first AI node."
+    );
+  });
+});
+
 describe('toRunEvent — error & workflow lifecycle', () => {
   test('error prefers the `error` key over `message`', () => {
     const e = toRunEvent(

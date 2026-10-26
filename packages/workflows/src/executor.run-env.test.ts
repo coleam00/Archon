@@ -9,6 +9,7 @@ import {
   makeStore,
   makeWorkflow,
   mockExecuteDagWorkflow,
+  recordedEvents,
   resetExecutorMocks,
   resumeOf,
   startWorkflow,
@@ -391,6 +392,33 @@ describe('credential preflight lifecycle', () => {
     );
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     expect(store.failWorkflowRun).toHaveBeenCalledWith('run-123', result.error, expect.anything());
+  });
+
+  it('an inconclusive native check starts the run and records a warning event with its evidence', async () => {
+    const store = makeStore();
+    const getAgentProvider = mock(() => ({
+      run: mock(async () => {}),
+      checkCredential: mock(async () => ({
+        state: 'check_failed',
+        source: 'native',
+        evidence: 'workspace routing discovery failed',
+      })),
+    })) as unknown as WorkflowDeps['getAgentProvider'];
+    const result = await startWorkflow({ deps: { ...makeDeps(store), getAgentProvider } });
+    expect(result.success).toBe(true);
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+    expect(recordedEvents(store, 'credential_check_inconclusive')).toEqual([
+      {
+        workflow_run_id: 'run-123',
+        event_type: 'credential_check_inconclusive',
+        data: {
+          provider: 'claude',
+          vendor: 'anthropic',
+          source: 'native',
+          evidence: 'workspace routing discovery failed',
+        },
+      },
+    ]);
   });
 
   it('a delivery refusal after a successful check blocks rather than using ambient credentials', async () => {

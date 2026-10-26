@@ -8,10 +8,11 @@ import {
 } from './deps';
 import type { RunDispatch } from './run-dispatch';
 import {
-  assertCredentialStatus,
   assertRunCredentials,
+  credentialRefusal,
   effectiveDbCredentialValues,
   StoredCredentialDeliveryError,
+  type InconclusiveCredentialCheck,
   type RunCredentialRequirement,
 } from './run-preflight';
 import { GITHUB_TOKEN_KEYS, resolveGithubTokenOverrides } from './utils/github-token-policy';
@@ -248,7 +249,8 @@ export async function resolveUserProviderEnvForWorkflow(
   } catch (error) {
     if (error instanceof StoredCredentialDeliveryError) {
       const requirement = requirements.find(r => r.vendor === error.vendor);
-      if (requirement) assertCredentialStatus(requirement, error.status);
+      // Delivery refreshes again at execution start; anything short of usable refuses.
+      if (requirement) throw credentialRefusal(requirement, error.status);
     }
     throw new Error('Could not safely deliver required provider credentials');
   }
@@ -289,11 +291,14 @@ export async function resolveUserProviderEnvForWorkflow(
  *
  * Provider env is merged LAST into `config.envVars`, so the originating user's keys win
  * over file/db/bot-github env; the no-key path leaves the config byte-for-byte unchanged.
+ *
+ * A credential check that could not decide does not stop the run; it is recorded as a
+ * `credential_check_inconclusive` event carrying the check's evidence.
  */
 export async function layerRunCredentials(
   deps: WorkflowDeps,
   dispatch: Pick<RunDispatch, 'prepared' | 'executionUserId' | 'execution'>,
-  run: { cwd: string; codebaseId: string | undefined; artifactsDir: string },
+  run: { runId: string; cwd: string; codebaseId: string | undefined; artifactsDir: string },
   withArtifactWrites: <T>(operation: () => T) => T
 ): Promise<void> {
   const { prepared, executionUserId } = dispatch;
@@ -306,10 +311,11 @@ export async function layerRunCredentials(
 
   const { env: userProviderEnv, protectedValues } = await withArtifactWrites(async () => {
     await clearManagedProviderCredentialFiles(run.artifactsDir);
-    await assertRunCredentials(deps, prepared, {
+    const inconclusive = await assertRunCredentials(deps, prepared, {
       cwd: run.cwd,
       execContext: dispatch.execution.execContext,
     });
+    for (const check of inconclusive) await recordInconclusiveCheck(deps, run.runId, check);
     return resolveUserProviderEnvForWorkflow(
       deps,
       executionUserId,
@@ -331,4 +337,23 @@ export async function layerRunCredentials(
   config.protectedCredentialValues = [
     ...new Set([...effectiveDbCredentialValues(dbEnvVars, config.envVars), ...protectedValues]),
   ];
+}
+
+async function recordInconclusiveCheck(
+  deps: WorkflowDeps,
+  runId: string,
+  check: InconclusiveCredentialCheck
+): Promise<void> {
+  try {
+    await deps.store.createWorkflowEvent({
+      workflow_run_id: runId,
+      event_type: 'credential_check_inconclusive',
+      data: { ...check },
+    });
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, workflowRunId: runId, eventType: 'credential_check_inconclusive' },
+      'workflow_event_persist_failed'
+    );
+  }
 }

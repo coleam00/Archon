@@ -424,6 +424,21 @@ export function readParseWarningEvents(events: readonly WorkflowEventRow[]): str
   return out;
 }
 
+/** One line per credential check that could not decide at run start (#5185). */
+export function readCredentialWarningEvents(events: readonly WorkflowEventRow[]): string[] {
+  const out: string[] = [];
+  for (const event of events) {
+    if (event.event_type !== 'credential_check_inconclusive') continue;
+    const data = (event.data as Record<string, unknown> | null) ?? {};
+    const text = (key: string): string => (typeof data[key] === 'string' ? data[key] : '');
+    const vendor = text('vendor');
+    out.push(
+      `provider '${text('provider')}'${vendor ? ` (vendor '${vendor}')` : ''}: ${text('evidence')}`
+    );
+  }
+  return out;
+}
+
 type TerminalRecord = ReturnType<typeof getTerminalRecord>;
 
 /** The text view of `workflow get`, in its fixed line order. */
@@ -461,6 +476,8 @@ export function printRunDetail(
   }
   printTerminalRecord(terminalRecord);
   if (leaveBehind) printLeaveBehind(leaveBehind);
+  // Shown without --verbose: it explains a first AI node that failed as `auth`.
+  printCredentialWarnings(events);
   if (verbose) {
     const parseWarnings = readParseWarningEvents(events);
     if (parseWarnings.length > 0) {
@@ -469,6 +486,13 @@ export function printRunDetail(
     }
     printVerboseNodes(events);
   }
+}
+
+function printCredentialWarnings(events: readonly WorkflowEventRow[]): void {
+  const warnings = readCredentialWarningEvents(events);
+  if (warnings.length === 0) return;
+  console.log(`  Credential warnings (${String(warnings.length)}):`);
+  for (const w of warnings) console.log(`    - ${w}`);
 }
 
 /** The gate, choices, wait and scheduled-resume lines of a paused or failed run. */
