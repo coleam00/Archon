@@ -20,6 +20,7 @@ import {
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
 import { BUILD_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
+import { mergeWaits } from '../../workflows/sdlc/.shared/merge';
 import { CONFIDENCES, checkAttention, chosen, renderAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
@@ -903,6 +904,54 @@ describe('the build queue scripts', () => {
     expect(woken.brief).toContain('#5 closed, #6 merged');
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-3' }, facts: { build: { status: 'next' } } });
     expect(readFileSync(calls, 'utf8')).not.toContain('archon-intake');
+  }, 60_000);
+
+  const SETTLED = { issues: BLOCKERS, pr: { state: 'MERGED' as const } };
+  const waiting = (number: number, overrides: Partial<WorkItem> = {}): WorkItem =>
+    triaged({ subject: { ...SUBJECT, number }, ...overrides }, record({ status: 'parked', brief: '', blockers: [5, 6] }));
+  const seedItem = (at: Install, doc: WorkItem): void =>
+    inProcess(at, () => expect(statePut(`work/${String(doc.subject.number)}`, doc, stateGet(`work/${String(doc.subject.number)}`).revision)).toBe('ok'));
+  const statusOf = (at: Install, number: number): string | undefined =>
+    inProcess(at, () => parseWorkItem(stateGet(`work/${String(number)}`).value).facts.build?.status);
+
+  test("a run wakes only its own repository's waits in a launch stage, and launches a second woken item on its own run", () => {
+    const at = install();
+    seedItem(at, waiting(7));
+    seedItem(at, waiting(8));
+    // Another repository's wait, and one intake has since moved to blocked.
+    seedItem(at, waiting(9, { subject: { repo: { host: PR.repo.host, path: 'someone/else' }, number: 9 } }));
+    seedItem(at, waiting(10, { stage: 'blocked' }));
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const result = ok(run(at, 'facts', { ...SELECTED, ARCHON_CALL_LOG: calls }, SETTLED));
+    expect(result).toMatchObject({ path: 'route', item: SUBJECT });
+    expect(result.wake).toContain('issue 8: its blockers settled; its next round started at once');
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-build-queue', 'number=8', 'retriage_as=maintainer', 'round_limit=5', `repo_path=${PR.repo.path}`]));
+    expect([statusOf(at, 8), statusOf(at, 9), statusOf(at, 10)]).toEqual(['next', 'parked', 'parked']);
+  }, 60_000);
+
+  test('a refused named claim still launches the waits this run woke', () => {
+    const at = install();
+    seed(at, triaged({ stage: 'blocked' }));
+    seedItem(at, waiting(8));
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const refused = run(at, 'facts', { INPUTS_NUMBER: '7', ARCHON_CALL_LOG: calls }, SETTLED);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain('issue 7 does not wait for the build queue');
+    expect(refused.stderr).toContain('issue 8: its blockers settled; its next round started at once');
+    expect(readFileSync(calls, 'utf8')).toContain('number=8');
+  }, 60_000);
+
+  test("a ready answer releases the item to the merge queue with the PR triage named", () => {
+    const at = install();
+    seed(at, triaged({ ...CLAIMED, facts: { triage: { ...TRIAGE, pull_request: 42 } } }, record({ status: 'asking', brief: '' })));
+    const ready = { id: 'operator-finishes', label: 'Done by hand', does: 'hands the PR on', effect: 'ready' as const, ruling: '', blockers: [] };
+    const asked = JSON.stringify({ attention: { ...ATTENTION, choices: [...ATTENTION.choices, ready] }, brief: 'b', by: 'stop' });
+    expect(ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: asked, INPUTS_CHOICE: 'operator-finishes', INPUTS_TEXT: '' })).decision).toBe('ready');
+    const doc = stored(at).value as WorkItem;
+    expect(doc).toMatchObject({ claim: null, facts: { build: { status: 'ready' } } });
+    expect(buildWaits(doc)).toBe(false);
+    expect(mergeWaits(doc)).toBe(true);
   }, 60_000);
 
   test('a blocker that cannot be read keeps the item parked and says so', () => {

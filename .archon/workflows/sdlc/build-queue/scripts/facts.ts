@@ -29,7 +29,7 @@ import {
   wakeSettled,
 } from '../../.shared/build.ts';
 import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
-import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, refuse, text, trimmed } from '../../.shared/io.ts';
 import { NotAnIssueError, viewIssue } from '../../.shared/issue.ts';
 import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
@@ -141,11 +141,19 @@ function main(): void {
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
   const number = trimmed(process.env.INPUTS_NUMBER);
-  const settled = wakeSettled(new Date().toISOString(), runId, blockerState);
-  const doc =
-    number === ''
-      ? claimNext(new Date().toISOString(), runId, BUILD_PICKUP)
-      : claimNamed(positive('number', number), new Date().toISOString(), runId);
+  const settled = wakeSettled(new Date().toISOString(), runId, repo, blockerState);
+  let doc: WorkItem | null;
+  try {
+    doc =
+      number === ''
+        ? claimNext(new Date().toISOString(), runId, BUILD_PICKUP)
+        : claimNamed(positive('number', number), new Date().toISOString(), runId);
+  } catch (error) {
+    // The items this run already woke still get their own runs; the refusal stands.
+    const lines = wakeLines(settled, null, repo, runId);
+    if (lines !== '') note(lines);
+    throw error;
+  }
   const wake = wakeLines(settled, doc?.subject ?? null, repo, runId);
   if (doc === null) {
     emit({

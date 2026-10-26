@@ -781,6 +781,15 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     });
   }, 60_000);
 
+  test('a ready item whose only pull request is the one triage routed it to continue is swept, and that PR never enrolls', () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item({ ...BUILT, rounds: [] }, undefined, { facts: { triage: { ...TRIAGE, pull_request: 42 }, build: { ...BUILT, rounds: [] } } }));
+    const output = ok(run(at, 'facts', {}, { pr: { ownPrs: [{ number: 42, url: PR_URL, isDraft: false }] } })) as { items: { pr: { number: number }; own_pr: boolean }[]; settled: unknown[] };
+    expect(output.items.map(entry => [entry.pr.number, entry.own_pr])).toEqual([[42, false]]);
+    expect(output.settled).toEqual([]);
+    expect(stored(at, 42).value).toBeNull();
+  }, 60_000);
+
   test('a failed base read still records a no-PR settlement and releases its claim', () => {
     const at = install();
     seed(at, item({ ...BUILT, rounds: [] }));

@@ -279,16 +279,25 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
 export type BlockerState = 'open' | 'closed' | 'merged' | { readonly unreadable: string };
 
 /**
- * Wake every unclaimed item a `wait` answer parked whose blockers all closed or merged:
+ * Wake every unclaimed item of `repo` in a launch stage that a `wait` answer parked,
+ * once its blockers all closed or merged:
  * its status goes back to `next`, with a brief naming what settled. Returns the woken
  * issue numbers, and one line for each item a blocker it could not read keeps parked.
  */
-export function wakeSettled(at: string, runId: string, stateOf: (blocker: QualifiedPr) => BlockerState): { woken: number[]; unreadable: string[] } {
+export function wakeSettled(
+  at: string,
+  runId: string,
+  repo: QualifiedPr['repo'],
+  stateOf: (blocker: QualifiedPr) => BlockerState
+): { woken: number[]; unreadable: string[] } {
   const woken: number[] = [];
   const unreadable: string[] = [];
   for (const item of stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? [])) {
-    const build = item.doc.facts.build;
-    const blockers = build?.status === 'parked' && item.doc.claim === null ? (build.blockers ?? []) : [];
+    const { doc } = item;
+    const build = doc.facts.build;
+    // An item intake has since moved out of a launch stage is no longer the build queue's to wake.
+    const owned = sameRepo(doc.subject.repo, repo) && (LAUNCH_STAGES as readonly string[]).includes(doc.stage) && doc.claim === null;
+    const blockers = owned && build?.status === 'parked' ? (build.blockers ?? []) : [];
     if (blockers.length === 0) continue;
     const states = blockers.map(number => ({ number, state: stateOf({ repo: item.doc.subject.repo, number }) }));
     const failed = states.flatMap(({ number, state }) => (typeof state === 'object' ? [`#${String(number)}: ${state.unreadable}`] : []));
@@ -298,7 +307,7 @@ export function wakeSettled(at: string, runId: string, stateOf: (blocker: Qualif
     }
     if (states.some(blocker => blocker.state === 'open')) continue;
     const settled = states.map(blocker => `#${String(blocker.number)} ${String(blocker.state)}`).join(', ');
-    const doc = withBuild(item.doc, {
+    const next = withBuild(doc, {
       at,
       run_id: runId,
       round: null,
@@ -308,7 +317,7 @@ export function wakeSettled(at: string, runId: string, stateOf: (blocker: Qualif
       release: false,
     });
     // A conflict means another run moved the item; the next pass reads it again.
-    if (statePut(item.name, doc, item.revision) === 'ok') woken.push(item.doc.subject.number);
+    if (statePut(item.name, next, item.revision) === 'ok') woken.push(doc.subject.number);
   }
   return { woken, unreadable };
 }

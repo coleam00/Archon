@@ -645,8 +645,9 @@ then the project's file, whose lines win where the two conflict.
   intake's claim and order. An item waits for the merge queue when its build record is
   `ready` and the merge queue has not settled it: it never decided it, or left it
   waiting or asking. When the build queue readies an item again after the merge queue
-  returned or parked it, it waits again. The pull request is the one the build
-  queue's last round delivered. One already merged or closed is recorded without the
+  returned or parked it, it waits again. The pull request is the latest one a build
+  round recorded, or, when no round recorded one, the one triage routed the item to
+  continue. One already merged or closed is recorded without the
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
