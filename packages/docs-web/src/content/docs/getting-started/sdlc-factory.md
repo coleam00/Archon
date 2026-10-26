@@ -12,7 +12,7 @@ The bundled `sdlc` pack is a software factory made of four queues. You write an 
 | Queue | What it does |
 |---|---|
 | `archon-intake` | Checks the issue's author against your maintainer list, triages a maintainer's issue and labels its route |
-| `archon-build-queue` | Takes one triaged issue through `archon-ship` rounds until its pull request is reviewed Ready |
+| `archon-build-queue` | Takes one triaged issue through `archon-ship` rounds until its pull request is reviewed Ready, or a maintainer's `ready` answer hands it to the merge queue |
 | `archon-merge-queue` | Merges the Ready, green pull requests the build queue finished, and sends back what it can't merge |
 | `archon-discoveries` | Files, tracks or drops what runs noticed outside their own task |
 
@@ -47,7 +47,7 @@ Each entry is a GitHub login, or an object naming one. With no file, every autho
 
 - **Whose issues get triaged.** An issue from anyone else gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label to it.
 - **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. **The login that authors the pack's published review comment must be on the list on the default branch**, or that verdict is ignored. With the default `gh` source, this is the identity `gh` acts as; with the opt-in `forge` source, it is the forge plugin's credential identity, which may differ. Check the published comment's author when choosing which login to list.
-- **Whose own pull requests enroll.** `"merge_queue": "own-prs"` enrolls that maintainer's own open, non-draft pull requests in the merge queue. A pull request a work item already names, such as one the build queue delivered, is not enrolled again.
+- **Whose own pull requests enroll.** `"merge_queue": "own-prs"` enrolls that maintainer's own open, non-draft pull requests in the merge queue. A pull request a work item already names, such as one the build queue delivered, is not enrolled again. Neither is one from a `build/` branch in the repository, the build queue's branch namespace, so a hand-made pull request on a `build/` branch does not enroll.
 
 ## 3. Adjust policy and models (optional)
 
@@ -103,7 +103,7 @@ archon workflow run archon-build-queue \
   --input repo_host=github.com --input repo_path=acme/widgets --input number=42 --detach
 ```
 
-A round runs `archon-ship`: investigate or plan if the route needs it, implement, open a draft pull request, review it, fix the findings, wait for CI and mark it ready. When a round ends on something the contract already answers, such as a review finding or red CI the change caused, the queue starts the next round at once as a new detached run. The item is done when the pull request's latest review says Ready at its head. Follow it with `archon workflow runs` and answer anything it asks (step 6).
+A round runs `archon-ship`: investigate or plan if the route needs it, implement, open a draft pull request, review it, fix the findings, wait for CI and mark it ready. When a round ends on something the contract already answers, such as a review finding or red CI the change caused, the queue starts the next round at once as a new detached run. The item is done when the pull request's latest review says Ready at its head, or when a maintainer answers `ready`, for example after finishing the pull request by hand; the merge gate still checks the verdict and CI either way. Follow it with `archon workflow runs` and answer anything it asks (step 6).
 
 Merge it:
 
@@ -138,7 +138,7 @@ Each item says what is being decided, why it matters, the agent's recommendation
 archon workflow respond <run-id> <choice> "why"
 ```
 
-The reason matters. A build or merge queue answer is written into the issue body as a dated "Current scope" section, and later rounds work from it. Every build item and merge pull-request item offers `other`: its text says what to do instead and becomes the ruling. `park` stops the queue working that item. [Operate runs](/getting-started/operate/) covers answering, resuming and stopping runs in full.
+The reason matters. A build or merge queue answer is written into the issue body as a dated "Current scope" section, and later rounds work from it. Every build item and merge pull-request item offers `other`: its text says what to do instead and becomes the ruling. `park` stops the queue working that item. A build item's `wait` names the issues or pull requests it waits on, and the build queue picks the item up again once they all close or merge. [Operate runs](/getting-started/operate/) covers answering, resuming and stopping runs in full.
 
 ## 7. Let it run on its own
 
