@@ -328,8 +328,9 @@ in `packages/core/src/db/adapters/sqlite.ts` and upgrades it in
 `packages/core/src/db/adapters/sqlite-migrations.ts`. Neither adapter uses a numbered
 migration runner or migration ledger.
 
-SQLite first checks its completion fingerprint in a read snapshot. It covers the startup
-implementation, Archon build, and SQLite schema counter; pending legacy credentials or
+SQLite first checks its completion fingerprint in a read snapshot. It covers the schema
+DDL and migration steps a convergence executes (comments and layout excluded), the Archon
+build, and the SQLite schema counter; pending legacy credentials or
 a missing/behind event-sequence head also require repair. A current database opens without
 taking the writer lock. Otherwise, a single writer transaction rechecks, converges, and
 publishes the fingerprint atomically. Schema changes invalidate the proof; ordinary event

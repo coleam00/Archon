@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { SqliteAdapter } from './sqlite';
-import { isSqliteSchemaCurrent } from './sqlite-schema-state';
+import { isSqliteSchemaCurrent, sqliteStartupDigest } from './sqlite-schema-state';
 import { prepareGet, prepareAll } from './sqlite-statements';
 
 const trackTempRoot = trackTempRoots();
@@ -128,7 +128,7 @@ function state(db: Database) {
       db,
       'SELECT schema_fingerprint FROM remote_agent_schema_version WHERE id = 1'
     )?.schema_fingerprint,
-    current: db.transaction(() => isSqliteSchemaCurrent(db)).deferred(),
+    current: db.transaction(() => isSqliteSchemaCurrent(db, SqliteAdapter.schemaDigest)).deferred(),
   };
 }
 
@@ -167,7 +167,9 @@ test.each([
       "SELECT sql FROM sqlite_master WHERE name = 'remote_agent_workflow_events_assign_order'"
     );
     raw.exec(damage);
-    expect(raw.transaction(() => isSqliteSchemaCurrent(raw)).deferred()).toBe(false);
+    expect(
+      raw.transaction(() => isSqliteSchemaCurrent(raw, SqliteAdapter.schemaDigest)).deferred()
+    ).toBe(false);
     await new SqliteAdapter(path).close();
     expect(
       prepareGet<{ sql: string }>(
@@ -307,4 +309,30 @@ test.each([
   } finally {
     raw.close();
   }
+});
+
+test('the startup digest ignores comments and layout but not DDL', () => {
+  const digest = (step: (db: Database) => void) => sqliteStartupDigest([step]);
+  const original = digest(db => {
+    db.run(`
+      CREATE TABLE t (id TEXT PRIMARY KEY);
+    `);
+  });
+  const commented = digest(db => {
+    // Why t exists.
+    db.run(`
+      -- One row per thing.
+      CREATE TABLE t (
+        id TEXT PRIMARY KEY
+      );
+
+    `);
+  });
+  const changed = digest(db => {
+    db.run(`
+      CREATE TABLE t (id TEXT PRIMARY KEY, name TEXT);
+    `);
+  });
+  expect(commented).toBe(original);
+  expect(changed).not.toBe(original);
 });

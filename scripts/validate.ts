@@ -29,7 +29,6 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     id: 'generated-files',
     label: 'Generated files match their sources',
     commands: [
-      ['bun', 'run', 'check:sqlite-schema-fingerprint'],
       ['bun', 'run', 'check:pi-vendor-map'],
       ['bun', 'run', 'check:capability-matrix'],
       ['bun', 'run', 'check:provider-contract-schema'],

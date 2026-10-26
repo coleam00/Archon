@@ -463,7 +463,9 @@ describe('migrateColumns on an existing database', () => {
             [`vendor-${vendor}`, vendor]
           );
           expect(cookie()).toEqual(before);
-          expect(raw.transaction(() => isSqliteSchemaCurrent(raw)).deferred()).toBe(false);
+          expect(
+            raw.transaction(() => isSqliteSchemaCurrent(raw, SqliteAdapter.schemaDigest)).deferred()
+          ).toBe(false);
           const apply = async () => {
             if (migration === 'sqlite') {
               await new SqliteAdapter(path).close();
@@ -500,7 +502,9 @@ describe('migrateColumns on an existing database', () => {
               'SELECT user_id, provider, label, kind, api_key_encrypted FROM remote_agent_user_provider_keys ORDER BY user_id, provider'
             );
           expect(rows()).toEqual(expected);
-          expect(raw.transaction(() => isSqliteSchemaCurrent(raw)).deferred()).toBe(true);
+          expect(
+            raw.transaction(() => isSqliteSchemaCurrent(raw, SqliteAdapter.schemaDigest)).deferred()
+          ).toBe(true);
           const convergedCookie = cookie();
           await apply();
           expect(rows()).toEqual(expected);

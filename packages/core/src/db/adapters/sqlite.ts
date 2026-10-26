@@ -8,7 +8,11 @@ import { dirname } from 'path';
 import type { IDatabase, QueryResult, SqlDialect } from './types';
 import { createLogger } from '@archon/paths';
 import { APP_VERSION } from '../schema-version';
-import { isSqliteSchemaCurrent, recordSqliteSchemaFingerprint } from './sqlite-schema-state';
+import {
+  isSqliteSchemaCurrent,
+  recordSqliteSchemaFingerprint,
+  sqliteStartupDigest,
+} from './sqlite-schema-state';
 import { migrateColumns } from './sqlite-migrations';
 import { prepareAll, prepareGet } from './sqlite-statements';
 import { isSqliteBusy, retryWhileBusy, retryWhileBusySync } from './sqlite-busy';
@@ -52,6 +56,12 @@ export class SqliteAdapter implements IDatabase {
    * concurrent second resolver cleanly loses (rowCount 0) instead of erroring.
    */
   private txTail: Promise<unknown> = Promise.resolve();
+
+  /** Identifies what this build's convergence applies; see sqliteStartupDigest(). */
+  static readonly schemaDigest = sqliteStartupDigest([
+    resourceSlotHoldersTable,
+    SqliteAdapter.prototype.createSchema,
+  ]);
 
   constructor(dbPath: string) {
     // Ensure directory exists
@@ -265,15 +275,16 @@ export class SqliteAdapter implements IDatabase {
 
   private initSchema(): void {
     retryWhileBusySync(() => {
-      if (this.db.transaction(() => isSqliteSchemaCurrent(this.db)).deferred()) return;
+      const digest = SqliteAdapter.schemaDigest;
+      if (this.db.transaction(() => isSqliteSchemaCurrent(this.db, digest)).deferred()) return;
       this.db
         .transaction(() => {
-          if (isSqliteSchemaCurrent(this.db)) return;
+          if (isSqliteSchemaCurrent(this.db, digest)) return;
           const preExisting = this.hasAnyArchonTable();
           this.createSchema();
           const allApplied = migrateColumns(this.db, resourceSlotHoldersTable);
           const recorded = this.recordSchemaVersion(preExisting, allApplied);
-          recordSqliteSchemaFingerprint(this.db, allApplied && recorded);
+          recordSqliteSchemaFingerprint(this.db, digest, allApplied && recorded);
         })
         .immediate();
     });

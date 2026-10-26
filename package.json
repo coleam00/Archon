@@ -26,8 +26,6 @@
     "check:api-types": "bun run --cwd=packages/server check:api-types",
     "generate:provider-contract-schema": "bun run --cwd=packages/provider-contract generate:schema",
     "check:provider-contract-schema": "bun run --cwd=packages/provider-contract check:schema",
-    "generate:sqlite-schema-fingerprint": "bun run scripts/generate-sqlite-schema-fingerprint.ts",
-    "check:sqlite-schema-fingerprint": "bun run scripts/generate-sqlite-schema-fingerprint.ts --check",
     "generate:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts",
     "check:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts --check",
     "check:schema-upgrades": "bun run scripts/check-schema-upgrades.ts",

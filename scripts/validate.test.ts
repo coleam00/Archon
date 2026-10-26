@@ -38,7 +38,6 @@ describe('validate check selection', () => {
 
   test('generated-files retains each required freshness check in order', () => {
     expect(selectChecks(['generated-files'])[0].commands).toEqual([
-      ['bun', 'run', 'check:sqlite-schema-fingerprint'],
       ['bun', 'run', 'check:pi-vendor-map'],
       ['bun', 'run', 'check:capability-matrix'],
       ['bun', 'run', 'check:provider-contract-schema'],

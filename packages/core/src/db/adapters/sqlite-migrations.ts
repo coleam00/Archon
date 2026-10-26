@@ -358,6 +358,11 @@ function addWorkflowEventOrder(db: Database): void {
   }).immediate();
 }
 
+/** The step of every migration, in order, for the startup fingerprint. */
+export function sqliteMigrationSteps(): readonly Migration['apply'][] {
+  return sqliteMigrations.map(migration => migration.apply);
+}
+
 export function hasPendingSqliteDataRepairs(db: Database): boolean {
   return sqliteMigrations.some(migration => migration.scope === 'data' && migration.pending(db));
 }
