@@ -577,7 +577,9 @@ function printTerminalArtifacts(artifacts: NonNullable<TerminalRecord>['artifact
     console.log('    Artifact list truncated at the display cap');
   }
   for (const limitation of artifacts.limitations) {
-    console.log(`    Inventory limitation: ${limitation.kind} (${limitation.path})`);
+    console.log(
+      `    Inventory limitation: ${limitation.kind}${limitation.code ? ` ${limitation.code}` : ''} (${limitation.path})`
+    );
   }
 }
 

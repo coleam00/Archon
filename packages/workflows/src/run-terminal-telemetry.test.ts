@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { buildRunTerminalTelemetry, type RunTelemetryEvent } from './run-terminal-telemetry';
-import { buildTerminalRecord } from './terminal-record';
+import { buildTerminalRecord, observeRunArtifacts } from './terminal-record';
 import { WORKFLOW_TERMINAL_EVENT_TYPE } from '@archon/paths';
 import { RUN_DISPATCH_METADATA_KEY, TERMINAL_RUN_EVENT_TYPE } from './schemas/workflow-run';
 import { RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
@@ -33,9 +33,11 @@ async function failedRunEvents(): Promise<RunTelemetryEvent[]> {
       created_at: '2026-09-24 10:00:09',
     },
   ];
-  const terminalRecord = await buildTerminalRecord({
-    run: { ...run, outcome: null, output_root: null },
+  const terminalRun = { ...run, outcome: null, output_root: null };
+  const terminalRecord = buildTerminalRecord({
+    run: terminalRun,
     events,
+    artifacts: await observeRunArtifacts(terminalRun),
   });
   return [
     ...events,
@@ -123,9 +125,11 @@ describe('buildRunTerminalTelemetry', () => {
         { event_type: 'loop_iteration_completed', data: {}, created_at: '2026-09-24T10:00:06Z' },
         { event_type: 'loop_iteration_completed', data: {}, created_at: '2026-09-24T10:01:06Z' },
       ];
-      const terminalRecord = await buildTerminalRecord({
-        run: { ...childRun, outcome: null, output_root: null },
+      const terminalRun = { ...childRun, outcome: null, output_root: null };
+      const terminalRecord = buildTerminalRecord({
+        run: terminalRun,
         events,
+        artifacts: await observeRunArtifacts(terminalRun),
       });
       events.push(
         {

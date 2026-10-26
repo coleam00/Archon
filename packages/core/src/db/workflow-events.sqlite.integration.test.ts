@@ -45,7 +45,9 @@ const {
   listAttentionNotices,
 } = await import('./workflow-events');
 const { cancelWorkflowRun } = await import('./workflows');
-const { insertTerminalWorkflowEvent } = await import('./workflow-terminal-event');
+const { insertTerminalWorkflowEvent, observeRunTerminalArtifacts } = await import(
+  './workflow-terminal-event'
+);
 
 // workflow_events.workflow_run_id has an enforced FK (PRAGMA foreign_keys = ON) — seed parents.
 await db.query(
@@ -252,10 +254,11 @@ test.each(['events', 'active nodes', 'snapshot', 'terminal record'] as const)(
         await db.query("UPDATE remote_agent_workflow_runs SET status = 'cancelled' WHERE id = $1", [
           runId,
         ]);
-        await insertTerminalWorkflowEvent(db.query.bind(db), {
-          workflow_run_id: runId,
-          event_type: 'workflow_cancelled',
-        });
+        await insertTerminalWorkflowEvent(
+          db.query.bind(db),
+          { workflow_run_id: runId, event_type: 'workflow_cancelled' },
+          await observeRunTerminalArtifacts(runId)
+        );
         const terminal = await db.query<WorkflowEventRow>(
           "SELECT * FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'workflow_cancelled'",
           [runId]

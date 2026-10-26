@@ -4,11 +4,25 @@ import { join, relative, resolve, sep } from 'node:path';
 import { nodeArtifactSchema } from './schemas/node-artifact';
 import type { ArtifactManifest } from './schemas/terminal-record';
 
-/** Observe filenames and sidecars only; output contents never enter a terminal record. */
+/**
+ * A terminal record is one event row; the cap keeps a huge artifacts tree from making
+ * that row (and the walk) unbounded.
+ */
+export const ARTIFACT_MANIFEST_ENTRY_LIMIT = 10_000;
+// Dependency and VCS trees are not run output a person inspects, and dominate entry counts.
+const EXCLUDED_ARTIFACT_DIRECTORIES = new Set(['node_modules', '.git']);
+
+/**
+ * Observe filenames and sidecars only; output contents never enter a terminal record.
+ * The inventory is bounded: `node_modules` and `.git` directories are not walked, and the
+ * walk stops after `entryLimit` entries. Each bound is recorded as an `unsupported_entry`
+ * limitation whose code names it (`excluded_directory`, `entry_limit`).
+ */
 export async function observeArtifactManifest(
   root: string | null,
   storageRoot?: string,
-  runId?: string
+  runId?: string,
+  entryLimit = ARTIFACT_MANIFEST_ENTRY_LIMIT
 ): Promise<ArtifactManifest> {
   const manifest: ArtifactManifest = { root, files: [], limitations: [] };
   if (root === null) {
@@ -43,6 +57,15 @@ export async function observeArtifactManifest(
     return manifest;
   }
   const metadata: { path: string; value: ReturnType<typeof nodeArtifactSchema.parse> }[] = [];
+  let limitReached = false;
+  // Records the cap at the first entry it refuses; every level of the recursion then stops.
+  function admit(path: string): boolean {
+    if (limitReached) return false;
+    if (manifest.files.length + manifest.limitations.length < entryLimit) return true;
+    manifest.limitations.push({ path, kind: 'unsupported_entry', code: 'entry_limit' });
+    limitReached = true;
+    return false;
+  }
   async function visit(directory: string): Promise<void> {
     let entries: string[];
     try {
@@ -52,33 +75,39 @@ export async function observeArtifactManifest(
       return;
     }
     for (const name of entries.sort()) {
-      const full = join(directory, name);
-      const path = portablePath(relative(scanRoot, full));
+      const path = portablePath(relative(scanRoot, join(directory, name)));
+      if (!admit(path)) return;
       try {
-        const stat = await lstat(full, { bigint: true });
-        if (stat.isSymbolicLink()) {
-          manifest.limitations.push({ path, kind: 'link_excluded' });
-          continue;
-        }
-        if (stat.isDirectory()) {
-          await visit(full);
-          continue;
-        }
-        if (!stat.isFile()) {
-          manifest.limitations.push({ path, kind: 'unsupported_entry' });
-          continue;
-        }
-        manifest.files.push({ path, size: Number(stat.size) });
-        if (relative(scanRoot, directory) !== 'nodes' || !name.endsWith('.meta.json')) continue;
-        if ((await realpath(directory)) !== resolve(directory)) {
-          manifest.limitations.push({ path, kind: 'link_excluded' });
-          continue;
-        }
-        await observeSidecar(full, path, stat);
+        await observeEntry(directory, name, path);
       } catch (error) {
         fault(path, error);
       }
     }
+  }
+  async function observeEntry(directory: string, name: string, path: string): Promise<void> {
+    const full = join(directory, name);
+    const stat = await lstat(full, { bigint: true });
+    if (stat.isSymbolicLink()) {
+      manifest.limitations.push({ path, kind: 'link_excluded' });
+      return;
+    }
+    if (stat.isDirectory()) {
+      if (EXCLUDED_ARTIFACT_DIRECTORIES.has(name))
+        manifest.limitations.push({ path, kind: 'unsupported_entry', code: 'excluded_directory' });
+      else await visit(full);
+      return;
+    }
+    if (!stat.isFile()) {
+      manifest.limitations.push({ path, kind: 'unsupported_entry' });
+      return;
+    }
+    manifest.files.push({ path, size: Number(stat.size) });
+    if (relative(scanRoot, directory) !== 'nodes' || !name.endsWith('.meta.json')) return;
+    if ((await realpath(directory)) !== resolve(directory)) {
+      manifest.limitations.push({ path, kind: 'link_excluded' });
+      return;
+    }
+    await observeSidecar(full, path, stat);
   }
   async function observeSidecar(full: string, path: string, stat: BigIntStats): Promise<void> {
     // Flags vary by platform. Descriptor identity protects the read even when

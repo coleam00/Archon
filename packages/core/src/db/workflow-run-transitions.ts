@@ -33,7 +33,11 @@ import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getWorkflowRunStatus } from './workflow-run-reads';
 import { getLog } from './workflow-run-shared';
-import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
+import {
+  insertTerminalWorkflowEvent,
+  observeRunTerminalArtifacts,
+  observeTerminalArtifacts,
+} from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
@@ -229,6 +233,13 @@ export async function cancelResumableRunsForConversation(
   let cancelledRuns: WorkflowRun[];
   let authorizationRefused = false;
   try {
+    const candidates = await getDatabase().query<Pick<WorkflowRun, 'id' | 'output_root'>>(
+      `SELECT id, output_root FROM remote_agent_workflow_runs
+       WHERE (conversation_id = $1 OR parent_conversation_id = $2)
+         AND status IN ('paused', 'failed')`,
+      [conversationId, conversationId]
+    );
+    const artifacts = await observeTerminalArtifacts(candidates.rows);
     cancelledRuns = await getDatabase().withTransaction(async query => {
       const snapshot = await query<WorkflowRunRow>(
         `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
@@ -260,11 +271,15 @@ export async function cancelResumableRunsForConversation(
         );
       }
       for (const run of resumable) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: run.id,
-          event_type: 'workflow_cancelled',
-          data: { cancel_reason: 'conversation_reset' },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: run.id,
+            event_type: 'workflow_cancelled',
+            data: { cancel_reason: 'conversation_reset' },
+          },
+          artifacts
+        );
       }
       return resumable.map(run => normalizeWorkflowRun(run));
     });
@@ -287,6 +302,7 @@ export async function completeWorkflowRun(
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = metadata
         ? await query(
@@ -302,11 +318,15 @@ export async function completeWorkflowRun(
             [id]
           );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_completed',
-          data: completion,
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_completed',
+            data: completion,
+          },
+          artifacts
+        );
       }
       return update;
     });
@@ -367,6 +387,7 @@ export async function failWorkflowRun(
         }`;
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
@@ -394,11 +415,15 @@ export async function failWorkflowRun(
         ]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_failed',
-          data: { error, ...(exitReason !== undefined ? { exit_reason: exitReason } : {}) },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_failed',
+            data: { error, ...(exitReason !== undefined ? { exit_reason: exitReason } : {}) },
+          },
+          artifacts
+        );
       }
       return update;
     });
@@ -426,6 +451,7 @@ export async function cancelWorkflowRun(
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
@@ -435,12 +461,16 @@ export async function cancelWorkflowRun(
       );
       if ((update.rowCount ?? 0) > 0) {
         const { step_name, ...data } = event ?? {};
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_cancelled',
-          step_name,
-          data,
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_cancelled',
+            step_name,
+            data,
+          },
+          artifacts
+        );
       }
       return update;
     });
@@ -468,6 +498,7 @@ export async function cancelFanOutRun(
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
@@ -478,11 +509,15 @@ export async function cancelFanOutRun(
         [id, JSON.stringify({ cancelled_reason: reason }), ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_cancelled',
-          data: { reason, cancel_reason: 'fan_out' },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_cancelled',
+            data: { reason, cancel_reason: 'fan_out' },
+          },
+          artifacts
+        );
       }
       return update;
     });

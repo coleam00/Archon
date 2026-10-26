@@ -21,7 +21,10 @@ import {
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
 import { getLog } from './workflow-run-shared';
-import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
+import {
+  insertTerminalWorkflowEvent,
+  observeRunTerminalArtifacts,
+} from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 
 /**
@@ -173,6 +176,7 @@ export async function resolveAndCancelApprovalGate(
   const dialect = getDialect();
   let outcome: { resolved: boolean };
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     outcome = await getDatabase().withTransaction(async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
@@ -187,12 +191,16 @@ export async function resolveAndCancelApprovalGate(
           await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
         }
         const { step_name, ...data } = cancellation;
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_cancelled',
-          step_name,
-          data: { ...data, cancel_reason: 'approval_rejected' },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_cancelled',
+            step_name,
+            data: { ...data, cancel_reason: 'approval_rejected' },
+          },
+          artifacts
+        );
       }
       return { resolved };
     });

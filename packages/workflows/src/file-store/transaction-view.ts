@@ -49,7 +49,7 @@ import {
   pauseCauseOfApproval,
   pauseCauseOfWait,
 } from '../schemas/pause-cause';
-import { buildTerminalRecord } from '../terminal-record';
+import { buildTerminalRecord, observeRunArtifacts } from '../terminal-record';
 import { isDeepStrictEqual } from 'node:util';
 
 export type TransactionView = Omit<
@@ -133,12 +133,13 @@ export function createTransactionView(
     const prepared = await Promise.all(
       changes.map(async ({ run, event, precedingEvents = [] }) => {
         run.completed_at = new Date();
-        const terminalRecord = await buildTerminalRecord({
+        const terminalRecord = buildTerminalRecord({
           run,
           events: [
             ...listRunEvents(events, run.id),
             ...precedingEvents.map(event => ({ ...event, data: event.data ?? {} })),
           ],
+          artifacts: await observeRunArtifacts(run),
         });
         return {
           run,
