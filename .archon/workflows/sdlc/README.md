@@ -439,9 +439,9 @@ request, never the state.
   outcome writes the work item and labels, then comments on the issue with a link to
   the original or the change and closes it as `duplicate` or `completed`. A
   duplicate's original gets a comment linking back. Each comment is one marked
-  comment, so a repeated run edits it rather than adding another. The one exception:
-  a comment write that lands but returns a 5xx is repeated, and if the listing lags it
-  posts a second marked comment; the next upsert then refuses on the two, and an
+  comment, so a repeated run edits it rather than adding another. The one exception, on
+  the `gh` source only: a comment write that lands but returns a 5xx or no response
+  is repeated, and if the listing lags it posts a second marked comment; the next upsert then refuses on the two, and an
   operator deletes one. An item already
   closed for the verdict's reason (an earlier run that stopped after its close)
   still records the work item and its labels, but posts no comment and doesn't close

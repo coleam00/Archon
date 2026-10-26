@@ -1013,9 +1013,16 @@ describe('publish-review repeats a comment write the forge failed transiently', 
   });
 
   it('repeats a comment listing that got no response and publishes one comment', () => {
-    const result = publishReview({ inputs: report, gh: { commentListDrops: 1 } });
+    const result = publishReview({ inputs: report, gh: { commentListDrops: [0] } });
     expect(result.code).toBe(0);
     expect(result.gh.filter(call => call.includes('/comments?per_page=100')).length).toBe(3);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('finds a landed write when its read-back got no response', () => {
+    const result = publishReview({ inputs: report, gh: { commentListDrops: [1] } });
+    expect(result.code).toBe(0);
+    expect(posts(result)).toBe(1);
     expect(result.comments).toHaveLength(1);
   });
 

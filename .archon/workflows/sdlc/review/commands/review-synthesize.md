@@ -149,7 +149,7 @@ The report contains:
 
 ## Publication is not yours
 
-The node after this one publishes the complete report to the recorded pull request as one canonical marked comment, edited in place across rounds (a 5xx write that landed can leave a second one while the listing lags; the next upsert then refuses), through whichever forge source the run selected. Write nothing to the forge yourself, and do not describe the comment as already posted.
+The node after this one publishes the complete report to the recorded pull request as one canonical marked comment, edited in place across rounds, through whichever forge source the run selected (on the `gh` source, a write that landed but returned a 5xx or no response can leave a second one while the listing lags; the next upsert then refuses). Write nothing to the forge yourself, and do not describe the comment as already posted.
 
 ## Verify before finishing
 
