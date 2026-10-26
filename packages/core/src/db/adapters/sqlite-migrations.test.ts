@@ -6,7 +6,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { mkdtemp } from 'fs/promises';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { LEGACY_VENDOR_ALIASES } from '@archon/providers';
+import { LEGACY_VENDOR_ALIASES } from '@archon/providers/credential-catalog';
 import { getSchemaSQL } from '../bundled-schema';
 import { SqliteAdapter } from './sqlite';
 import { isSqliteSchemaCurrent } from './sqlite-schema-state';

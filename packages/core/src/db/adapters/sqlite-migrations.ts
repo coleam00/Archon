@@ -6,7 +6,7 @@
  */
 import type { Database } from 'bun:sqlite';
 import { createLogger } from '@archon/paths';
-import { LEGACY_VENDOR_ALIASES } from '@archon/providers';
+import { LEGACY_VENDOR_ALIASES } from '@archon/providers/credential-catalog';
 import { isSqliteBusy } from './sqlite-busy';
 import { prepareAll, prepareGet } from './sqlite-statements';
 
