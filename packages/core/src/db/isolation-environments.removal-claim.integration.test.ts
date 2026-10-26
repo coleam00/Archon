@@ -150,6 +150,17 @@ describe('worktree removal claims on SQLite', () => {
     expect((await claimPendingWorkflowRun(runId))?.status).toBe('running');
   });
 
+  test('run activation refuses while a checkout shared with another registration is removed', async () => {
+    const env = await createEnv('shared-removed', '/tmp/claims/shared');
+    await createEnv('shared-sibling', '/tmp/claims/shared');
+    const runId = await seedPendingRun(env.working_path);
+    await withWorktreeRegistration(env, async markDestroyed => {
+      expect(await claimPendingWorkflowRun(runId)).toBeNull();
+      await markDestroyed();
+    });
+    expect((await claimPendingWorkflowRun(runId))?.status).toBe('running');
+  });
+
   test('a failed removal releases the claim and leaves the registration active', async () => {
     const env = await createEnv('failed');
     await expect(
