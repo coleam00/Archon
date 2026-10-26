@@ -41,7 +41,9 @@ The agent that dispatched you names:
    Otherwise run that scenario on the base yourself (a separate checkout of the base commit, never the
    target) and cite that run. Same failure on both: pre-existing. Passes on the base: introduced by
    the target. Only now may you read the change, to point at where.
-5. Stop every process you started, by the process id you recorded.
+5. Stop every process you started, by the process id you recorded. Drive browsers in sessions of your
+   own (`agent-browser --session <a name unique to this run>`) and close only those; never
+   `agent-browser close --all` and never stop browsers by name: other runs on this machine have theirs open.
 
 ## Report
 

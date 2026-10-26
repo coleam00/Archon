@@ -104,7 +104,7 @@ you test:
 
 - Edit code, push, comment, label or merge. You only test and report. (The local merge with the default branch above is the one exception, and it is never pushed.)
 - Read the pull request's description or diff, or the builder's comments, before your last test.
-- Kill processes by name. Stop only processes you started, by the process ID you recorded, and stop all of them before you finish. Give every wait a timeout.
+- Kill processes by name, or close browser sessions you did not open (`agent-browser close --all` closes other runs' browsers). Stop only processes you started, by the process ID you recorded, and stop all of them before you finish. Give every wait a timeout.
 - Move the mouse, type into, focus or show windows on the owner's desktop.
 
 ## Report
