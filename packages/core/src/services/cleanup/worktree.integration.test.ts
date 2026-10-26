@@ -27,6 +27,7 @@ import {
   IsolationResolver,
   WorktreeProvider,
   WorktreeRegistrationChangedError,
+  WorktreeRemovalInProgressError,
   classifyIsolationError,
   configureIsolation,
   getIsolationProvider,
@@ -1334,7 +1335,7 @@ describe('cleanup retires only the registration it observed', () => {
     expect(await git(repo, 'branch', '--list', env.branch_name)).not.toBe('');
   });
 
-  test('registration replacement waits until the destructive callback releases ownership', async () => {
+  test('registration replacement is refused while removal holds the claim', async () => {
     const entered = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();
     const destroy = spyOn(getIsolationProvider(), 'destroy').mockImplementation(async () => {
@@ -1349,22 +1350,19 @@ describe('cleanup retires only the registration it observed', () => {
       };
     });
     const removal = removeEnvironment(env);
-    await entered.promise;
-    let published = false;
-    const replacement = reRegister().then(row => {
-      published = true;
-      return row;
-    });
     try {
-      await Bun.sleep(0);
-      expect(published).toBe(false);
+      await entered.promise;
+      await expect(reRegister()).rejects.toBeInstanceOf(WorktreeRemovalInProgressError);
+      expect((await isolationDb.getById(env.id))?.metadata.worktree_registration_id).toBe(
+        env.metadata.worktree_registration_id
+      );
     } finally {
       finish.resolve();
       await removal;
-      await replacement;
       destroy.mockRestore();
     }
-    expectReplacementActive(await isolationDb.getById(env.id), await replacement);
+    const replacement = await reRegister();
+    expectReplacementActive(await isolationDb.getById(env.id), replacement);
     expect(existsSync(env.working_path)).toBe(true);
   });
 

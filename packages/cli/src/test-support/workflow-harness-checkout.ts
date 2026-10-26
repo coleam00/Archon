@@ -4,6 +4,8 @@ import {
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
 } from '@archon/isolation/types';
 
 export const mockFolderBackendPrepare = mock(
@@ -27,6 +29,8 @@ mock.module('@archon/isolation', () => ({
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
   worktreeRegistrationMetadata,
   configureIsolation: mock(() => undefined),
   // Marked rather than reimplemented: these tests prove a failure path routes

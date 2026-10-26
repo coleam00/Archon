@@ -2,7 +2,9 @@
  * Publish the review report as the pull request's one canonical comment.
  *
  * The reviewer judges and writes the report; this node owns the public write, so
- * every round edits the same marked comment instead of appending another. A
+ * every round edits the same marked comment instead of appending another (on `gh`,
+ * a landed write that returned a retryable response (5xx, or a rate limit) or no response can leave a second one, and
+ * the next upsert refuses). A
  * review whose scope was a working diff has no pull request and publishes
  * nothing. The verdict passes through unchanged either way: publication is not
  * what makes a review true.

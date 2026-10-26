@@ -2,7 +2,7 @@
  * Database operations for isolation environments
  */
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
-import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
+import { pool, getDialect, getDatabaseType } from './connection';
 import {
   type WorkflowRunStatus,
   TERMINAL_WORKFLOW_STATUSES,
@@ -10,7 +10,9 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import {
   WORKTREE_REGISTRATION_ID,
+  WORKTREE_REMOVAL_OWNER,
   WorktreeRegistrationChangedError,
+  WorktreeRemovalInProgressError,
 } from '@archon/isolation/types';
 import type {
   IsolationEnvironmentRow,
@@ -19,6 +21,11 @@ import type {
   CreateEnvironmentParams,
 } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
+import {
+  currentProcessOwner,
+  isOwnerProvablyGone,
+  parseProcessOwner,
+} from '@archon/paths/process-owner';
 import { toHydratedTimestamp } from './timestamps';
 import { readWorkflowRunStatus } from './workflow-run-status';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
@@ -164,6 +171,8 @@ export async function findLatestByCodebaseAndWorkingPath(
  * Create or update an active isolation environment (upsert).
  * If an active environment with the same (codebase_id, workflow_type, workflow_id) exists,
  * it updates the existing row instead of inserting a duplicate.
+ * Refuses with WorktreeRemovalInProgressError while another live process is removing
+ * that registration.
  */
 export async function create(env: CreateEnvironmentParams): Promise<IsolationEnvironmentRow> {
   const dialect = getDialect();
@@ -174,8 +183,9 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
   // re-creation (upsert) we preserve the original creator's attribution.
   // The first user to spin up an environment owns it; subsequent reactivations
   // by different users don't transfer ownership. Mirrors created_by_platform.
-  const result = await pool.query<IsolationEnvironmentRow>(
-    `INSERT INTO remote_agent_isolation_environments
+  const upsert = async (): Promise<IsolationEnvironmentRow | undefined> => {
+    const result = await pool.query<IsolationEnvironmentRow>(
+      `INSERT INTO remote_agent_isolation_environments
      (codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, created_by_platform, created_by_user_id, metadata)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (codebase_id, workflow_type, workflow_id) WHERE status = 'active'
@@ -187,29 +197,36 @@ export async function create(env: CreateEnvironmentParams): Promise<IsolationEnv
        metadata = EXCLUDED.metadata,
        status = 'active',
        created_at = ${dialect.now()}
+     WHERE ${unclaimedRemoval('remote_agent_isolation_environments.metadata')}
      RETURNING *`,
-    [
-      env.codebase_id,
-      env.workflow_type,
-      env.workflow_id,
-      provider,
-      env.working_path,
-      env.branch_name,
-      env.created_by_platform ?? null,
-      env.created_by_user_id ?? null,
-      JSON.stringify(metadata),
-    ]
+      [
+        env.codebase_id,
+        env.workflow_type,
+        env.workflow_id,
+        provider,
+        env.working_path,
+        env.branch_name,
+        env.created_by_platform ?? null,
+        env.created_by_user_id ?? null,
+        JSON.stringify(metadata),
+      ]
+    );
+    return result.rows[0];
+  };
+  const row = await retryPastRemovalClaim(
+    () => findActiveByWorkflow(env.codebase_id, env.workflow_type, env.workflow_id),
+    upsert
   );
 
-  if (!result.rows[0]) {
+  if (!row) {
     throw new Error('Failed to create isolation environment: INSERT succeeded but no row returned');
   }
 
   getLog().debug(
-    { envId: result.rows[0].id, codebaseId: env.codebase_id, branch: env.branch_name },
+    { envId: row.id, codebaseId: env.codebase_id, branch: env.branch_name },
     'db.isolation_env_create_completed'
   );
-  return normalizeEnvironmentRow(result.rows[0]);
+  return normalizeEnvironmentRow(row);
 }
 
 /**
@@ -252,9 +269,10 @@ export async function updateStatus(
 }
 
 /**
- * SQL that holds only while the row is still the observed worktree registration.
- * Placeholders start at `$${first}`. Older writers do not rotate a registration token,
- * so a tokenless observation is fenced with the whole observed snapshot instead.
+ * SQL that holds only while the row is still the observed worktree registration and no
+ * process claims its removal. Placeholders start at `$${first}`. Older writers do not
+ * rotate a registration token, so a tokenless observation is fenced with the whole
+ * observed snapshot instead.
  */
 function observedRegistrationPredicate(
   observed: IsolationEnvironmentRow,
@@ -294,7 +312,8 @@ function observedRegistrationPredicate(
        AND codebase_id = ${$(5)} AND workflow_type = ${$(6)} AND workflow_id = ${$(7)}
        AND created_by_platform IS NOT DISTINCT FROM ${$(8)} AND created_by_user_id IS NOT DISTINCT FROM ${$(9)}`
            : ''
-       }`;
+       }
+       AND ${unclaimedRemoval('metadata')}`;
   const params: unknown[] = [
     observed.metadata[WORKTREE_REGISTRATION_ID] ?? '',
     observed.working_path,
@@ -314,46 +333,121 @@ function observedRegistrationPredicate(
   return { sql, params };
 }
 
-/** Mark only the observed worktree registration destroyed, never a replacement registration. */
-export async function markWorktreeDestroyed(
-  observed: IsolationEnvironmentRow,
-  query: typeof pool.query = pool.query.bind(pool)
-): Promise<void> {
-  const predicate = observedRegistrationPredicate(observed, 2);
-  const result = await query(
-    `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
-     WHERE id = $1${predicate.sql}`,
-    [observed.id, ...predicate.params]
-  );
-  if (result.rowCount !== 1) {
-    throw new WorktreeRegistrationChangedError(observed.id);
+function unclaimedRemoval(metadataColumn: string): string {
+  return `${getDialect().jsonText(metadataColumn, WORKTREE_REMOVAL_OWNER)} IS NULL`;
+}
+
+/**
+ * Run a write that a removal claim refuses; `undefined` means refused. When it is
+ * refused and the row holds a claim whose owner is provably gone, release that claim
+ * and retry once. A claim held by a live owner, or by an owner on another host, is never
+ * released: it refuses with WorktreeRemovalInProgressError.
+ */
+async function retryPastRemovalClaim<T>(
+  read: () => Promise<IsolationEnvironmentRow | null>,
+  write: () => Promise<T | undefined>
+): Promise<T | undefined> {
+  const written = await write();
+  if (written !== undefined) return written;
+  const row = await read();
+  const record = row?.metadata[WORKTREE_REMOVAL_OWNER];
+  if (row && record !== undefined) {
+    const owner = parseProcessOwner(record, `isolation environment ${row.id}`);
+    if (!isOwnerProvablyGone(owner)) throw new WorktreeRemovalInProgressError(row.id, owner);
+    await pool.query(
+      `UPDATE remote_agent_isolation_environments
+       SET metadata = ${getDialect().jsonRemove('metadata', WORKTREE_REMOVAL_OWNER)}
+       WHERE id = $1 AND ${getDialect().jsonText('metadata', `${WORKTREE_REMOVAL_OWNER}.instance`)} = $2`,
+      [row.id, owner.instance]
+    );
+    getLog().warn({ envId: row.id, owner }, 'db.isolation_env_removal_claim_released');
   }
+  // Also covers a claim that was settled between the refused write and the read.
+  return write();
+}
+
+/** Mark only the observed worktree registration destroyed, never a replacement registration. */
+export async function markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void> {
+  const predicate = observedRegistrationPredicate(observed, 2);
+  const retired = await retryPastRemovalClaim(
+    () => getById(observed.id),
+    async () => {
+      const result = await pool.query(
+        `UPDATE remote_agent_isolation_environments SET status = 'destroyed'
+         WHERE id = $1${predicate.sql}`,
+        [observed.id, ...predicate.params]
+      );
+      return result.rowCount === 1 ? result : undefined;
+    }
+  );
+  if (!retired) throw new WorktreeRegistrationChangedError(observed.id);
   getLog().debug({ envId: observed.id }, 'db.isolation_env_worktree_destroyed');
 }
 
 /**
- * The conditional write acquires a PostgreSQL row lock or SQLite write reservation.
- * Ordinary upserts cannot publish a replacement until destruction and retirement finish.
- * The callback must use the supplied retirement callback, not the pooled connection.
+ * Claim the observed registration with a committed metadata record naming this process,
+ * run `remove` with no transaction open, then retire the registration if `remove`
+ * resolved after calling `markDestroyed`, or release the claim otherwise. While the claim
+ * is held, replacement upserts, adoption, other retirement and run activation in that
+ * checkout refuse. A claim whose process died is released by the next writer that meets it.
  */
-export const withWorktreeRegistration: IIsolationStore['withWorktreeRegistration'] = async (
-  observed,
-  remove
-) => {
-  const predicate = observedRegistrationPredicate(observed, 2);
-  return getDatabase().withTransaction(
-    async query => {
-      const locked = await query(
-        `UPDATE remote_agent_isolation_environments SET status = status
-       WHERE id = $1 AND status = 'active'${predicate.sql}`,
-        [observed.id, ...predicate.params]
+export async function withWorktreeRegistration<T>(
+  observed: IsolationEnvironmentRow,
+  remove: (markDestroyed: () => Promise<void>) => Promise<T>
+): Promise<T> {
+  await claimRemoval(observed);
+  let retire = false;
+  let result: T;
+  try {
+    result = await remove(async () => {
+      retire = true;
+    });
+  } catch (error) {
+    await settleRemovalClaim(observed.id, false).catch((err: unknown) => {
+      getLog().error({ envId: observed.id, err }, 'db.isolation_env_removal_claim_release_failed');
+    });
+    throw error;
+  }
+  await settleRemovalClaim(observed.id, retire);
+  return result;
+}
+
+async function claimRemoval(observed: IsolationEnvironmentRow): Promise<void> {
+  const predicate = observedRegistrationPredicate(observed, 3);
+  const claimed = await retryPastRemovalClaim(
+    () => getById(observed.id),
+    async () => {
+      const result = await pool.query(
+        `UPDATE remote_agent_isolation_environments
+         SET metadata = ${getDialect().jsonMerge('metadata', 2)}
+         WHERE id = $1 AND status = 'active'${predicate.sql}`,
+        [
+          observed.id,
+          JSON.stringify({ [WORKTREE_REMOVAL_OWNER]: currentProcessOwner }),
+          ...predicate.params,
+        ]
       );
-      if (locked.rowCount !== 1) throw new WorktreeRegistrationChangedError(observed.id);
-      return remove(() => markWorktreeDestroyed(observed, query));
-    },
-    { retryOnBusy: 'first-statement' }
+      return result.rowCount === 1 ? result : undefined;
+    }
   );
-};
+  if (!claimed) throw new WorktreeRegistrationChangedError(observed.id);
+}
+
+/** Drop this process's claim, retiring the registration in the same write when asked. */
+async function settleRemovalClaim(id: string, retire: boolean): Promise<void> {
+  const dialect = getDialect();
+  const result = await pool.query(
+    `UPDATE remote_agent_isolation_environments
+     SET metadata = ${dialect.jsonRemove('metadata', WORKTREE_REMOVAL_OWNER)}${
+       retire ? ", status = 'destroyed'" : ''
+     }
+     WHERE id = $1 AND status = 'active'
+       AND ${dialect.jsonText('metadata', `${WORKTREE_REMOVAL_OWNER}.instance`)} = $2`,
+    [id, currentProcessOwner.instance]
+  );
+  if (result.rowCount !== 1) throw new WorktreeRegistrationChangedError(id);
+  if (retire) getLog().debug({ envId: id }, 'db.isolation_env_worktree_destroyed');
+}
 
 /**
  * Update environment metadata (merge with existing)
@@ -364,14 +458,17 @@ export async function updateMetadata(
   observed?: IsolationEnvironmentRow
 ): Promise<void> {
   const predicate = observed ? observedRegistrationPredicate(observed, 3) : undefined;
-  const result = await pool.query(
-    `UPDATE remote_agent_isolation_environments
-     SET metadata = ${getDialect().jsonMerge('metadata', 1)}
-     WHERE id = $2${predicate ? ` AND status = 'active'${predicate.sql}` : ''}`,
-    [JSON.stringify(metadata), id, ...(predicate?.params ?? [])]
-  );
+  const write = async () => {
+    const result = await pool.query(
+      `UPDATE remote_agent_isolation_environments
+       SET metadata = ${getDialect().jsonMerge('metadata', 1)}
+       WHERE id = $2${predicate ? ` AND status = 'active'${predicate.sql}` : ''}`,
+      [JSON.stringify(metadata), id, ...(predicate?.params ?? [])]
+    );
+    return result.rowCount === 0 ? undefined : result;
+  };
 
-  if (result.rowCount === 0) {
+  if (!(observed ? await retryPastRemovalClaim(() => getById(id), write) : await write())) {
     if (observed) throw new Error(`Worktree ${id} changed during adoption; inspect it and retry`);
     throw new Error(
       `Failed to update isolation environment metadata: no environment found with id '${id}'`

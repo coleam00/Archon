@@ -147,6 +147,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // deliverable. `data.warnings` is the message list. Absence means the YAML was
   // clean OR the run predates this event type — never that delivery failed.
   'workflow_parse_warnings',
+  // #5185 — a credential check at run start could not decide, and the run started
+  // anyway. `data` carries `provider`, optional `vendor`, `source` and the check's
+  // `evidence`. Absence means every check decided OR the run predates this event type.
+  'credential_check_inconclusive',
   'workflow_cleanup_warning',
   // #2781 — the run's workflow declares `deprecated:`. Written by the executor at
   // run start for every deprecated workflow, whatever surface started it (the

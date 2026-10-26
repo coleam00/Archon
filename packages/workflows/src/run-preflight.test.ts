@@ -14,6 +14,7 @@ import { makeTestResolvedWorkflow, makeTestComposedWorkflow, makeTestWorkflow } 
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
+  type InconclusiveCredentialCheck,
   WorkflowCredentialPreflightError,
 } from './run-preflight';
 
@@ -146,7 +147,6 @@ describe('run credential preflight', () => {
 
   test.each([
     { state: 'unusable', source: 'archon', evidence: 'cannot read' },
-    { state: 'check_failed', source: 'archon', evidence: 'refresh unavailable' },
     { state: 'not_checked', source: 'archon' },
   ] satisfies CredentialStatus[])(
     'stored $state blocks without native fallback and names the provider',
@@ -165,6 +165,30 @@ describe('run credential preflight', () => {
       expect(deps.getUserProviderCredential).toHaveBeenCalledWith('origin', 'anthropic');
     }
   );
+
+  test('a stored check that cannot decide passes as connected, without native fallback', async () => {
+    const workflow = makeTestResolvedWorkflow({ name: 'ai' });
+    const { deps, checkCredential } = fixture();
+    deps.getUserProviderCredential.mockResolvedValue({
+      kind: 'oauth',
+      getStatus: async () => ({
+        state: 'check_failed',
+        source: 'archon',
+        evidence: 'refresh unavailable',
+      }),
+    });
+    const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
+    expect(await assertRunCredentials(deps, prepared, { cwd: '/p' })).toEqual([
+      {
+        provider: 'claude',
+        vendor: 'anthropic',
+        source: 'archon',
+        evidence: 'refresh unavailable',
+      },
+    ]);
+    expect(checkCredential).not.toHaveBeenCalled();
+    expect(prepared.connectedVendors.has('anthropic')).toBe(true);
+  });
 
   test('a shared stored vendor is checked once and unused vendors are never read', async () => {
     const workflow = makeTestResolvedWorkflow({
@@ -190,36 +214,56 @@ describe('run credential preflight', () => {
   });
 
   test.each([
-    [{ state: 'usable', source: 'native' }, true],
-    [{ state: 'not_checked', source: 'native' }, true],
-    [{ state: 'not_connected', source: 'native' }, false],
-    [{ state: 'unusable', source: 'native', evidence: 'rejected' }, false],
-    [{ state: 'check_failed', source: 'native', evidence: 'unreachable' }, false],
-  ] satisfies [CredentialStatus, boolean][])('native policy %#', async (status, allowed) => {
-    const workflow = makeTestResolvedWorkflow({ name: 'ai' });
-    const { deps, checkCredential } = fixture(status);
-    const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
-    const check = assertRunCredentials(deps, prepared, { cwd: '/p' });
-    if (allowed) await check;
-    else
-      await expect(check).rejects.toThrow(
-        status.state === 'check_failed'
-          ? 'could not verify: unreachable'
-          : 'Credential preflight failed'
-      );
-    expect(checkCredential).toHaveBeenCalledTimes(1);
-  });
+    [{ state: 'usable', source: 'native' }, []],
+    [{ state: 'not_checked', source: 'native' }, []],
+    [
+      { state: 'check_failed', source: 'native', evidence: 'unreachable' },
+      [{ provider: 'claude', vendor: 'anthropic', source: 'native', evidence: 'unreachable' }],
+    ],
+  ] satisfies [CredentialStatus, InconclusiveCredentialCheck[]][])(
+    'native %# starts the run, returning any inconclusive check',
+    async (status, inconclusive) => {
+      const workflow = makeTestResolvedWorkflow({ name: 'ai' });
+      const { deps, checkCredential } = fixture(status);
+      const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
+      expect(await assertRunCredentials(deps, prepared, { cwd: '/p' })).toEqual(inconclusive);
+      expect(checkCredential).toHaveBeenCalledTimes(1);
+    }
+  );
 
-  test('a rejected native probe refuses the run with provider context', async () => {
+  test.each([
+    [{ state: 'not_connected', source: 'native' }, 'no usable login'],
+    [
+      { state: 'unusable', source: 'native', evidence: 'rejected' },
+      'credential cannot be used: rejected',
+    ],
+  ] satisfies [CredentialStatus, string][])(
+    'a definite bad native credential refuses the run: %#',
+    async (status, reason) => {
+      const workflow = makeTestResolvedWorkflow({ name: 'ai' });
+      const { deps } = fixture(status);
+      const prepared = await prepareRunAiConfiguration(deps, workflow, '/p', { userId: 'origin' });
+      const check = assertRunCredentials(deps, prepared, { cwd: '/p' });
+      await expect(check).rejects.toBeInstanceOf(WorkflowCredentialPreflightError);
+      await expect(check).rejects.toThrow(
+        `Credential preflight failed for provider 'claude' (vendor 'anthropic'): ${reason}`
+      );
+    }
+  );
+
+  test('a native probe that throws is inconclusive and keeps its error out of the evidence', async () => {
     const workflow = makeTestResolvedWorkflow({ name: 'ai' });
     const { deps, checkCredential } = fixture();
     checkCredential.mockRejectedValue(new Error('probe unavailable'));
     const prepared = await prepareRunAiConfiguration(deps, workflow, '/p');
-    const check = assertRunCredentials(deps, prepared, { cwd: '/p' });
-    await expect(check).rejects.toBeInstanceOf(WorkflowCredentialPreflightError);
-    await expect(check).rejects.toThrow(
-      "Credential preflight failed for provider 'claude' (vendor 'anthropic'): could not verify native authentication"
-    );
+    expect(await assertRunCredentials(deps, prepared, { cwd: '/p' })).toEqual([
+      {
+        provider: 'claude',
+        vendor: 'anthropic',
+        source: 'native',
+        evidence: 'the native authentication check failed unexpectedly',
+      },
+    ]);
     expect(checkCredential).toHaveBeenCalledTimes(1);
   });
 
@@ -230,25 +274,26 @@ describe('run credential preflight', () => {
       (): Promise<CredentialStatus> =>
         Promise.resolve({ state: 'check_failed', source: 'native', evidence: 'aborted' }),
     ],
-  ] as const)('a timed-out native probe that %s refuses with a timeout', async (_, probe) => {
-    const timeout = spyOn(AbortSignal, 'timeout').mockImplementation(() =>
-      AbortSignal.abort(new DOMException('The operation timed out.', 'TimeoutError'))
-    );
-    try {
-      const workflow = makeTestResolvedWorkflow({ name: 'ai' });
-      const { deps, checkCredential } = fixture();
-      checkCredential.mockImplementation(({ signal }) => probe(signal));
-      const prepared = await prepareRunAiConfiguration(deps, workflow, '/p');
-      const check = assertRunCredentials(deps, prepared, { cwd: '/p' });
-      await expect(check).rejects.toBeInstanceOf(WorkflowCredentialPreflightError);
-      await expect(check).rejects.toThrow(
-        "Credential preflight failed for provider 'claude' (vendor 'anthropic'): native authentication check timed out after 60s"
+  ] as const)(
+    'a timed-out native probe that %s starts with a timeout warning',
+    async (_, probe) => {
+      const timeout = spyOn(AbortSignal, 'timeout').mockImplementation(() =>
+        AbortSignal.abort(new DOMException('The operation timed out.', 'TimeoutError'))
       );
-      expect(timeout).toHaveBeenCalledWith(60_000);
-    } finally {
-      timeout.mockRestore();
+      try {
+        const workflow = makeTestResolvedWorkflow({ name: 'ai' });
+        const { deps, checkCredential } = fixture();
+        checkCredential.mockImplementation(({ signal }) => probe(signal));
+        const prepared = await prepareRunAiConfiguration(deps, workflow, '/p');
+        const [check, ...rest] = await assertRunCredentials(deps, prepared, { cwd: '/p' });
+        expect(rest).toEqual([]);
+        expect(check?.evidence).toStartWith('native authentication check timed out after 60s');
+        expect(timeout).toHaveBeenCalledWith(60_000);
+      } finally {
+        timeout.mockRestore();
+      }
     }
-  });
+  );
 
   test('a stored connection removed after launch cannot switch to native authentication', async () => {
     const workflow = makeTestResolvedWorkflow({ name: 'ai' });

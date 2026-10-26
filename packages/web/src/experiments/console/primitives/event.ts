@@ -405,7 +405,19 @@ const EVENT_MAPPERS = new Map<string, EventMapper>([
     (raw, base): RunEvent =>
       textEvent(base, readString(raw.data, 'notice') || '⚠️ This workflow is deprecated.'),
   ],
+  // A credential check at run start could not decide and the run started anyway (#5185).
+  // Rendered as `text`, NOT `system`: it explains a first-node `auth` failure.
+  ['credential_check_inconclusive', toCredentialWarning],
 ]);
+
+function toCredentialWarning(raw: RawWorkflowEvent, base: EventBase): RunEvent {
+  const vendor = readString(raw.data, 'vendor');
+  const evidence = readString(raw.data, 'evidence');
+  return textEvent(
+    base,
+    `⚠️ Could not verify the credential for provider '${readString(raw.data, 'provider')}'${vendor ? ` (vendor '${vendor}')` : ''}${evidence ? `: ${evidence}` : ''}. The run started; a bad credential fails its first AI node.`
+  );
+}
 
 /** Normalize stored events; unknown payloads remain available behind the System toggle. */
 export function toRunEvent(raw: RawWorkflowEvent): RunEvent {

@@ -6,6 +6,8 @@ import {
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
 } from '@archon/isolation/types';
 import type * as Core from '@archon/core';
 import type * as Codebases from '@archon/core/db/codebases';
@@ -213,6 +215,8 @@ mock.module('@archon/isolation', () => ({
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
   readWorktreeCreationId,
   getIsolationProvider: mock(() => ({
     destroy: mockDestroyWorktree,

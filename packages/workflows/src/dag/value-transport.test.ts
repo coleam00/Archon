@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { buildTerminalRecord } from '../terminal-record';
+import { buildTerminalRecord, observeRunArtifacts } from '../terminal-record';
 import { RUN_GRAPH_METADATA_KEY } from '../schemas/terminal-record';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
@@ -142,12 +142,14 @@ describe('value transport (#2637): persistence, resume, and node-local bindings'
       });
       if (structured) expect(replay?.data?.structured_output).toEqual({ answer: 42 });
       expect(resumed.events.some(event => event.event_type === 'node_started')).toBe(false);
-      const record = await buildTerminalRecord({
-        run: makeWorkflowRun('incomplete-replay', {
-          status: 'completed',
-          metadata: { [RUN_GRAPH_METADATA_KEY]: { node_ids: ['producer'], returns: 'producer' } },
-        }),
+      const replayRun = makeWorkflowRun('incomplete-replay', {
+        status: 'completed',
+        metadata: { [RUN_GRAPH_METADATA_KEY]: { node_ids: ['producer'], returns: 'producer' } },
+      });
+      const record = buildTerminalRecord({
+        run: replayRun,
         events: resumed.events.map(event => ({ ...event, data: event.data ?? {} })),
+        artifacts: await observeRunArtifacts(replayRun),
       });
       expect(record.returns).toEqual(
         structured

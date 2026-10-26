@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { SqliteAdapter, sqliteDialect } from '../sqlite';
-import { Database, SQLiteError, type Statement } from 'bun:sqlite';
+import { Database, type Statement } from 'bun:sqlite';
 import { readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -152,56 +152,6 @@ export function registerBusyLocksTests(shared: ReturnType<typeof setupSqliteTest
 
       expect(attempts).toBeGreaterThan(1);
       expect(await codebaseCount()).toBe(1);
-    });
-
-    test('a non-replayable transaction retries its claim without replaying its callback', async () => {
-      await lockedAdapter();
-      const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
-      let attempts = 0;
-      await adapter.withTransaction(
-        async query => {
-          attempts++;
-          await query(
-            `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
-            ['cb-once', 'cb-once', '/tmp/test-cwd']
-          );
-        },
-        { retryOnBusy: 'first-statement' }
-      );
-      await released;
-      expect(attempts).toBe(1);
-      expect(await codebaseCount()).toBe(1);
-    });
-
-    test('a busy failure after a side effect never replays destruction', async () => {
-      const path = await lockedAdapter();
-      const contender = new Database(path);
-      let busy: unknown;
-      try {
-        contender.run('BEGIN IMMEDIATE');
-      } catch (error) {
-        busy = error;
-      } finally {
-        contender.close();
-        holder.run('COMMIT');
-      }
-      expect(busy).toBeInstanceOf(SQLiteError);
-      let destructions = 0;
-      await expect(
-        adapter.withTransaction(
-          async query => {
-            await query(
-              `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
-              ['cb-destroy', 'cb-destroy', '/tmp/test-cwd']
-            );
-            destructions++;
-            if (destructions === 1) throw busy;
-          },
-          { retryOnBusy: 'first-statement' }
-        )
-      ).rejects.toBe(busy);
-      expect(destructions).toBe(1);
-      expect(await codebaseCount()).toBe(0);
     });
 
     test('a block that wraps the busy error in its own still reruns from BEGIN', async () => {

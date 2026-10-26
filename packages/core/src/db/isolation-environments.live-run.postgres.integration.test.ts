@@ -17,6 +17,7 @@ import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
 import type { Pool as PgPool } from 'pg';
 import { isolationStatusReadTests } from './isolation-status-read-harness';
 import { randomUUID } from 'node:crypto';
+import { WorktreeRemovalInProgressError } from '@archon/isolation';
 
 const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
@@ -98,18 +99,25 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
 
   isolationStatusReadTests(() => db, createEnv);
 
-  test('destructive registration ownership excludes another connection and retires atomically', async () => {
+  test('removal holds no row lock, refuses a replacement registration and retires after removal', async () => {
     const env = await createEnv('pg-destruction-lock');
     await withWorktreeRegistration(env, async markDestroyed => {
+      await db.withTransaction(async query => {
+        await query("SET LOCAL lock_timeout = '20ms'");
+        await query(
+          'UPDATE remote_agent_isolation_environments SET status = status WHERE id = $1',
+          [env.id]
+        );
+      });
       await expect(
-        db.withTransaction(async query => {
-          await query("SET LOCAL lock_timeout = '20ms'");
-          await query(
-            `UPDATE remote_agent_isolation_environments SET metadata = '{}'::jsonb WHERE id = $1`,
-            [env.id]
-          );
+        create({
+          codebase_id: env.codebase_id,
+          workflow_type: env.workflow_type,
+          workflow_id: env.workflow_id,
+          working_path: '/tmp/other',
+          branch_name: 'replacement' as never,
         })
-      ).rejects.toMatchObject({ code: '55P03' });
+      ).rejects.toBeInstanceOf(WorktreeRemovalInProgressError);
       await markDestroyed();
     });
     expect((await getById(env.id))?.status).toBe('destroyed');

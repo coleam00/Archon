@@ -7,6 +7,8 @@ import {
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
 } from '@archon/isolation/types';
 import { createMockLogger } from './mocks/logger';
 export * from './orchestrator-agent-db-mocks';
@@ -554,6 +556,8 @@ mock.module('@archon/isolation', () => ({
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
   IsolationBlockedError: class IsolationBlockedError extends Error {
     public reason: string;
     constructor(reason: string) {
