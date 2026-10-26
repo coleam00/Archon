@@ -18,7 +18,7 @@ description: |
   continuation reviewer carries the prior findings forward.
 
   When the checkout matches the PR head, the final synthesized report is posted
-  to it as one canonical comment, edited in place on re-review. A head mismatch
+  to it as one canonical comment, edited in place on re-review (on `gh`, a write that landed but returned a 5xx or no response can leave a second one; the next upsert then refuses: inspect both and delete one). A head mismatch
   stops before review and returns the exact rerun command. For a same-repository
   PR, advance any clean existing worktree to its head, then use its head branch.
   For a fork PR, fetch its head first, then use a fresh review branch with
@@ -341,7 +341,9 @@ nodes:
 
   # The reviewer judges and writes the report; this node owns the one public
   # write, so every round edits the same marked comment instead of appending
-  # another, through whichever forge source the run selected. The verdict passes
+  # another, through whichever forge source the run selected (on `gh`, a landed
+  # write that returned a 5xx or no response can leave a second one, and the next
+  # upsert refuses). The verdict passes
   # through unchanged: publication is not what makes a review true.
   - id: publish
     script: publish-review

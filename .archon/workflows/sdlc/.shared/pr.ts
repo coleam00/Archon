@@ -430,20 +430,13 @@ export interface CommentSubject {
  * comment is a conflict: guessing which one is canonical would silently abandon
  * the other.
  *
- * A transient `gh api` failure repeats the whole upsert from the marker read. A write
- * that landed but is missing from that listing is posted again (an accepted risk),
- * and the second marked comment makes the next upsert refuse loudly.
+ * On `gh`, each listing is repeated in place after a transient failure, and a write
+ * that failed transiently is repeated from the marker read. A write that landed but
+ * is missing from that listing is posted again (an accepted risk), and the second
+ * marked comment makes the next upsert refuse loudly. A write that succeeded is
+ * never repeated: a read-back that keeps failing fails the upsert.
  */
 export function upsertComment(
-  subject: CommentSubject,
-  marker: string,
-  body: string,
-  source: ForgeSource
-): { readonly url: string } {
-  return retryTransient(() => upsertCommentOnce(subject, marker, body, source));
-}
-
-function upsertCommentOnce(
   subject: CommentSubject,
   marker: string,
   body: string,
@@ -464,7 +457,32 @@ function upsertCommentOnce(
   if ((body.split(/\r?\n/, 1)[0] ?? '') !== marker) {
     throw new Error('the comment body must begin with the exact canonical marker');
   }
-  const marked = ghIssueComments(ref).filter(
+  const written = retryTransient(() => writeMarkedComment(ref, marker, body));
+  if ('url' in written) return written;
+  let observed: GhComment | undefined;
+  try {
+    observed = retryTransient(() => ghIssueComments(ref)).find(comment => comment.id === written.id);
+  } catch (error) {
+    throw new Error(
+      `comment ${written.id} was written, but reading it back failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (observed?.body !== body) {
+    throw new Error(`comment ${written.id} does not read back as written; it may need reconciling`);
+  }
+  return { url: observed.url };
+}
+
+/**
+ * One marker read and, when the marked comment differs, one write. Returns the
+ * unchanged comment's url, or the written comment's id for the caller to read back.
+ */
+function writeMarkedComment(
+  ref: QualifiedPr,
+  marker: string,
+  body: string
+): { readonly url: string } | { readonly id: string } {
+  const marked = retryTransient(() => ghIssueComments(ref)).filter(
     comment => (comment.body.split(/\r?\n/, 1)[0] ?? '') === marker
   );
   if (marked.length > 1) {
@@ -497,11 +515,5 @@ function upsertCommentOnce(
   if (typeof id !== 'number' && typeof id !== 'string') {
     throw new Error('gh api returned no comment identity; a comment may have changed');
   }
-  const observed = ghIssueComments(ref).find(comment => comment.id === String(id));
-  if (observed?.body !== body) {
-    throw new Error(
-      `comment ${String(id)} does not read back as written; it may need reconciling`
-    );
-  }
-  return { url: observed.url };
+  return { id: String(id) };
 }

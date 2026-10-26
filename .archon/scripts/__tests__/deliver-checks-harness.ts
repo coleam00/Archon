@@ -79,6 +79,8 @@ export interface GhFake {
   readonly commentWriteFaults?: readonly GhHttpFault[];
   /** Which comment listings, counted from 0, fail with no HTTP response, as a dropped connection does. */
   readonly commentListDrops?: readonly number[];
+  /** Which comment listings, counted from 0, lag behind and show no comments. */
+  readonly commentListLags?: readonly number[];
   /**
    * Existing tracker issues; `issue create` appends to them. `gh api` reads them
    * too, beside the one issue `issue` describes.
@@ -193,6 +195,7 @@ let exists = fake.noOpenPr !== true;
 let nextId = 900;
 const faults = [...(fake.commentWriteFaults ?? [])];
 const listDrops = new Set(fake.commentListDrops ?? []);
+const listLags = new Set(fake.commentListLags ?? []);
 let listings = 0;
 const labels = new Set(fake.repositoryLabels ?? ['operator', 'archon-blocked', 'area']);
 let issueLabels = [...(fake.issueLabels ?? ['operator', 'archon-blocked'])];
@@ -370,9 +373,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const commentsOn = parts.at(-1) === 'comments' && parts.at(-3) === 'issues' ? Number(parts.at(-2)) : pr.number;
     const onIssue = commentsOn === pr.number ? undefined : commentsOn;
     if (method === 'GET') {
-      if (listDrops.has(listings++)) return { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('connection reset') };
+      const listing = listings++;
+      if (listDrops.has(listing)) return { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('connection reset') };
       const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');
-      const rows = page === 1 ? comments.filter(row => row.issue === onIssue).map(row => ({ id: row.id, body: row.body, html_url: commentUrl(row), ...(row.author === undefined ? {} : { user: { login: row.author } }) })) : [];
+      const rows = page === 1 && !listLags.has(listing) ? comments.filter(row => row.issue === onIssue).map(row => ({ id: row.id, body: row.body, html_url: commentUrl(row), ...(row.author === undefined ? {} : { user: { login: row.author } }) })) : [];
       return result(0, JSON.stringify(rows));
     }
     if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);

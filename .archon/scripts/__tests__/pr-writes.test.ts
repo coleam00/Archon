@@ -1026,6 +1026,30 @@ describe('publish-review repeats a comment write the forge failed transiently', 
     expect(result.comments).toHaveLength(1);
   });
 
+  it('never writes again after a successful POST whose read-back cannot find it', () => {
+    const result = publishReview({ inputs: report, gh: { commentListDrops: [1], commentListLags: [2] } });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('does not read back as written');
+    expect(posts(result)).toBe(1);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('finds a landed PATCH after a 504 instead of writing it again', () => {
+    const result = publishReview({
+      inputs: report,
+      gh: {
+        comments: [{ id: 5, body: `${MARKER}\nRound 1: ready\n` }],
+        commentWriteFaults: [{ status: 504, landed: true }],
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh.filter(call => call.includes('--method PATCH'))).toHaveLength(1);
+    expect(posts(result)).toBe(0);
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]?.body).toContain(REPORT);
+  });
+
   it('repeats a 403 carrying a Retry-After header once', () => {
     const result = publishReview({
       inputs: report,
