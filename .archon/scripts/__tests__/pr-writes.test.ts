@@ -906,26 +906,27 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   });
 
   it('upserts through the plugin on the forge source, with the report in the request file', () => {
+    const forge: ScriptOptions['forge'] = {
+      kind: 'fake',
+      response: [
+        prView,
+        forgeOperation('comment.upsert', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          comment: {
+            ref: PR,
+            id: '900',
+            url: `${PR_URL}#issuecomment-900`,
+            bodyDigest: 'digest',
+          },
+        }),
+      ],
+    };
     const result = publishReview({
       source: 'forge',
       inputs: report,
-      forge: {
-        kind: 'fake',
-        response: [
-          prView,
-          forgeOperation('comment.upsert', {
-            target: PR,
-            outcome: 'applied',
-            changed: true,
-            comment: {
-              ref: PR,
-              id: '900',
-              url: `${PR_URL}#issuecomment-900`,
-              bodyDigest: 'digest',
-            },
-          }),
-        ],
-      },
+      forge,
     });
     expect(result.code).toBe(0);
     expect(result.gh).toEqual([]);
@@ -936,7 +937,19 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     // The comment names the commit it reviewed from the round's own record, not the report text.
     expect(request.body.split('\n')[1]).toBe(`Reviewed commit: \`${REVIEWED}\``);
     expect(request.body.split('\n')[2]).toBe('Verdict: ready');
+    // A Ready verdict whose review left an acceptance item open is stamped open, so no merge closes the issue on it.
+    expect(request.body.split('\n')[3]).toBe('Contract: open');
     expect(result.forge.join(' ')).not.toContain(REPORT);
+
+    // A review that left nothing open is stamped complete: only that lets a merge close the issue.
+    const complete = publishReview({
+      source: 'forge',
+      inputs: { ...report, INPUTS_CONTRACT_LEFT: '[]' },
+      forge,
+    });
+    expect(complete.code).toBe(0);
+    const completeRequest = JSON.parse(complete.forgeRequests[1]) as { body: string };
+    expect(completeRequest.body.split('\n')[3]).toBe('Contract: complete');
   });
 
   it('still reports the verdict when the host could not audit the comment write', () => {

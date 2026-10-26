@@ -336,8 +336,9 @@ nodes:
   # Corrections and the base merge can falsify claims the description made when the
   # draft opened, and an implementer can pass red the description must disclose. One
   # agent reads the live description and the final diff, and edits only what is no
-  # longer true. It also links the issue by the latest review's coverage: closing
-  # only when nothing is left. It runs once the rounds have ended, never per round;
+  # longer true. It also links the issue: closing only when the latest review left
+  # nothing open and no dated ruling on the issue keeps it open. It runs once the
+  # rounds have ended, never per round;
   # content a round prepared for the description is that round's pr step's write.
   - id: update-pr-body
     command: update-pr-body

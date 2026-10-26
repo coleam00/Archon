@@ -106,7 +106,7 @@ const FACTS: PrFacts = {
   mergeable: 'clean',
   checks: { state: 'green', failing: [], pending: [] },
   threads: { unresolved: 0, urls: [] },
-  verdict: { state: 'ready', reviewed: HEAD, url: `${PR_URL}#issuecomment-1` },
+  verdict: { state: 'ready', reviewed: HEAD, url: `${PR_URL}#issuecomment-1`, contract: 'complete' },
 };
 
 const BASE = { head: OLD, checks: { state: 'green', failing: [], pending: [] } } as const;
@@ -131,7 +131,7 @@ describe('the merge record and the gate', () => {
     const refused = (facts: Partial<PrFacts>, head = HEAD) => gateRefusals({ ...FACTS, ...facts }, head, BASE);
     expect(refused({ verdict: { ...FACTS.verdict, reviewed: OLD } })).toEqual([`its review verdict is for ${OLD}, not ${HEAD}`]);
     expect(refused({ verdict: { ...FACTS.verdict, state: 'unstamped' } })).toEqual(['its review verdict is unstamped']);
-    expect(refused({ verdict: { state: 'not_ready', reviewed: HEAD, url: null } })).toEqual(['its review verdict is not_ready']);
+    expect(refused({ verdict: { state: 'not_ready', reviewed: HEAD, url: null, contract: null } })).toEqual(['its review verdict is not_ready']);
     expect(refused({ checks: { state: 'pending', failing: [], pending: ['test (ubuntu)'] } })).toEqual([
       'CI at its head is pending (test (ubuntu))',
     ]);
@@ -164,12 +164,21 @@ describe('the merge record and the gate', () => {
     );
   });
 
-  test('a review comment carries the reviewed commit and the verdict in stamped lines; an older one has no verdict', () => {
-    expect(readReviewStamp(reviewCommentBody(HEAD, true, '# Report'))).toEqual({ reviewed: HEAD, ready: true, report: '# Report' });
-    expect(readReviewStamp(reviewCommentBody(HEAD, false, '# Report'))?.ready).toBe(false);
+  test('a review comment carries the reviewed commit, the verdict and the contract coverage in stamped lines; an older one has none', () => {
+    expect(readReviewStamp(reviewCommentBody(HEAD, true, 'complete', '# Report'))).toEqual({ reviewed: HEAD, ready: true, contract: 'complete', report: '# Report' });
+    expect(readReviewStamp(reviewCommentBody(HEAD, false, 'open', '# Report'))?.ready).toBe(false);
+    // Ready does not imply complete: a Ready review that left an operator check open reads back open.
+    expect(readReviewStamp(reviewCommentBody(HEAD, true, 'open', '# Report'))).toMatchObject({ ready: true, contract: 'open' });
+    expect(readReviewStamp(`${REVIEW_MARKER}\nReviewed commit: \`${HEAD}\`\nVerdict: ready\n\n# Report`)).toEqual({
+      reviewed: HEAD,
+      ready: true,
+      contract: null,
+      report: '# Report',
+    });
     expect(readReviewStamp(`${REVIEW_MARKER}\nReviewed commit: \`${HEAD}\`\n\n# Report`)).toEqual({
       reviewed: HEAD,
       ready: null,
+      contract: null,
       report: '# Report',
     });
     expect(readReviewStamp('Verdict: ready')).toBeNull();
@@ -389,7 +398,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 `;
 }
 
-const REVIEWED: GhCommentRow = { id: 1, author: 'Maintainer', body: reviewCommentBody(HEAD, true, '# Review report') };
+const REVIEWED: GhCommentRow = { id: 1, author: 'Maintainer', body: reviewCommentBody(HEAD, true, 'complete', '# Review report') };
 
 function run(
   at: Install,
@@ -1385,6 +1394,20 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
     expect(ok(on(at, 'facts', {}, { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
   }, 60_000);
 
+  test("a trusted Ready review stamped open reaches the sweep's facts as open coverage", () => {
+    const at = install();
+    seed(at, item());
+    const open = { ...REVIEWED, body: reviewCommentBody(HEAD, true, 'open', '# Review report') };
+    const output = ok(on(at, 'facts', { comments: [open] })) as { items: { facts: PrFacts }[] };
+    expect(output.items[0]?.facts.verdict).toMatchObject({ state: 'ready', contract: 'open' });
+    // A Ready review published before coverage was stamped has none, so no merge closes the issue on it.
+    const unstamped = { ...REVIEWED, body: `${REVIEW_MARKER}\nReviewed commit: \`${HEAD}\`\nVerdict: ready\n\n# Review report` };
+    const fresh = install();
+    seed(fresh, item());
+    const old = ok(on(fresh, 'facts', { comments: [unstamped] })) as { items: { facts: PrFacts }[] };
+    expect(old.items[0]?.facts.verdict).toMatchObject({ state: 'ready', contract: null });
+  }, 60_000);
+
   test('a review comment from anyone but a listed maintainer is no verdict', () => {
     const at = install();
     seed(at, item());
@@ -1418,7 +1441,7 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
   }, 60_000);
 
   test('the gate refuses a verdict given at another head, and merges nothing', () => {
-    const stale = on(install(), 'gate', { args, comments: [{ ...REVIEWED, body: reviewCommentBody(OLD, true, '# Review report') }] });
+    const stale = on(install(), 'gate', { args, comments: [{ ...REVIEWED, body: reviewCommentBody(OLD, true, 'complete', '# Review report') }] });
     expect(stale.code).toBe(1);
     expect(JSON.parse(stale.stdout).refusals).toEqual([`its review verdict is for ${OLD}, not ${HEAD}`]);
     expect(merges(stale)).toEqual([]);
