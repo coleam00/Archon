@@ -104,7 +104,11 @@ export function changedPaths(facts: PrFacts): string[] {
     );
     const fetched = gitOrThrow('rev-parse', '--verify', head);
     if (fetched !== facts.head_revision) throw new Error(`its head moved to ${fetched} after the facts read ${facts.head_revision}`);
-    return gitOrThrow('diff', '--name-only', '--no-renames', `${base}...${head}`).split('\n').filter(path => path !== '');
+    // NUL-delimited and untrimmed: git quotes a name with non-ASCII or control
+    // characters in its line output, and that quoted form would match no glob.
+    const diff = Bun.spawnSync(['git', 'diff', '--name-only', '-z', '--no-renames', `${base}...${head}`], { stdout: 'pipe', stderr: 'pipe' });
+    if (diff.exitCode !== 0) throw new Error(`git diff ${base}...${head} failed: ${diff.stderr.toString().trim()}`);
+    return diff.stdout.toString().split('\0').filter(path => path !== '');
   } finally {
     git('update-ref', '-d', head);
     git('update-ref', '-d', base);
