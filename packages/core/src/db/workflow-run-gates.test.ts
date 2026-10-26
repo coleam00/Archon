@@ -13,6 +13,8 @@ mock.module('./connection', () => ({
     query: mockQuery,
   },
   getDatabase: () => ({
+    // The pre-transaction artifact read finds no run, so no artifacts are walked.
+    query: () => Promise.resolve(createQueryResult([])),
     withTransaction: <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => fn(mockQuery),
   }),
   getDialect: () => mockPostgresDialect,
