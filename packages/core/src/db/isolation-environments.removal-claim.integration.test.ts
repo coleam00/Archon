@@ -20,7 +20,9 @@ import {
   type IsolationEnvironmentRow,
 } from '@archon/isolation';
 
+const paths = { ...(await import('@archon/paths')) };
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: () => ({
     info() {},
     warn() {},
@@ -36,7 +38,9 @@ const dbPath = join(root, 'archon.db');
 const { SqliteAdapter, sqliteDialect } = await import('./adapters/sqlite');
 const db = new SqliteAdapter(dbPath);
 
+const connection = { ...(await import('./connection')) };
 mock.module('./connection', () => ({
+  ...connection,
   pool: db,
   getDatabase: () => db,
   getDialect: () => sqliteDialect,
