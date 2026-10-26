@@ -5,7 +5,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { SqliteAdapter } from './sqlite';
+import { SqliteAdapter, resourceSlotHoldersTable } from './sqlite';
 import { isSqliteSchemaCurrent, sqliteStartupDigest } from './sqlite-schema-state';
 import { prepareGet, prepareAll } from './sqlite-statements';
 
@@ -335,4 +335,11 @@ test('the startup digest ignores comments and layout but not DDL', () => {
   });
   expect(commented).toBe(original);
   expect(changed).not.toBe(original);
+});
+
+test("the adapter's digest covers the schema DDL and the slot holders table", () => {
+  const createSchema = SqliteAdapter.prototype['createSchema'];
+  for (const partial of [[], [resourceSlotHoldersTable], [createSchema]]) {
+    expect(SqliteAdapter.schemaDigest).not.toBe(sqliteStartupDigest(partial));
+  }
 });

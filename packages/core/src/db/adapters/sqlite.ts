@@ -29,7 +29,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * one-time rebuild that widens a dev database's narrow holder-kind CHECK.
  * `owner_*` name the process that owns an 'attempt' holder and are NULL for 'run'.
  */
-function resourceSlotHoldersTable(name: string): string {
+export function resourceSlotHoldersTable(name: string): string {
   return `CREATE TABLE IF NOT EXISTS ${name} (
         resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
         holder_kind TEXT NOT NULL CHECK (holder_kind IN ('run', 'attempt')),
