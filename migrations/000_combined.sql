@@ -555,14 +555,17 @@ CREATE CONSTRAINT TRIGGER archon_workflow_event_order
 -- (id = 1); the row's VALUES are written by the adapters from APP_VERSION
 -- (packages/core/src/db/schema-version.ts) so the version string has exactly one
 -- source of truth. created_app_version is NULL for databases that predate this
--- table and is never back-filled with a guess.
+-- table and is never back-filled with a guess. schema_fingerprint is separate,
+-- adapter-owned completion metadata, not diagnostic vintage.
 CREATE TABLE IF NOT EXISTS remote_agent_schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   created_app_version VARCHAR(64),
   app_version VARCHAR(64) NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+  applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  schema_fingerprint TEXT
 );
+ALTER TABLE remote_agent_schema_version ADD COLUMN IF NOT EXISTS schema_fingerprint TEXT;
 
 CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
   project_key TEXT NOT NULL,

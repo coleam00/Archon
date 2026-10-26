@@ -6,6 +6,7 @@
  */
 import type { Database } from 'bun:sqlite';
 import { createLogger } from '@archon/paths';
+import { isSqliteBusy } from './sqlite-busy';
 import { prepareAll, prepareGet } from './sqlite-statements';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -52,6 +53,7 @@ export function migrateColumns(
     try {
       migration.apply(db);
     } catch (e: unknown) {
+      if (isSqliteBusy(e)) throw e;
       getLog().warn({ err: e as Error }, migration.failureEvent);
       allApplied = false;
     }
@@ -64,6 +66,15 @@ function sqliteMigrations(
   resourceSlotHoldersTable: (name: string) => string
 ): readonly Migration[] {
   return [
+    {
+      kind: 'tolerated',
+      failureEvent: 'db.sqlite_migration_schema_fingerprint_failed',
+      apply: db => {
+        if (!columnNames(db, 'remote_agent_schema_version').has('schema_fingerprint')) {
+          db.run('ALTER TABLE remote_agent_schema_version ADD COLUMN schema_fingerprint TEXT');
+        }
+      },
+    },
     {
       kind: 'tolerated',
       failureEvent: 'db.sqlite_migration_users_columns_failed',
@@ -337,36 +348,48 @@ function addWorkflowEventOrder(db: Database): void {
 // Transactional so a mid-sequence failure can't leave partial renames
 // (matches the Postgres path, which runs inside the schema-apply txn);
 // a failed run is also survivable — reads normalize legacy ids.
+const legacyProviderVendors = {
+  claude: 'anthropic',
+  codex: 'openai',
+  copilot: 'github-copilot',
+} as const;
+
+// These repairs can become pending without DDL. New data migrations must extend
+// this probe as well: schema-cookie equality alone cannot prove convergence.
+export function hasPendingSqliteDataRepairs(db: Database): boolean {
+  const legacyProviders = Object.keys(legacyProviderVendors);
+  if (
+    prepareGet(
+      db,
+      `SELECT 1 FROM remote_agent_user_provider_keys WHERE provider IN (${legacyProviders.map(() => '?').join(',')}) LIMIT 1`,
+      legacyProviders
+    )
+  )
+    return true;
+  return !prepareGet(
+    db,
+    `SELECT 1 FROM remote_agent_workflow_event_sequence
+    WHERE id = 1 AND value >= (SELECT COALESCE(MAX(event_order), 0) FROM remote_agent_workflow_events)`
+  );
+}
+
 function renameProviderKeysToVendorIds(db: Database): void {
-  db.run('BEGIN');
-  try {
-    db.run(
-      `DELETE FROM remote_agent_user_provider_keys
-           WHERE provider IN ('claude', 'codex', 'copilot')
-             AND EXISTS (
-               SELECT 1 FROM remote_agent_user_provider_keys v
-               WHERE v.user_id = remote_agent_user_provider_keys.user_id
-                 AND v.provider = CASE remote_agent_user_provider_keys.provider
-                   WHEN 'claude' THEN 'anthropic'
-                   WHEN 'codex' THEN 'openai'
-                   WHEN 'copilot' THEN 'github-copilot'
-                 END
-             )`
-    );
-    db.run(
-      "UPDATE remote_agent_user_provider_keys SET provider = 'anthropic' WHERE provider = 'claude'"
-    );
-    db.run(
-      "UPDATE remote_agent_user_provider_keys SET provider = 'openai' WHERE provider = 'codex'"
-    );
-    db.run(
-      "UPDATE remote_agent_user_provider_keys SET provider = 'github-copilot' WHERE provider = 'copilot'"
-    );
-    db.run('COMMIT');
-  } catch (inner: unknown) {
-    db.run('ROLLBACK');
-    throw inner;
-  }
+  db.transaction(() => {
+    for (const [legacy, vendor] of Object.entries(legacyProviderVendors)) {
+      db.run(
+        `DELETE FROM remote_agent_user_provider_keys
+        WHERE provider = ? AND EXISTS (
+          SELECT 1 FROM remote_agent_user_provider_keys v
+          WHERE v.user_id = remote_agent_user_provider_keys.user_id AND v.provider = ?
+        )`,
+        [legacy, vendor]
+      );
+      db.run('UPDATE remote_agent_user_provider_keys SET provider = ? WHERE provider = ?', [
+        vendor,
+        legacy,
+      ]);
+    }
+  })();
 }
 
 // Resource slot holders gained the 'attempt' kind and its owner columns (#2816).
@@ -383,8 +406,7 @@ function widenResourceSlotHolders(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'remote_agent_resource_slot_holders'"
     )?.sql ?? '';
   if (holdersSql().includes("'attempt'")) return;
-  db.run('BEGIN IMMEDIATE');
-  try {
+  db.transaction(() => {
     if (!holdersSql().includes("'attempt'")) {
       db.run(resourceSlotHoldersTable('remote_agent_resource_slot_holders_next'));
       db.run(
@@ -398,11 +420,7 @@ function widenResourceSlotHolders(
         'ALTER TABLE remote_agent_resource_slot_holders_next RENAME TO remote_agent_resource_slot_holders'
       );
     }
-    db.run('COMMIT');
-  } catch (inner: unknown) {
-    db.run('ROLLBACK');
-    throw inner;
-  }
+  }).immediate();
 }
 
 // Names of event-derived inputs live beside the binding intent, not in it: older

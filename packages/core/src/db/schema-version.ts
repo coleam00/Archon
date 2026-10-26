@@ -1,9 +1,9 @@
 /**
  * Schema vintage (#2316).
  *
- * Archon has no migration ledger: both schemas are re-applied in full, idempotently,
- * on every connection by every process that opens the database. That converges without
- * operator action, but it leaves no record of *which* Archon build created a database
+ * Archon has no migration ledger. Adapters converge schemas idempotently, with
+ * SQLite skipping convergence when its separate completion proof still matches.
+ * Schema shape alone leaves no record of *which* Archon build created a database
  * or last applied schema to it — so a database whose tables predate a constraint change
  * is structurally different from a fresh one, and nothing can say so.
  *

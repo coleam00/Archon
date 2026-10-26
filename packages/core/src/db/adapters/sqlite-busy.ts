@@ -51,7 +51,8 @@ export async function retryWhileBusy<T>(
 }
 
 /**
- * `retryWhileBusy` for the synchronous open path. Switching a fresh file to WAL takes
+ * `retryWhileBusy` for synchronous WAL initialization and schema convergence.
+ * Switching a fresh file to WAL takes
  * a lock that SQLite does not wait for through busy_timeout, so a process opening the
  * same new database as another one gets SQLITE_BUSY there instead of waiting.
  */
