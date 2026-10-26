@@ -8,6 +8,11 @@ import { dirname } from 'path';
 import type { IDatabase, QueryResult, SqlDialect } from './types';
 import { createLogger } from '@archon/paths';
 import { APP_VERSION } from '../schema-version';
+import {
+  isSqliteSchemaCurrent,
+  recordSqliteSchemaFingerprint,
+  sqliteStartupDigest,
+} from './sqlite-schema-state';
 import { migrateColumns } from './sqlite-migrations';
 import { prepareAll, prepareGet } from './sqlite-statements';
 import { isSqliteBusy, retryWhileBusy, retryWhileBusySync } from './sqlite-busy';
@@ -24,7 +29,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * one-time rebuild that widens a dev database's narrow holder-kind CHECK.
  * `owner_*` name the process that owns an 'attempt' holder and are NULL for 'run'.
  */
-function resourceSlotHoldersTable(name: string): string {
+export function resourceSlotHoldersTable(name: string): string {
   return `CREATE TABLE IF NOT EXISTS ${name} (
         resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
         holder_kind TEXT NOT NULL CHECK (holder_kind IN ('run', 'attempt')),
@@ -52,6 +57,12 @@ export class SqliteAdapter implements IDatabase {
    */
   private txTail: Promise<unknown> = Promise.resolve();
 
+  /** Identifies what this build's convergence applies; see sqliteStartupDigest(). */
+  static readonly schemaDigest = sqliteStartupDigest([
+    resourceSlotHoldersTable,
+    SqliteAdapter.prototype.createSchema,
+  ]);
+
   constructor(dbPath: string) {
     // Ensure directory exists
     const dir = dirname(dbPath);
@@ -72,7 +83,12 @@ export class SqliteAdapter implements IDatabase {
     this.db.run('PRAGMA foreign_keys = ON');
 
     // Initialize schema if needed
-    this.initSchema();
+    try {
+      this.initSchema();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   /**
@@ -257,37 +273,21 @@ export class SqliteAdapter implements IDatabase {
     return { sql: convertedSql, params: reordered };
   }
 
-  /**
-   * Initialize database schema.
-   * Always runs createSchema() since all statements use IF NOT EXISTS,
-   * ensuring new tables from migrations are created in existing databases.
-   */
   private initSchema(): void {
-    // Probe BEFORE createSchema(): once CREATE TABLE IF NOT EXISTS has run there is
-    // no way left to tell a fresh database from one that predates version tracking.
-    const preExisting = this.hasAnyArchonTable();
-    if (preExisting) {
-      // Every statement is an IF NOT EXISTS no-op on an existing database, so this takes
-      // no write lock beside a running server.
-      this.createSchema();
-    } else {
-      // A fresh database gets its schema in one commit instead of one per statement:
-      // each commit is an fsync, and on a slow disk dozens of them took seconds. IMMEDIATE
-      // makes a second process creating the same fresh file wait (busy_timeout) and then
-      // find every table present, instead of failing to upgrade a stale read.
-      this.db.run('BEGIN IMMEDIATE');
-      try {
-        this.createSchema();
-        this.db.run('COMMIT');
-      } catch (error) {
-        // SQLite may already have rolled back (SQLITE_FULL, SQLITE_IOERR); a ROLLBACK
-        // then would throw and hide the error that explains the failure.
-        if (this.db.inTransaction) this.db.run('ROLLBACK');
-        throw error;
-      }
-    }
-    const allApplied = migrateColumns(this.db, resourceSlotHoldersTable);
-    this.recordSchemaVersion(preExisting, allApplied);
+    retryWhileBusySync(() => {
+      const digest = SqliteAdapter.schemaDigest;
+      if (this.db.transaction(() => isSqliteSchemaCurrent(this.db, digest)).deferred()) return;
+      this.db
+        .transaction(() => {
+          if (isSqliteSchemaCurrent(this.db, digest)) return;
+          const preExisting = this.hasAnyArchonTable();
+          this.createSchema();
+          const allApplied = migrateColumns(this.db, resourceSlotHoldersTable);
+          const recorded = this.recordSchemaVersion(preExisting, allApplied);
+          recordSqliteSchemaFingerprint(this.db, digest, allApplied && recorded);
+        })
+        .immediate();
+    });
   }
 
   /** True when core Archon tables already exist — i.e. this is not a fresh database. */
@@ -314,13 +314,13 @@ export class SqliteAdapter implements IDatabase {
    * than the "not recorded" / stale-version state a reader can act on. The next
    * successful open records it.
    */
-  private recordSchemaVersion(preExisting: boolean, allApplied: boolean): void {
+  private recordSchemaVersion(preExisting: boolean, allApplied: boolean): boolean {
     if (!allApplied) {
       getLog().warn(
         { appVersion: APP_VERSION },
         'db.sqlite_schema_version_skipped_incomplete_migration'
       );
-      return;
+      return false;
     }
     try {
       const existing = prepareGet<{ app_version: string }>(
@@ -341,10 +341,13 @@ export class SqliteAdapter implements IDatabase {
           [APP_VERSION]
         );
       }
+      return true;
     } catch (e: unknown) {
+      if (isSqliteBusy(e)) throw e;
       // Deliberate, logged fallback: the vintage row is diagnostic metadata and must
       // never be able to stop the database from opening (e.g. a read-only DB file).
       getLog().warn({ err: e as Error }, 'db.sqlite_schema_version_record_failed');
+      return false;
     }
   }
 
@@ -360,7 +363,8 @@ export class SqliteAdapter implements IDatabase {
   private createSchema(): void {
     this.db.run(`
       -- Schema vintage (#2316): which Archon build created this database, and which
-      -- last applied schema to it. Diagnostic only — nothing gates on these values.
+      -- last applied schema to it. Vintage fields are diagnostic; schema_fingerprint
+      -- separately records successful convergence for the startup skip check.
       -- Single row (id = 1); written by recordSchemaVersion() from APP_VERSION so the
       -- version string has exactly one source of truth.
       CREATE TABLE IF NOT EXISTS remote_agent_schema_version (
@@ -368,7 +372,8 @@ export class SqliteAdapter implements IDatabase {
         created_app_version TEXT,
         app_version TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+        applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+        schema_fingerprint TEXT
       );
 
       -- Users table (Archon identity, platform-agnostic)
