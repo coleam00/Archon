@@ -57,11 +57,16 @@ export async function observeArtifactManifest(
     return manifest;
   }
   const metadata: { path: string; value: ReturnType<typeof nodeArtifactSchema.parse> }[] = [];
+  let admitted = 0;
   let limitReached = false;
+  // Counts every entry, directories included, so a tree of empty directories is bounded too.
   // Records the cap at the first entry it refuses; every level of the recursion then stops.
   function admit(path: string): boolean {
     if (limitReached) return false;
-    if (manifest.files.length + manifest.limitations.length < entryLimit) return true;
+    if (admitted < entryLimit) {
+      admitted += 1;
+      return true;
+    }
     manifest.limitations.push({ path, kind: 'unsupported_entry', code: 'entry_limit' });
     limitReached = true;
     return false;

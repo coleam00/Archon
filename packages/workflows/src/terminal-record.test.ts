@@ -324,10 +324,20 @@ describe('terminal artifact observation', () => {
     await mkdir(join(root, 'b'));
     for (const name of ['1', '2', '3']) await writeFile(join(root, 'a', name), name);
     await writeFile(join(root, 'b', 'later'), 'later');
-    const manifest = await observeArtifactManifest(root, undefined, undefined, 2);
+    const manifest = await observeArtifactManifest(root, undefined, undefined, 3);
     expect(manifest.files.map(file => file.path)).toEqual(['a/1', 'a/2']);
     expect(manifest.limitations).toEqual([
       { path: 'a/3', kind: 'unsupported_entry', code: 'entry_limit' },
+    ]);
+  });
+
+  it('counts directories toward the entry limit', async () => {
+    const root = await scratch();
+    for (const name of ['a', 'b', 'c', 'd']) await mkdir(join(root, name));
+    const manifest = await observeArtifactManifest(root, undefined, undefined, 2);
+    expect(manifest.files).toEqual([]);
+    expect(manifest.limitations).toEqual([
+      { path: 'c', kind: 'unsupported_entry', code: 'entry_limit' },
     ]);
   });
 
