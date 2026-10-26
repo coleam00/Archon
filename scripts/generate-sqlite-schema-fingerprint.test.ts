@@ -19,7 +19,7 @@ test('fingerprint generation and freshness ignore checkout line endings but dete
   );
   const inputs = ['sqlite.ts', 'sqlite-migrations.ts', 'sqlite-schema-state.ts'];
   for (const name of inputs) writeFileSync(join(directory, name), `// ${name}\nexport {};\n`);
-  const run = (...args: string[]): ReturnType<typeof Bun.spawnSync> =>
+  const run = (...args: string[]) =>
     Bun.spawnSync([process.execPath, generator, ...args], { cwd: root });
   expect(run().exitCode).toBe(0);
   expect(run('--check').exitCode).toBe(0);
