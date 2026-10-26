@@ -171,14 +171,19 @@ function prName(doc: WorkItem): string {
 /**
  * One summary line for each item this run's pickup left that a person may look for:
  * one it would take that a live run holds (`not mine`), and one stuck, from the same
- * eligibility and claim rule the claim used.
+ * eligibility and claim rule the claim used. The summary is supplementary, so a failed
+ * listing is reported as a line rather than failing the run after its claims.
  */
 function unclaimedLines(runId: string, pickup: Pickup): string[] {
-  const { stuck, held } = unclaimedItems(runId, pickup);
-  return [
-    ...held.map(entry => `${prName(entry.doc)}: not mine: run ${entry.run_id} holds it (${entry.status})`),
-    ...stuck.map(entry => `${entry.name}: stuck: ${entry.reason}`),
-  ];
+  try {
+    const { stuck, held } = unclaimedItems(runId, pickup);
+    return [
+      ...held.map(entry => `${prName(entry.doc)}: not mine: run ${entry.run_id} holds it (${entry.status})`),
+      ...stuck.map(entry => `${entry.name}: stuck: ${entry.reason}`),
+    ];
+  } catch (error) {
+    return [`The items other runs hold could not be listed: ${error instanceof Error ? error.message : String(error)}`];
+  }
 }
 
 function emitFacts(
