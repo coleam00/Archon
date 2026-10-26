@@ -76,7 +76,9 @@ pack's own review verdict is unchanged: threads gate delivery, not the review.
 A pull request counts as ready only at the commit its review comment stamps. The
 comment's first lines are stamped by `publish-review` from the round's certified
 output ([`.shared/review-comment.ts`](.shared/review-comment.ts)): the reviewed commit
-and the verdict, which the merge queue's gate reads. CI never
+and the verdict, which the merge queue's gate reads, and the contract coverage
+(`complete` only when the review left nothing open), which the sweep reads before it
+lets a merge close the issue. CI never
 marks ready a head carrying commits the round's review did not cover. Commits pushed
 after a run ends, by a fixer or by hand, are reviewed by a continuation delivery of
 that pull request, whose first round reviews the whole change before CI marks it
@@ -116,8 +118,8 @@ gate and record read through `pr.view`, `pr.merge-state`, `checks.state`,
 `checks.commit`, `pr.threads` and `workitem.comments`, and the gate merges through
 `pr.merge` pinned to the head; `facts` refuses a plugin missing any of them before it
 claims an item. Own-PR enrollment does not run on `forge`, because the contract has
-no read for a maintainer's open pull requests, and the sweep agent's failed-job
-reruns, log reads and closing-reference body edit still use `gh`. The gate itself
+no read for a maintainer's open pull requests, and the sweep agent's issue read,
+failed-job reruns, log reads and closing-reference body edit still use `gh`. The gate itself
 doesn't refuse over threads; the sweep holds a merge only for a thread that raises a defect in code the
 pull request changes or makes reachable. Delivery reads, answers and resolves review
 threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,

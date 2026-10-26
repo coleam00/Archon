@@ -81,6 +81,8 @@ try {
     discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
     contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
   };
+  // Complete only on an empty list: a review that left anything open never lets a merge close the issue.
+  const coverage = Array.isArray(verdict.contract_left) && verdict.contract_left.length === 0 ? 'complete' : 'open';
   const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
   const declared = declaredPr(text(process.env.INPUTS_PR));
   const pr = recorded ?? declared;
@@ -114,7 +116,7 @@ try {
     const comment = upsertComment(
       { kind: 'pr', ref: pr },
       REVIEW_MARKER,
-      reviewCommentBody(head, verdict.ready, report),
+      reviewCommentBody(head, verdict.ready, coverage, report),
       source
     );
     note(`publish-review: canonical review comment at ${comment.url}`);
