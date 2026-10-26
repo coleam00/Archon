@@ -9,6 +9,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { RepoPath, BranchName } from '@archon/git';
 import type { ExecutionContext } from '@archon/provider-contract';
+import type { ProcessOwner } from '@archon/paths/process-owner';
 import type {
   OverlayMode,
   WriteBackFinalizeResult,
@@ -350,6 +351,10 @@ export type IsolationBlockReason = 'creation_failed';
 // An upsert can preserve the checkout and row id while replacing the registration.
 export const WORKTREE_REGISTRATION_ID = 'worktree_registration_id';
 
+// The process removing this worktree. While present, the registration is committed to
+// removal and replacement, adoption and other retirement refuse.
+export const WORKTREE_REMOVAL_OWNER = 'worktree_removal_owner';
+
 export interface IsolationEnvironmentRow {
   id: string;
   codebase_id: string;
@@ -377,6 +382,18 @@ export class WorktreeRegistrationChangedError extends Error {
       `Worktree ${environmentId} changed during cleanup; its current registration was left as is. Inspect it and retry.`
     );
     this.name = 'WorktreeRegistrationChangedError';
+  }
+}
+
+/** Another live process holds the registration's removal claim. */
+export class WorktreeRemovalInProgressError extends WorktreeRegistrationChangedError {
+  constructor(
+    environmentId: string,
+    readonly owner: ProcessOwner
+  ) {
+    super(environmentId);
+    this.message = `Worktree ${environmentId} is being removed by process ${String(owner.pid)} on ${owner.host}; its registration was left as is. Retry after that removal finishes. If that process no longer exists on another host, remove the ${WORKTREE_REMOVAL_OWNER} key from the environment's metadata.`;
+    this.name = 'WorktreeRemovalInProgressError';
   }
 }
 

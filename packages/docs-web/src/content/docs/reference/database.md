@@ -129,15 +129,19 @@ clears. While it waits, Archon logs `db.sqlite_busy_waiting` at warn level every
 seconds. A repeating warning points at a process that is holding the lock. Other SQLite
 errors still fail right away.
 
-Worktree cleanup retries its initial registration claim while SQLite is busy. Once
-that claim succeeds, it does not replay the transaction: filesystem deletion cannot
-safely be repeated. A later failure rolls back registration retirement and is reported
-to the caller.
+Worktree cleanup first claims the registration with a short write that records the
+removing process in its metadata (`worktree_removal_owner`). Git and filesystem
+removal then run with no database transaction open. A second short write retires the
+registration after success, or releases the claim after a failure, leaving the
+registration active and the error reported. While a claim is held, a same-workflow
+registration, adoption, and a run start in that checkout are refused. A claim whose
+process has exited on this host is released by the next write that meets it; one from
+another host stays until an operator removes the key from the environment's metadata.
 
-Cleanup holds registration exclusion through local checkout and branch removal.
+Cleanup's claim holds registration exclusion through local checkout and branch removal.
 Completion and merged cleanup retain remote branches with a warning, including
 with force, because registration ownership cannot be proved after the claim
-commits. No remote deletion runs under the SQLite writer. Enable GitHub's
+commits. Enable GitHub's
 **Automatically delete head branches** setting for merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)

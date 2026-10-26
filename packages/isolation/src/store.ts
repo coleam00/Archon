@@ -44,10 +44,15 @@ export interface IIsolationStore {
   /**
    * Retire only the observed worktree registration, atomically. Succeeds if that
    * registration is already destroyed; throws WorktreeRegistrationChangedError
-   * if it was replaced. An upsert keeps the row id, so a write by id is unsafe.
+   * if it was replaced, or WorktreeRemovalInProgressError while another live process is
+   * removing it. An upsert keeps the row id, so a write by id is unsafe.
    */
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;
-  /** Validate and exclude replacement until removal ends; retire using the supplied callback. */
+  /**
+   * Claim the observed registration, run `remove` with no store transaction open, then
+   * retire it only if `remove` resolved after calling `markDestroyed`; otherwise release
+   * the claim. Replacement, adoption and other retirement refuse while the claim is held.
+   */
   withWorktreeRegistration<T>(
     observed: IsolationEnvironmentRow,
     remove: (markDestroyed: () => Promise<void>) => Promise<T>
