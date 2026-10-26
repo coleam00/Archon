@@ -234,8 +234,8 @@ function ghResponse(stdout: string): GhResponse | undefined {
  * ms (0 when it named no time), or undefined when the failure is permanent.
  *
  * A 5xx is transient. A 429, or a 403 carrying `retry-after`, is a rate limit that
- * waits the seconds GitHub names, or a minute, as GitHub documents for a secondary
- * limit without one. A failure with no HTTP response at all is a connection that
+ * waits a minute when it names no time, as GitHub documents for a secondary limit.
+ * A valid `retry-after` (delta seconds) is the least wait on any retryable status. A failure with no HTTP response at all is a connection that
  * failed or timed out, except gh's exit 4, which is missing authentication.
  * Everything else, a 404 or a 422, is permanent.
  */
@@ -246,11 +246,10 @@ export function ghRetryWait(
   if (response === undefined) return exitCode === 4 ? undefined : 0;
   const { status, headers } = response;
   const retryAfter = headers.get('retry-after');
-  if (status === 429 || (status === 403 && retryAfter !== undefined)) {
-    const seconds = Number(retryAfter);
-    return retryAfter !== undefined && Number.isFinite(seconds) ? seconds * 1000 : 60_000;
-  }
-  return status >= 500 ? 0 : undefined;
+  const seconds = retryAfter === undefined || retryAfter.trim() === '' ? Number.NaN : Number(retryAfter);
+  const named = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
+  if (status === 429 || (status === 403 && retryAfter !== undefined)) return named ?? 60_000;
+  return status >= 500 ? (named ?? 0) : undefined;
 }
 
 /**

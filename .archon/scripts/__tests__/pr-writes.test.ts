@@ -1011,6 +1011,23 @@ describe('publish-review repeats a comment write the forge failed transiently', 
     expect(result.comments).toHaveLength(1);
   });
 
+  it('repeats a comment listing that got no response and publishes one comment', () => {
+    const result = publishReview({ inputs: report, gh: { commentListDrops: 1 } });
+    expect(result.code).toBe(0);
+    expect(result.gh.filter(call => call.includes('/comments?per_page=100')).length).toBe(3);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('repeats a 403 carrying a Retry-After header once', () => {
+    const result = publishReview({
+      inputs: report,
+      gh: { commentWriteFaults: [{ status: 403, headers: { 'Retry-After': '0' } }] },
+    });
+    expect(result.code).toBe(0);
+    expect(posts(result)).toBe(2);
+    expect(result.comments).toHaveLength(1);
+  });
+
   it('fails at once with the forge evidence on a permanent error', () => {
     const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 404 }] } });
     expect(result.code).not.toBe(0);
@@ -1036,6 +1053,12 @@ describe('a gh api failure is classified from its HTTP status and headers', () =
     expect(at(429, { 'retry-after': '30' })).toBe(30_000);
     expect(at(403, { 'retry-after': '5' })).toBe(5_000);
     expect(at(429)).toBe(60_000);
+  });
+
+  it('waits at least a valid Retry-After on a 5xx', () => {
+    expect(at(503, { 'retry-after': '120' })).toBe(120_000);
+    expect(at(503, { 'retry-after': 'soon' })).toBe(0);
+    expect(at(404, { 'retry-after': '5' })).toBeUndefined();
   });
 
   it('fails a permission refusal or any other 4xx at once', () => {

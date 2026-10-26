@@ -430,9 +430,9 @@ export interface CommentSubject {
  * comment is a conflict: guessing which one is canonical would silently abandon
  * the other.
  *
- * A transient `gh api` failure repeats the whole upsert. It finds the marked
- * comment first, so an attempt that landed before its failure is left as it is or
- * edited, never written a second time.
+ * A transient `gh api` failure repeats the whole upsert from the marker read. A write
+ * that landed but is missing from that listing is posted again (an accepted risk),
+ * and the second marked comment makes the next upsert refuse loudly.
  */
 export function upsertComment(
   subject: CommentSubject,
