@@ -309,7 +309,7 @@ export async function executeWorkflow(
     await layerRunCredentials(
       deps,
       dispatch,
-      { cwd, codebaseId: opts.codebaseId, artifactsDir: paths.artifactsDir },
+      { runId: workflowRun.id, cwd, codebaseId: opts.codebaseId, artifactsDir: paths.artifactsDir },
       withArtifactWrites
     );
     await recordRunGraph(deps, workflow, workflowRun);

@@ -9,6 +9,7 @@ import {
   makeStore,
   makeWorkflow,
   mockExecuteDagWorkflow,
+  recordedEvents,
   resetExecutorMocks,
   resumeOf,
   startWorkflow,
@@ -393,6 +394,33 @@ describe('credential preflight lifecycle', () => {
     expect(store.failWorkflowRun).toHaveBeenCalledWith('run-123', result.error, expect.anything());
   });
 
+  it('an inconclusive native check starts the run and records a warning event with its evidence', async () => {
+    const store = makeStore();
+    const getAgentProvider = mock(() => ({
+      run: mock(async () => {}),
+      checkCredential: mock(async () => ({
+        state: 'check_failed',
+        source: 'native',
+        evidence: 'workspace routing discovery failed',
+      })),
+    })) as unknown as WorkflowDeps['getAgentProvider'];
+    const result = await startWorkflow({ deps: { ...makeDeps(store), getAgentProvider } });
+    expect(result.success).toBe(true);
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+    expect(recordedEvents(store, 'credential_check_inconclusive')).toEqual([
+      {
+        workflow_run_id: 'run-123',
+        event_type: 'credential_check_inconclusive',
+        data: {
+          provider: 'claude',
+          vendor: 'anthropic',
+          source: 'native',
+          evidence: 'workspace routing discovery failed',
+        },
+      },
+    ]);
+  });
+
   it('a delivery refusal after a successful check blocks rather than using ambient credentials', async () => {
     const getUserProviderEnv = mock<NonNullable<WorkflowDeps['getUserProviderEnv']>>(async () => {
       throw new StoredCredentialDeliveryError('anthropic', {
@@ -410,6 +438,34 @@ describe('credential preflight lifecycle', () => {
       "Credential preflight failed for provider 'claude' (vendor 'anthropic'): could not verify: refresh unavailable"
     );
     expect(getUserProviderEnv.mock.calls[0]?.slice(2)).toEqual([['anthropic'], ['anthropic']]);
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('a stored check that stays inconclusive at delivery refuses without a run-started warning', async () => {
+    const store = makeStore();
+    const inconclusive = {
+      state: 'check_failed',
+      source: 'archon',
+      evidence: 'refresh unavailable',
+    } as const;
+    const getUserProviderEnv = mock<NonNullable<WorkflowDeps['getUserProviderEnv']>>(async () => {
+      throw new StoredCredentialDeliveryError('anthropic', inconclusive);
+    });
+    const result = await startWorkflow({
+      deps: {
+        ...withProviderEnv(getUserProviderEnv, makeDeps(store)),
+        getUserProviderCredential: mock(
+          async (): Promise<StoredProviderCredential> => ({
+            kind: 'oauth',
+            getStatus: async () => inconclusive,
+          })
+        ),
+      },
+      origin: { conversationId: 'db', userId: 'origin' },
+    });
+    if (result.success) throw new Error('Expected credential refusal');
+    expect(result.error).toEndWith('could not verify: refresh unavailable');
+    expect(recordedEvents(store, 'credential_check_inconclusive')).toEqual([]);
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 });
