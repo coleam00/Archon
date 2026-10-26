@@ -5,8 +5,10 @@
  * Every write here is performed and then read back before it is reported as
  * applied. On the forge path the plugin owns that verification and reports which
  * of the four outcomes happened; on `gh` this module performs the same read-back
- * and raises the failure itself. Neither path falls back to the other, and an
- * operation whose outcome could not be established is never retried here.
+ * and raises the failure itself. Neither path falls back to the other. Only the
+ * comment upsert, which reads first whether an earlier attempt landed, is repeated,
+ * and only after a `gh api` failure GitHub typed as transient (./forge.ts
+ * `retryTransient`).
  *
  * Authored content — a pull-request body, a comment — travels in a request file
  * on both paths, so it never reaches any process's argv.
@@ -16,10 +18,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  ghApi,
   invokeForge,
   parsePrRecord,
   qualifiedRepo,
   record,
+  retryTransient,
   sameRepo,
   type ForgeSource,
   type PrRecord,
@@ -385,13 +389,13 @@ export function ghIssueComments(ref: QualifiedPr): GhComment[] {
   // Paged explicitly rather than through `gh api --paginate`, so what this reads
   // does not depend on how gh chooses to join pages of a JSON array.
   for (let page = 1; ; page++) {
-    const result = gh(
-      'api',
-      '--hostname',
-      ref.repo.host,
-      `repos/${ref.repo.path}/issues/${String(ref.number)}/comments?per_page=100&page=${String(page)}`
+    const rows: unknown = JSON.parse(
+      ghApi('gh api issue comments', [
+        '--hostname',
+        ref.repo.host,
+        `repos/${ref.repo.path}/issues/${String(ref.number)}/comments?per_page=100&page=${String(page)}`,
+      ])
     );
-    const rows: unknown = JSON.parse(required(result, 'gh api issue comments'));
     if (!Array.isArray(rows)) throw new Error('gh api returned an unexpected comment payload');
     for (const row of rows) {
       const comment = record(row);
@@ -425,6 +429,12 @@ export interface CommentSubject {
  * not there yet and replacing it in place when it is. More than one marked
  * comment is a conflict: guessing which one is canonical would silently abandon
  * the other.
+ *
+ * On `gh`, a transient failure of the marker read or of the write repeats both from
+ * the marker read, and the read-back is repeated in place. A write that landed but
+ * is missing from that listing is posted again (an accepted risk), and the second
+ * marked comment makes the next upsert refuse loudly. A write that succeeded is
+ * never repeated: a read-back that keeps failing fails the upsert.
  */
 export function upsertComment(
   subject: CommentSubject,
@@ -447,6 +457,31 @@ export function upsertComment(
   if ((body.split(/\r?\n/, 1)[0] ?? '') !== marker) {
     throw new Error('the comment body must begin with the exact canonical marker');
   }
+  const written = retryTransient(() => writeMarkedComment(ref, marker, body));
+  if ('url' in written) return written;
+  let observed: GhComment | undefined;
+  try {
+    observed = retryTransient(() => ghIssueComments(ref)).find(comment => comment.id === written.id);
+  } catch (error) {
+    throw new Error(
+      `comment ${written.id} was written, but reading it back failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (observed?.body !== body) {
+    throw new Error(`comment ${written.id} does not read back as written; it may need reconciling`);
+  }
+  return { url: observed.url };
+}
+
+/**
+ * One marker read and, when the marked comment differs, one write. Returns the
+ * unchanged comment's url, or the written comment's id for the caller to read back.
+ */
+function writeMarkedComment(
+  ref: QualifiedPr,
+  marker: string,
+  body: string
+): { readonly url: string } | { readonly id: string } {
   const marked = ghIssueComments(ref).filter(
     comment => (comment.body.split(/\r?\n/, 1)[0] ?? '') === marker
   );
@@ -458,12 +493,11 @@ export function upsertComment(
   // gh reads the body from a JSON request file: `-f body=@path` would post the
   // literal string, and argv is not where authored content belongs.
   const directory = mkdtempSync(join(tmpdir(), 'archon-comment-'));
-  let written: Ran;
+  let written: string;
   try {
     const payload = join(directory, 'comment.json');
     writeFileSync(payload, JSON.stringify({ body }), { mode: 0o600 });
-    written = gh(
-      'api',
+    written = ghApi('gh api comment write', [
       '--hostname',
       ref.repo.host,
       '--method',
@@ -472,21 +506,14 @@ export function upsertComment(
         ? `repos/${ref.repo.path}/issues/comments/${previous.id}`
         : `repos/${ref.repo.path}/issues/${String(ref.number)}/comments`,
       '--input',
-      payload
-    );
+      payload,
+    ]);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-  if (!written.ok) throw new Error(`gh api comment write failed: ${written.stderr}`);
-  const id = record(JSON.parse(written.stdout))?.id;
+  const id = record(JSON.parse(written))?.id;
   if (typeof id !== 'number' && typeof id !== 'string') {
     throw new Error('gh api returned no comment identity; a comment may have changed');
   }
-  const observed = ghIssueComments(ref).find(comment => comment.id === String(id));
-  if (observed?.body !== body) {
-    throw new Error(
-      `comment ${String(id)} does not read back as written; it may need reconciling`
-    );
-  }
-  return { url: observed.url };
+  return { id: String(id) };
 }
