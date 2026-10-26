@@ -989,9 +989,9 @@ describe('publish-review keeps one canonical comment per pull request', () => {
 });
 
 // A forge that fails a request it may answer the next time (a gateway timeout, a
-// rate limit) must not end a run that has done hours of work. The repeat is safe
-// only because the comment write starts from the marker read, so a first attempt
-// that landed is found rather than written twice.
+// rate limit) must not end a run that has done hours of work. The repeat starts
+// from the marker read, so a first attempt that landed is found when the next
+// listing shows it; a listing that lags behind it lets the repeat post again.
 describe('publish-review repeats a comment write the forge failed transiently', () => {
   const report = { INPUTS_REPORT: '{ARTIFACTS}/review-report.md' };
   const posts = (result: ScriptRun): number => result.gh.filter(call => call.includes('--method POST')).length;
@@ -1065,6 +1065,20 @@ describe('a gh api failure is classified from its HTTP status and headers', () =
     expect(at(403)).toBeUndefined();
     expect(at(404)).toBeUndefined();
     expect(at(422)).toBeUndefined();
+  });
+
+  it('waits at least the time the failure asked for', () => {
+    const waits: number[] = [];
+    let attempts = 0;
+    const result = retryTransient(
+      () => {
+        if (attempts++ === 0) throw new TransientForgeError('gh api failed (HTTP 503)', 30_000);
+        return 'done';
+      },
+      ms => waits.push(ms)
+    );
+    expect(result).toBe('done');
+    expect(waits).toEqual([30_000]);
   });
 
   it('stops repeating after its last wait and never repeats another failure', () => {
