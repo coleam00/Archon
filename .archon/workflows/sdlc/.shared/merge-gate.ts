@@ -202,8 +202,10 @@ export function parseJudgeChanges(json: string): JudgeChange[] {
 }
 
 /** An approval is a link to an issue or a comment on one (the owner's words), never a criterion id. */
+// The link may be followed by a label a reviewer adds ("<url> (Owner decision, ...)"); the gate
+// needs the link, and refused correct approvals over the label (mission control #102/#145).
 export const isApprovalLink = (approval: string): boolean =>
-  /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(#issuecomment-\d+)?$/.test(approval.trim());
+  /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(#issuecomment-\d+)?(\s|$)/.test(approval.trim());
 
 export interface GateFacts {
   readonly report: AppCheck;

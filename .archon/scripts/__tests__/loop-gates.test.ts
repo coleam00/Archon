@@ -5,6 +5,7 @@ import {
   blocksPass,
   evidenceProblems,
   filesReadInLog,
+  isApprovalLink,
   isTrackingIssue,
   parseDispositions,
   parseJudgeChanges,
@@ -424,5 +425,16 @@ describe('holdouts behind a fence', () => {
     for (const brief of ['holdout-verifier', 'holdout-writer']) {
       expect(readFileSync(resolve(pack, `holdouts/commands/${brief}.md`), 'utf8')).toContain('whoever asks');
     }
+  });
+
+  it('takes an approval link with a label after it, never text without a link', () => {
+    // Reviewers wrote "<url> (Manager decision, ...)" and the gate refused correct approvals.
+    const url = 'https://github.com/o/r/issues/74#issuecomment-123';
+    expect(isApprovalLink(url)).toBe(true);
+    expect(isApprovalLink(`${url} (Owner decision, 2026-10-26)`)).toBe(true);
+    expect(isApprovalLink('https://github.com/o/r/pull/145 (Manager decision, manager pass 675828cb)')).toBe(true);
+    expect(isApprovalLink('Owner decision on #74')).toBe(false);
+    expect(isApprovalLink('see https://github.com/o/r/issues/74')).toBe(false);
+    expect(isApprovalLink('https://example.com/o/r/issues/74')).toBe(false);
   });
 });
