@@ -104,10 +104,10 @@ export function withOther<Effect extends string>(
 }
 
 /** The declared choice an answer named; an id that was never offered refuses. */
-export function chosen<C extends { readonly id: string }>(
-  attention: { readonly choices: readonly C[] },
+export function chosen<Effect extends string>(
+  attention: Attention<Effect>,
   id: string
-): C {
+): Choice<Effect> {
   const choice = attention.choices.find(entry => entry.id === id);
   if (choice === undefined) throw new Error(`the answer "${id}" is not one of the choices`);
   return choice;

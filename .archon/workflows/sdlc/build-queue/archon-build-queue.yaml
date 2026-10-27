@@ -87,9 +87,7 @@ nodes:
         # The branch the round opens its pull request from when route continues none: a
         # new build/<issue>-<slug>-<run>. Empty with no item.
         branch: { type: string }
-        # One line per item a wait parked that this run woke, or that an unreadable blocker keeps parked.
-        wake: { type: string }
-      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch, wake]
+      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -150,11 +148,9 @@ nodes:
                   id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
                   label: { type: string, pattern: '\S' }
                   does: { type: string, pattern: '\S' }
-                  effect: { type: string, enum: [continue, ready, wait, park] }
+                  effect: { type: string, enum: [continue, ready, park] }
                   ruling: { type: string }
-                  # The issue or pull request numbers a wait choice waits on; empty otherwise.
-                  blockers: { type: array, items: { type: integer, minimum: 1 } }
-                required: [id, label, does, effect, ruling, blockers]
+                required: [id, label, does, effect, ruling]
             if_unanswered: { type: string, pattern: '\S' }
             links: { type: array, items: { type: string } }
           required: [what, why, recommendation, choices, if_unanswered, links]
@@ -249,7 +245,6 @@ nodes:
       ending: { from: "$ship.output", if_skipped: null }
       answer: { from: "$answer.output", if_skipped: null }
       at_cap: "$facts.output.at_cap"
-      wake: "$facts.output.wake"
     output_format:
       type: object
       properties:
@@ -295,7 +290,7 @@ nodes:
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [continue, ready, wait, park] }
+        decision: { type: string, enum: [continue, ready, park] }
         section: { type: string }
         summary: { type: string }
       required: [decision, section, summary]

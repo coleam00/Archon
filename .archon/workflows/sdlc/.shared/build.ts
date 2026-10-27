@@ -10,7 +10,7 @@
 import { type QualifiedPr, sameRepo } from './forge.ts';
 import { note } from './io.ts';
 import { PR_CREATE_UNRESOLVED } from './pr.ts';
-import type { Attention, Choice, DecisionEntry } from './queue.ts';
+import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
   claimable,
@@ -31,14 +31,11 @@ import {
  * What a build choice does when a person picks it; archon-build-queue.yaml declares the
  * same enum. `continue` launches the next round from the brief. `ready` hands the pull
  * request to the merge queue as it stands, such as after a maintainer finished it by
- * hand. `wait` parks the item on the issues or pull requests the choice names in
- * `blockers` until they all close or merge. `park` stops work until a re-triage.
+ * hand. `park` stops work until a re-triage.
  */
-export const BUILD_EFFECTS = ['continue', 'ready', 'wait', 'park'] as const;
+export const BUILD_EFFECTS = ['continue', 'ready', 'park'] as const;
 export type BuildEffect = (typeof BUILD_EFFECTS)[number];
-/** A build choice; a `wait` choice also names the issue or pull request numbers, in the item's repository, it waits on. */
-export type BuildChoice = Choice<BuildEffect> & { readonly blockers?: readonly number[] };
-export type BuildAttention = Omit<Attention<BuildEffect>, 'choices'> & { readonly choices: readonly BuildChoice[] };
+export type BuildAttention = Attention<BuildEffect>;
 
 /** The decision each agent can declare; archon-build-queue.yaml declares the same enums. */
 export const ROUTE_DECISIONS = ['launch', 'ask', 'ready'] as const;
@@ -75,7 +72,7 @@ export interface BuildRound {
  * Who owns the item, as the build queue last recorded it. `next`: the build queue, for
  * its next launch from `brief`. `asking`: the build queue, paused on the item's
  * attention item. `ready`: handed to the merge queue, which owns its pull request from
- * here. `parked`: no queue, until a re-triage, or, with `blockers`, until they settle.
+ * here. `parked`: no queue, until a re-triage.
  */
 export type BuildStatus = 'next' | 'asking' | 'ready' | 'parked';
 
@@ -83,8 +80,6 @@ export interface BuildRecord {
   readonly status: BuildStatus;
   /** What the next launch starts from; empty unless the status is `next`. */
   readonly brief: string;
-  /** The issues or pull requests, in the item's repository, a `wait` answer parked the item on. */
-  readonly blockers?: readonly number[];
   readonly rounds: readonly BuildRound[];
   readonly decisions: readonly DecisionEntry[];
   /** When the queue last decided the item. */
@@ -248,8 +243,6 @@ export interface BuildChange {
   readonly entry: DecisionEntry;
   readonly status: BuildStatus;
   readonly brief: string;
-  /** What a `wait` answer parks the item on; recorded only when non-empty. */
-  readonly blockers?: readonly number[];
   /** Clear the claim in the same write: nothing is left for this run to do. */
   readonly release: boolean;
 }
@@ -262,7 +255,6 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
   const build: BuildRecord = {
     status: change.status,
     brief: change.status === 'next' ? change.brief : '',
-    ...(change.blockers === undefined || change.blockers.length === 0 ? {} : { blockers: change.blockers }),
     rounds: [...(prior?.rounds ?? []), ...round].slice(-KEPT_ROUNDS),
     decisions: [...(prior?.decisions ?? []), entry].slice(-KEPT_DECISIONS),
     at: change.at,
@@ -273,59 +265,4 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
     facts: { ...doc.facts, build },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
   };
-}
-
-/** A wait's blockers, refused unless each names another issue or pull request than the item `self`. */
-export function waitBlockers(id: string, blockers: readonly number[], self: number): readonly number[] {
-  if (blockers.length === 0 || blockers.some(number => !Number.isInteger(number) || number < 1 || number === self)) {
-    throw new Error(`the wait choice "${id}" must name at least one other issue or pull request as a blocker, not ${JSON.stringify(blockers)}`);
-  }
-  return blockers;
-}
-
-/** A blocker as the forge reports it, or why it could not be read. */
-export type BlockerState = 'open' | 'closed' | 'merged' | { readonly unreadable: string };
-
-/**
- * Wake every unclaimed item of `repo` in a launch stage that a `wait` answer parked,
- * once its blockers all closed or merged:
- * its status goes back to `next`, with a brief naming what settled. Returns the woken
- * issue numbers, and one line for each item a blocker it could not read keeps parked.
- */
-export function wakeSettled(
-  at: string,
-  runId: string,
-  repo: QualifiedPr['repo'],
-  stateOf: (blocker: QualifiedPr) => BlockerState
-): { woken: number[]; unreadable: string[] } {
-  const woken: number[] = [];
-  const unreadable: string[] = [];
-  for (const item of stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? [])) {
-    const { doc } = item;
-    const build = doc.facts.build;
-    // An item intake has since moved out of a launch stage is no longer the build queue's to wake.
-    const owned = sameRepo(doc.subject.repo, repo) && (LAUNCH_STAGES as readonly string[]).includes(doc.stage) && doc.claim === null;
-    const blockers = owned && build?.status === 'parked' ? (build.blockers ?? []) : [];
-    if (blockers.length === 0) continue;
-    const states = blockers.map(number => ({ number, state: stateOf({ repo: item.doc.subject.repo, number }) }));
-    const failed = states.flatMap(({ number, state }) => (typeof state === 'object' ? [`#${String(number)}: ${state.unreadable}`] : []));
-    if (failed.length > 0) {
-      unreadable.push(`issue ${String(item.doc.subject.number)} stays parked: blocker ${failed.join('; ')} could not be read`);
-      continue;
-    }
-    if (states.some(blocker => blocker.state === 'open')) continue;
-    const settled = states.map(blocker => `#${String(blocker.number)} ${String(blocker.state)}`).join(', ');
-    const next = withBuild(doc, {
-      at,
-      run_id: runId,
-      round: null,
-      entry: { at, run_id: runId, decision: 'woken', reason: `its blockers settled: ${settled}`, links: [] },
-      status: 'next',
-      brief: `The item waited on ${settled}; those have settled. Continue from the issue body, its dated "Current scope" sections and the recorded decisions.`,
-      release: false,
-    });
-    // A conflict means another run moved the item; the next pass reads it again.
-    if (statePut(item.name, next, item.revision) === 'ok') woken.push(doc.subject.number);
-  }
-  return { woken, unreadable };
 }

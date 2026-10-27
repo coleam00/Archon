@@ -13,13 +13,12 @@
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
- * node, "null" when it was skipped; INPUTS_AT_CAP, INPUTS_PULL_REQUEST and INPUTS_WAKE
- * from facts;
+ * node, "null" when it was skipped; INPUTS_AT_CAP and INPUTS_PULL_REQUEST from facts;
  * INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
  */
 
 import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
-import { waitBlockers, withBuild } from '../../.shared/build.ts';
+import { withBuild } from '../../.shared/build.ts';
 import { forgeSource, parseQualifiedPr, type ForgeSource, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
@@ -67,11 +66,9 @@ type Decision =
       readonly reason: string;
     };
 
-function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string, self: number): Decision {
+function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string): Decision {
   if (attention === null) throw new Error(`the ${by} decision asks without an attention item`);
   checkAttention(attention);
-  // A wait choice the ruling would refuse is refused before the maintainer is asked.
-  for (const choice of attention.choices) if (choice.effect === 'wait') waitBlockers(choice.id, choice.blockers ?? [], self);
   return { kind: 'asked', by, attention: withOther(attention, 'continue'), brief, reason };
 }
 
@@ -79,18 +76,17 @@ function decide(
   path: string,
   route: RouteOutput | null,
   answer: AnswerOutput | null,
-  atCap: boolean,
-  self: number
+  atCap: boolean
 ): Decision {
   if (path === 'closed') return { kind: 'parked', reason: 'the issue is closed' };
   if (answer !== null) {
     if (answer.decision === 'done') return { kind: 'ready', reason: answer.reason };
-    if (answer.decision === 'ask') return asked(atCap ? 'scope' : 'stop', answer.attention, answer.brief, answer.reason, self);
+    if (answer.decision === 'ask') return asked(atCap ? 'scope' : 'stop', answer.attention, answer.brief, answer.reason);
     if (answer.brief.trim() === '') throw new Error('a continue decision has no brief to launch from');
     return { kind: 'continue', brief: answer.brief, reason: answer.reason };
   }
   if (route === null) throw new Error(`the ${path} path reached apply with no decision`);
-  if (route.decision === 'ask') return asked('route', route.attention, route.brief, route.reason, self);
+  if (route.decision === 'ask') return asked('route', route.attention, route.brief, route.reason);
   if (route.decision === 'ready') return { kind: 'ready', reason: route.reason };
   // A launch is answered after its round, so a run never ends on one.
   return { kind: 'launch', brief: route.brief, reason: route.reason };
@@ -183,18 +179,12 @@ function afterWrite(
   return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId, selections)}` : written;
 }
 
-/** The summary with facts' wake lines, for waits this run woke or found unreadable. */
-function withWake(summary: string): string {
-  const wake = trimmed(process.env.INPUTS_WAKE);
-  return wake === '' ? summary : `${summary}\n${wake}`;
-}
-
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
   if (path === 'idle') {
     emit({
       decision: 'idle',
-      summary: withWake(idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID)))),
+      summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
       attention: '',
       options: [],
       class: '',
@@ -215,8 +205,7 @@ function main(): void {
     path,
     route,
     answer,
-    text(process.env.INPUTS_AT_CAP) === 'true',
-    item.number
+    text(process.env.INPUTS_AT_CAP) === 'true'
   );
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
@@ -263,7 +252,7 @@ function main(): void {
     retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
     round_limit: text(process.env.INPUTS_ROUND_LIMIT),
   };
-  emit({ ...result, summary: withWake(afterWrite(result.summary, wrote, decision, item, runId, selections)) });
+  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId, selections) });
 }
 
 try {

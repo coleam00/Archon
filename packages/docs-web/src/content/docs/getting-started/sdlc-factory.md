@@ -138,7 +138,7 @@ Each item says what is being decided, why it matters, the agent's recommendation
 archon workflow respond <run-id> <choice> "why"
 ```
 
-The reason matters. A build or merge queue answer is written into the issue body as a dated "Current scope" section, and later rounds work from it. Every build item and merge pull-request item offers `other`: its text says what to do instead and becomes the ruling. `park` stops the queue working that item. A build item's `wait` names the issues or pull requests it waits on, and the build queue picks the item up again once they all close or merge. [Operate runs](/getting-started/operate/) covers answering, resuming and stopping runs in full.
+The reason matters. A build or merge queue answer is written into the issue body as a dated "Current scope" section, and later rounds work from it. Every build item and merge pull-request item offers `other`: its text says what to do instead and becomes the ruling. `park` stops the queue working that item. [Operate runs](/getting-started/operate/) covers answering, resuming and stopping runs in full.
 
 ## 7. Let it run on its own
 

@@ -589,16 +589,12 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   `round_limit` the answered run started with. A `ready` choice hands the pull
   request to the merge queue as it stands, as after a maintainer finished it by hand;
   the merge gate still checks it, and an item with no pull request refuses the answer.
-  A `wait` choice names its `blockers`, the issues or pull requests it waits on, and
-  parks the item; every build-queue run reads them, and once all are closed or merged
-  it puts the item back to `next` with a brief naming what settled and builds it, no
-  re-triage involved. A blocker it cannot read keeps the item parked and says so in the
-  run's summary. A `park` choice stops working the item until a re-triage. If a
-  continue's launch fails, the item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
+  A `park` choice stops working the item until a re-triage. If a continue's launch
+  fails, the item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
   re-triage starts it over.
 - **Record.** The work item's `facts.build` holds the item's status, which says who
   owns it: the build queue (`next`, `asking`), the merge queue (`ready`), or no queue
-  (`parked`, with the `blockers` a wait named). It also holds the brief its next round
+  (`parked`). It also holds the brief its next round
   starts from, its last ten rounds and its last twenty decisions with any maintainer's
   answer.
 
