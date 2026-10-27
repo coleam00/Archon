@@ -53,7 +53,8 @@ For each scenario in scope:
   write the folder as `<id>.new` and rename it over `<id>`, so another run reading it never sees half
   a tool. A tool is never made more lenient than its scenario; when a tool and the scenario disagree,
   the scenario wins and you fix the tool.
-- Update the tool's last run in `TOOL.md` after every run.
+- Update the tool's last run in `TOOL.md` after every run. A folder without a `TOOL.md` is not a
+  tool yet: write its `TOOL.md` before you finish.
 
 ## Run them
 
