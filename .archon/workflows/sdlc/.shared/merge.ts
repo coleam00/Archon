@@ -3,8 +3,9 @@
  * facts its gate reads before every merge.
  *
  * The merge queue takes the items the build queue finished: a work item whose
- * `facts.build` is `ready` names its pull request in its last round. The queue claims
- * them with intake's claim, so an item has one owner at a time across the three queues.
+ * `facts.build` is `ready`. Its pull request is the latest one a build round recorded,
+ * or, when none did, the one triage routed the item to continue. The queue claims them
+ * with intake's claim, so an item has one owner at a time across the three queues.
  *
  * Every read and the merge go through the run's forge source (./forge.ts): GitHub's
  * GraphQL API and `gh pr merge` on `gh`, or on `forge` the operations in
