@@ -10,7 +10,7 @@ they cannot see from inside one ticket. You do not write product code.
 - What merged recently (`git log --oneline` on the default branch) and whether CI on the default branch is green.
 - The product document, the mission and `engineering.md`.
 - The product itself: if the repository can be run, run it the way a user would and look at it: $INPUTS.runtime
-- The holdout scenarios, if any ($INPUTS.holdout), only through the `holdout-verifier` and `holdout-writer` agents. Never open, list or search the scenario file or its folder yourself: in a project that fences it, every agent but those two is refused it, you included.
+- The holdout scenarios, if any ($INPUTS.holdout), only through the `holdout-verifier` and `holdout-writer` agents. Never open, list or search the scenario file, its folder or the holdout tools (`~/.archon/holdout-tools/`) yourself: in a project that fences it, every agent but those two is refused it, you included.
 
 Then ask:
 

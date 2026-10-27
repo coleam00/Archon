@@ -20,17 +20,50 @@ The agent that dispatched you names:
   scenario on the default branch each pass, so a skipped one is checked within hours, not lost.
 - **Runtime:** how to run the app (instructions, a scenario file or plain text).
 - **Evidence folder:** where every log, screenshot and record you make goes. Never write inside the
-  holdout file's folder or anywhere in the target checkout's tracked files.
+  holdout file's folder or anywhere in the target checkout's tracked files; your tools go in the
+  tools folder below.
 - **Known default-branch results**, if the dispatcher has them: a line of scenario ids and verdicts
   on a recent default-branch commit.
 
+## Your tools: keep one per scenario, and use it
+
+Every run of a scenario drives the app the same way, so write that once and keep it. The tools
+folder is `~/.archon/holdout-tools/<owner>-<repo>/` (from the project's `origin` remote; create it if
+missing). It sits outside every checkout, so a run never writes into the code under test, and it is
+shared by every lap and the manager. Like the scenario file, only you and the holdout writer may read
+it. Each scenario's tool is a folder named by its id:
+
+- `TOOL.md`: the scenario's full text, copied verbatim when the tool was made or last fixed; the one
+  command that runs it, with `{port}`, `{target}` and `{out}` for the app's port, the checkout under
+  test and an evidence folder; what it records; how long a run takes; and its last run (date, commit,
+  verdict).
+- The script itself: it drives the app through the same public surface you would (the runtime's
+  driver or input helpers when it names them), writes every record and screenshot into `{out}`,
+  checks every expectation the scenario states (running the scenario's judge script, if it names
+  one), and prints `verdict: PASS`, `verdict: FAIL` or `verdict: INCOMPLETE` as its last line, with
+  one line per finding before it.
+
+For each scenario in scope:
+
+- **A tool exists and its `TOOL.md` text equals the scenario's current text:** run its command. Read
+  what it printed and open the screenshots it names, and give the verdict from what you see. Do not
+  write a new script for it.
+- **No tool, a changed scenario, or a tool that crashes, cannot reach a state, or checks less than
+  the scenario asks:** write or fix the tool, run it until it reaches a real verdict, then save it:
+  write the folder as `<id>.new` and rename it over `<id>`, so another run reading it never sees half
+  a tool. A tool is never made more lenient than its scenario; when a tool and the scenario disagree,
+  the scenario wins and you fix the tool.
+- Update the tool's last run in `TOOL.md` after every run.
+
 ## Run them
 
-1. Read the scenario file. Pick the scenarios in scope by their `Touches` line.
+1. Read the scenario file. Pick the scenarios in scope by their `Touches` line. Look in the tools
+   folder for their tools.
 2. Start the app from the target the way the runtime says, on a free port with fresh data. Learn its
    surface the way a user would (its pages, its documented API), not from source.
-3. For each scenario do the setup and steps through the public surface only, and record each request
-   and response, or each screen, in the evidence folder. Give a verdict:
+3. For each scenario run its tool (or make one, as above), which does the setup and steps through
+   the public surface only and records each request and response, or each screen, in the evidence
+   folder. Give a verdict:
    - **PASS**: every expectation observed, with the record that shows it.
    - **FAIL**: an expectation contradicted; cite the exact record.
    - **INCOMPLETE**: the scenario could not be run to the end (missing route, the app would not start,
@@ -40,7 +73,8 @@ The agent that dispatched you names:
    The builder may name things differently from what the scenario expects. Adapt to its names; judge
    the behaviour.
 4. For each FAIL or INCOMPLETE, find out whether the base fails it the same way. If the known
-   default-branch results show the same verdict on a base commit from the last 24 hours, cite them.
+   default-branch results give a verdict for this scenario on a base commit from the last 24 hours,
+   cite them and do not run the base again: a pass there means this change introduced the failure.
    Otherwise run that scenario on the base yourself (a separate checkout of the base commit, never the
    target) and cite that run. Same failure on both: pre-existing. Passes on the base: introduced by
    the target. Only now may you read the change, to point at where.

@@ -51,7 +51,8 @@ nodes:
       - The scenario file: $INPUTS.holdout
       - What to write from: $INPUTS.source
 
-      Do not open, list or search the scenario file or its folder yourself, and do
+      Do not open, list or search the scenario file, its folder or the holdout tools
+      (`~/.archon/holdout-tools/`) yourself, and do
       not read the product code: in a project that fences the scenarios, every
       agent but the holdout agents is refused them. Your reply is the writer's
       one line per scenario id, and nothing about a scenario's text.

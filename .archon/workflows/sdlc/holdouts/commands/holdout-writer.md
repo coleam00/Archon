@@ -45,7 +45,9 @@ Expect: what a user sees
 Author: writer, <date>, <why: the section being built, or the defect's issue>
 ```
 
-You add and tighten, never loosen. Never remove or weaken a scenario, and never edit one whose
+The holdout verifier keeps a tool per scenario in `~/.archon/holdout-tools/<owner>-<repo>/<id>/`;
+when you change a scenario's text it rebuilds that tool on its next run, so you need not touch the
+tools. You add and tighten, never loosen. Never remove or weaken a scenario, and never edit one whose
 `Author` is the owner (or that has no author): if one looks wrong, say so in your reply and leave it.
 
 When the scenario file is inside the repository, commit only its folder, on the default branch, from a
