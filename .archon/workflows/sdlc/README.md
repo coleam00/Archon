@@ -398,8 +398,9 @@ request, never the state.
   The file is a JSON array whose entries are forge logins, or objects naming one with
   opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
   login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
-  open pull requests in the merge queue, except one a work item already names (see
-  Pickup there); on the `gh` source only. No file means an empty list, so every author is outside. Any other
+  open pull requests in the merge queue, except one a work item already names or one
+  from a `build/` branch in the repository itself, so a hand-made pull request on a
+  `build/` branch does not enroll (see Pickup there); on the `gh` source only. No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
