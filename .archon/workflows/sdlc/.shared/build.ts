@@ -223,14 +223,14 @@ function roundPrNumber(url: string, repo: QualifiedPr['repo']): number {
   return Number(match[2]);
 }
 
+/** Every round's branch starts with this, so a pull request from such a branch is the build queue's. */
+export const BUILD_BRANCH_PREFIX = 'build/';
+
 /**
  * The branch a round with no pull request to continue opens one from. The run-id
  * suffix keeps a name from being reused: after a closed pull request or a failed
  * create, the non-forcing push onto the old branch would refuse every round.
  */
-/** Every round's branch starts with this, so a pull request from such a branch is the build queue's. */
-export const BUILD_BRANCH_PREFIX = 'build/';
-
 export function buildBranch(number: number, title: string, runId: string): string {
   const slug = title
     .toLowerCase()
@@ -273,6 +273,14 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
     facts: { ...doc.facts, build },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
   };
+}
+
+/** A wait's blockers, refused unless each names another issue or pull request than the item `self`. */
+export function waitBlockers(id: string, blockers: readonly number[], self: number): readonly number[] {
+  if (blockers.length === 0 || blockers.some(number => !Number.isInteger(number) || number < 1 || number === self)) {
+    throw new Error(`the wait choice "${id}" must name at least one other issue or pull request as a blocker, not ${JSON.stringify(blockers)}`);
+  }
+  return blockers;
 }
 
 /** A blocker as the forge reports it, or why it could not be read. */

@@ -954,6 +954,24 @@ describe('the build queue scripts', () => {
     expect(mergeWaits(doc)).toBe(true);
   }, 60_000);
 
+  test('a wait choice with no blocker, or naming the item itself, is refused before the ask and at the answer, leaving the item unchanged', () => {
+    for (const blockers of [[], [7]]) {
+      const wait = { ...WAIT, blockers };
+      const attention = { ...ATTENTION, choices: [...ATTENTION.choices, wait] };
+      const at = install();
+      seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
+      const before = stored(at);
+      const applied = run(at, 'apply', applyInputs({ ...ASK, attention }));
+      expect(applied.code).not.toBe(0);
+      expect(applied.stdout).toBe('');
+      const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: JSON.stringify({ attention, brief: 'b', by: 'stop' }), INPUTS_CHOICE: 'wait-for-fix', INPUTS_TEXT: '' });
+      expect(ruled.code).not.toBe(0);
+      for (const refused of [applied, ruled]) expect(refused.stderr).toContain('must name at least one other issue or pull request');
+      expect(ruled.bodies).toEqual([]);
+      expect(stored(at)).toEqual(before);
+    }
+  }, 60_000);
+
   test('a blocker that cannot be read keeps the item parked and says so', () => {
     const at = install();
     seed(at, triaged({}, record({ status: 'parked', brief: '', blockers: [5, 6] })));

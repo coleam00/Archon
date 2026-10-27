@@ -19,7 +19,7 @@
  */
 
 import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
-import { withBuild } from '../../.shared/build.ts';
+import { waitBlockers, withBuild } from '../../.shared/build.ts';
 import { forgeSource, parseQualifiedPr, type ForgeSource, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
@@ -67,9 +67,11 @@ type Decision =
       readonly reason: string;
     };
 
-function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string): Decision {
+function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string, self: number): Decision {
   if (attention === null) throw new Error(`the ${by} decision asks without an attention item`);
   checkAttention(attention);
+  // A wait choice the ruling would refuse is refused before the maintainer is asked.
+  for (const choice of attention.choices) if (choice.effect === 'wait') waitBlockers(choice.id, choice.blockers ?? [], self);
   return { kind: 'asked', by, attention: withOther(attention, 'continue'), brief, reason };
 }
 
@@ -77,17 +79,18 @@ function decide(
   path: string,
   route: RouteOutput | null,
   answer: AnswerOutput | null,
-  atCap: boolean
+  atCap: boolean,
+  self: number
 ): Decision {
   if (path === 'closed') return { kind: 'parked', reason: 'the issue is closed' };
   if (answer !== null) {
     if (answer.decision === 'done') return { kind: 'ready', reason: answer.reason };
-    if (answer.decision === 'ask') return asked(atCap ? 'scope' : 'stop', answer.attention, answer.brief, answer.reason);
+    if (answer.decision === 'ask') return asked(atCap ? 'scope' : 'stop', answer.attention, answer.brief, answer.reason, self);
     if (answer.brief.trim() === '') throw new Error('a continue decision has no brief to launch from');
     return { kind: 'continue', brief: answer.brief, reason: answer.reason };
   }
   if (route === null) throw new Error(`the ${path} path reached apply with no decision`);
-  if (route.decision === 'ask') return asked('route', route.attention, route.brief, route.reason);
+  if (route.decision === 'ask') return asked('route', route.attention, route.brief, route.reason, self);
   if (route.decision === 'ready') return { kind: 'ready', reason: route.reason };
   // A launch is answered after its round, so a run never ends on one.
   return { kind: 'launch', brief: route.brief, reason: route.reason };
@@ -212,7 +215,8 @@ function main(): void {
     path,
     route,
     answer,
-    text(process.env.INPUTS_AT_CAP) === 'true'
+    text(process.env.INPUTS_AT_CAP) === 'true',
+    item.number
   );
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;

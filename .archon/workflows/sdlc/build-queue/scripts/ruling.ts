@@ -17,7 +17,7 @@
  * the workflow's inputs.
  */
 
-import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, withBuild } from '../../.shared/build.ts';
+import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, waitBlockers, withBuild } from '../../.shared/build.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
@@ -42,14 +42,6 @@ function requireReadyPr(item: QualifiedPr, id: string): void {
   if (doc === null || itemPullRequest(doc.facts.build?.rounds ?? [], doc.facts.triage, item.repo) === null) {
     throw new Error(`the ready choice "${id}" hands nothing to the merge queue: issue ${String(item.number)} has no pull request`);
   }
-}
-
-/** A wait's blockers, refused before any write unless each names another issue or pull request. */
-function waitBlockers(id: string, blockers: readonly number[], self: number): readonly number[] {
-  if (blockers.length === 0 || blockers.some(number => !Number.isInteger(number) || number < 1 || number === self)) {
-    throw new Error(`the wait choice "${id}" must name at least one other issue or pull request as a blocker, not ${JSON.stringify(blockers)}`);
-  }
-  return blockers;
 }
 
 const ABOUT: Record<AskedBy, string> = {
