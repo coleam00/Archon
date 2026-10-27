@@ -20,6 +20,7 @@ import {
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
 import { BUILD_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
+import { mergeWaits } from '../../workflows/sdlc/.shared/merge';
 import { CONFIDENCES, checkAttention, chosen, renderAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
@@ -882,6 +883,31 @@ describe('the build queue scripts', () => {
     expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
     expect(ruled.bodies).toEqual([]);
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', brief: '' } } });
+  }, 60_000);
+
+  const READY = { id: 'operator-finishes', label: 'Done by hand', does: 'hands the PR on', effect: 'ready' as const, ruling: '' };
+  const READY_ASKED = JSON.stringify({ attention: { ...ATTENTION, choices: [...ATTENTION.choices, READY] }, brief: 'b', by: 'stop' });
+
+  test('a ready answer releases the item to the merge queue with the PR triage named', () => {
+    const at = install();
+    seed(at, triaged({ ...CLAIMED, facts: { triage: { ...TRIAGE, pull_request: 42 } } }, record({ status: 'asking', brief: '' })));
+    expect(ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: READY_ASKED, INPUTS_CHOICE: 'operator-finishes', INPUTS_TEXT: '' })).decision).toBe('ready');
+    const doc = stored(at).value as WorkItem;
+    expect(doc).toMatchObject({ claim: null, facts: { build: { status: 'ready' } } });
+    expect(buildWaits(doc)).toBe(false);
+    expect(mergeWaits(doc)).toBe(true);
+  }, 60_000);
+
+  test('a ready answer on an item with no pull request is refused before the issue body or the work item changes', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
+    const before = stored(at);
+    const asked = JSON.stringify({ attention: { ...ATTENTION, choices: [...ATTENTION.choices, { ...READY, ruling: 'Done by hand.' }] }, brief: 'b', by: 'stop' });
+    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: asked, INPUTS_CHOICE: 'operator-finishes', INPUTS_TEXT: '' });
+    expect(ruled.code).not.toBe(0);
+    expect(ruled.stderr).toContain('has no pull request');
+    expect(ruled.bodies).toEqual([]);
+    expect(stored(at)).toEqual(before);
   }, 60_000);
 
   test('an answer that is not a declared choice, or a section that does not read back, records nothing', () => {

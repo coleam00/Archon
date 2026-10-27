@@ -26,7 +26,9 @@ reference covers launching and tending the queues by hand.
   whose issues are triaged and whose review comments count. An entry can be an object,
   `{ "login": "<login>", "merge_queue": "own-prs" }`, which also sends that
   maintainer's own open pull requests through the merge queue, except one a work item
-  already names, such as a pull request the build queue delivered. Without the file
+  already names, such as a pull request the build queue delivered, and one from a
+  `build/` branch in the repository itself, the build queue's branch namespace: a
+  hand-made pull request on a `build/` branch does not enroll. Without the file
   every author is an outsider: intake labels their issues `archon-needs-maintainer`
   and runs no agent.
 - The forge account the pack's review runs post as must also be on
