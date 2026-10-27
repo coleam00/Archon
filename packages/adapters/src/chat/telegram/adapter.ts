@@ -6,7 +6,7 @@ import { telegramPolicy } from './policy';
 import { Bot, Context } from 'grammy';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
 import { createLogger } from '@archon/paths';
-import { deprecatedForRemovalNotice } from '@archon/providers/community/deprecation';
+import { deprecatedNotice } from '@archon/providers/community/deprecation';
 import { parseAllowedUserIds, isUserAuthorized } from './auth';
 import { convertToTelegramMarkdown, stripMarkdown } from './markdown';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
@@ -167,7 +167,7 @@ export class TelegramAdapter implements IPlatformAdapter {
    * Makes up to 3 attempts on 409 Conflict (stale getUpdates connection).
    */
   async start(options?: { retryDelayMs?: number }): Promise<void> {
-    getLog().warn({ notice: deprecatedForRemovalNotice('Telegram') }, 'telegram.deprecated');
+    getLog().warn({ notice: deprecatedNotice('Telegram') }, 'telegram.deprecated');
 
     this.registerMessageHandler();
 
