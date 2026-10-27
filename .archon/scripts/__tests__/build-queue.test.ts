@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -970,6 +970,15 @@ describe('the build queue scripts', () => {
       expect(ruled.bodies).toEqual([]);
       expect(stored(at)).toEqual(before);
     }
+  }, 60_000);
+
+  test('a plain park, with no blockers, is never woken', () => {
+    const at = install();
+    seed(at, triaged({}, record({ status: 'parked', brief: '' })));
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    expect(ok(run(at, 'facts', { ARCHON_CALL_LOG: calls }, SETTLED))).toMatchObject({ path: 'idle', wake: '' });
+    expect(stored(at).value?.facts.build?.status).toBe('parked');
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('number=');
   }, 60_000);
 
   test('a blocker that cannot be read keeps the item parked and says so', () => {
