@@ -122,16 +122,19 @@ export class SSETransport {
         getLog().debug({ conversationId, count: buffered.length }, 'sse_buffer_replay');
         const written = await this.writeToStream(conversationId, stream, event.data);
         if (this.replayOwners.get(conversationId) !== owner) return;
-        if (!written) continue;
-        // Retention can evict the attempted entry while its write is pending.
-        const index = buffered.indexOf(event);
-        if (index !== -1) buffered.splice(index, 1);
+        if (written) this.acknowledgeBufferedEvent(buffered, event);
       }
     } finally {
       if (this.replayOwners.get(conversationId) === owner) {
         this.replayOwners.delete(conversationId);
       }
     }
+  }
+
+  private acknowledgeBufferedEvent(buffered: BufferedEvent[], event: BufferedEvent): void {
+    // Retention can evict the attempted entry while its write is pending.
+    const index = buffered.indexOf(event);
+    if (index !== -1) buffered.splice(index, 1);
   }
 
   private expireBufferedEvents(conversationId: string, buffered: BufferedEvent[]): void {
@@ -230,10 +233,9 @@ export class SSETransport {
     }
     const results = await Promise.all(writes);
     const buffered = this.eventBuffer.get(conversationId);
-    const index = buffered?.indexOf(bufferedEvent) ?? -1;
-    if (!buffered || index === -1) return;
+    if (!buffered?.includes(bufferedEvent)) return;
     bufferedEvent.liveWritePending = false;
-    if (results.some(Boolean)) buffered.splice(index, 1);
+    if (results.some(Boolean)) this.acknowledgeBufferedEvent(buffered, bufferedEvent);
     if (buffered.length === 0) this.clearBuffer(conversationId);
     else this.replayBufferedEvents(conversationId);
   }
