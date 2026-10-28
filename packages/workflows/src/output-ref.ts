@@ -440,11 +440,12 @@ export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
 interface DeclaredOutputSchema {
   path: string[];
   schema: unknown;
-  inAlternative: boolean;
+  conjunction: symbol;
 }
 
 /**
  * Enumerate explicit declarations, retaining every source schema for repeated paths.
+ * Conjunctive declarations share an identity; each selectable branch starts a new one.
  * Children are paths only when their parent may be an object; dotted keys stay one segment.
  */
 export function declaredOutputSchemasFromSchema(
@@ -459,11 +460,7 @@ export function declaredOutputSchemasFromSchema(
     return undefined;
   }
   const declarations: DeclaredOutputSchema[] = [];
-  const visit = (
-    schema: Record<string, unknown>,
-    prefix: string[],
-    inAlternative: boolean
-  ): void => {
+  const visit = (schema: Record<string, unknown>, prefix: string[], conjunction: symbol): void => {
     const type = schema.type;
     if (
       prefix.length > 0 &&
@@ -475,22 +472,22 @@ export function declaredOutputSchemasFromSchema(
     }
     for (const [key, raw] of Object.entries(asPlainObject(schema.properties) ?? {})) {
       const path = [...prefix, key];
-      declarations.push({ path, schema: raw, inAlternative });
+      declarations.push({ path, schema: raw, conjunction });
       const child = asPlainObject(raw);
-      if (child !== undefined) visit(child, path, inAlternative);
+      if (child !== undefined) visit(child, path, conjunction);
     }
     const branches = keywords.flatMap(keyword => {
       const value = schema[keyword];
       return Array.isArray(value)
-        ? value.map(raw => ({ raw, inAlternative: inAlternative || keyword !== 'allOf' }))
+        ? value.map(raw => ({ raw, conjunction: keyword === 'allOf' ? conjunction : Symbol() }))
         : [];
     });
-    for (const { raw, inAlternative: branchInAlternative } of branches) {
+    for (const { raw, conjunction: branchConjunction } of branches) {
       const branch = asPlainObject(raw);
-      if (branch !== undefined) visit(branch, prefix, branchInAlternative);
+      if (branch !== undefined) visit(branch, prefix, branchConjunction);
     }
   };
-  visit(outputFormat, [], false);
+  visit(outputFormat, [], Symbol());
   return declarations;
 }
 

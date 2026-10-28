@@ -543,6 +543,7 @@ nodes:
         readOnly: true,
         writeOnly: false,
       },
+      { 'x-archon-note': 'Available choices' },
       {},
       true,
     ]) {
@@ -558,6 +559,17 @@ nodes:
           }).error
         ).toBeNull();
       }
+    }
+  });
+
+  it('rejects asserting allOf declarations alongside valid options', () => {
+    for (const assertion of [false, { enum: ['not options'] }, { not: validOptions }]) {
+      expect(
+        parseWithOptionsSchema({
+          properties: { options: validOptions },
+          allOf: [{ properties: { options: assertion } }],
+        }).error?.error
+      ).toContain('must be an array of objects declaring only');
     }
   });
 
@@ -585,6 +597,32 @@ nodes:
         }).error?.error
       ).toContain('must be an array of objects declaring only');
     }
+  });
+
+  it.each(['anyOf', 'oneOf'])('loads annotated allOf constraints inside %s', keyword => {
+    for (const declarations of [
+      [validOptions, { description: 'Available choices' }],
+      [{ 'x-archon-note': 'Available choices' }, validOptions],
+    ]) {
+      expect(
+        parseWithOptionsSchema({
+          [keyword]: [{ allOf: declarations.map(options => ({ properties: { options } })) }],
+        }).error
+      ).toBeNull();
+    }
+  });
+
+  it.each(['anyOf', 'oneOf'])('rejects an unconstrained nested %s option alternative', keyword => {
+    expect(
+      parseWithOptionsSchema(
+        {
+          [keyword]: [validOptions, { description: 'Available choices' }].map(options => ({
+            properties: { result: { type: 'object', properties: { options } } },
+          })),
+        },
+        'result.options'
+      ).error?.error
+    ).toContain('must be an array of objects declaring only');
   });
 
   it('rejects annotation-only options without an option shape', () => {

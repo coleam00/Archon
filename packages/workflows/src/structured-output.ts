@@ -1,5 +1,6 @@
 // ajv MUST resolve to ^8 — a transitive ajv@6 has a different API/draft.
 import Ajv, { type ErrorObject, type ValidateFunction } from 'ajv';
+import { metadataVocabulary, contentVocabulary } from 'ajv/dist/vocabularies/metadata';
 
 // ─── Schema validation (ajv) ─────────────────────────────────────────────────
 
@@ -10,6 +11,19 @@ import Ajv, { type ErrorObject, type ValidateFunction } from 'ajv';
  * failure at once so a reask prompt can list them all.
  */
 const ajv = new Ajv({ allErrors: true, strict: false });
+
+/** Unknown keywords are annotations in the same tolerant dialect used for validation. */
+export function isAnnotationOnlyOutputSchema(schema: unknown): boolean {
+  if (schema === true) return true;
+  if (typeof schema !== 'object' || schema === null || Array.isArray(schema)) return false;
+  return Object.keys(schema).every(
+    key =>
+      key === '$comment' ||
+      metadataVocabulary.includes(key) ||
+      contentVocabulary.includes(key) ||
+      ajv.getKeyword(key) === false
+  );
+}
 
 /**
  * Compiled-validator cache keyed by the schema object identity. Compilation is

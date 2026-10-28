@@ -8,6 +8,7 @@ import {
   isIncludeDirective,
 } from '../schemas';
 import { attentionOptionSchema } from '../schemas/wait-node';
+import { isAnnotationOnlyOutputSchema } from '../structured-output';
 import {
   findUnsupportedNestedWhenRef,
   assertSupportedWhenOutputRefs,
@@ -111,11 +112,20 @@ function referencedOptionsShapeError(
       declaration.path.length === path.length &&
       declaration.path.every((segment, index) => segment === path[index])
   );
+  const conjunctions = new Map<symbol, unknown[]>();
+  for (const { schema, conjunction } of declarations) {
+    const schemas = conjunctions.get(conjunction) ?? [];
+    schemas.push(schema);
+    conjunctions.set(conjunction, schemas);
+  }
   const fits =
-    declarations.some(({ schema }) => isAttentionOptionsSchema(schema)) &&
-    declarations.every(
-      ({ schema, inAlternative }) =>
-        isAttentionOptionsSchema(schema) || (!inAlternative && isAnnotationOnlySchema(schema))
+    conjunctions.size > 0 &&
+    [...conjunctions.values()].every(
+      schemas =>
+        schemas.some(isAttentionOptionsSchema) &&
+        schemas.every(
+          schema => isAttentionOptionsSchema(schema) || isAnnotationOnlyOutputSchema(schema)
+        )
     );
   if (fits) return undefined;
   const { properties: optionProperties = {}, required: optionRequired = [] } =
@@ -127,21 +137,6 @@ function referencedOptionsShapeError(
     })
     .join('; ');
   return `'${options}' must be an array of objects declaring only { ${expected} } in '${ref.nodeId}'s output_format`;
-}
-
-function isAnnotationOnlySchema(schema: unknown): boolean {
-  if (schema === true) return true;
-  const annotations = [
-    '$comment',
-    'title',
-    'description',
-    'default',
-    'examples',
-    'deprecated',
-    'readOnly',
-    'writeOnly',
-  ];
-  return isRecord(schema) && Object.keys(schema).every(key => annotations.includes(key));
 }
 
 function isAttentionOptionsSchema(schema: unknown): boolean {
