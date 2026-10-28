@@ -256,6 +256,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
         ? { nodeId: node.id, bodyGateId: terminalSuspendNode.id, iteration: i }
         : undefined,
     unfinishedInvocations: ctx.unfinishedInvocations,
+    loopConfigFailureBaselines: ctx.loopConfigFailureBaselines,
     deps: ctx.deps,
     platform: ctx.platform,
     conversationId: ctx.conversationId,
@@ -342,6 +343,7 @@ function addIterationUsage(run: LoopGroupRun, iterCtx: RunLayersContext, i: numb
   if (iterCtx.totalCostUsd !== undefined) {
     usage.costUsd = (usage.costUsd ?? 0) + iterCtx.totalCostUsd;
   }
+  usage.costPartial ||= iterCtx.totalCostPartial;
   usage.tokensUnknown ||= iterCtx.totalTokensUnknown;
   if (usage.tokensUnknown) {
     usage.tokens = undefined;

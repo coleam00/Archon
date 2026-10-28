@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { readNodeRecordEvent } from '../../../node-record-reader';
 import { describe, it, expect, beforeEach, afterEach, type Mock } from 'bun:test';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -26,7 +27,8 @@ import {
   newNodeInvocation,
   startNodeExecution,
 } from '../../../node-execution';
-import type { DagNode } from '../../../schemas';
+import type { DagNode, LoopNode } from '../../../schemas';
+import { COMPILED_LOOP_COMMAND } from '../../../compiled-command';
 import type { IWorkflowStore } from '../../../store';
 
 describe('interactive loop node', () => {
@@ -938,6 +940,7 @@ describe('interactive loop node', () => {
               message: 'gate',
               completionSignaled: true,
               signaledOutput: '{"verdict":{"ok":true}}',
+              signaledCostUsd: 0.02,
             },
             loop_user_input: 'Approved',
             loop_feedback_given: false,
@@ -952,7 +955,22 @@ describe('interactive loop node', () => {
     expect(completed?.data).toMatchObject({
       declared_fields: ['verdict'],
       declared_output_paths: [['verdict'], ['verdict', 'ok']],
+      cost_usd: 0.02,
+      cost_partial: true,
     });
+    expect(
+      completed && readNodeRecordEvent({ ...completed, data: completed.data })?.data.cost_partial
+    ).toBe(true);
+    expect(
+      completed && readNodeRecordEvent({ ...completed, data: completed.data })?.metadata
+    ).toBeUndefined();
+    const snapshot = await foldDagResumeSnapshot(
+      persistedEvents(mockDeps.store),
+      'finalize-contract'
+    );
+    expect(snapshot.costUsd).toBe(0.02);
+    expect(snapshot.costPartial).toBe(true);
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 
   it('iterates at resume when feedback was given, even on a signal-bearing gate (#2074 C)', async () => {
@@ -1051,6 +1069,105 @@ describe('interactive loop node', () => {
     ]);
   });
 
+  it.each([undefined, -0.01])(
+    'keeps live unavailable cost %s partial across gates and resumed iterations',
+    async unavailableCost => {
+      const runId = 'live-partial-gates';
+      const node: DagNode = {
+        id: 'refine',
+        kind: 'loop',
+        loop: {
+          fresh_context: false,
+          prompt: 'Refine.',
+          until: 'APPROVED',
+          max_iterations: 4,
+          interactive: true,
+          gate_message: 'Review.',
+        },
+      };
+      let iteration = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        iteration++;
+        yield {
+          type: 'agent_message_chunk',
+          text: iteration === 3 ? '<promise>APPROVED</promise>' : 'Working.',
+        };
+        yield {
+          type: 'result',
+          sessionId: 'live-cost-session',
+          cost: iteration === 1 ? unavailableCost : iteration === 2 ? 0.02 : 0.03,
+        };
+        if (iteration === 1) yield { type: 'result', sessionId: 'live-cost-session', cost: 0.01 };
+      });
+      const firstDeps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: firstDeps,
+          cwd: testDir,
+          workflow: { name: 'live-gate-cost', nodes: [node] },
+          workflowRun: makeWorkflowRun(runId),
+        })
+      );
+      const firstGate = firstDeps.store.pauseWorkflowRun.mock.calls[0][1];
+      expect(firstGate.signaledCostUsd).toBe(0.01);
+      expect(firstGate.execution?.spend.costUsd).toEqual({
+        source: 'provider',
+        value: 0.01,
+        partial: true,
+      });
+
+      const secondDeps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: secondDeps,
+          cwd: testDir,
+          workflow: { name: 'live-gate-cost', nodes: [node] },
+          workflowRun: makeWorkflowRun(runId, {
+            metadata: {
+              approval: firstGate,
+              loop_user_input: 'Continue.',
+              loop_feedback_given: true,
+            },
+          }),
+        })
+      );
+      const secondGate = secondDeps.store.pauseWorkflowRun.mock.calls[0]?.[1];
+      expect(secondGate).toBeDefined();
+      expect(secondGate?.execution?.spend.costUsd).toEqual({
+        source: 'provider',
+        value: 0.03,
+        partial: true,
+      });
+      const finalDeps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: finalDeps,
+          cwd: testDir,
+          workflow: { name: 'live-gate-cost', nodes: [node] },
+          workflowRun: makeWorkflowRun(runId, {
+            metadata: {
+              approval: secondGate,
+              loop_user_input: 'Continue.',
+              loop_feedback_given: true,
+            },
+          }),
+        })
+      );
+      const expected = 0.06;
+      expect(iteration).toBe(3);
+      const events = [
+        ...persistedEvents(firstDeps.store),
+        ...persistedEvents(secondDeps.store),
+        ...persistedEvents(finalDeps.store),
+      ];
+      const completed = events.find(e => e.event_type === 'node_completed');
+      expect(completed?.data).toMatchObject({
+        spend: { costUsd: { source: 'provider', value: expected, partial: true } },
+      });
+      expect((await foldDagResumeSnapshot(events, runId)).costUsd).toBeCloseTo(expected, 5);
+    }
+  );
+
   describe('cost carried in from a gate', () => {
     const refine: DagNode = {
       id: 'refine',
@@ -1107,6 +1224,327 @@ describe('interactive loop node', () => {
         snapshot: await foldDagResumeSnapshot(events, runId),
       };
     };
+
+    it.each([true, false])(
+      'ignores negative persisted gate cost on resume with feedback=%s',
+      async feedbackGiven => {
+        const runId = `negative-gate-${feedbackGiven}`;
+        const execution = executionMetadata(
+          finishNodeExecution(
+            startNodeExecution({
+              runId,
+              path: 'refine',
+              node: refine,
+              invocation: newNodeInvocation(),
+              provider: 'claude',
+            }),
+            { status: 'suspended', point: 'interactive_loop' },
+            { costUsd: -0.01 }
+          )
+        );
+        const { completed, snapshot } = await resumeAt(
+          runId,
+          gate({ execution, signaledCostUsd: -0.01 }),
+          feedbackGiven,
+          feedbackGiven
+            ? [refine]
+            : [
+                refine,
+                {
+                  id: 'after',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Next.' },
+                  depends_on: ['refine'],
+                },
+              ]
+        );
+        expect(mockSendQueryDag.mock.calls.length).toBe(1);
+        if (feedbackGiven) {
+          expect(completed?.data?.cost_usd).toBe(0.03);
+          expect(completed?.data).toMatchObject({
+            spend: { costUsd: { source: 'provider', value: 0.03, partial: true } },
+          });
+        } else {
+          expect(completed?.data).not.toHaveProperty('cost_usd');
+          expect(completed?.data).toMatchObject({
+            spend: { costUsd: { source: 'unavailable', reason: 'invalid' } },
+          });
+        }
+        expect(snapshot.costUsd).toBeCloseTo(0.03, 5);
+      }
+    );
+
+    it.each(
+      [-0.01, undefined, 'invalid'].flatMap(signaledCostUsd =>
+        [true, false].map(feedbackGiven => ({ signaledCostUsd, feedbackGiven }))
+      )
+    )(
+      'uses saved execution cost with inconsistent gate fields: %j',
+      async ({ signaledCostUsd, feedbackGiven }) => {
+        const runId = `inconsistent-gate-${signaledCostUsd}-${feedbackGiven}`;
+        const execution = executionMetadata(
+          finishNodeExecution(
+            startNodeExecution({
+              runId,
+              path: 'refine',
+              node: refine,
+              invocation: newNodeInvocation(),
+              provider: 'claude',
+            }),
+            { status: 'suspended', point: 'interactive_loop' },
+            { costUsd: 0.02 }
+          )
+        );
+        const { completed } = await resumeAt(
+          runId,
+          gate({ execution, signaledCostUsd }),
+          feedbackGiven
+        );
+        const expected = feedbackGiven ? 0.05 : 0.02;
+        expect(completed?.data).toMatchObject({
+          cost_usd: expected,
+          spend: { costUsd: { source: 'provider', value: expected } },
+        });
+        expect(completed?.data).not.toHaveProperty('spend.costUsd.partial');
+      }
+    );
+
+    it.each(
+      (['provider', 'command load', 'compiled error', 'compiled metadata'] as const).flatMap(
+        failure =>
+          [0, 1, 2].flatMap(depth =>
+            [false, true].map(throughGate => ({ failure, throughGate, depth }))
+          )
+      )
+    )(
+      'counts gate spend once after $failure failure with further gate=$throughGate at group depth=$depth',
+      async ({ failure, throughGate, depth }) => {
+        const runId = `gate-failure-${failure}`;
+        const node: LoopNode = {
+          ...refine,
+          loop:
+            failure === 'provider'
+              ? { ...refine.loop }
+              : { ...refine.loop, prompt: undefined, command: 'missing-command' },
+        };
+        if (failure === 'compiled error' || failure === 'compiled metadata') {
+          Object.assign(node.loop, {
+            [COMPILED_LOOP_COMMAND]:
+              failure === 'compiled error' ? { error: 'Command compilation failed' } : {},
+          });
+        }
+        if (failure === 'provider') {
+          mockGetAgentProviderDag.mockImplementation(() => {
+            throw new Error('Provider initialization failed');
+          });
+        }
+        const loopPath = Array.from({ length: depth }, (_, index) => ({
+          groupId: `group${index}`,
+          iteration: 1,
+        }));
+        const stepName = [...loopPath.map(frame => frame.groupId), 'refine'].join('.');
+        const workflowNodes = (leaf: DagNode): DagNode[] => {
+          let wrapped = leaf;
+          for (const frame of [...loopPath].reverse()) {
+            wrapped = {
+              id: frame.groupId,
+              kind: 'loop_group',
+              loop_group: {
+                until: 'APPROVED',
+                max_iterations: 1,
+                fresh_context: false,
+                nodes: [wrapped],
+              },
+            };
+          }
+          return [wrapped];
+        };
+        const execution = executionMetadata(
+          finishNodeExecution(
+            startNodeExecution({
+              runId,
+              path: stepName,
+              node,
+              invocation: newNodeInvocation(loopPath),
+              provider: 'claude',
+            }),
+            { status: 'suspended', point: 'interactive_loop' },
+            {
+              costUsd: 0.04,
+              costPartial: true,
+              tokens: { input: 40, output: 4, cacheRead: 10, cacheWrite: 0 },
+            }
+          )
+        );
+        const mockDeps = createMockDeps();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: { name: 'gate-early-failure', nodes: workflowNodes(node) },
+            workflowRun: makeWorkflowRun(runId, {
+              metadata: {
+                approval: gate({
+                  execution,
+                  signaledCostUsd: 0.04,
+                  signaledTokens: undefined,
+                }),
+                loop_user_input: 'again',
+                loop_feedback_given: true,
+              },
+            }),
+          })
+        );
+        const events = persistedEvents(mockDeps.store);
+        const failed = events.filter(
+          e => e.event_type === 'node_failed' && e.step_name === stepName
+        );
+        expect(failed).toHaveLength(1);
+        expect(failed[0]?.data).toMatchObject({
+          failure_kind: 'config',
+          cost_usd: 0.04,
+          spend: { costUsd: { source: 'provider', value: 0.04, partial: true } },
+        });
+        expect(mockSendQueryDag).not.toHaveBeenCalled();
+        expect(runUsageWrites(mockDeps.store)).toEqual([
+          expect.objectContaining({ total_cost_usd: 0.04 }),
+        ]);
+        expect((await foldDagResumeSnapshot(events, runId)).costUsd).toBeCloseTo(0.04, 5);
+
+        mockGetAgentProviderDag.mockImplementation(() => ({
+          sendQuery: mockSendQueryDag,
+          checkCredential: async () => ({
+            state: 'not_checked' as const,
+            source: 'native' as const,
+          }),
+          getType: () => 'claude',
+          getCapabilities: mockClaudeCapabilities,
+        }));
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield {
+            type: 'agent_message_chunk',
+            text: throughGate ? 'Review this iteration.' : '<promise>APPROVED</promise>',
+          };
+          yield {
+            type: 'result',
+            cost: 0.03,
+            sessionId: 'continued',
+            tokens: { input: 30, output: 3, cacheRead: 5, cacheWrite: 0 },
+          };
+        });
+        const snapshot = await foldDagResumeSnapshot(events, runId);
+        (
+          mockDeps.store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>
+        ).mockImplementation(async () => snapshot);
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: { name: 'gate-retry', nodes: workflowNodes(refine) },
+            workflowRun: makeWorkflowRun(runId, {
+              metadata: {
+                approval: gate({
+                  execution,
+                  signaledCostUsd: 0.04,
+                  signaledTokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 1 },
+                }),
+                loop_user_input: 'again',
+                loop_feedback_given: true,
+              },
+            }),
+            priorCompletedNodes: snapshot.completedNodeOutputs,
+            priorUsage: snapshot,
+          })
+        );
+        if (throughGate) {
+          expect(runUsageWrites(mockDeps.store).at(-1)).toMatchObject({
+            total_cost_usd: 0.07,
+            total_tokens_in: 70,
+            total_tokens_out: 7,
+            total_cache_read_tokens: 15,
+            total_cache_write_tokens: 0,
+          });
+          const nextGate = mockDeps.store.pauseWorkflowRun.mock.calls.at(-1)?.[1];
+          expect(nextGate?.execution?.spend.tokens).toMatchObject({
+            source: 'provider',
+            value: { input: 70, output: 7, cacheRead: 15, cacheWrite: 0 },
+          });
+          const pausedSnapshot = await foldDagResumeSnapshot(
+            persistedEvents(mockDeps.store),
+            runId
+          );
+          expect(pausedSnapshot.costUsd).toBeCloseTo(0.04, 5);
+          expect(
+            pausedSnapshot.loopConfigFailureBaselines?.get(execution.invocation.id)
+          ).toMatchObject({
+            costUsd: execution.spend.costUsd,
+            tokens: execution.spend.tokens,
+          });
+          (
+            mockDeps.store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>
+          ).mockImplementation(async () => pausedSnapshot);
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: '<promise>APPROVED</promise>' };
+            yield {
+              type: 'result',
+              cost: 0.03,
+              sessionId: 'continued-again',
+              tokens: { input: 30, output: 3, cacheRead: 5, cacheWrite: 0 },
+            };
+          });
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              platform: createMockPlatform(),
+              cwd: testDir,
+              workflow: { name: 'gate-retry-again', nodes: workflowNodes(refine) },
+              workflowRun: makeWorkflowRun(runId, {
+                metadata: {
+                  approval: nextGate,
+                  loop_user_input: 'again',
+                  loop_feedback_given: true,
+                },
+              }),
+              priorCompletedNodes: pausedSnapshot.completedNodeOutputs,
+              priorUsage: pausedSnapshot,
+            })
+          );
+        }
+        const expectedCost = throughGate ? 0.1 : 0.07;
+        const expectedTokens = {
+          input: throughGate ? 100 : 70,
+          output: throughGate ? 10 : 7,
+          cacheRead: throughGate ? 20 : 15,
+          cacheWrite: 0,
+        };
+        const retriedEvents = persistedEvents(mockDeps.store);
+        const completed = retriedEvents.find(
+          e => e.event_type === 'node_completed' && e.step_name === stepName
+        );
+        expect(completed?.data).toMatchObject({
+          spend: {
+            costUsd: { source: 'provider', value: expectedCost, partial: true },
+            tokens: { source: 'provider', value: expectedTokens },
+          },
+        });
+        expect((await foldDagResumeSnapshot(retriedEvents, runId)).costUsd).toBeCloseTo(
+          expectedCost,
+          5
+        );
+        expect(runUsageWrites(mockDeps.store).at(-1)).toMatchObject({
+          total_cost_usd: expectedCost,
+          total_tokens_in: expectedTokens.input,
+          total_tokens_out: expectedTokens.output,
+          total_cache_read_tokens: expectedTokens.cacheRead,
+          total_cache_write_tokens: 0,
+        });
+        const finalSnapshot = await foldDagResumeSnapshot(retriedEvents, runId);
+        expect(finalSnapshot.tokens).toMatchObject(expectedTokens);
+        expect(finalSnapshot.loopConfigFailureBaselines?.size).toBe(0);
+      }
+    );
 
     it('feedback on a legacy gate with null cost keeps the priced floor partial', async () => {
       const { store, completed, snapshot } = await resumeAt(

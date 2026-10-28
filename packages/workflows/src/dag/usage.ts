@@ -1,3 +1,5 @@
+import type { NodeExecutionResult } from '../node-record-serialization';
+import type { NodeExecutionMetadata } from '../schemas/node-execution';
 import type { RunUsageFigures } from '../schemas/run-usage';
 import { mergeTokenUsage, tokenUsageSchema, type TokenUsage } from '@archon/provider-contract';
 import { getLog } from './log';
@@ -106,4 +108,29 @@ function tokensAgree(a: RunUsageFigures, b: RunUsageFigures): boolean {
   const aUnknown = a.tokensUnknown === true;
   if (aUnknown || b.tokensUnknown === true) return aUnknown === (b.tokensUnknown === true);
   return RECONCILED_TOKEN_AXES.every(axis => a.tokens?.[axis] === b.tokens?.[axis]);
+}
+
+export function incrementalLoopUsage(
+  output: NodeExecutionResult,
+  prior: NodeExecutionMetadata['spend'] | undefined
+): Pick<NodeExecutionResult, 'costUsd' | 'tokens'> {
+  const execution = output.execution;
+  if (execution?.node.kind !== 'loop') return output;
+  if (prior === undefined) return output;
+  const priorCost = prior.costUsd;
+  const tokens = output.tokens === undefined ? undefined : { ...output.tokens };
+  if (tokens !== undefined && prior.tokens.source === 'provider') {
+    for (const axis of RECONCILED_TOKEN_AXES) {
+      const value = tokens[axis];
+      const baseline = prior.tokens.value[axis];
+      if (value !== undefined && baseline !== undefined) tokens[axis] = value - baseline;
+    }
+  }
+  return {
+    costUsd:
+      output.costUsd === undefined
+        ? undefined
+        : output.costUsd - (priorCost.source === 'provider' ? priorCost.value : 0),
+    tokens,
+  };
 }

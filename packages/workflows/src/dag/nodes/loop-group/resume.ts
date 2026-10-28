@@ -1,3 +1,4 @@
+import { attemptSpend } from '../../../run-budget';
 import { ParentStatusReadError } from '../../../parent-status-read';
 import { BASE_COMPLETION_CHANNELS } from '../../../schemas/loop';
 import { resolveBashPath } from '@archon/git';
@@ -89,6 +90,8 @@ export function readLoopGroupResume(
     isLoopResume,
     enclosingPauseFrame,
   });
+  // Leaf rows already own prior spend; only its completeness proof carries into this segment.
+  progress.usage.costPartial = hasIncompleteGroupCost(ctx, loopGateMeta, ownerInvocationKey);
   const startIteration = isLoopResume
     ? resumeIteration + 1
     : shape.restoredAncestry !== undefined
@@ -118,6 +121,21 @@ export function readLoopGroupResume(
     iterationLimit: answered ? Math.max(maxIterations, startIteration) : maxIterations,
     loopUserInput: isLegacyInteractiveLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '',
   };
+}
+
+function hasIncompleteGroupCost(
+  ctx: RunLayersContext,
+  gate: ApprovalContext | undefined,
+  ownerInvocationKey: string
+): boolean {
+  const savedExecution = [gate?.execution, ctx.unfinishedInvocations?.get(ownerInvocationKey)].find(
+    saved =>
+      saved !== undefined &&
+      saved.runId === ctx.workflowRun.id &&
+      saved.node.kind === 'loop_group' &&
+      nodeInvocationKey(saved.path, saved.invocation.loopPath) === ownerInvocationKey
+  );
+  return savedExecution !== undefined && attemptSpend(savedExecution).kind === 'unavailable';
 }
 
 /** Every enclosing invocation needs a frame, even when it owns no sessions. */
@@ -314,6 +332,7 @@ export async function finalizeGroupOnBareApprove(
   return {
     state: 'completed',
     output: finalizeOutput,
+    ...run.progress.usage,
     ...(finalizeStructured !== null ? { structuredOutput: finalizeStructured } : {}),
   };
 }
@@ -363,6 +382,7 @@ export async function resumeTerminalWait(
       state: 'running',
       output: '',
       loopIterations: resumeIteration,
+      ...run.progress.usage,
       ...((await ownsTerminalWait(run, resumeIteration, terminalNode.id))
         ? { suspensionPoint: 'wait' as const }
         : {}),
@@ -491,6 +511,7 @@ async function completeResumedIteration(
   return {
     state: 'completed',
     output: resumedOutput,
+    ...run.progress.usage,
     loopIterations: resumedIteration,
     ...(resumedStructuredOutput !== undefined ? { structuredOutput: resumedStructuredOutput } : {}),
   };

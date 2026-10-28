@@ -181,6 +181,7 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   guardedLayerSnapshots?: Set<string>;
   bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
+  loopConfigFailureBaselines?: DagResumeSnapshot['loopConfigFailureBaselines'];
   /** Each workflow path dispatches once per segment; prior events are the fixed accounting baseline. */
   reportedChildUsage?: DagResumeSnapshot['reportedChildUsage'];
   unattributedChildUsagePaths?: DagResumeSnapshot['unattributedChildUsagePaths'];
@@ -233,6 +234,7 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   warnedProviderConflicts: Set<string>;
   /** Run-level usage accumulators (mutated by runLayers; caller reads after). */
   totalCostUsd: number | undefined;
+  totalCostPartial?: boolean;
   totalTokens: TokenUsage | undefined;
   totalTokensUnknown?: boolean;
   /** Prefix prepended to every persisted `step_name` ('' for top-level, '{groupId}.' for a loop_group body). */

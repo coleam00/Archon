@@ -122,7 +122,8 @@ export function ConsoleWorkflowResultCard({
   const glyph = RESULT_GLYPH[run.status] ?? '•';
   const label = RESULT_LABEL[run.status] ?? `Workflow ${statusLabel[run.status].toLowerCase()}`;
   const duration = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
-  const cost = run.costUsd !== null ? formatCost(run.costUsd) : null;
+  const cost =
+    run.costUsd !== null ? `Reported cost ${formatCost(run.costUsd)} (may be partial)` : null;
   const accent = ACCENT_BY_STATUS[run.status] ?? FALLBACK_ACCENT;
 
   return (

@@ -234,6 +234,7 @@ export async function executeComposeFanOutNode(
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const execution = beginExecution(ctx, node);
   let tokensUnknown = false;
+  let costPartial = false;
   await recordNodeState({ store: deps.store, logDir: ctx.logDir }, execution);
 
   const failResult = async (
@@ -256,6 +257,7 @@ export async function executeComposeFanOutNode(
         {
           output: { text: '' },
           costUsd,
+          costPartial,
           tokens,
           tokensUnknown,
           diagnostics: { fanOut: true },
@@ -280,6 +282,7 @@ export async function executeComposeFanOutNode(
         {
           output: { text: output, ...(structured !== undefined ? { structured } : {}) },
           costUsd,
+          costPartial,
           tokens,
           tokensUnknown,
           diagnostics: { fanOut: true },
@@ -376,11 +379,18 @@ export async function executeComposeFanOutNode(
 
   const totalCostUsd = sumReportedCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
+  costPartial = outcomes.some(outcome => outcome.costPartial === true);
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 
   const parent = await readParentStatus(ctx, node);
   if (parent === 'stopped') {
-    return interruptedFanOutResult(execution, totalCostUsd, totalTokens, tokensUnknown);
+    return interruptedFanOutResult(
+      execution,
+      totalCostUsd,
+      totalTokens,
+      tokensUnknown,
+      costPartial
+    );
   }
 
   const joined = joinComposeOutcomes(
@@ -412,11 +422,13 @@ function interruptedFanOutResult(
   execution: NodeExecutionRecord,
   costUsd: number | undefined,
   tokens: TokenUsage | undefined,
-  tokensUnknown: boolean
+  tokensUnknown: boolean,
+  costPartial: boolean
 ): NodeExecutionResult {
   return {
     ...serializeNodeOutput(execution),
     ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(costPartial ? { costPartial: true } : {}),
     ...(tokens !== undefined ? { tokens } : {}),
     ...(tokensUnknown ? { tokensUnknown: true } : {}),
   };

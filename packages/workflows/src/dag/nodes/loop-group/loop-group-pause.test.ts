@@ -16,6 +16,13 @@ import {
   makeWorkflowRun,
   readTranscript,
 } from '../../test-utils';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import {
+  newNodeInvocation,
+  startNodeExecution,
+  finishNodeExecution,
+} from '../../../node-execution';
+import { serializeNodeStateRecord } from '../../../node-record-serialization';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from '../../../event-emitter';
 import type {
@@ -31,6 +38,24 @@ import {
 } from '../../../schemas';
 import { expandWorkflowIncludes } from '../../../include-expander';
 import type { IWorkflowStore, PersistedNodeOutput } from '../../../store';
+
+function seedIncompleteGroup(store: MockWorkflowStore, runId: string): void {
+  const node = dagNodeSchema.parse({
+    id: 'grp',
+    loop_group: { max_iterations: 2, until: 'DONE', nodes: [{ id: 'work', prompt: 'Work.' }] },
+  });
+  if (node.kind !== 'loop_group') throw new Error('Expected loop group');
+  const execution = startNodeExecution({
+    runId,
+    path: 'grp',
+    node,
+    invocation: newNodeInvocation([]),
+  });
+  const record = serializeNodeStateRecord(
+    finishNodeExecution(execution, { status: 'suspended', point: 'wait' }, { costPartial: true })
+  );
+  store.getDagResumeSnapshot.mockImplementation(() => foldDagResumeSnapshot([record], runId));
+}
 
 // ─── #2707 step 3: gate-terminated loop_group pause escalation ─────────────
 
@@ -377,9 +402,11 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
 
     const persisted = workflowWaitContextSchema.parse(paused.metadata.wait);
     const earlyStore = createEscalationStore('run-wait-escalation');
+    seedIncompleteGroup(earlyStore, 'run-wait-escalation');
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(earlyStore),
+        priorCompletedNodes: new Map(),
         platform,
         cwd: testDir,
         workflow: ready(waitTerminatedLoopGroupWorkflow()),
@@ -392,6 +419,11 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(workflowWaitContextSchema.parse(continued?.[1])).toEqual(persisted);
     expect(continued?.[1]).toEqual(persisted);
     expect(continued?.[2]).toEqual({ kind: 'continued' });
+    expect(
+      earlyStore.createWorkflowEvent.mock.calls
+        .map(([e]) => e)
+        .find(e => e.event_type === 'node_suspended' && e.step_name === 'grp')?.data?.spend
+    ).toMatchObject({ costUsd: { source: 'unavailable', reason: 'incomplete' } });
 
     const expiredWait = {
       ...(paused.metadata.wait as WorkflowWaitContext),
@@ -402,10 +434,12 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       metadata: { wait: expiredWait },
     });
     const resumedStore = createEscalationStore('run-wait-escalation');
+    seedIncompleteGroup(resumedStore, 'run-wait-escalation');
 
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(resumedStore),
+        priorCompletedNodes: new Map(),
         platform,
         cwd: testDir,
         workflow: ready(waitTerminatedLoopGroupWorkflow()),
@@ -413,6 +447,11 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       })
     );
 
+    expect(
+      resumedStore.createWorkflowEvent.mock.calls
+        .map(([e]) => e)
+        .find(e => e.event_type === 'node_completed' && e.step_name === 'grp')?.data?.spend
+    ).toMatchObject({ costUsd: { source: 'unavailable', reason: 'incomplete' } });
     expect(resumedStore.completeWorkflowRun).toHaveBeenCalledTimes(1);
     expect(resumedStore.pauseWorkflowRunForWait).not.toHaveBeenCalled();
   });
@@ -761,6 +800,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     });
 
     const store = createEscalationStore('run-escalation-2');
+    seedIncompleteGroup(store, 'run-escalation-2');
     const platform = createMockPlatform();
     const approvedDecision = { decision: 'approve', text: '' };
     const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
@@ -811,6 +851,9 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     // until_bash read the answer; the group's output is still the work (#4043).
     expect(completedEvents[0].data?.node_output).toBe('work output');
     expect(completedEvents[0].data?.structured_output).toBeUndefined();
+    expect(completedEvents[0].data?.spend).toMatchObject({
+      costUsd: { source: 'unavailable', reason: 'incomplete' },
+    });
   });
 
   it('#4164: resumed loop_group.until_bash receives named inputs', async () => {

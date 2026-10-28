@@ -164,9 +164,9 @@ function RunCardHeader({
         {typeof run.costUsd === 'number' ? (
           <span
             className="font-mono text-[11px] tabular-nums text-text-secondary"
-            title="Total agent cost"
+            title="Reported agent cost; may be partial"
           >
-            {formatCost(run.costUsd)}
+            {`Reported cost ${formatCost(run.costUsd)} (may be partial)`}
           </span>
         ) : null}
         <span className="font-mono text-[11px] tabular-nums text-text-tertiary">

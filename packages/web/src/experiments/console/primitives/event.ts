@@ -56,11 +56,11 @@ export interface NodeTransitionEvent extends RunEventBase {
   /** Only populated for `skipped` — the evaluated expression that gated it. */
   skipExpr: string | null;
   /**
-   * Completion enrichment from the persisted row; null when a field is absent.
-   * `foldNodeRuns` copies costUsd, costScope, stopReason, numTurns, and tokens from
-   * the latest `completed` transition only when the engine's node state is `completed`.
+   * Completion enrichment from the persisted row. `foldNodeRuns` copies it from the
+   * latest `completed` transition only when the engine's node state is `completed`.
    */
   costUsd: number | null;
+  costPartial: boolean;
   /** The server's scope for `costUsd`; null when the row carries no cost. */
   costScope: CostScope | null;
   stopReason: string | null;
@@ -189,6 +189,9 @@ function toNodeTransition(
     skipReason: transition === 'skipped' ? readStringOrNull(data, 'reason') : null,
     skipExpr: transition === 'skipped' ? readStringOrNull(data, 'expr') : null,
     costUsd: readNumberOrNull(data, 'cost_usd'),
+    costPartial:
+      data.cost_partial === true ||
+      (isRecord(data.spend) && isRecord(data.spend.costUsd) && data.spend.costUsd.partial === true),
     costScope: raw.cost_scope ?? null,
     stopReason: readStringOrNull(data, 'stop_reason'),
     numTurns: readNumberOrNull(data, 'num_turns'),
@@ -454,6 +457,7 @@ export interface NodeRun {
   durationMs: number | null;
   /** From the `node_completed` behind a `completed` state; null for non-AI nodes and every other state. */
   costUsd: number | null;
+  costPartial: boolean;
   costScope: CostScope | null;
   numTurns: number | null;
   tokens: TokenUsage | null;
@@ -554,6 +558,7 @@ function toNodeRun(node: RunNodeState, transitions: NodeTransitionEvent[]): Node
     endedAt: end?.timestamp ?? null,
     durationMs: end?.durationMs ?? null,
     costUsd: completed?.costUsd ?? null,
+    costPartial: completed?.costPartial ?? false,
     costScope: completed?.costScope ?? null,
     numTurns: completed?.numTurns ?? null,
     tokens: completed?.tokens ?? null,

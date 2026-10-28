@@ -15,6 +15,7 @@ interface NodeDividerProps {
   timestamp: string;
   /** From `node_completed` — surfaced inline so per-node spend is visible. */
   costUsd?: number | null;
+  costPartial?: NodeRun['costPartial'];
   costScope?: CostScope | null;
   numTurns?: number | null;
   tokens?: NodeRun['tokens'];
@@ -109,11 +110,16 @@ const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
 // node's own.
 function formatNodeCost(
   costUsd: NodeDividerProps['costUsd'],
-  costScope: NodeDividerProps['costScope']
+  costScope: NodeDividerProps['costScope'],
+  costPartial: NodeDividerProps['costPartial']
 ): string {
-  return typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd >= 0
-    ? ` · ${costScope === 'total' ? 'total ' : ''}$${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
-    : '';
+  if (typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd < 0) return '';
+  const digits = costUsd >= 0.01 ? 2 : 4;
+  let amount = costUsd.toFixed(digits);
+  if (costPartial && Number(amount) > costUsd) {
+    amount = (Number(amount) - 10 ** -digits).toFixed(digits);
+  }
+  return ` · ${costScope === 'total' ? 'total ' : ''}${costPartial ? 'at least ' : ''}$${amount}`;
 }
 
 /**
@@ -131,6 +137,7 @@ export function NodeDivider({
   durationMs,
   timestamp,
   costUsd,
+  costPartial,
   costScope,
   numTurns,
   tokens,
@@ -147,7 +154,7 @@ export function NodeDivider({
     durationMs !== null && durationMs > 0
       ? ` · ${formatElapsed(Math.floor(durationMs / 1000))}`
       : '';
-  const cost = formatNodeCost(costUsd, costScope);
+  const cost = formatNodeCost(costUsd, costScope, costPartial);
   const turns =
     numTurns !== null && numTurns !== undefined && numTurns > 0 ? ` · ${numTurns}t` : '';
 

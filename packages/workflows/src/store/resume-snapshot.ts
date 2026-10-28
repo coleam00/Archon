@@ -36,12 +36,16 @@ export interface PriorFailedNode {
 }
 
 export interface DagResumeSnapshot extends RunUsageFigures {
+  /** Completeness of the retained cost contributions, independent of reusable outputs. */
+  costPartial?: boolean;
   /** Cumulative usage already reported for each child run, keyed by child run id. */
   reportedChildUsage?: Map<string, RunUsageFigures>;
   /** Historical workflow spend with no unambiguous child attribution, keyed by path. */
   unattributedChildUsagePaths?: Set<string>;
   /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
   unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
+  /** Already counted loop configuration failures, keyed by invocation id, surviving later gates. */
+  loopConfigFailureBaselines?: Map<string, NodeExecutionMetadata['spend']>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
   /** Nodes whose latest record is `node_failed`; a run continued after a pause replays them. */
   failedNodes: Map<string, PriorFailedNode>;

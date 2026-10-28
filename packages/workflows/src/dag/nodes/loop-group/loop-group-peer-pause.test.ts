@@ -246,3 +246,64 @@ for (const variant of variants) {
     }
   });
 }
+
+test('a loop gate suppressed by peer failure persists partial deferred spend', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'archon-loop-partial-suppressed-'));
+  try {
+    mockSendQueryDag.mockImplementation(async function* (prompt) {
+      if (prompt.includes('Fail')) throw new Error('peer failed');
+      yield { type: 'result', sessionId: 'unpriced' };
+      yield { type: 'agent_message_chunk', text: 'DONE' };
+      yield { type: 'result', sessionId: 'priced', cost: 0.02 };
+    });
+    const store = await createFileWorkflowStore({ root });
+    const pauseGate = spyOn(store, 'pauseWorkflowRun');
+    const created = await store.createWorkflowRun({
+      workflow_name: 'partial-suppressed',
+      user_message: '',
+    });
+    const run = await store.claimPendingWorkflowRun(created.id, root);
+    if (!run) throw new Error('Claim failed');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: root,
+        workflowRun: run,
+        workflow: {
+          name: 'partial-suppressed',
+          nodes: [
+            dagNodeSchema.parse({
+              id: 'cycle',
+              loop_group: {
+                max_iterations: 1,
+                until: 'DONE',
+                nodes: [
+                  peer('pause', 'interactive loop'),
+                  peer('broken', 'interactive loop', true),
+                ],
+              },
+            }),
+          ],
+        },
+      })
+    );
+    const events = await store.listWorkflowEvents(run.id);
+    expect((await store.getWorkflowRun(run.id))?.status).toBe('failed');
+    expect(pauseGate).not.toHaveBeenCalled();
+    expect(
+      events.find(e => e.step_name === 'cycle.pause' && e.event_type === 'node_skipped')
+    ).toBeDefined();
+    const usage = events.filter(
+      e => e.step_name === 'cycle.pause' && e.event_type === 'node_deferred_usage'
+    );
+    expect(usage).toHaveLength(1);
+    expect(usage[0].data).toMatchObject({
+      cost_usd: 0.02,
+      spend: { costUsd: { source: 'provider', value: 0.02, partial: true } },
+    });
+    expect((await foldDagResumeSnapshot(events, run.id)).costUsd).toBe(0.02);
+  } finally {
+    await removeTempTree(root);
+  }
+});

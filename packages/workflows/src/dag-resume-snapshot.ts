@@ -17,6 +17,7 @@ import { nodeFailureKindSchema, type NodeExecutionMetadata } from './schemas/nod
 import {
   RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
   addAttemptSpend,
+  attemptSpend,
   emptyRunBudgetUsage,
   type RunBudgetUsage,
 } from './run-budget';
@@ -115,9 +116,11 @@ function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefi
 
 interface UsageContribution {
   stepName: string;
+  loopConfigFailure?: NodeExecutionMetadata;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   costUsd?: number;
+  costPartial?: boolean;
 }
 
 /** What one fold accumulates across a run's rows. */
@@ -207,10 +210,16 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
 function readUsage(
   fold: ResumeFold,
   stepName: string,
-  rawUsage: NodeRecord['rawUsage']
+  rawUsage: NodeRecord['rawUsage'],
+  execution?: Pick<NodeExecutionMetadata, 'spend'>
 ): UsageContribution {
+  const costPartial =
+    execution !== undefined
+      ? attemptSpend(execution).kind === 'unavailable'
+      : rawUsage.costPartial === true;
   const contribution: UsageContribution = {
     stepName,
+    ...(costPartial ? { costPartial: true } : {}),
     ...(rawUsage.tokensUnknown ? { tokensUnknown: true } : {}),
   };
   if (rawUsage.tokens !== undefined) {
@@ -225,9 +234,15 @@ function readUsage(
   return contribution;
 }
 
-function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
-  const contribution = readUsage(fold, stepName, rawUsage);
+function addUsage(
+  fold: ResumeFold,
+  stepName: string,
+  rawUsage: NodeRecord['rawUsage'],
+  execution?: Pick<NodeExecutionMetadata, 'spend'>
+): void {
+  const contribution = readUsage(fold, stepName, rawUsage, execution);
   if (
+    contribution.costPartial ||
     contribution.tokensUnknown ||
     contribution.tokens !== undefined ||
     contribution.costUsd !== undefined
@@ -246,7 +261,13 @@ function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
     });
   }
   if (usage && nodeCostScope(usage.data) !== 'total') {
-    addUsage(fold, row.step_name, usage.rawUsage);
+    replaceLoopConfigFailure(fold, row.step_name, usage.data.invocation?.id);
+    addUsage(
+      fold,
+      row.step_name,
+      usage.rawUsage,
+      usage.data.spend === undefined ? undefined : { spend: usage.data.spend }
+    );
   }
 }
 
@@ -431,6 +452,21 @@ async function readCompletedOutput(
   };
 }
 
+// Configuration failures make no provider call. A cumulative continuation replaces
+// their carried gate measurement only when it proves the same invocation.
+function replaceLoopConfigFailure(
+  fold: ResumeFold,
+  stepName: string,
+  invocationId: string | undefined
+): void {
+  if (invocationId === undefined) return;
+  fold.usageContributions = fold.usageContributions.filter(
+    contribution =>
+      contribution.stepName !== stepName ||
+      contribution.loopConfigFailure?.invocation.id !== invocationId
+  );
+}
+
 function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): void {
   // Each instance terminal owns only the preceding segment. Later inner rows
   // remain counted until a subsequent terminal replaces that segment.
@@ -446,7 +482,17 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   // Other aggregate rows merely restate usage already carried by their leaves.
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
   if (row.event_type !== 'node_skipped_prior_success') {
-    addUsage(fold, row.step_name, record.rawUsage);
+    const metadata = record.metadata;
+    if (metadata?.node.kind === 'loop') {
+      replaceLoopConfigFailure(fold, row.step_name, metadata.invocation.id);
+      const contribution = readUsage(fold, row.step_name, record.rawUsage, metadata);
+      if (metadata.lifecycle.status === 'failed' && metadata.lifecycle.failureKind === 'config') {
+        contribution.loopConfigFailure = metadata;
+      }
+      fold.usageContributions.push(contribution);
+    } else {
+      addUsage(fold, row.step_name, record.rawUsage, metadata);
+    }
   }
 }
 
@@ -555,7 +601,7 @@ async function foldRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
 
 function countedUsage(
   fold: ResumeFold
-): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd'> {
+): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd' | 'costPartial'> {
   const counted = fold.usageContributions;
   const tokensUnknown = counted.some(contribution => contribution.tokensUnknown);
   return {
@@ -568,6 +614,7 @@ function countedUsage(
           )
         ),
     costUsd: sumReportedCost(counted),
+    costPartial: counted.some(contribution => contribution.costPartial),
   };
 }
 
@@ -648,6 +695,13 @@ export async function foldDagResumeSnapshot(
     reportedChildUsage: fold.reportedChildUsage,
     unattributedChildUsagePaths: fold.unattributedChildUsagePaths,
     unfinishedInvocations: fold.unfinishedInvocations,
+    loopConfigFailureBaselines: new Map(
+      fold.usageContributions.flatMap(({ loopConfigFailure }) =>
+        loopConfigFailure === undefined
+          ? []
+          : [[loopConfigFailure.invocation.id, loopConfigFailure.spend] as const]
+      )
+    ),
     completedNodeOutputs: fold.completedNodeOutputs,
     failedNodes: fold.failedNodes,
     fanOutSnapshots: fold.fanOutSnapshots,
