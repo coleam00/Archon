@@ -8,7 +8,7 @@ import { createMockLogger } from '../test/mocks/logger';
 const log = createMockLogger();
 mock.module('@archon/paths', () => ({ createLogger: mock(() => log) }));
 
-import { createFakeAppServer } from '../test/codex-app-server-fake';
+import { createFakeAppServer, type FakeTurnScript } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
 import type { Spawner } from './app-server';
 
@@ -36,6 +36,7 @@ function expectRefreshes(server: ReturnType<typeof createFakeAppServer>, count: 
 
 describe('Codex native login recheck', () => {
   test('two simultaneous refreshes succeed after the loser reloads the saved login', async () => {
+    log.info.mockClear();
     const fixture = loginFixture();
     const refreshed = JSON.stringify({ refresh_token: 'fixture-new-refresh-token' });
     const loaded: string[] = [];
@@ -77,6 +78,9 @@ describe('Codex native login recheck', () => {
     expect(loaded).toEqual([fixture.original, fixture.original, refreshed]);
     expect(readFileSync(fixture.path, 'utf8')).toBe(refreshed);
     expectRefreshes(server, 3);
+    expect(
+      log.info.mock.calls.filter(([, event]) => event === 'codex.native_login_rechecked')
+    ).toEqual([[{ state: 'usable' }, 'codex.native_login_rechecked']]);
   });
 
   test('persistent refresh rejection is unusable after two reads and leaves the login unchanged', async () => {
@@ -101,24 +105,61 @@ describe('Codex native login recheck', () => {
     ).toEqual([[{ state: 'unusable' }, 'codex.native_login_rechecked']]);
   });
 
-  test('cancellation during first-process shutdown prevents a fresh process', async () => {
-    const controller = new AbortController();
-    const server = createFakeAppServer(() => ({ account: null, ignoreStdinClose: true }));
-    const spawner: Spawner = (command, args, options) => {
-      const child = server(command, args, options);
-      const process = server.processes.at(-1);
-      child.stdin.once('finish', () => {
-        controller.abort(new Error('cancelled during shutdown'));
-        setImmediate(() => process?.exit(0));
+  for (const attempt of [1, 2]) {
+    for (const [state, script] of Object.entries({
+      usable: { account },
+      not_checked: { requiresOpenaiAuth: false },
+      malformed: { accountResponse: {} },
+      unusable: { account: null },
+    } satisfies Record<string, FakeTurnScript>)) {
+      test(`abort during process ${attempt} shutdown overrides ${state} before exit`, async () => {
+        log.info.mockClear();
+        const controller = new AbortController();
+        const shuttingDown = Promise.withResolvers<void>();
+        const terminated = Promise.withResolvers<void>();
+        const closed = Promise.withResolvers<void>();
+        let spawned = 0;
+        const server = createFakeAppServer(() =>
+          ++spawned === attempt ? { ...script, ignoreStdinClose: true } : { account: null }
+        );
+        const spawner: Spawner = (command, args, options) => {
+          const child = server(command, args, options);
+          if (spawned === attempt) {
+            child.stdin.once('finish', () => shuttingDown.resolve());
+            child.once('close', () => closed.resolve());
+            child.kill = () => {
+              terminated.resolve();
+              return true;
+            };
+          }
+          return child;
+        };
+        const check = new CodexProvider(spawner, 1).checkCredential({
+          env: { CODEX_API_KEY: '' },
+          signal: controller.signal,
+        });
+        try {
+          await shuttingDown.promise;
+          controller.abort(new Error('cancelled during shutdown'));
+          const result = await Promise.race([
+            check,
+            new Promise<'still waiting'>(resolve => setImmediate(() => resolve('still waiting'))),
+          ]);
+          expect(result).toMatchObject({
+            state: 'check_failed',
+            evidence: 'cancelled during shutdown',
+          });
+          expectRefreshes(server, attempt);
+          expect(
+            log.info.mock.calls.filter(([, event]) => event === 'codex.native_login_rechecked')
+          ).toEqual([]);
+          await terminated.promise;
+        } finally {
+          server.processes.at(-1)?.exit(0);
+          await closed.promise;
+          await check;
+        }
       });
-      return child;
-    };
-    expect(
-      await new CodexProvider(spawner, 1).checkCredential({
-        env: { CODEX_API_KEY: '' },
-        signal: controller.signal,
-      })
-    ).toMatchObject({ state: 'check_failed', evidence: 'cancelled during shutdown' });
-    expectRefreshes(server, 1);
-  });
+    }
+  }
 });

@@ -369,7 +369,10 @@ export class CodexProvider implements IAgentProvider {
           'Codex reports no usable login: it is not signed in, or its sign-in could not be refreshed. Run `codex login`.',
       };
     } finally {
-      await connection.shutdown(this.shutdownGraceMs);
+      // Cleanup keeps observing the process after cancellation; the credential decision
+      // must still end at the caller's deadline.
+      await Promise.race([aborted, connection.shutdown(this.shutdownGraceMs)]);
+      signal.throwIfAborted();
     }
   }
 

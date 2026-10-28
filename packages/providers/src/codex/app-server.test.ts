@@ -411,6 +411,7 @@ describe('Codex native credential check', () => {
     let attempt = 0;
     const server = createFakeAppServer(() => scripts[attempt++] ?? {});
     const status = await new CodexProvider(server, 1).checkCredential({ env, signal });
+    await tick();
     expect(server.processes).toHaveLength(scripts.length);
     for (const process of server.processes) {
       expect(process.methods).toEqual(['initialize', 'account/read']);
@@ -598,6 +599,7 @@ describe('Codex native credential check', () => {
       const { createFakeAppServer } = await import('../test/codex-app-server-fake');
       const server = createFakeAppServer(() => ({ ignoreInitialize: true }));
       expect(await run(server, AbortSignal.timeout(50))).toMatchObject({ state: 'check_failed' });
+      await tick();
       expect(server.processes[0]?.methods).toEqual(['initialize']);
       expect(server.processes[0]?.stdinEnded).toBe(true);
     });

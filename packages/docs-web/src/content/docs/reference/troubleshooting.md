@@ -31,16 +31,24 @@ The recheck does not bypass authentication or send a model request. If the reche
 response, the check is inconclusive: the run starts with a
 `credential_check_inconclusive` warning, as any inconclusive credential check does.
 
-Run `archon doctor` under the same OS user and environment as the server. Its
-Assistant login line must read `codex: usable` to show the native login works. A
-line reading `codex: uses the credential connected in Archon` means doctor skipped
-the native check because an `openai` credential is connected; it says nothing about
-the native login. If the native login remains unavailable, run `codex login` and
-check again. `codex login status` alone does not prove that a refresh will succeed.
+For host execution, run `archon doctor` under the same OS user and environment as
+the server. Doctor checks only the configured host assistant. When that assistant
+is Codex, its Assistant login line must read `codex: usable` to show the native
+login works. A line reading `codex: uses the credential connected in Archon` means
+doctor skipped the native check because an `openai` credential is connected; it
+says nothing about the native login. If the native login remains unavailable, run
+`codex login` under that user and environment and check again. `codex login status`
+alone does not prove that a refresh will succeed.
 
-A refused launch never created a run, so there is nothing to resume: repeat the
-original `archon workflow run` command. Resume only a run that already exists, by
-its ID.
+For container execution, host doctor does not verify the container's login. Check
+the credential source available inside the container and the run's container
+credential preflight result; repair that source if the login is unavailable.
+
+A host credential preflight refusal before run creation leaves no run to resume:
+repeat the original `archon workflow run` command after fixing the login. A
+container native credential refusal happens after run creation and marks that run
+failed. After fixing its credential source, resume the existing run with
+`archon workflow resume <run-id>`.
 
 ## Project uses an unexpected provider
 
