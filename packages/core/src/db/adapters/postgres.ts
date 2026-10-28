@@ -145,6 +145,21 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       getLog().debug('db.postgres_schema_current');
       return;
     }
+    try {
+      await retryConflicts(() => this.initSchemaOnce(sql), 'db.postgres_schema_init_retry');
+      getLog().info('db.postgres_schema_init_completed');
+    } catch (e) {
+      const err = e instanceof Error ? e : new Error(String(e));
+      getLog().fatal({ err }, 'db.postgres_schema_init_failed');
+      throw err;
+    }
+    // Best-effort, AFTER the core schema commits: a role without CREATE FUNCTION/
+    // TRIGGER must not fail boot — the dashboard poller's interval backstop still
+    // streams CLI runs, just without the instant LISTEN/NOTIFY push.
+    await this.installNotifyTrigger(fingerprint);
+  }
+
+  private async initSchemaOnce(sql: string): Promise<void> {
     let client: PoolClient | undefined;
     try {
       client = await this.pool.connect();
@@ -164,7 +179,6 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       await client.query(sql);
       await this.recordSchemaVersion(client, preExisting);
       await client.query('COMMIT');
-      getLog().info('db.postgres_schema_init_completed');
     } catch (e) {
       if (client) {
         try {
@@ -179,16 +193,10 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
           );
         }
       }
-      const err = e instanceof Error ? e : new Error(String(e));
-      getLog().fatal({ err }, 'db.postgres_schema_init_failed');
-      throw err;
+      throw e;
     } finally {
       client?.release();
     }
-    // Best-effort, AFTER the core schema commits: a role without CREATE FUNCTION/
-    // TRIGGER must not fail boot — the dashboard poller's interval backstop still
-    // streams CLI runs, just without the instant LISTEN/NOTIFY push.
-    await this.installNotifyTrigger(fingerprint);
   }
 
   /**

@@ -55,6 +55,65 @@ describe.skipIf(!baseUrl)('PostgreSQL schema convergence and conflict retry', ()
     expect(await notifyTriggerOid()).toBe(before);
   });
 
+  test('a schema deadlock rolls back repairs and retries before the first caller writes', async () => {
+    await scratch.query('UPDATE remote_agent_workflow_event_sequence SET value = -1');
+    await scratch.query('CREATE TABLE boot_write_probe (n INT NOT NULL)');
+    const reader = await scratch.connect();
+    let db: PostgresAdapter | undefined;
+    let write: Promise<unknown> | undefined;
+    try {
+      await reader.query('BEGIN');
+      // The schema waiter must detect the cycle first and become its victim.
+      await reader.query("SET LOCAL deadlock_timeout = '10s'");
+      await reader.query('LOCK TABLE remote_agent_schema_version IN ACCESS SHARE MODE');
+      db = new PostgresAdapter(scratchUrl);
+      write = db.query('INSERT INTO boot_write_probe VALUES (1)');
+      // Observe rejection before waiting on PostgreSQL to avoid an unhandled rejection.
+      const outcome = write.then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error })
+      );
+
+      let schemaWaiting = false;
+      for (let i = 0; i < 200; i++) {
+        const locks = await scratch.query<{ waiting: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1 FROM pg_locks v JOIN pg_locks e ON e.pid = v.pid
+             WHERE v.relation = 'remote_agent_schema_version'::regclass
+               AND v.mode = 'AccessExclusiveLock' AND NOT v.granted
+               AND e.relation = 'remote_agent_workflow_events'::regclass
+               AND e.mode = 'AccessExclusiveLock' AND e.granted
+           ) AS waiting`
+        );
+        if (locks.rows[0].waiting) {
+          schemaWaiting = true;
+          break;
+        }
+        await Bun.sleep(10);
+      }
+      expect(schemaWaiting).toBe(true);
+      await reader.query('SELECT 1 FROM remote_agent_workflow_events');
+      const rolledBack = await reader.query<{ value: string }>(
+        'SELECT value FROM remote_agent_workflow_event_sequence WHERE id = 1'
+      );
+      expect(rolledBack.rows[0].value).toBe('-1');
+      await reader.query('COMMIT');
+
+      expect(await outcome).toEqual({ ok: true });
+      const writes = await scratch.query('SELECT n FROM boot_write_probe');
+      expect(writes.rows).toEqual([{ n: 1 }]);
+      const repaired = await scratch.query<{ value: string }>(
+        'SELECT value FROM remote_agent_workflow_event_sequence WHERE id = 1'
+      );
+      expect(repaired.rows[0].value).toBe('0');
+    } finally {
+      await reader.query('ROLLBACK');
+      reader.release();
+      await write?.catch(() => {});
+      await db?.close();
+    }
+  });
+
   test.each([
     [
       'an older build converged since',

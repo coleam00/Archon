@@ -464,6 +464,64 @@ describe('PostgresAdapter', () => {
   // -------------------------------------------------------------------------
 
   describe('initSchema()', () => {
+    test.each(['40P01', '40001'])(
+      'retries a schema transaction after %s only after rollback and release',
+      async code => {
+        await adapter.query('SELECT 0');
+        const issued: string[] = [];
+        let attempts = 0;
+        mockSchemaSQL = '-- retry schema';
+        mockClient = {
+          query: async sql => {
+            issued.push(sql);
+            if (sql === mockSchemaSQL && ++attempts === 1)
+              throw Object.assign(new Error('schema conflict'), { code });
+            return { rows: [], rowCount: 0 };
+          },
+          release: () => {
+            issued.push('release');
+          },
+        };
+        const db = new PostgresAdapter('postgresql://localhost:5432/testdb');
+        await db.query('SELECT 1');
+        expect(attempts).toBe(2);
+        const rollback = issued.indexOf('ROLLBACK');
+        expect(issued.slice(rollback, rollback + 3)).toEqual(['ROLLBACK', 'release', 'BEGIN']);
+        expect(issued.filter(sql => sql === 'COMMIT')).toHaveLength(2);
+      }
+    );
+
+    test.each([
+      ['40P01', 4],
+      ['40001', 4],
+      ['42501', 1],
+    ] as const)('a persistent schema error %s fails after %s attempts', async (code, count) => {
+      await adapter.query('SELECT 0');
+      let attempts = 0;
+      let rollbacks = 0;
+      let releases = 0;
+      mockSchemaSQL = '-- failing schema';
+      const error = Object.assign(new Error('schema failed'), { code });
+      mockClient = {
+        query: async sql => {
+          if (sql === mockSchemaSQL) {
+            attempts++;
+            throw error;
+          }
+          if (sql === 'ROLLBACK') rollbacks++;
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {
+          releases++;
+        },
+      };
+      const db = new PostgresAdapter('postgresql://localhost:5432/testdb');
+      await expect(db.query('SELECT 1')).rejects.toBe(error);
+      expect(attempts).toBe(count);
+      expect(rollbacks).toBe(count);
+      expect(releases).toBe(count);
+    });
+
     test('runs schema SQL inside an advisory-lock transaction on construction', async () => {
       const issued: string[] = [];
       mockClient = {
