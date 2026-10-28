@@ -268,7 +268,7 @@ describe('SSETransport', () => {
       expect(stream.writeSSE).toHaveBeenCalledWith({ data: '{"type":"text"}' });
     });
 
-    test('buffers events until a stream connects', async () => {
+    test('buffers events until a stream connects and replays them only once', async () => {
       const transport = new SSETransport();
 
       try {
@@ -276,6 +276,12 @@ describe('SSETransport', () => {
         const stream = createMockStream();
         transport.registerStream('conv-1', stream);
         expect(stream.writeSSE).toHaveBeenCalledWith({ data: '{"type":"text"}' });
+        expect(stream.writeSSE).toHaveBeenCalledTimes(1);
+
+        transport.removeStream('conv-1', stream);
+        const reconnected = createMockStream();
+        transport.registerStream('conv-1', reconnected);
+        expect(reconnected.writeSSE).not.toHaveBeenCalled();
       } finally {
         transport.stop();
       }

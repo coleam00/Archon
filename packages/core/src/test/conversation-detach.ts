@@ -41,6 +41,32 @@ function barrier(): { reached: Promise<void>; release: () => void; pause: () => 
   };
 }
 
+async function expectCompetingTransactionBlocked(
+  db: IDatabase,
+  other: IDatabase,
+  isSettled: () => boolean
+): Promise<void> {
+  if (db.dialect === 'sqlite') {
+    // The competing connection waits out SQLITE_BUSY until the leader commits.
+    // Its zero busy timeout keeps each attempt from blocking the event loop the
+    // paused leader shares, so the wait happens in the adapter's async backoff.
+    await Bun.sleep(100);
+    expect(isSettled()).toBe(false);
+  } else {
+    // Wait for PostgreSQL to prove the competing transaction is lock-blocked.
+    let waiting = false;
+    for (let i = 0; i < 200 && !waiting; i++) {
+      const locks = await other.query<{ waiting: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS waiting`
+      );
+      waiting = locks.rows[0].waiting;
+      if (!waiting) await Bun.sleep(5);
+    }
+    expect(waiting).toBe(true);
+    expect(isSettled()).toBe(false);
+  }
+}
+
 export function conversationDetachTests(
   getConnections: () => { db: IDatabase; other: IDatabase },
   useDatabase: (db: IDatabase) => void
@@ -50,6 +76,7 @@ export function conversationDetachTests(
   let conversationId: string;
   let workerId: string;
   let projectId: string;
+  let projectPath: string;
   let sessionId: string;
   let projectName: string;
   let userId: string;
@@ -65,6 +92,7 @@ export function conversationDetachTests(
     conversationId = crypto.randomUUID();
     workerId = crypto.randomUUID();
     projectId = crypto.randomUUID();
+    projectPath = `/project/${projectId}`;
     sessionId = crypto.randomUUID();
     userId = crypto.randomUUID();
     await db.query("INSERT INTO remote_agent_users (id, display_name) VALUES ($1, 'Test')", [
@@ -72,8 +100,8 @@ export function conversationDetachTests(
     ]);
     projectName = `My App ${projectId}`;
     await db.query(
-      "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, '/project')",
-      [projectId, projectName]
+      'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)',
+      [projectId, projectName, projectPath]
     );
     for (const id of [conversationId, workerId]) {
       await db.query(
@@ -112,6 +140,101 @@ export function conversationDetachTests(
     expect(row.rows[0].codebase_id).toBe(projectId);
     expect(row.rows[0].cwd).toBe('/override');
     expect(Boolean(row.rows[0].active)).toBe(true);
+  };
+
+  const insertionRaceTests = (): void => {
+    for (const ownership of ['direct', 'parent'] as const) {
+      for (const admission of ['ordinary', 'resource'] as const) {
+        if (ownership === 'parent' && admission === 'resource') continue;
+        for (const first of ['detach', 'insert'] as const) {
+          test(`${first} wins the ${ownership} ${admission} insertion race across connections`, async () => {
+            const runId = crypto.randomUUID();
+            const run = {
+              id: runId,
+              workflow_name: 'test',
+              user_message: '',
+              codebase_id: projectId,
+              metadata: {},
+              origin: {
+                userId,
+                conversationId: ownership === 'parent' ? workerId : conversationId,
+                ...(ownership === 'parent' ? { parentConversationId: conversationId } : {}),
+              },
+            };
+            const gate = barrier();
+            const insert = async (): Promise<unknown> =>
+              admission === 'ordinary'
+                ? createWorkflowRun(run)
+                : admitResourceStart({
+                    resource: `resource-${runId}`,
+                    capacity: 1,
+                    hostId: 'test',
+                    overlap: 'queue',
+                    launch: {
+                      version: 2,
+                      run,
+                      execution: {
+                        cwd: projectPath,
+                        conversationId: 'platform',
+                        isolation: { kind: 'in-place' },
+                      },
+                    },
+                  });
+            const paused = intercept(
+              db,
+              async sql => {
+                if (
+                  (first === 'detach' && sql.includes('SELECT id, status')) ||
+                  (first === 'insert' && sql.includes('INSERT INTO remote_agent_workflow_runs'))
+                )
+                  await gate.pause();
+              },
+              'after'
+            );
+            useDatabase(paused);
+            const leading = first === 'detach' ? detachConversationProject(input()) : insert();
+            await gate.reached;
+            useDatabase(other);
+            let settled = false;
+            const trailing = (
+              first === 'detach' ? insert() : detachConversationProject(input())
+            ).then(
+              value => {
+                settled = true;
+                return { value };
+              },
+              error => {
+                settled = true;
+                return { error };
+              }
+            );
+            try {
+              await expectCompetingTransactionBlocked(db, other, () => settled);
+            } finally {
+              gate.release();
+            }
+            const leadingResult = await leading;
+            const trailingResult = await trailing;
+            useDatabase(other);
+            if (first === 'detach') {
+              expect(leadingResult).toMatchObject({ status: 'detached' });
+              if ('error' in trailingResult) await insert();
+              else expect(trailingResult.value).toBeDefined();
+            } else {
+              const refused =
+                'error' in trailingResult
+                  ? await detachConversationProject(input())
+                  : trailingResult.value;
+              expect(refused).toMatchObject({
+                status: 'blocked',
+                runs: [{ id: runId, status: 'pending' }],
+              });
+              await expectBound();
+            }
+          }, 10000);
+        }
+      }
+    }
   };
 
   describe('atomic conversation project detach', () => {
@@ -455,115 +578,6 @@ export function conversationDetachTests(
       await expectBound();
     });
 
-    for (const ownership of ['direct', 'parent'] as const) {
-      for (const admission of ['ordinary', 'resource'] as const) {
-        if (ownership === 'parent' && admission === 'resource') continue;
-        for (const first of ['detach', 'insert'] as const) {
-          test(`${first} wins the ${ownership} ${admission} insertion race across connections`, async () => {
-            const runId = crypto.randomUUID();
-            const run = {
-              id: runId,
-              workflow_name: 'test',
-              user_message: '',
-              codebase_id: projectId,
-              metadata: {},
-              origin: {
-                userId,
-                conversationId: ownership === 'parent' ? workerId : conversationId,
-                ...(ownership === 'parent' ? { parentConversationId: conversationId } : {}),
-              },
-            };
-            const gate = barrier();
-            const insert = async (): Promise<unknown> =>
-              admission === 'ordinary'
-                ? createWorkflowRun(run)
-                : admitResourceStart({
-                    resource: `resource-${runId}`,
-                    capacity: 1,
-                    hostId: 'test',
-                    overlap: 'queue',
-                    launch: {
-                      version: 2,
-                      run,
-                      execution: {
-                        cwd: '/project',
-                        conversationId: 'platform',
-                        isolation: { kind: 'in-place' },
-                      },
-                    },
-                  });
-            const paused = intercept(
-              db,
-              async sql => {
-                if (
-                  (first === 'detach' && sql.includes('SELECT id, status')) ||
-                  (first === 'insert' && sql.includes('INSERT INTO remote_agent_workflow_runs'))
-                )
-                  await gate.pause();
-              },
-              'after'
-            );
-            useDatabase(paused);
-            const leading = first === 'detach' ? detachConversationProject(input()) : insert();
-            await gate.reached;
-            useDatabase(other);
-            let settled = false;
-            const trailing = (
-              first === 'detach' ? insert() : detachConversationProject(input())
-            ).then(
-              value => {
-                settled = true;
-                return { value };
-              },
-              error => {
-                settled = true;
-                return { error };
-              }
-            );
-            try {
-              if (db.dialect === 'sqlite') {
-                // The competing connection waits out SQLITE_BUSY until the leader commits.
-                // Its zero busy timeout keeps each attempt from blocking the event loop the
-                // paused leader shares, so the wait happens in the adapter's async backoff.
-                await Bun.sleep(100);
-                expect(settled).toBe(false);
-              } else {
-                // Wait for PostgreSQL to prove the competing transaction is lock-blocked.
-                let waiting = false;
-                for (let i = 0; i < 200 && !waiting; i++) {
-                  const locks = await other.query<{ waiting: boolean }>(
-                    `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS waiting`
-                  );
-                  waiting = locks.rows[0].waiting;
-                  if (!waiting) await Bun.sleep(5);
-                }
-                expect(waiting).toBe(true);
-                expect(settled).toBe(false);
-              }
-            } finally {
-              gate.release();
-            }
-            const leadingResult = await leading;
-            const trailingResult = await trailing;
-            useDatabase(other);
-            if (first === 'detach') {
-              expect(leadingResult).toMatchObject({ status: 'detached' });
-              if ('error' in trailingResult) await insert();
-              else expect(trailingResult.value).toBeDefined();
-            } else {
-              const refused =
-                'error' in trailingResult
-                  ? await detachConversationProject(input())
-                  : trailingResult.value;
-              expect(refused).toMatchObject({
-                status: 'blocked',
-                runs: [{ id: runId, status: 'pending' }],
-              });
-              await expectBound();
-            }
-          }, 10000);
-        }
-      }
-    }
+    insertionRaceTests();
   });
 }

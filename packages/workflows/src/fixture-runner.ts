@@ -39,9 +39,11 @@ import {
   dryRunStubsSchema,
   dryRunWorkflow,
   type DryRunResult,
+  type DryRunTraceEntry,
   type DryRunStubs,
 } from './dry-run';
 import type { WorkflowWithSource } from './schemas/workflow';
+import { workflowRunOutcomeSchema } from './schemas';
 import type { WorkflowConfig } from './deps';
 import type { ResolvedAiProfile } from './model-validation';
 import { resolveTopLevelInputs } from './utils/workflow-requirements';
@@ -68,6 +70,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export const fixtureDeclarationSchema = z
   .object({
     expect: z.enum(['completed', 'failed', 'paused', 'cancelled']).default('completed'),
+    authored: workflowRunOutcomeSchema.optional(),
     // A single node id, or the exact set of failed entries when one failure
     // implies another — a node failing inside a loop_group fails the group
     // too, so that shape is always two entries and was inexpressible before.
@@ -76,6 +79,7 @@ export const fixtureDeclarationSchema = z
     inputs: z.record(z.string(), z.string()).optional(),
     'resolved-text-contains': z.record(z.string(), z.string()).optional(),
   })
+  .strict()
   .refine(decl => decl.expect !== 'failed' || decl['fail-node'] !== undefined, {
     message: "fail-node is required when expect is 'failed'",
   });
@@ -276,6 +280,10 @@ export interface FixtureCheckResult {
   readonly authoredOutcome?: DryRunResult['authoredOutcome'];
   readonly pass: boolean;
   readonly failureReason?: string;
+  readonly nodeFailures?: readonly Pick<
+    Extract<DryRunTraceEntry, { state: 'failed' }>,
+    'nodeId' | 'reason'
+  >[];
   readonly missingStubs: readonly string[];
   /**
    * The subset of `missingStubs` a `trigger_rule: all_done` join tolerated (#2869).
@@ -313,6 +321,8 @@ export interface RunFixturesOptions {
    */
   sourceConfig: WorkflowSourceConfig;
   config?: WorkflowConfig;
+  /** Resolve managed environment only for executable fixtures; failures belong to that result. */
+  resolveExecConfig?: () => Promise<WorkflowConfig>;
   aiProfile?: ResolvedAiProfile;
   /**
    * Restrict to a workflow name, a pack or workflow-folder name, or a path (relative
@@ -469,6 +479,32 @@ export async function runFixtures(options: RunFixturesOptions): Promise<FixtureR
   ]);
 
   const byName = new Map(options.workflows.map(ws => [ws.workflow.name, ws]));
+  const selected = await selectFixtures(all, byName, options);
+
+  const results = await withCapturedFixtureSource(
+    options.cwd,
+    options.sourceConfig,
+    async captured => {
+      const collected: FixtureCheckResult[] = [];
+      for (const fixture of selected) {
+        collected.push(...(await runOneFixture(fixture, byName, options, captured)));
+      }
+      return collected;
+    }
+  );
+
+  return Object.freeze({
+    results,
+    passed: results.filter(r => r.pass).length,
+    failed: results.filter(r => !r.pass).length,
+  });
+}
+
+async function selectFixtures(
+  all: DiscoveredFixture[],
+  byName: ReadonlyMap<string, WorkflowWithSource>,
+  options: RunFixturesOptions
+): Promise<DiscoveredFixture[]> {
   let selected = all;
   if (options.target !== undefined) {
     const targetName = options.target;
@@ -513,24 +549,7 @@ export async function runFixtures(options: RunFixturesOptions): Promise<FixtureR
       throw new Error(`No fixtures found for '${targetName}'.${hint}`);
     }
   }
-
-  const results = await withCapturedFixtureSource(
-    options.cwd,
-    options.sourceConfig,
-    async captured => {
-      const collected: FixtureCheckResult[] = [];
-      for (const fixture of selected) {
-        collected.push(...(await runOneFixture(fixture, byName, options, captured)));
-      }
-      return collected;
-    }
-  );
-
-  return Object.freeze({
-    results,
-    passed: results.filter(r => r.pass).length,
-    failed: results.filter(r => !r.pass).length,
-  });
+  return selected;
 }
 
 async function runOneFixture(
@@ -582,6 +601,89 @@ async function runOneFixture(
   return out;
 }
 
+async function resolveFixtureConfig(
+  options: RunFixturesOptions,
+  execCode: boolean
+): Promise<WorkflowConfig | undefined> {
+  return execCode && options.resolveExecConfig ? options.resolveExecConfig() : options.config;
+}
+
+function fixtureOutcomeFailure(
+  result: DryRunResult,
+  declaration: FixtureDeclaration
+): string | undefined {
+  if (result.outcome !== declaration.expect) {
+    return `expected ${declaration.expect}, dry-run reported ${result.outcome}`;
+  }
+  if (declaration.expect === 'failed') {
+    const failures = result.trace.filter(entry => entry.state === 'failed');
+    const declared = declaration['fail-node'];
+    const expected = (typeof declared === 'string' ? [declared] : [...(declared ?? [])]).sort();
+    const actual = failures.map(f => f.nodeId).sort();
+    if (expected.length !== actual.length || expected.some((id, i) => id !== actual[i])) {
+      return (
+        `expected exactly the failed trace entries [${expected.join(', ')}], got ` +
+        (actual.join(', ') || '(none)')
+      );
+    }
+  }
+  if (declaration.authored !== undefined && result.authoredOutcome !== declaration.authored) {
+    return `expected authored outcome ${declaration.authored}, dry-run reported ${result.authoredOutcome ?? 'undeclared'}`;
+  }
+  return undefined;
+}
+
+function fixtureReachedFailure(
+  result: DryRunResult,
+  declaration: FixtureDeclaration
+): string | undefined {
+  if (declaration.reached === undefined) return undefined;
+  const missingReached = declaration.reached.filter(
+    nodeId =>
+      !result.trace.some(
+        entry =>
+          entry.nodeId === nodeId && (entry.state === 'completed' || entry.state === 'stubbed')
+      )
+  );
+  if (missingReached.length > 0) {
+    return `required nodes did not complete: ${missingReached.join(', ')}`;
+  }
+  return undefined;
+}
+
+function fixtureResolvedTextFailure(
+  result: DryRunResult,
+  declaration: FixtureDeclaration
+): string | undefined {
+  if (declaration['resolved-text-contains'] === undefined) return undefined;
+  for (const [nodeId, expectedText] of Object.entries(declaration['resolved-text-contains'])) {
+    const traceEntries = result.trace.filter(
+      entry =>
+        entry.nodeId === nodeId &&
+        (entry.state === 'completed' || entry.state === 'stubbed' || entry.state === 'paused')
+    );
+    if (traceEntries.length === 0) {
+      return `expected resolved text for node '${nodeId}', but it was not reached`;
+    }
+    // Line endings belong to the checkout, not to the workflow. A command file is read as
+    // raw text, so `* text=auto` gives a Windows clone CRLF inside it, while a fixture
+    // spells its expectation with `\n` escapes that stay LF everywhere. This declaration is
+    // about interpolated content, so it compares on LF alone rather than passing on Linux
+    // and failing on Windows for the same workflow. (Workflow YAML is immune: the parser
+    // normalizes line breaks in its own scalars.)
+    const expected = withLfEndings(expectedText);
+    if (
+      !traceEntries.some(
+        entry =>
+          entry.resolvedText !== undefined && withLfEndings(entry.resolvedText).includes(expected)
+      )
+    ) {
+      return `expected node '${nodeId}' resolved text to contain ${JSON.stringify(expectedText)}`;
+    }
+  }
+  return undefined;
+}
+
 async function checkFixture(
   workflowName: string,
   ws: WorkflowWithSource,
@@ -598,6 +700,7 @@ async function checkFixture(
   try {
     const execCode = parsed.execCode;
     const inputs = resolveTopLevelInputs(ws.workflow, parsed.declaration.inputs);
+    const config = await resolveFixtureConfig(options, execCode);
     const run = (workspace: string): Promise<DryRunResult> =>
       dryRunWorkflow({
         workflow: ws.workflow,
@@ -608,72 +711,15 @@ async function checkFixture(
         execCode,
         execWorkspace: workspace,
         sourceRoots: captured,
-        ...(options.config ? { config: options.config } : {}),
+        ...(config ? { config } : {}),
         ...(options.aiProfile ? { aiProfile: options.aiProfile } : {}),
       });
     const result = execCode ? await withExecWorkspace(options.cwd, run) : await run(options.cwd);
 
-    let failureReason: string | undefined;
-    if (result.outcome !== parsed.declaration.expect) {
-      failureReason = `expected ${parsed.declaration.expect}, dry-run reported ${result.outcome}`;
-    } else if (parsed.declaration.expect === 'failed') {
-      const failures = result.trace.filter(entry => entry.state === 'failed');
-      const declared = parsed.declaration['fail-node'];
-      const expected = (typeof declared === 'string' ? [declared] : [...(declared ?? [])]).sort();
-      const actual = failures.map(f => f.nodeId).sort();
-      if (expected.length !== actual.length || expected.some((id, i) => id !== actual[i])) {
-        failureReason =
-          `expected exactly the failed trace entries [${expected.join(', ')}], got ` +
-          (actual.join(', ') || '(none)');
-      }
-    }
-    // Checked whenever declared, never chained after the outcome branches above: a
-    // fixture that expects a later gate to fail still has to prove the nodes before it
-    // ran, and a declaration that can silently prove nothing is worse than none.
-    if (failureReason === undefined && parsed.declaration.reached !== undefined) {
-      const missingReached = parsed.declaration.reached.filter(
-        nodeId =>
-          !result.trace.some(
-            entry =>
-              entry.nodeId === nodeId && (entry.state === 'completed' || entry.state === 'stubbed')
-          )
-      );
-      if (missingReached.length > 0) {
-        failureReason = `required nodes did not complete: ${missingReached.join(', ')}`;
-      }
-    }
-    if (failureReason === undefined && parsed.declaration['resolved-text-contains'] !== undefined) {
-      for (const [nodeId, expectedText] of Object.entries(
-        parsed.declaration['resolved-text-contains']
-      )) {
-        const traceEntries = result.trace.filter(
-          entry =>
-            entry.nodeId === nodeId &&
-            (entry.state === 'completed' || entry.state === 'stubbed' || entry.state === 'paused')
-        );
-        if (traceEntries.length === 0) {
-          failureReason = `expected resolved text for node '${nodeId}', but it was not reached`;
-          break;
-        }
-        // Line endings belong to the checkout, not to the workflow. A command file is read as
-        // raw text, so `* text=auto` gives a Windows clone CRLF inside it, while a fixture
-        // spells its expectation with `\n` escapes that stay LF everywhere. This declaration is
-        // about interpolated content, so it compares on LF alone rather than passing on Linux
-        // and failing on Windows for the same workflow. (Workflow YAML is immune: the parser
-        // normalizes line breaks in its own scalars.)
-        const expected = withLfEndings(expectedText);
-        if (
-          !traceEntries.some(
-            entry =>
-              entry.resolvedText !== undefined &&
-              withLfEndings(entry.resolvedText).includes(expected)
-          )
-        ) {
-          failureReason = `expected node '${nodeId}' resolved text to contain ${JSON.stringify(expectedText)}`;
-          break;
-        }
-      }
-    }
+    let failureReason =
+      fixtureOutcomeFailure(result, parsed.declaration) ??
+      fixtureReachedFailure(result, parsed.declaration) ??
+      fixtureResolvedTextFailure(result, parsed.declaration);
     // A `trigger_rule: all_done` join tolerates its own missing stub (#2869) — it never
     // blocked this simulated outcome, so it must not block the fixture either. Only the
     // untolerated remainder still means "this fixture never verified a reached node."
@@ -692,6 +738,9 @@ async function checkFixture(
       ...base,
       outcome: result.outcome,
       authoredOutcome: result.authoredOutcome,
+      nodeFailures: result.trace
+        .filter(entry => entry.state === 'failed')
+        .map(({ nodeId, reason }) => ({ nodeId, reason })),
       pass: failureReason === undefined,
       ...(failureReason !== undefined ? { failureReason } : {}),
       missingStubs: result.missingStubs,
@@ -721,6 +770,7 @@ export function formatFixtureReport(report: FixtureReport): string {
       lines.push(`    Authored outcome: ${r.authoredOutcome ?? 'undeclared'}`);
     }
     if (r.failureReason) lines.push(`    ${r.failureReason}`);
+    lines.push(...(r.nodeFailures ?? []).map(({ nodeId, reason }) => `    ${nodeId}: ${reason}`));
     if (r.unusedStubs.length > 0) {
       lines.push(`    warning: unused stubs — ${r.unusedStubs.join(', ')}`);
     }

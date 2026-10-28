@@ -9,6 +9,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { RepoPath, BranchName } from '@archon/git';
 import type { ExecutionContext } from '@archon/provider-contract';
+import type { ProcessOwner } from '@archon/paths/process-owner';
 import type {
   OverlayMode,
   WriteBackFinalizeResult,
@@ -20,11 +21,14 @@ export type { ExecutionContext, WriteBackFinalizeResult, WriteBackApplySummary }
 
 // --- Provider Types ---
 
-export type IsolationProviderType = 'worktree' | 'container' | 'vm' | 'remote';
+export const ISOLATION_PROVIDER_TYPES = ['worktree', 'container', 'vm', 'remote'] as const;
+export type IsolationProviderType = (typeof ISOLATION_PROVIDER_TYPES)[number];
 
-export type IsolationWorkflowType = 'issue' | 'pr' | 'review' | 'thread' | 'task';
+export const ISOLATION_WORKFLOW_TYPES = ['issue', 'pr', 'review', 'thread', 'task'] as const;
+export type IsolationWorkflowType = (typeof ISOLATION_WORKFLOW_TYPES)[number];
 
-export type EnvironmentStatus = 'active' | 'destroyed';
+export const ENVIRONMENT_STATUSES = ['active', 'destroyed'] as const;
+export type EnvironmentStatus = (typeof ENVIRONMENT_STATUSES)[number];
 
 // --- Isolation Request Types (Discriminated Union) ---
 
@@ -183,7 +187,10 @@ export interface WorktreeEnvironment<Metadata extends WorktreeMetadata = Worktre
 export type IsolatedEnvironment = WorktreeEnvironment;
 export type WorktreeCreationEnvironment = WorktreeEnvironment<
   CreatedWorktreeMetadata | AdoptedWorktreeMetadata
->;
+> & {
+  /** Transient reporting base; absent when the original base of a reused branch is unknown. */
+  resolvedBaseBranch?: string;
+};
 
 /**
  * Isolation-record metadata carrying a worktree's creation proof (null when adopted)
@@ -344,6 +351,10 @@ export type IsolationBlockReason = 'creation_failed';
 // An upsert can preserve the checkout and row id while replacing the registration.
 export const WORKTREE_REGISTRATION_ID = 'worktree_registration_id';
 
+// The process removing this worktree. While present, the registration is committed to
+// removal and replacement, adoption and other retirement refuse.
+export const WORKTREE_REMOVAL_OWNER = 'worktree_removal_owner';
+
 export interface IsolationEnvironmentRow {
   id: string;
   codebase_id: string;
@@ -371,6 +382,18 @@ export class WorktreeRegistrationChangedError extends Error {
       `Worktree ${environmentId} changed during cleanup; its current registration was left as is. Inspect it and retry.`
     );
     this.name = 'WorktreeRegistrationChangedError';
+  }
+}
+
+/** Another live process holds the registration's removal claim. */
+export class WorktreeRemovalInProgressError extends WorktreeRegistrationChangedError {
+  constructor(
+    environmentId: string,
+    readonly owner: ProcessOwner
+  ) {
+    super(environmentId);
+    this.message = `Worktree ${environmentId} is being removed by process ${String(owner.pid)} on ${owner.host}; its registration was left as is. Retry after that removal finishes. If that process no longer exists on another host, remove the ${WORKTREE_REMOVAL_OWNER} key from the environment's metadata.`;
+    this.name = 'WorktreeRemovalInProgressError';
   }
 }
 
@@ -459,6 +482,7 @@ export interface WorktreeStatusBreakdown {
   mergedEnvs: { id: string; branchName: string }[];
   staleEnvs: { id: string; branchName: string; daysInactive: number }[];
   activeEnvs: { id: string; branchName: string; reason?: string }[];
+  inspectionFailedEnvs: { id: string; branchName: string; errors: string[] }[];
 }
 
 // --- Store Types ---

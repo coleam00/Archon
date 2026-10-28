@@ -1,91 +1,32 @@
 /**
  * Cleanup service for isolation environments
- * Handles removal triggered by events, schedule, or commands
+ * Handles removal triggered by events, schedule, or commands.
+ *
+ * The cleanup jobs live under ./cleanup/. The scheduled and stale sweeps stay
+ * here with the environment configuration they read, which is read once, when
+ * this module initializes.
  */
-import { lstat } from 'node:fs/promises';
-import {
-  readOwnedWorktree,
-  type OwnedWorktree,
-  type WorkflowRun,
-} from '@archon/workflows/schemas/workflow-run';
-import type { WorktreeDisposition } from '@archon/workflows/schemas/terminal-record';
-import {
-  readWorktreeBranchCreated,
-  readWorktreeCreationId,
-  WorktreeLeftoverError,
-  type IIsolationStore,
-} from '@archon/isolation';
+import type { WorktreeStatusBreakdown } from '@archon/isolation';
+import { isBranchMerged, isPatchEquivalent, toBranchName, toRepoPath } from '@archon/git';
+import type { RepoPath, BranchName } from '@archon/git';
+import type { PrLookup } from '@archon/isolation';
 import {
   getRegisteredPlatformPolicies,
-  unknownPlatformReason,
   retainsWorkspace,
-  type UnknownPlatformReason,
+  unknownPlatformReason,
 } from '../platforms/registry';
 import * as isolationEnvDb from '../db/isolation-environments';
 import * as conversationDb from '../db/conversations';
 import * as sessionDb from '../db/sessions';
 import { SessionNotFoundError } from '../db/sessions';
-import * as codebaseDb from '../db/codebases';
-import * as workflowDb from '../db/workflows';
-import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isolation';
-import type { WorktreeStatusBreakdown, PrLookup, ContainerBackendConfig } from '@archon/isolation';
-import {
-  hasUncommittedChangesStrict,
-  isWorktreeRegistered,
-  worktreeExists,
-  getDefaultBranch,
-  isBranchMerged,
-  isPatchEquivalent,
-  localBranchExists,
-  inspectRemoteBranches,
-  isRevCoveredBy,
-  countCommitsMissingFromRemotes,
-  getLastCommitDate,
-  toRepoPath,
-  toWorktreePath,
-  toBranchName,
-} from '@archon/git';
-import type { RepoPath, BranchName, WorktreePath } from '@archon/git';
-import { createLogger } from '@archon/paths';
-import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { ConversationNotFoundError } from '../types';
-import { loadRepoConfig } from '../config/config-loader';
-
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('cleanup');
-  return cachedLog;
-}
-
-/** Git context for a repo's cleanup operations, resolved from repo config. */
-interface RepoGitContext {
-  /** Remote-qualified base ref (e.g. "origin/main"), kept current via `git fetch`. */
-  remoteMainRef: BranchName;
-  /** Configured remote name (worktree.remote). Always resolved to a string (defaults to 'origin'). */
-  remote: string;
-}
-
-// Resolve the base branch and remote for a repo, preferring worktree.baseBranch /
-// worktree.remote from .archon/config.yaml before falling back to runtime git
-// detection. A reachable remote with a known symbolic HEAD is required unless
-// worktree.baseBranch is configured.
-// A missing config falls back to git detection; a config that fails to load
-// throws, and cleanup surfaces that rather than working around it.
-async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<RepoGitContext> {
-  const repoConfig = await loadRepoConfig(cwd);
-  const remote = configuredRemote(repoConfig);
-  const configured = repoConfig.worktree?.baseBranch?.trim();
-  if (configured) {
-    return { remoteMainRef: toBranchName(`${remote}/${configured}`), remote };
-  }
-  const branch = await getDefaultBranch(repoPath, remote);
-  return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
-}
-
-function configuredRemote(repoConfig: Awaited<ReturnType<typeof loadRepoConfig>>): string {
-  return repoConfig.worktree?.remote?.trim() || 'origin';
-}
+import { getLog } from './cleanup/log';
+import { resolveRepoGitContext } from './cleanup/merge-verdict';
+import { checkRemoval, getLiveRunBlocker } from './cleanup/run-lock';
+import { removeEnvironment } from './cleanup/remove-environment';
+import { reapContainerEnvironments, type ContainerCleanupReport } from './cleanup/containers';
+import { recordCleanupRemoval, type CleanupOperationResult } from './cleanup/merged-sweep';
+import { sweepScheduledEnvironment, type CleanupReport } from './cleanup/scheduled-sweep';
 
 function readPositiveIntegerEnv(
   name: string,
@@ -119,171 +60,11 @@ export { STALE_THRESHOLD_DAYS, SESSION_RETENTION_DAYS };
 // Module-level variable for scheduler
 let cleanupIntervalId: NodeJS.Timeout | null = null;
 
-export interface CleanupReport {
-  removed: string[];
-  skipped: { id: string; reason: string }[];
-  errors: { id: string; error: string }[];
-  sessionsDeleted: number;
-  /** Removed environments that a failed run no longer locked, keyed by env id. */
-  releasedFailedRuns: ({ id: string } & ReleasedFailedRun)[];
-}
-
-// ---------------------------------------------------------------------------
-// Container isolation environments (folder-project container backend, Phase C)
-// ---------------------------------------------------------------------------
-
-/**
- * `ContainerBackend.destroy()` reads the container/volume names from the tracking
- * row's metadata and IGNORES `config` (config is a prepare-time concern), so a
- * placeholder is correct for the cleanup path — it never prepares a container.
- */
-const CLEANUP_PLACEHOLDER_CONTAINER_CONFIG: ContainerBackendConfig = {
-  image: 'archon-runner:latest',
-  network: 'bridge',
-  memoryMb: 4096,
-  pidsLimit: 512,
-};
-
-export interface ContainerEnvSummary {
-  envId: string;
-  codebaseName: string;
-  workingPath: string;
-  ageDays: number;
-  runId: string | null;
-  runStatus: string | null;
-}
-
-export interface ContainerCleanupReport {
-  removed: string[];
-  skipped: { id: string; reason: string }[];
-  errors: { id: string; error: string }[];
-}
-
-/**
- * Immediately reclaim (destroy) a single container isolation environment by id —
- * used when a container run is ABANDONED (M2), so its container + upper volume don't
- * linger until the scheduled reaper. Best-effort: throws on a genuine docker failure
- * (the caller surfaces it), a no-op if the row/container is already gone. The
- * placeholder config is unused by `destroy` (see CLEANUP_PLACEHOLDER_CONTAINER_CONFIG).
- */
-export async function reclaimContainerEnv(envId: string, store: IIsolationStore): Promise<void> {
-  const env = await store.getById(envId);
-  if (env) {
-    const reason = unknownPlatformReason(env.created_by_platform);
-    if (reason) throw new Error(reason);
-  }
-  const backend = new ContainerBackend({
-    store,
-    config: CLEANUP_PLACEHOLDER_CONTAINER_CONFIG,
-  });
-  await backend.destroy(envId);
-}
-
-/**
- * List active container isolation environments with their owning run's status.
- * Read-only; used by `archon isolation list`.
- */
-export async function listContainerEnvironments(): Promise<readonly ContainerEnvSummary[]> {
-  const rows = await isolationEnvDb.listActiveContainerEnvironments();
-  const summaries: ContainerEnvSummary[] = [];
-  for (const row of rows) {
-    // A lookup ERROR is reported as an explicit 'lookup-failed' status, NOT null — a
-    // null runId reads as "orphan" and would misrepresent an active run's container.
-    let run: Awaited<ReturnType<typeof workflowDb.getRunByIsolationEnvId>> | null = null;
-    let lookupFailed = false;
-    try {
-      run = await workflowDb.getRunByIsolationEnvId(row.id);
-    } catch (err) {
-      lookupFailed = true;
-      getLog().warn({ err, envId: row.id }, 'container_env_list_lookup_failed');
-    }
-    summaries.push({
-      envId: row.id,
-      codebaseName: row.codebase_name,
-      workingPath: row.working_path,
-      ageDays: Math.floor(row.days_since_created),
-      runId: run?.id ?? null,
-      runStatus: lookupFailed ? 'lookup-failed' : (run?.status ?? null),
-    });
-  }
-  return summaries;
-}
-
-/**
- * Reap orphaned container isolation environments: remove the container + upper
- * volume of finished-and-unresumable (completed/cancelled) or run-less container
- * envs older than `daysStale`. A container a run can still claim — running, pending,
- * paused, or failed-but-resumable — is NEVER touched: it is awaited state, not
- * garbage (No-Autonomous-Lifecycle-Mutation Across Process Boundaries), and is
- * surfaced by `isolation list` with its age instead. All pruning is label-scoped
- * (via the tracking row), never a bare `docker prune`.
- */
-export async function cleanupContainerEnvironments(
+/** Reap orphaned container environments older than `daysStale`; see reapContainerEnvironments. */
+export function cleanupContainerEnvironments(
   daysStale = STALE_THRESHOLD_DAYS
 ): Promise<ContainerCleanupReport> {
-  getRegisteredPlatformPolicies();
-  const report: ContainerCleanupReport = { removed: [], skipped: [], errors: [] };
-  const rows = await isolationEnvDb.listActiveContainerEnvironments();
-  if (rows.length === 0) return report;
-
-  const backend = new ContainerBackend({
-    store: isolationEnvDb.createIsolationStore(),
-    config: CLEANUP_PLACEHOLDER_CONTAINER_CONFIG,
-  });
-
-  for (const row of rows) {
-    const reason = unknownPlatformReason(row.created_by_platform);
-    if (reason) {
-      report.skipped.push({ id: row.id, reason });
-      continue;
-    }
-    if (retainsWorkspace(row.created_by_platform)) {
-      report.skipped.push({
-        id: row.id,
-        reason: `platform '${row.created_by_platform}' retains workspaces`,
-      });
-      continue;
-    }
-    // FAIL CLOSED on an ambiguous lookup (H3): a DB error is NOT "no run" — treating
-    // it as an orphan would destroy a claimable run's container on a transient blip
-    // (violating No-Autonomous-Lifecycle-Mutation). Report + skip, never destroy.
-    //
-    // Same lock the worktree sweeps use. getRunByIsolationEnvId, which this replaced,
-    // took the newest run row BEFORE filtering status, so a newer terminal run could
-    // shadow an older claimable one and the container would be reaped underneath it.
-    let liveRun: LiveRunBlocker | null;
-    try {
-      liveRun = await getLiveRunBlocker(row.id);
-    } catch (err) {
-      report.errors.push({
-        id: row.id,
-        error: `run lookup failed (NOT reaped): ${(err as Error).message}`,
-      });
-      getLog().warn({ err, envId: row.id }, 'container_env_reap_lookup_failed');
-      continue;
-    }
-    if (liveRun) {
-      report.skipped.push({ id: row.id, reason: liveRun.display });
-      continue;
-    }
-    if (row.days_since_created < daysStale) {
-      report.skipped.push({
-        id: row.id,
-        reason: `${Math.floor(row.days_since_created)}d old (< ${daysStale}d threshold)`,
-      });
-      continue;
-    }
-    try {
-      await backend.destroy(row.id);
-      report.removed.push(row.id);
-      // No runId: the reap only happens when no run can still claim this env.
-      getLog().info({ envId: row.id }, 'container_env_reaped');
-    } catch (err) {
-      report.errors.push({ id: row.id, error: (err as Error).message });
-      getLog().warn({ err, envId: row.id }, 'container_env_reap_failed');
-    }
-  }
-  return report;
+  return reapContainerEnvironments(daysStale);
 }
 
 /**
@@ -356,7 +137,7 @@ export async function onConversationClosed(
     return;
   }
 
-  const result = await removeEnvironment(envId, {
+  const result = await removeEnvironment(env, {
     force: false,
     deleteRemoteBranch: options?.merged,
   });
@@ -382,423 +163,6 @@ export async function onConversationClosed(
 }
 
 /**
- * Options for removing an isolation environment
- */
-export interface RemoveEnvironmentOptions {
-  force?: boolean;
-  deleteRemoteBranch?: boolean;
-}
-
-const NON_WORKTREE_CLEANUP_REASON =
-  'not a worktree environment; archon isolation cleanup 0 only removes eligible containers from registered platforms that do not retain workspaces. Cancel or abandon the owning workflow first if it is live or resumable.';
-
-/**
- * Result from removeEnvironment indicating what actually happened
- */
-export interface RemoveEnvironmentResult {
-  /** Whether the worktree was removed from disk */
-  worktreeRemoved: boolean;
-  /** Whether the branch was deleted (null if branch cleanup was not attempted) */
-  branchDeleted: boolean | null;
-  /**
-   * Why removal did not proceed. A closed set so callers that branch
-   * on a reason fail type-check when it changes, instead of silently diverging.
-   */
-  skippedReason?:
-    | 'environment not found'
-    | 'already destroyed'
-    | typeof NON_WORKTREE_CLEANUP_REASON
-    | 'has uncommitted changes'
-    | 'filesystem removal incomplete; environment remains active'
-    | UnknownPlatformReason;
-  /** Warnings from partial cleanup (e.g., branch couldn't be deleted) */
-  warnings: string[];
-}
-
-/**
- * Remove a specific environment
- */
-export async function removeEnvironment(
-  envId: string,
-  options?: RemoveEnvironmentOptions
-): Promise<RemoveEnvironmentResult> {
-  const noopResult: RemoveEnvironmentResult = {
-    worktreeRemoved: false,
-    branchDeleted: false,
-    warnings: [],
-  };
-
-  const env = await isolationEnvDb.getById(envId);
-  if (!env) {
-    getLog().debug({ envId }, 'env_not_found');
-    return { ...noopResult, skippedReason: 'environment not found' };
-  }
-
-  if (env.status === 'destroyed') {
-    getLog().debug({ envId }, 'env_already_destroyed');
-    return { ...noopResult, skippedReason: 'already destroyed' };
-  }
-
-  if (env.provider !== 'worktree') {
-    return {
-      ...noopResult,
-      skippedReason: NON_WORKTREE_CLEANUP_REASON,
-    };
-  }
-
-  const reason = unknownPlatformReason(env.created_by_platform);
-  if (reason) return { ...noopResult, skippedReason: reason };
-
-  // Get canonical repo path from codebase for branch cleanup
-  let canonicalRepoPath: RepoPath | undefined;
-  let remote: string | undefined;
-  if (env.codebase_id) {
-    const codebase = await codebaseDb.getCodebase(env.codebase_id);
-    canonicalRepoPath = codebase?.default_cwd ? toRepoPath(codebase.default_cwd) : undefined;
-    // Resolve the configured remote only when remote-branch deletion is requested —
-    // that's the one destroy path that pushes to a remote.
-    if (options?.deleteRemoteBranch && codebase?.default_cwd) {
-      remote = configuredRemote(await loadRepoConfig(codebase.default_cwd));
-    }
-  }
-
-  // Check if directory exists before attempting removal
-  const pathExists = await worktreeExists(toWorktreePath(env.working_path));
-
-  const provider = getIsolationProvider();
-
-  try {
-    // If path exists, check for uncommitted changes (unless force)
-    if (pathExists && !options?.force) {
-      const hasChanges = await hasUncommittedChangesStrict(toWorktreePath(env.working_path));
-      if (hasChanges) {
-        getLog().warn({ envId, workingPath: env.working_path }, 'env_has_uncommitted_changes');
-        return { ...noopResult, skippedReason: 'has uncommitted changes' };
-      }
-    }
-
-    // A branch this environment did not create (an existing branch it checked out)
-    // may hold the only copy of someone's commits, so it is deleted only together
-    // with its remote branch. Callers request that only when the branch is finished:
-    // merged, or an operator's explicit `--include-closed` or `archon complete`.
-    const deleteBranch = readWorktreeBranchCreated(env.metadata) || options?.deleteRemoteBranch;
-    // Call destroy even if path doesn't exist - branch cleanup may still be needed
-    const destroyResult = await provider.destroy(env.working_path, {
-      force: options?.force,
-      creationId: readWorktreeCreationId(env.metadata) ?? undefined,
-      ...(deleteBranch ? { branchName: toBranchName(env.branch_name) } : {}),
-      canonicalRepoPath,
-      deleteRemoteBranch: options?.deleteRemoteBranch,
-      remote,
-    });
-
-    // Log warnings from partial failures
-    if (destroyResult.warnings.length > 0) {
-      getLog().warn({ envId, warnings: destroyResult.warnings }, 'env_partial_cleanup');
-    }
-
-    if (!destroyResult.worktreeRemoved || !destroyResult.directoryClean) {
-      return {
-        worktreeRemoved: destroyResult.worktreeRemoved,
-        branchDeleted: destroyResult.branchDeleted,
-        warnings: destroyResult.warnings,
-        skippedReason: 'filesystem removal incomplete; environment remains active',
-      };
-    }
-    await isolationEnvDb.markWorktreeDestroyed(env);
-
-    getLog().info({ envId, workingPath: env.working_path }, 'env_removed');
-
-    return {
-      worktreeRemoved: destroyResult.worktreeRemoved,
-      branchDeleted: destroyResult.branchDeleted,
-      warnings: destroyResult.warnings,
-    };
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, envId }, 'env_remove_failed');
-    throw err;
-  }
-}
-
-/**
- * Clean up to make room when limit reached (Phase 3D)
- * Attempts to remove merged branches first
- * Returns detailed results for user feedback
- */
-export async function cleanupToMakeRoom(
-  codebaseId: string,
-  mainRepoPath: string
-): Promise<CleanupOperationResult> {
-  // Reuse the merged cleanup logic
-  return cleanupMergedWorktrees(codebaseId, mainRepoPath);
-}
-
-export interface LiveRunBlocker {
-  reason: 'live_run';
-  display: string;
-  runId: string;
-  runStatus: string;
-}
-
-/**
- * The live-run lock removers report: a workflow run that can still claim the
- * environment — running, pending, paused, or failed-but-resumable (see
- * getLiveRunOwningEnv) — with the refusal text chat, the CLI, and the sweeps share.
- * Historical conversation references are data, not locks. A lookup failure throws;
- * callers must refuse removal rather than read it as "no run".
- */
-export async function getLiveRunBlocker(envId: string): Promise<LiveRunBlocker | null> {
-  const liveRun = await isolationEnvDb.getLiveRunOwningEnv(envId);
-  return liveRun ? toLiveRunBlocker(liveRun) : null;
-}
-
-function toLiveRunBlocker(run: { id: string; status: string }): LiveRunBlocker {
-  return {
-    reason: 'live_run',
-    display: `run ${run.id.slice(0, 8)} is ${run.status}`,
-    runId: run.id,
-    runStatus: run.status,
-  };
-}
-
-/**
- * What a cleanup sweep has established about an environment's outcome. A failed
- * run's lock lasts only until one of these holds.
- */
-export type CleanupSettlement =
-  | { kind: 'merged' }
-  | { kind: 'pr-closed' }
-  | { kind: 'stale'; staleDays: number };
-
-export type FailedRunReleaseReason = 'merged' | 'PR closed' | 'stale';
-
-export interface ReleasedFailedRun {
-  runId: string;
-  reason: FailedRunReleaseReason;
-}
-
-export type CleanupRunLock =
-  | { kind: 'free' }
-  | { kind: 'locked'; blocker: LiveRunBlocker }
-  | ({ kind: 'released' } & ReleasedFailedRun)
-  | { kind: 'unpushed'; runId: string | null; commits: number; display: string };
-
-const RELEASE_REASONS: Record<CleanupSettlement['kind'], FailedRunReleaseReason> = {
-  merged: 'merged',
-  'pr-closed': 'PR closed',
-  stale: 'stale',
-};
-
-/**
- * The run lock a cleanup sweep must respect. Running, pending, and paused runs
- * always lock. A failed run locks until the sweep's settlement releases it (#4090):
- * a merged or closed PR, or inactivity past the stale window. The run row is left
- * as it is.
- *
- * Removal force-deletes a branch Archon created, so age alone never removes an
- * environment whose worktree HEAD or branch holds a commit on no remote, whether
- * or not a run owns it: that work stays until an operator removes it explicitly.
- * The merged verdict already proved the PR head or the base covers both.
- */
-export async function getCleanupRunLock(
-  env: { id: string; working_path: string; branch_name: string | null },
-  repoPath: RepoPath,
-  settlement: CleanupSettlement
-): Promise<CleanupRunLock> {
-  const owner = await isolationEnvDb.getLiveRunOwningEnv(env.id);
-  if (owner) {
-    if (!isolationEnvDb.isSettleableRunStatus(owner.status)) {
-      return { kind: 'locked', blocker: toLiveRunBlocker(owner) };
-    }
-    const lock = await isolationEnvDb.getLiveRunOwningEnv(
-      env.id,
-      settlement.kind === 'stale' ? settlement : { kind: 'settled' }
-    );
-    if (lock) return { kind: 'locked', blocker: toLiveRunBlocker(lock) };
-  }
-  if (settlement.kind === 'stale') {
-    const commits = await countUnpushedCommits(env, repoPath);
-    if (commits > 0) return toUnpushedLock(env, owner?.id ?? null, commits);
-  }
-  return owner
-    ? { kind: 'released', runId: owner.id, reason: RELEASE_REASONS[settlement.kind] }
-    : { kind: 'free' };
-}
-
-function toUnpushedLock(
-  env: { branch_name: string | null },
-  runId: string | null,
-  commits: number
-): Extract<CleanupRunLock, { kind: 'unpushed' }> {
-  const count = `${String(commits)} unpushed commit(s)`;
-  return {
-    kind: 'unpushed',
-    runId,
-    commits,
-    display: runId
-      ? `failed run ${runId.slice(0, 8)} has ${count}`
-      : `${count}; remove it explicitly with archon complete ${env.branch_name ?? '<branch>'} --force`,
-  };
-}
-
-async function countUnpushedCommits(
-  env: { working_path: string; branch_name: string | null },
-  repoPath: RepoPath
-): Promise<number> {
-  const branchRevs =
-    env.branch_name && (await localBranchExists(repoPath, toBranchName(env.branch_name)))
-      ? [`refs/heads/${env.branch_name}`]
-      : [];
-  const worktreePath = toWorktreePath(env.working_path);
-  if (await worktreeExists(worktreePath)) {
-    return countCommitsMissingFromRemotes(worktreePath, ['HEAD', ...branchRevs]);
-  }
-  return countCommitsMissingFromRemotes(repoPath, branchRevs);
-}
-
-/** Why an environment cannot be removed. */
-type RemovalBlocker =
-  | { reason: 'uncommitted_changes'; display: string }
-  | LiveRunBlocker
-  | { reason: 'unpushed_commits'; display: string; runId: string | null };
-
-type RemovalCheck =
-  | { blocker: RemovalBlocker }
-  | { blocker: null; released: ReleasedFailedRun | null };
-
-/**
- * Whether a sweep may remove the environment. Checks uncommitted changes first
- * (avoids a DB query when changes are present), then the run lock. Historical
- * conversation references are data, not locks; see getLiveRunOwningEnv.
- */
-async function checkRemoval(
-  env: { id: string; working_path: string; branch_name: string },
-  repoPath: RepoPath,
-  settlement: CleanupSettlement
-): Promise<RemovalCheck> {
-  const workingPath = toWorktreePath(env.working_path);
-  if ((await worktreeExists(workingPath)) && (await hasUncommittedChangesStrict(workingPath))) {
-    return { blocker: { reason: 'uncommitted_changes', display: 'has uncommitted changes' } };
-  }
-  const lock = await getCleanupRunLock(env, repoPath, settlement);
-  switch (lock.kind) {
-    case 'free':
-      return { blocker: null, released: null };
-    case 'released':
-      return { blocker: null, released: { runId: lock.runId, reason: lock.reason } };
-    case 'locked':
-      return { blocker: lock.blocker };
-    case 'unpushed':
-      return {
-        blocker: {
-          reason: 'unpushed_commits',
-          display: lock.display,
-          runId: lock.runId,
-        },
-      };
-  }
-}
-
-/**
- * How a branch's merge state came out, from the union of signals both cleanup
- * sweeps share:
- *   (a) git ancestry  — `git branch --merged` (fast-forward / merge commit)
- *   (b) git cherry    — patch-equivalent commits (single-commit squash merge)
- *   (c) the PR's state — the only signal that sees a multi-commit squash merge,
- *       and the only one left once the local branch ref is gone
- *
- * A MERGED or CLOSED PR only speaks for the commits it carried. Run branch names
- * are derived from the run identifier and get reused, and removal deletes both the
- * worktree and the branch, so every local tip that still exists (the worktree's
- * HEAD, and the branch ref) must be the PR's head commit or an ancestor of it.
- * Anything past the PR head is unmerged work. With neither left, the PR's state
- * stands alone.
- *
- * 'unjudgeable' is the dead end the git signals hit when the branch ref has been
- * deleted and no PR answers for the branch; 'pr-unavailable' is a PR lookup that
- * failed. Either way the worktree stays, and the caller reports it rather than
- * letting it read as ordinary unmerged work. 'merged' and 'pr-closed' are the two
- * reclaimable verdicts; a closed PR is reclaimable only with `includeClosed`.
- */
-type MergeVerdict =
-  | 'merged'
-  | 'pr-closed'
-  | 'open-pr'
-  | 'unmerged'
-  | 'unjudgeable'
-  | 'pr-unavailable';
-
-async function judgeBranchForRemoval(input: {
-  repoPath: RepoPath;
-  branchName: BranchName;
-  baseRef: BranchName;
-  prStateCache: Map<string, PrLookup>;
-  includeClosed: boolean;
-  remote: string;
-  worktreePath: WorktreePath;
-}): Promise<MergeVerdict> {
-  const { repoPath, branchName, baseRef, prStateCache, includeClosed, remote, worktreePath } =
-    input;
-  // Both git signals resolve the local branch ref, and `git cherry` fails outright
-  // once it is gone, so ask git only while the ref is there. The PR lookup keys off
-  // the branch name on the remote and needs no local ref at all.
-  const refExists = await localBranchExists(repoPath, branchName);
-  // Removal deletes the worktree too, so its HEAD must be covered by whatever proved
-  // the merge. It can differ from the branch tip (a detached HEAD, a branch renamed
-  // inside the worktree).
-  const hasWorktree = await worktreeExists(worktreePath);
-  if (
-    refExists &&
-    ((await isBranchMerged(repoPath, branchName, baseRef)) ||
-      (await isPatchEquivalent(repoPath, branchName, baseRef)))
-  ) {
-    // `git cherry <base> HEAD` answers for both git signals: an ancestor of the base
-    // lists no commits, and a squash-merged commit lists as '-'. A HEAD it cannot
-    // settle falls through to the PR, and an unanswerable one throws.
-    if (
-      !hasWorktree ||
-      (await isPatchEquivalent(worktreePath, 'HEAD', baseRef, { throwOnExpectedError: true }))
-    ) {
-      return 'merged';
-    }
-  }
-
-  const pr = await getPrState(branchName, repoPath, prStateCache, remote);
-  if (pr.state === 'UNAVAILABLE') return 'pr-unavailable';
-  if (pr.state === 'NONE') return refExists ? 'unmerged' : 'unjudgeable';
-  if (pr.state === 'OPEN') return 'open-pr';
-  if (pr.state === 'CLOSED' && !includeClosed) return 'unmerged';
-  // isRevCoveredBy fetches the PR head when it was pushed from elsewhere, and throws
-  // when that fetch or the comparison fails; the callers report it as a failed merge
-  // check and keep the worktree.
-  if (hasWorktree && !(await isRevCoveredBy(worktreePath, 'HEAD', pr.headSha, remote))) {
-    return 'unmerged';
-  }
-  if (
-    refExists &&
-    !(await isRevCoveredBy(repoPath, `refs/heads/${branchName}`, pr.headSha, remote))
-  ) {
-    return 'unmerged';
-  }
-  return pr.state === 'CLOSED' ? 'pr-closed' : 'merged';
-}
-
-/** The operator-facing reason a kept environment is worth reporting, or null when it is ordinary unmerged work. */
-function skipReasonFor(verdict: Exclude<MergeVerdict, 'merged' | 'pr-closed'>): string | null {
-  switch (verdict) {
-    case 'open-pr':
-      return 'PR is open (active review)';
-    case 'unjudgeable':
-      return 'branch ref is gone and no PR was found — merge state unverifiable';
-    case 'pr-unavailable':
-      return 'PR state lookup failed — merge state unverifiable';
-    case 'unmerged':
-      return null;
-  }
-}
-
-/**
  * Run full scheduled cleanup cycle
  * 1. Find and remove merged branches
  * 2. Find and remove stale environments
@@ -814,174 +178,18 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
     sessionsDeleted: 0,
     releasedFailedRuns: [],
   };
-  const recordRelease = (envId: string, released: ReleasedFailedRun | null): void => {
-    if (!released) return;
-    report.releasedFailedRuns.push({ id: envId, ...released });
-    getLog().info({ envId, ...released }, 'failed_run_lock_released');
-  };
 
   try {
-    // Get all active environments with their codebase info
     const environments = await isolationEnvDb.listAllActiveWithCodebase();
     getLog().info({ count: environments.length }, 'active_environments_found');
-
-    // One PR-state cache for the whole cycle; getPrState keys it by repo + branch,
-    // and this sweep spans every registered repo.
-    const prStateCache = new Map<string, PrLookup>();
-
+    const sweep = {
+      staleDays: STALE_THRESHOLD_DAYS,
+      prStateCache: new Map<string, PrLookup>(),
+      report,
+    };
     for (const env of environments) {
       try {
-        // Skip if already processing or destroyed
-        if (env.status !== 'active' || env.provider !== 'worktree') continue;
-        const reason = unknownPlatformReason(env.created_by_platform);
-        if (reason) {
-          report.skipped.push({ id: env.id, reason });
-          continue;
-        }
-
-        // Check if path still exists
-        const pathExists = await worktreeExists(toWorktreePath(env.working_path));
-        if (!pathExists) {
-          // Even with the directory gone, marking the env destroyed invalidates
-          // the live run's resume handle. A failed run's lock is instead settled by
-          // the merged and stale checks below, which handle a missing worktree.
-          const liveRun = await getLiveRunBlocker(env.id);
-          if (liveRun && !isolationEnvDb.isSettleableRunStatus(liveRun.runStatus)) {
-            report.skipped.push({ id: env.id, reason: `path missing but ${liveRun.display}` });
-            getLog().info(
-              { envId: env.id, runId: liveRun.runId, runStatus: liveRun.runStatus },
-              'skip_path_missing_live_run'
-            );
-            continue;
-          }
-          if (!liveRun) {
-            // Removal deletes a branch this environment created, so a branch holding
-            // commits on no remote stays, as it does in the stale sweep below.
-            const commits = readWorktreeBranchCreated(env.metadata)
-              ? await countUnpushedCommits(env, toRepoPath(env.codebase_default_cwd))
-              : 0;
-            if (commits > 0) {
-              report.skipped.push({
-                id: env.id,
-                reason: `path missing but ${toUnpushedLock(env, null, commits).display}`,
-              });
-              continue;
-            }
-            const removeResult = await removeEnvironment(env.id, { force: false });
-            if (removeResult.skippedReason) {
-              report.skipped.push({ id: env.id, reason: removeResult.skippedReason });
-            } else {
-              report.removed.push(`${env.id} (path missing)`);
-            }
-            continue;
-          }
-        }
-
-        // Same merged decision the `--merged` sweep uses, PR state included: this
-        // repository squash-merges every PR, and git alone cannot see that.
-        const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-        const { remoteMainRef, remote } = await resolveRepoGitContext(
-          mainRepoPath,
-          env.codebase_default_cwd
-        );
-        // A throw here reaches the per-environment catch below, which records the
-        // failure and leaves the environment for the next cycle. It must not fall
-        // through to the staleness sweep: an unresolved merge check would then be
-        // indistinguishable from confirmed-unmerged work and lose its branch to age.
-        const verdict = await judgeBranchForRemoval({
-          repoPath: mainRepoPath,
-          branchName: toBranchName(env.branch_name),
-          baseRef: remoteMainRef,
-          prStateCache,
-          includeClosed: false,
-          remote,
-          worktreePath: toWorktreePath(env.working_path),
-        });
-
-        if (verdict === 'merged' || verdict === 'pr-closed') {
-          const check = await checkRemoval(env, mainRepoPath, { kind: verdict });
-          if (check.blocker) {
-            const { blocker } = check;
-            report.skipped.push({ id: env.id, reason: `merged but ${blocker.display}` });
-            if (blocker.reason === 'live_run') {
-              getLog().info(
-                { envId: env.id, runId: blocker.runId, runStatus: blocker.runStatus },
-                'skip_merged_live_run'
-              );
-            } else {
-              getLog().warn({ envId: env.id }, 'skip_merged_uncommitted_changes');
-            }
-            continue;
-          }
-
-          // Safe to remove merged branch (also delete remote branch)
-          const mergedResult = await removeEnvironment(env.id, {
-            force: false,
-            deleteRemoteBranch: true,
-          });
-          if (mergedResult.skippedReason) {
-            report.skipped.push({ id: env.id, reason: mergedResult.skippedReason });
-          } else {
-            report.removed.push(`${env.id} (merged)`);
-            recordRelease(env.id, check.released);
-          }
-          continue;
-        }
-
-        // The staleness sweep below deletes the branch on age alone, so only work
-        // git or the PR settled as unmerged may reach it. An open PR or an
-        // unverifiable merge state is reported and kept. The exception is a failed
-        // run's environment with both worktree and branch gone: nothing local is
-        // left to lose, so only the stale window settles its lock.
-        const nothingLocalLeft = !pathExists && verdict === 'unjudgeable';
-        const skipReason = nothingLocalLeft ? null : skipReasonFor(verdict);
-        if (skipReason) {
-          report.skipped.push({ id: env.id, reason: skipReason });
-          continue;
-        }
-
-        if (retainsWorkspace(env.created_by_platform)) {
-          continue;
-        }
-
-        // Check if environment is stale
-        const isStale = await isEnvironmentStale(env, STALE_THRESHOLD_DAYS);
-        if (isStale) {
-          const check = await checkRemoval(env, mainRepoPath, {
-            kind: 'stale',
-            staleDays: STALE_THRESHOLD_DAYS,
-          });
-          if (check.blocker) {
-            const { blocker } = check;
-            report.skipped.push({ id: env.id, reason: `stale but ${blocker.display}` });
-            switch (blocker.reason) {
-              case 'live_run':
-                getLog().info(
-                  { envId: env.id, runId: blocker.runId, runStatus: blocker.runStatus },
-                  'skip_stale_live_run'
-                );
-                break;
-              case 'unpushed_commits':
-                getLog().warn(
-                  { envId: env.id, runId: blocker.runId },
-                  'skip_stale_unpushed_commits'
-                );
-                break;
-              case 'uncommitted_changes':
-                getLog().warn({ envId: env.id }, 'skip_stale_uncommitted_changes');
-                break;
-            }
-            continue;
-          }
-
-          const staleResult = await removeEnvironment(env.id, { force: false });
-          if (staleResult.skippedReason) {
-            report.skipped.push({ id: env.id, reason: staleResult.skippedReason });
-          } else {
-            report.removed.push(`${env.id} (stale)`);
-            recordRelease(env.id, check.released);
-          }
-        }
+        await sweepScheduledEnvironment(env, sweep);
       } catch (error) {
         const err = error as Error;
         report.errors.push({ id: env.id, error: err.message });
@@ -1018,51 +226,6 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 }
 
 /**
- * Check if an environment is stale based on activity
- */
-async function isEnvironmentStale(
-  env: IsolationEnvironmentRow,
-  staleDays: number
-): Promise<boolean> {
-  // Check last commit date in the worktree
-  const lastCommit = await getLastCommitDate(toWorktreePath(env.working_path));
-  if (lastCommit) {
-    const daysSinceCommit = (Date.now() - lastCommit.getTime()) / (1000 * 60 * 60 * 24);
-    if (daysSinceCommit < staleDays) {
-      return false; // Recent commit activity
-    }
-  }
-
-  // Check environment creation date as fallback
-  const daysSinceCreation =
-    (Date.now() - new Date(env.created_at).getTime()) / (1000 * 60 * 60 * 24);
-  return daysSinceCreation >= staleDays;
-}
-
-// =============================================================================
-// Phase 3D: Worktree Limits and User Feedback
-// =============================================================================
-
-/**
- * Result from cleanup operations with detailed information
- */
-export interface CleanupOperationResult {
-  removed: string[];
-  skipped: { branchName: string; reason: string }[];
-  /** Removed environments that a failed run no longer locked. */
-  releasedFailedRuns: ({ branchName: string } & ReleasedFailedRun)[];
-}
-
-/**
- * A merged-cleanup result. Carries the base ref the merge decision actually
- * compared against so callers report the repo's configured base branch instead
- * of guessing at one.
- */
-export interface MergedCleanupResult extends CleanupOperationResult {
-  baseRef: BranchName;
-}
-
-/**
  * Get detailed worktree status breakdown for a codebase
  * Includes git operations to detect merged branches
  */
@@ -1084,6 +247,7 @@ export async function getWorktreeStatusBreakdown(
     mergedEnvs: [],
     staleEnvs: [],
     activeEnvs: [],
+    inspectionFailedEnvs: [],
   };
 
   const { remoteMainRef } = await resolveRepoGitContext(repoPath, mainRepoPath);
@@ -1097,25 +261,16 @@ export async function getWorktreeStatusBreakdown(
     }
     const retained = retainsWorkspace(env.created_by_platform);
 
-    // Check if merged (treat as not-merged on unexpected errors)
-    let merged = false;
-    try {
-      merged = await isBranchMerged(repoPath, toBranchName(env.branch_name), remoteMainRef);
-    } catch (error) {
-      getLog().warn(
-        { err: error, envId: env.id, branchName: env.branch_name },
-        'merge_check_error_in_breakdown'
-      );
+    const inspection = await inspectWorktreeMerge(repoPath, env.branch_name, remoteMainRef);
+    if (inspection.status === 'failed') {
+      breakdown.inspectionFailedEnvs.push({
+        id: env.id,
+        branchName: env.branch_name,
+        errors: inspection.errors,
+      });
+      continue;
     }
-    // Fallback to patch-equivalence for squash-merge detection.
-    if (!merged) {
-      try {
-        merged = await isPatchEquivalent(repoPath, toBranchName(env.branch_name), remoteMainRef);
-      } catch {
-        // Patch-equivalence is best-effort; a failure doesn't change the result.
-      }
-    }
-    if (merged) {
+    if (inspection.status === 'merged') {
       breakdown.merged++;
       breakdown.mergedEnvs.push({ id: env.id, branchName: env.branch_name });
       continue;
@@ -1140,6 +295,36 @@ export async function getWorktreeStatusBreakdown(
   return breakdown;
 }
 
+async function inspectWorktreeMerge(
+  repoPath: RepoPath,
+  branchName: string,
+  baseRef: BranchName
+): Promise<{ status: 'merged' | 'unmerged' } | { status: 'failed'; errors: string[] }> {
+  const errors: string[] = [];
+  try {
+    if (await isBranchMerged(repoPath, toBranchName(branchName), baseRef)) {
+      return { status: 'merged' };
+    }
+  } catch (error) {
+    getLog().warn({ err: error, branchName }, 'merge_check_error_in_breakdown');
+    errors.push(`Ancestry: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  // Squash merges can be patch-equivalent even when ancestry inspection fails.
+  try {
+    if (
+      await isPatchEquivalent(repoPath, toBranchName(branchName), baseRef, {
+        throwOnExpectedError: true,
+      })
+    ) {
+      return { status: 'merged' };
+    }
+  } catch (error) {
+    getLog().warn({ err: error, branchName }, 'patch_check_error_in_breakdown');
+    errors.push(`Patch equivalence: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return errors.length > 0 ? { status: 'failed', errors } : { status: 'unmerged' };
+}
+
 /**
  * Clean up stale worktrees for a codebase
  * Respects uncommitted changes and live workflow runs
@@ -1148,7 +333,13 @@ export async function cleanupStaleWorktrees(
   codebaseId: string,
   mainRepoPath: string
 ): Promise<CleanupOperationResult> {
-  const result: CleanupOperationResult = { removed: [], skipped: [], releasedFailedRuns: [] };
+  const result: CleanupOperationResult = {
+    errors: [],
+    removed: [],
+    skipped: [],
+    warnings: [],
+    releasedFailedRuns: [],
+  };
   const repoPath = toRepoPath(mainRepoPath);
   getRegisteredPlatformPolicies();
   const environments = (await isolationEnvDb.listByCodebaseWithAge(codebaseId)).filter(
@@ -1175,103 +366,11 @@ export async function cleanupStaleWorktrees(
         result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
         continue;
       }
-      const removeResult = await removeEnvironment(env.id);
-      if (removeResult.skippedReason) {
-        result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
-      } else {
-        result.removed.push(env.branch_name);
-        if (check.released) {
-          result.releasedFailedRuns.push({ branchName: env.branch_name, ...check.released });
-        }
-      }
+      const removeResult = await removeEnvironment(env);
+      recordCleanupRemoval(result, env.branch_name, removeResult, check.released);
     } catch (error) {
       const err = error as Error;
-      result.skipped.push({ branchName: env.branch_name, reason: err.message });
-    }
-  }
-
-  return result;
-}
-
-/**
- * Clean up merged worktrees for a codebase
- * Respects uncommitted changes and live workflow runs
- */
-export async function cleanupMergedWorktrees(
-  codebaseId: string,
-  mainRepoPath: string,
-  options: { includeClosed?: boolean } = {}
-): Promise<MergedCleanupResult> {
-  getRegisteredPlatformPolicies();
-  const environments = (await isolationEnvDb.listByCodebase(codebaseId)).filter(
-    env => env.provider === 'worktree'
-  );
-  const repoPath = toRepoPath(mainRepoPath);
-  const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
-  const result: MergedCleanupResult = {
-    removed: [],
-    skipped: [],
-    releasedFailedRuns: [],
-    baseRef: remoteMainRef,
-  };
-  const includeClosed = options.includeClosed ?? false;
-  const prStateCache = new Map<string, PrLookup>();
-
-  for (const env of environments) {
-    const reason = unknownPlatformReason(env.created_by_platform);
-    if (reason) {
-      result.skipped.push({ branchName: env.branch_name, reason });
-      continue;
-    }
-    let verdict: MergeVerdict;
-    try {
-      verdict = await judgeBranchForRemoval({
-        repoPath,
-        branchName: toBranchName(env.branch_name),
-        baseRef: remoteMainRef,
-        prStateCache,
-        includeClosed,
-        remote,
-        worktreePath: toWorktreePath(env.working_path),
-      });
-    } catch (error) {
-      const err = error as Error;
-      // Log before skipping — silent skips make transient git/network failures
-      // impossible to debug from the cleanup report alone.
-      getLog().warn(
-        { err, branchName: env.branch_name, repoPath: mainRepoPath },
-        'cleanup.merge_check_failed'
-      );
-      result.skipped.push({
-        branchName: env.branch_name,
-        reason: `merge check failed: ${err.message}`,
-      });
-      continue;
-    }
-    if (verdict !== 'merged' && verdict !== 'pr-closed') {
-      const reason = skipReasonFor(verdict);
-      if (reason) result.skipped.push({ branchName: env.branch_name, reason });
-      continue;
-    }
-
-    try {
-      const check = await checkRemoval(env, repoPath, { kind: verdict });
-      if (check.blocker) {
-        result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
-        continue;
-      }
-      const removeResult = await removeEnvironment(env.id, { deleteRemoteBranch: true });
-      if (removeResult.skippedReason) {
-        result.skipped.push({ branchName: env.branch_name, reason: removeResult.skippedReason });
-      } else {
-        result.removed.push(env.branch_name);
-        if (check.released) {
-          result.releasedFailedRuns.push({ branchName: env.branch_name, ...check.released });
-        }
-      }
-    } catch (error) {
-      const err = error as Error;
-      result.skipped.push({ branchName: env.branch_name, reason: err.message });
+      result.errors.push({ branchName: env.branch_name, error: err.message });
     }
   }
 
@@ -1315,241 +414,5 @@ export function stopCleanupScheduler(): void {
     clearInterval(cleanupIntervalId);
     cleanupIntervalId = null;
     getLog().info('scheduler_stopped');
-  }
-}
-
-export interface ReleasedWorktree {
-  path: string;
-  branch: string;
-}
-
-export interface RunWorktreeRelease {
-  released?: ReleasedWorktree;
-  warnings: string[];
-}
-
-export interface WorktreeOwnershipReaders {
-  getCodebase: typeof codebaseDb.getCodebase;
-  getLiveRunOwningEnv: typeof isolationEnvDb.getLiveRunOwningEnv;
-}
-
-/** The isolation record and repository behind a run's creation proof; throws when they disagree. */
-async function resolveOwnedWorktree(
-  run: WorkflowRun,
-  proof: OwnedWorktree,
-  store: IIsolationStore,
-  getCodebase: WorktreeOwnershipReaders['getCodebase']
-): Promise<{ env: IsolationEnvironmentRow; repo: RepoPath }> {
-  const env = await store.getById(proof.envId);
-  if (
-    env?.provider !== 'worktree' ||
-    env.codebase_id !== run.codebase_id ||
-    env.working_path !== run.working_path ||
-    readWorktreeCreationId(env.metadata) !== proof.creationId
-  ) {
-    throw new Error('creation proof does not match its isolation record');
-  }
-  const reason = unknownPlatformReason(env.created_by_platform);
-  if (reason) throw new Error(reason);
-  const codebase = run.codebase_id ? await getCodebase(run.codebase_id) : null;
-  if (!codebase) throw new Error('canonical repository is unavailable');
-  return { env, repo: toRepoPath(codebase.default_cwd) };
-}
-
-/**
- * Whether a completed run's worktree can go without losing work: clean, every commit
- * on a remote, and the branch never published. A published branch waits for the merged
- * sweep, which also deletes it; releasing it here would destroy the record that sweep reads.
- */
-async function judgeCompletedWorktree(
-  env: IsolationEnvironmentRow,
-  repo: RepoPath
-): Promise<WorktreeDisposition> {
-  const path = toWorktreePath(env.working_path);
-  if ((await worktreeExists(path)) && (await hasUncommittedChangesStrict(path))) {
-    return { disposition: 'retained', reason: 'uncommitted_changes' };
-  }
-  const commits = await countUnpushedCommits(env, repo);
-  if (commits > 0) {
-    return {
-      disposition: 'retained',
-      reason: 'unpushed_commits',
-      detail: `${String(commits)} commit(s) on no remote`,
-    };
-  }
-  // Ask the remote: a push by URL or refspec need not leave a remote-tracking ref.
-  const remote = configuredRemote(await loadRepoConfig(repo));
-  const advertised = await inspectRemoteBranches({ kind: 'local', repoPath: repo, remote });
-  if (advertised.status === 'unavailable') {
-    throw new Error(`cannot read branches on remote '${remote}': ${advertised.evidence}`);
-  }
-  if (advertised.branches.includes(toBranchName(env.branch_name))) {
-    return { disposition: 'retained', reason: 'published_branch' };
-  }
-  return { disposition: 'release' };
-}
-
-/**
- * Decide what happens to the worktree a completed run created. Null when the run has
- * no creation proof; a failed check is reported as a retention, never thrown.
- */
-export async function assessCompletedRunWorktree(
-  run: WorkflowRun,
-  store: IIsolationStore,
-  readers: WorktreeOwnershipReaders
-): Promise<WorktreeDisposition | null> {
-  const proof = readOwnedWorktree(run.metadata);
-  if (!proof || run.metadata?.isolation === 'container') return null;
-  try {
-    const { env, repo } = await resolveOwnedWorktree(run, proof, store, readers.getCodebase);
-    if (retainsWorkspace(env.created_by_platform)) {
-      return { disposition: 'retained', reason: 'workspace_retained' };
-    }
-    // The completing run is still claimable here; release refuses any other claimant.
-    const user = await readers.getLiveRunOwningEnv(env.id, undefined, run.id);
-    if (user) {
-      return {
-        disposition: 'retained',
-        reason: 'in_use',
-        detail: `run ${user.id} (${user.status})`,
-      };
-    }
-    return await judgeCompletedWorktree(env, repo);
-  } catch (err) {
-    getLog().warn({ err, workflowRunId: run.id }, 'completed_worktree_assess_failed');
-    return { disposition: 'retained', reason: 'check_failed', detail: (err as Error).message };
-  }
-}
-
-/**
- * Remove a completed run's worktree, keeping its branch so the run stays adoptable.
- * Re-judges under the worktree lock and refuses when work appeared since the assessment.
- */
-export async function releaseCompletedRunWorktree(
-  run: WorkflowRun,
-  store: IIsolationStore,
-  readers: WorktreeOwnershipReaders
-): Promise<void> {
-  const result = await reclaimOwnedWorktree(run, store, readers, async (env, repo) => {
-    const disposition = await judgeCompletedWorktree(env, repo);
-    if (disposition.disposition !== 'release') {
-      throw new Error(`worktree is no longer releasable: ${disposition.reason}`);
-    }
-  });
-  if (result.warnings.length > 0) {
-    getLog().warn(
-      { workflowRunId: run.id, warnings: result.warnings },
-      'completed_worktree_release_warnings'
-    );
-  }
-}
-
-async function reclaimOwnedWorktree(
-  run: WorkflowRun,
-  store: IIsolationStore,
-  readers: WorktreeOwnershipReaders,
-  verify?: (env: IsolationEnvironmentRow, repo: RepoPath) => Promise<void>
-): Promise<RunWorktreeRelease> {
-  const proof = readOwnedWorktree(run.metadata);
-  if (!proof) {
-    if (run.metadata?.isolation === 'container') return { warnings: [] };
-    const codebase = run.codebase_id ? await readers.getCodebase(run.codebase_id) : null;
-    if (codebase?.kind === 'folder') return { warnings: [] };
-    return {
-      warnings: run.working_path
-        ? [
-            `Retained checkout ${run.working_path} for run ${run.id}: no valid proof this run created it. Inspect it and use explicit isolation cleanup if appropriate.`,
-          ]
-        : [],
-    };
-  }
-  const refuse = (reason: string): never => {
-    throw new Error(reason);
-  };
-  const { env, repo } = await resolveOwnedWorktree(run, proof, store, readers.getCodebase);
-  const path = toWorktreePath(env.working_path);
-  const pathExists = async (): Promise<boolean> => {
-    try {
-      await lstat(path);
-      return true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      return false;
-    }
-  };
-  if (!(await pathExists())) {
-    if (await isWorktreeRegistered(repo, path))
-      return refuse('checkout is absent but still registered with Git');
-    if (env.status !== 'destroyed') await store.markWorktreeDestroyed(env);
-    return { warnings: [] };
-  }
-  if (env.status === 'destroyed')
-    return refuse('a path exists for an already destroyed environment');
-  let marked = false;
-  try {
-    const result = await getIsolationProvider().destroy(path, {
-      canonicalRepoPath: repo,
-      guardedRemoval: {
-        creationId: proof.creationId,
-        // The record is marked destroyed before the claimant check, so a run that
-        // reused it after this point fails claimPendingWorkflowRun instead of
-        // starting in a checkout that is about to disappear.
-        beforeRemove: async () => {
-          await verify?.(env, repo);
-          await store.markWorktreeDestroyed(env);
-          marked = true;
-          const user = await readers.getLiveRunOwningEnv(env.id);
-          if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
-        },
-      },
-    });
-    if (!result.worktreeRemoved || !result.directoryClean)
-      return refuse('filesystem removal incomplete');
-    return { released: { path, branch: env.branch_name }, warnings: result.warnings };
-  } catch (err) {
-    if (marked) {
-      try {
-        if (await pathExists()) await store.updateStatus(env.id, 'active', env);
-      } catch (recoveryError) {
-        getLog().error(
-          { err: recoveryError, isolationEnvId: env.id },
-          'worktree_reclaim_recovery_failed'
-        );
-        throw new AggregateError(
-          [err, recoveryError],
-          `${err instanceof Error ? err.message : String(err)}; registration recovery failed: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`,
-          { cause: err }
-        );
-      }
-    }
-    throw err;
-  }
-}
-
-/**
- * Remove the worktree an abandoned run created, discarding uncommitted work.
- * The branch is kept, so committed work stays recoverable.
- */
-export async function reclaimRunWorktree(
-  run: WorkflowRun,
-  store: IIsolationStore,
-  readers: WorktreeOwnershipReaders = {
-    getCodebase: codebaseDb.getCodebase,
-    getLiveRunOwningEnv: isolationEnvDb.getLiveRunOwningEnv,
-  }
-): Promise<RunWorktreeRelease> {
-  try {
-    return await reclaimOwnedWorktree(run, store, readers);
-  } catch (err) {
-    const proof = readOwnedWorktree(run.metadata);
-    // A leftover Git no longer tracks cannot be finished by a retry; its message says so.
-    const next =
-      err instanceof WorktreeLeftoverError
-        ? ''
-        : `. Fix the cause and retry workflow abandon ${run.id}.`;
-    throw new Error(
-      `Could not release worktree for run ${run.id}, environment ${proof?.envId ?? '(unaccounted)'}, checkout ${run.working_path ?? '(missing)'}: ${(err as Error).message}${next}`,
-      { cause: err }
-    );
   }
 }

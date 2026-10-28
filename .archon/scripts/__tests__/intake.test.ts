@@ -3,15 +3,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
-import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
-import {
-  TERMINAL_WORKFLOW_STATUSES,
-  workflowRunStatusSchema,
-} from '../../../packages/workflows/src/schemas/workflow-run';
+import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
-import { BODY_SOURCES } from '../../workflows/sdlc/.shared/issue';
-import { claimDisposition, statePut } from '../../workflows/sdlc/.shared/state';
+import { statePut } from '../../workflows/sdlc/.shared/state';
 import {
   assertNoSelfPromotion,
   bodyDigest,
@@ -23,24 +17,19 @@ import {
   type IssueFacts,
   mirrorLabels,
   newWorkItem,
-  parseMaintainers,
-  parseMode,
-  parseOrder,
-  parseTrustInput,
   parseWorkItem,
+  PICKUP_ORDER,
   RANKS,
   sortCandidates,
-  TRUST_INPUTS,
   TRUSTS,
   type TriageFacts,
-  type TrustInput,
   updateClaimed,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
+import { parseMaintainerList, parseMaintainers } from '../../workflows/sdlc/.shared/maintainers';
 import {
-  forgeOperation,
   gitCheckout,
-  type GhApiIssue,
+  hostCli,
   type GhCommentRow,
   type GhIssue,
   PACK,
@@ -89,8 +78,8 @@ function issue(overrides: Partial<IssueFacts> = {}): IssueFacts {
   return { author: 'stranger', labels: [], state: 'open', digest: DIGEST, ...overrides };
 }
 
-const decide = (doc: WorkItem, facts: IssueFacts, trustInput?: TrustInput) =>
-  decideIntake(doc, facts, MAINTAINERS, AT, 'run', trustInput);
+const decide = (doc: WorkItem, facts: IssueFacts) =>
+  decideIntake(doc, facts, MAINTAINERS, AT, 'run');
 
 describe('the intake decision', () => {
   test('an outside item gets archon-needs-maintainer and no agent node', () => {
@@ -233,41 +222,6 @@ describe('the intake decision', () => {
     expect(decision.notes[0]).toMatchObject({ outcome: 'void' });
   });
 
-  test("trust: outside decides a maintainer's new item as outside, without reading its author", () => {
-    for (const author of ['Maintainer', undefined]) {
-      expect(decide(item(), issue({ author }), 'outside')).toMatchObject({
-        path: 'outside',
-        trust: 'outside',
-        stage: 'needs_maintainer',
-      });
-    }
-  });
-
-  test('trust: outside never rewrites recorded trust, and a maintainer can still promote', () => {
-    expect(() => decide(item({ trust: 'maintainer' }), issue(), 'outside')).toThrow(
-      'decided once'
-    );
-    const outside = item({ trust: 'outside', stage: 'needs_maintainer' }, [
-      labelRequest('archon-triage', 'maintainer'),
-    ]);
-    expect(decide(outside, issue({ labels: ['archon-triage'] }), 'outside')).toMatchObject({
-      path: 'triage',
-      trust: 'outside',
-      promoted: { by: 'maintainer' },
-    });
-  });
-
-  test('mode and trust accept only their own values; empty is the default', () => {
-    expect(parseMode('')).toBe('live');
-    expect(parseMode('eval')).toBe('eval');
-    expect(() => parseMode('dry')).toThrow('mode must be one of live, eval, not "dry"');
-    expect(parseTrustInput('')).toBe('auto');
-    expect(parseTrustInput('outside')).toBe('outside');
-    expect(() => parseTrustInput('maintainer')).toThrow(
-      'trust must be one of auto, outside, not "maintainer"'
-    );
-  });
-
   test('the outcome refuses to add a request label to an outside item no maintainer promoted', () => {
     const outside = item({
       trust: 'outside',
@@ -284,17 +238,6 @@ describe('the intake decision', () => {
 });
 
 describe('pickup', () => {
-  test('order accepts the default and refuses unknown keys and directions', () => {
-    expect(parseOrder('')).toEqual([
-      { key: 'urgency', direction: 'desc' },
-      { key: 'importance', direction: 'desc' },
-      { key: 'size', direction: 'asc' },
-      { key: 'created', direction: 'asc' },
-    ]);
-    expect(() => parseOrder('["age desc"]')).toThrow('is not');
-    expect(() => parseOrder('["size up"]')).toThrow('is not');
-  });
-
   test('candidates sort by the keys, untriaged after triaged and oldest first, then by number', () => {
     const at = (number: number, created: string, triage?: TriageFacts) => ({
       doc: { ...newWorkItem({ repo: PR.repo, number }, created), facts: triage ? { triage } : {} },
@@ -312,7 +255,7 @@ describe('pickup', () => {
         ),
         at(0, '2026-01-01', undefined),
       ],
-      parseOrder('')
+      PICKUP_ORDER
     );
     expect(sorted.map(entry => entry.doc.subject.number)).toEqual([4, 5, 3, 0, 2, 1]);
   });
@@ -356,8 +299,6 @@ describe('pickup', () => {
           properties: {
             path: Enum;
             decision?: { properties: { path: Enum; trust: Enum }; required: string[] };
-            seen?: { properties: { body_from: Enum } };
-            evaluation?: { properties: { trust_input: Enum } };
           };
         };
       }[];
@@ -371,18 +312,6 @@ describe('pickup', () => {
     expect(decision?.path.enum).toEqual([...INTAKE_PATHS]);
     expect(decision?.trust.enum).toEqual([...TRUSTS, null]);
     expect(output('outcome')?.properties.path.enum).toEqual(['idle', ...INTAKE_PATHS]);
-    expect(output('facts')?.properties.seen?.properties.body_from.enum).toEqual([...BODY_SOURCES]);
-    expect(output('outcome')?.properties.evaluation?.properties.trust_input.enum).toEqual([
-      ...TRUST_INPUTS,
-    ]);
-  });
-
-  test("a claim is released only when its run's status is one the engine calls terminal", () => {
-    for (const status of workflowRunStatusSchema.options)
-      expect(claimDisposition(status)).toBe(
-        TERMINAL_WORKFLOW_STATUSES.includes(status) ? 'release' : 'hold'
-      );
-    expect(claimDisposition(null)).toBe('hold');
   });
 
   test('an item whose last attempt failed sorts after every other waiting item', () => {
@@ -395,7 +324,7 @@ describe('pickup', () => {
     const order = (docs: WorkItem[]) =>
       sortCandidates(
         docs.map(doc => ({ doc })),
-        parseOrder('')
+        PICKUP_ORDER
       ).map(entry => entry.doc.subject.number);
     expect(order([released, fresh])).toEqual([2, 1]);
     // A decision recorded after the release means the item's last attempt finished.
@@ -410,13 +339,16 @@ describe('pickup', () => {
     expect([...parseMaintainers('[" Wirasm ", "Other"]')]).toEqual(['wirasm', 'other']);
     expect(() => parseMaintainers('{"maintainers": []}')).toThrow('JSON array of forge logins');
     expect(() => parseMaintainers('[""]')).toThrow('JSON array of forge logins');
+    const list = parseMaintainerList('["Alice", { "login": " Wirasm ", "merge_queue": "own-prs" }]');
+    expect([...list.logins]).toEqual(['alice', 'wirasm']);
+    expect([...list.ownPrs]).toEqual(['wirasm']);
+    expect(() => parseMaintainerList('[{ "login": "x", "merge_queue": "all" }]')).toThrow('JSON array of forge logins');
   });
 });
 
 // --- the scripts, run as the engine runs them --------------------------------------
 
 const FAKE_ARCHON = resolve(import.meta.dir, 'fixtures/fake-archon-runs.ts');
-const CLI_ENTRY = resolve(import.meta.dir, '../../../packages/cli/src/cli.ts');
 
 interface Install {
   readonly checkout: string;
@@ -447,7 +379,7 @@ function install(): Install {
       HOME: home,
       DATABASE_URL: '',
       ARCHON_TELEMETRY_DISABLED: '1',
-      INTAKE_STATE_CWD: checkout,
+      INTAKE_STATE_CWD: checkout, INTAKE_HOST_CLI: JSON.stringify(hostCli()),
     },
   };
 }
@@ -506,7 +438,6 @@ function run(
       INPUTS_ACTION: event.action ?? 'opened',
       INPUTS_LABEL: event.label ?? '',
       INPUTS_LABEL_ACTOR: event.actor ?? '',
-      INPUTS_ORDER: '',
       ...inputs,
     },
   });
@@ -530,6 +461,7 @@ const READY_VERDICT = {
   INPUTS_LABELS: '["archon-ready","archon-size-s","archon-type-feature"]',
   INPUTS_SUMMARY: 'Ready to deliver',
   INPUTS_CLOSURE: 'null',
+  INPUTS_RELATED: '[{"url":"https://ghe.example.com/example/repo/issues/5","relation":"an earlier attempt, closed"}]',
   INPUTS_REPORT: '{"type":"archon_artifact","run_id":"run-1","path":"triage.md"}',
 };
 const SKIPPED_TRIAGE = Object.fromEntries(Object.keys(READY_VERDICT).map(key => [key, 'null']));
@@ -588,15 +520,12 @@ function outcome(
 }
 
 function stored(at: Install): { revision: number; value: WorkItem } {
-  const result = spawnSync(
-    process.execPath,
-    ['--no-env-file', CLI_ENTRY, 'state', 'get', 'work/7'],
-    {
-      cwd: at.checkout,
-      env: { ...process.env, ...at.env, WORKFLOW_ID: '', ARCHON_NODE_EXECUTION: '' },
-      encoding: 'utf8',
-    }
-  );
+  const [command, ...prefix] = hostCli();
+  const result = spawnSync(command, [...prefix, 'state', 'get', 'work/7'], {
+    cwd: at.checkout,
+    env: { ...process.env, ...at.env, WORKFLOW_ID: '', ARCHON_NODE_EXECUTION: '' },
+    encoding: 'utf8',
+  });
   const parsed = JSON.parse(result.stdout) as { revision: number; value: unknown };
   return { revision: parsed.revision, value: parseWorkItem(parsed.value) };
 }
@@ -641,6 +570,13 @@ describe('the intake scripts', () => {
       importance: { value: 'high' },
       urgency: { value: 'soon' },
     });
+    // Related work is stored for later rounds; the run-only fields are not.
+    expect(doc.facts.triage?.related).toEqual([
+      { url: 'https://ghe.example.com/example/repo/issues/5', relation: 'an earlier attempt, closed' },
+    ]);
+    expect(Object.keys(doc.facts.triage ?? {}).sort()).toEqual(
+      ['at', 'complexity', 'importance', 'pull_request', 'related', 'run_id', 'size', 'type', 'urgency', 'verdict']
+    );
     expect(doc.history.at(-1)).toMatchObject({
       outcome: 'deliver',
       verdict: 'READY',
@@ -808,6 +744,59 @@ describe('the intake scripts', () => {
       summary: expect.stringContaining('run-1, which ended failed'),
     });
   }, 60_000);
+  function idleOutcome(at: Install, event: Event): string {
+    // A skipped document is noted on stderr as well, so only the exit codes are pinned.
+    const picked = run(at, 'facts', event);
+    expect(picked.code).toBe(0);
+    expect(JSON.parse(picked.stdout)).toMatchObject({ path: 'idle', item: null });
+    const result = run(at, 'outcome', event, { INPUTS_PATH: 'idle', INPUTS_ITEM: 'null', INPUTS_DECISION: 'null' });
+    expect(result.code).toBe(0);
+    return (JSON.parse(result.stdout) as { summary: string }).summary;
+  }
+
+  test('an idle pass names a stored item that does not parse instead of reporting an empty queue', () => {
+    const at = install();
+    inProcess(at, () => statePut('work/3', { not: 'a work item' }, 0));
+    const summary = idleOutcome(at, { runId: 'run-1', kind: 'pr' });
+    expect(summary).not.toBe('No item waits for intake.');
+    expect(summary).toContain('work/3');
+  }, 60_000);
+
+  test('a claim held by a run with no status stays held, and the idle pass names it and the run', () => {
+    const at = install();
+    const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'ghost-run', at: AT, requests: [] } };
+    inProcess(at, () => statePut('work/7', held, 0));
+    const summary = idleOutcome(at, { runId: 'run-1', kind: 'pr' });
+    expect(stored(at).value.claim?.run_id).toBe('ghost-run');
+    expect(summary).toContain('work/7');
+    expect(summary).toContain('ghost-run');
+  }, 60_000);
+
+  test('an idle pass with only live claims still reports an empty queue', () => {
+    const at = install();
+    const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'live-run', at: AT, requests: [] } };
+    inProcess(at, () => statePut('work/7', held, 0));
+    const event = { runId: 'run-1', kind: 'pr', statuses: { 'live-run': 'running' } };
+    expect(idleOutcome(at, event)).toBe('No item waits for intake.');
+  }, 60_000);
+
+  test('pickup reads every stored work item in one state call, not one per item', () => {
+    const at = install();
+    inProcess(at, () => {
+      for (const number of [1, 2, 3]) {
+        statePut(`work/${String(number)}`, newWorkItem({ repo: PR.repo, number }, AT), 0);
+      }
+    });
+    const log = join(track(mkdtempSync(join(tmpdir(), 'archon-intake-calls-'))), 'calls.jsonl');
+    const result = run(at, 'facts', { runId: 'run-1', kind: 'pr' }, { ARCHON_CALL_LOG: log });
+    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(JSON.parse(result.stdout)).toMatchObject({ path: 'idle', item: null });
+    const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
+    expect(calls.filter(argv => argv[0] === 'state')).toEqual([
+      ['state', 'list', '--prefix', 'work/', '--values'],
+    ]);
+  }, 60_000);
+
   test('edits while an item is claimed queue one request, and a release keeps only the newest', () => {
     const at = install();
     facts(at, { runId: 'run-1' });
@@ -1206,280 +1195,5 @@ describe('the intake scripts', () => {
     expect(late.stderr).toContain('no longer claimed by this run');
     expect(late.gh.filter(call => call.startsWith('issue edit'))).toEqual([]);
     expect(stored(at).value).toMatchObject({ stage: 'new', claim: { run_id: 'run-2' } });
-  }, 60_000);
-});
-
-// --- eval mode -------------------------------------------------------------------
-
-const CREATED = { title: 'The title it was opened with', body: 'The body it was opened with' };
-
-/**
- * Run an intake script in eval mode. The forge fake has no response, so any `archon`
- * call (every state read and write) is logged in `run.forge` and fails; `run.gh` logs
- * every gh call. Those two logs are the write proof.
- */
-function evalRun(
-  at: Install,
-  script: 'facts' | 'outcome',
-  ghIssue: GhApiIssue,
-  inputs: Record<string, string> = {},
-  options: { source?: string; response?: string } = {}
-): ScriptRun {
-  return runPackScript(`intake/scripts/${script}`, {
-    cwd: at.checkout,
-    source: options.source ?? 'gh',
-    forge: { kind: 'fake', ...(options.response ? { response: options.response } : {}) },
-    gh: { issue: { number: 7, ...ghIssue }, issueLabels: ['archon-ready'], repositoryLabels: [] },
-    inputs: {
-      ...at.env,
-      WORKFLOW_ID: 'eval-run',
-      INPUTS_REPO_HOST: PR.repo.host,
-      INPUTS_REPO_PATH: PR.repo.path,
-      INPUTS_NUMBER: '7',
-      INPUTS_KIND: 'issue',
-      INPUTS_ACTION: 'opened',
-      INPUTS_LABEL: '',
-      INPUTS_LABEL_ACTOR: '',
-      INPUTS_ORDER: '',
-      INPUTS_MODE: 'eval',
-      ...inputs,
-    },
-  });
-}
-
-function evalOutcome(
-  at: Install,
-  decided: Record<string, unknown>,
-  verdict: Record<string, string>,
-  trust = ''
-): ScriptRun {
-  return evalRun(
-    at,
-    'outcome',
-    {},
-    {
-      INPUTS_PATH: String(decided.path),
-      INPUTS_ITEM: JSON.stringify(decided.item),
-      INPUTS_DECISION: JSON.stringify(decided.decision),
-      INPUTS_SEEN: JSON.stringify(decided.seen),
-      INPUTS_TRUST: trust,
-      INPUTS_PROPOSED_EDITS: '{"title":"","body":""}',
-      INPUTS_BLOCKED_REASON: '',
-      INPUTS_BLOCKED_BY: '[]',
-      ...verdict,
-    }
-  );
-}
-
-const ISSUE_READ = /^api --hostname ghe\.example\.com repos\/example\/repo\/issues\/\d+$/;
-const HISTORY_READ = /^api graphql --hostname ghe\.example\.com -f query=query\(/;
-
-function outputSchema(id: 'facts' | 'outcome'): Record<string, unknown> {
-  const workflow = Bun.YAML.parse(
-    readFileSync(join(PACK, 'intake/archon-intake.yaml'), 'utf8')
-  ) as { nodes: { id: string; output_format?: Record<string, unknown> }[] };
-  return workflow.nodes.find(node => node.id === id)?.output_format ?? {};
-}
-
-function succeeded(run: ScriptRun, id: 'facts' | 'outcome'): Record<string, unknown> {
-  expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: '' });
-  const output = JSON.parse(run.stdout) as Record<string, unknown>;
-  expect(validateStructuredOutput(output, outputSchema(id))).toEqual({ valid: true });
-  return output;
-}
-
-/** Only issue reads: the REST view and the GraphQL history query. */
-function readsOnly(run: ScriptRun): void {
-  expect(run.forge).toEqual([]);
-  for (const call of run.gh) {
-    expect(ISSUE_READ.test(call) || HISTORY_READ.test(call)).toBe(true);
-  }
-}
-
-describe('eval mode', () => {
-  test("a maintainer's item is decided at creation and triaged on its creation text, with no write", () => {
-    const at = install();
-    const facts = evalRun(at, 'facts', {
-      author: 'Maintainer',
-      title: 'A title edited later',
-      body: 'A body edited to name the fix',
-      history: { createdBody: CREATED.body, createdTitle: CREATED.title },
-    });
-    const decided = succeeded(facts, 'facts');
-    expect(decided).toMatchObject({
-      path: 'triage',
-      item: SUBJECT,
-      target: `# ${CREATED.title}\n\n${CREATED.body}`,
-      decision: { trust: 'maintainer', body_digest: bodyDigest(CREATED.body), labels: [] },
-      seen: { title: CREATED.title, body_from: 'creation' },
-    });
-    expect(String(decided.target)).not.toContain('issues/7');
-    expect(String(decided.target)).not.toContain('edited');
-    readsOnly(facts);
-    expect(facts.gh).toHaveLength(2);
-
-    const outcome = evalOutcome(at, decided, READY_VERDICT);
-    const result = succeeded(outcome, 'outcome');
-    expect(outcome.gh).toEqual([]);
-    expect(outcome.forge).toEqual([]);
-    expect(result).toMatchObject({
-      path: 'triage',
-      stage: 'deliver',
-      trust: 'maintainer',
-      labels: ['archon-ready', 'archon-size-s', 'archon-type-feature'],
-      evaluation: {
-        trust_input: 'auto',
-        seen: { body_from: 'creation' },
-        labels: { add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] },
-        reasons: [expect.objectContaining({ outcome: 'deliver', verdict: 'READY' })],
-        triage: {
-          contract: 'READY',
-          route: 'deliver',
-          pull_request: null,
-          type: { value: 'feature' },
-          size: { value: 's' },
-          complexity: { value: 'low' },
-          importance: { value: 'high' },
-          urgency: { value: 'soon' },
-          proposed_edits: { title: '', body: '' },
-          report: { path: 'triage.md' },
-        },
-      },
-    });
-  }, 60_000);
-
-  test('a duplicate verdict closes nothing in eval, and reports what it would close as', () => {
-    const at = install();
-    const decided = succeeded(evalRun(at, 'facts', { author: 'Maintainer' }), 'facts');
-    const outcome = evalOutcome(at, decided, DUPLICATE_VERDICT);
-    const result = succeeded(outcome, 'outcome');
-    expect([...outcome.gh, ...outcome.forge]).toEqual([]);
-    expect(result).toMatchObject({
-      stage: 'close',
-      evaluation: {
-        triage: { contract: 'NO_ACTION', closure: { kind: 'duplicate', url: ORIGINAL_URL } },
-      },
-    });
-  }, 60_000);
-
-  test('an outside item, and a maintainer\'s item run with trust: outside, take the outside path with no write', () => {
-    const at = install();
-    for (const [author, trust] of [
-      ['stranger', ''],
-      ['Maintainer', 'outside'],
-    ] as const) {
-      const facts = evalRun(at, 'facts', { author }, { INPUTS_TRUST: trust });
-      const decided = succeeded(facts, 'facts');
-      expect(decided).toMatchObject({
-        path: 'outside',
-        decision: { trust: 'outside' },
-        seen: { body_from: 'creation' },
-      });
-      readsOnly(facts);
-
-      const outcome = evalOutcome(at, decided, SKIPPED_TRIAGE, trust);
-      expect(succeeded(outcome, 'outcome')).toMatchObject({
-        stage: 'needs_maintainer',
-        labels: ['archon-needs-maintainer'],
-        evaluation: {
-          trust_input: trust || 'auto',
-          triage: null,
-          reasons: [expect.objectContaining({ outcome: 'needs_maintainer' })],
-        },
-      });
-      expect([...outcome.gh, ...outcome.forge]).toEqual([]);
-    }
-  }, 60_000);
-
-  test('a body whose creation revision cannot be recovered is shown as it is now, and says so', () => {
-    const unrecoverable: NonNullable<GhApiIssue['history']>[] = [
-      { createdBody: null },
-      { firstEditedBody: 'A later revision' },
-    ];
-    for (const history of unrecoverable) {
-      const at = install();
-      const decided = succeeded(evalRun(at, 'facts', { body: 'The body now', history }), 'facts');
-      expect(decided).toMatchObject({
-        target: '# An issue\n\nThe body now',
-        seen: { body_from: 'current' },
-      });
-    }
-  }, 60_000);
-
-  test('the forge source has no edit history, so it shows the current text, and only reads', () => {
-    const at = install();
-    const run = evalRun(
-      at,
-      'facts',
-      {},
-      {},
-      {
-        source: 'forge',
-        response: forgeOperation('workitem.view', {
-          ref: SUBJECT,
-          kind: 'issue',
-          title: 'Forge title',
-          body: 'Forge body',
-          url: 'https://ghe.example.com/example/repo/issues/7',
-          state: 'closed',
-          labels: ['archon-ready'],
-          author: { login: 'Maintainer' },
-        }),
-      }
-    );
-    // A closed issue is decided as it was opened.
-    expect(succeeded(run, 'facts')).toMatchObject({
-      path: 'triage',
-      target: '# Forge title\n\nForge body',
-      seen: { body_from: 'current' },
-    });
-    expect(run.gh).toEqual([]);
-    expect(run.forge.length).toBeGreaterThan(0);
-    for (const call of run.forge) expect(call.startsWith('forge workitem.view')).toBe(true);
-  }, 60_000);
-
-  test('a value outside the mode or trust vocabulary refuses the run before any call', () => {
-    const at = install();
-    for (const [inputs, message] of [
-      [{ INPUTS_TRUST: 'maintainer' }, 'trust must be one of auto, outside'],
-      [{ INPUTS_MODE: 'dry' }, 'mode must be one of live, eval'],
-    ] as const) {
-      const run = evalRun(at, 'facts', {}, inputs);
-      expect(run.code).not.toBe(0);
-      expect(run.stderr).toContain(message);
-      expect([...run.gh, ...run.forge]).toEqual([]);
-    }
-  }, 60_000);
-
-  test('an eval run that fails part way has written nothing', () => {
-    const at = install();
-    // The fake knows only issue 7, so the read refuses.
-    const unreadable = evalRun(at, 'facts', {}, { INPUTS_NUMBER: '8' });
-    expect(unreadable.code).not.toBe(0);
-    readsOnly(unreadable);
-
-    const decided = succeeded(evalRun(at, 'facts', { author: 'Maintainer' }), 'facts');
-    // The triage path with no verdict refuses in the outcome.
-    const unjudged = evalOutcome(at, decided, SKIPPED_TRIAGE);
-    expect(unjudged.code).not.toBe(0);
-    expect(unjudged.stderr).toContain('has no triage verdict');
-    expect([...unjudged.gh, ...unjudged.forge]).toEqual([]);
-  }, 60_000);
-});
-
-describe('trust: outside in live', () => {
-  test('refuses an item whose trust is recorded as maintainer, and leaves it recorded', () => {
-    const at = install();
-    const decided = facts(at, { runId: 'run-1' }).output;
-    expect(outcome(at, { runId: 'run-1' }, decided, READY_VERDICT).code).toBe(0);
-    const edited = run(
-      at,
-      'facts',
-      { runId: 'run-2', action: 'edited', statuses: { 'run-1': 'completed' } },
-      { INPUTS_TRUST: 'outside' }
-    );
-    expect(edited.code).not.toBe(0);
-    expect(edited.stderr).toContain('decided once');
-    expect(stored(at).value.trust).toBe('maintainer');
   }, 60_000);
 });

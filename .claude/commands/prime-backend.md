@@ -21,8 +21,8 @@ Read `packages/core/src/orchestrator/orchestrator-agent.ts` — the single entry
 platform messages. Maps messages to slash commands (via command-handler) or AI execution. Note
 the lazy logger pattern and MAX_BATCH constants.
 
-Read `packages/core/src/orchestrator/orchestrator.ts` first 60 lines — `validateAndResolveIsolation`
-and `dispatchBackgroundWorkflow` utilities called by orchestrator-agent.
+Read `packages/core/src/orchestrator/dispatch/isolation-resolver.ts` — `validateAndResolveIsolation` —
+and the top of `packages/core/src/orchestrator/dispatch/background.ts` — `dispatchBackgroundWorkflow`.
 
 Read `packages/core/src/orchestrator/prompt-builder.ts` first 40 lines — how system prompts
 are assembled with codebase context.
@@ -62,7 +62,7 @@ Read `packages/server/src/index.ts` first 80 lines — adapter wiring, port allo
 List API routes:
 !`ls packages/server/src/routes/`
 
-Read `packages/server/src/routes/api.ts` first 60 lines for REST endpoint structure.
+Read `registerApiRoutes` in `packages/server/src/routes/api.ts` for the REST endpoint structure: it calls one registrar per area, each in an `api.<area>.ts` module beside it.
 
 ### 8. Check Recent Backend Activity
 
@@ -90,7 +90,7 @@ Summarize (under 250 words):
 
 ### Server
 - Port allocation: 3090 default, auto-allocated worktree ports
-- Adapters wired: Telegram, GitHub, Discord, Slack, Web (SSE)
+- Adapters wired: Telegram, GitHub, Discord, Web (SSE); Slack runs as a chat plugin
 
 ### Recent Changes
 - Last few backend commits

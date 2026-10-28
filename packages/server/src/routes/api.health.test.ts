@@ -100,16 +100,20 @@ mock.module('@archon/paths', () => ({
   getWSLDistroName: mockGetWSLDistroName,
 }));
 
+const STORE_ID = '6f1c2b3a-4d5e-4f60-8a71-92b3c4d5e6f7';
+const mockReadStoreId = mock((): string | null => STORE_ID);
+const realServerDiscovery = { ...(await import('@archon/paths/server-discovery')) };
+mock.module('@archon/paths/server-discovery', () => ({
+  ...realServerDiscovery,
+  readStoreId: mockReadStoreId,
+}));
+
 mock.module('@archon/workflows/workflow-discovery', makeDiscoverWorkflowsMock);
 mock.module('@archon/workflows/loader', makeLoaderMock);
 mock.module('@archon/workflows/command-validation', makeCommandValidationMock);
 mock.module('@archon/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {},
-  BUNDLED_COMMANDS: {
-    'archon-investigate': '# archon-investigate command',
-    plan: '# plan command',
-    implement: '# implement command',
-  },
+  BUNDLED_COMMANDS: {},
   isBinaryBuild: mock(() => false),
 }));
 
@@ -178,15 +182,13 @@ mock.module('@archon/core/db/messages', () => ({
   listMessages: mock(async () => []),
 }));
 
-mock.module('@archon/core/utils/commands', () => ({
-  findCommandFiles: mock(async () => []),
-}));
-
 import { registerApiRoutes } from './api';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+const T0 = '2026-01-01T00:00:00.000Z';
 
 function makeApp(): OpenAPIHono {
   const app = new OpenAPIHono();
@@ -233,18 +235,25 @@ describe('GET /api/health', () => {
     const response = await app.request('/api/health');
     expect(response.status).toBe(200);
 
-    const body = (await response.json()) as {
+    const text = await response.text();
+    const body = JSON.parse(text) as {
       status: string;
       adapter: string;
-      concurrency: { active: number; activeConversationIds: string[] };
+      concurrency: Record<string, unknown>;
       runningWorkflows: number;
       version: string;
     };
     expect(body.status).toBe('ok');
     expect(body.adapter).toBe('web');
-    expect(body.concurrency).toBeDefined();
-    expect(body.concurrency.active).toBe(1);
-    expect(body.concurrency.activeConversationIds).toEqual(['conv-1']);
+    expect(body.concurrency).toEqual({
+      active: 1,
+      queuedTotal: 2,
+      maxConcurrent: 10,
+      oldestActiveAgeMs: null,
+      oldestQueuedAgeMs: null,
+    });
+    // Health is public: conversation ids stay behind /api/dashboard/conversations.
+    expect(text).not.toContain('conv-1');
     expect(body.runningWorkflows).toBe(1);
     expect(typeof body.version).toBe('string');
     expect(body.version.length).toBeGreaterThan(0);
@@ -289,6 +298,27 @@ describe('GET /api/health', () => {
     expect(body.schema?.createdAppVersion).toBeNull();
   });
 
+  test("reports its home's store id, and omits it when the home has none", async () => {
+    mockGetStats.mockImplementation(makeIdleLockStats);
+    mockGetRunningWorkflows.mockImplementation(async () => []);
+    const app = makeApp();
+
+    const withId = (await (await app.request('/api/health')).json()) as { storeId?: string };
+    expect(withId.storeId).toBe(STORE_ID);
+
+    mockReadStoreId.mockImplementationOnce(() => null);
+    const missing = await app.request('/api/health');
+    expect(missing.status).toBe(200);
+    expect(((await missing.json()) as { storeId?: string }).storeId).toBeUndefined();
+
+    mockReadStoreId.mockImplementationOnce(() => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    });
+    const unreadable = await app.request('/api/health');
+    expect(unreadable.status).toBe(200);
+    expect(((await unreadable.json()) as { storeId?: string }).storeId).toBeUndefined();
+  });
+
   test('omits schema and still answers 200 when the vintage read fails', async () => {
     mockGetStats.mockImplementationOnce(makeIdleLockStats);
     mockGetRunningWorkflows.mockImplementationOnce(async () => []);
@@ -320,11 +350,10 @@ describe('GET /api/health', () => {
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as {
-      concurrency: { active: number; activeConversationIds: string[] };
+      concurrency: { active: number };
       runningWorkflows: number;
     };
     expect(body.concurrency.active).toBe(2);
-    expect(body.concurrency.activeConversationIds).toEqual(['conv-1', 'conv-2']);
     expect(body.runningWorkflows).toBe(3);
   });
 
@@ -332,7 +361,7 @@ describe('GET /api/health', () => {
     mockGetStats.mockImplementationOnce(() => ({
       ...makeIdleLockStats(),
       active: 1,
-      activeConversationIds: ['conv-1'],
+      activeConversations: [{ conversationId: 'conv-1', acquiredAt: T0, ageMs: 1_000 }],
     }));
     mockGetRunningWorkflows.mockImplementationOnce(async () => [
       { id: 'run-1', conversation_id: 'conv-1', workflow_name: 'assist', started_at: '2026-01-01' },
@@ -342,12 +371,9 @@ describe('GET /api/health', () => {
     const response = await app.request('/api/health');
     expect(response.status).toBe(200);
 
-    const body = (await response.json()) as {
-      concurrency: { active: number; activeConversationIds: string[] };
-    };
+    const body = (await response.json()) as { concurrency: { active: number } };
     // Should NOT double-count conv-1
     expect(body.concurrency.active).toBe(1);
-    expect(body.concurrency.activeConversationIds).toEqual(['conv-1']);
   });
 
   test('combines lock manager and background workflow counts', async () => {
@@ -355,7 +381,11 @@ describe('GET /api/health', () => {
       ...makeIdleLockStats(),
       active: 1,
       queuedTotal: 3,
-      activeConversationIds: ['conv-1'],
+      activeConversations: [{ conversationId: 'conv-1', acquiredAt: T0, ageMs: 2_220_000 }],
+      queuedConversations: [
+        { conversationId: 'conv-3', queuedMessages: 2, oldestEnqueuedAt: T0, oldestAgeMs: 60_000 },
+        { conversationId: 'conv-4', queuedMessages: 1, oldestEnqueuedAt: T0, oldestAgeMs: 5_000 },
+      ],
     }));
     mockGetRunningWorkflows.mockImplementationOnce(async () => [
       { id: 'run-2', conversation_id: 'conv-2', workflow_name: 'plan', started_at: '2026-01-01' },
@@ -365,14 +395,40 @@ describe('GET /api/health', () => {
     const response = await app.request('/api/health');
     expect(response.status).toBe(200);
 
-    const body = (await response.json()) as {
-      concurrency: { active: number; queuedTotal: number; activeConversationIds: string[] };
+    const text = await response.text();
+    const body = JSON.parse(text) as {
+      status: string;
+      concurrency: Record<string, unknown>;
       runningWorkflows: number;
     };
-    expect(body.concurrency.active).toBe(2);
-    expect(body.concurrency.queuedTotal).toBe(3);
-    expect(body.concurrency.activeConversationIds).toEqual(['conv-1', 'conv-2']);
+    // A 37-minute-old slot is reported as an age; it does not change status.
+    expect(body.status).toBe('ok');
+    expect(body.concurrency).toEqual({
+      active: 2,
+      queuedTotal: 3,
+      maxConcurrent: 10,
+      oldestActiveAgeMs: 2_220_000,
+      oldestQueuedAgeMs: 60_000,
+    });
     expect(body.runningWorkflows).toBe(1);
+    expect(text).not.toMatch(/conv-\d/);
+  });
+
+  test('GET /api/dashboard/conversations returns the per-conversation snapshot', async () => {
+    const snapshot = {
+      ...makeIdleLockStats(),
+      active: 1,
+      queuedTotal: 1,
+      activeConversations: [{ conversationId: 'conv-1', acquiredAt: T0, ageMs: 2_220_000 }],
+      queuedConversations: [
+        { conversationId: 'conv-2', queuedMessages: 1, oldestEnqueuedAt: T0, oldestAgeMs: 60_000 },
+      ],
+    };
+    mockGetStats.mockImplementationOnce(() => snapshot);
+
+    const response = await makeApp().request('/api/dashboard/conversations');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(snapshot);
   });
 
   test('returns 200 without any auth requirements', async () => {
@@ -502,57 +558,6 @@ describe('GET /api/config', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests: GET /api/commands
-// ---------------------------------------------------------------------------
-
-describe('GET /api/commands', () => {
-  test('returns commands array with bundled commands', async () => {
-    const app = makeApp();
-    const response = await app.request('/api/commands');
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
-    expect(Array.isArray(body.commands)).toBe(true);
-
-    // BUNDLED_COMMANDS mock has 3 entries
-    const bundledCommands = body.commands.filter(c => c.source === 'bundled');
-    expect(bundledCommands.length).toBeGreaterThan(0);
-  });
-
-  test('includes archon-investigate as bundled command', async () => {
-    const app = makeApp();
-    const response = await app.request('/api/commands');
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
-    const archonAssist = body.commands.find(c => c.name === 'archon-investigate');
-    expect(archonAssist).toBeDefined();
-    expect(archonAssist?.source).toBe('bundled');
-  });
-
-  test('includes plan and implement as bundled commands', async () => {
-    const app = makeApp();
-    const response = await app.request('/api/commands');
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
-    const names = body.commands.map(c => c.name);
-    expect(names).toContain('plan');
-    expect(names).toContain('implement');
-  });
-
-  test('returns commands with cwd query param without error', async () => {
-    const app = makeApp();
-    // Use the registered codebase path (/tmp/project from the mock) so validateCwd passes
-    const response = await app.request('/api/commands?cwd=/tmp/project');
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { commands: Array<{ name: string }> };
-    expect(Array.isArray(body.commands)).toBe(true);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Tests: GET /api/openapi.json — guards @hono/zod-openapi spec generation
 // (the v0 -> v1 / zod v4 upgrade is a major bump; this confirms every
 // registered route's schema still serializes without throwing).
@@ -602,5 +607,6 @@ describe('GET /api/openapi.json', () => {
     expect(health?.properties?.['wsl_distro']).toBeDefined();
     expect(health?.required).toContain('is_wsl');
     expect(health?.required).not.toContain('wsl_distro');
+    expect(health?.properties?.['storeId']).toBeDefined();
   });
 });

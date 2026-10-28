@@ -32,12 +32,12 @@ const CANONICALIZING_SITES = [
   // registerFolder — the CLI `workflow run --folder` and HTTP writer.
   'packages/core/src/handlers/clone.ts',
   // /register-project and /update-project — the chat writers.
-  'packages/core/src/orchestrator/orchestrator-agent.ts',
+  'packages/core/src/orchestrator/project-commands.ts',
   // The pre-dispatch project gate — the reader that decides whether a command
   // may run at all in a non-git directory.
   'packages/cli/src/cli.ts',
   // `archon doctor`'s folder-project check.
-  'packages/cli/src/commands/doctor.ts',
+  'packages/cli/src/commands/doctor-folder-project.ts',
 ] as const;
 
 /**

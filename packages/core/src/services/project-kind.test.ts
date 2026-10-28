@@ -6,6 +6,7 @@ const git = await import('@archon/git');
 mock.module('@archon/git', () => ({
   ...git,
   findRepoRoot: mock<typeof findRepoRoot>(() => Promise.reject(failure)),
+  trustRegisteredPath: mock(() => Promise.resolve()),
 }));
 const { detectProjectKind, ProjectKindDetectionError } = await import('./project-kind');
 test('Git detection failures preserve the original cause for an existing path', async () => {

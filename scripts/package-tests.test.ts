@@ -7,18 +7,18 @@ import { TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
 
 const track = trackTempRoots();
 const runner = join(import.meta.dir, 'package-tests.ts');
-function fixture(): string {
+function fixture(manifest: object = {}): string {
   const root = track(mkdtempSync(join(tmpdir(), 'package-runner-')));
   mkdirSync(join(root, 'src'));
-  writeFileSync(join(root, 'package.json'), JSON.stringify({}));
+  writeFileSync(join(root, 'package.json'), JSON.stringify(manifest));
   return root;
 }
-async function run(root: string, args: string[] = []): Promise<number> {
+async function run(root: string, args: string[] = [], part = ''): Promise<number> {
   const child = Bun.spawn([process.execPath, 'run', runner, ...args], {
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_TEST_PART: part },
   });
   const [status] = await Promise.all([
     child.exited,
@@ -115,4 +115,61 @@ test(
     expect(existsSync(join(root, 'later'))).toBe(false);
   },
   testTimeout(5000)
+);
+
+test(
+  'testConcurrency runs that many groups at once, each in its own process',
+  async () => {
+    const root = fixture({ testConcurrency: 2 });
+    // Each group waits for the file the other writes, so both pass only side by side.
+    const rendezvous = (mine: string, theirs: string): string =>
+      `import { existsSync, writeFileSync } from 'node:fs';
+    test('meets', async () => {
+      writeFileSync('${mine}', String(process.pid));
+      const deadline = Date.now() + 4000;
+      while (!existsSync('${theirs}') && Date.now() < deadline) await Bun.sleep(25);
+      expect(existsSync('${theirs}')).toBe(true);
+    }, 5000);`;
+    testFile(root, 'a', rendezvous('a-ready', 'b-ready'), true);
+    testFile(root, 'b', rendezvous('b-ready', 'a-ready'), true);
+    expect(await run(root)).toBe(0);
+    expect(readFileSync(join(root, 'a-ready'), 'utf8')).not.toBe(
+      readFileSync(join(root, 'b-ready'), 'utf8')
+    );
+  },
+  testTimeout(10000)
+);
+
+test(
+  'a failing group fails a concurrent run',
+  async () => {
+    const root = fixture({ testConcurrency: 2 });
+    testFile(root, 'a-failure', `test('fails', () => { throw new Error('expected'); });`, true);
+    testFile(root, 'b-pass', `test('passes', () => {});`, true);
+    expect(await run(root)).not.toBe(0);
+  },
+  testTimeout(5000)
+);
+
+test(
+  'ARCHON_TEST_PART runs disjoint parts that together run every group',
+  async () => {
+    const root = fixture();
+    for (const name of ['a', 'b', 'c']) {
+      testFile(root, name, `test('${name}', () => appendFileSync('ran', '${name}\\n'));`, true);
+    }
+    const ran = (): string[] =>
+      existsSync(join(root, 'ran'))
+        ? readFileSync(join(root, 'ran'), 'utf8').trim().split('\n')
+        : [];
+    expect(await run(root, [], '1/2')).toBe(0);
+    const first = ran();
+    expect(await run(root, [], '2/2')).toBe(0);
+    const second = ran().slice(first.length);
+    expect(first.length).toBeGreaterThan(0);
+    expect(second.length).toBeGreaterThan(0);
+    expect([...first, ...second].sort()).toEqual(['a', 'b', 'c']);
+    expect(await run(root, [], '3/2')).not.toBe(0);
+  },
+  testTimeout(10000)
 );

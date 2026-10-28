@@ -109,6 +109,18 @@ async function install(repoPath: string): Promise<CredentialHelperInstallResult>
  * rewritten config keys; URL-write failures expose only the key and Git exit code.
  */
 async function removeGitHubUrlCredentials(repoPath: string): Promise<string[]> {
+  const cleanedKeys: string[] = [];
+  for (const [key, urls] of await listRemoteUrls(repoPath)) {
+    const changed = urls.filter(url => withoutGitHubCredentials(url) !== url);
+    if (changed.length === 0) continue;
+    for (const url of new Set(changed)) await stripUrlCredentials(repoPath, key, url);
+    cleanedKeys.push(key);
+  }
+  return cleanedKeys;
+}
+
+/** Every local `remote.*.url` and `remote.*.pushurl` value, grouped by config key. */
+async function listRemoteUrls(repoPath: string): Promise<Map<string, string[]>> {
   let listed: string;
   try {
     ({ stdout: listed } = await execFileAsync(
@@ -118,7 +130,7 @@ async function removeGitHubUrlCredentials(repoPath: string): Promise<string[]> {
     ));
   } catch (err) {
     // Exit 1 means no remote URL is configured.
-    if ((err as { code?: unknown }).code === 1) return [];
+    if ((err as { code?: unknown }).code === 1) return new Map();
     throw err;
   }
   const urlsByKey = new Map<string, string[]>();
@@ -128,40 +140,35 @@ async function removeGitHubUrlCredentials(repoPath: string): Promise<string[]> {
     const key = entry.slice(0, newline);
     urlsByKey.set(key, [...(urlsByKey.get(key) ?? []), entry.slice(newline + 1)]);
   }
-  const cleanedKeys: string[] = [];
-  for (const [key, urls] of urlsByKey) {
-    const changed = urls.filter(url => withoutGitHubCredentials(url) !== url);
-    if (changed.length === 0) continue;
-    for (const url of new Set(changed)) {
-      try {
-        await execFileAsync(
-          'git',
-          [
-            '-C',
-            repoPath,
-            'config',
-            '--local',
-            '--fixed-value',
-            '--replace-all',
-            key,
-            withoutGitHubCredentials(url),
-            url,
-          ],
-          { timeout: 5000 }
-        );
-      } catch (error) {
-        // execFile errors contain argv, including the credential-bearing match value.
-        // Keep only the structured exit code; never retain the original as a cause.
-        const code = error instanceof Error && 'code' in error ? error.code : undefined;
-        throw new Error(
-          `Failed to remove credentials from ${key}` +
-            (typeof code === 'number' ? ` (git exit ${code})` : '')
-        );
-      }
-    }
-    cleanedKeys.push(key);
+  return urlsByKey;
+}
+
+async function stripUrlCredentials(repoPath: string, key: string, url: string): Promise<void> {
+  try {
+    await execFileAsync(
+      'git',
+      [
+        '-C',
+        repoPath,
+        'config',
+        '--local',
+        '--fixed-value',
+        '--replace-all',
+        key,
+        withoutGitHubCredentials(url),
+        url,
+      ],
+      { timeout: 5000 }
+    );
+  } catch (error) {
+    // execFile errors contain argv, including the credential-bearing match value.
+    // Keep only the structured exit code; never retain the original as a cause.
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    throw new Error(
+      `Failed to remove credentials from ${key}` +
+        (typeof code === 'number' ? ` (git exit ${code})` : '')
+    );
   }
-  return cleanedKeys;
 }
 
 function withoutGitHubCredentials(url: string): string {

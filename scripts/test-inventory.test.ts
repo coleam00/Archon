@@ -142,9 +142,10 @@ function packageTestSelectors(
 }
 
 /** Paths the root plan tests itself, rather than delegating to a workspace. */
-const ROOT_TEST_SELECTORS = ROOT_TEST_PLAN.flatMap((step): string[] =>
+const ROOT_TEST_SELECTORS = ROOT_TEST_PLAN.flatMap((step): readonly string[] =>
   step.kind === 'root' ? step.selectors : []
 );
+/** The `workspaces` step runs every package the `workspace` steps do not, so together they run all. */
 const ROOT_PLAN_RUNS_WORKSPACE_TESTS = ROOT_TEST_PLAN.some(
   (step): boolean => step.kind === 'workspaces'
 );
@@ -202,7 +203,7 @@ function packageDirectoryForTest(
 
 export function isCollectedByRepositoryTest(
   testPath: string,
-  rootSelectors: string[],
+  rootSelectors: readonly string[],
   workspacePatterns: string[],
   workspaceTestsRun: boolean,
   packageSelectors: Map<string, string[]>
@@ -241,6 +242,31 @@ export function inspectPackage(packageDirectory: string): InventoryMismatch | un
 
   const manifest = readPackageManifest(manifestPath);
   const { selectors, unsupportedDeclarations } = packageTestSelectors(manifest, packageDirectory);
+  const { selectedTests, staleSelectors } = selectPackageTests(packageDirectory, selectors, tests);
+
+  const missingTests = tests.filter((path): boolean => !selectedTests.has(path));
+  if (
+    missingTests.length === 0 &&
+    staleSelectors.length === 0 &&
+    unsupportedDeclarations.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    packageName: manifest.name ?? relative(PACKAGES_DIR, packageDirectory),
+    manifestPath: normalizePath(relative(REPO_ROOT, manifestPath)),
+    missingTests,
+    staleSelectors,
+    unsupportedDeclarations,
+  };
+}
+
+function selectPackageTests(
+  packageDirectory: string,
+  selectors: readonly string[],
+  tests: readonly string[]
+): { selectedTests: Set<string>; staleSelectors: string[] } {
   const selectedTests = new Set<string>();
   const staleSelectors: string[] = [];
 
@@ -261,22 +287,7 @@ export function inspectPackage(packageDirectory: string): InventoryMismatch | un
     }
   }
 
-  const missingTests = tests.filter((path): boolean => !selectedTests.has(path));
-  if (
-    missingTests.length === 0 &&
-    staleSelectors.length === 0 &&
-    unsupportedDeclarations.length === 0
-  ) {
-    return undefined;
-  }
-
-  return {
-    packageName: manifest.name ?? relative(PACKAGES_DIR, packageDirectory),
-    manifestPath: normalizePath(relative(REPO_ROOT, manifestPath)),
-    missingTests,
-    staleSelectors,
-    unsupportedDeclarations,
-  };
+  return { selectedTests, staleSelectors };
 }
 
 function formatMismatches(mismatches: InventoryMismatch[]): string {

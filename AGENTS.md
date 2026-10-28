@@ -112,6 +112,7 @@ The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [
 - Workflow execution depends on injected contracts, not on core database or adapter implementations.
 - Platform-specific parsing and authorization belong inside the owning adapter. Core receives normalized intent and identity.
 - The Web client consumes generated API types through its local API layer; it does not import server or workflow runtime packages.
+- The engine (`packages/`) and the bundled SDLC pack (`.archon/workflows`, `.archon/scripts`) don't import each other's code, in source or in tests. They meet through the workflow language, the CLI and the provider and forge contracts.
 - Shared schemas are the source of truth for persisted and API shapes. Keep OpenAPI generation and runtime validation on the same schema path.
 - Use the type system, schema validation, and package boundaries to enforce architecture before adding prose rules.
 
@@ -162,12 +163,13 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 ## Tests and validation
 
 - Add tests for meaningful behavior and failure modes. Do not preserve deleted features through regression-test clutter.
+- The engine tests what it owns (the workflow language, script nodes, state, waits, resume) with its own minimal fixtures, never with a pack workflow. The pack tests only its own scripts at a tool boundary and never retests the engine's behavior.
 - Prefer deterministic, cheap tests. Remove accidental I/O and unnecessary subprocesses before increasing timeouts.
-- Remove test temp trees with `removeTempTree` or `trackTempRoots` from `@archon/paths/test-utils`.
+- Remove test temp trees with `removeTempTree` or `trackTempRoots`: from `@archon/paths/test-utils` in engine and `scripts/` tests, and from the pack's own `.archon/scripts/__tests__/temp-roots.ts` in pack tests.
 - Spawn a subprocess only when the subprocess is the subject under test. To suppress an inherited env key for a Bun child, pass it as `''`; deleting it allows `.env` loading to restore it.
 - Bun's module mocks pollute the process cache. Use the package test scripts that preserve isolation; do not run `bun test` from the repository root.
 - Run lint through `bun run lint`. Besides Biome, it runs the repository checks Biome cannot express, such as the workflow persistence boundary.
-- Check what you changed: run the tests that cover it, and lint and type-check the packages you touched.
+- Check what you changed: run the tests that cover it, lint and type-check the packages you touched, and run `bun run check:ratchet` before you push. CI refuses a change the ratchet refuses, and it takes seconds locally against a fetched `origin/dev`.
 - CI is the full validation. Don't run `bun run validate` to finish a change. `scripts/validate.ts` owns the check list and CI selects from it; workflow fixtures run locally only through `--only`.
 - Schema changes also need the PostgreSQL upgrade check. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists it with its command.
 - For visual or runtime behavior, add direct evidence when static tests cannot prove the outcome.
@@ -178,7 +180,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Branch from `dev` and open the pull request back to `dev`.
 - Use [`.github/pull_request_template.md`](.github/pull_request_template.md). Keep its required sections, remove instructional comments and irrelevant conditional sections, and describe the problem before the implementation.
 - Review the complete diff against the actual base branch before opening the pull request.
-- Link the source issue with a closing keyword when the work has one.
+- Link the source issue as [`CONTRIBUTING.md`](CONTRIBUTING.md) says: a closing keyword, or `Refs` when the issue's dated ruling keeps it open after the pull request.
 - Keep titles concise and outcome-focused. Do not add AI attribution to commits or pull requests.
 
 ## Find current facts
@@ -190,6 +192,6 @@ Do not expand this file with copied reference material. Use the owning source:
 - Workflow-language design: [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md)
 - Engineering craft and review values: [`.archon/engineering.md`](.archon/engineering.md)
 - CLI: [`packages/docs-web/src/content/docs/reference/cli.md`](packages/docs-web/src/content/docs/reference/cli.md) and `archon --help`
-- Workflow authoring: [`packages/docs-web/src/content/docs/guides/authoring-workflows.md`](packages/docs-web/src/content/docs/guides/authoring-workflows.md) and workflow schemas
+- Workflow authoring: [`packages/docs-web/src/content/docs/reference/workflow-language.md`](packages/docs-web/src/content/docs/reference/workflow-language.md) and workflow schemas
 - Database behavior: [`packages/docs-web/src/content/docs/reference/database.md`](packages/docs-web/src/content/docs/reference/database.md), migrations, and adapter tests
 - Available commands and generated-file checks: root and package `package.json` scripts

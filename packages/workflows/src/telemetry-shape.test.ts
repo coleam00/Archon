@@ -1,23 +1,75 @@
+// @archon-test-isolated
 import type { ProviderRegistry } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
-import { beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, mock, test } from 'bun:test';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { basename } from 'node:path';
-import {
-  BUNDLED_COMMANDS,
-  BUNDLED_WORKFLOWS,
-  BUNDLED_WORKFLOW_OWNERS,
-  BUNDLED_WORKFLOW_PATHS,
-} from './defaults/bundled-defaults';
+import { removeTempTree } from '@archon/paths/test-utils';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
 import { expandWorkflowIncludes } from './include-expander';
 import { parseWorkflow } from './loader';
 import { qualifyWorkflowResources } from './packaged-workflow';
 import type { ResolvedWorkflow, WorkflowDefinition } from './schemas/workflow';
-import { deriveBundledAncestry, describeWorkflowShape, promptCharsBucket } from './telemetry-shape';
+import { writeFakeBundle } from './test-fake-bundle';
 
-beforeAll(() => {
-  registerBuiltinProviders();
-});
+registerBuiltinProviders();
+
+// Ancestry compares against the bundled records; these fake ones stand in for the shipped
+// pack. `fake-deliver` includes `fake-implement`, and the probe names a provider so an
+// empty registry cannot parse it.
+const bundleRoot = await mkdtemp(join(tmpdir(), 'archon-telemetry-bundle-'));
+afterAll(() => removeTempTree(bundleRoot));
+const fake = await writeFakeBundle(
+  bundleRoot,
+  {
+    'fake/implement/fake-implement.yaml': [
+      'name: fake-implement',
+      'description: Implement fixture.',
+      'nodes:',
+      '  - id: read',
+      '    bash: echo read',
+      '  - id: build',
+      '    command: build',
+      '    depends_on: [read]',
+      '  - id: lint',
+      '    script: lint',
+      '    runtime: bun',
+      '    depends_on: [build]',
+      '  - id: check',
+      '    prompt: Check the build.',
+      '    depends_on: [lint]',
+    ].join('\n'),
+    'fake/implement/commands/build.md': 'Build the change the plan describes.\n',
+    'fake/implement/scripts/lint.ts': "console.log('lint');\n",
+    'fake/deliver/fake-deliver.yaml': [
+      'name: fake-deliver',
+      'description: Deliver fixture.',
+      'nodes:',
+      '  - id: implement',
+      '    include: fake-implement',
+      '  - id: report',
+      '    prompt: Report the delivery.',
+      '    depends_on: [implement]',
+    ].join('\n'),
+    'fake/probe/registry-ancestry-probe.yaml': [
+      'name: registry-ancestry-probe',
+      'description: Registry admission fixture.',
+      'provider: claude',
+      'nodes:',
+      '  - id: registry-ancestry-probe-node',
+      '    prompt: Check registry admission.',
+    ].join('\n'),
+  },
+  ['fake']
+);
+const actualDefaults = await import('./defaults/bundled-defaults');
+mock.module('./defaults/bundled-defaults', () => ({ ...actualDefaults, ...fake }));
+const { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, BUNDLED_WORKFLOW_OWNERS, BUNDLED_WORKFLOW_PATHS } =
+  fake;
+const { deriveBundledAncestry, describeWorkflowShape, promptCharsBucket } = await import(
+  './telemetry-shape'
+);
 
 /** Parse and resolve a workflow the way discovery does for an include-free file. */
 function resolve(yaml: string): ResolvedWorkflow {
@@ -75,53 +127,41 @@ function resolveProjectCopy(
 describe('deriveBundledAncestry', () => {
   test('bundled ancestry uses the registry supplied to each call', () => {
     const name = 'registry-ancestry-probe';
-    BUNDLED_WORKFLOWS[name] = [
-      `name: ${name}`,
-      'description: Registry admission fixture.',
-      'provider: claude',
-      'nodes:',
-      '  - id: registry-ancestry-probe-node',
-      '    prompt: Check registry admission.',
-    ].join('\n');
     const emptyRegistry: ProviderRegistry = { get: () => undefined, list: () => [] };
-    try {
-      const copy = resolve(BUNDLED_WORKFLOWS[name]);
-      expect(deriveBundledAncestry(providerRegistry, copy)).toEqual({
-        derivedFrom: name,
-        derivedSimilarity: 'identical',
-      });
-      expect(deriveBundledAncestry(emptyRegistry, copy)).toBeUndefined();
-      expect(deriveBundledAncestry(providerRegistry, copy)?.derivedFrom).toBe(name);
-    } finally {
-      delete BUNDLED_WORKFLOWS[name];
-    }
+    const copy = resolve(BUNDLED_WORKFLOWS[name]);
+    expect(deriveBundledAncestry(providerRegistry, copy)).toEqual({
+      derivedFrom: name,
+      derivedSimilarity: 'identical',
+    });
+    expect(deriveBundledAncestry(emptyRegistry, copy)).toBeUndefined();
+    expect(deriveBundledAncestry(providerRegistry, copy)?.derivedFrom).toBe(name);
   });
 
   test('a copy with a node added is modified', () => {
-    const copy = resolveProjectCopy('archon-implement', 'acme-implement', undefined, yaml =>
+    const copy = resolveProjectCopy('fake-implement', 'acme-implement', undefined, yaml =>
       yaml.replace(/^nodes:\n/m, 'nodes:\n  - id: acme-extra\n    bash: echo acme\n')
     );
     expect(copy.nodes.some(node => node.id === 'acme-extra')).toBe(true);
     expect(deriveBundledAncestry(providerRegistry, copy)).toEqual({
-      derivedFrom: 'archon-implement',
+      derivedFrom: 'fake-implement',
       derivedSimilarity: 'modified',
     });
   });
 
   test('an unchanged copy of a workflow that includes another bundled workflow is identical', () => {
     expect(
-      deriveBundledAncestry(providerRegistry, resolveProjectCopy('archon-deliver', 'acme-deliver'))
+      deriveBundledAncestry(providerRegistry, resolveProjectCopy('fake-deliver', 'acme-deliver'))
     ).toEqual({
-      derivedFrom: 'archon-deliver',
+      derivedFrom: 'fake-deliver',
       derivedSimilarity: 'identical',
     });
   });
 
   test('an unchanged project copy of a pack workflow is identical despite its project owner', () => {
     expect(
-      deriveBundledAncestry(providerRegistry, resolveProjectCopy('archon-plan', 'acme-plan'))
+      deriveBundledAncestry(providerRegistry, resolveProjectCopy('fake-implement', 'acme-plan'))
     ).toEqual({
-      derivedFrom: 'archon-plan',
+      derivedFrom: 'fake-implement',
       derivedSimilarity: 'identical',
     });
   });
@@ -182,7 +222,7 @@ describe('describeWorkflowShape', () => {
   });
 
   test('nothing that describes a custom workflow carries its ids, names or text', () => {
-    const custom = resolveProjectCopy('archon-implement', 'acme-secret-intake', undefined, yaml =>
+    const custom = resolveProjectCopy('fake-implement', 'acme-secret-intake', undefined, yaml =>
       yaml.replace(
         /^nodes:\n/m,
         'nodes:\n  - id: acme-secret-node\n    prompt: Acme secret prompt text.\n'

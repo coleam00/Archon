@@ -1,12 +1,13 @@
 {
   "name": "@archon/providers",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
+    "./credential-catalog": "./src/credential-catalog.ts",
     "./claude/provider": "./src/claude/provider.ts",
     "./claude/config": "./src/claude/config.ts",
     "./claude/binary-resolver": "./src/claude/binary-resolver.ts",
@@ -20,6 +21,7 @@
     "./community/copilot": "./src/community/copilot/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
     "./community/opencode/runtime": "./src/community/opencode/runtime.ts",
+    "./community/deprecation": "./src/community/deprecation.ts",
     "./errors": "./src/errors.ts",
     "./registry": "./src/registry.ts",
     "./claude/plugin": "./src/claude/plugin.ts",
@@ -120,7 +122,8 @@
       "src/community/pi/config.test.ts"
     ],
     [
-      "src/community/pi/event-bridge.test.ts"
+      "src/community/pi/event-bridge.test.ts",
+      "src/community/pi/event-bridge-text.test.ts"
     ],
     [
       "src/community/pi/extension-error-broker.test.ts",
@@ -148,7 +151,40 @@
       "src/community/pi/provider.test.ts"
     ],
     [
+      "src/community/pi/provider-models.test.ts"
+    ],
+    [
+      "src/community/pi/provider-auth.test.ts"
+    ],
+    [
+      "src/community/pi/provider-custom-models.test.ts"
+    ],
+    [
+      "src/community/pi/provider-output.test.ts"
+    ],
+    [
+      "src/community/pi/provider-sessions.test.ts"
+    ],
+    [
+      "src/community/pi/provider-tools.test.ts"
+    ],
+    [
+      "src/community/pi/provider-context.test.ts"
+    ],
+    [
+      "src/community/pi/provider-extensions.test.ts"
+    ],
+    [
+      "src/community/pi/provider-lifecycle.test.ts"
+    ],
+    [
+      "src/community/pi/provider-extension-loader.test.ts"
+    ],
+    [
       "src/community/pi/provider.integration.test.ts"
+    ],
+    [
+      "src/community/pi/structured-output-tool.integration.test.ts"
     ],
     [
       "src/community/pi/provider-lazy-load.test.ts"
@@ -202,6 +238,9 @@
       "src/community/opencode/runtime.test.ts"
     ],
     [
+      "src/community/opencode/runtime-cancellation.test.ts"
+    ],
+    [
       "src/community/opencode/session.test.ts"
     ],
     [
@@ -246,6 +285,12 @@
     ],
     [
       "src/community/pi/credential-authority.integration.test.ts"
+    ],
+    [
+      "src/mcp/readiness.test.ts"
+    ],
+    [
+      "src/claude/mcp-readiness.boundary.test.ts"
     ]
   ]
 }

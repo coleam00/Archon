@@ -25,9 +25,7 @@ import {
   intro,
   outro,
   text,
-  password,
   select,
-  multiselect,
   confirm,
   note,
   spinner,
@@ -35,1702 +33,47 @@ import {
   cancel,
   log,
 } from '@clack/prompts';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, chmodSync } from 'fs';
-import { parse as parseDotenv } from 'dotenv';
-import { join, dirname, resolve } from 'path';
-import { loadGitHubAppConfig } from '@archon/core/github-auth/config';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { type Document, isScalar, parseDocument, Scalar, YAMLMap } from 'yaml';
 import { copyArchonSkill } from './skill';
-import { setInstallDefault } from './ai';
-import { homedir } from 'os';
-import { randomBytes, createPrivateKey } from 'crypto';
-import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
-import { execFileAsync } from '@archon/git';
 import {
-  GITHUB_APP_CREDENTIAL_KEYS,
-  GITHUB_APP_PRIVATE_KEY_KEYS,
-  GITHUB_PAT_KEYS,
-  selectGitHubAuthMode,
-} from '@archon/core/utils/github-auth-mode';
-import { getRegisteredProviders, registerProvider, providerRegistry } from '@archon/providers';
-import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-contract';
-import { providerCommand } from './provider';
-import { checkProviderDiagnostics, type CheckResult } from './doctor';
+  SetupExit,
+  cancelSetup,
+  exitSetup,
+  getLog,
+  type SetupConfig,
+  type SetupOptions,
+} from './setup-shared';
+import { writeHomePiModelConfig } from './setup-provider-auth';
 import {
-  CODEX_SETUP_ENV,
-  migrateCodexSetupEnv,
-  readCodexSetupEnv,
-} from '@archon/providers/codex/setup-env';
-import { TIER_NAMES, buildAiProfile } from '@archon/workflows/model-validation';
+  checkExistingConfig,
+  generateEnvContent,
+  resolveScopedEnvPath,
+  writeScopedEnv,
+} from './setup-env';
+import { collectAIConfig, confirmModelTiers, writeInstallDefaults } from './setup-ai';
 import {
-  getArchonEnvPath as pathsGetArchonEnvPath,
-  getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
-  getArchonHome as pathsGetArchonHome,
-  createLogger,
-  BUNDLED_IS_BINARY,
-  BUNDLED_VERSION,
-  getPluginsPath,
-  expandTilde,
-} from '@archon/paths';
-
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('cli.setup');
-  return cachedLog;
-}
-
-// =============================================================================
-// Types
-// =============================================================================
-
-// Pi backends offered by the setup wizard.
-const PI_BACKENDS = [
-  {
-    id: 'anthropic',
-    envVar: 'ANTHROPIC_API_KEY',
-    label: 'Anthropic',
-    hint: 'claude-haiku-4-5, claude-opus-4-7, etc.',
-  },
-  { id: 'openai', envVar: 'OPENAI_API_KEY', label: 'OpenAI', hint: 'gpt-4o, gpt-5.6-sol, etc.' },
-  {
-    id: 'google',
-    envVar: 'GEMINI_API_KEY',
-    label: 'Google (Gemini)',
-    hint: 'gemini-2.0-flash, etc.',
-  },
-  {
-    id: 'openrouter',
-    envVar: 'OPENROUTER_API_KEY',
-    label: 'OpenRouter',
-    hint: 'qwen/qwen3-coder, many others',
-  },
-  {
-    id: 'groq',
-    envVar: 'GROQ_API_KEY',
-    label: 'Groq',
-    hint: 'llama-3.3-70b-versatile, etc.',
-  },
-  { id: 'mistral', envVar: 'MISTRAL_API_KEY', label: 'Mistral', hint: 'mistral-large, etc.' },
-  { id: 'xai', envVar: 'XAI_API_KEY', label: 'xAI (Grok)', hint: 'grok-3, etc.' },
-  {
-    id: 'cerebras',
-    envVar: 'CEREBRAS_API_KEY',
-    label: 'Cerebras',
-    hint: 'llama3.1-70b, etc.',
-  },
-  {
-    id: 'huggingface',
-    envVar: 'HUGGINGFACE_API_KEY',
-    label: 'Hugging Face',
-    hint: 'inference API',
-  },
-] as const;
-
-const PI_DEFAULT_MODELS: Record<string, string> = {
-  anthropic: 'anthropic/claude-haiku-4-5',
-  openai: 'openai/gpt-4o',
-  google: 'google/gemini-2.0-flash',
-  openrouter: 'openrouter/qwen/qwen3-coder',
-  groq: 'groq/llama-3.3-70b-versatile',
-  mistral: 'mistral/mistral-large-latest',
-  xai: 'xai/grok-3',
-  cerebras: 'cerebras/llama3.1-70b',
-  huggingface: 'huggingface/Qwen/Qwen2.5-72B-Instruct',
-};
-
-/**
- * Curated default-chat-model suggestions for the built-in SDK providers
- * (#1999). CONVENIENCE only, not authority — mirrors CLAUDE_MODEL_OPTIONS /
- * CODEX_MODEL_OPTIONS in packages/web/src/experiments/console/lib/
- * model-options.ts (the web package can't be imported from the CLI, same
- * mirroring convention as that file's effort vocabularies). The prompt always
- * keeps a free-text escape; nothing blocks an unlisted model string.
- */
-const DEFAULT_CHAT_MODEL_OPTIONS: Record<string, { value: string; hint?: string }[]> = {
-  claude: [
-    { value: 'sonnet', hint: 'balanced (SDK default)' },
-    { value: 'opus', hint: 'most capable' },
-    { value: 'haiku', hint: 'fastest' },
-  ],
-  codex: [{ value: 'gpt-5.6-sol' }, { value: 'gpt-5.6-terra' }, { value: 'gpt-5.6-luna' }],
-};
-
-/** Sentinel select values for the default-chat-model prompt. Prefixed with
- *  `__` so they can never collide with a real model id. */
-const KEEP_MODEL = '__keep__';
-const CUSTOM_MODEL = '__custom__';
-
-interface SetupConfig {
-  ai: {
-    claude: boolean;
-    claudeAuthType?: 'global' | 'apiKey' | 'oauthToken';
-    claudeApiKey?: string;
-    claudeOauthToken?: string;
-    /** Absolute path to Claude Code SDK's cli.js. Written as CLAUDE_BIN_PATH
-     *  in ~/.archon/.env. Required in compiled Archon binaries; harmless in dev. */
-    claudeBinaryPath?: string;
-    codex: boolean;
-    codexTokens?: CodexTokens;
-    pi: boolean;
-    /** e.g. 'anthropic/claude-haiku-4-5' — written to ~/.archon/config.yaml */
-    piModel?: string;
-    /** API key value for the chosen Pi backend */
-    piApiKey?: string;
-    /** Canonical env var name for the chosen Pi backend, e.g. 'ANTHROPIC_API_KEY' */
-    piApiKeyEnvVar?: string;
-    defaultAssistant: string | undefined;
-    /** Gates the config.yaml write so an empty selection preserves the saved default. */
-    defaultAssistantSelected?: boolean;
-    /** Default CHAT model for the default assistant — written to
-     *  ~/.archon/config.yaml as `assistants.<defaultAssistant>.model` (#1999).
-     *  Unset when the user keeps the SDK default (or the default is Pi, whose
-     *  model is collected in collectPiConfig). */
-    defaultModel?: string;
-  };
-  platforms: {
-    github: boolean;
-    telegram: boolean;
-    slack: boolean;
-  };
-  github?: GitHubConfig;
-  telegram?: TelegramConfig;
-  slack?: SlackConfig;
-  botDisplayName: string;
-}
-
-type GitHubConfig = {
-  webhookSecret: string;
-  allowedUsers: string;
-  botMention?: string;
-} & (
-  | { mode: 'pat'; token: string }
-  | {
-      mode: 'app';
-      appId: string;
-      slug?: string;
-      privateKey: { source: 'path' | 'inline'; value: string };
-    }
-);
-
-export const GITHUB_APP_KEYS = [
-  ...GITHUB_APP_CREDENTIAL_KEYS,
-  'GITHUB_APP_CLIENT_ID',
-  'GITHUB_APP_SLUG',
-  'GITHUB_APP_INSTALLATION_ID',
-] as const;
-
-function hasCompleteAppCredential(env: Record<string, string | undefined>): boolean {
-  return (
-    Boolean(env.GITHUB_APP_ID?.trim()) &&
-    GITHUB_APP_PRIVATE_KEY_KEYS.some(key => Boolean(env[key]?.trim()))
-  );
-}
-
-interface TelegramConfig {
-  botToken: string;
-  allowedUserIds: string;
-}
-
-interface SlackConfig {
-  botToken: string;
-  appToken: string;
-  allowedUserIds: string;
-}
-
-interface CodexTokens {
-  idToken: string;
-  accessToken: string;
-  refreshToken: string;
-  accountId: string;
-}
-
-interface ExistingConfig {
-  hasClaude: boolean;
-  hasCodex: boolean;
-  hasPi: boolean;
-  platforms: {
-    github: boolean;
-    telegram: boolean;
-    slack: boolean;
-  };
-}
-
-interface SetupOptions {
-  /** Environment before CLI startup overlays the Archon env files. */
-  inheritedEnv?: NodeJS.ProcessEnv;
-  spawn?: boolean;
-  providers?: readonly string[];
-  repoPath: string;
-  /** Which archon-owned file to target. Default: 'home'. */
-  scope?: 'home' | 'project';
-  /** Skip merge and overwrite the target wholesale (backup still written). Default: false. */
-  force?: boolean;
-}
-
-interface SpawnResult {
-  success: boolean;
-  error?: string;
-}
-
-// =============================================================================
-// Utility Functions
-// =============================================================================
-
-/**
- * Get the Archon home directory (typically ~/.archon)
- */
-function getArchonHome(): string {
-  const envHome = process.env.ARCHON_HOME;
-  if (envHome) {
-    if (envHome.startsWith('~')) {
-      return join(homedir(), envHome.slice(1));
-    }
-    return envHome;
-  }
-  return join(homedir(), '.archon');
-}
-
-/**
- * Generate a cryptographically secure webhook secret
- */
-export function generateWebhookSecret(): string {
-  return randomBytes(32).toString('hex');
-}
-
-/**
- * Check if a file exists and has a non-empty value for a given key
- */
-function hasEnvValue(content: string, key: string): boolean {
-  const regex = new RegExp(`^${key}=(.+)$`, 'm');
-  const match = content.match(regex);
-  return match !== null && match[1].trim().length > 0;
-}
-
-/**
- * Probe wrappers — exported so tests can spy on each tier independently.
- * Direct imports of `existsSync` and `execSync` cannot be intercepted by
- * `spyOn` (esm rebinding limitation), so we route the probes through these
- * thin wrappers and let the test mock them in isolation.
- */
-export function probeFileExists(path: string): boolean {
-  return existsSync(path);
-}
-
-export function probeNpmRoot(): string | null {
-  try {
-    const out = execSync('npm root -g', {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return out || null;
-  } catch {
-    return null;
-  }
-}
-
-export function probeWhichClaude(): string | null {
-  try {
-    const checkCmd = process.platform === 'win32' ? 'where' : 'which';
-    const resolved = execSync(`${checkCmd} claude`, {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    // On Windows, `where` can return multiple lines — take the first.
-    const first = resolved.split(/\r?\n/)[0]?.trim();
-    return first ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Try to locate the Claude Code executable on disk.
- *
- * Compiled Archon binaries need an explicit path because the Claude Agent
- * SDK's `import.meta.url` resolution is frozen to the build host's filesystem.
- * The SDK's `pathToClaudeCodeExecutable` accepts either:
- *   - A native compiled binary (from the curl/PowerShell/winget installers — current default)
- *   - A JS `cli.js` (from `npm install -g @anthropic-ai/claude-code` — older path)
- *
- * We probe the well-known install locations in order:
- *   1. Native installer (`~/.local/bin/claude` on macOS/Linux, `%USERPROFILE%\.local\bin\claude.exe` on Windows)
- *   2. npm global `cli.js`
- *   3. `which claude` / `where claude` — fallback if the user installed via Homebrew, winget, or a custom layout
- *
- * Returns null on total failure so the caller can prompt the user.
- * Detection is best-effort; the caller should let users override.
- *
- * Exported so the probe order can be tested directly by spying on the
- * tier wrappers above (`probeFileExists`, `probeNpmRoot`, `probeWhichClaude`).
- */
-export function detectClaudeExecutablePath(): string | null {
-  // 1. Native installer default location (primary Anthropic-recommended path)
-  const nativePath =
-    process.platform === 'win32'
-      ? join(homedir(), '.local', 'bin', 'claude.exe')
-      : join(homedir(), '.local', 'bin', 'claude');
-  if (probeFileExists(nativePath)) return nativePath;
-
-  // 2. npm global cli.js
-  const npmRoot = probeNpmRoot();
-  if (npmRoot) {
-    const npmCliJs = join(npmRoot, '@anthropic-ai', 'claude-code', 'cli.js');
-    if (probeFileExists(npmCliJs)) return npmCliJs;
-  }
-
-  // 3. Fallback: resolve via `which` / `where` (Homebrew, winget, custom layouts)
-  const fromPath = probeWhichClaude();
-  if (fromPath && probeFileExists(fromPath)) return fromPath;
-
-  return null;
-}
-
-/**
- * Check for existing configuration at the selected scope's archon-owned env
- * file. Defaults to home scope for backward compatibility — callers writing to
- * project scope must pass a path so the Add/Update/Fresh decision reflects the
- * actual target.
- */
-export function checkExistingConfig(envPath?: string): ExistingConfig | null {
-  const path = envPath ?? join(getArchonHome(), '.env');
-
-  if (!existsSync(path)) {
-    return null;
-  }
-
-  const content = readFileSync(path, 'utf-8');
-  // Counts the deprecated unprefixed names too: the server still reads them this release.
-  const env = parseDotenv(content);
-  const codex = readCodexSetupEnv(env).values;
-  const githubMode = selectGitHubAuthMode(env).kind;
-  const nonblankGitHubMode = selectGitHubAuthMode(
-    Object.fromEntries(Object.entries(env).map(([key, value]) => [key, value.trim()]))
-  ).kind;
-
-  return {
-    hasClaude:
-      hasEnvValue(content, 'CLAUDE_API_KEY') ||
-      hasEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN') ||
-      hasEnvValue(content, 'CLAUDE_USE_GLOBAL_AUTH'),
-    hasCodex: Boolean(codex.idToken && codex.accessToken && codex.refreshToken && codex.accountId),
-    // Detection is intentionally API-key-only (no DEFAULT_AI_ASSISTANT=pi check)
-    // so that re-runs after partial configs still surface Pi. Doctor checks only
-    // the configured default assistant, so Claude users who share the same key
-    // env vars never get a Pi login check.
-    hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
-    platforms: {
-      github: (githubMode === 'app' || githubMode === 'pat') && githubMode === nonblankGitHubMode,
-      telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
-      slack: hasEnvValue(content, 'SLACK_BOT_TOKEN') && hasEnvValue(content, 'SLACK_APP_TOKEN'),
-    },
-  };
-}
-
-// =============================================================================
-// Data Collection Functions
-// =============================================================================
-
-/**
- * Try to read Codex tokens from ~/.codex/auth.json
- */
-function tryReadCodexAuth(): CodexTokens | null {
-  const authPath = join(homedir(), '.codex', 'auth.json');
-
-  if (!existsSync(authPath)) {
-    return null;
-  }
-
-  try {
-    const content = readFileSync(authPath, 'utf-8');
-    const auth = JSON.parse(content) as {
-      tokens?: {
-        id_token?: string;
-        access_token?: string;
-        refresh_token?: string;
-        account_id?: string;
-      };
-    };
-
-    if (
-      auth.tokens?.id_token &&
-      auth.tokens?.access_token &&
-      auth.tokens?.refresh_token &&
-      auth.tokens?.account_id
-    ) {
-      return {
-        idToken: auth.tokens.id_token,
-        accessToken: auth.tokens.access_token,
-        refreshToken: auth.tokens.refresh_token,
-        accountId: auth.tokens.account_id,
-      };
-    }
-  } catch {
-    // Invalid JSON or other error
-  }
-
-  return null;
-}
-
-/**
- * Collect Pi backend selection and optional API key.
- *
- * The wizard configures one Pi backend per run; users with multiple backends
- * can re-run setup or hand-edit `.env` and `~/.archon/config.yaml`.
- */
-async function collectPiConfig(): Promise<{
-  model: string;
-  apiKey?: string;
-  apiKeyEnvVar?: string;
-}> {
-  const backendChoice = await select({
-    message: 'Which Pi backend will you use as the default?',
-    options: PI_BACKENDS.map(b => ({ value: b.id, label: b.label, hint: b.hint })),
-  });
-
-  if (isCancel(backendChoice)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  const backend = PI_BACKENDS.find(b => b.id === backendChoice);
-  if (!backend) {
-    // Unreachable: select() can only return one of the option values, but
-    // narrow defensively so we never index PI_DEFAULT_MODELS with undefined.
-    cancel('Unknown Pi backend selected.');
-    exitSetup(1);
-  }
-  const model = PI_DEFAULT_MODELS[backendChoice] ?? `${backendChoice}/default`;
-
-  const apiKey = await password({
-    message: `Enter ${backend.envVar} (press Enter to skip — you can set it later):`,
-    // Empty input is allowed; users can configure the key later by hand.
-    validate: () => undefined,
-  });
-
-  if (isCancel(apiKey)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  const key = apiKey.trim();
-
-  return {
-    model,
-    ...(key.length > 0 ? { apiKey: key, apiKeyEnvVar: backend.envVar } : {}),
-  };
-}
-
-/**
- * Best-effort read of the install-scope default chat model
- * (`assistants.<provider>.model` in ~/.archon/config.yaml) so a setup re-run
- * surfaces the current value (#1999). Hint-only: any read/parse failure
- * returns undefined rather than blocking the wizard — the authoritative parse
- * happens in @archon/core's config loader at runtime.
- */
-export function readInstallDefaultModel(
-  provider: string,
-  configPath: string = join(pathsGetArchonHome(), 'config.yaml')
-): string | undefined {
-  try {
-    if (!existsSync(configPath)) return undefined;
-    const parsed: unknown = Bun.YAML.parse(readFileSync(configPath, 'utf-8'));
-    if (typeof parsed !== 'object' || parsed === null) return undefined;
-    const assistants = (parsed as Record<string, unknown>).assistants;
-    if (typeof assistants !== 'object' || assistants === null) return undefined;
-    const entry = (assistants as Record<string, unknown>)[provider];
-    if (typeof entry !== 'object' || entry === null) return undefined;
-    const model = (entry as Record<string, unknown>).model;
-    if (typeof model !== 'string') return undefined;
-    const trimmed = model.trim();
-    // 'inherit' means "no explicit model" in assistant config — treat as unset.
-    return trimmed.length > 0 && trimmed !== 'inherit' ? trimmed : undefined;
-  } catch {
-    // Intentional best-effort fallback: an unreadable/malformed config.yaml
-    // must not break setup; the prompt just won't show a current value.
-    return undefined;
-  }
-}
-
-const TIER_DOCS_URL =
-  'https://archon.diy/getting-started/ai-assistants/#per-user-credentials-and-ai-settings';
-
-/**
- * Best-effort check for a non-empty `tiers:` block in ~/.archon/config.yaml,
- * mirroring readInstallDefaultModel's read: a setup re-run on an install that
- * already configured tiers must not warn that tiers are missing. Any
- * read/parse failure reports "not configured" — the authoritative parse
- * happens in @archon/core's config loader at runtime.
- */
-export function readInstallTiersConfigured(
-  configPath: string = join(pathsGetArchonHome(), 'config.yaml')
-): boolean {
-  try {
-    if (!existsSync(configPath)) return false;
-    const parsed: unknown = Bun.YAML.parse(readFileSync(configPath, 'utf-8'));
-    if (typeof parsed !== 'object' || parsed === null) return false;
-    const tiers = (parsed as Record<string, unknown>).tiers;
-    return typeof tiers === 'object' && tiers !== null && Object.keys(tiers).length > 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Model-tier step for the chosen default assistant. Built-in tier defaults
- * exist for claude and codex only, and accepting them intentionally writes
- * NOTHING to config.yaml: the built-ins stay implicit so upstream default
- * bumps reach this install on upgrade instead of freezing at setup time.
- * Providers without built-ins get a pointer, not a wizard — `archon ai tier
- * set` and the console AI Settings panel own tier editing.
- */
-async function confirmModelTiers(provider: string): Promise<void> {
-  if (readInstallTiersConfigured()) {
-    log.info('Model tiers already configured — inspect them with `archon ai tier list`.');
-    return;
-  }
-
-  let aliases: ReturnType<typeof buildAiProfile>['aliases'] = {};
-  try {
-    aliases = buildAiProfile(provider).aliases;
-  } catch {
-    // buildAiProfile is throw-averse; an odd provider lands in the no-defaults branch.
-  }
-  const rows = TIER_NAMES.flatMap(tier => {
-    const preset = aliases[tier];
-    return preset ? [`${tier} -> ${preset.provider}/${preset.model}`] : [];
-  });
-
-  if (rows.length === TIER_NAMES.length) {
-    const useDefaults = await confirm({
-      message: `Use the built-in model tiers for ${provider}? (${rows.join(', ')})`,
-      initialValue: true,
-    });
-    if (isCancel(useDefaults)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-    if (!useDefaults) {
-      note(
-        'Set your own tiers with `archon ai tier set <tier> <provider> <model>`\n' +
-          `or in the console AI Settings -> Model Tiers panel.\nDocs: ${TIER_DOCS_URL}`,
-        'Model tiers'
-      );
-    }
-    return;
-  }
-
-  log.warning(
-    `No built-in model tiers exist for provider '${provider}'. Bundled workflows (and tier-addressed chat) ` +
-      'fail until small/medium/large are configured:\n' +
-      '  archon ai tier set <tier> <provider> <model>\n' +
-      `Docs: ${TIER_DOCS_URL}`
-  );
-}
-
-/**
- * Build the select options for the default-chat-model step: keep-current/skip
- * first (so plain Enter is the happy path), curated suggestions next, and a
- * free-text escape last.
- */
-export function buildDefaultModelChoices(
-  provider: string,
-  currentModel: string | undefined
-): { value: string; label: string; hint?: string }[] {
-  const curated = DEFAULT_CHAT_MODEL_OPTIONS[provider] ?? [];
-  return [
-    {
-      value: KEEP_MODEL,
-      label: currentModel ? `Keep current (${currentModel})` : 'Keep SDK default',
-      ...(currentModel ? {} : { hint: 'set one later with `archon ai default`' }),
-    },
-    ...curated.map(o => ({ value: o.value, label: o.value, ...(o.hint ? { hint: o.hint } : {}) })),
-    { value: CUSTOM_MODEL, label: 'Other…', hint: 'type a model id' },
-  ];
-}
-
-/**
- * Optional, skippable default-chat-model prompt for the chosen default
- * assistant (#1999). Returns the chosen model string, or undefined when the
- * user keeps the current/SDK default. Free-text escape for anything the
- * curated shortlist misses.
- */
-async function collectDefaultChatModel(provider: string): Promise<string | undefined> {
-  const currentModel = readInstallDefaultModel(provider);
-
-  const choice = await select({
-    message: `Default chat model for ${provider}? (Enter to keep ${currentModel ?? 'the SDK default'})`,
-    options: buildDefaultModelChoices(provider, currentModel),
-  });
-
-  if (isCancel(choice)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  if (choice === KEEP_MODEL) return undefined;
-
-  if (choice === CUSTOM_MODEL) {
-    const typed = await text({
-      message: `Model id for ${provider}:`,
-      placeholder: provider === 'codex' ? 'gpt-5.6-sol' : 'claude-sonnet-4-6',
-    });
-    if (isCancel(typed)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-    // clack's text() is typed as string but resolves undefined on an empty
-    // submit — guard like the docs-path prompt does. Empty input = same as
-    // keeping the default (guide, never gate).
-    const trimmed = typeof typed === 'string' ? typed.trim() : '';
-    return trimmed.length > 0 ? trimmed : undefined;
-  }
-
-  return choice;
-}
-
-/**
- * Write the wizard's default assistant (+ optional chat model) to
- * ~/.archon/config.yaml via the SAME install-scope path as
- * `archon ai default <provider> [<model>]` — setInstallDefault writes
- * `defaultAssistant` unconditionally and `assistants.<p>.model` only when a
- * model was chosen, so the pair stays atomic (#1998/#1999). Writing the
- * assistant even when the model is skipped matters: the .env
- * DEFAULT_AI_ASSISTANT is fallback-only (applyEnvOverrides in @archon/core),
- * so a stale config.yaml defaultAssistant from an earlier `archon ai default`
- * would otherwise silently override the wizard's fresh selection.
- *
- * An empty selection preserves the existing config.yaml default. Non-fatal
- * on failure: the env write has already succeeded, so warn and log instead of
- * aborting setup. Returns true when the config was written.
- *
- * The `write` parameter keeps config writes testable without module mocks.
- */
-export async function writeInstallDefaults(
-  ai: SetupConfig['ai'],
-  write: (provider: string, model?: string) => Promise<void> = setInstallDefault
-): Promise<boolean> {
-  if (!ai.defaultAssistantSelected || ai.defaultAssistant === undefined) return false;
-  try {
-    await write(ai.defaultAssistant, ai.defaultModel);
-    return true;
-  } catch (err) {
-    // Non-fatal: the user can run `archon ai default <provider> [<model>]`
-    // later. Surface, don't swallow.
-    const e = err as NodeJS.ErrnoException;
-    const code = e.code ? ` (${e.code})` : '';
-    log.warning(`Could not write default assistant config: ${e.message}${code}`);
-    getLog().warn({ err: e }, 'setup.default_assistant_config_write_failed');
-    return false;
-  }
-}
-
-/**
- * Try to spawn the Claude binary with `--version` to confirm it actually runs.
- * Returns `{ ok: true }` on success or `{ ok: false, reason }` with the spawn
- * error message so the caller can show it to the user. Bounded to 5s so a hung
- * process can't stall setup.
- */
-async function probeClaudeBinarySpawns(
-  path: string
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  try {
-    await execFileAsync(path, ['--version'], { timeout: 5000 });
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, reason: (err as Error).message };
-  }
-}
-
-/**
- * Resolve the Claude Code executable path for CLAUDE_BIN_PATH.
- * Auto-detects common install locations and falls back to prompting the user.
- * Returns undefined if the user declines to configure (setup continues; the
- * compiled binary will error with clear instructions on first Claude query).
- */
-async function collectClaudeBinaryPath(): Promise<string | undefined> {
-  const detected = detectClaudeExecutablePath();
-
-  if (detected) {
-    const probe = await probeClaudeBinarySpawns(detected);
-    const suffix = probe.ok ? '(spawns OK)' : `(could not spawn: ${probe.reason})`;
-    const useDetected = await confirm({
-      message: `Found Claude Code at ${detected} ${suffix}. Write this to CLAUDE_BIN_PATH?`,
-      initialValue: true,
-    });
-    if (isCancel(useDetected)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-    if (useDetected) return detected;
-  }
-
-  const nativeExample =
-    process.platform === 'win32' ? '%USERPROFILE%\\.local\\bin\\claude.exe' : '~/.local/bin/claude';
-
-  note(
-    'Compiled Archon binaries need CLAUDE_BIN_PATH set to the Claude Code executable.\n' +
-      'In dev (`bun run`) this is ignored — the SDK resolves it via node_modules.\n\n' +
-      'Recommended (Anthropic default — native installer):\n' +
-      `  macOS/Linux: ${nativeExample}\n` +
-      '  Windows:     %USERPROFILE%\\.local\\bin\\claude.exe\n\n' +
-      'Alternative (npm global install):\n' +
-      '  $(npm root -g)/@anthropic-ai/claude-code/cli.js',
-    'Claude binary path'
-  );
-
-  const customPath = await text({
-    message: 'Absolute path to the Claude Code executable (leave blank to skip):',
-    placeholder: nativeExample,
-  });
-
-  if (isCancel(customPath)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  const trimmed = (customPath ?? '').trim();
-  if (!trimmed) return undefined;
-
-  if (!existsSync(trimmed)) {
-    log.warning(
-      `Path does not exist: ${trimmed}. Saving anyway — the compiled binary will error on first use until this is correct.`
-    );
-    return trimmed;
-  }
-
-  const probe = await probeClaudeBinarySpawns(trimmed);
-  if (!probe.ok) {
-    log.warning(
-      `Could not spawn ${trimmed} --version: ${probe.reason}. Saving anyway — verify the binary works (try running it directly).`
-    );
-  }
-  return trimmed;
-}
-
-/**
- * Collect Claude authentication method (API key, OAuth token, or global auth).
- */
-async function collectClaudeAuth(): Promise<{
-  authType: 'global' | 'apiKey' | 'oauthToken';
-  apiKey?: string;
-  oauthToken?: string;
-}> {
-  const authType = await select({
-    message: 'How do you want to authenticate with Claude?',
-    options: [
-      {
-        value: 'global',
-        label: 'Use global auth from `claude /login` (Recommended)',
-        hint: 'Simplest - uses your existing Claude login',
-      },
-      {
-        value: 'apiKey',
-        label: 'Provide API key',
-        hint: 'From console.anthropic.com',
-      },
-      {
-        value: 'oauthToken',
-        label: 'Provide OAuth token',
-        hint: 'For advanced use cases',
-      },
-    ],
-  });
-
-  if (isCancel(authType)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  if (authType === 'apiKey') {
-    const apiKey = await password({
-      message: 'Enter your Claude API key:',
-      validate: value => {
-        if (!value || value.length < 10) {
-          return 'Please enter a valid API key';
-        }
-        return undefined;
-      },
-    });
-
-    if (isCancel(apiKey)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-
-    return { authType: 'apiKey', apiKey };
-  }
-
-  if (authType === 'oauthToken') {
-    const oauthToken = await password({
-      message: 'Enter your Claude OAuth token:',
-      validate: value => {
-        if (!value || value.length < 10) {
-          return 'Please enter a valid OAuth token';
-        }
-        return undefined;
-      },
-    });
-
-    if (isCancel(oauthToken)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-
-    return { authType: 'oauthToken', oauthToken };
-  }
-
-  return { authType: 'global' };
-}
-
-/**
- * Collect Codex authentication
- */
-async function collectCodexAuth(): Promise<CodexTokens | null> {
-  // Try to auto-import from ~/.codex/auth.json
-  const existingAuth = tryReadCodexAuth();
-
-  if (existingAuth) {
-    const useExisting = await confirm({
-      message: 'Found existing Codex auth at ~/.codex/auth.json. Use it?',
-    });
-
-    if (isCancel(useExisting)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-
-    if (useExisting) {
-      return existingAuth;
-    }
-  } else {
-    note(
-      'Codex requires authentication tokens.\n\n' +
-        'To get them:\n' +
-        '1. Run `codex login` in your terminal\n' +
-        '2. Complete the login flow\n' +
-        '3. Tokens will be saved to ~/.codex/auth.json\n\n' +
-        'You can skip Codex setup now and run `archon setup` again later.',
-      'Codex Auth'
-    );
-  }
-
-  const enterManually = await confirm({
-    message: 'Enter Codex tokens manually?',
-  });
-
-  if (isCancel(enterManually)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  if (!enterManually) {
-    return null;
-  }
-
-  const idToken = await password({
-    message: `Enter ${CODEX_SETUP_ENV.idToken.name}:`,
-    validate: value => {
-      if (!value) return 'Token is required';
-      return undefined;
-    },
-  });
-
-  if (isCancel(idToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  const accessToken = await password({
-    message: `Enter ${CODEX_SETUP_ENV.accessToken.name}:`,
-    validate: value => {
-      if (!value) return 'Token is required';
-      return undefined;
-    },
-  });
-
-  if (isCancel(accessToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  const refreshToken = await password({
-    message: `Enter ${CODEX_SETUP_ENV.refreshToken.name}:`,
-    validate: value => {
-      if (!value) return 'Token is required';
-      return undefined;
-    },
-  });
-
-  if (isCancel(refreshToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  const accountId = await text({
-    message: `Enter ${CODEX_SETUP_ENV.accountId.name}:`,
-    validate: value => {
-      if (!value) return 'Account ID is required';
-      return undefined;
-    },
-  });
-
-  if (isCancel(accountId)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  return {
-    idToken,
-    accessToken,
-    refreshToken,
-    accountId,
-  };
-}
-
-async function installSetupProviders(ids: readonly string[], repoPath: string): Promise<void> {
-  if (!BUNDLED_IS_BINARY) return;
-  const pluginsDir = getPluginsPath();
-  const result = await providerCommand('add', ids, {
-    pluginsDir,
-    archonVersion: BUNDLED_VERSION,
-    projectDir: repoPath,
-  });
-  if (result !== 0)
-    throw new Error(
-      `Provider installation failed. Run: archon provider add <${MAINTAINED_PROVIDER_IDS.join('|')}>`
-    );
-  const { loadProviderPlugins } = await import('@archon/core/providers/load-provider-plugins');
-  for (const registration of await loadProviderPlugins(pluginsDir, { maintained: 'installed' })) {
-    if (!providerRegistry.get(registration.id)) registerProvider(registration);
-  }
-}
-
-export async function selectSetupProviders(
-  providers: readonly string[] | undefined,
-  install: (ids: readonly string[]) => Promise<void>,
-  ask: () => Promise<string[] | symbol> = () =>
-    multiselect({
-      message: 'Which AI provider(s) should Archon add?',
-      options: MAINTAINED_PROVIDER_IDS.map(id => ({
-        value: id,
-        label: providerRegistry.get(id)?.displayName ?? id,
-      })),
-      required: false,
-    })
-): Promise<string[]> {
-  const selection = providers ?? (await ask());
-  if (isCancel(selection)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  if (typeof selection === 'symbol') throw new Error('Invalid provider selection');
-  const ids = [...new Set(selection)];
-  for (const id of ids) {
-    if (!isMaintainedProvider(id)) {
-      throw new Error(
-        `Unknown maintained provider '${id}'. Choose: ${MAINTAINED_PROVIDER_IDS.join(', ')}`
-      );
-    }
-  }
-  if (ids.length === 0) {
-    log.warning(
-      `No providers selected. Run: archon provider add <${MAINTAINED_PROVIDER_IDS.join('|')}>`
-    );
-  } else {
-    await install(ids);
-  }
-  return ids;
-}
-
-export async function collectAIConfig(
-  options: Pick<SetupOptions, 'providers' | 'repoPath'>,
-  install: (ids: readonly string[]) => Promise<void> = ids =>
-    installSetupProviders(ids, options.repoPath),
-  diagnose: (id: string) => Promise<CheckResult[]> = id => checkProviderDiagnostics(id)
-): Promise<SetupConfig['ai']> {
-  const selectedProviders = await selectSetupProviders(options.providers, install);
-  for (const id of selectedProviders) {
-    for (const check of await diagnose(id)) {
-      const message = `${check.label}: ${check.message}`;
-      if (check.status === 'fail' || check.status === 'warn') log.warning(message);
-      else log.info(message);
-    }
-  }
-  const hasClaude = selectedProviders.includes('claude');
-  const hasCodex = selectedProviders.includes('codex');
-  const hasPi = selectedProviders.includes('pi');
-
-  let claudeAuthType: 'global' | 'apiKey' | 'oauthToken' | undefined;
-  let claudeApiKey: string | undefined;
-  let claudeOauthToken: string | undefined;
-  let claudeBinaryPath: string | undefined;
-  let codexTokens: CodexTokens | undefined;
-  let piModel: string | undefined;
-  let piApiKey: string | undefined;
-  let piApiKeyEnvVar: string | undefined;
-
-  // Collect Claude auth if selected
-  if (hasClaude) {
-    const claudeAuth = await collectClaudeAuth();
-    claudeAuthType = claudeAuth.authType;
-    claudeApiKey = claudeAuth.apiKey;
-    claudeOauthToken = claudeAuth.oauthToken;
-    claudeBinaryPath = await collectClaudeBinaryPath();
-  }
-
-  // Collect Codex auth if selected
-  if (hasCodex) {
-    const tokens = await collectCodexAuth();
-    codexTokens = tokens ?? undefined;
-  }
-
-  if (hasPi) {
-    const piConfig = await collectPiConfig();
-    piModel = piConfig.model;
-    piApiKey = piConfig.apiKey;
-    piApiKeyEnvVar = piConfig.apiKeyEnvVar;
-  }
-
-  let defaultAssistant: string | undefined;
-
-  if (selectedProviders.length > 1) {
-    const providerChoices = selectedProviders.map(id => {
-      const reg = getRegisteredProviders().find(p => p.id === id);
-      const displayName = reg?.displayName ?? id;
-      return {
-        value: id,
-        label: displayName,
-      };
-    });
-
-    const defaultChoice = await select({
-      message: 'Which should be the default AI assistant?',
-      options: providerChoices,
-    });
-
-    if (isCancel(defaultChoice)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-
-    defaultAssistant = defaultChoice;
-  } else if (selectedProviders.length === 1) {
-    defaultAssistant = selectedProviders[0];
-  }
-
-  // Optional, skippable default-chat-model step for the default assistant
-  // (#1999). Pi is excluded: its model was already chosen in collectPiConfig
-  // and is written by writeHomePiModelConfig.
-  let defaultModel: string | undefined;
-  if (defaultAssistant !== undefined && defaultAssistant !== 'pi') {
-    defaultModel = await collectDefaultChatModel(defaultAssistant);
-  }
-
-  return {
-    claude: hasClaude,
-    claudeAuthType,
-    claudeApiKey,
-    claudeOauthToken,
-    ...(claudeBinaryPath !== undefined ? { claudeBinaryPath } : {}),
-    codex: hasCodex,
-    codexTokens,
-    pi: hasPi,
-    piModel,
-    piApiKey,
-    piApiKeyEnvVar,
-    defaultAssistant,
-    ...(selectedProviders.length > 0 ? { defaultAssistantSelected: true } : {}),
-    ...(defaultModel !== undefined ? { defaultModel } : {}),
-  };
-}
-
-/**
- * Collect platform selection
- */
-async function collectPlatforms(): Promise<SetupConfig['platforms']> {
-  const platforms = await multiselect({
-    message:
-      'Which chat adapters do you want to connect? (all optional — Archon works as CLI + skill without any)\n(↑↓ navigate, space select, enter confirm)',
-    options: [
-      { value: 'github', label: 'GitHub', hint: 'Respond to issues/PRs via webhooks' },
-      { value: 'telegram', label: 'Telegram', hint: 'Chat bot via BotFather' },
-      { value: 'slack', label: 'Slack', hint: 'Workspace app with Socket Mode' },
-    ],
-    required: false,
-  });
-
-  if (isCancel(platforms)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  return {
-    github: platforms.includes('github'),
-    telegram: platforms.includes('telegram'),
-    slack: platforms.includes('slack'),
-  };
-}
-
-/**
- * Collect GitHub credentials
- */
-async function collectGitHubConfig(): Promise<GitHubConfig> {
-  const mode = await select({
-    message: 'GitHub authentication mode?',
-    initialValue: 'pat',
-    options: [
-      { value: 'pat', label: 'Personal access token', hint: 'Default for solo use' },
-      { value: 'app', label: 'GitHub App', hint: 'Recommended for teams' },
-    ],
-  });
-  if (isCancel(mode)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  return mode === 'app' ? collectGitHubAppConfig() : collectGitHubPatConfig();
-}
-
-async function collectGitHubAppConfig(): Promise<GitHubConfig> {
-  note(
-    'Follow the GitHub App guide for registration, permissions, webhook events, and installation:\n' +
-      'https://archon.diy/adapters/github-app-setup/',
-    'GitHub App Setup'
-  );
-  const appId = await text({
-    message: 'GitHub App ID:',
-    validate: value =>
-      value && /^[0-9]+$/.test(value.trim()) && /[1-9]/.test(value)
-        ? undefined
-        : 'Enter a positive decimal App ID',
-  });
-  if (isCancel(appId)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  const source = await select({
-    message: 'GitHub App private key source?',
-    options: [
-      { value: 'path', label: 'Path to a PEM file' },
-      { value: 'inline', label: 'Inline PEM', hint: 'Use literal \\n for line breaks' },
-    ],
-  });
-  if (isCancel(source)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  const resolveKeyPath = (value: string): string => resolve(expandTilde(value.trim()));
-  const validateKey = (value: string | undefined): string | undefined => {
-    if (!value?.trim()) return 'A private key is required';
-    try {
-      const pem =
-        source === 'path'
-          ? readFileSync(resolveKeyPath(value), 'utf8')
-          : value.replace(/\\r\\n|\\n/g, '\n');
-      if (createPrivateKey(pem).asymmetricKeyType !== 'rsa') return 'Use an RSA PEM private key';
-    } catch {
-      return 'Enter a readable RSA PEM private key';
-    }
-    return undefined;
-  };
-  const key =
-    source === 'path'
-      ? await text({ message: 'GitHub App private key path:', validate: validateKey })
-      : await password({ message: 'GitHub App private key (PEM):', validate: validateKey });
-  if (isCancel(key)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  const webhookSecret = await password({
-    message: 'GitHub webhook secret:',
-    validate: value =>
-      value?.trim() ? undefined : 'Enter the secret configured on your GitHub App',
-  });
-  if (isCancel(webhookSecret)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  const slug = await text({ message: 'GitHub App slug (optional):' });
-  if (isCancel(slug)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  return {
-    mode: 'app',
-    appId: appId.trim(),
-    privateKey:
-      source === 'path'
-        ? { source: 'path', value: resolveKeyPath(key) }
-        : { source: 'inline', value: key.replace(/\\r\\n|\\n/g, '\n') },
-    webhookSecret,
-    slug: slug.trim() || undefined,
-    allowedUsers: await collectGitHubAllowedUsers(),
-  };
-}
-
-async function collectGitHubAllowedUsers(): Promise<string> {
-  const allowedUsers = await text({
-    message: 'Enter allowed GitHub usernames (comma-separated, or leave empty for all):',
-    placeholder: 'username1,username2',
-  });
-
-  if (isCancel(allowedUsers)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-  return allowedUsers;
-}
-
-async function collectGitHubPatConfig(): Promise<GitHubConfig> {
-  note(
-    'GitHub Personal Access Token Setup\n\n' +
-      '1. Go to github.com/settings/tokens\n' +
-      '2. Click "Generate new token" -> "Generate new token (classic)"\n' +
-      '3. Set an expiration and select these scopes:\n' +
-      '   - repo (clone and push, issues, pull requests, and reading CI check\n' +
-      '     state, which gh queries through GraphQL statusCheckRollup)\n' +
-      '   - workflow (only if runs may change .github/workflows/ files)\n' +
-      '4. Generate and copy the token\n\n' +
-      'A fine-grained token cannot read GitHub Actions check runs: GitHub exposes\n' +
-      'no Checks permission to them, so a workflow that waits on CI stops there.\n' +
-      'The repo scope is broad, so prefer GitHub App mode when you want access\n' +
-      'granted per repository (docs: adapters/github-app-setup).',
-    'GitHub Setup'
-  );
-
-  const token = await password({
-    message: 'Enter your GitHub Personal Access Token:',
-    validate: value => {
-      if (!value || value.length < 10) {
-        return 'Please enter a valid token';
-      }
-      return undefined;
-    },
-  });
-
-  if (isCancel(token)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  // Probe `gh` CLI auth — workflows that shell out to `gh` (e.g. `gh issue
-  // create`, `gh pr edit`) need this even if the PAT is set, because they call
-  // the local `gh` binary, not the API directly.
-  const ghSpin = spinner();
-  ghSpin.start('Checking gh CLI authentication...');
-  let ghAuthOk = false;
-  let ghAuthError: string | undefined;
-  try {
-    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
-    ghAuthOk = true;
-    ghSpin.stop('gh CLI is authenticated');
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    ghAuthError =
-      e.code === 'ENOENT'
-        ? 'gh not found in PATH — install it first (https://cli.github.com)'
-        : (e.message ?? 'unknown error');
-    ghSpin.stop('gh CLI check failed');
-  }
-
-  if (!ghAuthOk) {
-    log.warning(
-      `gh auth check failed: ${ghAuthError}\n` +
-        (ghAuthError?.includes('not found') ? '' : 'Run: gh auth login')
-    );
-    // gh auth login is an interactive OAuth flow — only offer it from a TTY.
-    if (process.stdout.isTTY) {
-      const runGhLogin = await confirm({
-        message: 'Run `gh auth login` now?',
-        initialValue: true,
-      });
-      if (!isCancel(runGhLogin) && runGhLogin) {
-        // spawnSync with inherited stdio so the OAuth prompt reaches the terminal.
-        const ghLoginResult = spawnSync('gh', ['auth', 'login'], { stdio: 'inherit' });
-        if (ghLoginResult.error) {
-          log.warning(
-            `Could not run gh auth login: ${ghLoginResult.error.message}. ` +
-              'Install the gh CLI from https://cli.github.com/ and run it manually.'
-          );
-        } else if (ghLoginResult.status !== 0) {
-          // gh exited non-zero (user cancelled, OAuth callback failed, etc.).
-          // .error is only set on spawn failure, so without this the wizard
-          // would proceed as if auth succeeded.
-          log.warning(
-            `gh auth login exited with code ${ghLoginResult.status ?? 'null'}. ` +
-              'Authentication may not have completed — re-run `gh auth login` manually if needed.'
-          );
-        }
-      }
-    }
-  }
-
-  const allowedUsers = await collectGitHubAllowedUsers();
-
-  const customMention = await confirm({
-    message: 'Do you want to set a custom @mention name? (Default: archon)',
-  });
-
-  if (isCancel(customMention)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  let botMention: string | undefined;
-  if (customMention) {
-    const mention = await text({
-      message: 'Enter the @mention name (without @):',
-      placeholder: 'archon',
-      validate: value => {
-        if (!value) return 'Mention name is required';
-        if (value.includes('@')) return 'Do not include @ symbol';
-        return undefined;
-      },
-    });
-
-    if (isCancel(mention)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-
-    botMention = mention;
-  }
-
-  // Auto-generate webhook secret
-  const webhookSecret = generateWebhookSecret();
-  log.success('Generated webhook secret (will be saved as WEBHOOK_SECRET in the env file)');
-
-  return {
-    mode: 'pat',
-    token,
-    webhookSecret,
-    allowedUsers: allowedUsers || '',
-    botMention,
-  };
-}
-
-/**
- * Collect Telegram credentials
- */
-async function collectTelegramConfig(): Promise<TelegramConfig> {
-  note(
-    'SECURITY: Telegram bots are public by default — anyone can DM your bot.\n' +
-      'Set TELEGRAM_ALLOWED_USER_IDS to restrict access to your user ID only.\n\n' +
-      'To find your user ID:\n' +
-      '1. Open Telegram and search for @userinfobot\n' +
-      '2. Send any message — it replies with your user ID (a number)',
-    'Telegram Security'
-  );
-
-  note(
-    'Telegram Bot Setup\n\n' +
-      'Step 1: Create your bot\n' +
-      '1. Open Telegram and search for @BotFather\n' +
-      '2. Send /newbot\n' +
-      '3. Choose a display name (e.g., "My Archon Bot")\n' +
-      '4. Choose a username (must end in "bot")\n' +
-      '5. Copy the token BotFather gives you',
-    'Telegram Setup'
-  );
-
-  const botToken = await password({
-    message: 'Enter your Telegram Bot Token:',
-    validate: value => {
-      if (!value?.includes(':')) {
-        return 'Please enter a valid bot token (format: 123456:ABC...)';
-      }
-      return undefined;
-    },
-  });
-
-  if (isCancel(botToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  // Do NOT set required: true — clack's text() blocks the enter key when
-  // required is true and the value is empty, which traps the user. Validate
-  // post-hoc with a warning instead.
-  const allowedUserIds = await text({
-    message: 'Enter allowed Telegram user IDs (comma-separated):',
-    placeholder: '123456789,987654321',
-  });
-
-  if (isCancel(allowedUserIds)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  if (!allowedUserIds?.trim()) {
-    log.warning(
-      'No allowlist set — your Telegram bot will accept messages from ANYONE.\n' +
-        'Add TELEGRAM_ALLOWED_USER_IDS to ~/.archon/.env after setup to restrict access.'
-    );
-  }
-
-  return {
-    botToken,
-    allowedUserIds: allowedUserIds || '',
-  };
-}
-
-/**
- * Collect Slack credentials
- */
-async function collectSlackConfig(): Promise<SlackConfig> {
-  note(
-    'Slack App Setup\n\n' +
-      'Slack setup requires creating an app at api.slack.com/apps\n\n' +
-      '1. Create a new app "From scratch"\n' +
-      '2. Enable Socket Mode:\n' +
-      '   - Settings -> Socket Mode -> Enable\n' +
-      '   - Generate an App-Level Token (xapp-...)\n' +
-      '3. Add Bot Token Scopes (OAuth & Permissions):\n' +
-      '   - app_mentions:read, chat:write, channels:history\n' +
-      '   - channels:join, im:history, im:write, im:read\n' +
-      '4. Subscribe to Bot Events (Event Subscriptions):\n' +
-      '   - app_mention, message.im\n' +
-      '5. Install to Workspace\n' +
-      '   - Copy the Bot User OAuth Token (xoxb-...)\n' +
-      '6. Invite bot to your channel: /invite @YourBotName\n\n' +
-      'Get your user ID: Click profile -> ... -> Copy member ID',
-    'Slack Setup'
-  );
-
-  const botToken = await password({
-    message: 'Enter your Slack Bot Token (xoxb-...):',
-    validate: value => {
-      if (!value?.startsWith('xoxb-')) {
-        return 'Please enter a valid bot token (starts with xoxb-)';
-      }
-      return undefined;
-    },
-  });
-
-  if (isCancel(botToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  const appToken = await password({
-    message: 'Enter your Slack App Token (xapp-...):',
-    validate: value => {
-      if (!value?.startsWith('xapp-')) {
-        return 'Please enter a valid app token (starts with xapp-)';
-      }
-      return undefined;
-    },
-  });
-
-  if (isCancel(appToken)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  const allowedUserIds = await text({
-    message: 'Enter allowed Slack user IDs (comma-separated, or leave empty for all):',
-    placeholder: 'U12345678,U87654321',
-  });
-
-  if (isCancel(allowedUserIds)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  return {
-    botToken,
-    appToken,
-    allowedUserIds: allowedUserIds || '',
-  };
-}
-
-/**
- * Collect bot display name
- */
-async function collectBotDisplayName(): Promise<string> {
-  const customName = await confirm({
-    message: 'Do you want to set a custom bot display name? (Default: Archon)',
-  });
-
-  if (isCancel(customName)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  if (!customName) {
-    return 'Archon';
-  }
-
-  const name = await text({
-    message: 'Enter the bot display name:',
-    placeholder: 'Archon',
-    validate: value => {
-      if (!value) return 'Name is required';
-      return undefined;
-    },
-  });
-
-  if (isCancel(name)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  return name;
-}
+  assertEffectiveGitHubAuth,
+  collectGitHubConfig,
+  reconcileGitHubAuth,
+} from './setup-github';
+import {
+  collectBotDisplayName,
+  collectPlatforms,
+  collectSlackConfig,
+  collectTelegramConfig,
+} from './setup-platforms';
+import { setupLaunchCommand, spawnTerminalWithSetup } from './setup-spawn';
+import {
+  createPlatformSelection,
+  platformNames,
+  SETUP_PLATFORMS,
+} from './setup-platform-selection';
 
 // =============================================================================
 // File Generation and Writing
 // =============================================================================
-
-/**
- * Generate .env file content from collected configuration
- */
-export function generateEnvContent(config: SetupConfig): string {
-  const lines: EnvLine[] = [];
-
-  // Header
-  lines.push('# Archon Configuration');
-  lines.push('# Generated by `archon setup`');
-  lines.push('');
-
-  // Database
-  lines.push('# Database');
-  lines.push('# Using SQLite (default) - no DATABASE_URL needed');
-  lines.push('# Set DATABASE_URL=postgresql://... to use PostgreSQL instead.');
-  lines.push('');
-
-  // AI Assistants
-  lines.push('# AI Assistants');
-
-  if (config.ai.claude) {
-    if (config.ai.claudeAuthType === 'global') {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'true']);
-    } else if (config.ai.claudeAuthType === 'apiKey' && config.ai.claudeApiKey) {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
-      lines.push(['CLAUDE_API_KEY', config.ai.claudeApiKey]);
-    } else if (config.ai.claudeAuthType === 'oauthToken' && config.ai.claudeOauthToken) {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
-      lines.push(['CLAUDE_CODE_OAUTH_TOKEN', config.ai.claudeOauthToken]);
-    }
-    if (config.ai.claudeBinaryPath) {
-      lines.push(['CLAUDE_BIN_PATH', config.ai.claudeBinaryPath]);
-    }
-  } else {
-    lines.push('# Claude not configured');
-  }
-  lines.push('');
-
-  if (config.ai.codex && config.ai.codexTokens) {
-    lines.push('# Codex Authentication');
-    const tokens = config.ai.codexTokens;
-    lines.push([CODEX_SETUP_ENV.idToken.name, tokens.idToken]);
-    lines.push([CODEX_SETUP_ENV.accessToken.name, tokens.accessToken]);
-    lines.push([CODEX_SETUP_ENV.refreshToken.name, tokens.refreshToken]);
-    lines.push([CODEX_SETUP_ENV.accountId.name, tokens.accountId]);
-    lines.push('');
-  }
-
-  if (config.ai.pi && config.ai.piApiKey && config.ai.piApiKeyEnvVar) {
-    lines.push('# Pi Authentication');
-    lines.push([config.ai.piApiKeyEnvVar, config.ai.piApiKey]);
-    lines.push('');
-  } else if (config.ai.pi) {
-    lines.push('# Pi configured — set the backend API key manually');
-    lines.push('# e.g. ANTHROPIC_API_KEY=sk-ant-...');
-    lines.push('');
-  } else {
-    lines.push('# Pi not configured');
-    lines.push('');
-  }
-
-  // Default AI Assistant
-  lines.push('# Default AI Assistant');
-  if (config.ai.defaultAssistant !== undefined)
-    lines.push(['DEFAULT_AI_ASSISTANT', config.ai.defaultAssistant]);
-  lines.push('');
-
-  // GitHub
-  if (config.platforms.github && config.github) {
-    lines.push('# GitHub');
-    if (config.github.mode === 'pat') {
-      for (const key of GITHUB_PAT_KEYS) lines.push([key, config.github.token]);
-    } else {
-      const app = config.github;
-      lines.push(
-        ['GITHUB_APP_ID', app.appId],
-        [
-          app.privateKey.source === 'path'
-            ? 'GITHUB_APP_PRIVATE_KEY_PATH'
-            : 'GITHUB_APP_PRIVATE_KEY',
-          app.privateKey.value,
-        ]
-      );
-      if (app.slug) lines.push(['GITHUB_APP_SLUG', app.slug]);
-    }
-    lines.push(['WEBHOOK_SECRET', config.github.webhookSecret]);
-    if (config.github.allowedUsers) {
-      lines.push(['GITHUB_ALLOWED_USERS', config.github.allowedUsers]);
-    }
-    if (config.github.botMention) {
-      lines.push(['GITHUB_BOT_MENTION', config.github.botMention]);
-    }
-    lines.push('');
-  }
-
-  // Telegram
-  if (config.platforms.telegram && config.telegram) {
-    lines.push('# Telegram');
-    lines.push(['TELEGRAM_BOT_TOKEN', config.telegram.botToken]);
-    if (config.telegram.allowedUserIds) {
-      lines.push(['TELEGRAM_ALLOWED_USER_IDS', config.telegram.allowedUserIds]);
-    }
-    lines.push(['TELEGRAM_STREAMING_MODE', 'stream']);
-    lines.push('');
-  }
-
-  // Slack
-  if (config.platforms.slack && config.slack) {
-    lines.push('# Slack');
-    lines.push(['SLACK_BOT_TOKEN', config.slack.botToken]);
-    lines.push(['SLACK_APP_TOKEN', config.slack.appToken]);
-    if (config.slack.allowedUserIds) {
-      lines.push(['SLACK_ALLOWED_USER_IDS', config.slack.allowedUserIds]);
-    }
-    lines.push(['SLACK_STREAMING_MODE', 'batch']);
-    lines.push('');
-  }
-
-  // Bot Display Name
-  if (config.botDisplayName !== 'Archon') {
-    lines.push('# Bot Display Name');
-    lines.push(['BOT_DISPLAY_NAME', config.botDisplayName]);
-    lines.push('');
-  }
-
-  // Server
-  // PORT is intentionally omitted: both the Hono server (packages/core/src/utils/port-allocation.ts)
-  // and the Vite dev proxy (packages/web/vite.config.ts) default to 3090 when unset, which keeps
-  // them in sync. Writing a fixed PORT here risked a mismatch if ~/.archon/.env leaks a PORT that
-  // the Vite proxy (which only reads repo-local .env) never sees — see #1152.
-  lines.push('# Server');
-  lines.push('# PORT=3090  # Default: 3090. Uncomment to override.');
-  lines.push('');
-
-  // Concurrency
-  lines.push('# Concurrency');
-  lines.push(['MAX_CONCURRENT_CONVERSATIONS', '10']);
-
-  return serializeEnvDocument(lines);
-}
-
-/**
- * Resolve the target path for the selected scope. Delegates to `@archon/paths`
- * so Docker (`/.archon`), the `ARCHON_HOME` override, and the "undefined"
- * literal guard behave identically to the loader. Never resolves to
- * `<repoPath>/.env` — that path belongs to the user.
- */
-export function resolveScopedEnvPath(scope: 'home' | 'project', repoPath: string): string {
-  if (scope === 'project') return pathsGetRepoArchonEnvPath(repoPath);
-  return pathsGetArchonEnvPath();
-}
 
 /**
  * Result of attempting to bootstrap project-scoped Archon config.
@@ -1789,390 +132,9 @@ export function bootstrapProjectConfig(projectPath: string): BootstrapProjectCon
   }
 }
 
-/**
- * Write the Pi model ref to `~/.archon/config.yaml` so Pi knows which backend
- * to use by default. Three branches:
- *   1. File already contains `pi:` — skip (idempotent; avoids duplicate blocks
- *      on re-runs or when the user has already configured this manually).
- *   2. File contains `assistants:` but no `pi:` — show a manual `note()`
- *      because we can't safely splice into existing YAML indentation.
- *   3. Otherwise — append a fresh `assistants: pi: model:` block.
- */
-export function writeHomePiModelConfig(model: string): void {
-  // Use the paths-package version of getArchonHome so Docker (/.archon) is
-  // handled correctly — the local getArchonHome() always returns ~/.archon.
-  const home = pathsGetArchonHome();
-  mkdirSync(home, { recursive: true });
-  const configPath = join(home, 'config.yaml');
-  const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
-
-  // Use a regex to avoid false positives from substrings like `api:`.
-  if (/^\s*pi\s*:/m.test(existing)) {
-    log.info(
-      `Pi model already present in ${configPath} — edit assistants.pi.model manually to change.`
-    );
-    return;
-  }
-
-  const escaped = model.replace(/"/g, '\\"');
-
-  if (existing.includes('assistants:')) {
-    // Don't risk splicing into the user's existing assistants: block — show
-    // them the YAML to paste in by hand instead of corrupting indentation.
-    note(
-      `Add to ${configPath} under assistants:\n\n  pi:\n    model: "${escaped}"`,
-      'Pi model config'
-    );
-    return;
-  }
-
-  writeFileSync(configPath, existing + `\nassistants:\n  pi:\n    model: "${escaped}"\n`);
-  log.info(`Pi model written to ${configPath}`);
-}
-
-/**
- * dotenv does not unescape quotes or backslashes. Choose a representation its
- * parser can round-trip rather than applying JavaScript string escaping.
- */
-export function serializeEnv(entries: Record<string, string>): string {
-  return serializeEnvDocument(Object.entries(entries));
-}
-
-type EnvLine = string | [key: string, value: string];
-
-function serializeEnvDocument(document: EnvLine[]): string {
-  const entries: Record<string, string> = {};
-  const lines: string[] = [];
-  const trailing: string[] = [];
-  for (const entry of document) {
-    if (typeof entry === 'string') {
-      lines.push(entry);
-      continue;
-    }
-    const [key, value] = entry;
-    entries[key] = value;
-    const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-    const candidates: string[] = [];
-    // Prefer quoted forms for leading quotes, which can consume later entries.
-    if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
-    for (const [quote, contents] of [
-      ['"', encodedLineBreaks],
-      ["'", value],
-      ['`', value],
-    ]) {
-      if (!contents.replaceAll(`\\${quote}`, '').includes(quote)) {
-        candidates.push(`${key}=${quote}${contents}${quote}`);
-      }
-    }
-    candidates.push(`${key}=${value}`);
-    const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
-    if (line === undefined)
-      throw new Error(`Cannot serialize env key ${key} without changing its value`);
-    // An unmatched opening quote can close in a later entry, even in a comment.
-    // Put values requiring this bare representation after the rest of the document.
-    if (/^["'`]/.test(value) && line === `${key}=${value}`) trailing.push(line);
-    else lines.push(line);
-  }
-  const content =
-    [...lines, ...trailing].join('\n') + (lines.length + trailing.length > 0 ? '\n' : '');
-  const parsed = parseDotenv(content);
-  if (
-    Object.keys(parsed).length !== Object.keys(entries).length ||
-    Object.entries(entries).some(([key, value]) => parsed[key] !== value)
-  ) {
-    throw new Error('Cannot serialize env without changing its values');
-  }
-  return content;
-}
-
-/**
- * Produce a filesystem-safe ISO timestamp (no `:` or `.` characters).
- */
-function backupTimestamp(): string {
-  return new Date().toISOString().replace(/[:.]/g, '-');
-}
-
-interface WriteScopedEnvResult {
-  targetPath: string;
-  backupPath: string | null;
-  /** Keys present in the existing file that were preserved against the proposed set. */
-  preservedKeys: string[];
-  /** True when `--force` overrode the merge. */
-  forced: boolean;
-}
-
-function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth: boolean) {
-  const preservedKeys: string[] = [];
-  const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
-  const proposed = parseDotenv(content);
-  if (replaceGitHubAuth) {
-    for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
-    // An App's webhook secret is the one typed from the App's settings, so it must win.
-    // PAT mode generates a fresh secret, so an existing one stays for its repo webhooks.
-    if (proposed.GITHUB_APP_ID) delete existing.WEBHOOK_SECRET;
-  } else if (
-    proposed.GITHUB_APP_ID ||
-    (!proposed.GITHUB_TOKEN && hasCompleteAppCredential(existing))
-  ) {
-    for (const key of GITHUB_APP_KEYS) {
-      if (existing[key] !== undefined && !existing[key].trim()) delete existing[key];
-    }
-    for (const key of GITHUB_PAT_KEYS) {
-      if (!existing[key]) delete existing[key];
-    }
-  } else if (proposed.GITHUB_TOKEN) {
-    for (const key of GITHUB_APP_CREDENTIAL_KEYS) {
-      if (!existing[key]) delete existing[key];
-    }
-  }
-  const existingPrivateKey = GITHUB_APP_PRIVATE_KEY_KEYS.find(key => existing[key]?.trim());
-  if (existingPrivateKey && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => key in proposed)) {
-    // Inline PEM outranks a path at runtime; adding a new source would replace the credential.
-    preservedKeys.push(existingPrivateKey);
-    for (const key of GITHUB_APP_PRIVATE_KEY_KEYS) delete proposed[key];
-  }
-  const merged: Record<string, string> = { ...existing };
-  for (const [key, value] of Object.entries(proposed)) {
-    const prior = existing[key];
-    // Treat whitespace-only existing values as empty — otherwise a
-    // copy-paste stray `   ` would silently defeat the wizard's update for
-    // that key forever.
-    const priorIsEmpty = prior === undefined || prior.trim() === '';
-    if (!(key in existing) || priorIsEmpty) {
-      merged[key] = value;
-    } else {
-      preservedKeys.push(key);
-    }
-  }
-  return { content: serializeEnv(merged), preservedKeys };
-}
-
-/**
- * Write env content to exactly one archon-owned file, selected by scope.
- * Merge-only by default (existing non-empty values win, user-added keys
- * survive). Backs up the existing file (if any) before every rewrite, even
- * when `--force` is set. Without force, a confirmed GitHub authentication change
- * replaces auth keys, and the webhook secret when switching to App mode, while
- * keeping other values.
- */
-export function writeScopedEnv(
-  content: string,
-  options: {
-    scope: 'home' | 'project';
-    repoPath: string;
-    force: boolean;
-    replaceGitHubAuth?: boolean;
-  }
-): WriteScopedEnvResult {
-  const targetPath = resolveScopedEnvPath(options.scope, options.repoPath);
-  const parentDir = dirname(targetPath);
-  if (!existsSync(parentDir)) {
-    mkdirSync(parentDir, { recursive: true });
-  }
-
-  const exists = existsSync(targetPath);
-  let backupPath: string | null = null;
-  if (exists) {
-    backupPath = `${targetPath}.archon-backup-${backupTimestamp()}`;
-    copyFileSync(targetPath, backupPath);
-    // Backups carry tokens/secrets — match the 0o600 we set on the live file.
-    chmodSync(backupPath, 0o600);
-  }
-
-  const preservedKeys: string[] = [];
-  let finalContent: string;
-
-  if (options.force || !exists) {
-    finalContent = content;
-    if (options.force && backupPath) {
-      process.stderr.write(
-        `[archon] --force: overwriting ${targetPath} (backup at ${backupPath})\n`
-      );
-    }
-  } else {
-    // Merge: existing non-empty values win; proposed-only keys are added;
-    // existing-only keys (user customizations) are preserved verbatim, except
-    // an old Archon Codex setup, which moves to its new names (#3562).
-    const existingRaw = readFileSync(targetPath, 'utf-8');
-    const merged = mergeScopedEnv(content, existingRaw, options.replaceGitHubAuth ?? false);
-    preservedKeys.push(...merged.preservedKeys);
-    finalContent = merged.content;
-  }
-
-  // 0o600 — env files hold secrets. Prevents group/world-readable writes on a
-  // permissive umask. writeFileSync's default mode is 0o666 & ~umask.
-  writeFileSync(targetPath, finalContent, { mode: 0o600 });
-  // writeFileSync preserves mode for existing files; chmod guarantees 0o600
-  // even when overwriting a file that pre-existed with looser permissions.
-  chmodSync(targetPath, 0o600);
-  return { targetPath, backupPath, preservedKeys, forced: options.force && exists };
-}
-
-// =============================================================================
-// Terminal Spawning
-// =============================================================================
-
-/**
- * Try to spawn a process, catching both sync and async errors
- * Returns true if spawn succeeded, false if it failed
- */
-function trySpawn(
-  command: string,
-  args: string[],
-  options: { detached: boolean; stdio: 'ignore' }
-): boolean {
-  try {
-    const child: ChildProcess = spawn(command, args, options);
-    // Check if spawn failed immediately (child.pid will be undefined)
-    if (!child.pid) {
-      return false;
-    }
-    child.unref();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Spawn a new terminal window with the setup command on Windows
- * Tries: Windows Terminal -> cmd.exe with start
- */
-function spawnWindowsTerminal(repoPath: string, command: string): SpawnResult {
-  // Try Windows Terminal first (modern Windows 10/11)
-  if (
-    trySpawn('wt.exe', ['-d', repoPath, 'cmd', '/k', command], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  // Fallback to cmd.exe with start command (works on all Windows)
-  if (
-    trySpawn('cmd.exe', ['/c', 'start', '""', '/D', repoPath, 'cmd', '/k', command], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  return { success: false, error: 'Could not open terminal. Please run `archon setup` manually.' };
-}
-
-/**
- * Spawn terminal on macOS
- * Uses osascript to open Terminal.app (works with default terminal)
- */
-function spawnMacTerminal(repoPath: string, command: string): SpawnResult {
-  // Escape single quotes in path for AppleScript
-  const escapedPath = repoPath.replace(/'/g, "'\"'\"'");
-  const script = `tell application "Terminal" to do script "cd '${escapedPath}' && ${command}"`;
-
-  if (trySpawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' })) {
-    return { success: true };
-  }
-
-  return { success: false, error: 'Could not open Terminal. Please run `archon setup` manually.' };
-}
-
-/**
- * Spawn terminal on Linux
- * Tries: x-terminal-emulator -> gnome-terminal -> konsole -> xterm
- */
-function spawnLinuxTerminal(repoPath: string, command: string): SpawnResult {
-  const setupCmd = `${command}; exec bash`;
-
-  // Try x-terminal-emulator first (Debian/Ubuntu default)
-  if (
-    trySpawn(
-      'x-terminal-emulator',
-      ['--working-directory=' + repoPath, '-e', `bash -c "${setupCmd}"`],
-      {
-        detached: true,
-        stdio: 'ignore',
-      }
-    )
-  ) {
-    return { success: true };
-  }
-
-  // Try gnome-terminal (GNOME)
-  if (
-    trySpawn('gnome-terminal', ['--working-directory=' + repoPath, '--', 'bash', '-c', setupCmd], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  // Try konsole (KDE)
-  if (
-    trySpawn('konsole', ['--workdir', repoPath, '-e', 'bash', '-c', setupCmd], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  // Try xterm (fallback, available on most systems)
-  if (
-    trySpawn('xterm', ['-e', `cd "${repoPath}" && ${setupCmd}`], {
-      detached: true,
-      stdio: 'ignore',
-    })
-  ) {
-    return { success: true };
-  }
-
-  return {
-    success: false,
-    error: 'Could not find a terminal emulator. Please run `archon setup` manually.',
-  };
-}
-
-/**
- * Spawn a new terminal window with archon setup
- */
-export function spawnTerminalWithSetup(
-  repoPath: string,
-  providers?: readonly string[]
-): SpawnResult {
-  if (providers?.some(id => !isMaintainedProvider(id)))
-    throw new Error('Invalid setup provider selection');
-  const command = `archon setup${providers === undefined ? '' : ` --providers=${providers.join(',')}`}`;
-  const platform = process.platform;
-
-  if (platform === 'win32') {
-    return spawnWindowsTerminal(repoPath, command);
-  } else if (platform === 'darwin') {
-    return spawnMacTerminal(repoPath, command);
-  } else {
-    return spawnLinuxTerminal(repoPath, command);
-  }
-}
-
 // =============================================================================
 // Main Setup Command
 // =============================================================================
-
-/**
- * Ends setup early. Thrown instead of calling `process.exit` so the CLI's
- * `main()` returns the code through its `finally`, which flushes telemetry.
- */
-class SetupExit extends Error {
-  constructor(readonly exitCode: 0 | 1) {
-    super(`setup exited with ${exitCode}`);
-  }
-}
-
-function exitSetup(exitCode: 0 | 1): never {
-  throw new SetupExit(exitCode);
-}
 
 /**
  * Main setup command entry point. Resolves to the process exit code.
@@ -2188,262 +150,207 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
 }
 
 async function runSetup(options: SetupOptions): Promise<void> {
-  // Handle --spawn flag
   if (options.spawn) {
-    console.log('Opening setup wizard in a new terminal window...');
-    const result = spawnTerminalWithSetup(options.repoPath, options.providers);
-
-    if (result.success) {
-      console.log('Setup wizard opened. Complete the setup in the new terminal window.');
-    } else {
-      console.log('');
-      console.log('Next step: run the setup wizard in a separate terminal.');
-      console.log('');
-      console.log(
-        `    cd ${options.repoPath} && archon setup${options.providers === undefined ? '' : ` --providers=${options.providers.join(',')}`}`
-      );
-      console.log('');
-      console.log(
-        'Come back here and let me know when you finish so I can verify your configuration.'
-      );
-    }
+    await openSetupTerminal(options);
     return;
   }
 
-  // Interactive setup flow
   intro('Archon Setup Wizard');
 
-  // Resolve scope + target path up-front so everything downstream (existing-
-  // config check, merge, write) agrees on which file we're touching.
-  const scope: 'home' | 'project' = options.scope ?? 'home';
+  const scope = options.scope ?? 'home';
   const force = options.force ?? false;
   const targetEnvPath = resolveScopedEnvPath(scope, options.repoPath);
+  const target = { scope, force, repoPath: options.repoPath, targetEnvPath };
 
-  // If a pre-existing <repo>/.env is present, tell the operator once that
-  // archon does NOT manage it — avoids confusion for users upgrading from
-  // versions that used to write there.
-  const legacyRepoEnv = join(options.repoPath, '.env');
+  reportLegacyRepoEnv(options.repoPath);
+  const existing = checkExistingConfig(targetEnvPath);
+  const mode = await selectSetupMode(existing, force);
+  const s = spinner();
+  const ai = await collectAIConfig(options);
+  let config: SetupConfig;
+  if (mode === 'add') {
+    config = await collectAdditionalConfig(ai, existing, force, s);
+  } else {
+    const platforms = await collectPlatforms();
+    config = { ai, platforms, botDisplayName: 'Archon' };
+    await collectPlatformCredentials(config, platforms);
+    config.botDisplayName = await collectBotDisplayName();
+  }
+  const writeResult = await writeConfiguration(
+    config,
+    target,
+    options.inheritedEnv ?? process.env,
+    s
+  );
+
+  writePiModelPreference(config.ai);
+  // The Pi writer must run first: it refuses to append once an assistants block
+  // exists, and writeInstallDefaults can materialize that block.
+  await writeInstallDefaults(config.ai);
+  if (config.ai.defaultAssistant !== undefined) await confirmModelTiers(config.ai.defaultAssistant);
+  reportEnvWrite(writeResult);
+
+  const installation = await installProjectSkill(options.repoPath, s);
+  await configureDocsPath(installation.projectPath);
+  showSetupSummary(config, scope, writeResult.targetPath, installation);
+  await finishSetup();
+}
+
+async function openSetupTerminal(options: SetupOptions): Promise<void> {
+  console.log('Opening setup wizard in a new terminal window...');
+  const result = await spawnTerminalWithSetup(options);
+
+  if (result.success) {
+    console.log('Setup wizard opened. Complete the setup in the new terminal window.');
+  } else {
+    const changeDirectory =
+      process.platform === 'win32'
+        ? `cd /d "${options.repoPath}"`
+        : `cd '${options.repoPath.replaceAll("'", "'\"'\"'")}'`;
+    console.log('');
+    console.log(
+      process.platform === 'win32'
+        ? 'Next step: run the setup wizard in Command Prompt (cmd.exe).'
+        : 'Next step: run the setup wizard in a separate terminal.'
+    );
+    console.log('');
+    console.log(`    ${changeDirectory} && ${setupLaunchCommand(options)}`);
+    console.log('');
+    console.log(
+      'Come back here and let me know when you finish so I can verify your configuration.'
+    );
+    exitSetup(1);
+  }
+}
+
+function reportLegacyRepoEnv(repoPath: string): void {
+  const legacyRepoEnv = join(repoPath, '.env');
   if (existsSync(legacyRepoEnv)) {
     log.info(
       `Note: ${legacyRepoEnv} exists but is not managed by archon.\n` +
         '      Values there are stripped from the archon process at runtime (safety guard).\n' +
         '      Put archon env vars in ~/.archon/.env (home scope) or ' +
-        `${join(options.repoPath, '.archon', '.env')} (project scope).`
+        `${join(repoPath, '.archon', '.env')} (project scope).`
     );
   }
+}
 
-  // Check for existing configuration at the selected scope (not unconditionally
-  // ~/.archon/.env) so the Add/Update/Fresh decision reflects the actual target.
-  const existing = checkExistingConfig(targetEnvPath);
+type SetupMode = 'fresh' | 'add' | 'update';
+type ExistingConfig = ReturnType<typeof checkExistingConfig>;
 
-  type SetupMode = 'fresh' | 'add' | 'update';
-  let mode: SetupMode = 'fresh';
+async function selectSetupMode(existing: ExistingConfig, force: boolean): Promise<SetupMode> {
+  if (!existing) return 'fresh';
+  const platforms = platformNames(existing.platforms);
+  const summary = [
+    `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
+    `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
+    `Pi: ${existing.hasPi ? 'Configured' : 'Not configured'}`,
+    `Platforms: ${platforms.length > 0 ? platforms.join(', ') : 'None'}`,
+  ].join('\n');
 
-  if (existing) {
-    const configuredPlatforms: string[] = [];
-    if (existing.platforms.github) configuredPlatforms.push('GitHub');
-    if (existing.platforms.telegram) configuredPlatforms.push('Telegram');
-    if (existing.platforms.slack) configuredPlatforms.push('Slack');
+  note(summary, 'Existing Configuration Found');
 
-    const summary = [
-      `Claude: ${existing.hasClaude ? 'Configured' : 'Not configured'}`,
-      `Codex: ${existing.hasCodex ? 'Configured' : 'Not configured'}`,
-      `Pi: ${existing.hasPi ? 'Configured' : 'Not configured'}`,
-      `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None'}`,
-    ].join('\n');
-
-    note(summary, 'Existing Configuration Found');
-
-    const modeChoice = await select({
-      message: 'What would you like to do?',
-      options: [
-        {
-          value: 'add',
-          label: 'Add providers or platforms',
-          hint: force
-            ? 'Re-enter existing platform credentials and configure additions before replacing the file'
-            : 'Keep existing credentials, configure selected providers and new platforms',
-        },
-        { value: 'update', label: 'Update config', hint: 'Modify existing settings' },
-        { value: 'fresh', label: 'Start fresh', hint: 'Replace all configuration' },
-      ],
-    });
-
-    if (isCancel(modeChoice)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-
-    mode = modeChoice as SetupMode;
-  }
-
-  // Collect configuration based on mode
-  const s = spinner();
-  const ai = await collectAIConfig(options);
-
-  let config: SetupConfig;
-
-  if (mode === 'add') {
-    s.start('Loading existing configuration...');
-
-    config = {
-      ai,
-      platforms: {
-        github: existing?.platforms.github ?? false,
-        telegram: existing?.platforms.telegram ?? false,
-        slack: existing?.platforms.slack ?? false,
+  const modeChoice = await select({
+    message: 'What would you like to do?',
+    options: [
+      {
+        value: 'add',
+        label: 'Add providers or platforms',
+        hint: force
+          ? 'Re-enter existing platform credentials and configure additions before replacing the file'
+          : 'Keep existing credentials, configure selected providers and new platforms',
       },
-      botDisplayName: 'Archon',
-    };
+      { value: 'update', label: 'Update config', hint: 'Modify existing settings' },
+      { value: 'fresh', label: 'Start fresh', hint: 'Replace all configuration' },
+    ],
+  });
 
-    s.stop('Existing configuration loaded');
+  if (isCancel(modeChoice)) cancelSetup();
 
-    // Collect only new platforms
-    log.info('Select additional platforms to configure');
-    const newPlatforms = await collectPlatforms();
+  return modeChoice;
+}
 
-    // Merge with existing
-    config.platforms = {
-      github: config.platforms.github || newPlatforms.github,
-      telegram: config.platforms.telegram || newPlatforms.telegram,
-      slack: config.platforms.slack || newPlatforms.slack,
-    };
+async function collectAdditionalConfig(
+  ai: SetupConfig['ai'],
+  existing: ExistingConfig,
+  force: boolean,
+  s: ReturnType<typeof spinner>
+): Promise<SetupConfig> {
+  s.start('Loading existing configuration...');
 
-    if (force) {
-      log.info('--force replaces the env file. Re-enter credentials for all configured platforms.');
-    }
+  s.stop('Existing configuration loaded');
 
-    if (config.platforms.github && (force || !existing?.platforms.github)) {
-      config.github = await collectGitHubConfig();
-    }
-    if (config.platforms.telegram && (force || !existing?.platforms.telegram)) {
-      config.telegram = await collectTelegramConfig();
-    }
-    if (config.platforms.slack && (force || !existing?.platforms.slack)) {
-      config.slack = await collectSlackConfig();
-    }
-  } else {
-    const platforms = await collectPlatforms();
+  log.info('Select additional platforms to configure');
+  const newPlatforms = await collectPlatforms();
 
-    config = {
-      ai,
-      platforms,
-      botDisplayName: 'Archon',
-    };
+  const config: SetupConfig = {
+    ai,
+    platforms: createPlatformSelection(
+      platform => (existing?.platforms[platform] ?? false) || newPlatforms[platform]
+    ),
+    botDisplayName: 'Archon',
+  };
 
-    // Collect platform credentials
-    if (platforms.github) {
-      config.github = await collectGitHubConfig();
-    }
-    if (platforms.telegram) {
-      config.telegram = await collectTelegramConfig();
-    }
-    if (platforms.slack) {
-      config.slack = await collectSlackConfig();
-    }
-
-    // Collect bot display name
-    config.botDisplayName = await collectBotDisplayName();
+  if (force) {
+    log.info('--force replaces the env file. Re-enter credentials for all configured platforms.');
   }
 
-  let replaceGitHubAuth = false;
-  const otherEnvPath = resolveScopedEnvPath(
-    scope === 'home' ? 'project' : 'home',
-    options.repoPath
+  await collectPlatformCredentials(
+    config,
+    createPlatformSelection(
+      platform => config.platforms[platform] && (force || !existing?.platforms[platform])
+    )
   );
-  const otherGitHubEnv =
-    otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)
-      ? parseDotenv(readFileSync(otherEnvPath, 'utf8'))
-      : {};
-  const saved = existsSync(targetEnvPath) ? parseDotenv(readFileSync(targetEnvPath, 'utf8')) : {};
-  if (!force && !config.github && selectGitHubAuthMode(saved).kind === 'conflict') {
-    cancel(
-      `Conflicting GitHub authentication in ${targetEnvPath}. Select GitHub to resolve the conflict. No env files were changed.`
-    );
-    exitSetup(1);
-  }
-  if (config.platforms.github) {
-    const githubMode = config.github?.mode ?? selectGitHubAuthMode(saved).kind;
-    if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
-      const other = otherGitHubEnv;
-      const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
-      if (conflictingKeys.some(key => other[key])) {
-        cancel(
-          `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
-        );
-        exitSetup(1);
-      }
-    }
-    const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
-    const replacePartialApp =
-      config.github?.mode === 'app' &&
-      !hasCompleteAppCredential(saved) &&
-      GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(saved[key]));
-    if (config.github && (oppositeKeys.some(key => Boolean(saved[key])) || replacePartialApp)) {
-      const approved = await confirm({
-        message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
-        initialValue: false,
-      });
-      if (isCancel(approved) || !approved) {
-        cancel('Setup cancelled. Existing configuration was not changed.');
-        exitSetup(0);
-      }
-      replaceGitHubAuth = true;
-    }
-  }
+  return config;
+}
 
-  // Generate and write configuration. Wrap in try/catch so any fs exception
-  // (permission denied, read-only FS, backup copy failure, etc.) stops the
-  // spinner cleanly and surfaces an actionable error instead of a raw stack
-  // trace after the user has filled out the entire wizard.
+async function collectPlatformCredentials(
+  config: SetupConfig,
+  platforms: SetupConfig['platforms']
+): Promise<void> {
+  const collectors = {
+    github: async () => {
+      config.github = await collectGitHubConfig();
+    },
+    telegram: async () => {
+      config.telegram = await collectTelegramConfig();
+    },
+    slack: async () => {
+      config.slack = await collectSlackConfig();
+    },
+  } satisfies Record<keyof SetupConfig['platforms'], () => Promise<void>>;
+
+  for (const { value } of SETUP_PLATFORMS) {
+    if (platforms[value]) await collectors[value]();
+  }
+}
+
+async function writeConfiguration(
+  config: SetupConfig,
+  target: Parameters<typeof reconcileGitHubAuth>[1],
+  inheritedEnv: NodeJS.ProcessEnv,
+  s: ReturnType<typeof spinner>
+): Promise<ReturnType<typeof writeScopedEnv>> {
+  const { scope, force, repoPath, targetEnvPath } = target;
+  const githubAuth = await reconcileGitHubAuth(config, target);
+
   s.start('Writing configuration...');
 
   let writeResult: ReturnType<typeof writeScopedEnv>;
   try {
     const envContent = generateEnvContent(config);
-    const selected = parseDotenv(
-      !force && existsSync(targetEnvPath)
-        ? mergeScopedEnv(envContent, readFileSync(targetEnvPath, 'utf8'), replaceGitHubAuth).content
-        : envContent
-    );
-    const inheritedEnv = options.inheritedEnv ?? process.env;
-    const effective = {
-      ...inheritedEnv,
-      ...(scope === 'project' ? otherGitHubEnv : selected),
-      ...(scope === 'project' ? selected : otherGitHubEnv),
-    };
-    const mode = selectGitHubAuthMode(effective);
-    if (config.github?.mode === 'pat' && mode.kind !== 'pat') {
-      throw new Error(
-        mode.kind === 'conflict'
-          ? mode.message
-          : 'Effective GitHub configuration does not activate PAT mode. Check GITHUB_TOKEN and WEBHOOK_SECRET in the environment and both Archon env files.'
-      );
-    }
-    if (
-      config.github?.mode === 'app' ||
-      (!config.github &&
-        mode.kind !== 'pat' &&
-        [inheritedEnv, otherGitHubEnv, force ? {} : saved].some(layer =>
-          GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(layer[key]))
-        ))
-    ) {
-      if (mode.kind !== 'app') {
-        throw new Error(
-          mode.kind === 'conflict'
-            ? mode.message
-            : 'Effective GitHub configuration does not activate App mode. Check App ID, private key, and webhook secret in the environment and both Archon env files.'
-        );
-      }
-      if (!loadGitHubAppConfig(effective)) {
-        throw new Error('Effective GitHub App configuration could not be loaded.');
-      }
-    }
+    assertEffectiveGitHubAuth(config, envContent, {
+      scope,
+      force,
+      targetEnvPath,
+      inheritedEnv,
+      ...githubAuth,
+    });
     writeResult = writeScopedEnv(envContent, {
       scope,
-      repoPath: options.repoPath,
+      repoPath,
       force,
-      replaceGitHubAuth,
+      replaceGitHubAuth: githubAuth.replaceGitHubAuth,
     });
   } catch (error) {
     s.stop('Failed to write configuration');
@@ -2455,36 +362,24 @@ async function runSetup(options: SetupOptions): Promise<void> {
 
   s.stop('Configuration written');
 
-  // Pi model ref lives in ~/.archon/config.yaml, not the .env file, because
-  // it's a structured user preference rather than a secret.
-  if (config.ai.pi && config.ai.piModel) {
-    try {
-      writeHomePiModelConfig(config.ai.piModel);
-    } catch (err) {
-      // Non-fatal: env write already succeeded, so the user can hand-edit
-      // ~/.archon/config.yaml later. Surface the error so it's not silent.
-      const e = err as NodeJS.ErrnoException;
-      const code = e.code ? ` (${e.code})` : '';
-      log.warning(`Could not write Pi model config: ${e.message}${code}`);
-      getLog().warn({ err: e }, 'setup.pi_model_config_write_failed');
-    }
+  return writeResult;
+}
+
+function writePiModelPreference(ai: SetupConfig['ai']): void {
+  if (!ai.pi || !ai.piModel) return;
+  try {
+    writeHomePiModelConfig(ai.piModel);
+  } catch (err) {
+    // Non-fatal: env write already succeeded, so the user can hand-edit
+    // ~/.archon/config.yaml later. Surface the error so it's not silent.
+    const e = err as NodeJS.ErrnoException;
+    const code = e.code ? ` (${e.code})` : '';
+    log.warning(`Could not write Pi model config: ${e.message}${code}`);
+    getLog().warn({ err: e }, 'setup.pi_model_config_write_failed');
   }
+}
 
-  // Default assistant (+ optional chat model) → ~/.archon/config.yaml through
-  // the SAME install-scope write path as `archon ai default <provider>
-  // [<model>]` (#1998/#1999). Must run AFTER the Pi block above:
-  // writeHomePiModelConfig refuses to append once an `assistants:` block
-  // exists, and updateGlobalConfig can materialize one — the merge-write here
-  // preserves whatever the Pi writer produced.
-  await writeInstallDefaults(config.ai);
-
-  // Model tiers: confirm built-in defaults (claude/codex) or point providers
-  // without built-ins at the owning config surfaces before anything runs.
-  if (config.ai.defaultAssistant !== undefined) await confirmModelTiers(config.ai.defaultAssistant);
-
-  // Tell the operator exactly what happened — especially that <repo>/.env was
-  // NOT touched, because prior versions wrote there and this is the biggest
-  // behavior change for returning users.
+function reportEnvWrite(writeResult: ReturnType<typeof writeScopedEnv>): void {
   if (writeResult.preservedKeys.length > 0) {
     log.info(
       `Preserved ${writeResult.preservedKeys.length} existing value(s) (use --force to overwrite): ${writeResult.preservedKeys.join(', ')}`
@@ -2493,133 +388,60 @@ async function runSetup(options: SetupOptions): Promise<void> {
   if (writeResult.backupPath) {
     log.info(`Backup written to ${writeResult.backupPath}`);
   }
+}
 
-  // Offer to install the Archon skill
-  const shouldCopySkill = await confirm({
-    message: 'Install the Archon skill in your project? (recommended)',
-    initialValue: true,
-  });
-
-  if (isCancel(shouldCopySkill)) {
-    cancel('Setup cancelled.');
-    exitSetup(0);
-  }
-
-  let skillInstalledPath: string | null = null;
-  let skillInstalledBase: string | null = null;
-  let projectConfigCreatedPath: string | null = null;
-
-  if (shouldCopySkill) {
-    const skillTargetRaw = await text({
-      message: 'Project path to install the skill:',
-      defaultValue: options.repoPath,
-      placeholder: options.repoPath,
-    });
-
-    if (isCancel(skillTargetRaw)) {
-      cancel('Setup cancelled.');
-      exitSetup(0);
-    }
-
-    s.start('Installing Archon skill...');
-    try {
-      await copyArchonSkill(skillTargetRaw);
-    } catch (err) {
-      s.stop('Archon skill installation failed');
-      cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);
-      exitSetup(1);
-    }
-    s.stop('Archon skill installed');
-    skillInstalledBase = skillTargetRaw;
-    skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon-cli');
-
-    const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
-    if (bootstrapResult.state === 'created') {
-      log.info(`Created project config: ${bootstrapResult.path}`);
-      projectConfigCreatedPath = bootstrapResult.path;
-    } else if (bootstrapResult.state === 'failed') {
-      // Non-fatal — log so silent permission errors don't masquerade as a
-      // successful setup. The user can hand-create the file later.
-      log.warn(`Could not create ${bootstrapResult.path}: ${bootstrapResult.error}`);
-    }
-  }
-
-  // Optional: configure docs directory
-  const wantsDocsPath = await confirm({
-    message: 'Configure a non-default docs directory? (default: docs/)',
-    initialValue: false,
-  });
-
-  if (!isCancel(wantsDocsPath) && wantsDocsPath) {
-    const docsPath = await text({
-      message: 'Where are your project docs? (relative to repo root)',
-      placeholder: 'docs/',
-    });
-
-    if (!isCancel(docsPath) && typeof docsPath === 'string' && docsPath.trim()) {
-      try {
-        const archonDir = join(options.repoPath, '.archon');
-        mkdirSync(archonDir, { recursive: true });
-        const configPath = join(archonDir, 'config.yaml');
-        const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
-        if (!existing.includes('docs:')) {
-          const escaped = docsPath.trim().replace(/"/g, '\\"');
-          writeFileSync(configPath, existing + `\ndocs:\n  path: "${escaped}"\n`);
-        } else {
-          note(
-            `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
-            'Docs path not written'
-          );
-        }
-      } catch (err) {
-        cancel(`Could not write docs config: ${(err as NodeJS.ErrnoException).message}`);
-        exitSetup(1);
-      }
-    }
-  }
-
-  // Summary
-  const configuredPlatforms: string[] = [];
-  if (config.platforms.github) configuredPlatforms.push('GitHub');
-  if (config.platforms.telegram) configuredPlatforms.push('Telegram');
-  if (config.platforms.slack) configuredPlatforms.push('Slack');
-
+function configuredProviderNames(ai: SetupConfig['ai']): string[] {
   const aiConfigured: string[] = [];
-  if (config.ai.claude) {
+  if (ai.claude) {
     const authMethod =
-      config.ai.claudeAuthType === 'global'
+      ai.claudeAuthType === 'global'
         ? 'global auth'
-        : config.ai.claudeAuthType === 'apiKey'
+        : ai.claudeAuthType === 'apiKey'
           ? 'API key'
           : 'OAuth token';
     aiConfigured.push(`Claude (${authMethod})`);
   }
-  if (config.ai.codex && config.ai.codexTokens) {
+  if (ai.codex && ai.codexTokens) {
     aiConfigured.push('Codex');
   }
-  if (config.ai.pi) {
-    aiConfigured.push(config.ai.piApiKey ? `Pi (${config.ai.piApiKeyEnvVar})` : 'Pi');
+  if (ai.pi) {
+    aiConfigured.push(ai.piApiKey ? `Pi (${ai.piApiKeyEnvVar})` : 'Pi');
   }
 
+  return aiConfigured;
+}
+
+function showSetupSummary(
+  config: SetupConfig,
+  scope: NonNullable<SetupOptions['scope']>,
+  targetPath: string,
+  {
+    skillInstalledPath,
+    projectPath,
+    projectConfigCreatedPath,
+  }: Awaited<ReturnType<typeof installProjectSkill>>
+): void {
+  const platforms = platformNames(config.platforms);
+  const aiConfigured = configuredProviderNames(config.ai);
   const summaryLines = [
     `AI: ${aiConfigured.length > 0 ? aiConfigured.join(', ') : 'None configured'}`,
     `Default: ${config.ai.defaultAssistant ?? 'unset'}${config.ai.defaultModel ? ` (chat model: ${config.ai.defaultModel})` : ''}`,
-    `Platforms: ${configuredPlatforms.length > 0 ? configuredPlatforms.join(', ') : 'None (CLI + skill only)'}`,
+    `Platforms: ${platforms.length > 0 ? platforms.join(', ') : 'None (CLI + skill only)'}`,
     '',
     `File written (${scope} scope):`,
-    `  ${writeResult.targetPath}`,
+    `  ${targetPath}`,
   ];
 
   if (config.platforms.github && config.github) {
     summaryLines.push('');
     summaryLines.push('GitHub Webhook Setup:');
     summaryLines.push(
-      `  Use WEBHOOK_SECRET from ${writeResult.targetPath} in your GitHub webhook configuration.`
+      `  Use WEBHOOK_SECRET from ${targetPath} in your GitHub webhook configuration.`
     );
   }
 
-  if (skillInstalledPath && skillInstalledBase) {
-    const codexInstalledPath = join(skillInstalledBase, '.agents', 'skills', 'archon-cli');
+  if (skillInstalledPath) {
+    const codexInstalledPath = join(projectPath, '.agents', 'skills', 'archon-cli');
     summaryLines.push('');
     summaryLines.push('Archon skill installed:');
     summaryLines.push(`  ${skillInstalledPath}  (Claude Code)`);
@@ -2632,8 +454,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
   }
 
   note(summaryLines.join('\n'), 'Configuration Complete');
+}
 
-  // Additional options note
+async function finishSetup(): Promise<void> {
   note(
     'Other settings you can customize in ~/.archon/.env:\n' +
       '  - PORT (default: 3090)\n' +
@@ -2663,4 +486,123 @@ async function runSetup(options: SetupOptions): Promise<void> {
   }
 
   outro('Setup complete!');
+}
+
+/**
+ * Offer to install the Archon skill, and bootstrap `.archon/config.yaml`, in
+ * a project the operator names. `projectPath` is that project, or `repoPath`
+ * when the operator declines the install.
+ */
+async function installProjectSkill(
+  repoPath: string,
+  s: ReturnType<typeof spinner>
+): Promise<{
+  skillInstalledPath: string | null;
+  projectPath: string;
+  projectConfigCreatedPath: string | null;
+}> {
+  const shouldCopySkill = await confirm({
+    message: 'Install the Archon skill in your project? (recommended)',
+    initialValue: true,
+  });
+
+  if (isCancel(shouldCopySkill)) cancelSetup();
+
+  let skillInstalledPath: string | null = null;
+  let projectPath = repoPath;
+  let projectConfigCreatedPath: string | null = null;
+
+  if (shouldCopySkill) {
+    const skillTargetRaw = await text({
+      message: 'Project path to install the skill:',
+      defaultValue: repoPath,
+      placeholder: repoPath,
+    });
+
+    if (isCancel(skillTargetRaw)) cancelSetup();
+
+    s.start('Installing Archon skill...');
+    try {
+      await copyArchonSkill(skillTargetRaw);
+    } catch (err) {
+      s.stop('Archon skill installation failed');
+      cancel(`Could not install skill: ${(err as NodeJS.ErrnoException).message}`);
+      exitSetup(1);
+    }
+    s.stop('Archon skill installed');
+    projectPath = skillTargetRaw;
+    skillInstalledPath = join(skillTargetRaw, '.claude', 'skills', 'archon-cli');
+
+    const bootstrapResult = bootstrapProjectConfig(skillTargetRaw);
+    if (bootstrapResult.state === 'created') {
+      log.info(`Created project config: ${bootstrapResult.path}`);
+      projectConfigCreatedPath = bootstrapResult.path;
+    } else if (bootstrapResult.state === 'failed') {
+      // Non-fatal — log so silent permission errors don't masquerade as a
+      // successful setup. The user can hand-create the file later.
+      log.warn(`Could not create ${bootstrapResult.path}: ${bootstrapResult.error}`);
+    }
+  }
+
+  return { skillInstalledPath, projectPath, projectConfigCreatedPath };
+}
+
+/**
+ * Return `existing` config text with `docs.path` set, or null when a real `docs` key
+ * already exists. Comments and other content are preserved.
+ */
+function withDocsPath(existing: string, docsPath: string): string | null {
+  // Use the runtime loader's parser to resolve aliases, merges and complex keys.
+  const parsed: unknown = Bun.YAML.parse(existing);
+  if (parsed !== null && typeof parsed === 'object' && Object.hasOwn(parsed, 'docs')) return null;
+
+  const document: Document = parseDocument(existing, { uniqueKeys: false });
+  if (document.errors.length > 0) throw document.errors[0];
+  if (isScalar(document.contents) && document.contents.value === null) {
+    const root = new YAMLMap(document.schema);
+    root.commentBefore = document.contents.commentBefore;
+    root.comment = document.contents.comment;
+    root.spaceBefore = document.contents.spaceBefore;
+    document.contents = root;
+  }
+  const path = new Scalar(docsPath);
+  path.type = Scalar.QUOTE_DOUBLE;
+  const docs = new YAMLMap(document.schema);
+  docs.set('path', path);
+  document.set('docs', docs);
+  return document.toString();
+}
+
+/** Optionally record a non-default docs directory in `<repo>/.archon/config.yaml`. */
+export async function configureDocsPath(repoPath: string): Promise<void> {
+  const wantsDocsPath = await confirm({
+    message: 'Configure a non-default docs directory? (default: docs/)',
+    initialValue: false,
+  });
+  if (isCancel(wantsDocsPath) || !wantsDocsPath) return;
+
+  const docsPath = await text({
+    message: 'Where are your project docs? (relative to repo root)',
+    placeholder: 'docs/',
+  });
+  if (isCancel(docsPath) || typeof docsPath !== 'string' || !docsPath.trim()) return;
+
+  try {
+    const archonDir = join(repoPath, '.archon');
+    mkdirSync(archonDir, { recursive: true });
+    const configPath = join(archonDir, 'config.yaml');
+    const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
+    const updated = withDocsPath(existing, docsPath.trim());
+    if (updated !== null) {
+      writeFileSync(configPath, updated);
+    } else {
+      note(
+        `A "docs:" key already exists in ${configPath}.\nEdit it manually to set path: ${docsPath.trim()}`,
+        'Docs path not written'
+      );
+    }
+  } catch (err) {
+    cancel(`Could not write docs config: ${(err as NodeJS.ErrnoException).message}`);
+    exitSetup(1);
+  }
 }

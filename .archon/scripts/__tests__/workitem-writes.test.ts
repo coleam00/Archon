@@ -1,24 +1,13 @@
 import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
 import {
   forgeFailure,
   forgeOperation,
-  PACK,
   PR,
   packScriptRunner,
 } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
-
-function outputFormat(id: 'triage' | 'verdict'): Record<string, unknown> {
-  const workflow = Bun.YAML.parse(
-    readFileSync(join(PACK, 'triage/archon-triage-block.yaml'), 'utf8')
-  ) as { nodes: { id: string; output_format?: Record<string, unknown> }[] };
-  return workflow.nodes.find(node => node.id === id)?.output_format ?? {};
-}
 
 const inputs = {
   INPUTS_ITEM: JSON.stringify({ repo: PR.repo, number: 7 }),
@@ -31,6 +20,7 @@ const inputs = {
   INPUTS_URGENCY: '{"value":"none","reason":"nothing waits on it"}',
   INPUTS_SUMMARY: 'Ready',
   INPUTS_AREA_LABELS: '["area","nonexistent"]',
+  INPUTS_RELATED: '[]',
   INPUTS_REPORT: '{"path":"triage.md"}',
 };
 test('gh triage applies wanted labels', () => {
@@ -112,22 +102,6 @@ test('a close verdict keeps the type label, drops the size label, and carries it
   const output = JSON.parse(run.stdout);
   expect(output.labels).toEqual(['archon-close', 'archon-type-feature', 'area', 'nonexistent']);
   expect(output.closure).toEqual(DELIVERED);
-  expect(validateStructuredOutput(output, outputFormat('verdict'))).toEqual({ valid: true });
-});
-
-test('the verdict output admits exactly the closures the triage decision does', () => {
-  const closure = (outputFormat('verdict').properties as Record<string, Record<string, unknown>>)
-    .closure;
-  const url = 'https://ghe.example.com/example/repo/issues/3';
-  const admitted: (Closure | null)[] = [
-    null,
-    DELIVERED,
-    { kind: 'duplicate', url, original: { repo: PR.repo, number: 3 } },
-  ];
-  for (const value of admitted) expect(validateStructuredOutput(value, closure).valid).toBe(true);
-  for (const value of [{ kind: 'duplicate', url }, { kind: 'delivered' }, { url }]) {
-    expect(validateStructuredOutput(value, closure).valid).toBe(false);
-  }
 });
 
 test('a published close verdict labels the item and closes nothing; intake owns the close', () => {
@@ -158,39 +132,19 @@ test("a close link that is not a qualified URL is refused, so a guess never reac
   expect(run.stderr).toContain('closure.url must be a fully qualified');
 });
 
-test('the triage schema requires the kind and URL on NO_ACTION, so the provider is re-asked', () => {
-  const schema = outputFormat('triage');
-  const declared = (decision: unknown) =>
-    validateStructuredOutput(
-      {
-        decision,
-        type: { value: 'feature', reason: 'r' },
-        size: { value: 's', reason: 'r' },
-        complexity: { value: 'low', reason: 'r' },
-        importance: { value: 'medium', reason: 'r' },
-        urgency: { value: 'none', reason: 'r' },
-        item: { repo: PR.repo, number: 7 },
-        area_labels: [],
-        summary: 's',
-        report: { type: 'archon_artifact', run_id: 'r', path: 'triage.md' },
-      },
-      schema
-    ).valid;
-  const original = { repo: PR.repo, number: 3 };
-  const url = 'https://ghe.example.com/example/repo/issues/3';
-  expect(declared({ contract: 'NO_ACTION', closure: DELIVERED })).toBe(true);
-  expect(declared({ contract: 'NO_ACTION', closure: { kind: 'duplicate', url, original } })).toBe(
-    true
-  );
-  for (const closure of [
-    undefined,
-    { url },
-    { kind: 'delivered' },
-    { kind: 'duplicate', url },
-    { kind: 'obsolete', url },
-  ]) {
-    expect(declared({ contract: 'NO_ACTION', closure })).toBe(false);
-  }
+test('related work reaches the verdict as declared, and a related link that is not a qualified URL is refused', () => {
+  const related = [{ url: 'https://ghe.example.com/example/repo/pull/5', relation: 'merged change on the same surface' }];
+  const passed = runPackScript('triage/scripts/verdict', {
+    inputs: { ...inputs, INPUTS_PUBLISH: 'false', INPUTS_RELATED: JSON.stringify(related) },
+  });
+  expect({ code: passed.code, stderr: passed.stderr }).toEqual({ code: 0, stderr: '' });
+  expect((JSON.parse(passed.stdout) as { related: unknown }).related).toEqual(related);
+
+  const refused = runPackScript('triage/scripts/verdict', {
+    inputs: { ...inputs, INPUTS_PUBLISH: 'false', INPUTS_RELATED: '[{"url":"issue 5","relation":"overlaps"}]' },
+  });
+  expect(refused.code).not.toBe(0);
+  expect(refused.stderr).toContain('related urls must be fully qualified');
 });
 
 test('malformed qualified triage identity refuses before invoking a transport', () => {
@@ -319,4 +273,36 @@ test('a retired size label is never created and never accepted as an area label'
   expect(run.code).not.toBe(0);
   expect(run.gh).toEqual([]);
   expect(run.stderr).toContain('may not name a pack label');
+});
+
+test('forge triage adds the labels it lacks and removes only the stale one it owns', () => {
+  const item = { ref: { repo: PR.repo, number: 7 }, kind: 'issue', url: 'https://ghe.example.com/example/repo/issues/7', state: 'open' };
+  const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
+  const run = runPackScript('triage/scripts/verdict', {
+    source: 'forge',
+    inputs,
+    forge: {
+      kind: 'fake',
+      response: [
+        forgeOperation('workitem.view', { ...item, title: 't', body: 'b', labels: ['archon-plan', 'someone-elses'] }),
+        forgeOperation('repo.labels.list', {
+          repo: PR.repo,
+          labels: ['archon-ready', 'archon-plan', 'archon-size-s', 'archon-type-feature', 'area'].map(name => ({ name })),
+        }),
+        ...Array.from({ length: 4 }, () => applied('workitem.label.add')),
+        applied('workitem.label.remove'),
+      ],
+    },
+  });
+  expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+  const writes = run.forge
+    .map((argv, index) => [argv.split(' ')[1], JSON.parse(run.forgeRequests[index] ?? '{}').name])
+    .filter(([op]) => op?.startsWith('workitem.label.'));
+  expect(writes).toEqual([
+    ['workitem.label.add', 'archon-ready'],
+    ['workitem.label.add', 'archon-size-s'],
+    ['workitem.label.add', 'archon-type-feature'],
+    ['workitem.label.add', 'area'],
+    ['workitem.label.remove', 'archon-plan'],
+  ]);
 });

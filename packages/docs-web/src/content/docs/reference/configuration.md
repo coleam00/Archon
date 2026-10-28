@@ -86,8 +86,8 @@ assistants:
     settingSources:   # Which sources the Claude SDK loads (default: ['project', 'user'])
       - project       # Project-level <cwd>/.claude/ (CLAUDE.md, skills, commands, agents)
       - user          # User-level ~/.claude/ (CLAUDE.md, skills, commands, agents)
-    # Optional: absolute path to the Claude Code executable.
-    # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
+    # Optional: absolute path to the Claude Code executable. Compiled binaries
+    # find the native installer's ~/.local/bin/claude without it.
     # Accepts the native binary (~/.local/bin/claude from the curl installer),
     # the npm-installed cli.js, or the npm platform-package directory
     # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).
@@ -102,6 +102,7 @@ assistants:
     additionalDirectories:
       - /absolute/path/to/other/repo
     # codexBinaryPath: /absolute/path/to/codex  # Optional: Codex CLI path
+    # toolFreeStructuredOutputModels: [glm-5.3]  # Optional: routes that reject tools + strict schema together
 
 # Streaming preferences per platform
 streaming:
@@ -142,7 +143,9 @@ tiers:
   medium: { provider: codex, model: gpt-5.6-terra, effort: high }
   small: { provider: pi, model: minimax-m3 }
 
-# Model aliases — optional custom refs for project workflows.
+# Model aliases — custom refs. Project workflows can name one directly; a bundled
+# workflow names one in a preference list that ends in a tier, such as the SDLC pack's
+# '@implementer' or '@reviewer', so an unset alias falls back to that tier.
 aliases:
   '@reasoning': { provider: claude, model: opus, effort: max }
 
@@ -426,7 +429,7 @@ worktree:
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).
 2. If omitted: Uses the project's stored explicit branch, if present; otherwise resolves the default from the remote's live HEAD advertisement. Renames are followed even when local remote HEAD is stale. A reachable remote with a known symbolic HEAD is required; no branch name is guessed.
-3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
+3. If a workflow references `$BASE_BRANCH` while its base is unresolved, the node fails. See [`$BASE_BRANCH` fail-fast](/reference/variables/#base_branch-fail-fast) for causes and recovery.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
 
@@ -477,7 +480,7 @@ container:
   write_back: approve # 'approve' (default) pauses at a write-back gate; 'auto' applies without pausing
 ```
 
-**Prerequisites:** Docker, and the runner image built with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Rebuild existing and custom runner images after upgrading Archon: native fallback requires the current entrypoint's dedicated FUSE mount failure status (78). Docker startup failures, including a missing `/dev/fuse`, and older images returning a generic failure status stop preparation without native fallback. Container mode is **folder-project-only** (a repo project errors). Pausing workflows (approval/interactive gates) **are** supported — a pause `docker stop`s the container (near-zero resources while awaiting a decision) and resume rediscovers and restarts it. `$ARTIFACTS_DIR` is bound read-write at its host path; `$STATE_DIR` is not mounted — see [Container runs and run output](#container-runs-and-run-output) below. For the full flow, pause economics, and security posture, see the [Container isolation guide](/guides/container-isolation/) and `packages/isolation/docker/SECURITY.md`.
+**Prerequisites:** Docker, and the runner image built with `bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`). Rebuild existing and custom runner images after upgrading Archon: native fallback requires the current entrypoint's dedicated FUSE mount failure status (78). Docker startup failures, including a missing `/dev/fuse`, and older images returning a generic failure status stop preparation without native fallback. Container mode is **folder-project-only** (a repo project errors). Pausing workflows (approval/interactive gates) **are** supported — a normal gate pause `docker stop`s the container (near-zero resources once stopped) and resume rediscovers and restarts it. Failed resume setup marks the run failed. Failed setup or suspension can leave its container running and consuming resources; see [Pause economics](/guides/container-isolation/#pause-economics). `$ARTIFACTS_DIR` is bound read-write at its host path; `$STATE_DIR` is not mounted — see [Container runs and run output](#container-runs-and-run-output) below. For the full flow, pause economics, and security posture, see the [Container isolation guide](/guides/container-isolation/) and `packages/isolation/docker/SECURITY.md`.
 
 ### Container runs and run output
 
@@ -512,7 +515,7 @@ Environment variables override all other configuration. They are organized by ca
 | --- | --- | --- |
 | `ARCHON_HOME` | Base directory for all Archon-managed files. **Ignored in Docker** — the container always uses `/.archon`. | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
-| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). Read from the environment or from `~/.archon/.env` or `.archon/.env`. CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
+| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). Read from the environment or from `~/.archon/.env` or `.archon/.env`. CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). At `debug` or `trace`, each DAG run compares the usage totals it writes to the run with the sum of its node events, and logs `dag.run_usage_reconciliation_mismatch` with both figures when they differ. | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
 | `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id. | Only registered provider, otherwise unset |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
@@ -525,13 +528,13 @@ Environment variables override all other configuration. They are organized by ca
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `CLAUDE_USE_GLOBAL_AUTH` | Use global auth from `claude /login` (`true`/`false`) | Auto-detect |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Explicit OAuth token (alternative to global auth) | -- |
-| `CLAUDE_API_KEY` | Explicit API key (alternative to global auth) | -- |
+| `CLAUDE_USE_GLOBAL_AUTH` | Startup-check marker: `true` tells the server you rely on a `claude /login` session. Claude Code never reads it. | Set to `true` by the CLI, and by the server unless `TOKEN_ENCRYPTION_KEY` is set, when no token or key is set |
+| `CLAUDE_CODE_OAUTH_TOKEN` | OAuth token from `claude setup-token` | -- |
+| `CLAUDE_API_KEY` | Anthropic API key. Passed to Claude Code as `ANTHROPIC_API_KEY` when neither `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY` is set | -- |
 | `TITLE_GENERATION_MODEL` | Lightweight model for generating conversation titles | SDK default |
 | `ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS` | Timeout (ms) before Claude subprocess is considered hung (throws with diagnostic log) | `60000` |
 
-When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit tokens if present, otherwise falls back to global auth.
+Claude Code uses a token or key from its environment when one is set, and its own `claude /login` session otherwise, whatever `CLAUDE_USE_GLOBAL_AUTH` says. A fresh Docker container has no login session, so set a token or key there.
 
 ### AI Providers -- Codex
 
@@ -553,6 +556,8 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort, copilotCliPath, configDir, enableConfigDiscovery, useLoggedInUser, logLevel}` from `~/.archon/config.yaml` or `.archon/config.yaml`. See the [AI Assistants guide](/getting-started/ai-assistants/) for the full setup.
 
 ### Platform Adapters -- Slack
+
+These variables configure the `chat-slack` plugin. In Docker, a nonempty `SLACK_BOT_TOKEN` declares installation of the image-provided release offline at startup; both tokens are required to connect. Existing installed releases are retained. Remove the tokens from every effective env source and remove the plugin to keep Slack off across Docker restarts. Outside Docker, install the plugin manually. See the [Slack guide](/adapters/slack/).
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -584,6 +589,7 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 | --- | --- | --- |
 | `GITHUB_TOKEN` | Required with `WEBHOOK_SECRET` to activate the GitHub adapter in PAT mode. Used for adapter API calls, cloning and forge credentials when `GH_TOKEN` is unset or empty. | -- |
 | `GH_TOKEN` | Preferred token for adapter API calls in PAT mode, cloning, forge credentials and the GitHub CLI. Takes precedence over `GITHUB_TOKEN`; does not activate the adapter by itself. | -- |
+| `GITHUB_URL` | Base URL of a GitHub Enterprise Server (e.g. `https://github.example.com`). The adapter and the GitHub App call `<GITHUB_URL>/api/v3`, and HTTPS clones with this exact scheme, host and port use `GH_TOKEN`/`GITHUB_TOKEN` (or the App's installation token in App mode). A value that is not a bare `http(s)://host[:port]` URL fails startup. See [GitHub Enterprise Server](/adapters/github/#github-enterprise-server). | github.com |
 | `WEBHOOK_SECRET` | HMAC SHA-256 secret for GitHub webhook signature verification | -- |
 | `GITHUB_ALLOWED_USERS` | Comma-separated GitHub usernames for whitelist (case-insensitive) | Open access |
 | `GITHUB_BOT_MENTION` | @mention name the bot responds to in issues/PRs | Falls back to `BOT_DISPLAY_NAME` |
@@ -599,7 +605,7 @@ An opt-in layer on top of [GitHub App mode](/adapters/github-app-setup/) that le
 | `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK` | When `false` (default), a workflow run by an **unconnected** user has `GH_TOKEN`/`GITHUB_TOKEN` scrubbed (so `gh`/`git` fail) rather than silently using the shared org/bot token. Set `true` to opt back into the shared token. | `false` |
 | `ARCHON_WEB_AUTH_HEADER` | Name of the reverse-proxy-set header Archon trusts to identify the web user (reverse-proxy fallback; still honored alongside Better Auth web login below). Only safe when Archon is reachable **solely** through a trusted proxy that strips client-supplied values and sets the header from the authenticated identity. Use a loopback bind for a same-host proxy or a private container interface for a container proxy; clients must not be able to reach the upstream directly. See the [reverse-proxy contract](/deployment/reverse-proxy/#authentication-and-headers). Absent header → unattributed (never elevated). | `X-Archon-User` |
 
-To connect once the vars are set: `archon auth github` (CLI), `/archon connect github` (Slack), or the Web UI **Settings → Connect GitHub** card.
+To connect once the vars are set: `archon auth github` (CLI) or the Web UI **Settings → Connect GitHub** card.
 
 ### Web UI login (Better Auth, optional)
 
@@ -665,7 +671,7 @@ Signup uses email + password (no email verification by default). **Signup postur
 
 ### Telemetry
 
-Archon sends a few anonymous events — `archon_started` (once per CLI invocation or server boot), `archon_active` (daily server heartbeat), `chat_turn_handled` (direct chat turn — platform, provider, model, duration, and usage totals, counted as failed when the provider errors mid-turn; never message content), `workflow_invoked` (workflow start or resumed segment), `workflow_completed`/`workflow_failed`/`workflow_cancelled` (sent once when the run's final status is saved), `workflow_approval_resolved` (binary approve/reject), and `codebase_registered` (pure count — no name/path/URL). Categorical only: workflow name (real for bundled workflows, `"custom"` for your own), platform, provider id (model id on `workflow_invoked`), node shape (`nodes_<type>` counts, `graph_depth`, `max_fan_out`, `command_refs`, `prompt_chars_bucket`) and feature flags, `derived_from`/`derived_similarity` naming the bundled workflow a custom one was copied from (never the copy's own name), outcome/duration, aggregate provider-reported usage (gross input, output, optional cache-read/cache-write totals plus a flag when those totals are a floor, cost, and loop iterations), a fixed-enum failure class and exit/cancel reason (never error text), a `run_ref` hash that joins one run's events without sending its id, deployment shape (adapter/db/auth booleans), OS/arch/version, install channel (`binary`/`docker`/`source`) and build commit, a `schema_version`, and a random install UUID stored at `$ARCHON_HOME/telemetry-id`. No code, prompts, paths, IP, geo, or error text. Any one of the variables below disables it. See `archon telemetry status` to inspect the live state.
+Archon sends a few anonymous events — `archon_started` (once per CLI invocation or server boot), `archon_active` (daily server heartbeat), `chat_turn_handled` (direct chat turn — platform, provider, model, duration, and usage totals, counted as failed when the provider errors mid-turn; never message content), `workflow_no_match` (agent-reported no-fit count and transport only), `workflow_invoked` (workflow start or resumed segment), `workflow_completed`/`workflow_failed`/`workflow_cancelled` (sent once when the run's final status is saved), `workflow_approval_resolved` (binary approve/reject), and `codebase_registered` (pure count — no name/path/URL). Categorical only: workflow name (real for bundled workflows, `"custom"` for your own), platform, provider id (model id on `workflow_invoked`), node shape (`nodes_<type>` counts, `graph_depth`, `max_fan_out`, `command_refs`, `prompt_chars_bucket`) and feature flags, `derived_from`/`derived_similarity` naming the bundled workflow a custom one was copied from (never the copy's own name), outcome/duration, aggregate provider-reported usage (gross input, output, optional cache-read/cache-write totals plus a flag when those totals are a floor, cost, and loop iterations), a fixed-enum failure class and exit/cancel reason (never error text), a `run_ref` hash that joins one run's events without sending its id, deployment shape (adapter/db/auth booleans and a chat plugin count), OS/arch/version, install channel (`binary`/`docker`/`source`) and build commit, a `schema_version`, and a random install UUID stored at `$ARCHON_HOME/telemetry-id`. No code, prompts, paths, IP, geo, or error text. Any one of the variables below disables it. See `archon telemetry status` to inspect the live state.
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -677,21 +683,23 @@ Archon sends a few anonymous events — `archon_started` (once per CLI invocatio
 
 ### `.env` File Locations
 
-Archon keys env loading on **directory ownership, not filename**. `.archon/` (at `~/` or `<cwd>/`) is archon-owned. Anything else is yours.
+Archon loads its own environment files, separate from the target repository's app configuration. The CLI and compiled server load `.archon/.env` files at user and repo scope. A server running from source also loads the Archon checkout's root `.env`.
 
 | Path | Stripped at boot? | Archon loads? | `archon setup` writes? |
 | --- | --- | --- | --- |
-| `<cwd>/.env` | **yes** (safety guard) | never | never |
+| Target repo `<cwd>/.env` | **yes** (safety guard) | no | never |
+| `<archon-checkout>/.env` | yes if the checkout is CWD | source server only, after stripping, without override | never |
 | `<cwd>/.archon/.env` | no | yes (repo scope, overrides user scope with CLI exceptions below) | yes iff `--scope project` |
 | `~/.archon/.env` | no | yes (user scope) | yes iff `--scope home` (default) |
 
 **Load order at boot** (every entry point — CLI and server):
 
-1. Strip keys Bun auto-loaded from `<cwd>/.env`, `.env.local`, `.env.development`, `.env.production` (prevents target-repo env from leaking into Archon).
-2. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars).
-3. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
+1. Strip every key named in `<cwd>/.env`, `.env.local`, `.env.development`, `.env.production`, including shell or direnv values with those names (prevents target-repo env from leaking into Archon).
+2. **Source-checkout server only:** load `<archon-checkout>/.env` without `override`, so values still in the process environment win. This path is resolved from the server source location, independently of CWD. When CWD is the Archon checkout, this deliberately reloads its root `.env` after stripping. The CLI and compiled server skip this step.
+3. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars and source-checkout values).
+4. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
 
-The CLI makes exceptions to this order: repository env cannot set `GH_CONFIG_DIR`; the CLI preserves the user-scope value, including its absence. Inside a workflow, an inherited `GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`, including an empty value, wins over both files. The standalone server follows the general load order above, including repository overrides of `GH_CONFIG_DIR`. See [forge configuration](/reference/forge/#plugin-configuration) and [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
+The CLI makes exceptions to this order: selected chat scope is read from the explicit `--chat-project-id` argument before Archon env loading; env files and the old `ARCHON_WORKFLOW_CODEBASE_ID` variable cannot supply or override it. Repository env cannot set `GH_CONFIG_DIR`; the CLI preserves the user-scope value, including its absence. Inside a workflow, an inherited `GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN` or `COPILOT_GITHUB_TOKEN`, including an empty value, wins over both files. The standalone server follows the general load order above, including repository overrides of `GH_CONFIG_DIR`. See [forge configuration](/reference/forge/#plugin-configuration) and [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
 
 A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`. If it does, Archon refuses to start and names the file and the key. Those keys decide which Archon home and which executables Archon uses, so a repository could otherwise choose which plugins run. Set them in your shell, your scheduler or `~/.archon/.env` instead.
 
@@ -712,7 +720,8 @@ The `[archon] loaded N keys from …` lines are suppressed by default (they woul
 
 - **`~/.archon/.env`** — user-wide defaults (your personal `SLACK_WEBHOOK`, `DATABASE_URL`, etc.). Applies to every project.
 - **`<cwd>/.archon/.env`** — per-project overrides. Different webhook per repo, different DB per environment, etc. It cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`.
-- **`<cwd>/.env`** — **your app's** env file. Archon does not read this file; it strips the keys at boot so they do not leak into Archon's process.
+- **Target repo `<cwd>/.env`** — **your app's** env file. Archon strips its keys at boot and does not load its values.
+- **`<archon-checkout>/.env`** — configuration for a server running from Archon source, as described in the [developer guide](https://github.com/coleam00/Archon/blob/dev/CONTRIBUTING.md#getting-started). This is Archon's own checkout, not a separate target repository. Its root `.env` loads even when the server starts with another CWD; when the checkout itself is CWD, its root `.env` is the exception to the target-repo rule above.
 
 ```bash
 # User-wide
@@ -816,7 +825,9 @@ DISCORD_STREAMING_MODE=stream
 
 ### Batch Mode
 
-Only the final summary message is sent after AI completes processing.
+The assistant reply is sent after AI completes processing. Batch mode filters sections that start with tool-indicator emoji. If filtering leaves no text, it sends the original assistant messages joined with separators, including those indicators. Provider warnings are sent as they arrive.
+
+Filtering operates on provider text blocks, including continuations split by an immediate warning. Adapters may split long replies into multiple platform messages or comments.
 
 ```ini
 TELEGRAM_STREAMING_MODE=batch
@@ -825,14 +836,14 @@ DISCORD_STREAMING_MODE=batch
 ```
 
 **Pros:**
-- Single coherent message/comment
+- One assembled assistant reply before delivery; adapters may split long replies
 - Fewer API calls
 - No spam or clutter
 
 **Cons:**
-- No progress indication during processing
+- Assistant text is held until processing completes
 - Longer wait for first response
-- Can't see intermediate steps
+- Intermediate tool-indicator sections are normally omitted; the all-filtered fallback includes them
 
 **Best for:** Issue trackers and async platforms (GitHub)
 
@@ -866,7 +877,7 @@ Attention stores only ids, timestamps, and bounded display fields. It never copi
 
 This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt, because retrying in the same provider window only repeats the failure. When the attempt fails this way and the provider reported when the limit resets, the run does not fail. It pauses in a durable wait until that time, and a continuation host continues it once: `archon serve`, `archon workflow wake`, or the CLI process that started the run. The nodes that hit the limit run again. If they hit a limit again, the run waits again, until the new reset. `workflow status`, `workflow get`, the attention queue (item kind `usage_limit`) and the console show the wait with its node and reset time. Cancel or abandon the run to stop it.
 
-The run waits only when every node that failed in that pass hit a usage limit with a reported reset that is still ahead, or a rate limit (below); it waits for the latest of those deadlines. Any other failure, a usage limit without a reset time, or a usage limit whose reset has already passed fails the run as before. Archon never guesses when a usage limit resets. A container run also fails, because the continuation host cannot continue one; resume it by hand.
+The run waits only when every node that failed in that pass hit a usage limit with a reported reset, or a rate limit (below), and the latest of those deadlines is still ahead. This also applies to failed descendants inside loop groups and fan-outs. A node that failed downstream of another failed node, such as an `all_done` node reading a limited node's output, does not prevent the wait, whatever its own error was; it runs again when the run continues, and if it then fails after its upstream succeeded, that failure fails the run. A usage limit whose reset has already passed does not prevent waiting for another node's later deadline: when the run continues, both failed nodes retry. Any other failure, a usage limit without a reset time, or no deadline still ahead fails the run as before. Archon never guesses when a usage limit resets. A container run also fails, because the continuation host cannot continue one; resume it by hand.
 
 A rate limit (`rate_limited`, such as HTTP 429) that still refuses a node after its retries takes the same wait. Its deadline is the provider's reset when the failure reports one that is still ahead; otherwise Archon waits a computed backoff of 5 to 15 minutes, jittered so runs limited together do not retry together. Resume the run to try sooner.
 
@@ -918,7 +929,9 @@ Returns: `{"status":"ok","database":"connected"}`
 ```bash
 curl http://localhost:3090/health/concurrency
 ```
-Returns: `{"status":"ok","active":0,"queued":0,"maxConcurrent":10}`
+Returns: `{"status":"ok","active":0,"queuedTotal":0,"maxConcurrent":10}`
+
+Per-conversation acquisition and queue times are on the authenticated `GET /api/dashboard/conversations`.
 
 **Use cases:**
 - Docker healthcheck configuration

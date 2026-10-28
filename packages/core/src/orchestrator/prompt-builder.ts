@@ -3,7 +3,13 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
-import { INVOKE_WORKFLOW_SCHEMA, REGISTER_PROJECT_SCHEMA } from './chat-tools';
+import { CHAT_PROJECT_ID_ARG } from '@archon/paths/workflow-scope';
+
+import {
+  INVOKE_WORKFLOW_SCHEMA,
+  REGISTER_PROJECT_SCHEMA,
+  REPORT_WORKFLOW_NO_MATCH_TOOL_NAME,
+} from './chat-tools';
 import { resolveProjectAssistant } from '../config/project-assistant';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
@@ -11,6 +17,7 @@ import {
   isApprovalContext,
   isContainerRun,
   runAttention,
+  type RunAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import {
   attentionAnswerLines,
@@ -21,7 +28,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import { isRejectableUnreadableGate } from '../operations/workflow-operations';
 
-type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description'> & {
+type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description' | 'deprecated' | 'inputs'> & {
   readonly nodes: readonly unknown[];
 };
 
@@ -45,6 +52,21 @@ export function formatProjectSection(
   return section;
 }
 
+function formatInputs(inputs: PromptWorkflow['inputs']): string {
+  const entries = Object.entries(inputs ?? {});
+  if (entries.length === 0) return '';
+  const lines = entries.map(([name, spec]) => {
+    const kind =
+      spec.required === true
+        ? 'required'
+        : spec.default !== undefined
+          ? `default: ${JSON.stringify(spec.default)}`
+          : 'optional';
+    return `    - ${name} (${kind})${spec.description ? `: ${spec.description}` : ''}\n`;
+  });
+  return `  Inputs:\n${lines.join('')}`;
+}
+
 /**
  * Format workflow list for the orchestrator prompt.
  */
@@ -53,14 +75,12 @@ export function formatWorkflowSection(workflows: readonly PromptWorkflow[]): str
     return 'No workflows available. Users can create workflows in `.archon/workflows/` as YAML files.\n';
   }
 
-  let section = '';
-  for (const w of workflows) {
-    section += `**${w.name}**\n`;
-    section += `  ${w.description}\n`;
-    section += `  Type: DAG (${String(w.nodes.length)} nodes)\n`;
-    section += '\n';
-  }
-  return section;
+  return workflows
+    .map(w => {
+      const deprecation = w.deprecated ? `  Deprecated: ${w.deprecated.message}\n` : '';
+      return `**${w.name}**\n  ${w.description}\n${deprecation}${formatInputs(w.inputs)}  Type: DAG (${String(w.nodes.length)} nodes)\n\n`;
+    })
+    .join('');
 }
 
 /** WorkflowResult type for prompt context injection */
@@ -115,6 +135,8 @@ export interface PausedGateContext {
   surface?: WorkflowCommandSurface;
 }
 
+const PAUSED_GATE_HEADER = '## Paused Approval Gate\n\n';
+
 /**
  * Format the "there is a human gate waiting in this conversation" section.
  *
@@ -128,7 +150,6 @@ export interface PausedGateContext {
  * gate is awaiting resume, not a human.
  */
 export function formatPausedGateSection(gate: PausedGateContext): string {
-  const header = '## Paused Approval Gate\n\n';
   const runId = gate.run.id;
   const workflowName = gate.run.workflow_name;
   const attention = runAttention(gate.run);
@@ -146,7 +167,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'unreadable' && attention.reason === 'source_release_not_continued') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) has no gate: it is ${attention.detail}. ` +
       `Tell the user to resume it with \`${cmd(`resume ${runId}`)}\` once a host can read ` +
       `its source, or to abandon it with \`${cmd(`abandon ${runId}`)}\`.`
@@ -155,7 +176,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'unreadable') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) is paused, but its approval context is ` +
       'missing or malformed, so the gate cannot be described. Do not resolve it. ' +
       `Tell the user to inspect it with \`${cmd(`get ${runId}`)}\` before choosing an action` +
@@ -167,7 +188,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'blocked_on_child') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) is paused waiting on its sub-run ` +
       `\`${attention.childRunId}\`, which has a gate of its own. This run has no gate you can resolve — ` +
       'the decision belongs to the child run, and this one continues on its own once the child ' +
@@ -177,7 +198,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'blocked_on_children') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) is paused waiting on its fan-out sub-runs ` +
       `${attention.childRunIds.map(id => `\`${id}\``).join(', ')}. This run has no gate you can ` +
       'resolve — each sub-run that is waiting is answered by its own run id, and this one ' +
@@ -187,7 +208,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
 
   if (attention.kind === 'usage_limit') {
     return (
-      header +
+      PAUSED_GATE_HEADER +
       `Run \`${runId}\` (**${workflowName}**) is paused on a provider usage or rate limit and ` +
       `tries again on its own at ${attention.resumeAt}; if the limit persists, it pauses ` +
       `again. It has no gate you can resolve. Resume it only if the user wants to try sooner: \`${cmd(`resume ${runId}`)}\`. ` +
@@ -205,6 +226,17 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
       '\n\nOnly answer what the user actually decided; an undeclared option is refused.'
     );
   }
+
+  return formatAwaitingResponse(gate, attention);
+}
+
+function formatAwaitingResponse(
+  gate: PausedGateContext,
+  attention: Extract<RunAttention, { kind: 'awaiting_response' }>
+): string {
+  const runId = gate.run.id;
+  const workflowName = gate.run.workflow_name;
+  const cmd = (command: string): string => spellWorkflowCommand(gate.surface ?? {}, command);
 
   // `awaiting_response`. The projection reports it only for a well-formed, unresolved
   // gate; the context read here carries the DETAIL the attention value omits.
@@ -230,7 +262,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     : `\`${cmd(`approve ${runId} [comment]`)}\` or \`${cmd(`reject ${runId} <reason>`)}\``;
 
   const preamble =
-    header +
+    PAUSED_GATE_HEADER +
     'A workflow run in this conversation is PAUSED waiting for a human decision. It does not ' +
     'continue until the gate is resolved.\n\n' +
     facts.join('\n') +
@@ -305,13 +337,8 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
   );
 }
 
-/**
- * How the chat agent launches workflows and registers projects. `tools`: the typed
- * `invoke_workflow` and `register_project` native tools (providers with in-process
- * tools). `commands`: `/invoke-workflow` and `/register-project` lines the command
- * scan reads from the reply (every other provider).
- */
-export type LaunchChannel = 'tools' | 'commands';
+/** The provider transport for launching and managing workflow runs. */
+export type LaunchChannel = 'tools' | 'cli';
 
 /**
  * Build the routing rules section, optionally scoped to a specific project.
@@ -330,7 +357,9 @@ export function buildRoutingRulesWithProject(channel: LaunchChannel, projectName
 3. If the user mentions a specific project → use that project's name
 ${rule4}
 5. If no project needed (general question) → answer directly without workflow
-6. If the user wants to add a new project → clone it, then register it (see below)`;
+6. If the user wants to add a new project → clone it, then register it (see below)
+
+In the examples below, {workflow-name} is an illustrative placeholder: replace it with the exact name of an appropriate workflow from Available Workflows. Never invoke the placeholder literally. If the user wants work done but no listed workflow fits, ${channel === 'tools' ? `call \`${REPORT_WORKFLOW_NO_MATCH_TOOL_NAME}\` once` : 'run `archon telemetry no-match` once'}, then explain that instead of inventing a name. Do not report no match for ordinary questions or missing project/input details. Identify the closest available option and its limits, offer to author a workflow for repeatable work, or suggest using a coding agent directly for one-off work. Do not recommend deprecated workflows when a non-deprecated workflow fits; follow the deprecation guidance in Available Workflows.`;
 
   const promptRules = (
     arg: string
@@ -341,7 +370,8 @@ ${rule4}
   const exampleTask =
     'Fix GitHub issue #42: the login form rejects valid email addresses. Check the issue against the current code, fix the root cause, and open a reviewed pull request.';
 
-  const projectMaintenance = `To update a project's path:
+  const projectMaintenance = `Ask the user to submit these project-maintenance commands in this conversation.
+To update a project's path:
    /update-project {project-name} {new-path}
 
 To remove a registered project:
@@ -350,11 +380,17 @@ To remove a registered project:
 Before cloning, choose an unoccupied source path. Prefer ${workspaces}/{owner}/{repo}/source; if occupied, choose a readable suffix such as ${workspaces}/{owner}/{repo}-2/source. Honor a user-specified location, but never overwrite an occupied checkout.
 Use the name returned by registration for subsequent workflow and project commands; registration may add a suffix. Two clones of one registered remote cannot be separate projects; use worktrees for parallel checkouts.`;
 
+  const projectSelection = `## Project Selection
+
+Ask the user to submit \`/setproject <name>\` in this conversation or thread to persist its active project and enable project run management. Registration alone does not bind the conversation. General questions work without a project.
+${!projectName && channel === 'cli' ? 'Before launching or managing runs, ask the user to select a registered project with /setproject <name>.' : 'If a requested project is ambiguous, ask which project the user means.'}`;
+
   if (channel === 'tools') {
     const invokeExample = {
-      workflow: 'archon-ship',
+      workflow: '{workflow-name}',
       project: 'my-project',
       prompt: exampleTask,
+      inputs: '{"base_branch":"dev"}',
     } satisfies Record<keyof typeof INVOKE_WORKFLOW_SCHEMA.properties, string>;
     const registerExample = {
       name: 'my-new-app',
@@ -362,6 +398,8 @@ Use the name returned by registration for subsequent workflow and project comman
       folder: false,
     } satisfies Record<keyof typeof REGISTER_PROJECT_SCHEMA.properties, string | boolean>;
     return `${routingRules}
+
+${projectSelection}
 
 ## Invoking a Workflow
 
@@ -372,11 +410,12 @@ ${Object.entries(INVOKE_WORKFLOW_SCHEMA.properties)
 
 Rules:
 ${promptRules('`prompt`')}
+- If the chosen workflow lists inputs, pass the values the user gave in \`inputs\`. If a required input is missing, ask the user for it before calling \`invoke_workflow\`.
 - Call \`invoke_workflow\` at most once per reply. The run starts after your reply ends: say what you launched, and never claim the run finished.
 
 Routing behavior:
 - If the user clearly wants work done (e.g., "create a plan for X", "implement Y", "fix Z") → briefly explain what you're doing and call \`invoke_workflow\`.
-- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may suggest a workflow by name (e.g., "I can run the **archon-investigate** workflow to find the root cause if you'd like"), but do NOT call \`invoke_workflow\`.
+- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may offer to run a suitable workflow from Available Workflows if one fits, but do NOT call \`invoke_workflow\`.
 
 Example (clear intent):
 User: "Fix issue #42, the login form rejects valid emails"
@@ -385,7 +424,7 @@ invoke_workflow(${INVOKE_WORKFLOW_SCHEMA.required.map(name => `${name}: "${invok
 
 Example (ambiguous — answer directly):
 User: "What do you think about adding dark mode?"
-Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run the **archon-plan** workflow." Do NOT call \`invoke_workflow\`.
+Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run one if a suitable workflow is available." Do NOT call \`invoke_workflow\`.
 
 ## Project Setup
 
@@ -405,46 +444,33 @@ ${projectMaintenance}`;
 
   return `${routingRules}
 
-## Workflow Invocation Format
+${projectSelection}
 
-When invoking a workflow, output the command as the VERY LAST line of your response:
-/invoke-workflow {workflow-name} --project {project-name} --prompt "{task description}"
+## Workflow Launch via CLI
 
-Rules:
-- Use the project NAME (e.g., "my-project"), not an ID or path.
-${promptRules('--prompt')}
-- You may include a brief explanation before the command. The user will see this text.
-- /invoke-workflow MUST be the absolute last thing in your response. Do NOT use any tools or generate additional text after it.
-
-Routing behavior:
-- If the user clearly wants work done (e.g., "create a plan for X", "implement Y", "fix Z") → include a brief explanation of what you're doing, then invoke the workflow.
-- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may suggest a workflow by name (e.g., "I can run the **archon-investigate** workflow to find the root cause if you'd like"), but do NOT include /invoke-workflow in your response.
-
-Example (clear intent):
-User: "Fix issue #42, the login form rejects valid emails"
-Response: I'll take issue #42 through to a reviewed pull request.
-/invoke-workflow archon-ship --project my-project --prompt "${exampleTask}"
-
-Example (ambiguous — answer directly):
-User: "What do you think about adding dark mode?"
-Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run the **archon-plan** workflow."
+${projectName ? 'Launch only when the user clearly requests work and a listed workflow fits. Use the existing CLI in the registered project directory.' : 'Once the user selects a project, use the existing CLI in its registered directory. Do not launch from the projectless workspace.'}
+- Use \`archon workflow run <workflow> "<message>" --detach\`.
+${promptRules('message argument')}
+- Pass declared workflow inputs with \`--input name=value\` for each value. Ask for missing required inputs before launching.
+- Quote every shell argument safely, including paths, task text and inputs. Preserve embedded quotes and apostrophes; never interpolate user text as shell code.
+- Use the selected project's listed directory. To change projects, ask the user to submit /setproject <name> first.
+- Launch at most once per reply. For questions or unclear intent, answer directly without launching.
+- Detached launches are headless: they use CLI identity, have no originating-chat progress or result delivery, and return a run ID. Inspect that ID with the CLI; never claim the run has finished just because launch returned.
 
 ## Project Setup
 
-When a user asks to register an existing local directory, emit:
+Ask the user to submit an explicit command:
    /register-project {project-name} "{path}"
-Use the explicit folder choice when the user wants Archon to run in place without managing git:
+For in-place execution without Archon-managed git:
    /register-project --folder {project-name} "{path}"
-A folder project may itself be a git repository. Git belongs to the user and agent.
-Without --folder, git paths are repo projects and non-git paths are folder projects.
+A folder project may itself be a git repository. Without --folder, git paths are repo projects and non-git paths are folder projects.
+Displaying a command does not execute it. After registration, ask the user to submit /setproject <name> in this conversation.
 
-When a user asks to clone a new repository:
-1. Following the path guidance below, choose an unoccupied source path under ${workspaces}/:
+When asked to clone a repository, choose an unoccupied source path following the guidance below:
    git clone https://github.com/{owner}/{repo} "{unoccupied-source-path}"
-2. Register it by emitting this command on its own line:
+Then ask the user to submit:
    /register-project {project-name} {path-to-source}
-
-Example:
+For example:
    /register-project my-new-app ${workspaces}/user/my-new-app/source
 
 ${projectMaintenance}`;
@@ -529,29 +555,17 @@ ${formatProjectSection(scopedCodebase, await resolveProjectAssistant(scopedCodeb
   return prompt;
 }
 
-/**
- * Build the run-management section of the orchestrator prompt.
- *
- * Teaches the chat agent it can inspect and control workflow runs directly via
- * the `archon` CLI over bash — the delivery of the `manage-run` skill for
- * providers WITHOUT the in-process `manage_run` tool. Direct chat is the one path
- * where the `skills:` option is NOT consumed (it is workflow-node-only), so the
- * system prompt is the only channel that reaches OpenCode/Copilot. The
- * orchestrator (orchestrator-agent.ts) appends this ONLY for project-scoped chats
- * on non-nativeTools providers — Claude/Codex/Pi use the native tool instead, and the
- * CLI commands require a git-repo cwd that unscoped chats don't have. Invocation
- * inherits the same `archon`-on-PATH convention the `archon` skill already assumes.
- */
-export function buildRunManagementSection(): string {
+/** CLI transport for inspecting and controlling runs in a registered project. */
+export function buildRunManagementSection(codebaseId?: string): string {
   return `## Managing Workflow Runs
 
 You can inspect and control this project's workflow runs directly via the \`archon\` CLI (bash) — you do NOT need to invoke a workflow for run management. Add \`--json\` to any command for a single clean, machine-readable line.
 
-Run these from within the project's git repo (any subdirectory works — they resolve to the repo root, which also scopes \`runs\` and \`status\` to this project). In an unregistered git checkout, \`workflow status\` falls back to install-wide active runs and reports \`scopeFallback: true\` in JSON. A non-repo path such as \`${getArchonWorkspacesPath()}/\` still fails with "Not in a git repository".
+${codebaseId ? `Add \`--${CHAT_PROJECT_ID_ARG} ${JSON.stringify(codebaseId)}\` to every command below so the CLI keeps queries and by-ID operations within the selected project. ` : ''}Run these from the registered project directory (repo or folder). Use its listed path, not the projectless workspace at \`${getArchonWorkspacesPath()}/\`. Queries and by-ID operations stay within this project; do not use \`--all\` or select another project with \`--project\`. Ask the user to switch projects with /setproject <name> when needed.
 
 - \`archon workflow runs [--json]\` — recent runs of ALL statuses for this project
 - \`archon workflow get <run-id> [--json]\` — one run's status/error (add \`--verbose\` for per-node detail)
-- \`archon workflow status [--json]\` — active runs only (running/paused) for this project; add \`--all\` only for install-wide visibility
+- \`archon workflow status [--json]\` — active runs only (running/paused) for this project
 - \`archon workflow run <workflow> "<message>" --detach\` — start a run in the background (returns immediately)
 - \`archon workflow approve <run-id> [comment]\` / \`archon workflow reject <run-id> [reason]\` — resolve a paused approval gate AND continue the run in one step. Pass the user's own words as the comment or reason, never a summary: a workflow may read the comment as the gate node's output, and the reason is what an \`on_reject\` prompt reworks from. Add \`--json\` only when you need a machine-readable ack: \`--json\` records the decision WITHOUT continuing, and you must then drive \`archon workflow resume <run-id>\` yourself or the run stays stranded.
 - \`archon workflow respond <run-id> <decision> [text]\` — same shape as approve/reject, but for a gate that declares decisions beyond the default pair (check the paused run's message for the declared options). \`approve\`/\`reject\` remain the shortcuts above; use \`respond\` only when the gate offers a different vocabulary.
@@ -562,14 +576,7 @@ Run these from within the project's git repo (any subdirectory works — they re
 When the user asks what's running, whether a run passed/failed, or to approve / reject / resume / cancel a run, use these commands directly instead of invoking a workflow. The \`manage-run\` skill has the full reference if it is loaded.`;
 }
 
-/**
- * Build the static orchestrator context string for use as a cacheable system prompt append.
- * Returns the same content as buildOrchestratorPrompt/buildProjectScopedPrompt depending
- * on whether the conversation is scoped to a project, with launch instructions for the
- * given channel. The run-management section is NOT
- * appended here — the orchestrator adds it conditionally (project-scoped + non-nativeTools
- * providers) via buildRunManagementSection().
- */
+/** Build cacheable chat context with the selected launch and run-management transport. */
 export async function buildOrchestratorSystemAppend(
   conversation: Conversation,
   codebases: readonly Codebase[],
@@ -580,7 +587,10 @@ export async function buildOrchestratorSystemAppend(
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;
 
-  return scopedCodebase
+  const prompt = await (scopedCodebase
     ? buildProjectScopedPrompt(scopedCodebase, codebases, workflows, channel)
-    : buildOrchestratorPrompt(codebases, workflows, channel);
+    : buildOrchestratorPrompt(codebases, workflows, channel));
+  return scopedCodebase && channel === 'cli'
+    ? `${prompt}\n\n${buildRunManagementSection(scopedCodebase.id)}`
+    : prompt;
 }

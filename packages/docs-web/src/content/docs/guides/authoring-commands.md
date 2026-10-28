@@ -30,7 +30,7 @@ Shared commands live in `.archon/commands/` relative to the working directory. O
 
 > **Bundled commands live inside their workflow packages:** Commands shipped with Archon sit beside the workflow that uses them, under `.archon/workflows/<pack>/<workflow>/commands/`, and are embedded into the binary at build time. There is no shared bundled command directory. For your own commands use an owning workflow package's `commands/`, `.archon/commands/` (project-scoped), or `~/.archon/commands/` (home-scoped).
 
-> **CLI vs Server:** The CLI reads commands from wherever you run it (sees uncommitted changes). The server reads from `~/.archon/workspaces/owner/repo/`, which only syncs from the remote before worktree creation — so changes must be committed and pushed for the server to pick them up.
+> **CLI vs Server:** The CLI reads commands from wherever you run it, including uncommitted changes. The server uses the registered project's saved checkout path. An existing local registration can point to your checkout or a subdirectory of it, so the server reads local files there. A new webhook registration creates a managed clone at `~/.archon/workspaces/owner/repo/source/`, or at a suffixed path such as `owner/repo-2/source/` when that project name is taken; commit and push changes from another checkout so that clone can receive them when it syncs. Worktree runs use files in their worktree.
 
 Commands use this structure:
 
@@ -229,7 +229,7 @@ Archon replaces variables in command text before sending to the AI. The most com
 |----------|-------|
 | `$ARGUMENTS` / `$USER_MESSAGE` | User's whole input message (positional `$1`/`$2`/`$3` are not supported) |
 | `$ARTIFACTS_DIR` | Pre-created artifacts directory for this workflow run |
-| `$BASE_BRANCH` | Base branch (auto-detected or configured) |
+| `$BASE_BRANCH` | The run's resolved or recorded base branch; see [resolution and child inheritance rules](/reference/variables/#workflow-variables) |
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$WORKFLOW_ID` | Unique workflow run ID |
 | `$CONTEXT` | GitHub issue/PR context (if available) |

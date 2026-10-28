@@ -15,368 +15,51 @@
  *
  * House rules: no `console.*`; all failures surface as `Issue[]` in the panel.
  */
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from 'react';
-import { useNavigate, useParams, useLocation, useSearchParams } from 'react-router';
-import { BuilderPage } from './BuilderPage';
-import { fromWorkflowDefinition, toWorkflowDefinition } from './model';
-import { runValidation } from './validation';
-import { makeIssue } from './validation/make-issue';
-import { useBuilderProject } from './connect/use-builder-project';
-import {
-  blockingErrors,
-  clientIssue,
-  errorToIssues,
-  isReadOnlySource,
-  isValidWorkflowName,
-  planRename,
-  renameReasonMessage,
-  saveTargetFor,
-  validationFailureToIssues,
-} from './connect/save-logic';
-import type {
-  BuilderWorkflow,
-  BuilderWorkflowDefinition,
-  Issue,
-  WireWorkflowDefinition,
-} from './types';
-import {
-  loadWorkflow,
-  saveWorkflow,
-  deleteWorkflow,
-  validateWorkflow,
-  listWorkflows,
-  isInstalledPackWorkflow,
-  type WorkflowLoad,
-} from '../skills/workflows';
-import { listProjects, type WorkflowListResult } from '../skills';
-import { useEntity, invalidate } from '../store/cache';
-import { K } from '../store/keys';
-import { HttpError, errorDetail } from '../lib/http';
-import type { Project } from '../primitives/project';
-import type { Workflow } from '../primitives/workflow';
-
-/** Router navigation state carried into the connected route. */
-interface BuilderNavState {
-  /** A freshly-seeded workflow for create mode (no server load). */
-  createSeed?: BuilderWorkflow;
-  /** Non-fatal notices to seed the panel after a navigation (e.g. rename delete-failed). */
-  notices?: Issue[];
-}
-
-const IDLE_LIST_KEY = 'workflows:idle';
-
-function EmptyState({ children }: { children: ReactNode }): ReactElement {
-  return (
-    <div className="flex h-full items-center justify-center p-8 text-center text-[12.5px] text-text-tertiary">
-      <div className="max-w-md">{children}</div>
-    </div>
-  );
-}
+import { useCallback, useMemo, type ReactElement } from 'react';
+import { useNavigate, useParams, useLocation } from 'react-router';
+import { useBuilderProject, useProjectSearchParam } from './connect/use-builder-project';
+import { useBuilderLoad, type BuilderNavState } from './connect/use-builder-load';
+import { useBuilderEditor } from './connect/use-builder-editor';
+import { useBuilderActions } from './connect/use-builder-actions';
+import { BuilderHeader } from './connect/BuilderHeader';
+import { BuilderBody } from './connect/BuilderBody';
 
 export function BuilderConnected(): ReactElement {
   const { name } = useParams<{ name?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams, setSearchParams] = useSearchParams();
   const { projectId, setProjectId } = useBuilderProject();
+  useProjectSearchParam(projectId);
 
   const navState = location.state as BuilderNavState | null;
-  const createSeed =
-    navState?.createSeed !== undefined && navState.createSeed.name === name
-      ? navState.createSeed
-      : undefined;
-  const isCreateMode = createSeed !== undefined && name !== undefined;
+  const load = useBuilderLoad(name, projectId, navState);
+  const { cwd, existingNames, isCreateMode, imported } = load;
 
-  const projectsView = useEntity<Project[]>(K.projects, () => listProjects());
-  const projects = projectsView.data ?? [];
-  const selectedProject = projects.find(p => p.id === projectId);
-  const cwd = selectedProject?.path;
-
-  // Keep `?project=` in sync with the selected project so a deep-link reload
-  // restores the cwd. Guarded to only write when it actually differs (no loop).
-  useEffect(() => {
-    if (projectId !== undefined && searchParams.get('project') !== projectId) {
-      const next = new URLSearchParams(searchParams);
-      next.set('project', projectId);
-      setSearchParams(next, { replace: true });
-    }
-  }, [projectId, searchParams, setSearchParams]);
-
-  // Workflow list for the open-picker + rename collision checks.
-  const listKey = cwd !== undefined ? K.workflows(cwd) : IDLE_LIST_KEY;
-  const listView = useEntity<WorkflowListResult>(listKey, () =>
-    cwd !== undefined ? listWorkflows(cwd) : Promise.resolve({ workflows: [], recommended: [] })
-  );
-  const existingNames = useMemo(
-    () => (listView.data?.workflows ?? []).map(w => w.name),
-    [listView.data]
-  );
-
-  // Single-workflow load (skipped in create mode — the seed is authoritative).
-  const idle = name === undefined || cwd === undefined || isCreateMode;
-  const loadKey =
-    idle || cwd === undefined || name === undefined ? 'builder:idle' : K.workflow(cwd, name);
-  const loadView = useEntity<WorkflowLoad | null>(loadKey, () =>
-    idle || cwd === undefined || name === undefined
-      ? Promise.resolve<WorkflowLoad | null>(null)
-      : loadWorkflow(name, cwd)
-  );
-  const loaded = loadView.data ?? null;
-  const installedPack = loaded !== null && isInstalledPackWorkflow(loaded);
-  const loadedDefinition = loaded !== null && !isInstalledPackWorkflow(loaded) ? loaded : null;
-
-  // Resolve the workflow under edit (seed in create mode, else the server load).
-  // Memoized on stable inputs (location-state seed, cache object) so it does NOT
-  // produce a fresh identity every render — that would thrash the reset effect.
-  // Widened to `Workflow['source']` (#2578) so an unrecognised wire value passes
-  // through to `effectiveSource` (and the downstream `isReadOnlySource` /
-  // `saveTargetFor` helpers) without a cast at this seam.
-  const loadedSource: Workflow['source'] = isCreateMode
-    ? 'project'
-    : (loadedDefinition?.source ?? 'project');
-
-  const imported = useMemo<{ workflow: BuilderWorkflow; issues: Issue[] } | null>(() => {
-    if (isCreateMode && createSeed !== undefined) return { workflow: createSeed, issues: [] };
-    if (loadedDefinition !== null) return fromWorkflowDefinition(loadedDefinition.definition);
-    return null;
-  }, [isCreateMode, createSeed, loadedDefinition]);
-
-  // Editing state — reset whenever the imported workflow changes (workflow switch).
-  const [currentWorkflow, setCurrentWorkflow] = useState<BuilderWorkflow | null>(null);
-  const [dirty, setDirty] = useState(false);
-  const [serverIssues, setServerIssues] = useState<Issue[]>([]);
-  // Source can flip after a bundled Save-as (bundled → project override).
-  // Widened to `Workflow['source']` (#2578) to match `loadedSource` /
-  // `LoadedWorkflow.source` — `saveWorkflow` returns whatever the server put on
-  // the response, which is `Workflow['source']`-typed.
-  const [sourceOverride, setSourceOverride] = useState<Workflow['source'] | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const effectiveSource = sourceOverride ?? loadedSource;
-  const readOnly = isReadOnlySource(effectiveSource);
-
-  // Initialize editing state ONCE per editor identity (cwd + name + mode), not on
-  // every `imported` identity change. A successful Save invalidates the workflow
-  // cache, which re-runs the loader and yields a fresh `imported` for the SAME
-  // workflow; resetting on that refetch would clobber live edits and silently
-  // clear `dirty` in the window between Save resolving and the refetch landing.
-  // BuilderPage is keyed by the same identity, so it remounts in lockstep. When
-  // `imported` becomes null (picker view / still loading) the ref is cleared so
-  // the next load re-initializes cleanly.
   const editorKey = `${cwd ?? ''}:${name ?? ''}:${String(isCreateMode)}`;
-  const initedKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (imported === null) {
-      // No workflow open (picker view, or still loading) — return to a clean
-      // closed state so the dirty flag / beforeunload guard don't linger.
-      initedKeyRef.current = null;
-      setCurrentWorkflow(null);
-      setDirty(false);
-      setSourceOverride(null);
-      return;
-    }
-    if (initedKeyRef.current === editorKey) return; // same workflow refetched — keep edits
-    initedKeyRef.current = editorKey;
-    setCurrentWorkflow(imported.workflow);
-    setDirty(isCreateMode);
-    setSourceOverride(null);
-    setServerIssues(navState?.notices ?? []);
-  }, [imported, editorKey, isCreateMode, navState?.notices]);
-
-  // beforeunload guard (reload/tab-close) — armed only while dirty.
-  useEffect(() => {
-    if (!dirty) return undefined;
-    const handler = (e: BeforeUnloadEvent): void => {
-      e.preventDefault();
-      e.returnValue = '';
-    };
-    window.addEventListener('beforeunload', handler);
-    return (): void => {
-      window.removeEventListener('beforeunload', handler);
-    };
-  }, [dirty]);
-
-  const confirmIfDirty = useCallback(
-    (action: () => void): void => {
-      if (dirty && !window.confirm('You have unsaved changes. Discard them?')) return;
-      action();
-    },
-    [dirty]
-  );
-
-  const handleChange = useCallback((bw: BuilderWorkflow): void => {
-    setCurrentWorkflow(bw);
-    setDirty(true);
-  }, []);
-
-  const extraIssues = useMemo(
-    () => [...(imported?.issues ?? []), ...serverIssues],
-    [imported, serverIssues]
-  );
+  const editor = useBuilderEditor({
+    imported,
+    editorKey,
+    isCreateMode,
+    loadedSource: load.loadedSource,
+    notices: navState?.notices,
+  });
+  const { confirmIfDirty, readOnly } = editor;
 
   const projectQuery = `?project=${encodeURIComponent(projectId ?? '')}`;
-
-  // --- Save ----------------------------------------------------------------
-  const doSave = useCallback(async (): Promise<void> => {
-    if (currentWorkflow === null || cwd === undefined || name === undefined) return;
-    // Force the in-YAML name to match the route name so filename and `name:` stay in sync.
-    const draft: BuilderWorkflowDefinition = { ...toWorkflowDefinition(currentWorkflow), name };
-
-    const blocking = blockingErrors(runValidation(currentWorkflow));
-    if (blocking.length > 0) {
-      setServerIssues([
-        clientIssue(
-          'save.blocked',
-          `Cannot save: fix ${String(blocking.length)} blocking error(s) first.`
-        ),
-      ]);
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const validation = await validateWorkflow(draft);
-      if (!validation.valid) {
-        setServerIssues(validationFailureToIssues(validation.errors));
-        return;
-      }
-      // The server validated this exact draft against the workflow wire schema.
-      const definition = draft as WireWorkflowDefinition;
-      const saved = await saveWorkflow(name, definition, {
-        cwd,
-        source: saveTargetFor(effectiveSource),
-      });
-      setServerIssues([]);
-      setDirty(false);
-      setSourceOverride(saved.source);
-      invalidate(K.workflows(cwd));
-      invalidate(K.workflow(cwd, name));
-      // A just-created workflow now exists on disk — drop the create-mode seed
-      // from the route so it reloads as a normal project workflow (enabling
-      // Rename/Delete). `replace` keeps history clean.
-      if (isCreateMode) {
-        navigate(`/console/builder/${encodeURIComponent(name)}${projectQuery}`, { replace: true });
-      }
-    } catch (e) {
-      setServerIssues(errorToIssues(e, 'save.failed', 'Save failed (unknown error).'));
-    } finally {
-      setBusy(false);
-    }
-  }, [currentWorkflow, cwd, name, effectiveSource, isCreateMode, navigate, projectQuery]);
-
-  // --- Delete --------------------------------------------------------------
-  const doDelete = useCallback(async (): Promise<void> => {
-    if (name === undefined || cwd === undefined) return;
-    if (!window.confirm(`Delete workflow "${name}"? This removes the YAML file.`)) return;
-    setBusy(true);
-    try {
-      await deleteWorkflow(name, { cwd, source: saveTargetFor(effectiveSource) });
-      invalidate(K.workflows(cwd));
-      invalidate(K.workflow(cwd, name));
-      navigate(`/console/builder${projectQuery}`);
-    } catch (e) {
-      setServerIssues(errorToIssues(e, 'delete.failed', 'Delete failed (unknown error).'));
-    } finally {
-      // The success path navigates away, but this route reuses one component
-      // instance across `builder` and `builder/:name`, so clear busy either way.
-      setBusy(false);
-    }
-  }, [name, cwd, effectiveSource, navigate, projectQuery]);
-
-  // --- Rename --------------------------------------------------------------
-  const doRename = useCallback(async (): Promise<void> => {
-    if (name === undefined || cwd === undefined || currentWorkflow === null) return;
-    const raw = window.prompt('Rename workflow to:', name);
-    if (raw === null) return;
-    const to = raw.trim();
-    const plan = planRename({ from: name, to, existingNames });
-    if (!plan.ok) {
-      setServerIssues([clientIssue('rename.blocked', renameReasonMessage(plan.reason, to))]);
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const draft: BuilderWorkflowDefinition = {
-        ...toWorkflowDefinition(currentWorkflow),
-        name: to,
-      };
-      const validation = await validateWorkflow(draft);
-      if (!validation.valid) {
-        setServerIssues(validationFailureToIssues(validation.errors));
-        return;
-      }
-      // The server validated this exact draft against the workflow wire schema.
-      const definition = draft as WireWorkflowDefinition;
-      // New-then-old: the new file is authoritative even if the old delete fails.
-      await saveWorkflow(to, definition, { cwd, source: saveTargetFor(effectiveSource) });
-      let notices: Issue[] = [];
-      try {
-        await deleteWorkflow(name, { cwd, source: saveTargetFor(effectiveSource) });
-      } catch (delErr) {
-        notices = [
-          makeIssue({
-            rule: 'rename.delete.failed',
-            severity: 'warning',
-            source: 'server',
-            message: `Renamed to "${to}", but removing the old file "${name}" failed (${errorDetail(delErr)}). Delete it manually.`,
-            path: {},
-          }),
-        ];
-      }
-      invalidate(K.workflows(cwd));
-      invalidate(K.workflow(cwd, name));
-      invalidate(K.workflow(cwd, to));
-      setDirty(false);
-      navigate(`/console/builder/${encodeURIComponent(to)}${projectQuery}`, {
-        state: notices.length > 0 ? ({ notices } satisfies BuilderNavState) : undefined,
-      });
-    } catch (e) {
-      setServerIssues(errorToIssues(e, 'rename.failed', 'Rename failed (unknown error).'));
-    } finally {
-      setBusy(false);
-    }
-  }, [name, cwd, currentWorkflow, existingNames, effectiveSource, navigate, projectQuery]);
-
-  // --- New -----------------------------------------------------------------
-  const doNew = useCallback((): void => {
-    if (cwd === undefined) return;
-    const raw = window.prompt('New workflow name:', '');
-    if (raw === null) return;
-    const nm = raw.trim();
-    if (!isValidWorkflowName(nm)) {
-      setServerIssues([clientIssue('new.invalid-name', renameReasonMessage('invalid-name', nm))]);
-      return;
-    }
-    if (existingNames.includes(nm)) {
-      setServerIssues([clientIssue('new.collision', renameReasonMessage('collision', nm))]);
-      return;
-    }
-    const seed: BuilderWorkflow = {
-      name: nm,
-      description: 'New workflow.',
-      meta: {},
-      nodes: [
-        {
-          id: 'step-1',
-          variant: 'prompt',
-          base: {},
-          data: { prompt: 'Describe what this step should do.' },
-        },
-      ],
-    };
-    navigate(`/console/builder/${encodeURIComponent(nm)}${projectQuery}`, {
-      state: { createSeed: seed } satisfies BuilderNavState,
-    });
-  }, [cwd, existingNames, navigate, projectQuery]);
+  const { doSave, doDelete, doRename, doNew } = useBuilderActions({
+    name,
+    cwd,
+    currentWorkflow: editor.currentWorkflow,
+    existingNames,
+    effectiveSource: editor.effectiveSource,
+    isCreateMode,
+    projectQuery,
+    navigate,
+    setServerIssues: editor.setServerIssues,
+    setDirty: editor.setDirty,
+    setSourceOverride: editor.setSourceOverride,
+    setBusy: editor.setBusy,
+  });
 
   // --- Navigation controls (dirty-guarded) ---------------------------------
   const onPickProject = useCallback(
@@ -406,6 +89,10 @@ export function BuilderConnected(): ReactElement {
     [confirmIfDirty, navigate, projectQuery, name]
   );
 
+  const onNew = useCallback((): void => {
+    confirmIfDirty(doNew);
+  }, [confirmIfDirty, doNew]);
+
   // Ensure the currently-open name is selectable even when it isn't in the list
   // yet — e.g. a create-mode name (no file on disk), or before the list fetch
   // resolves. Dedupe.
@@ -415,125 +102,40 @@ export function BuilderConnected(): ReactElement {
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [existingNames, name]);
 
-  const saveLabel = readOnly ? 'Save as' : 'Save';
-  const canSave = !busy && (readOnly || dirty || isCreateMode);
   const workflowOpen = name !== undefined && imported !== null;
-  // Split a genuine 404 (workflow doesn't exist → offer New) from other load
-  // failures (500/403/network) — the latter must NOT masquerade as "not found",
-  // which would mislead and invite a duplicate via "Create a new workflow".
-  const loadError = name !== undefined && !isCreateMode ? loadView.error : undefined;
-  const notFound = loadError instanceof HttpError && loadError.status === 404;
-  const workflowLoadError = loadError !== undefined && !notFound ? loadError : undefined;
-  // Surface list-load failures instead of masking them as empty states — a
-  // transient backend error otherwise reads as "no projects / no workflows".
-  const listFetchError = projectsView.error ?? listView.error;
+  const { listFetchError } = load;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
-        <h1 className="text-[14px] font-semibold text-text-primary">Workflow Builder</h1>
-        <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-tertiary">
-          beta
-        </span>
-
-        <label className="flex items-center gap-2 text-[11.5px] text-text-tertiary">
-          Project
-          <select
-            value={projectId ?? ''}
-            onChange={(e): void => {
-              onPickProject(e.target.value);
-            }}
-            className="max-w-[220px] rounded-[8px] border border-border bg-surface px-2 py-1 font-mono text-[12px] text-text-primary outline-none focus:border-accent-bright/60"
-          >
-            <option value="">Select a project…</option>
-            {projects.map(p => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {cwd !== undefined ? (
-          <label className="flex items-center gap-2 text-[11.5px] text-text-tertiary">
-            Workflow
-            <select
-              value={name ?? ''}
-              onChange={(e): void => {
-                onOpenWorkflow(e.target.value);
-              }}
-              className="max-w-[220px] rounded-[8px] border border-border bg-surface px-2 py-1 font-mono text-[12px] text-text-primary outline-none focus:border-accent-bright/60"
-            >
-              <option value="">Open a workflow…</option>
-              {openOptions.map(n => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-
-        {cwd !== undefined ? (
-          <button
-            type="button"
-            onClick={(): void => {
-              confirmIfDirty(doNew);
-            }}
-            className="rounded-[8px] border border-border bg-surface px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-          >
-            New
-          </button>
-        ) : null}
-
-        <div className="flex-1" />
-
-        {workflowOpen ? (
-          <div className="flex items-center gap-2">
-            {dirty ? (
-              <span
-                title="Unsaved changes"
-                aria-label="Unsaved changes"
-                className="h-2 w-2 rounded-full bg-warning"
-              />
-            ) : null}
-            <button
-              type="button"
-              disabled={!canSave}
-              onClick={(): void => {
-                void doSave();
-              }}
-              className="rounded-[8px] bg-accent-bright px-3 py-1 text-[12px] font-semibold text-white/95 transition-opacity hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
-            >
-              {saveLabel}
-            </button>
-            {!isCreateMode ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={(): void => {
+      <BuilderHeader
+        projects={load.projects}
+        projectId={projectId}
+        cwd={cwd}
+        name={name}
+        openOptions={openOptions}
+        onPickProject={onPickProject}
+        onOpenWorkflow={onOpenWorkflow}
+        onNew={onNew}
+        controls={
+          workflowOpen
+            ? {
+                dirty: editor.dirty,
+                busy: editor.busy,
+                readOnly,
+                isCreateMode,
+                onSave: (): void => {
+                  void doSave();
+                },
+                onRename: (): void => {
                   void doRename();
-                }}
-                className="rounded-[8px] border border-border bg-surface px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40"
-              >
-                Rename
-              </button>
-            ) : null}
-            {!readOnly && !isCreateMode ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={(): void => {
+                },
+                onDelete: (): void => {
                   void doDelete();
-                }}
-                className="rounded-[8px] px-2.5 py-1 text-[12px] text-error transition-colors hover:bg-error/10 disabled:opacity-40"
-              >
-                Delete
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </header>
+                },
+              }
+            : null
+        }
+      />
 
       {listFetchError !== undefined ? (
         <div
@@ -552,82 +154,21 @@ export function BuilderConnected(): ReactElement {
       ) : null}
 
       <div className="min-h-0 flex-1">
-        {selectedProject === undefined ? (
-          <EmptyState>
-            Select a project to load its workflows. Workflows are discovered and saved per project
-            (the project's <span className="font-mono">cwd</span>).
-          </EmptyState>
-        ) : workflowLoadError !== undefined ? (
-          <EmptyState>
-            <p>
-              Failed to load <span className="font-mono">{name}</span>:{' '}
-              {errorDetail(workflowLoadError)}
-            </p>
-            <p className="mt-2">
-              The workflow may still exist — retry once the server is reachable.
-            </p>
-          </EmptyState>
-        ) : notFound ? (
-          <EmptyState>
-            <p>
-              No workflow named <span className="font-mono">{name}</span> was found in{' '}
-              <span className="font-mono">{selectedProject.name}</span>.
-            </p>
-            <p className="mt-2">
-              It may live in a subfolder (not loadable via the single-name route) or not exist yet.
-            </p>
-            <button
-              type="button"
-              onClick={(): void => {
-                confirmIfDirty(doNew);
-              }}
-              className="mt-3 rounded-[8px] border border-border bg-surface px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-            >
-              Create a new workflow
-            </button>
-          </EmptyState>
-        ) : name === undefined ? (
-          existingNames.length === 0 ? (
-            <EmptyState>
-              <p>
-                <span className="font-mono">{selectedProject.name}</span> has no project workflows
-                yet.
-              </p>
-              <button
-                type="button"
-                onClick={doNew}
-                className="mt-3 rounded-[8px] border border-border bg-surface px-2.5 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-              >
-                Create the first workflow
-              </button>
-            </EmptyState>
-          ) : (
-            <EmptyState>
-              Pick a workflow from the <span className="font-semibold">Workflow</span> menu above to
-              start editing, or create a new one.
-            </EmptyState>
-          )
-        ) : installedPack ? (
-          <EmptyState>
-            <p>
-              <span className="font-mono">{name}</span> is installed from a pack — read-only.
-            </p>
-            <p className="mt-2">
-              The builder cannot edit it. Update the pack with{' '}
-              <span className="font-mono">archon plugin update</span>, or make an editable project
-              copy with <span className="font-mono">archon plugin copy</span>.
-            </p>
-          </EmptyState>
-        ) : imported !== null && currentWorkflow !== null ? (
-          <BuilderPage
-            key={editorKey}
-            initialWorkflow={imported.workflow}
-            onChange={handleChange}
-            extraIssues={extraIssues}
-          />
-        ) : (
-          <EmptyState>Loading workflow…</EmptyState>
-        )}
+        <BuilderBody
+          selectedProject={load.selectedProject}
+          name={name}
+          workflowLoadError={load.workflowLoadError}
+          notFound={load.notFound}
+          installedPack={load.installedPack}
+          existingNames={existingNames}
+          imported={imported}
+          currentWorkflow={editor.currentWorkflow}
+          editorKey={editorKey}
+          extraIssues={editor.extraIssues}
+          onChange={editor.handleChange}
+          onNew={onNew}
+          onCreateFirst={doNew}
+        />
       </div>
     </div>
   );

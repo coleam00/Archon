@@ -1,20 +1,24 @@
+// @archon-test-isolated
+import { WorkflowExecutionHandoffError } from './engine-port';
 /**
  * Wires the shared `IWorkflowEngine` contract-test suite
  * (`engine-contract-tests.ts`) against `InProcessWorkflowEngine`
  * (issue #3334).
  *
- * Mock setup mirrors `executor.test.ts`'s "Mock ... / Import after mocks"
- * convention — `InProcessWorkflowEngine` delegates straight through to the
+ * Mock setup mirrors `executor/test-utils.ts`, the scaffolding of the
+ * `executor.*.test.ts` files — `InProcessWorkflowEngine` delegates straight through to the
  * real `executeWorkflow`/`hydrateResumableRun`, so the same fs/git/dag-executor
  * seams need stubbing here too. This file deliberately does NOT mock
  * `./executor` or `@archon/workflows/executor` itself.
  */
 import { providerRegistry } from '@archon/providers';
-import { afterEach, describe, expect, it, mock } from 'bun:test';
-import { mkdtemp } from 'node:fs/promises';
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { getRunArtifactsDirForRoot, getRunScratchDir } from '@archon/paths/archon-paths';
 
 // --- Mock logger ---
 const mockLogFn = mock(() => {});
@@ -73,7 +77,7 @@ mock.module('@archon/git', () => ({
 }));
 
 // --- Mock dag-executor: the DAG loop itself is out of scope for this suite
-// (dag-executor.test.ts / subrun.test.ts own that); this suite only proves
+// (dag-executor.test.ts / child-runs.*.test.ts own that); this suite only proves
 // the InProcessWorkflowEngine -> executeWorkflow/hydrateResumableRun wiring. ---
 type ExecuteDagWorkflow = typeof import('./dag-executor').executeDagWorkflow;
 let executedWorkflow: Parameters<ExecuteDagWorkflow>[0]['workflow'] | undefined;
@@ -85,10 +89,6 @@ const mockExecuteDagWorkflow = mock<ExecuteDagWorkflow>(async input => {
 });
 mock.module('./dag-executor', () => ({
   executeDagWorkflow: mockExecuteDagWorkflow,
-  childOutcomeFromRun: mock((run: { id: string; status: string }) => ({
-    childRunId: run.id,
-    status: run.status,
-  })),
 }));
 
 mock.module('./logger', () => ({
@@ -106,7 +106,7 @@ mock.module('./event-emitter', () => ({
   getWorkflowEventEmitter: mock(() => mockEmitter),
 }));
 
-// --- Bootstrap provider registry (after path mocks), same as executor.test.ts ---
+// --- Bootstrap provider registry (after path mocks), same as executor/test-utils.ts ---
 import { clearRegistry } from '@archon/providers';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 clearRegistry();
@@ -121,16 +121,19 @@ import { createFileWorkflowStore } from './file-store';
 import { resolveWorkflow } from './graph-plan';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import type { WorkflowRunDelivery } from './engine-port';
-import type { IWorkflowStore } from './store';
+import { executionClaim, type IWorkflowStore } from './store';
 
 runWorkflowEngineContractTests(providerRegistry, deps => new InProcessWorkflowEngine(deps), {
   executedWorkflow: () => executedWorkflow,
 });
 
-describe('InProcessWorkflowEngine.subscribe', () => {
+describe('InProcessWorkflowEngine', () => {
   const roots = trackTempRoots();
+  const originalArchonHome = process.env.ARCHON_HOME;
   afterEach(() => {
     dagBody = undefined;
+    if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = originalArchonHome;
   });
 
   const platform = {
@@ -184,6 +187,113 @@ describe('InProcessWorkflowEngine.subscribe', () => {
     deliveries
       .filter(({ event }) => event.event_type.startsWith('workflow_') || event.step_name)
       .map(({ event }) => `${event.workflow_run_id}:${event.event_type}:${event.step_name ?? ''}`);
+
+  it.each(['read', 'post-publication', 'pre-publication'] as const)(
+    'preserves ownership across a %s rejection on resume',
+    async kind => {
+      const { engine, store } = await makeEngine();
+      const run = await store.createWorkflowRun({ workflow_name: parent.name, user_message: '' });
+      await completeNode(store, run.id, 'first');
+      await store.failWorkflowRun(run.id, 'interrupted');
+      const failed = await store.getWorkflowRun(run.id);
+      if (failed?.status !== 'failed') throw new Error('expected failed run');
+      const cause = new Error('required operation failed');
+      let read: ReturnType<typeof spyOn> | undefined;
+      dagBody = async ({ workflowRun }) => {
+        if (kind === 'pre-publication') throw cause;
+        const context = {
+          type: 'approval' as const,
+          nodeId: 'review',
+          message: '',
+          pauseId: 'published',
+        };
+        await store.pauseWorkflowRun(workflowRun.id, context);
+        await store.resumeWorkflowRun(workflowRun.id);
+        if (kind === 'read') {
+          const get = store.getWorkflowRun.bind(store);
+          read = spyOn(store, 'getWorkflowRun')
+            .mockImplementation(get)
+            .mockImplementationOnce(async () => {
+              throw cause;
+            });
+        }
+        if (kind === 'post-publication')
+          throw new WorkflowExecutionHandoffError(workflowRun.id, cause);
+        return {
+          kind: 'container_pause',
+          pause: { kind: 'gate', context },
+        };
+      };
+      try {
+        const admission = await engine.resume({
+          platform,
+          conversationId: 'conv-1',
+          cwd: '/tmp/ops',
+          userMessage: '',
+          run: failed,
+          legacyWorkflow: parent,
+        });
+        if (!admission.accepted) throw new Error('expected resume');
+        if (kind === 'pre-publication') {
+          expect(await admission.settled).toMatchObject({ success: false, error: cause.message });
+        } else {
+          await expect(admission.settled).rejects.toMatchObject({
+            name: 'WorkflowExecutionHandoffError',
+            workflowRunId: run.id,
+            cause,
+          });
+        }
+        expect(await store.getWorkflowRunStatus(run.id)).toBe(
+          kind === 'pre-publication' ? 'failed' : 'running'
+        );
+      } finally {
+        read?.mockRestore();
+      }
+    }
+  );
+
+  it('resume settles before the host drains scratch cleanup', async () => {
+    const { engine, store } = await makeEngine();
+    const home = roots(await mkdtemp(join(tmpdir(), 'archon-engine-resume-scratch-')));
+    process.env.ARCHON_HOME = home;
+    const root = join(home, 'project');
+    const run = await store.createWorkflowRun({
+      workflow_name: parent.name,
+      user_message: '',
+    });
+    await store.updateWorkflowRun(run.id, { output_root: root });
+    await completeNode(store, run.id, 'first');
+    await store.failWorkflowRun(run.id, 'interrupted');
+    const failed = await store.getWorkflowRun(run.id);
+    if (failed?.status !== 'failed') throw new Error('expected a failed run');
+    const scratch = getRunScratchDir(getRunArtifactsDirForRoot(root, run.id));
+    await mkdir(scratch, { recursive: true });
+    dagBody = async ({ deps, workflowRun }) => {
+      await completeNode(deps.store, workflowRun.id, 'child');
+      await deps.store.completeWorkflowRun(workflowRun.id, { duration_ms: 1 });
+      return undefined;
+    };
+    const cleanups: (() => Promise<void>)[] = [];
+
+    const admission = await engine.resume({
+      platform,
+      conversationId: 'conv-1',
+      cwd: root,
+      userMessage: '',
+      run: failed,
+      legacyWorkflow: parent,
+      options: { deferScratchCleanup: cleanup => cleanups.push(cleanup) },
+    });
+    if (!admission.accepted) throw new Error('expected resume');
+    const result = await admission.settled;
+
+    expect(result).toMatchObject({ success: true, workflowRunId: run.id });
+    expect(await store.getWorkflowRunStatus(run.id)).toBe('completed');
+    expect(cleanups).toHaveLength(1);
+    expect(existsSync(scratch)).toBe(true);
+    await Promise.all(cleanups.map(cleanup => cleanup()));
+    expect(existsSync(scratch)).toBe(false);
+  });
 
   it('delivers the run and its workflow child in commit order', async () => {
     const { engine, store } = await makeEngine();
@@ -246,7 +356,13 @@ describe('InProcessWorkflowEngine.subscribe', () => {
 
   it('a subscription opened before resume sees only the new segment', async () => {
     const { engine, store } = await makeEngine();
+    const claims: (string | null)[] = [];
+    const onExecutionClaimed = (claim: string | null): void => {
+      claims.push(claim);
+    };
     dagBody = async ({ deps, workflowRun, priorCompletedNodes }) => {
+      expect(claims).toHaveLength(priorCompletedNodes?.has('first') ? 2 : 1);
+      expect(claims.at(-1)).toBe(executionClaim(workflowRun.metadata));
       if (priorCompletedNodes?.has('first')) {
         await completeNode(deps.store, workflowRun.id, 'child');
         await deps.store.completeWorkflowRun(workflowRun.id, { duration_ms: 1 });
@@ -262,6 +378,7 @@ describe('InProcessWorkflowEngine.subscribe', () => {
       cwd: '/tmp/ops',
       workflow: parent,
       userMessage: '',
+      options: { onExecutionClaimed },
     });
     const failed = await store.getWorkflowRun(first.workflowRunId ?? '');
     if (failed?.status !== 'failed') throw new Error('expected a failed first segment');
@@ -275,9 +392,12 @@ describe('InProcessWorkflowEngine.subscribe', () => {
       userMessage: '',
       run: failed,
       legacyWorkflow: parent,
+      options: { onExecutionClaimed },
     });
     if (!admission.accepted) throw new Error('expected resume');
     await admission.settled;
+    expect(claims[0]).toBeNull();
+    expect(typeof claims[1]).toBe('string');
     await subscription.close();
 
     expect(lifecycle(deliveries)).toEqual([

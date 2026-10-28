@@ -17,6 +17,9 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import {
+  ISOLATION_PROVIDER_TYPES,
+  ISOLATION_WORKFLOW_TYPES,
+  ENVIRONMENT_STATUSES,
   WORKTREE_REGISTRATION_ID,
   WorktreeRegistrationChangedError,
   sameWorktreeRegistration,
@@ -33,7 +36,7 @@ import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
 import { completedRunWorktreeDeps, createWorkflowDeps } from './store-adapter';
-import type { WorktreeOwnershipReaders } from '../services/cleanup-service';
+import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
 import { runOwnerLossWatch } from '../services/run-attention-watch';
@@ -52,12 +55,12 @@ export const isolationSchema = z.array(
   z.object({
     id: z.string(),
     codebase_id: z.string(),
-    workflow_type: z.enum(['issue', 'pr', 'review', 'thread', 'task']),
+    workflow_type: z.enum(ISOLATION_WORKFLOW_TYPES),
     workflow_id: z.string(),
-    provider: z.enum(['worktree', 'container', 'vm', 'remote']),
+    provider: z.enum(ISOLATION_PROVIDER_TYPES),
     working_path: z.string(),
     branch_name: z.string(),
-    status: z.enum(['active', 'destroyed']),
+    status: z.enum(ENVIRONMENT_STATUSES),
     created_at: z.coerce.date(),
     created_by_platform: z.string().nullable(),
     created_by_user_id: z.string().nullable(),
@@ -293,6 +296,18 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
           row.status = 'destroyed';
           return { result: undefined, changes: { documents: { 'host/isolation.json': rows } } };
         }),
+      withWorktreeRegistration: (observed, remove) =>
+        commit(root, 'all', async () => {
+          const rows = await environments();
+          const row = rows.find(row => row.id === observed.id);
+          if (!row || row.status !== 'active' || !sameWorktreeRegistration(row, observed)) {
+            throw new WorktreeRegistrationChangedError(observed.id);
+          }
+          const result = await remove(async () => {
+            row.status = 'destroyed';
+          });
+          return { result, changes: { documents: { 'host/isolation.json': rows } } };
+        }),
       countActiveByCodebase: async id => (await records.isolation.listByCodebase(id)).length,
       listActive: async () => (await readEnvironments()).filter(row => row.status === 'active'),
       listByCodebase: async id =>
@@ -310,6 +325,14 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   const store = await createFileWorkflowStore({
     root,
     getCodebase: id => records.codebases.getCodebase(id),
+    listReusableCheckouts: async () =>
+      (await environments())
+        .filter(row => row.status === 'active' && row.workflow_type === 'task')
+        .map(row => ({
+          codebaseId: row.codebase_id,
+          branch: row.workflow_id,
+          workingPath: row.working_path,
+        })),
     isCheckoutReleased: async (run, path) => {
       const matching = (await environments()).filter(
         row =>
@@ -345,7 +368,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   const deps: ReturnType<typeof createWorkflowDeps> = {
     ...createWorkflowDeps(store, 'files'),
     completedRunWorktree: completedRunWorktreeDeps(async () => ({
-      cleanup: await import('../services/cleanup-service'),
+      cleanup: await import('../services/cleanup/run-worktree'),
       store: records.isolation,
       readers: worktreeReaders,
     })),
@@ -365,13 +388,13 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       isRunOwnedByThisProcess,
       isRunOwnerAnswering,
       reclaimRunWorktree: async (run, isolation) =>
-        (await import('../services/cleanup-service')).reclaimRunWorktree(
+        (await import('../services/cleanup/run-worktree')).reclaimRunWorktree(
           run,
           isolation,
           worktreeReaders
         ),
       reclaimContainerEnv: async (id, isolation) =>
-        (await import('../services/cleanup-service')).reclaimContainerEnv(id, isolation),
+        (await import('../services/cleanup/containers')).reclaimContainerEnv(id, isolation),
     }),
   };
 }

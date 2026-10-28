@@ -5,23 +5,42 @@
  * never from the answer's text. The choice's ruling and the person's words are written
  * into the issue body as one dated "Current scope" section and read back, so the next
  * run and its review read the ruling as the contract. Then the answer is recorded on the
- * work item, which says what happens next, and the claim is released.
+ * work item as the item's next owner, and the claim is released: `continue` keeps it in
+ * the build queue, `ready` hands its pull request to the merge queue, and `park` stops
+ * all work until a re-triage. A `continue` then starts the item's next build-queue run
+ * at once, on the run config and input selections this run started with; if that
+ * launch fails, the item waits for the next queue run as before.
  *
  * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE
- * and INPUTS_TEXT, the attention answer.
+ * and INPUTS_TEXT, the attention answer; INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT,
+ * the workflow's inputs.
  */
 
-import { type AskedBy, type BuildAttention, withBuild } from '../../.shared/build.ts';
-import { parseQualifiedPr } from '../../.shared/forge.ts';
+import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, withBuild } from '../../.shared/build.ts';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { chosen, rulingHeading } from '../../.shared/queue.ts';
-import { updateClaimed } from '../../.shared/workitem.ts';
+import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 
 interface Asked {
   readonly attention: BuildAttention;
   readonly brief: string;
   readonly by: AskedBy;
+}
+
+const STATUS = { continue: 'next', ready: 'ready', park: 'parked' } as const satisfies Record<
+  BuildEffect,
+  BuildStatus
+>;
+
+/** Refuse a ready answer before any write when the item has no pull request to hand on. */
+function requireReadyPr(item: QualifiedPr, id: string): void {
+  const doc = readWorkItem(item.number);
+  if (doc === null || itemPullRequest(doc.facts.build?.rounds ?? [], doc.facts.triage, item.repo) === null) {
+    throw new Error(`the ready choice "${id}" hands nothing to the merge queue: issue ${String(item.number)} has no pull request`);
+  }
 }
 
 const ABOUT: Record<AskedBy, string> = {
@@ -39,7 +58,12 @@ function main(): void {
   const choice = chosen(asked.attention, trimmed(process.env.INPUTS_CHOICE));
   const words = trimmed(process.env.INPUTS_TEXT);
   const at = new Date().toISOString();
+  const selections: BuildQueueSelections = {
+    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
+    round_limit: text(process.env.INPUTS_ROUND_LIMIT),
+  };
 
+  if (choice.effect === 'ready') requireReadyPr(item, choice.id);
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')
     .join('\n\n');
@@ -58,21 +82,22 @@ function main(): void {
       entry: {
         at,
         run_id: runId,
-        decision: choice.effect === 'continue' ? 'answered: continue' : 'answered: park',
+        decision: `answered: ${choice.effect}`,
         reason: choice.label,
         links: asked.attention.links,
         answer: { choice: choice.id, text: words, at },
       },
-      status: choice.effect === 'continue' ? 'next' : 'parked',
+      status: STATUS[choice.effect],
       brief,
       release: true,
     })
   );
-  emit({
-    decision: choice.effect,
-    section: heading,
-    summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${choice.effect === 'continue' ? 'the next run launches from the ruling' : 'the queue stops working it until a re-triage'}.`,
-  });
+  const next = {
+    continue: () => launchNextRound(item, runId, selections),
+    ready: () => 'its pull request waits for the merge queue',
+    park: () => 'the queue stops working it until a re-triage',
+  }[choice.effect]();
+  emit({ decision: choice.effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
 }
 
 try {

@@ -10,9 +10,8 @@ implement__implement:
   green: true
   red_cause: ""
   summary: "stub: implemented; focused checks pass"
-implement__assert-changed: "3 files changed"
 pr__forge: { source: forge }
-pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: target recorded" }
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, description: null, summary: "stub: target recorded" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
 review__scope:
@@ -39,6 +38,7 @@ review__publish:
   contract_left: ["acceptance: the console shows the new state (deferred to part 2 by the part assignment)"]
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+threads: { open: 0, summary: "stub: no review thread is unresolved" }
 ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
 update-pr-body: { changed: true, summary: "stub: the issue stays referenced as Refs #1; added the Left open list" }
 fixture:

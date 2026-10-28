@@ -84,13 +84,14 @@ const CONNECTION_STATUSES: Record<McpServerConnectionStatus, true> = {
   disabled: true,
 };
 type McpStatusPage = Pick<ListMcpServerStatusResponse, 'nextCursor'> & {
-  data: Pick<McpServerStatus, 'name' | 'pluginId' | 'runtimeStatus'>[];
+  data: Pick<McpServerStatus, 'name' | 'pluginId' | 'runtimeStatus' | 'toolsError'>[];
 };
 const mcpStatusSchema: z.ZodType<McpStatusPage> = z.object({
   data: z.array(
     z.object({
       name: z.string(),
       pluginId: z.string().nullable(),
+      toolsError: z.string().nullable(),
       // A status this Codex version does not list reads as unknown (null), which the check
       // treats as live: it can pass only for a declared server.
       runtimeStatus: z
@@ -153,29 +154,54 @@ export async function readCodexInventory(
   };
   if (plugins.length === 0) return inventory;
 
+  const installed = await readInstalledPlugins(connection, cwd);
+  inventory.installedPlugins = [...installed.keys()];
+  requireNamedPluginsInstalled(plugins, inventory);
+  inventory.namedPluginServers = await readNamedPluginServers(connection, plugins, installed);
+  return inventory;
+}
+
+type InstalledPlugins = Map<string, { pluginName: string; marketplace: Marketplace }>;
+
+/** The installed plugins of every marketplace, by plugin id. */
+async function readInstalledPlugins(
+  connection: AppServerConnection,
+  cwd: string
+): Promise<InstalledPlugins> {
   const { marketplaces } = await requestScoped(
     connection,
     'plugin/installed',
     { cwds: [cwd] },
     pluginInstalledSchema
   );
-  const installed = new Map<string, { pluginName: string; marketplace: Marketplace }>();
+  const installed: InstalledPlugins = new Map();
   for (const marketplace of marketplaces) {
     for (const plugin of marketplace.plugins) {
       if (plugin.installed) installed.set(plugin.id, { pluginName: plugin.name, marketplace });
     }
   }
-  inventory.installedPlugins = [...installed.keys()];
+  return installed;
+}
 
-  const missing = plugins.filter(id => !installed.has(id));
-  if (missing.length > 0) {
-    throw new ClassifiedProviderError(
-      'misconfigured',
-      `Codex plugin${missing.length === 1 ? '' : 's'} not installed in ${codexHome}: ${missing.join(', ')}. ` +
-        `Installed: ${inventory.installedPlugins.length > 0 ? inventory.installedPlugins.join(', ') : 'none'}. ` +
-        'Name plugins by their exact `name@marketplace` id from `codex plugin list`.'
-    );
-  }
+function requireNamedPluginsInstalled(plugins: readonly string[], inventory: CodexInventory): void {
+  const { codexHome, installedPlugins } = inventory;
+  const missing = plugins.filter(id => !installedPlugins.includes(id));
+  if (missing.length === 0) return;
+  throw new ClassifiedProviderError(
+    'misconfigured',
+    `Codex plugin${missing.length === 1 ? '' : 's'} not installed in ${codexHome}: ${missing.join(', ')}. ` +
+      `Installed: ${installedPlugins.length > 0 ? installedPlugins.join(', ') : 'none'}. ` +
+      'Name plugins by their exact `name@marketplace` id from `codex plugin list`.'
+  );
+}
+
+/** Each named plugin's MCP servers, read in installed order. */
+async function readNamedPluginServers(
+  connection: AppServerConnection,
+  plugins: readonly string[],
+  installed: InstalledPlugins
+): Promise<CodexInventory['namedPluginServers']> {
+  const servers: CodexInventory['namedPluginServers'] = {};
   for (const [id, { pluginName, marketplace }] of installed) {
     if (!plugins.includes(id)) continue;
     const detail = await requestScoped(
@@ -186,9 +212,9 @@ export async function readCodexInventory(
         : { pluginName, remoteMarketplaceName: marketplace.name },
       pluginReadSchema
     );
-    inventory.namedPluginServers[id] = detail.plugin.mcpServers;
+    servers[id] = detail.plugin.mcpServers;
   }
-  return inventory;
+  return servers;
 }
 
 /**
@@ -225,7 +251,7 @@ export function applyNodeScope(
     ...config,
     // A named plugin turns plugins on for the thread even when the user turned them off
     // globally: the node asked for it, and every other plugin is switched off below.
-    features: { apps: false, plugins: plugins.length > 0 },
+    features: { ...objectAt(config.features), apps: false, plugins: plugins.length > 0 },
   };
   if (Object.keys(mcpServers).length > 0) scoped.mcp_servers = mcpServers;
   if (plugins.length > 0) {
@@ -242,9 +268,12 @@ export function applyNodeScope(
 }
 
 /** The MCP servers the node declares: the `mcp_servers` the provider built from its `mcp:` file. */
-function declaredServers(config: ThreadConfig): JsonObject {
-  const servers = config.mcp_servers;
-  return typeof servers === 'object' && servers !== null && !Array.isArray(servers) ? servers : {};
+export function declaredServers(config: ThreadConfig): JsonObject {
+  return objectAt(config.mcp_servers);
+}
+
+function objectAt(value: JsonValue | undefined): JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value : {};
 }
 
 /**
@@ -261,23 +290,13 @@ export async function checkThreadMcpScope(
 ): Promise<void> {
   const allowed = new Set(declared);
   const unexpected: string[] = [];
-  let cursor: string | null = null;
-  do {
-    const page: McpStatusPage = await requestScoped(
-      connection,
-      'mcpServerStatus/list',
-      { threadId, detail: 'toolsAndAuthOnly', cursor },
-      mcpStatusSchema
+  for (const server of await readThreadMcpStatuses(connection, threadId)) {
+    if (server.runtimeStatus === 'disabled') continue;
+    if (server.pluginId === null && allowed.has(server.name)) continue;
+    unexpected.push(
+      server.pluginId === null ? server.name : `${server.name} (plugin ${server.pluginId})`
     );
-    for (const server of page.data) {
-      if (server.runtimeStatus === 'disabled') continue;
-      if (server.pluginId === null && allowed.has(server.name)) continue;
-      unexpected.push(
-        server.pluginId === null ? server.name : `${server.name} (plugin ${server.pluginId})`
-      );
-    }
-    cursor = page.nextCursor;
-  } while (cursor !== null);
+  }
 
   if (unexpected.length > 0) {
     throw new ClassifiedProviderError(
@@ -286,4 +305,23 @@ export async function checkThreadMcpScope(
         'Declare each one the node needs in its mcp: file; Archon could not turn the others off for this Codex version.'
     );
   }
+}
+
+export async function readThreadMcpStatuses(
+  connection: AppServerConnection,
+  threadId: string
+): Promise<McpStatusPage['data']> {
+  const statuses: McpStatusPage['data'] = [];
+  let cursor: string | null = null;
+  do {
+    const page: McpStatusPage = await requestScoped(
+      connection,
+      'mcpServerStatus/list',
+      { threadId, detail: 'toolsAndAuthOnly', cursor },
+      mcpStatusSchema
+    );
+    statuses.push(...page.data);
+    cursor = page.nextCursor;
+  } while (cursor !== null);
+  return statuses;
 }

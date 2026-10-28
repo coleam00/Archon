@@ -137,13 +137,9 @@ curl -fsSL https://claude.ai/install.sh | bash
 irm https://claude.ai/install.ps1 | iex
 ```
 
-Source installs (`bun run`) find the executable automatically via `node_modules`. The installed Claude provider (quick install, Homebrew) must be able to find the Claude Code executable. It probes the native installer's path; otherwise point it there:
+The installed Claude provider finds Claude Code at the native installer's path (`~/.local/bin/claude`, or `%USERPROFILE%\.local\bin\claude.exe` on Windows) without configuration. Source installs (`bun run`) find it through `node_modules`. For any other install, such as `npm install -g @anthropic-ai/claude-code`, point Archon at it:
 
 ```bash
-# After the native installer:
-export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
-
-# After `npm install -g @anthropic-ai/claude-code`:
 export CLAUDE_BIN_PATH="$(npm root -g)/@anthropic-ai/claude-code/cli.js"
 ```
 
@@ -165,12 +161,6 @@ for full details and install-layout paths.
 
 ```bash
 archon version
-```
-
-Run the setup checks from a checkout with a forge remote:
-
-```bash
-cd /path/to/your/repo
 archon doctor     # lists installed providers and their diagnostics
 ```
 
@@ -178,6 +168,6 @@ archon doctor     # lists installed providers and their diagnostics
 
 See [Updating Archon](/getting-started/updating/) for your install method.
 
-- [Core Concepts](/getting-started/concepts/) — Understand workflows, nodes, commands, and isolation
+- [Why Archon](/getting-started/why-archon/) — Workflows, nodes, commands and isolation
 - [Quick Start](/getting-started/quick-start/) — Run your first workflow
 - [Configuration](/getting-started/configuration/) — Set up API keys and preferences

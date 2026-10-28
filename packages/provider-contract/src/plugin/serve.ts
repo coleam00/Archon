@@ -12,7 +12,7 @@ import {
   logNotificationSchema,
   type ProviderLogSink,
   cancelNotificationSchema,
-  checkCredentialRequestSchema,
+  checkCredentialParamsSchema,
   initializeRequestSchema,
   newSessionRequestSchema,
   promptRequestSchema,
@@ -22,9 +22,15 @@ import {
   type ProviderSessionRequest,
 } from './wire';
 
-const hostProtocolSchema = z.object({
-  clientCapabilities: z.object({
-    _meta: z.object({ archon: z.object({ protocol: z.number().int().positive() }) }),
+const hostCapabilitiesSchema = initializeRequestSchema.shape.clientCapabilities;
+const hostMetaSchema = hostCapabilitiesSchema.shape._meta;
+const hostProtocolSchema = initializeRequestSchema.pick({ clientCapabilities: true }).extend({
+  clientCapabilities: hostCapabilitiesSchema.pick({ _meta: true }).extend({
+    _meta: hostMetaSchema.extend({
+      archon: hostMetaSchema.shape.archon
+        .pick({ protocol: true })
+        .extend({ protocol: z.number().int().positive() }),
+    }),
   }),
 });
 
@@ -129,8 +135,12 @@ export async function serveProvider(
   });
   rpc.handle('_archon/check_credential', async raw => {
     requireInitialized();
-    const request = checkCredentialRequestSchema.parse(raw);
-    return options.create(log).checkCredential({ ...request, env, signal: connectionAbort.signal });
+    const request = checkCredentialParamsSchema.parse(raw);
+    return options.create(log).checkCredential({
+      ...request,
+      env: request.execContext?.kind === 'container' ? (request.env ?? {}) : env,
+      signal: connectionAbort.signal,
+    });
   });
   rpc.handle('_archon/resolve_credential_model', async raw => {
     requireInitialized();

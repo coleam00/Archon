@@ -1,9 +1,12 @@
+import type { ExecutionContext } from '@archon/provider-contract';
+import { isContainerRun, type WorkflowRun } from './schemas/workflow-run';
+
 /**
- * Container run context shared by the executor and dag-executor (Phase C).
+ * Container run context shared by the executor and the DAG engine (Phase C).
  *
  * Lives in its own module so both `executor.ts` (which threads it in from the
- * caller) and `dag-executor.ts` (which drives suspend + the write-back gate) can
- * import it without an import cycle between those two large files.
+ * caller) and `dag/container-gate.ts` (which drives suspend + the write-back gate)
+ * can import it without an import cycle.
  */
 
 /**
@@ -77,6 +80,16 @@ export interface WriteBackApplySummary {
 export interface ContainerWriteBackBackend {
   /** `docker stop` on pause; the upper volume persists for resume. */
   suspend(envId: string): Promise<void>;
+  /**
+   * Verify the environment owns the execution container, then prepare a repeatable
+   * stop action without store I/O. A Docker timeout bounds each
+   * of at most three calls and uses a one-second stop grace for locked source release.
+   */
+  prepareSuspend(
+    envId: string,
+    expectedContainerId: string,
+    dockerTimeoutMs?: number
+  ): Promise<() => Promise<void>>;
   /** Inspect the overlay diff → whether a write-back gate is warranted + summary. */
   finalize(envId: string): Promise<WriteBackFinalizeResult>;
   /** Apply the overlay diff to the live root (the ONE live-root write). */
@@ -108,3 +121,35 @@ export interface ContainerRunContext {
 
 /** Synthetic node id for the engine-level write-back gate (there is no DAG node). */
 export const WRITEBACK_GATE_NODE_ID = '__writeback__';
+
+export type RunExecutionMode =
+  | { kind: 'host'; execContext: Extract<ExecutionContext, { kind: 'host' }>; container?: never }
+  | {
+      kind: 'container';
+      execContext: Extract<ExecutionContext, { kind: 'container' }>;
+      container: ContainerRunContext;
+    };
+
+export function resolveRunExecutionMode(
+  execContext: ExecutionContext = { kind: 'host' },
+  container?: ContainerRunContext,
+  recordedMetadata?: WorkflowRun['metadata']
+): RunExecutionMode {
+  if (execContext.kind === 'container') {
+    if (!container) throw new Error('Container execution requires a container backend context');
+    if (
+      recordedMetadata &&
+      (!isContainerRun({ metadata: recordedMetadata }) ||
+        typeof recordedMetadata.isolation_env_id !== 'string' ||
+        recordedMetadata.isolation_env_id.length === 0 ||
+        recordedMetadata.isolation_env_id !== container.envId)
+    ) {
+      throw new Error('Execution context does not match the recorded run isolation');
+    }
+    return { kind: 'container', execContext, container };
+  }
+  if (container || isContainerRun({ metadata: recordedMetadata })) {
+    throw new Error('Container backend requires a container execution context');
+  }
+  return { kind: 'host', execContext };
+}

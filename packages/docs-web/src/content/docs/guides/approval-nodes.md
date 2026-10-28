@@ -90,7 +90,7 @@ reference to an upstream output:
 ```
 
 The attention message accepts runtime references (`$plan.output`, `$INPUTS.x`).
-See [Attention waits](/guides/authoring-workflows/#attention-waits) for the full
+See [Attention waits](/reference/workflow-language/#attention-waits) for the full
 rules on forms, options and output.
 
 ## Answering
@@ -124,6 +124,15 @@ An answer names the occurrence it was meant for, so an answer to an earlier paus
 of the same run is refused. Answering through the CLI without `--json` continues
 the run in that process; otherwise `archon serve` or `archon workflow wake`
 continues it. Attention waits are not supported in container-isolated workflows.
+
+Continuing after an answer picks the run up where it paused. Nodes that completed
+replay their results, and a node that failed before the pause replays its failure
+instead of running again, because the run had already moved past it. On the first
+answer, if the question the wait would ask now differs from the one that was answered,
+the wait discards the answer and asks again. Its notice names the changed dependencies
+when the engine can identify them; otherwise it gives a generic notice that the
+question changed. After one re-ask, the next answer is accepted even if the question
+changes again. See [attention waits](/reference/workflow-language/#attention-waits).
 
 ## Reading the answer
 

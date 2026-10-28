@@ -413,3 +413,19 @@ test('immutable publication rejects different bytes and retains the recovery int
   expect(await readFile(join(root, 'state/test/1.json'))).toEqual(before);
   expect(await Bun.file(join(root, 'intent.json')).exists()).toBe(true);
 });
+
+test('cancellation retains structured cleanup warnings across reopen', async () => {
+  const { root, store, run } = await fixture();
+  const warnings = ['Output still held; use lsof on the checkout.'];
+  await store.cancelWorkflowRun(run.id, {
+    cancel_reason: 'operator',
+    reason: warnings[0],
+    warnings,
+  });
+  const reopened = await createFileWorkflowStore({ root });
+  const events = await reopened.listWorkflowEvents(run.id);
+  expect(events.find(event => event.event_type === 'workflow_cancelled')?.data).toMatchObject({
+    reason: warnings[0],
+    warnings,
+  });
+});

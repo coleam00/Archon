@@ -1,6 +1,9 @@
-import { executeWorkflow, hydrateResumableRun, resolveContinuationWorkflow } from './executor';
-import type { ExecuteWorkflowOptions } from './executor';
+import { isWorkflowExecutionInterruption } from './execution-interruption';
+import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
+import { hydrateResumableRun } from './run-resume';
+import { resolveContinuationWorkflow } from './run-source';
 import {
+  WorkflowExecutionHandoffError,
   FRESH_RUN_FORBIDDEN_OPTIONS,
   RESUME_FORBIDDEN_OPTIONS,
   type AttentionWatch,
@@ -21,7 +24,8 @@ import {
 } from './attention-watch';
 import type { WorkflowDeps } from './deps';
 import type { WorkflowExecutionResult } from './schemas';
-import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite } from './terminal-status-write';
+import { resolveRunExecutionMode } from './container-context';
 
 function rejectOptions(
   options: ExecuteWorkflowOptions | undefined,
@@ -79,20 +83,43 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
     const hydrated = await hydrateResumableRun(this.deps, input.run, input.cursor);
     if (hydrated === null) return { accepted: false, reason: 'nothing-to-resume' };
 
+    let context: Pick<WorkflowResumeInput, 'cwd' | 'options'> = input;
+    if (input.prepareExecution) {
+      try {
+        context = await input.prepareExecution(structuredClone(hydrated.preCreatedRun));
+        rejectOptions(context.options, RESUME_FORBIDDEN_OPTIONS, 'resume');
+        resolveRunExecutionMode(
+          context.options?.execContext,
+          context.options?.container,
+          hydrated.preCreatedRun.metadata
+        );
+      } catch (error) {
+        await requireTerminalStatusWrite(
+          this.deps.store.failWorkflowRun(
+            hydrated.preCreatedRun.id,
+            error instanceof Error ? error.message : String(error)
+          ),
+          { workflowRunId: hydrated.preCreatedRun.id, site: 'engine.resume_preparation_failed' }
+        );
+        throw error;
+      }
+    }
+
     const settled = executeWorkflow(
       this.deps,
       input.platform,
       input.conversationId,
-      input.cwd,
+      context.cwd,
       workflow,
       input.userMessage,
       hydrated.preCreatedRun.origin ?? undefined,
-      { ...input.options, ...hydrated }
+      { ...context.options, ...hydrated }
     ).catch(async (error: unknown) => {
       // Hydration already claimed the row. The executor's early setup can throw
       // before its terminal-write boundary; recovery must work without a server.
       if (
-        !(error instanceof TerminalStatusWriteError) &&
+        !isWorkflowExecutionInterruption(error) &&
+        !(error instanceof WorkflowExecutionHandoffError) &&
         (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
       ) {
         await requireTerminalStatusWrite(

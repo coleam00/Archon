@@ -1,6 +1,6 @@
 {
   "name": "@archon/provider-contract",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

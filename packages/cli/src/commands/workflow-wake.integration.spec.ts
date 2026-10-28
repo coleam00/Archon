@@ -109,7 +109,7 @@ import { getOrCreateConversation } from ${path('packages/core/src/db/conversatio
 import { closeDatabase } from ${path('packages/core/src/db/connection.ts')};
 import { findOrCreateUserByPlatformIdentity } from ${path('packages/core/src/db/users.ts')};
 import { InProcessWorkflowEngine } from ${path('packages/workflows/src/in-process-engine.ts')};
-import { prepareWorkflowSource, recordSelectedWorkflow } from ${path('packages/workflows/src/executor.ts')};
+import { prepareWorkflowSource, recordSelectedWorkflow } from ${path('packages/workflows/src/run-source.ts')};
 import { discoverWorkflowsWithConfig } from ${path('packages/workflows/src/workflow-discovery.ts')};
 import { HeadlessPlatform } from ${path('packages/core/src/workflows/headless-platform.ts')};
 import { startRunLiveOwner } from ${path('packages/core/src/services/run-live-owner.ts')};
@@ -445,13 +445,19 @@ describe('cold CLI continuation host', () => {
     const stderr = new Response(child.stderr).text();
     const reader = child.stdout.getReader();
     const decoder = new TextDecoder();
-    let stdout = '';
-    while (!stdout.includes('\n')) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      stdout += decoder.decode(chunk.value, { stream: true });
-    }
-    expect(JSON.parse(stdout.split('\n')[0] ?? '')).toMatchObject({ accepted: 0 });
+    let pending = '';
+    const readPass = async (): Promise<{ accepted: number }> => {
+      while (!pending.includes('\n')) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error('Watcher stdout ended before the next wake report');
+        pending += decoder.decode(chunk.value, { stream: true });
+      }
+      const end = pending.indexOf('\n');
+      const line = pending.slice(0, end);
+      pending = pending.slice(end + 1);
+      return JSON.parse(line) as { accepted: number };
+    };
+    expect(await readPass()).toMatchObject({ accepted: 0 });
     const db = new Database(join(f.home, 'archon.db'));
     try {
       db.run(
@@ -464,20 +470,16 @@ describe('cold CLI continuation host', () => {
     const deadline = Date.now() + 15_000;
     while (row(f).status !== 'completed' && Date.now() < deadline) await Bun.sleep(25);
     expect(row(f).status).toBe('completed');
+    // Observe the report before SIGTERM, which terminates outright on Windows.
+    let pass = await readPass();
+    while (pass.accepted === 0) pass = await readPass();
+    expect(pass.accepted).toBe(1);
     child.kill('SIGTERM');
     const exitCode = await child.exited;
     // Windows has no catchable SIGTERM: Bun terminates the child outright (143), so only
     // POSIX can prove the handler drains and exits cleanly.
     if (process.platform !== 'win32') expect(exitCode).toBe(0);
     children.delete(child);
-    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read())
-      stdout += decoder.decode(chunk.value, { stream: true });
-    const passes = stdout
-      .trim()
-      .split('\n')
-      .map(line => JSON.parse(line) as { accepted: number });
-    expect(passes[0]?.accepted).toBe(0);
-    expect(passes.some(pass => pass.accepted === 1)).toBe(true);
     expect(await stderr).not.toContain('fatal');
     expect(readFileSync(join(f.project, 'marker'), 'utf8')).toBe(
       'frozen-original-input-original-config\n'

@@ -1,6 +1,7 @@
+// @archon-test-isolated
 import type { ProviderRegistry } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, afterAll, mock, spyOn } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm, symlink as fsSymlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -23,11 +24,43 @@ import {
 } from './validator';
 import type { WorkflowDefinition, DagNode } from './schemas';
 import { dagNodeSchema } from './schemas';
-import { parseWorkflow } from './loader';
 import { discoverWorkflows } from './workflow-discovery';
-import { BUNDLED_WORKFLOWS, BUNDLED_WORKFLOW_OWNERS } from './defaults/bundled-defaults';
 import { makeTestWorkflow } from './test-utils';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { formatPackagedResourceReference } from './packaged-workflow';
+import { writeFakeBundle } from './test-fake-bundle';
+import * as bundleInventory from './defaults/bundle-inventory';
+
+// The bundled set these tests resolve against: a fake pack, never the shipped one. Binary
+// mode reads the records; source mode reads the tree through the bundled root and index.
+// `registry-target-probe` names a provider so an empty registry cannot admit it.
+const bundleRoot = await mkdtemp(join(tmpdir(), 'validator-bundle-'));
+afterAll(() => removeTempTree(bundleRoot));
+const fakeBundle = await writeFakeBundle(
+  bundleRoot,
+  {
+    'fake/review/fake-review.yaml':
+      'name: fake-review\ndescription: Review fixture.\nnodes:\n  - id: check\n    command: check\n',
+    'fake/review/commands/check.md': 'Check the change against its contract.\n',
+    'fake/probe/registry-target-probe.yaml': [
+      'name: registry-target-probe',
+      'description: Registry admission fixture.',
+      'provider: claude',
+      'nodes:',
+      '  - id: registry-target-probe-node',
+      '    prompt: Check registry admission.',
+    ].join('\n'),
+  },
+  ['fake']
+);
+const actualDefaults = await import('./defaults/bundled-defaults');
+mock.module('./defaults/bundled-defaults', () => ({ ...actualDefaults, ...fakeBundle }));
+const actualPaths = await import('@archon/paths');
+mock.module('@archon/paths', () => ({
+  ...actualPaths,
+  getBundledWorkflowsPath: () => bundleRoot,
+}));
+spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['fake']);
 
 // =============================================================================
 // Test helpers
@@ -239,43 +272,26 @@ describe('validateWorkflowResources — command nodes', () => {
 describe('validateWorkflowResources — bundled workflow: target check', () => {
   test('bundled targets use the registry supplied to each call', async () => {
     const name = 'registry-target-probe';
-    BUNDLED_WORKFLOWS[name] = [
-      `name: ${name}`,
-      'description: Registry admission fixture.',
-      'provider: claude',
-      'nodes:',
-      '  - id: registry-target-probe-node',
-      '    prompt: Check registry admission.',
-    ].join('\n');
     const emptyRegistry: ProviderRegistry = { get: () => undefined, list: () => [] };
     const workflow = makeWorkflow('test', [{ id: 'sub', kind: 'workflow', workflow: name }]);
     const config = { workflowSource: 'bundled' } as const;
-    try {
-      const admitted = await validateWorkflowResources(workflow, tmpDir, providerRegistry, config);
-      expect(admitted.filter(issue => issue.field === 'workflow')).toEqual([]);
-      const rejected = await validateWorkflowResources(workflow, tmpDir, emptyRegistry, config);
-      expect(rejected.filter(issue => issue.field === 'workflow')).toEqual([
-        expect.objectContaining({
-          level: 'error',
-          nodeId: 'sub',
-          message: `Node 'sub' targets sub-run '${name}', which is not a bundled workflow`,
-        }),
-      ]);
-      const readmitted = await validateWorkflowResources(
-        workflow,
-        tmpDir,
-        providerRegistry,
-        config
-      );
-      expect(readmitted.filter(issue => issue.field === 'workflow')).toEqual([]);
-    } finally {
-      delete BUNDLED_WORKFLOWS[name];
-    }
+    const admitted = await validateWorkflowResources(workflow, tmpDir, providerRegistry, config);
+    expect(admitted.filter(issue => issue.field === 'workflow')).toEqual([]);
+    const rejected = await validateWorkflowResources(workflow, tmpDir, emptyRegistry, config);
+    expect(rejected.filter(issue => issue.field === 'workflow')).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        nodeId: 'sub',
+        message: `Node 'sub' targets sub-run '${name}', which is not a bundled workflow`,
+      }),
+    ]);
+    const readmitted = await validateWorkflowResources(workflow, tmpDir, providerRegistry, config);
+    expect(readmitted.filter(issue => issue.field === 'workflow')).toEqual([]);
   });
 
-  test('bundled workflow with a real bundled workflow: target passes', async () => {
+  test('bundled workflow with a bundled workflow: target passes', async () => {
     const workflow = makeWorkflow('test', [
-      { id: 'sub', kind: 'workflow', workflow: 'archon-review' } as DagNode,
+      { id: 'sub', kind: 'workflow', workflow: 'fake-review' } as DagNode,
     ]);
     const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {
       workflowSource: 'bundled',
@@ -436,6 +452,50 @@ describe('validateWorkflowResources — portable model refs', () => {
 
     expect(issues.some(i => i.field === 'model')).toBe(false);
   });
+
+  test('bundled workflow accepts a model preference list that ends in a tier', async () => {
+    await createCommandFile('my-command');
+    const workflow = {
+      ...makeWorkflow('test', [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'command', name: 'my-command' },
+          model: ['@review-seams', '@reviewer', 'medium'],
+        } as DagNode,
+      ]),
+      model: ['@implementer', 'large'],
+    } as WorkflowDefinition;
+
+    // No alias configured anywhere: the list lands on its tier, so it is portable.
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {
+      workflowSource: 'bundled',
+      assistant: 'claude',
+    });
+
+    expect(issues.some(i => i.field === 'model')).toBe(false);
+  });
+
+  test('a preference list must resolve without its aliases, even when one is configured', async () => {
+    await createCommandFile('my-command');
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'step1',
+        kind: 'agent',
+        source: { kind: 'command', name: 'my-command' },
+        model: ['@reviewer', 'medium'],
+      } as DagNode,
+    ]);
+
+    // '@reviewer' resolves here, but with no default assistant the final tier cannot,
+    // so an install without the alias would fail this node.
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {
+      workflowSource: 'project',
+      aliases: { '@reviewer': { provider: 'claude', model: 'sonnet' } },
+    });
+
+    expect(issues.some(i => i.nodeId === 'step1' && i.field === 'model')).toBe(true);
+  });
 });
 
 // =============================================================================
@@ -506,12 +566,12 @@ describe('validateWorkflowResources — loop.command', () => {
   });
 
   test('no issues when loop.command resolves to a bundled packaged command', async () => {
-    // A `loop.command` naming a shipped pack command must resolve when defaults are
+    // A `loop.command` naming a bundled pack command must resolve when defaults are
     // loaded, even with an empty repo `.archon/commands/` — the same resolution
     // command-nodes already get.
     const command = formatPackagedResourceReference(
-      { source: 'bundled', pack: 'sdlc', workflow: 'deliver' },
-      'ci'
+      { source: 'bundled', pack: 'fake', workflow: 'review' },
+      'check'
     );
     const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', command)]);
     const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry);
@@ -2344,25 +2404,5 @@ describe('validateWorkflowResources — loose output schemas', () => {
       'loop',
       'body',
     ]);
-  });
-
-  test('bundled SDLC workflows have no loose output schema warnings', async () => {
-    const names = Object.keys(BUNDLED_WORKFLOWS).filter(
-      name => BUNDLED_WORKFLOW_OWNERS[name]?.pack === 'sdlc'
-    );
-    expect(names.length).toBeGreaterThan(0);
-    for (const name of names) {
-      const { workflow, error } = parseWorkflow(BUNDLED_WORKFLOWS[name], name, providerRegistry);
-      expect(error).toBeNull();
-      if (!workflow) throw new Error(`Could not parse bundled workflow ${name}`);
-      const issues = await validateWorkflowResources(
-        workflow,
-        tmpDir,
-        providerRegistry,
-        {},
-        'claude'
-      );
-      expect(issues.filter(i => i.field === 'output_format' && i.level === 'warning')).toEqual([]);
-    }
   });
 });

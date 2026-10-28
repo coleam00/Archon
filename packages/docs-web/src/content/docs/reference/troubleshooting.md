@@ -10,6 +10,14 @@ sidebar:
 
 Common issues and their solutions when running Archon.
 
+For credential checks below, trace the value Archon actually uses rather than checking only one file:
+
+- **Source server:** Start with the environment inherited by the server. Boot strips every key named in the CWD's `.env`, `.env.local`, `.env.development` and `.env.production`, including shell values. Archon's checkout-root `.env` then fills missing values without overriding those that remain. Next, `~/.archon/.env` overrides those values, and finally `<cwd>/.archon/.env` overrides user scope. Check all three files in that order; a key defined in either `.archon/.env` file wins over earlier sources, even if empty. CWD means the server's working directory, which may differ from the checkout.
+- **CLI or compiled server:** Skip the checkout-root file. Check the inherited environment after CWD key stripping, then `~/.archon/.env` and `<cwd>/.archon/.env`. See [environment file locations and load order](/reference/configuration/#env-file-locations) for CLI workflow credential exceptions.
+- **Docker:** Check the Compose `.env` and the container environment, then the container's Archon env files in the same user/repo order. See [Docker configuration](/deployment/docker/#configure-env).
+
+Replace `/path/to/env-file` in each command with each applicable file above. A missing key in one file does not mean it is unset in Archon. Shell commands such as the GitHub API test use your current shell's value; set it to the effective credential you traced before testing.
+
 ## Project uses an unexpected provider
 
 New projects follow the configured provider when a conversation is created: repository
@@ -64,8 +72,7 @@ docker compose logs -f app
 
 **Verify bot token:**
 ```bash
-# In your .env file
-cat .env | grep TELEGRAM_BOT_TOKEN
+grep TELEGRAM_BOT_TOKEN /path/to/env-file
 ```
 
 **Test with health check:**
@@ -108,7 +115,7 @@ psql $DATABASE_URL -c "\dt"
 
 **Verify GitHub token:**
 ```bash
-cat .env | grep GH_TOKEN
+grep GH_TOKEN /path/to/env-file
 # Should have both GH_TOKEN and GITHUB_TOKEN set
 ```
 
@@ -137,7 +144,7 @@ git clone https://github.com/user/repo ~/.archon/workspaces/test-repo
 
 **Check webhook secret:**
 ```bash
-cat .env | grep WEBHOOK_SECRET
+grep WEBHOOK_SECRET /path/to/env-file
 # Must match exactly what you entered in GitHub
 ```
 
@@ -312,18 +319,22 @@ Claude Code not found. Archon requires the Claude Code executable to be
 reachable at a configured path in compiled builds.
 ```
 
-**Cause:** Compiled Archon binaries (`archon` from the curl/PowerShell installer or Homebrew) do not bundle Claude Code. They need an explicit path to the Claude Code executable. Source/dev mode (`bun run`) auto-resolves via `node_modules` and is unaffected.
+**Cause:** Compiled Archon binaries (`archon` from the curl/PowerShell installer or Homebrew) do not bundle Claude Code. They look for it at the native installer's path (`~/.local/bin/claude`, or `%USERPROFILE%\.local\bin\claude.exe` on Windows) unless `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` points elsewhere. This error means no pin is set and that path holds no executable. An invalid pin fails with a different error that names the setting (`CLAUDE_BIN_PATH is set to ... but the file does not exist`), in every mode and without falling back to autodetection; correct or remove that setting. Source/dev mode (`bun run`) with no pin resolves Claude Code through `node_modules`.
 
-**Fix:** Install Claude Code separately and point Archon at it.
+**Fix:** Install Claude Code with the native installer, which Archon then finds on its own:
 
 ```bash
-# macOS / Linux / WSL — Anthropic's recommended native installer
+# macOS / Linux / WSL
 curl -fsSL https://claude.ai/install.sh | bash
-export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
 
 # Windows (PowerShell)
 irm https://claude.ai/install.ps1 | iex
-$env:CLAUDE_BIN_PATH = "$env:USERPROFILE\.local\bin\claude.exe"
+```
+
+If Claude Code is installed somewhere else, such as through npm, set `CLAUDE_BIN_PATH` to it:
+
+```bash
+export CLAUDE_BIN_PATH="$(npm root -g)/@anthropic-ai/claude-code/cli.js"
 ```
 
 For a durable setup, set the path in `~/.archon/config.yaml` instead:
@@ -361,7 +372,15 @@ ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 - `Cannot adopt <path>: path contains a full git checkout, not a worktree.`
 - `Cannot adopt <path>: .git pointer is not a git-worktree reference.`
 
-**Registration refusal:** `Project "<name>" is already registered at <path>` means this is another clone of a registered remote. Two clones of one remote cannot be separate Archon projects. Run from the named registered checkout and use `--branch` or `git worktree add` for parallel checkouts. Removing a worktree or changing the branch name does not resolve a registration refusal.
+**Registration refusal:** `Project "<name>" is already registered at <path>` means this is another clone of a registered remote. Two clones of one remote cannot be separate Archon projects. Run from the named registered checkout and use `--branch` or `git worktree add` for parallel checkouts. For a fresh run from the separate clone, bind it to the existing project instead:
+
+```bash
+archon workflow run investigate --project owner/repo --cwd /other/clone --no-worktree
+```
+
+Use `archon project list` to find the registered name or ID. `--no-worktree` executes in the clone; isolated execution uses the registered checkout. See [workflow run](/reference/cli/#workflow-run-name-message). Removing a worktree or changing the branch name does not resolve a registration refusal.
+
+Inspect the run with `archon workflow get <full-run-id>`, or run `archon workflow runs` from the registered checkout. From the separate clone, `workflow runs` falls back to an install-wide list limited to 20 rows by default.
 
 If this checkout replaces a moved or retired checkout, use `/update-project "<name>" <new-absolute-path>` to repair the registration. Keep its existing workspace storage: it contains state, artifacts and logs. For legacy nested GitLab projects, follow the [storage recovery steps below](#legacy-nested-gitlab-storage-recovery) before changing the path.
 

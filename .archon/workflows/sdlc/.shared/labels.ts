@@ -212,16 +212,15 @@ function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly Own
   return applied;
 }
 
-// The forge seam has no single-label add or remove yet, so this reads the item's
-// labels and writes the whole set back. A label another writer adds between that
-// read and the write is dropped. The race closes when the seam can apply a delta;
-// this path then takes the same single add and remove as the gh path.
+// Single add and remove operations, as on the gh path, so labels another writer adds
+// concurrently survive. Each forge write reads itself back, and a write that does not
+// fails with its outcome, so there is nothing left to re-check here.
 function forgeWrite(
   item: QualifiedPr,
   add: readonly string[],
   remove: readonly OwnedLabel[]
 ): string[] {
-  const current = viewIssue(item).labels;
+  const current = new Set(viewIssue(item).labels);
   const present = new Set(readRepositoryLabels(item.repo));
   for (const name of add) {
     if (!present.has(name) && isPackLabel(name)) {
@@ -230,16 +229,12 @@ function forgeWrite(
     }
   }
   const applied = [...new Set(add.filter(name => present.has(name)))].sort();
-  const removing = new Set<string>(remove);
-  const labels = [...new Set([...current.filter(name => !removing.has(name)), ...applied])].sort();
-  const result = invokeForge('workitem.labels.set', { ref: item, labels });
-  const observedLabels = result?.labels;
-  if (
-    result?.outcome !== 'applied' ||
-    !Array.isArray(observedLabels) ||
-    observedLabels.length !== labels.length ||
-    !labels.every(name => observedLabels.includes(name))
-  )
-    throw new Error('forge label-set read-back disagrees');
+  const subject = { kind: 'issue', ref: item };
+  for (const name of applied.filter(label => !current.has(label))) {
+    invokeForge('workitem.label.add', { subject, name });
+  }
+  for (const name of remove.filter(label => current.has(label))) {
+    invokeForge('workitem.label.remove', { subject, name });
+  }
   return applied;
 }

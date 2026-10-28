@@ -116,6 +116,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
       getById: unsupported,
       create: unsupported,
       updateStatus: unsupported,
+      withWorktreeRegistration: unsupported,
       markWorktreeDestroyed: unsupported,
       updateMetadata: unsupported,
       countActiveByCodebase: unsupported,
@@ -127,7 +128,8 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
   };
 }
 
-type InMemoryWorkflowStore = IWorkflowStore & Pick<WorkflowStoreHarness, 'backdate'>;
+type InMemoryWorkflowStore = IWorkflowStore &
+  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait'>;
 
 /**
  * The file store's transaction view over in-memory maps. Every operation runs on a copy and
@@ -146,12 +148,7 @@ export function createInMemoryWorkflowStore(
   const sessions = new Map<string, WorkflowNodeSession>();
   const runSessions = new Map<string, WorkflowRunNodeSession>();
   const getCodebase: IWorkflowStore['getCodebase'] = id => records.codebases.getCodebase(id);
-  // Unqueued: admission calls it from inside its own queued operation.
-  const apply = async <T>(call: (view: TransactionView) => Promise<T>): Promise<T> => {
-    const nextRuns = structuredClone(runs);
-    const nextEvents = structuredClone(events);
-    const result = await call(createTransactionView(nextRuns, nextEvents, getCodebase));
-    const priorIds = new Set(events.map(event => event.id));
+  const clearDeletedRunSessions = (nextRuns: Map<string, WorkflowRun>): void => {
     for (const id of runs.keys()) {
       if (nextRuns.has(id)) continue;
       for (const [key, session] of runSessions)
@@ -159,6 +156,14 @@ export function createInMemoryWorkflowStore(
       for (const session of sessions.values())
         if (session.last_run_id === id) session.last_run_id = null;
     }
+  };
+  // Unqueued: admission calls it from inside its own queued operation.
+  const apply = async <T>(call: (view: TransactionView) => Promise<T>): Promise<T> => {
+    const nextRuns = structuredClone(runs);
+    const nextEvents = structuredClone(events);
+    const result = await call(createTransactionView(nextRuns, nextEvents, getCodebase));
+    const priorIds = new Set(events.map(event => event.id));
+    clearDeletedRunSessions(nextRuns);
     for (const event of nextEvents) {
       if (!priorIds.has(event.id))
         feed.push({ cursor: cursor(++eventOrder), event: structuredClone(event) });
@@ -186,7 +191,16 @@ export function createInMemoryWorkflowStore(
     serialize(() => apply(call));
   const admission = createInMemoryResourceStartStore(
     input => apply(view => view.createWorkflowRun(input)),
-    async id => structuredClone(runs.get(id) ?? null)
+    async id => structuredClone(runs.get(id) ?? null),
+    () => [...runs.values()],
+    async () =>
+      (await records.isolation.listActive())
+        .filter(row => row.workflow_type === 'task')
+        .map(row => ({
+          codebaseId: row.codebase_id,
+          branch: row.workflow_id,
+          workingPath: row.working_path,
+        }))
   );
   const admit =
     <Args extends unknown[], Result>(
@@ -220,6 +234,12 @@ export function createInMemoryWorkflowStore(
         if (!run) throw new Error(`Run missing: ${id}`);
         Object.assign(run, structuredClone(dates));
       }),
+    seedPersistedWait: (id, wait) =>
+      serialize(async () => {
+        const run = runs.get(id);
+        if (!run) throw new Error(`Run missing: ${id}`);
+        run.metadata.wait = structuredClone(wait);
+      }),
     getCodebase,
     getCodebaseEnvVars: async () => ({}),
     createWorkflowRun: input => write(view => view.createWorkflowRun(input)),
@@ -227,6 +247,8 @@ export function createInMemoryWorkflowStore(
     getWorkflowRunStatus: id => write(view => view.getWorkflowRunStatus(id)),
     claimPendingWorkflowRun: (id, path) => write(view => view.claimPendingWorkflowRun(id, path)),
     updateWorkflowRun: (id, updates) => write(view => view.updateWorkflowRun(id, updates)),
+    updateWorkflowRunMetadataIfRunning: (id, metadata) =>
+      write(view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
     updateWorkflowActivity: id => write(view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write(view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
@@ -237,7 +259,8 @@ export function createInMemoryWorkflowStore(
         const blocker = await admission.resume(run);
         if (!blocker) return view.resumeWorkflowRun(id, cursor);
         const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
-        if (busy.refusal !== 'waiting' || !view.recordCapacityWait(id)) throw busy;
+        if (busy.refusal !== 'waiting') throw busy;
+        view.recordCapacityWait(id);
         return busy;
       });
       if (outcome instanceof WorkflowResourceBusyError) throw outcome;
@@ -256,8 +279,8 @@ export function createInMemoryWorkflowStore(
       write(view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write(view => view.pauseWorkflowRunForWait(id, wait, pause)),
-    releaseRunForUnreadableSource: (id, release) =>
-      write(view => view.releaseRunForUnreadableSource(id, release)),
+    releaseRunForUnreadableSource: (id, release, beforePublish) =>
+      write(view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write(view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, gateEvents, expected) =>

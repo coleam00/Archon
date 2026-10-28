@@ -3,7 +3,7 @@
  *
  * All schemas are re-exported from this index.
  * Types are derived from schemas via `z.infer<typeof Schema>` (WorkflowDefinition
- * uses `Omit<z.infer<...>, 'nodes'>` because node parsing happens per-node in loader.ts).
+ * uses `Omit<z.infer<...>, 'nodes'>` because node parsing happens per-node in loader/node-parse.ts).
  *
  * Import `z` from plain `zod`; name OpenAPI components with `.meta({ id })`.
  */
@@ -39,9 +39,11 @@ export {
   resolvedRunModelOverridesSchema,
   resolvedAiProfileSchema,
   runModelBindingsMetadataSchema,
+  modelRefSchema,
 } from './model-binding';
 export type {
   TierName,
+  WorkflowModelRef,
   ModelAliasPreset,
   RawAliasEntry,
   RawAliasesConfig,
@@ -87,35 +89,55 @@ export {
   TRIGGER_RULES,
   dagNodeBaseSchema,
   nodeContextSchema,
+  isNodeContextResume,
+  isTriggerRule,
+} from './dag-node-base';
+export {
   nodeMcpSchema,
   mcpDeclaration,
-  promptSourceSchema,
-  agentNodeSchema,
-  execNodeSchema,
-  loopNodeSchema,
   loopGroupNodeSchema,
   loopGroupNodeConfigSchema,
+  MAX_DURABLE_WAIT_MS,
+  dagNodeSchema,
+  definedOutputPaths,
+  KNOWN_DAG_NODE_KEYS,
+  KNOWN_NODE_NESTED_KEYS,
+  dagNodeFlatSchema,
+  sandboxSettingsSchema,
+  agentDefinitionSchema,
+  piNodeConfigSchema,
+} from './dag-node';
+export { promptSourceSchema, agentNodeSchema } from './agent-node';
+export { execNodeSchema } from './exec-node';
+export { loopNodeSchema } from './loop-node';
+export {
   decisionOptionSchema,
   gateNodeSchema,
   approvalOnRejectSchema,
-  haltNodeSchema,
-  MAX_DURABLE_WAIT_MS,
+  approvalConfigSchema,
+} from './gate-node';
+export { haltNodeSchema } from './halt-node';
+export {
   waitConfigSchema,
   waitUntilTimestampSchema,
   waitNodeSchema,
   waitCondition,
   workflowWaitResultSchema,
   WAIT_NODE_OUTPUT_FORMAT,
+} from './wait-node';
+export {
   includeDirectiveSchema,
-  workflowNodeSchema,
-  fanOutConfigSchema,
   composeFanOutConfigSchema,
   composeFanOutNodeSchema,
-  dagNodeSchema,
+} from './include-node';
+export { workflowNodeSchema, fanOutConfigSchema } from './workflow-node';
+export {
   INPUT_NAME_SOURCE,
   inputEnvKey,
   bindingDirectiveSchema,
   isBindingDirective,
+} from './node-bindings';
+export {
   isAgentNode,
   isExecNode,
   isGateNode,
@@ -123,20 +145,14 @@ export {
   isWaitNode,
   isLoopNode,
   isLoopGroupNode,
-  definedOutputPaths,
-  loopGroupOutputNodes,
-  loopGroupSoleTerminalSink,
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,
+} from './node-guards';
+export { loopGroupOutputNodes, loopGroupSoleTerminalSink } from './loop-group-body';
+export {
   ignoredFieldsForNode,
   isOutputFormatEnforced,
-  isPersistableNode,
-  nodeUsesPersistedScope,
-  runMayPersistSessions,
-  persistedSessionHandling,
-  isNodeContextResume,
-  isTriggerRule,
   BASH_NODE_AI_FIELDS,
   SCRIPT_NODE_AI_FIELDS,
   LOOP_NODE_AI_FIELDS,
@@ -145,45 +161,34 @@ export {
   WAIT_NODE_IGNORED_FIELDS,
   WORKFLOW_NODE_IGNORED_FIELDS,
   GATE_AND_HALT_IGNORED_FIELDS,
-  KNOWN_DAG_NODE_KEYS,
-  KNOWN_NODE_NESTED_KEYS,
-  approvalConfigSchema,
-  dagNodeFlatSchema,
-  sandboxSettingsSchema,
-  agentDefinitionSchema,
-  piNodeConfigSchema,
-} from './dag-node';
+} from './node-ignored-fields';
+export {
+  isPersistableNode,
+  nodeUsesPersistedScope,
+  runMayPersistSessions,
+  persistedSessionHandling,
+} from './node-session-persistence';
+export type { TriggerRule, DagNodeBase, NodeContext } from './dag-node-base';
 export type {
-  TriggerRule,
-  DagNodeBase,
-  NodeContext,
   NodeMcp,
   McpDeclaration,
-  BindingDirective,
-  PromptSource,
-  AgentNode,
-  ExecNode,
-  LoopNode,
   LoopGroupNode,
   LoopGroupNodeConfig,
-  DecisionOption,
-  GateNode,
-  ApprovalOnReject,
-  HaltNode,
-  WaitConfig,
-  WaitNode,
-  WaitCondition,
-  WorkflowWaitResult,
-  IncludeDirective,
-  WorkflowNode,
-  ComposeFanOutNode,
-  FanOutConfig,
   DagNode,
   SandboxSettings,
   AgentDefinition,
   PiNodeConfig,
   NestedKeySpec,
 } from './dag-node';
+export type { BindingDirective } from './node-bindings';
+export type { PromptSource, AgentNode } from './agent-node';
+export type { ExecNode } from './exec-node';
+export type { LoopNode } from './loop-node';
+export type { DecisionOption, GateNode, ApprovalOnReject } from './gate-node';
+export type { HaltNode } from './halt-node';
+export type { WaitConfig, WaitNode, WaitCondition, WorkflowWaitResult } from './wait-node';
+export type { IncludeDirective, ComposeFanOutNode } from './include-node';
+export type { WorkflowNode, FanOutConfig } from './workflow-node';
 
 // Workflow definition
 export {
@@ -234,6 +239,7 @@ export {
   isTerminalRunStatus,
   runAttention,
   isWorkflowWaitContext,
+  readWorkflowWaitContext,
   pendingWorkflowWaitDeadline,
   pausedUsageLimitWait,
   workflowWaitStepName,
@@ -323,6 +329,14 @@ export type { WorkflowDefinition as DagWorkflow } from './workflow';
 export * from './workflow-run-listing';
 
 export { workflowRunOriginSchema } from './workflow-run';
+export {
+  PAUSE_CAUSE_METADATA_KEY,
+  pauseCauseSchema,
+  pauseCauseOfApproval,
+  pauseCauseOfWait,
+  readPauseCause,
+  type PauseCause,
+} from './pause-cause';
 export type { WorkflowRunOrigin } from './workflow-run';
 
 export * from './workflow-event';
@@ -335,3 +349,5 @@ export {
 } from './workflow-run';
 
 export type { SessionCursor } from './workflow-run';
+
+export { canSuspend, isInteractiveSink } from './node-suspension';

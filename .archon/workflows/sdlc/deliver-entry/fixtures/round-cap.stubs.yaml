@@ -7,9 +7,8 @@ implement__implement:
   green: true
   red_cause: ""
   summary: "stub: implemented; focused checks pass"
-implement__assert-changed: "3 files changed"
 pr__forge: { source: forge }
-pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, summary: "stub: target recorded" }
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, description: null, summary: "stub: target recorded" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}},"seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
 review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change touches a persisted format" }
@@ -37,6 +36,7 @@ review__publish:
   contract_left: []
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+threads: { open: 0, summary: "stub: no review thread is unresolved" }
 ci: { state: pr_caused, rerun: none, summary: "stub: conflicts with dev in src/a.ts; marked draft" }
 stage__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 round:
@@ -47,8 +47,6 @@ round:
   pr_url: "https://github.com/example/repo/pull/1"
   prior_report: "review/report.md"
   light_review: false
-  ci_rerun: none
-  threads_checked: false
   contract_left: []
   summary: "stub: four rounds ended on a conflict with dev each time"
 attend__decide:
@@ -74,5 +72,4 @@ fixture:
   reached: [stage__report, attend__settle]
   resolved-text-contains:
     attend__decide: '"reason":"round_cap"'
-    attend__ask: "**Recommendation: `rerun`** (medium confidence). stub: the conflict is mechanical"
 exec-code: true

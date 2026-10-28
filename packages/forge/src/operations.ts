@@ -5,6 +5,9 @@ import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 import {
   mergeConditionSchema,
   prReviewsSchema,
+  prThreadsSchema,
+  reviewThreadCommentSchema,
+  reviewThreadSchema,
   lifecycleReadRequestSchemas,
   lifecycleReadResultSchemas,
   mutationFailureSchema,
@@ -19,6 +22,11 @@ import {
   workItemListSchema,
   workItemViewRequestSchema,
   workItemViewSchema,
+  workItemCommentsRequestSchema,
+  workItemCommentsSchema,
+  workItemCommentSchema,
+  prMergeStateRequestSchema,
+  prMergeStateSchema,
   type ForgeMutationRequest,
 } from './lifecycle';
 
@@ -95,6 +103,13 @@ export const checksObservationSchema = checkSetSchema.safeExtend({
   approvalPending: z.boolean().nullable().optional(),
 });
 export type ChecksObservation = z.infer<typeof checksObservationSchema>;
+/** Checks on one commit; `branch` names the default branch when that is how the commit was chosen. */
+export const commitChecksObservationSchema = checkSetSchema.safeExtend({
+  repo: repoRefSchema,
+  branch: z.string().min(1).nullable(),
+  revision: gitObjectIdSchema,
+  approvalPending: z.boolean().nullable().optional(),
+});
 export const pluginIdentitySchema = z.object({
   name: z.string().regex(/^[a-z0-9-]+$/),
   version: z.string().min(1),
@@ -127,9 +142,19 @@ export const checksRequestSchema = z.object({
   op: z.literal('checks.state'),
   ref: prRefSchema,
 });
+export const checksCommitRequestSchema = z.object({
+  operationId: z.string().min(1),
+  op: z.literal('checks.commit'),
+  repo: repoRefSchema,
+  at: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('revision'), revision: gitObjectIdSchema }),
+    z.object({ kind: z.literal('default_branch') }),
+  ]),
+});
 export const forgeRequestSchema = z.discriminatedUnion('op', [
   resolveRequestSchema,
   checksRequestSchema,
+  checksCommitRequestSchema,
   ...lifecycleReadRequestSchemas,
   ...mutationRequestSchemas,
 ]);
@@ -161,6 +186,7 @@ export const forgeResponseSchema = z.discriminatedUnion('ok', [
     result: z.discriminatedUnion('op', [
       z.object({ op: z.literal('resolve'), value: resolveResultSchema }),
       z.object({ op: z.literal('checks.state'), value: checksObservationSchema }),
+      z.object({ op: z.literal('checks.commit'), value: commitChecksObservationSchema }),
       ...lifecycleReadResultSchemas,
       ...mutationResultSchemas,
     ]),
@@ -199,6 +225,16 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
     result: z.discriminatedUnion('op', [
       z.object({ op: resolveRequestSchema.shape.op, value: resolveResultSchema }),
       z.object({ op: checksRequestSchema.shape.op, value: checksObservationSchema }),
+      z.object({ op: checksCommitRequestSchema.shape.op, value: commitChecksObservationSchema }),
+      z.object({ op: prMergeStateRequestSchema.shape.op, value: prMergeStateSchema }),
+      z.object({
+        op: workItemCommentsRequestSchema.shape.op,
+        value: workItemCommentsSchema.extend({
+          comments: z.array(
+            workItemCommentSchema.omit({ body: true }).extend({ content: contentAuditSchema })
+          ),
+        }),
+      }),
       z.object({
         op: workItemViewRequestSchema.shape.op,
         value: workItemViewSchema
@@ -224,12 +260,30 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
           ),
         }),
       }),
+      z.object({
+        op: z.literal('pr.threads'),
+        value: prThreadsSchema.extend({
+          threads: z.array(
+            reviewThreadSchema.extend({
+              comments: z.array(
+                reviewThreadCommentSchema
+                  .omit({ body: true })
+                  .extend({ content: contentAuditSchema })
+              ),
+            })
+          ),
+        }),
+      }),
       ...mutationResultSchemas,
     ]),
   }),
   forgeResponseSchema.options[1],
 ]);
 export type ForgeAuditResponse = z.infer<typeof auditResponseSchema>;
+
+function bodyAudit(body: string): z.infer<typeof contentAuditSchema> {
+  return { digest: contentDigest(body), bytes: Buffer.byteLength(body) };
+}
 
 export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse {
   if (!response.ok) return response;
@@ -243,7 +297,38 @@ export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse 
           ...result.value,
           items: result.value.items.map(({ body, ...facts }) => ({
             ...facts,
-            content: { digest: contentDigest(body), bytes: Buffer.byteLength(body) },
+            content: bodyAudit(body),
+          })),
+        },
+      },
+    };
+  if (result.op === 'workitem.comments')
+    return {
+      ...response,
+      result: {
+        op: result.op,
+        value: {
+          ...result.value,
+          comments: result.value.comments.map(({ body, ...facts }) => ({
+            ...facts,
+            content: bodyAudit(body),
+          })),
+        },
+      },
+    };
+  if (result.op === 'pr.threads')
+    return {
+      ...response,
+      result: {
+        op: result.op,
+        value: {
+          ...result.value,
+          threads: result.value.threads.map(thread => ({
+            ...thread,
+            comments: thread.comments.map(({ body, ...facts }) => ({
+              ...facts,
+              content: bodyAudit(body),
+            })),
           })),
         },
       },

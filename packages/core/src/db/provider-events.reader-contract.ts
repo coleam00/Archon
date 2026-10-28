@@ -78,6 +78,11 @@ export function providerEventReaderContract(
       tool_call_id: 'anonymous-1',
       tool_outcome: 'unknown',
     });
+    await insertLegacyRow(db, runId, 'tool_completed', 'build', {
+      tool_name: 'Read',
+      duration_ms: 3,
+      tool_call_id: 'pre-outcome',
+    });
     await insertLegacyRow(db, runId, 'task_activity', 'build', {
       task_id: 't-1',
       activity: 'progress',
@@ -108,7 +113,7 @@ export function providerEventReaderContract(
     const records = await getModule().listProviderEvents(runId);
 
     expect(records.map(r => [r.stepName, r.attemptId, r.seq])).toEqual(
-      [0, 1, 2, 3, 4, 5, 6, 7].map(seq => ['build', null, seq])
+      [0, 1, 2, 3, 4, 5, 6, 7, 8].map(seq => ['build', null, seq])
     );
     expect(records.every(r => !Number.isNaN(Date.parse(r.observedAt)))).toBe(true);
     expect(records.map(r => r.event)).toEqual([
@@ -116,6 +121,7 @@ export function providerEventReaderContract(
       { type: 'tool_call_update', toolCallId: 'call-1', status: 'failed', exitCode: 2 },
       { type: 'tool_call', toolCallId: 'anonymous-1', name: 'Read', rawInput: {} },
       { type: 'tool_call_update', toolCallId: 'anonymous-1', status: 'cancelled' },
+      { type: 'tool_call_update', toolCallId: 'pre-outcome', status: 'completed' },
       {
         type: 'subtask',
         taskId: 't-1',

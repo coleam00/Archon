@@ -6,7 +6,7 @@ description: Publish an agent provider as an independently installed process plu
 Community providers ship from their authors' repositories as optional plugins. They
 attach through the provider contract without an import in Archon's registry. Claude,
 Codex, and Pi remain maintained in this repository. The bundled OpenCode and Copilot
-providers remain deprecated until community owners publish replacements.
+providers are deprecated: no Archon maintainer owns them.
 
 ## Implement the provider contract
 
@@ -47,13 +47,13 @@ its prompt uses them as its system prompt, and a `systemPrompt` takes precedence
 
 Each runtime reports its own event types, and the provider maps them to the contract's chunks. The maintained providers own the full mapping, including interrupted tool calls, subtasks, hooks, MCP status and tool-output limits.
 
-**Claude Code SDK** ([`packages/providers/src/claude/provider.ts`](https://github.com/coleam00/Archon/blob/dev/packages/providers/src/claude/provider.ts)):
+**Claude Code SDK** ([`packages/providers/src/claude/stream.ts`](https://github.com/coleam00/Archon/blob/dev/packages/providers/src/claude/stream.ts)):
 
 Assistant text becomes `agent_message_chunk`; tool use becomes `tool_call`. The provider reports the turn's `result` separately from completion of background work. It tracks visible tasks and live background tasks from the SDK's lifecycle events. An idle notification ends the turn only after a result has been observed and both task sets are empty. A running notification resets the result condition for the next turn.
 
 If the stream closes while observed work remains, or before reaching idle after background work was observed, it ends without `settled`. Once those settlement conditions hold, a stream that closes without a result produces a failure result (`stream_ended_without_result`), then `settled`. An early idle notification alone produces neither completion nor failure.
 
-**Codex app-server** ([`packages/providers/src/codex/provider.ts`](https://github.com/coleam00/Archon/blob/dev/packages/providers/src/codex/provider.ts)): Archon speaks Codex's JSON-RPC protocol over stdio, one `codex app-server` process per turn.
+**Codex app-server** ([`packages/providers/src/codex/stream.ts`](https://github.com/coleam00/Archon/blob/dev/packages/providers/src/codex/stream.ts)): Archon speaks Codex's JSON-RPC protocol over stdio, one `codex app-server` process per turn.
 
 `streamTurn` maps parent-thread messages and foreground tools to provider events. The parent's `turn/completed` notification produces its successful `result`, but background work can still be live. Failure results wait until observed background work drains because the executor stops reading on failure; failure classification uses the typed `codexErrorInfo`.
 
@@ -138,8 +138,13 @@ and normalizes that field without validating unrelated run fields or root constr
 The text before the first `/` selects a declared vendor after credential alias
 normalization; a model rejected by its field rule selects none. An empty list uses native auth.
 `checkCredential` returns `CredentialStatus` for doctor and run preflight, and receives
-its environment and abort signal from Archon. Return `not_checked` when the runtime
-cannot check without spending on a session.
+its environment and abort signal from Archon. During run preflight it also receives the
+run's `cwd`, `execContext` and `settingSources`: check authentication where the run will
+execute (the checkout, or the container for a container `execContext`), not in the
+host process directory. Return `not_checked` when the runtime cannot check without
+spending on a session. During run preflight, `not_connected` and `unusable` block the
+run, and `check_failed` lets it start with a warning event. Return `unusable` only when
+the credential is definitely bad.
 
 Optional `IAgentProvider.diagnose({ assistantConfig, signal })` and `listModels({ signal })` hooks
 serve information to hosts through `_archon/diagnose` and `_archon/list_models`.
@@ -160,9 +165,11 @@ and mid-run permission requests remain unsupported. A dynamic catalog is rejecte
 `serveProvider` supplies an awaitable log sink to `create(log)`; `connectProvider` accepts
 an `onLog` callback. Log metadata only, never credentials, tokens, or message text.
 The process host logs a fixed `provider.plugin.log` event at the supplied severity
-through `provider.<id>`, using its own descriptor id. The only plugin value it forwards
-is `bindings.failureClass`, and only when it is one of the contract's failure classes;
-the host drops a record without one. Plugin `msg`, module identity, and all other
+through `provider.<id>`, using its own descriptor id. The only plugin values it forwards
+are `bindings.failureClass`, when it is one of the contract's failure classes, and
+`bindings.lifecycle`, when it is one of the contract's lifecycle events
+(`providerLifecycleEventSchema`), plus a lifecycle event's non-negative integer
+`bindings.waitedMs`; the host drops a record with neither enum value. Plugin `msg`, module identity, and all other
 bindings are withheld: any plugin-chosen string, even one that looks like a machine
 token, can carry a credential.
 Container requests carry their optional `env` bag as session data while the plugin

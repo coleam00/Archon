@@ -70,6 +70,68 @@ function getRuntimeForExtension(ext: string): ScriptRuntime | undefined {
  */
 const MAX_SCRIPT_DISCOVERY_DEPTH = 1;
 
+function selectedScriptRuntime(
+  entry: string,
+  requestedNames?: ReadonlySet<string>
+): ScriptRuntime | undefined {
+  const ext = extname(entry);
+  if (requestedNames && !requestedNames.has(basename(entry, ext))) return undefined;
+  return getRuntimeForExtension(ext);
+}
+
+async function readScriptEntries(
+  dirPath: string,
+  requestedNames?: ReadonlySet<string>,
+  onMissing?: (path: string, error: unknown) => void
+): Promise<string[]> {
+  try {
+    return requestedNames
+      ? (await readdir(dirPath, { withFileTypes: true }))
+          .filter(
+            entry =>
+              entry.isDirectory() ||
+              entry.isSymbolicLink() ||
+              selectedScriptRuntime(entry.name, requestedNames)
+          )
+          .map(entry => entry.name)
+      : await readdir(dirPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      onMissing?.(dirPath, error);
+      getLog().debug({ dirPath }, 'script_directory_not_found');
+      return [];
+    }
+    getLog().warn({ err, dirPath }, 'script_directory_read_error');
+    throw error;
+  }
+}
+
+async function inspectScriptEntry(
+  entryPath: string,
+  runtime: ScriptRuntime | undefined,
+  onMissing?: (path: string, error: unknown) => void
+) {
+  try {
+    return await stat(entryPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      onMissing?.(entryPath, error);
+      return undefined;
+    }
+    // A failure on the selected script must surface: skipping it would report the
+    // script as missing. Any other entry (an unrelated or looping link) is not this
+    // lookup's concern and must not invalidate it.
+    if (runtime) {
+      getLog().warn({ err, entryPath }, 'script_file_stat_error');
+      throw error;
+    }
+    getLog().debug({ err, entryPath }, 'script_unrelated_entry_stat_skipped');
+    return undefined;
+  }
+}
+
 /**
  * Scan a directory for script files, descending at most `MAX_SCRIPT_DISCOVERY_DEPTH`
  * folders deep. Skips files with unknown extensions. Throws on duplicate script names.
@@ -84,55 +146,14 @@ async function scanScriptDir(
   requestedNames?: ReadonlySet<string>,
   onMissing?: (path: string, error: unknown) => void
 ): Promise<void> {
-  /** The runtime of a script this scan selects; undefined for any other entry. */
-  const selectedRuntime = (entry: string): ScriptRuntime | undefined => {
-    const ext = extname(entry);
-    if (requestedNames && !requestedNames.has(basename(entry, ext))) return undefined;
-    return getRuntimeForExtension(ext);
-  };
-  let entries: string[];
-  try {
-    entries = requestedNames
-      ? (await readdir(dirPath, { withFileTypes: true }))
-          .filter(
-            entry => entry.isDirectory() || entry.isSymbolicLink() || selectedRuntime(entry.name)
-          )
-          .map(entry => entry.name)
-      : await readdir(dirPath);
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      onMissing?.(dirPath, error);
-      getLog().debug({ dirPath }, 'script_directory_not_found');
-      return;
-    }
-    getLog().warn({ err, dirPath }, 'script_directory_read_error');
-    throw error;
-  }
+  const entries = await readScriptEntries(dirPath, requestedNames, onMissing);
 
   for (const entry of entries) {
     const entryPath = join(dirPath, entry);
-    const runtime = selectedRuntime(entry);
+    const runtime = selectedScriptRuntime(entry, requestedNames);
 
-    let entryStat;
-    try {
-      entryStat = await stat(entryPath);
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') {
-        onMissing?.(entryPath, error);
-        continue;
-      }
-      // A failure on the selected script must surface: skipping it would report the
-      // script as missing. Any other entry (an unrelated or looping link) is not this
-      // lookup's concern and must not invalidate it.
-      if (runtime) {
-        getLog().warn({ err, entryPath }, 'script_file_stat_error');
-        throw error;
-      }
-      getLog().debug({ err, entryPath }, 'script_unrelated_entry_stat_skipped');
-      continue;
-    }
+    const entryStat = await inspectScriptEntry(entryPath, runtime, onMissing);
+    if (entryStat === undefined) continue;
 
     if (entryStat.isDirectory()) {
       // 1-depth cap: allow one level of grouping (e.g. `.archon/scripts/triage/foo.ts`)
@@ -179,6 +200,25 @@ export async function discoverScripts(
   return scripts;
 }
 
+async function isPackagedDirectory(
+  path: string,
+  label: 'workflow pack' | 'workflow',
+  onMissing?: (path: string, error: unknown) => void
+): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      onMissing?.(path, error);
+      return false;
+    }
+    throw new Error(`Failed to inspect packaged ${label} "${path}": ${err.message}`, {
+      cause: err,
+    });
+  }
+}
+
 async function discoverPackagedScripts(
   workflowsRoot: string,
   source: WorkflowSource,
@@ -210,18 +250,7 @@ async function discoverPackagedScripts(
     )
       continue;
     const packPath = join(workflowsRoot, pack);
-    try {
-      if (!(await stat(packPath)).isDirectory()) continue;
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') {
-        onMissing?.(packPath, error);
-        continue;
-      }
-      throw new Error(`Failed to inspect packaged workflow pack "${packPath}": ${err.message}`, {
-        cause: err,
-      });
-    }
+    if (!(await isPackagedDirectory(packPath, 'workflow pack', onMissing))) continue;
     await discoverPackScripts(packPath, pack, source, scripts, requestedNames, onMissing);
   }
   return scripts;
@@ -265,19 +294,7 @@ async function discoverPackScripts(
         })
       );
     if (localNames?.size === 0) continue;
-    try {
-      if (!(await stat(join(packPath, workflow))).isDirectory()) continue;
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') {
-        onMissing?.(join(packPath, workflow), error);
-        continue;
-      }
-      throw new Error(
-        `Failed to inspect packaged workflow "${join(packPath, workflow)}": ${err.message}`,
-        { cause: err }
-      );
-    }
+    if (!(await isPackagedDirectory(join(packPath, workflow), 'workflow', onMissing))) continue;
     const owner = { source, pack, workflow };
     const localScripts = await discoverScripts(
       join(packPath, workflow, 'scripts'),
@@ -309,6 +326,47 @@ async function discoverInstalledPackScripts(
   return scripts;
 }
 
+async function ensureBundledScriptTree(unitDir: string, files: [string, string][]): Promise<void> {
+  try {
+    if (!(await stat(unitDir)).isDirectory()) {
+      throw new Error(`Bundled script cache is not a directory: ${unitDir}`);
+    }
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  // Publish the complete tree at once; another discovery must never see half a pack.
+  const staging = `${unitDir}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await mkdir(staging, { recursive: true });
+    for (const [relativePath, content] of files) {
+      const target = join(staging, relativePath);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, content, 'utf-8');
+    }
+    await publishBundledScriptTree(staging, unitDir);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function publishBundledScriptTree(staging: string, unitDir: string): Promise<void> {
+  try {
+    await rename(staging, unitDir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Windows reports EPERM for an existing directory. Accept a competing
+    // publisher only when its complete unit is present; other permission
+    // failures must retain the original rename error.
+    if (code !== 'EEXIST' && code !== 'ENOTEMPTY' && code !== 'EPERM') throw error;
+    const published = await stat(unitDir).then(
+      info => info.isDirectory(),
+      () => false
+    );
+    if (!published) throw error;
+  }
+}
+
 async function materializeBundledScripts(): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
   for (const [pack, bundled] of Object.entries(BUNDLED_SCRIPT_PACKS)) {
@@ -319,43 +377,7 @@ async function materializeBundledScripts(): Promise<Map<string, ScriptDefinition
       .slice(0, 16);
     const packCache = join(getArchonHome(), 'cache', 'workflow-scripts', pack);
     const unitDir = join(packCache, contentHash);
-    let exists = false;
-    try {
-      if (!(await stat(unitDir)).isDirectory()) {
-        throw new Error(`Bundled script cache is not a directory: ${unitDir}`);
-      }
-      exists = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-    if (!exists) {
-      // Publish the complete tree at once; another discovery must never see half a pack.
-      const staging = `${unitDir}.${process.pid}.${randomUUID()}.tmp`;
-      try {
-        await mkdir(staging, { recursive: true });
-        for (const [relativePath, content] of files) {
-          const target = join(staging, relativePath);
-          await mkdir(dirname(target), { recursive: true });
-          await writeFile(target, content, 'utf-8');
-        }
-        try {
-          await rename(staging, unitDir);
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          // Windows reports EPERM for an existing directory. Accept a competing
-          // publisher only when its complete unit is present; other permission
-          // failures must retain the original rename error.
-          if (code !== 'EEXIST' && code !== 'ENOTEMPTY' && code !== 'EPERM') throw error;
-          const published = await stat(unitDir).then(
-            info => info.isDirectory(),
-            () => false
-          );
-          if (!published) throw error;
-        }
-      } finally {
-        await rm(staging, { recursive: true, force: true });
-      }
-    }
+    await ensureBundledScriptTree(unitDir, files);
     for (const [name, entry] of Object.entries(bundled.scripts)) {
       const packaged = parsePackagedResourceReference(name);
       if (packaged?.owner.source !== 'bundled' || packaged.owner.pack !== pack) {

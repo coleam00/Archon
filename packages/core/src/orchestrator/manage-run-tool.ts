@@ -1,3 +1,4 @@
+import { findProjectRunsByReference } from '../workflows/run-id';
 import type { RunActor } from '../operations/run-authorization';
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
@@ -21,7 +22,11 @@ import {
   describeAbandonOwner,
   expectedGateForOccurrence,
 } from '../operations/workflow-operations';
-import type { GateAnswerOrigin, WorkflowOperations } from '../operations/workflow-operations';
+import type {
+  GateAnswerOrigin,
+  RejectionOperationResult,
+  WorkflowOperations,
+} from '../operations/workflow-operations';
 
 const log = createLogger('orchestrator.manage_run');
 
@@ -314,7 +319,7 @@ async function handleList(ctx: ManageRunContext): Promise<string> {
  * Runtime-safe timestamp formatter. The run schema declares these fields as
  * Date, but rows are cast, never Zod-parsed: Postgres hydrates TIMESTAMPTZ
  * into Date objects while SQLite returns TEXT ('YYYY-MM-DD HH:MM:SS', UTC)
- * as-is (#2078). Mirrors the API serializer pattern (routes/api.ts
+ * as-is (#2078). Mirrors the API serializer (routes/api-serializers.ts
  * toISOString): pass strings through verbatim — re-parsing with new Date()
  * would misread the UTC wall-clock string as local time — and format Dates.
  */
@@ -323,15 +328,24 @@ function formatTimestamp(val: Date | string): string {
 }
 
 function formatRunDetail(run: WorkflowRun): string {
+  const parts = formatRunSummary(run);
+  parts.push(...formatRunAttention(run), ...formatRunGate(run));
+  log.info({ runId: run.id, status: run.status }, 'manage_run.get_completed');
+  return parts.join('\n');
+}
+
+function formatRunSummary(run: WorkflowRun): string[] {
   const parts = [`Run ${run.id.slice(0, 8)} · ${run.workflow_name}`, `status: ${run.status}`];
   if (run.outcome !== null) parts.push(`authored outcome: ${run.outcome}`);
   parts.push(`started: ${formatTimestamp(run.started_at)}`);
   if (run.completed_at !== null) parts.push(`finished: ${formatTimestamp(run.completed_at)}`);
   const error = run.metadata.error;
   if (typeof error === 'string' && error.length > 0) parts.push(`error: ${error.slice(0, 300)}`);
-  // Paused interactive-loop gate: surface the structured gate state (#2074) so an
-  // AI approver can decide finalize-vs-iterate without parsing prose.
-  const rawApproval = run.metadata.approval;
+  return parts;
+}
+
+function formatRunAttention(run: WorkflowRun): string[] {
+  const parts: string[] = [];
   const attention = runAttention(run);
   if (attention?.kind === 'awaiting_response' || attention?.kind === 'attention')
     parts.push(`occurrence: ${attention.occurrence}`);
@@ -357,6 +371,12 @@ function formatRunDetail(run: WorkflowRun): string {
     }
     parts.push(`-> ${attentionAnswerAdvice(attention)}`);
   }
+  return parts;
+}
+
+function formatRunGate(run: WorkflowRun): string[] {
+  const parts: string[] = [];
+  const rawApproval = run.metadata.approval;
   if (
     run.status === 'paused' &&
     isApprovalContext(rawApproval) &&
@@ -374,9 +394,6 @@ function formatRunDetail(run: WorkflowRun): string {
     const excerpt = (rawApproval.signaledOutput ?? '').trim().slice(0, 300);
     if (excerpt) parts.push(`output: ${excerpt}`);
   }
-  // Paused gate with an author-declared decision vocabulary beyond approve/reject
-  // (#2707 step 2) — surface it so the agent knows what action=respond accepts,
-  // instead of guessing at a decision id.
   if (
     run.status === 'paused' &&
     isApprovalContext(rawApproval) &&
@@ -387,24 +404,83 @@ function formatRunDetail(run: WorkflowRun): string {
     const ids = rawApproval.decisions.map(d => d.id).join(', ');
     parts.push(`gate: decisions: ${ids} (use action=respond with one of these)`);
   }
-  log.info({ runId: run.id, status: run.status }, 'manage_run.get_completed');
-  return parts.join('\n');
+  return parts;
 }
 
 // ─── Write handlers ─────────────────────────────────────────────────────────
 
-/** resume / cancel / abandon / approve / reject / respond — all by-id, project-scoped. */
+type WriteAction = 'resume' | 'cancel' | 'abandon' | 'approve' | 'reject' | 'respond';
+
+/** A project-scoped write with its parsed arguments, ready for its action's handler. */
+interface ScopedWrite {
+  ctx: ManageRunContext;
+  /** The scoped run; its full id is what the operations look up, never the (possibly short) input. */
+  run: WorkflowRun;
+  decision: string;
+  decisions: string[] | undefined;
+  message: string;
+  origin: GateAnswerOrigin;
+  /**
+   * Single finalize-vs-iterate predicate for approve (#2074): accept=true or an
+   * empty message means no feedback reaches the gate — used by both the confirm
+   * preview and the write path so they can never disagree.
+   */
+  willFinalize: boolean;
+}
+
+/**
+ * resume / cancel / abandon / approve / reject / respond — all by-id, project-scoped.
+ * Scope and argument checks run here, once, before any action's handler.
+ */
 async function handleWrite(
   ctx: ManageRunContext,
-  action: 'resume' | 'cancel' | 'abandon' | 'approve' | 'reject' | 'respond',
+  action: WriteAction,
   input: Record<string, unknown>
 ): Promise<string> {
+  const write = await scopeWrite(ctx, action, input);
+  if (typeof write === 'string') return write;
+  // Destructive actions need explicit confirmation. Without it, preview only.
+  if (DESTRUCTIVE_ACTIONS.has(action) && input.confirm !== true) {
+    log.info({ runId: write.run.id, action }, 'manage_run.confirm_preview');
+    return confirmPreview(action, write);
+  }
+  log.info({ runId: write.run.id, action }, 'manage_run.write_requested');
+  return WRITE_HANDLERS[action](write);
+}
+
+/** The write's scoped run and parsed arguments, or a message naming what is missing. */
+async function scopeWrite(
+  ctx: ManageRunContext,
+  action: WriteAction,
+  input: Record<string, unknown>
+): Promise<ScopedWrite | string> {
   const runId = typeof input.runId === 'string' ? input.runId.trim() : '';
   if (runId === '') return `manage_run: action=${action} requires a runId.`;
-
   const run = await getScopedRun(runId, ctx);
   if (typeof run === 'string') return run; // not found / wrong project
+  const answer = parseAnswer(action, input);
+  if (typeof answer === 'string') return answer;
+  // A supplied occurrence is always checked, even when empty: an empty one matches no pause
+  // and is refused as stale, as the CLI refuses `--occurrence ''`. Only an absent one skips it.
+  const origin: GateAnswerOrigin = {
+    via: 'manage_run',
+    ...(typeof input.occurrence === 'string'
+      ? { expectedGate: expectedGateForOccurrence(run, input.occurrence.trim()) }
+      : {}),
+  };
+  return {
+    ctx,
+    run,
+    ...answer,
+    origin,
+    willFinalize: input.accept === true || answer.message === '',
+  };
+}
 
+function parseAnswer(
+  action: WriteAction,
+  input: Record<string, unknown>
+): Pick<ScopedWrite, 'decision' | 'decisions' | 'message'> | string {
   const decision = typeof input.decision === 'string' ? input.decision.trim() : '';
   const decisions = parseDecisions(input);
   if (typeof decisions === 'string') return decisions;
@@ -414,163 +490,167 @@ async function handleWrite(
   if (decision !== '' && decisions !== undefined) {
     return 'manage_run: pass either decision or decisions, not both.';
   }
-
   const message = typeof input.message === 'string' ? input.message.trim() : '';
-  // A supplied occurrence is always checked, even when empty: an empty one matches no pause
-  // and is refused as stale, as the CLI refuses `--occurrence ''`. Only an absent one skips it.
-  const origin: GateAnswerOrigin = {
-    via: 'manage_run',
-    ...(typeof input.occurrence === 'string'
-      ? { expectedGate: expectedGateForOccurrence(run, input.occurrence.trim()) }
-      : {}),
-  };
-  // Single finalize-vs-iterate predicate for approve (#2074): accept=true or an
-  // empty message means no feedback reaches the gate — used by both the confirm
-  // preview and the write path so they can never disagree.
-  const willFinalize = input.accept === true || message === '';
+  return { decision, decisions, message };
+}
 
-  // Destructive actions need explicit confirmation. Without it, preview only.
-  if (DESTRUCTIVE_ACTIONS.has(action) && input.confirm !== true) {
-    log.info({ runId: run.id, action }, 'manage_run.confirm_preview');
-    const subject = GATE_ACTIONS.has(action)
-      ? `the paused gate or attention wait on run ${run.id.slice(0, 8)} (${run.workflow_name})`
-      : `run ${run.id.slice(0, 8)} (${run.workflow_name}), currently '${run.status}' — irreversible`;
-    // For approve after an interactive-loop completion condition was met, tell the agent which
-    // effect its current args would have (finalize vs iterate) so the confirmed
-    // second call is deliberate (#2074).
-    let effect = '';
-    const approvalMeta = run.metadata.approval;
-    if (
-      action === 'approve' &&
-      isApprovalContext(approvalMeta) &&
-      approvalMeta.type === 'interactive_loop' &&
-      approvalMeta.completionSignaled === true
-    ) {
-      effect = willFinalize
-        ? ' A completion condition was met at this gate, and your args would FINALIZE the node from the already-computed output (no re-run).'
-        : ' A completion condition was met at this gate, but your message would run ANOTHER iteration (pass accept:true or drop the message to finalize instead).';
-    }
-    return (
-      `⚠️ This will ${action} ${subject}.${effect} ` +
-      'Confirm with the user, then call manage_run again with confirm: true to proceed.'
-    );
+function confirmPreview(action: WriteAction, { run, willFinalize }: ScopedWrite): string {
+  const subject = GATE_ACTIONS.has(action)
+    ? `the paused gate or attention wait on run ${run.id.slice(0, 8)} (${run.workflow_name})`
+    : `run ${run.id.slice(0, 8)} (${run.workflow_name}), currently '${run.status}' — irreversible`;
+  // For approve after an interactive-loop completion condition was met, tell the agent which
+  // effect its current args would have (finalize vs iterate) so the confirmed
+  // second call is deliberate (#2074).
+  let effect = '';
+  const approvalMeta = run.metadata.approval;
+  if (
+    action === 'approve' &&
+    isApprovalContext(approvalMeta) &&
+    approvalMeta.type === 'interactive_loop' &&
+    approvalMeta.completionSignaled === true
+  ) {
+    effect = willFinalize
+      ? ' A completion condition was met at this gate, and your args would FINALIZE the node from the already-computed output (no re-run).'
+      : ' A completion condition was met at this gate, but your message would run ANOTHER iteration (pass accept:true or drop the message to finalize instead).';
   }
+  return (
+    `⚠️ This will ${action} ${subject}.${effect} ` +
+    'Confirm with the user, then call manage_run again with confirm: true to proceed.'
+  );
+}
 
-  log.info({ runId: run.id, action }, 'manage_run.write_requested');
+const WRITE_HANDLERS: Record<WriteAction, (write: ScopedWrite) => Promise<string>> = {
+  resume: resumeRun,
+  cancel: cancelRun,
+  abandon: abandonRun,
+  approve: approveGate,
+  reject: rejectGate,
+  respond: respondToGate,
+};
 
-  // Use the verified full id from `getScopedRun`, not the (possibly short) input
-  // — the operations below look runs up by exact id.
+async function resumeRun({ ctx, run }: ScopedWrite): Promise<string> {
+  const resumed = await ctx.operations.resumeWorkflow(run.id, ctx.actor);
+  return (
+    `Run ${resumed.id.slice(0, 8)} (${resumed.workflow_name}) can resume from its completed ` +
+    'nodes. It does not restart automatically — continue it from the run’s controls or by ' +
+    're-invoking the workflow.'
+  );
+}
+
+async function cancelRun({ ctx, run }: ScopedWrite): Promise<string> {
   const id = run.id;
-  switch (action) {
-    case 'resume': {
-      const resumed = await ctx.operations.resumeWorkflow(id, ctx.actor);
-      return (
-        `Run ${resumed.id.slice(0, 8)} (${resumed.workflow_name}) can resume from its completed ` +
-        'nodes. It does not restart automatically — continue it from the run’s controls or by ' +
-        're-invoking the workflow.'
-      );
+  try {
+    const result = await ctx.operations.cancelWorkflow(id, ctx.actor);
+    if (result.kind === 'cooperative') {
+      return result.cancelled
+        ? `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}). Its executor stops at its next status check.${cancelCleanupWarnings(result.cleanupWarnings)}`
+        : `Run ${id.slice(0, 8)} (${result.run.workflow_name}) already finished; nothing to cancel.`;
     }
-    case 'cancel': {
-      try {
-        const result = await ctx.operations.cancelWorkflow(id, ctx.actor);
-        if (result.kind === 'cooperative') {
-          return result.cancelled
-            ? `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}). Its executor stops at its next status check.`
-            : `Run ${id.slice(0, 8)} (${result.run.workflow_name}) already finished; nothing to cancel.`;
-        }
-        let msg = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}).`;
-        for (const warning of result.cleanupWarnings ?? []) msg += ` Warning: ${warning}`;
-        if (result.cascadeFailures > 0) {
-          msg += ` Warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
-        }
-        if (result.blockedParentRunId) {
-          msg += ` Parent run ${result.blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it so it reads this sub-run's outcome, or abandon it too.`;
-        }
-        return msg;
-      } catch (error) {
-        if (error instanceof CancelRefusedError && error.reason === 'no_owner_answered') {
-          return `${error.message} To release it, call manage_run with action='abandon' once the user confirms its process is gone.`;
-        }
-        throw error;
-      }
+    let msg = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}).`;
+    msg += cancelCleanupWarnings(result.cleanupWarnings);
+    if (result.cascadeFailures > 0) {
+      msg += ` Warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
     }
-    case 'abandon': {
-      const {
-        run: cancelled,
-        cascadeFailures,
-        cleanupWarnings,
-        blockedParentRunId,
-        owner,
-      } = await ctx.operations.abandonWorkflow(id, ctx.actor);
-      let msg = `${describeAbandonOwner(owner).join(' ')} Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
-      for (const warning of cleanupWarnings ?? []) msg += ` Warning: ${warning}`;
-      if (cascadeFailures > 0) {
-        msg += ` Warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
-      }
-      if (blockedParentRunId) {
-        msg += ` Parent run ${blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it so it reads this sub-run's outcome, or abandon it too.`;
-      }
-      return msg;
+    if (result.blockedParentRunId) {
+      msg += ` Parent run ${result.blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it so it reads this sub-run's outcome, or abandon it too.`;
     }
-    case 'approve': {
-      // accept=true forces the finalize path (#2074): no feedback reaches the gate,
-      // so a loop with a completed condition finalizes from its persisted output on resume.
-      const feedback = willFinalize ? undefined : message;
-      const result = await ctx.operations.approveWorkflow(id, feedback, ctx.actor, origin);
-      const continues = await signalGateResolved(ctx, run, 'approve');
-      if (result.type !== 'interactive_loop') {
-        return `Approved ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
-      }
-      return feedback === undefined
-        ? `Approved ${result.workflowName} (${id.slice(0, 8)}) with no feedback. If the gate paused after a completion condition was met, the node finalizes from its computed output (no re-run); otherwise the loop runs another iteration.${continues}`
-        : `Feedback recorded for ${result.workflowName} (${id.slice(0, 8)}); the loop runs another iteration with it.${continues}`;
+    return msg;
+  } catch (error) {
+    if (error instanceof CancelRefusedError && error.reason === 'no_owner_answered') {
+      return `${error.message} To release it, call manage_run with action='abandon' once the user confirms its process is gone.`;
     }
-    case 'reject': {
-      const result = await ctx.operations.rejectWorkflow(id, message, ctx.actor, origin);
-      if (result.cancelled) {
-        const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
-        return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
-      }
-      const continues = await signalGateResolved(ctx, run, 'reject');
-      return `Rejected ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
-    }
-    case 'respond': {
-      if (decisions !== undefined) {
-        // Several options for a multi_select wait. The operation validates them against the
-        // wait's declared options and refuses an unknown or repeated id, naming the valid ones.
-        await ctx.operations.answerWorkflow(
-          id,
-          { choose: decisions, ...(message !== '' ? { text: message } : {}) },
-          ctx.actor,
-          origin
-        );
-        const continues = await signalGateResolved(ctx, run, 'respond');
-        return `Responded ${decisions.map(option => `'${option}'`).join(', ')} to ${run.workflow_name} (${id.slice(0, 8)}).${continues}`;
-      }
-      // Any decision the gate declared, not just approve/reject (#2707 step 2).
-      // respondToWorkflow validates `decision` itself and throws a clear error
-      // naming the gate's actual options on a mismatch — caught by the tool's
-      // outer try/catch and returned as text, never a silent no-op.
-      const result = await ctx.operations.respondToWorkflow(
-        id,
-        decision,
-        message,
-        ctx.actor,
-        origin
-      );
-      if ('cancelled' in result) {
-        // decision === 'reject' resolved through the legacy cancel/rework path.
-        if (result.cancelled) {
-          const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
-          return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
-        }
-        const continues = await signalGateResolved(ctx, run, 'respond');
-        return `Rejected ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
-      }
-      const continues = await signalGateResolved(ctx, run, 'respond');
-      return `Responded '${decision}' to ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
-    }
+    throw error;
   }
+}
+
+async function abandonRun({ ctx, run }: ScopedWrite): Promise<string> {
+  const {
+    run: cancelled,
+    cascadeFailures,
+    cleanupWarnings,
+    blockedParentRunId,
+    owner,
+  } = await ctx.operations.abandonWorkflow(run.id, ctx.actor);
+  let msg = `${describeAbandonOwner(owner).join(' ')} Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
+  for (const warning of cleanupWarnings ?? []) msg += ` Warning: ${warning}`;
+  if (cascadeFailures > 0) {
+    msg += ` Warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
+  }
+  if (blockedParentRunId) {
+    msg += ` Parent run ${blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it so it reads this sub-run's outcome, or abandon it too.`;
+  }
+  return msg;
+}
+
+async function approveGate({
+  ctx,
+  run,
+  message,
+  origin,
+  willFinalize,
+}: ScopedWrite): Promise<string> {
+  const id = run.id;
+  // accept=true forces the finalize path (#2074): no feedback reaches the gate,
+  // so a loop with a completed condition finalizes from its persisted output on resume.
+  const feedback = willFinalize ? undefined : message;
+  const result = await ctx.operations.approveWorkflow(id, feedback, ctx.actor, origin);
+  const continues = await signalGateResolved(ctx, run, 'approve');
+  if (result.type !== 'interactive_loop') {
+    return `Approved ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
+  }
+  return feedback === undefined
+    ? `Approved ${result.workflowName} (${id.slice(0, 8)}) with no feedback. If the gate paused after a completion condition was met, the node finalizes from its computed output (no re-run); otherwise the loop runs another iteration.${continues}`
+    : `Feedback recorded for ${result.workflowName} (${id.slice(0, 8)}); the loop runs another iteration with it.${continues}`;
+}
+
+async function rejectGate({ ctx, run, message, origin }: ScopedWrite): Promise<string> {
+  const id = run.id;
+  const result = await ctx.operations.rejectWorkflow(id, message, ctx.actor, origin);
+  if (result.cancelled) return cancelledRejectionMessage(id, result);
+  const continues = await signalGateResolved(ctx, run, 'reject');
+  return `Rejected ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
+}
+
+function cancelledRejectionMessage(id: string, result: RejectionOperationResult): string {
+  const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
+  return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.${cancelCleanupWarnings(result.cleanupWarnings)}`;
+}
+
+async function respondToGate(write: ScopedWrite): Promise<string> {
+  const { ctx, run, decision, decisions, message, origin } = write;
+  const id = run.id;
+  if (decisions !== undefined) return chooseOptions(write, decisions);
+  // Any decision the gate declared, not just approve/reject (#2707 step 2).
+  // respondToWorkflow validates `decision` itself and throws a clear error
+  // naming the gate's actual options on a mismatch — caught by the tool's
+  // outer try/catch and returned as text, never a silent no-op.
+  const result = await ctx.operations.respondToWorkflow(id, decision, message, ctx.actor, origin);
+  if ('cancelled' in result) {
+    // decision === 'reject' resolved through the legacy cancel/rework path.
+    if (result.cancelled) return cancelledRejectionMessage(id, result);
+    const continues = await signalGateResolved(ctx, run, 'respond');
+    return `Rejected ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
+  }
+  const continues = await signalGateResolved(ctx, run, 'respond');
+  return `Responded '${decision}' to ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
+}
+
+/**
+ * Several options for a multi_select wait. The operation validates them against the
+ * wait's declared options and refuses an unknown or repeated id, naming the valid ones.
+ */
+async function chooseOptions(
+  { ctx, run, message, origin }: ScopedWrite,
+  decisions: string[]
+): Promise<string> {
+  await ctx.operations.answerWorkflow(
+    run.id,
+    { choose: decisions, ...(message !== '' ? { text: message } : {}) },
+    ctx.actor,
+    origin
+  );
+  const continues = await signalGateResolved(ctx, run, 'respond');
+  return `Responded ${decisions.map(option => `'${option}'`).join(', ')} to ${run.workflow_name} (${run.id.slice(0, 8)}).${continues}`;
 }
 
 const decisionsSchema = z.array(z.string().min(1)).min(1);
@@ -702,7 +782,7 @@ async function signalGateResolved(
  * or ambiguous prefix.
  */
 async function getScopedRun(runId: string, ctx: ManageRunContext): Promise<WorkflowRun | string> {
-  const matches = await ctx.operations.findWorkflowRunsByIdPrefix(runId, ctx.codebaseId);
+  const matches = await findProjectRunsByReference(ctx.operations, runId, ctx.codebaseId);
   if (matches.length > 1) {
     return `manage_run: id '${runId}' matches more than one run — use more characters or the full id.`;
   }
@@ -711,4 +791,8 @@ async function getScopedRun(runId: string, ctx: ManageRunContext): Promise<Workf
     return `manage_run: no run found for id '${runId}' in this project.`;
   }
   return run;
+}
+
+function cancelCleanupWarnings(warnings: readonly string[] = []): string {
+  return warnings.map(warning => ` Warning: ${warning}`).join('');
 }

@@ -78,7 +78,7 @@ export const stateRevisionSchema = z.object({
 export type StateRevision = z.infer<typeof stateRevisionSchema>;
 /**
  * Where a document lives. Every project key has at least two segments (`owner/repo`,
- * `_folder/<slug>`, `_cwd/<name>`), so the one-segment install key cannot collide with one.
+ * `_folder/<slug>`, `@cwd/<basename>-<digest>`), so the one-segment install key cannot collide with one.
  */
 export const stateProjectKeySchema = z.string().regex(/^[^/]+(?:\/[^/]+)+$/u);
 export const stateScopeSchema = z.discriminatedUnion('kind', [
@@ -208,49 +208,7 @@ export function applyStatePatch(
   if (ops.length === 0) throw new StatePatchError(name, 0, 'Expected at least one operation');
   for (const [opIndex, supplied] of ops.entries()) {
     try {
-      const op = statePatchOpSchema.parse(supplied);
-      const segments =
-        op.path === ''
-          ? []
-          : op.path
-              .slice(1)
-              .split('/')
-              .map(segment => segment.replaceAll('~1', '/').replaceAll('~0', '~'));
-      if (segments.length === 0) {
-        if (op.op === 'set') result = structuredClone(op.value);
-        else if (op.op === 'remove') throw new Error('Use delete to remove the document');
-        else {
-          if (!Array.isArray(result)) throw new Error('Append target must be an array');
-          result.push(structuredClone(op.value));
-        }
-      } else {
-        let parent = container(result);
-        for (const key of segments.slice(0, -1)) {
-          let child = read(parent, key);
-          if (child === undefined && op.op !== 'remove') {
-            child = {};
-            set(parent, key, child);
-          }
-          if (child === undefined) throw new Error('Pointer does not exist');
-          parent = container(child);
-        }
-        const key = segments.pop();
-        if (key === undefined) throw new Error('Missing pointer target');
-        if (op.op === 'set') set(parent, key, structuredClone(op.value));
-        else if (op.op === 'remove') {
-          if (read(parent, key) === undefined) throw new Error('Pointer does not exist');
-          if (Array.isArray(parent)) parent.splice(arrayIndex(key, parent.length, false), 1);
-          else Reflect.deleteProperty(parent, key);
-        } else {
-          let target = read(parent, key);
-          if (target === undefined) {
-            target = [];
-            set(parent, key, target);
-          }
-          if (!Array.isArray(target)) throw new Error('Append target must be an array');
-          target.push(structuredClone(op.value));
-        }
-      }
+      result = applyPatchOp(result, statePatchOpSchema.parse(supplied));
       if (result === null) throw new Error('Use delete for a tombstone');
       validateStateValue(result, name);
     } catch (error) {
@@ -263,6 +221,79 @@ export function applyStatePatch(
     }
   }
   return result;
+}
+
+function pointerSegments(path: string): string[] {
+  if (path === '') return [];
+  return path
+    .slice(1)
+    .split('/')
+    .map(segment => segment.replaceAll('~1', '/').replaceAll('~0', '~'));
+}
+
+/** Applies one op in place below the root; an op on the root returns the new document. */
+function applyPatchOp(document: StateValue, op: StatePatchOp): StateValue {
+  const segments = pointerSegments(op.path);
+  const key = segments.pop();
+  if (key === undefined) return applyRootOp(document, op);
+  const parent = pointerParent(document, segments, op.op !== 'remove');
+  switch (op.op) {
+    case 'set':
+      set(parent, key, structuredClone(op.value));
+      break;
+    case 'remove':
+      removeMember(parent, key);
+      break;
+    case 'append':
+      appendMember(parent, key, op.value);
+      break;
+  }
+  return document;
+}
+
+function applyRootOp(document: StateValue, op: StatePatchOp): StateValue {
+  switch (op.op) {
+    case 'set':
+      return structuredClone(op.value);
+    case 'remove':
+      throw new Error('Use delete to remove the document');
+    case 'append':
+      if (!Array.isArray(document)) throw new Error('Append target must be an array');
+      document.push(structuredClone(op.value));
+      return document;
+  }
+}
+
+/** Walks to the container holding the pointer's last segment. A missing step is created
+ * as an object, except for a remove, whose path must already exist. */
+function pointerParent(document: StateValue, segments: string[], create: boolean): Container {
+  let parent = container(document);
+  for (const key of segments) {
+    let child = read(parent, key);
+    if (child === undefined && create) {
+      child = {};
+      set(parent, key, child);
+    }
+    if (child === undefined) throw new Error('Pointer does not exist');
+    parent = container(child);
+  }
+  return parent;
+}
+
+function removeMember(parent: Container, key: string): void {
+  if (read(parent, key) === undefined) throw new Error('Pointer does not exist');
+  if (Array.isArray(parent)) parent.splice(arrayIndex(key, parent.length, false), 1);
+  else Reflect.deleteProperty(parent, key);
+}
+
+function appendMember(parent: Container, key: string, value: StateValue): void {
+  let target = read(parent, key);
+  if (target === undefined) {
+    target = [];
+    set(parent, key, target);
+  }
+  if (!Array.isArray(target)) throw new Error('Append target must be an array');
+  target.push(structuredClone(value));
 }
 
 /** The operation a patch records: its ops, plus the revision it named, if any. */

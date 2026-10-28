@@ -5,7 +5,7 @@
  * payload accumulates across resume segments.
  *
  * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
- * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
+ * ./connection with a real adapter, conflicting with the fake in the mock-based workflow-run-*.test.ts suites.
  */
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowTerminalProperties } from '@archon/paths';
@@ -263,4 +263,16 @@ describe('the projected payload', () => {
     expect(captured[0]).toMatchObject({ runId: 't-child', isChild: true });
     expect(captured[0]).not.toHaveProperty('workflowSource');
   });
+});
+
+test('terminal telemetry uses the first durable start and latest durable failure despite timestamp reversals', async () => {
+  await seedRun('t-durable-order', 'running');
+  await seedEvent('t-durable-order', 'workflow_started', '2030-01-01 00:00:00', { origin: 'cli' });
+  await seedEvent('t-durable-order', 'workflow_started', '2026-01-01 00:00:00', { origin: 'api' });
+  await seedEvent('t-durable-order', 'workflow_failed', '2030-01-02 00:00:00', {
+    exit_reason: 'source_unavailable',
+  });
+  await failWorkflowRun('t-durable-order', 'failed', { exitReason: 'node_error' });
+  expect(captured).toHaveLength(1);
+  expect(captured[0]).toMatchObject({ platform: 'cli', exitReason: 'node_error' });
 });

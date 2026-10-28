@@ -1,3 +1,5 @@
+import { createLogger } from '@archon/paths';
+import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
@@ -139,6 +141,8 @@ function compareCapacityWaiters(a: CapacityWaiter, b: CapacityWaiter): number {
 }
 
 const checkoutPath = (path: string): string => JSON.stringify(['path', path]);
+const checkoutBranch = (codebaseId: string, branch: string): string =>
+  JSON.stringify(['branch', codebaseId, branch]);
 
 /**
  * The checkout a launch locks, when admission can know it before execution starts: the
@@ -150,27 +154,44 @@ function launchCheckout(launch: PreparedWorkflowLaunch): string | undefined {
   if (isolation.kind === 'in-place') return checkoutPath(cwd);
   return isolation.branch === undefined
     ? undefined
-    : JSON.stringify(['branch', launch.run.codebase_id, isolation.branch]);
+    : checkoutBranch(launch.run.codebase_id, isolation.branch);
 }
 
-/**
- * The checkouts held by live runs admitted on a resource, each naming one such run. A run
- * holds its path lock from admission until it ends, whether or not it holds a slot (a
- * paused run gives its slot back), so a start on the same checkout would fail the lock. A
- * store passes each non-terminal run with its own launch.
- */
+export interface ReusableCheckout {
+  codebaseId: string;
+  branch: string;
+  workingPath: string;
+}
+
+function checkoutKeys(
+  launch: PreparedWorkflowLaunch | undefined,
+  workingPath: string | null | undefined,
+  reusable: readonly ReusableCheckout[]
+): Set<string> {
+  const keys = new Set(
+    [
+      launch ? launchCheckout(launch) : undefined,
+      workingPath ? checkoutPath(workingPath) : undefined,
+    ].filter((key): key is string => key !== undefined)
+  );
+  for (const checkout of reusable)
+    if (keys.has(checkoutBranch(checkout.codebaseId, checkout.branch)))
+      keys.add(checkoutPath(checkout.workingPath));
+  for (const checkout of reusable)
+    if (keys.has(checkoutPath(checkout.workingPath)))
+      keys.add(checkoutBranch(checkout.codebaseId, checkout.branch));
+  return keys;
+}
+
+/** Oldest-first holders contribute launch identities, paths and registered branch aliases. */
 export function heldCheckouts(
-  live: Iterable<{
-    id: string;
-    working_path?: string | null;
-    launch: PreparedWorkflowLaunch;
-  }>
+  live: Iterable<{ id: string; working_path?: string | null; launch?: PreparedWorkflowLaunch }>,
+  reusable: readonly ReusableCheckout[] = []
 ): Map<string, string> {
   const held = new Map<string, string>();
   for (const run of live) {
-    const own = launchCheckout(run.launch);
-    for (const key of [own, run.working_path ? checkoutPath(run.working_path) : undefined])
-      if (key !== undefined && !held.has(key)) held.set(key, run.id);
+    for (const key of checkoutKeys(run.launch, run.working_path, reusable))
+      if (!held.has(key)) held.set(key, run.id);
   }
   return held;
 }
@@ -191,19 +212,51 @@ export interface ResourceSlotOccupancy {
   /** Live holders, oldest first. */
   holders: readonly { id: string }[];
   waiters: readonly CapacityWaiter[];
-  /** Queued start requests, oldest first. */
+  /** Valid prefix of queued start requests, oldest first. */
   queue: readonly QueuedStart[];
-  /** `heldCheckouts` of the live runs admitted on the resource. */
+  /** Damage at the next queue position prevents admitting successors. */
+  queueError?: Error;
+  /** Checkouts requiring local serialization, including holders not provably foreign. */
   heldCheckouts: ReadonlyMap<string, string>;
+  foreignHeldCheckouts: ReadonlyMap<string, string>;
+  /** Oldest foreign holder whose missing or corrupt launch and absent path hide its checkout. */
+  unknownForeignCheckoutHolder?: string;
+  reusableCheckouts: readonly ReusableCheckout[];
 }
 
-/** The run whose checkout `launch` would fail to lock. */
 function checkoutHolder(
-  held: ReadonlyMap<string, string>,
+  slot: Pick<
+    ResourceSlotOccupancy,
+    'heldCheckouts' | 'foreignHeldCheckouts' | 'unknownForeignCheckoutHolder'
+  >,
   launch: PreparedWorkflowLaunch
 ): string | undefined {
   const checkout = launchCheckout(launch);
-  return checkout === undefined ? undefined : held.get(checkout);
+  if (checkout === undefined) return undefined;
+  return (
+    slot.heldCheckouts.get(checkout) ??
+    (readAdmissionCheckoutGuard(launch)
+      ? (slot.foreignHeldCheckouts.get(checkout) ?? slot.unknownForeignCheckoutHolder)
+      : undefined)
+  );
+}
+
+function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
+  return slot.queue.filter(start => {
+    try {
+      readAdmissionCheckoutGuard(start.launch);
+      return true;
+    } catch (error) {
+      if (!(error instanceof AdmissionCheckoutGuardError)) throw error;
+      // Keep the corrupt request inspectable and withdrawable, without letting it
+      // stall valid work. Never infer a guard value from malformed persisted data.
+      createLogger('resource-start').error(
+        { err: error, requestId: start.id },
+        'resource_start.invalid_queued_guard'
+      );
+      return false;
+    }
+  });
 }
 
 /**
@@ -212,7 +265,7 @@ function checkoutHolder(
  * per checkout and the slot goes to the next request that can run.
  */
 function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
-  return slot.queue.filter(start => checkoutHolder(slot.heldCheckouts, start.launch) === undefined);
+  return validQueuedStarts(slot).filter(start => checkoutHolder(slot, start.launch) === undefined);
 }
 
 /** What keeps a new start request for `launch` from being admitted now. */
@@ -220,10 +273,12 @@ export function resourceStartBlocker(
   slot: ResourceSlotOccupancy,
   launch: PreparedWorkflowLaunch
 ): ResourceBlocker | null {
+  readAdmissionCheckoutGuard(launch);
+  if (slot.queueError) throw slot.queueError;
   // An older request that could run keeps FIFO even when a slot is free.
   const older = runnableQueue(slot)[0];
   if (older) return { kind: 'request', id: older.id };
-  const holder = checkoutHolder(slot.heldCheckouts, launch);
+  const holder = checkoutHolder(slot, launch);
   if (holder !== undefined) return { kind: 'run', id: holder };
   const first = slot.holders[0] ?? slot.waiters[0];
   return first && slot.holders.length + slot.waiters.length >= slot.capacity
@@ -240,13 +295,13 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
   const free = slot.capacity - slot.holders.length - slot.waiters.length;
   const held = new Map(slot.heldCheckouts);
   const admitted: QueuedStart[] = [];
-  for (const start of slot.queue) {
+  for (const start of validQueuedStarts(slot)) {
     if (admitted.length >= free) break;
-    if (checkoutHolder(held, start.launch) !== undefined) continue;
+    if (checkoutHolder({ ...slot, heldCheckouts: held }, start.launch) !== undefined) continue;
     if (start.hostId !== hostId) break;
     admitted.push(start);
-    const checkout = launchCheckout(start.launch);
-    if (checkout !== undefined) held.set(checkout, start.id);
+    for (const checkout of checkoutKeys(start.launch, undefined, slot.reusableCheckouts))
+      held.set(checkout, start.id);
   }
   return admitted;
 }
@@ -264,6 +319,7 @@ export function resourceResumeBlocker(
   slot: ResourceSlotOccupancy,
   run: Pick<WorkflowRun, 'id' | 'metadata'> & { status: 'failed' | 'paused' }
 ): ResourceBlocker | null {
+  if (slot.queueError) throw slot.queueError;
   const others = slot.holders.filter(holder => holder.id !== run.id);
   if (others[0] && others.length >= slot.capacity) return { kind: 'run', id: others[0].id };
   if (others.length < slot.holders.length) return null;
@@ -305,6 +361,18 @@ export function resumeRefusal(
   return ready ? 'waiting' : 'paused';
 }
 
+export type QueuedResourceStartInspection =
+  | ResourceStartRequestInspection
+  | { id: string; resource?: string; receiptId?: string; error: unknown };
+
+/** A stored start receipt that could not be read or validated. Its bindings and their hosts are unknown. */
+export interface DamagedStartReceipt {
+  document: string;
+  error: Error;
+}
+
+export type PendingStartBindingInspection = StartBindingInspection | DamagedStartReceipt;
+
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {
@@ -328,12 +396,13 @@ export interface IResourceStartStore {
       'id' | 'sourceInstanceId' | 'deliveryId' | 'outcome' | 'reason' | 'receivedAt'
     >[]
   >;
+  /** Damaged receipts are reported as entries beside the bindings; `limit` counts bindings only. */
   listPendingStartBindings(options: {
     hostId: string;
     limit?: number;
-  }): Promise<StartBindingInspection[]>;
+  }): Promise<PendingStartBindingInspection[]>;
   getResourceStartRequest(id: string): Promise<ResourceStartRequestInspection | null>;
-  listQueuedResourceStartsForHost(hostId: string): Promise<ResourceStartRequestInspection[]>;
+  listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
   claimStartBindingPreparation(input: {
     receiptId: string;

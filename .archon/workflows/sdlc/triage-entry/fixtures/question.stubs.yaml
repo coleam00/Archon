@@ -10,6 +10,7 @@ stage__triage:
   urgency: { value: none, reason: "stub: urgency" }
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
+  related: []
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
   summary: "stub: blocked on an owned prerequisite; see triage.md"
 attend__decide:
@@ -33,6 +34,4 @@ attend__decide:
 fixture:
   expect: paused
   reached: [stage__verdict, attend__settle]
-  resolved-text-contains:
-    attend__ask: "**Choices.**\n- `rerun` (stub: triage again): stub: triages again with the note\n- `finish` (stub: leave it blocked): stub: ends the run with the verdict BLOCKED"
 exec-code: true

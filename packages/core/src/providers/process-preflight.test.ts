@@ -33,7 +33,9 @@ test('run preflight resolves the model and checks credentials through a process 
   expect(prepared.requirements).toEqual([
     { provider: descriptor.id, model: 'openai/native-model', vendor: 'openai' },
   ]);
-  await assertRunCredentials(deps, prepared);
+  await assertRunCredentials(deps, prepared, { cwd: tmpdir() });
   prepared.config.envVars = { TEST_CREDENTIAL: '' };
-  await expect(assertRunCredentials(deps, prepared)).rejects.toThrow('no usable login');
+  await expect(assertRunCredentials(deps, prepared, { cwd: tmpdir() })).rejects.toThrow(
+    'no usable login'
+  );
 });

@@ -410,17 +410,11 @@ CREATE TABLE IF NOT EXISTS remote_agent_user_provider_keys (
   UNIQUE(user_id, provider)
 );
 
--- #1955: credential rows are vendor-keyed (claude→anthropic, codex→openai,
--- copilot→github-copilot) so one credential can serve every agent that
--- consumes the vendor. Idempotent data fix: where both a legacy and a vendor
--- row exist for the same user, the vendor row wins (rare — requires having
--- connected both ids pre-rename); then legacy rows are renamed in place.
--- Tested on SQLite (adapters/sqlite.test.ts covers rename, conflict, and
--- idempotency); the Postgres DML below is the same statements but is NOT
--- covered by an automated test — verified manually on the multi-user smoke.
--- Survivable either way: reads normalize legacy ids (normalizeCredentialVendor).
+-- Vendor rows win conflicts with legacy rows, then remaining legacy rows are
+-- renamed. sqlite-migrations.test.ts executes this portable DML against every
+-- alias in the provider catalog to enforce conformance with the SQLite repair.
 DELETE FROM remote_agent_user_provider_keys
-WHERE provider IN ('claude', 'codex', 'copilot')
+WHERE provider IN ('claude', 'codex', 'copilot', 'azure-openai-responses')
   AND EXISTS (
     SELECT 1 FROM remote_agent_user_provider_keys v
     WHERE v.user_id = remote_agent_user_provider_keys.user_id
@@ -428,11 +422,13 @@ WHERE provider IN ('claude', 'codex', 'copilot')
         WHEN 'claude' THEN 'anthropic'
         WHEN 'codex' THEN 'openai'
         WHEN 'copilot' THEN 'github-copilot'
+        WHEN 'azure-openai-responses' THEN 'azure'
       END
   );
 UPDATE remote_agent_user_provider_keys SET provider = 'anthropic' WHERE provider = 'claude';
 UPDATE remote_agent_user_provider_keys SET provider = 'openai' WHERE provider = 'codex';
 UPDATE remote_agent_user_provider_keys SET provider = 'github-copilot' WHERE provider = 'copilot';
+UPDATE remote_agent_user_provider_keys SET provider = 'azure' WHERE provider = 'azure-openai-responses';
 
 -- Phase 3: per-user AI preferences (model tiers, @custom aliases, default
 -- assistant). NON-encrypted — model names are not secrets (mirrors
@@ -555,14 +551,17 @@ CREATE CONSTRAINT TRIGGER archon_workflow_event_order
 -- (id = 1); the row's VALUES are written by the adapters from APP_VERSION
 -- (packages/core/src/db/schema-version.ts) so the version string has exactly one
 -- source of truth. created_app_version is NULL for databases that predate this
--- table and is never back-filled with a guess.
+-- table and is never back-filled with a guess. schema_fingerprint is separate,
+-- adapter-owned completion metadata, not diagnostic vintage.
 CREATE TABLE IF NOT EXISTS remote_agent_schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   created_app_version VARCHAR(64),
   app_version VARCHAR(64) NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+  applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  schema_fingerprint TEXT
 );
+ALTER TABLE remote_agent_schema_version ADD COLUMN IF NOT EXISTS schema_fingerprint TEXT;
 
 CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
   project_key TEXT NOT NULL,

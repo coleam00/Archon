@@ -2,7 +2,7 @@
  * Conformance test: `@archon/providers` and the Pi runtime load ONE pi-ai module
  * instance.
  *
- * The compiled-binary shims in `provider.ts` (`ensureBedrockProviderRegistered`,
+ * The compiled-binary shims in `sdk-setup.ts` (`ensureBedrockProviderRegistered`,
  * `ensurePiOAuthFlowsRegistered`) write into module-level registries inside
  * pi-ai. Pi only sees them if pi-coding-agent and pi-agent-core resolve the same
  * pi-ai files that this package imports. Bun's isolated linker installs a second

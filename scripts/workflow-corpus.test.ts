@@ -1,0 +1,201 @@
+import { providerRegistry } from '@archon/providers';
+import { afterAll, expect, test } from 'bun:test';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
+import {
+  validationSourceConfigSchema,
+  workflowValidationConfig,
+} from '../packages/workflows/src/validation-config';
+import { discoverWorkflowsWithConfig } from '../packages/workflows/src/workflow-discovery';
+import {
+  validateWorkflowResources,
+  type ValidationIssue,
+} from '../packages/workflows/src/validator';
+
+/**
+ * Lints this repository's own workflows with the engine's discovery and validator. It
+ * lives in `scripts/` because it reads the SDLC pack and the engine together; engine
+ * tests never read the pack. The scratch-project cases prove the lint itself reports.
+ */
+const repo = resolve(import.meta.dir, '..');
+const root = await mkdtemp(join(tmpdir(), 'archon-workflow-corpus-'));
+const originalHome = process.env.ARCHON_HOME;
+process.env.ARCHON_HOME = join(root, 'home');
+registerBuiltinProviders();
+registerCommunityProviders();
+afterAll(async () => {
+  if (originalHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = originalHome;
+  await removeTempTree(root);
+});
+
+interface Finding {
+  file: string;
+  issue: ValidationIssue;
+}
+
+function workflowSourceFiles(paths: string[]): string[] {
+  return paths
+    .map(file => file.replaceAll('\\', '/'))
+    .filter(file => !file.split('/').includes('fixtures'))
+    .sort();
+}
+
+async function validateCorpus(
+  cwd: string,
+  defaultAssistant?: string
+): Promise<{ findings: Finding[]; files: string[] }> {
+  const configPath = join(cwd, '.archon/config.yaml');
+  const config = validationSourceConfigSchema.parse(
+    (await Bun.file(configPath).exists()) ? Bun.YAML.parse(await readFile(configPath, 'utf8')) : {}
+  );
+  config.assistant ??= defaultAssistant;
+  const workflowRoot = join(cwd, '.archon/workflows');
+  const files = workflowSourceFiles(
+    await Array.fromAsync(new Bun.Glob('**/*.{yaml,yml}').scan(workflowRoot))
+  );
+  const fileByName = new Map<string, string>();
+  for (const file of files) {
+    const value: unknown = Bun.YAML.parse(await readFile(join(workflowRoot, file), 'utf8'));
+    if (typeof value === 'object' && value !== null && 'name' in value) {
+      if (typeof value.name === 'string') fileByName.set(value.name, file);
+    }
+  }
+  const discovered = await discoverWorkflowsWithConfig(
+    cwd,
+    async () => ({
+      ...config,
+      envVars: config.env,
+    }),
+    providerRegistry
+  );
+  const findings: Finding[] = discovered.errors.map(error => ({
+    file:
+      files.find(file => file.endsWith('/' + error.filename) || file === error.filename) ??
+      error.filename,
+    issue: { level: 'error', field: error.errorType, message: error.error },
+  }));
+  const checkedFiles = new Set(findings.map(finding => finding.file));
+  // Workflows validate independently; most of each one's cost is resource lookups
+  // on disk, so they run concurrently rather than one after another.
+  const validated = await Promise.all(
+    discovered.workflows.map(async ({ workflow, source }) => {
+      const file = fileByName.get(workflow.name);
+      // Bundled workflows also appear when validating scratch projects.
+      if (file === undefined) return [];
+      checkedFiles.add(file);
+      const issues = await validateWorkflowResources(
+        workflow,
+        cwd,
+        providerRegistry,
+        {
+          ...workflowValidationConfig(config),
+          workflowSource: source,
+        },
+        config.assistant
+      );
+      return issues
+        .filter(issue => issue.level === 'error' || issue.code === 'shell_output_ref')
+        .map(issue => ({ file, issue }));
+    })
+  );
+  findings.push(...validated.flat());
+  expect(files.filter(file => !checkedFiles.has(file))).toEqual([]);
+  return { findings, files };
+}
+
+// Validating the whole corpus costs about 14 ms per workflow file on an idle
+// machine (50 files: ~0.7 s, measured 2026-10-07), mostly the expanded SDLC
+// pack's resource checks, and grows with every workflow added. CI runs it beside
+// the rest of the suite several times slower, where the default 5 s timed out, so
+// the bound scales with the corpus at 200 ms per file (never under the Windows
+// floor, through testTimeout).
+const corpusFiles = workflowSourceFiles(
+  Array.from(new Bun.Glob('**/*.{yaml,yml}').scanSync(join(repo, '.archon/workflows')))
+);
+test(
+  'repository workflows have no errors or unsafe shell output references',
+  async () => {
+    const { findings, files } = await validateCorpus(repo, 'claude');
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some(file => file.startsWith('sdlc/'))).toBe(true);
+    expect(findings).toEqual([]);
+  },
+  testTimeout(Math.max(5_000, corpusFiles.length * 200))
+);
+
+test('corpus inventory excludes fixtures and identifies SDLC sources with either path separator', () => {
+  const paths = [
+    'sdlc/deliver/fixtures/clean.stubs.yaml',
+    'sdlc/deliver/archon-deliver.yaml',
+    'scratch.yml',
+  ];
+  const expected = ['scratch.yml', 'sdlc/deliver/archon-deliver.yaml'];
+  expect(workflowSourceFiles(paths)).toEqual(expected);
+  expect(workflowSourceFiles(paths.map(file => file.replaceAll('/', '\\')))).toEqual(expected);
+});
+
+test.each<[string, string, ValidationIssue['code']]>([
+  ['quoted', 'echo "$source.output"', 'shell_output_ref'],
+  ['bare', 'echo $source.output', 'shell_output_ref'],
+  ['unknown', 'value=$missing.output', undefined],
+])('rejects a discovered workflow with %s output references', async (name, body, code) => {
+  const project = join(root, name);
+  const folder = join(project, '.archon/workflows');
+  await mkdir(folder, { recursive: true });
+  await writeFile(
+    join(folder, 'broken.yaml'),
+    `name: corpus-${name}
+description: scratch corpus
+nodes:
+  - id: source
+    bash: echo hello
+  - id: use
+    depends_on: [source]
+    bash: '${body}'
+`
+  );
+  const { findings } = await validateCorpus(project);
+  expect(findings).toHaveLength(1);
+  expect(findings[0].file).toBe('broken.yaml');
+  if (code) expect(findings[0].issue.code).toBe(code);
+  else expect(findings[0].issue.level).toBe('error');
+  expect(() => expect(findings).toEqual([])).toThrow();
+});
+
+test.each(['project', 'custom-user'])(
+  'honours Claude configuration for a %s skill',
+  async scope => {
+    const project = join(root, `skill-${scope}`);
+    const folder = join(project, '.archon/workflows');
+    const configDir = join(project, 'custom-claude');
+    const skillDir = join(
+      scope === 'project' ? join(project, '.claude') : configDir,
+      'skills',
+      'corpus-skill'
+    );
+    await mkdir(folder, { recursive: true });
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), '# Corpus skill\n');
+    await writeFile(
+      join(folder, 'skill.yaml'),
+      `name: corpus-skill-${scope}\ndescription: scratch skill corpus\nprovider: claude\nnodes:\n  - id: use\n    prompt: use the skill\n    skills: [corpus-skill]\n`
+    );
+    const configPath = join(project, '.archon/config.yaml');
+    const config = {
+      assistants: { claude: { settingSources: [scope === 'project' ? 'user' : 'project'] } },
+      env: { CLAUDE_CONFIG_DIR: configDir },
+    };
+    await writeFile(configPath, Bun.YAML.stringify(config));
+    const { findings } = await validateCorpus(project);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].issue.field).toBe('skills');
+    expect(findings[0].issue.level).toBe('error');
+    config.assistants.claude.settingSources = [scope === 'project' ? 'project' : 'user'];
+    await writeFile(configPath, Bun.YAML.stringify(config));
+    expect((await validateCorpus(project)).findings).toEqual([]);
+  }
+);

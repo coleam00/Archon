@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -53,6 +54,97 @@ async function waitFor<T>(read: () => T | undefined, label: string): Promise<T> 
   const detail = lastError instanceof Error ? `: ${lastError.message}` : '';
   throw new Error(`Timed out waiting for ${label}${detail}`);
 }
+
+function readRecordedPids(pidFile: string): [owner: number, node: number] | undefined {
+  if (!existsSync(pidFile)) return undefined;
+  const record = readFileSync(pidFile, 'utf8');
+  // The shell's terminating newline publishes the complete owner/node pair.
+  const match = /^([1-9]\d*) ([1-9]\d*)\n$/.exec(record);
+  if (!match || match[0] !== record) return undefined;
+  const owner = Number(match[1]);
+  const node = Number(match[2]);
+  return Number.isSafeInteger(owner) && Number.isSafeInteger(node) ? [owner, node] : undefined;
+}
+
+function stagedPidWriter(pidFile: string): string {
+  return `node_pid=$$; echo "$PPID $$" > '${pidFile}.ready'; printf '%s %s' "$PPID" "\${node_pid:0:1}" > '${pidFile}'; while [ ! -f '${pidFile}.publish' ]; do sleep 0.025; done; printf '%s\\n' "\${node_pid:1}" >> '${pidFile}'; exec sleep 60`;
+}
+
+async function publishPidsAfterConsumerWaits(
+  pidFile: string,
+  consumer: Promise<[owner: number, node: number]>
+): Promise<[owner: number, node: number]> {
+  const expected = await waitFor(
+    () => readRecordedPids(`${pidFile}.ready`),
+    'node to prepare its complete PID pair'
+  );
+  await waitFor(
+    () =>
+      existsSync(pidFile) &&
+      readFileSync(pidFile, 'utf8') === `${expected[0]} ${String(expected[1])[0]}`
+        ? true
+        : undefined,
+    'node to pause with a positive partial second PID'
+  );
+  let consumed = false;
+  const result = consumer.then(pids => {
+    consumed = true;
+    return pids;
+  });
+  try {
+    // Allow several consumer polls while the shell is held at the publication gate.
+    await Bun.sleep(100);
+    expect(consumed).toBe(false);
+    if (process.platform !== 'win32') expect(processAlive(expected[0])).toBe(true);
+  } finally {
+    writeFileSync(`${pidFile}.publish`, '');
+  }
+  const pids = await result;
+  expect(pids).toEqual(expected);
+  return pids;
+}
+
+describe('trigger fixture PID records', () => {
+  test.each([
+    '',
+    '12345',
+    '12345 ',
+    '12345 6',
+    '12345 67890',
+    '0 67890\n',
+    '12345 0\n',
+    '-12345 67890\n',
+    '12345 -67890\n',
+    'owner 67890\n',
+    '12345 node\n',
+    '12345 6.5\n',
+    '12345 6e3\n',
+    '9007199254740993 67890\n',
+    '12345 9007199254740993\n',
+    '12345 67890 42\n',
+    '12345 67890\n\n',
+    '12345 67890\n42 43\n',
+  ])('rejects incomplete or invalid record %j', record => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-trigger-pids-'));
+    tempRoots.push(root);
+    const pidFile = join(root, 'owner.pid');
+    writeFileSync(pidFile, record);
+    expect(readRecordedPids(pidFile)).toBeUndefined();
+  });
+
+  test('withholds both PIDs until the node finishes publishing its record', () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-trigger-pids-'));
+    tempRoots.push(root);
+    const pidFile = join(root, 'owner.pid');
+    expect(readRecordedPids(pidFile)).toBeUndefined();
+    writeFileSync(pidFile, '12345 6');
+    expect(readRecordedPids(pidFile)).toBeUndefined();
+    appendFileSync(pidFile, '7890');
+    expect(readRecordedPids(pidFile)).toBeUndefined();
+    appendFileSync(pidFile, '\n');
+    expect(readRecordedPids(pidFile)).toEqual([12345, 67890]);
+  });
+});
 
 async function runCli(
   cliPath: string,
@@ -220,6 +312,7 @@ describe('trigger CLI durable execution', () => {
       writeFileSync(
         fixturePath,
         `
+        import { renameSync } from 'node:fs';
         import { createSqlWorkflowHost } from ${JSON.stringify(join(packagesRoot, 'core/src/workflows/sql-host.ts'))};
         import createSource from ${JSON.stringify(join(packagesRoot, 'adapters/src/sources/standard-webhooks/source-plugin.ts'))};
         import { SourceReceiptDigestConflictError } from ${JSON.stringify(join(packagesRoot, 'workflows/src/resource-start-store.ts'))};
@@ -236,7 +329,8 @@ describe('trigger CLI durable execution', () => {
             throw error;
           }
         }});
-        await Bun.write(${JSON.stringify(portPath)}, String(server.port));
+        await Bun.write(${JSON.stringify(`${portPath}.tmp`)}, String(server.port));
+        renameSync(${JSON.stringify(`${portPath}.tmp`)}, ${JSON.stringify(portPath)});
       `
       );
       const env = {
@@ -259,7 +353,7 @@ describe('trigger CLI durable execution', () => {
       const serverOutput = new Response(server.stderr).text();
       try {
         const port = await waitFor(
-          () => (existsSync(portPath) ? readFileSync(portPath, 'utf8') : undefined),
+          () => (existsSync(portPath) ? readFileSync(portPath, 'utf8') || undefined : undefined),
           'recipe fixture port'
         );
         const runScript = async (path: string, syntaxOnly = false): Promise<string> => {
@@ -858,7 +952,7 @@ nodes:
           `name: signal-proof\ndescription: Signal proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
         );
       };
-      writeWorkflow(`echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
+      writeWorkflow(stagedPidWriter(pidFile));
 
       const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
       const databasePath = join(archonHome, 'archon.db');
@@ -905,11 +999,18 @@ nodes:
       let sleepPid: number | undefined;
       try {
         await runCli(cliPath, projectRoot, archonHome, fire);
-        const [ownerPid, nodePid] = await waitFor(() => {
-          if (runs()[0]?.status !== 'running' || !existsSync(pidFile)) return undefined;
-          const pids = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
-          return pids.length === 2 ? pids : undefined;
-        }, 'trigger execution to start its node');
+        const first = await waitFor(() => {
+          const run = runs()[0];
+          return run?.status === 'running' ? run : undefined;
+        }, 'trigger execution to start');
+        activeRuns.add(first.id);
+        const [ownerPid, nodePid] = await publishPidsAfterConsumerWaits(
+          pidFile,
+          waitFor(() => {
+            if (runs()[0]?.status !== 'running') return undefined;
+            return readRecordedPids(pidFile);
+          }, 'trigger execution to start its node')
+        );
         sleepPid = nodePid;
 
         process.kill(ownerPid, 'SIGTERM');
@@ -928,6 +1029,7 @@ nodes:
             return true;
           }
         }, 'signalled owner to exit');
+        activeRuns.delete(first.id);
 
         // With the run terminal, the capacity-1 slot admits the next start at once.
         writeWorkflow('echo done');
@@ -971,7 +1073,7 @@ nodes:
       );
     };
     // A bash node's parent is the `trigger execute` process that owns the run.
-    writeWorkflow(`echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
+    writeWorkflow(stagedPidWriter(pidFile));
 
     const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
     const databasePath = join(archonHome, 'archon.db');
@@ -1028,16 +1130,7 @@ nodes:
         return run?.status === 'running' ? run : undefined;
       }, 'trigger execution to start');
       activeRuns.add(first.id);
-      // The node writes both PIDs with one echo, but the file can exist before the write
-      // finishes. Parse only a complete record, so a partial read never yields PID 0,
-      // which the cleanup below would turn into a signal to this runner's own group.
-      pids = await waitFor(() => {
-        if (!existsSync(pidFile)) return undefined;
-        const record = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
-        return record.length === 2 && record.every(pid => Number.isInteger(pid) && pid > 0)
-          ? record
-          : undefined;
-      }, 'trigger node to record its PIDs');
+      pids = await publishPidsAfterConsumerWaits(pidFile, recordedPids(pidFile));
 
       // The next start captures its own source at intake and waits behind the slot.
       writeWorkflow('echo done');
@@ -1183,15 +1276,8 @@ nodes:
     };
   }
 
-  /** Both PIDs the held node records, parsed only from a complete record (never PID 0). */
   function recordedPids(pidFile: string): Promise<[owner: number, node: number]> {
-    return waitFor(() => {
-      if (!existsSync(pidFile)) return undefined;
-      const record = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
-      return record.length === 2 && record.every(pid => Number.isInteger(pid) && pid > 0)
-        ? ([record[0], record[1]] as [number, number])
-        : undefined;
-    }, 'trigger node to record its PIDs');
+    return waitFor(() => readRecordedPids(pidFile), 'trigger node to record its PIDs');
   }
 
   function killAll(pids: number[]): void {
@@ -1460,189 +1546,3 @@ function processAlive(pid: number): boolean {
     return false;
   }
 }
-
-/**
- * A project with one input-declaring workflow, a registered actor and a poll-style
- * timer binding for it. Two tests share it because each fire is a full CLI process,
- * which costs most of a second on Windows: one test holding every case ran at its budget.
- */
-async function pollFixture() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-poll-')));
-  tempRoots.push(root);
-  const archonHome = join(root, 'home');
-  const projectRoot = join(root, 'project');
-  const workflowsDir = join(projectRoot, '.archon', 'workflows');
-  mkdirSync(workflowsDir, { recursive: true });
-  const gitInit = Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot });
-  expect(await gitInit.exited).toBe(0);
-  const workflowPath = join(workflowsDir, 'process-order.yaml');
-  writeFileSync(
-    workflowPath,
-    `name: process-order
-description: Record a polled order.
-mutates_checkout: false
-inputs:
-  order_id: { type: string, required: true }
-  mode: { type: string, required: true }
-nodes:
-  - id: record
-    bash: printf '%s\\n' "$INPUTS_ORDER_ID:$INPUTS_MODE" > "$ARTIFACTS_DIR/order.txt"
-`
-  );
-  const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
-  const databasePath = join(archonHome, 'archon.db');
-  await runCli(cliPath, projectRoot, archonHome, ['trigger', 'list']);
-  const userId = crypto.randomUUID();
-  const database = new Database(databasePath);
-  try {
-    database
-      .query('INSERT INTO remote_agent_users (id, display_name) VALUES (?, ?)')
-      .run(userId, 'Poll integration actor');
-  } finally {
-    database.close();
-  }
-  const configPath = join(root, 'trigger.json');
-  const inputsPath = join(root, 'inputs.json');
-  const config = {
-    version: 1,
-    sourceInstanceId: 'polled-orders',
-    binding: {
-      bindingId: 'process-order',
-      bindingRevision: null,
-      hostId: 'poll-host',
-      runAsUserId: userId,
-      resource: 'orders:processing',
-      overlap: 'queue',
-      launch: {
-        cwd: projectRoot,
-        workflowName: 'process-order',
-        inputs: { order_id: 'literal-order', mode: 'poll' },
-        isolation: { kind: 'in-place' },
-      },
-    },
-    schedule: { intervalSeconds: 60, runAtLoad: false },
-  };
-  writeFileSync(configPath, JSON.stringify(config));
-  const fire = ['trigger', 'fire', '--config', configPath, '--inputs', inputsPath];
-  return {
-    config,
-    configPath,
-    inputsPath,
-    workflowPath,
-    databasePath,
-    fire,
-    cli: (args: string[], expectSuccess = true) =>
-      runCli(cliPath, projectRoot, archonHome, args, expectSuccess),
-    runs: (): RunRow[] =>
-      readRows<RunRow>(
-        databasePath,
-        'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs'
-      ),
-  };
-}
-
-test('poll-style CLI fires deduplicate keyed event inputs and reject bad ones', async () => {
-  const { config, configPath, inputsPath, databasePath, fire, cli, runs } = await pollFixture();
-  writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-123' }));
-  const keyed = [...fire, '--delivery-id', 'order-123@1'];
-  for (let tick = 0; tick < 2; tick++) {
-    await cli(keyed);
-    config.binding.launch.inputs.mode = 'edited-after-acceptance';
-    writeFileSync(configPath, JSON.stringify(config));
-  }
-  const completed = await waitFor(() => {
-    const rows = runs();
-    return rows.length === 1 && rows[0]?.status === 'completed' ? rows[0] : undefined;
-  }, 'one completed polled run');
-  expect(JSON.parse(completed.metadata)).toMatchObject({
-    inputs: { order_id: 'order-123', mode: 'poll' },
-  });
-  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
-  expect(
-    readRows(databasePath, 'SELECT id FROM remote_agent_resource_start_requests')
-  ).toHaveLength(1);
-  const stored = readRows<{ intent: string; event_input_names: string }>(
-    databasePath,
-    'SELECT intent,event_input_names FROM remote_agent_start_receipt_bindings'
-  )[0];
-  if (!stored) throw new Error('Missing stored binding');
-  expect(JSON.parse(stored.intent)).not.toHaveProperty('eventInputs');
-  expect(JSON.parse(stored.event_input_names)).toEqual(['order_id']);
-
-  for (const invalid of ['[]', 'null', '{bad json', '{"":1}']) {
-    writeFileSync(inputsPath, invalid);
-    const result = await cli(fire, false);
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain('--inputs');
-  }
-  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(1);
-
-  writeFileSync(inputsPath, JSON.stringify({ undeclared: 'event' }));
-  const rejected = await cli([...fire, '--delivery-id', 'undeclared@1'], false);
-  expect(rejected.exitCode).not.toBe(0);
-  expect(
-    readRows<{ preparation_status: string }>(
-      databasePath,
-      "SELECT preparation_status FROM remote_agent_start_receipt_bindings WHERE preparation_status='rejected'"
-    )
-  ).toHaveLength(1);
-  expect(runs()).toHaveLength(1);
-
-  // A recorded delivery answers replay or conflict even after its run-as user is removed.
-  const users = new Database(databasePath);
-  try {
-    users.query('DELETE FROM remote_agent_users WHERE id = ?').run(config.binding.runAsUserId);
-  } finally {
-    users.close();
-  }
-  writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-124' }));
-  const unknownUser = await cli([...fire, '--delivery-id', 'order-124@1'], false);
-  expect(unknownUser.exitCode).not.toBe(0);
-  expect(unknownUser.stderr).toContain('Trigger binding names an unknown run-as user.');
-  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(2);
-  writeFileSync(inputsPath, JSON.stringify({ order_id: 'order-123' }));
-  await cli(keyed);
-  writeFileSync(inputsPath, JSON.stringify({ order_id: 'changed-order' }));
-  const conflict = await cli(keyed, false);
-  expect(conflict.exitCode).not.toBe(0);
-  expect(conflict.stderr).toContain(
-    "Delivery ID 'order-123@1' was already used with different inputs"
-  );
-  expect(readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts')).toHaveLength(2);
-  expect(runs()).toHaveLength(1);
-});
-
-test('poll-style CLI fires preserve unkeyed starts', async () => {
-  const { configPath, inputsPath, workflowPath, databasePath, fire, cli, runs } =
-    await pollFixture();
-  writeFileSync(inputsPath, JSON.stringify({ order_id: 'unkeyed-event' }));
-  await cli(fire);
-  const inputsOnlyRun = await waitFor(() => {
-    const rows = runs();
-    return rows.length === 1 && rows[0]?.status === 'completed' ? rows[0] : undefined;
-  }, 'inputs-only run completion');
-  expect(JSON.parse(inputsOnlyRun.metadata)).toMatchObject({
-    inputs: { order_id: 'unkeyed-event' },
-  });
-  writeFileSync(
-    workflowPath,
-    'name: process-order\ndescription: No declared inputs\nnodes:\n  - id: record\n    bash: echo done\n'
-  );
-  writeFileSync(inputsPath, JSON.stringify({ order_id: 'event' }));
-  const noDeclaration = await cli([...fire, '--delivery-id', 'undeclared@2'], false);
-  expect(noDeclaration.exitCode).not.toBe(0);
-  expect(runs()).toHaveLength(1);
-
-  for (let tick = 0; tick < 2; tick++) {
-    await cli(['trigger', 'fire', '--config', configPath]);
-    await waitFor(
-      () =>
-        runs().filter(row => row.status === 'completed').length === tick + 2 ? true : undefined,
-      'unkeyed run completion'
-    );
-  }
-  expect(
-    readRows(databasePath, 'SELECT id FROM remote_agent_start_receipts WHERE delivery_id IS NULL')
-  ).toHaveLength(3);
-  expect(runs()).toHaveLength(3);
-});

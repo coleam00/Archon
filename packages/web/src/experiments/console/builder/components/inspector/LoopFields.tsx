@@ -79,6 +79,11 @@ export function LoopFields({
           onChange({ ...data, until_bash: raw.trim().length > 0 ? raw : undefined });
         }}
       />
+      <p className="text-[11.5px] text-text-secondary">
+        New loops start with a placeholder check that never completes. Replace it with a real check
+        before running. Exit 0 completes the loop; leaving the placeholder reaches the iteration cap
+        and fails the node.
+      </p>
       <TextField
         label="Until field (boolean in output_format)"
         value={data.until_field ?? ''}

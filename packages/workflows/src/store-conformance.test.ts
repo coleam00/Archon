@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { expect, test } from 'bun:test';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';

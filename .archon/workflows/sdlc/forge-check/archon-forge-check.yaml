@@ -1,0 +1,31 @@
+name: archon-forge-check
+description: |
+  Check that the pack's selected forge source (ARCHON_SDLC_FORGE, gh by
+  default) can act for this checkout, without starting any delivery. It runs
+  the check the pack's forge-using workflows run as their first node, with the
+  env a run gets. On forge, the installed plugin must advertise every
+  operation the delivery workflows use; the merge queue checks its own when
+  it starts. On both sources, one repository the checkout's
+  remotes name must answer an authenticated read. That proves read access,
+  not write access. A pass names the credential source used; a refusal says
+  what to fix.
+
+  Use when: setting up the pack on a checkout, switching ARCHON_SDLC_FORGE, or
+  a delivery run refused at its forge node.
+  NOT for: proving write access (the first write does that).
+
+# A read-only check of the live checkout's remotes and credentials, so it runs
+# there, beside any run that already holds the checkout.
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+  - id: forge
+    script: forge-check
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        source: { type: string, enum: [gh, forge] }
+      required: [source]

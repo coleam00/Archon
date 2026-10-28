@@ -15,9 +15,9 @@ Connect Archon to GitHub so you can interact with your AI coding assistant from 
 
 ## Prerequisites
 
-- Archon server running (see [Getting Started](/getting-started/overview/))
+- Archon server running (`archon serve`; see [Web UI](/adapters/web/))
 - GitHub repository with issues enabled
-- `GITHUB_TOKEN` set in your environment (see [Getting Started](/getting-started/overview/))
+- A GitHub personal access token set as `GITHUB_TOKEN` in `~/.archon/.env`
 - Public endpoint for webhooks (see ngrok setup below for local development)
 
 ## Step 1: Generate Webhook Secret
@@ -96,7 +96,7 @@ WEBHOOK_SECRET=your_secret_from_step_1
 
 ## Step 5: Configure Streaming (Optional)
 
-The GitHub adapter always uses `batch` mode (hardcoded) since GitHub issues and PRs are best served by single complete comments rather than streaming updates.
+The GitHub adapter always uses `batch` mode (hardcoded). It assembles the reply before delivery and splits long replies into multiple comments.
 
 ## Usage
 
@@ -109,7 +109,8 @@ Interact by @mentioning your bot in issue or PR **comments**:
 ```
 
 **First mention behavior:**
-- Automatically clones the repository to `~/.archon/workspaces/`
+- Reuses an existing local registration at its saved checkout path, including a subdirectory of a Git checkout. Otherwise, registers and clones the repository to `~/.archon/workspaces/owner/repo/source/`, or to a suffixed path such as `owner/repo-2/source/` when that project name is taken.
+- For an existing registration, readiness skips syncing the checkout to preserve local changes.
 - Detects and loads commands from `.archon/commands/` if present
 - Injects full issue/PR context for the AI assistant
 
@@ -151,6 +152,22 @@ gh api repos/OWNER/REPO/hooks --method POST \
 **Important**: The webhook secret must be identical across all repos.
 
 Check-run deliveries wake CI waits quickly. They are not required for correctness: when GitHub does not deliver one, the workflow reaches its deadline and probes CI again.
+
+## GitHub Enterprise Server
+
+To run the adapter against a self-hosted GitHub Enterprise Server, set its base URL:
+
+```ini
+GITHUB_URL=https://github.example.com
+```
+
+With `GITHUB_URL` set, the adapter calls `https://github.example.com/api/v3`, clones from `https://github.example.com/<owner>/<repo>.git`, and `GH_TOKEN`/`GITHUB_TOKEN` authenticate HTTPS clones of that exact scheme, host and port. Leave it unset for github.com. A value with a path, query or credentials is rejected: the adapter and the GitHub App fail startup, and clones to the Enterprise host get no GitHub token. Clones from other forges are unaffected.
+
+- **Webhook:** create it on the Enterprise repository or organization, pointing at the same `/webhooks/github` endpoint with the same secret (Step 3).
+- **GitHub App mode:** register the App on the Enterprise instance (**Settings → Developer settings → GitHub Apps**) with the permissions listed in [GitHub App Setup](/adapters/github-app-setup/). The App's API calls and installation tokens go to the Enterprise instance.
+- **SDLC workflows:** the forge plugin needs a `forge.hosts` entry for the Enterprise host; see [forge plugin configuration](/reference/forge/#plugin-configuration).
+
+Current limits: in App mode, git operations after the first clone (sync, workflow pushes) and per-user identity (`archon auth github`, the device flow) still target github.com. Use PAT mode on Enterprise Server for now.
 
 ## Further Reading
 

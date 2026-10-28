@@ -64,7 +64,10 @@ open, so the round ends `threads_open` instead of ready. The next round's
 implementer judges each thread like a blocking finding, fixing it or declining it
 with evidence; `settle-threads` checks each disposition at the pushed head and
 writes the reply, and `threads` posts the replies, resolves those threads, and reads
-the pull request back. A thread no agent can settle ends the run `needs_human`.
+the pull request back. A thread about code the pull request doesn't change or make
+reachable, such as one that arrived with a merge of the default branch, is settled
+with a reply saying so; it belongs in its own issue. A thread no agent can settle
+ends the run `ask`.
 `settle-threads` runs before CI and a failed one skips it, so the pull request stays
 the draft the previous round left; a failed `threads` node puts it back to draft
 before the run fails. The
@@ -73,7 +76,9 @@ pack's own review verdict is unchanged: threads gate delivery, not the review.
 A pull request counts as ready only at the commit its review comment stamps. The
 comment's first lines are stamped by `publish-review` from the round's certified
 output ([`.shared/review-comment.ts`](.shared/review-comment.ts)): the reviewed commit
-and the verdict, which the merge queue's gate reads. CI never
+and the verdict, which the merge queue's gate reads, and the contract coverage
+(`complete` only when the review left nothing open), which the sweep reads before it
+lets a merge close the issue. CI never
 marks ready a head carrying commits the round's review did not cover. Commits pushed
 after a run ends, by a fixer or by hand, are reviewed by a continuation delivery of
 that pull request, whose first round reviews the whole change before CI marks it
@@ -103,15 +108,22 @@ same shapes from either source:
   with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
   qualified PR, with the authenticated `gh` login.
 
-The released GitHub plugin v0.11.1 lacks eight required operations and refuses preflight.
-Keep `gh` as the default until a compatible release passes a real-PR check.
+The preflight names every forge operation the delivery workflows use, and a plugin
+missing any of them is refused before an agent spends. The merge queue checks its own
+operations when it starts (below). Keep `gh` as the default until a released plugin
+with all of them passes a real-PR check.
 
-The merge queue reads through `gh` alone and refuses `forge`: its gate needs a pull
-request's unresolved review threads, which the forge contract does not report.
-Delivery reads, answers and resolves review threads through `gh` alone for the same
-reason. On the `forge` source it never calls `gh` for them: its `threads` node does
-not run, and the report records `threads_checked: false` and says the threads were
-not checked.
+The merge queue reads and merges through the run's source. On `forge` its facts,
+gate and record read through `pr.view`, `pr.merge-state`, `checks.state`,
+`checks.commit`, `pr.threads` and `workitem.comments`, and the gate merges through
+`pr.merge` pinned to the head; `facts` refuses a plugin missing any of them before it
+claims an item. Own-PR enrollment does not run on `forge`, because the contract has
+no read for a maintainer's open pull requests, and the sweep agent's issue read,
+failed-job reruns, log reads and closing-reference body edit still use `gh`. The gate itself
+doesn't refuse over threads; the sweep holds a merge only for a thread that raises a defect in code the
+pull request changes or makes reachable. Delivery reads, answers and resolves review
+threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,
+`pr.thread.reply` and `pr.thread.resolve`.
 
 The switch does not cover standalone `archon-review`: given a pull-request number,
 URL or branch, or run on a branch with an open pull request, it reads that pull
@@ -142,23 +154,44 @@ The gh check first refuses a run whose `GH_TOKEN` is empty with no `GITHUB_TOKEN
 otherwise act as the host's login): per-user GitHub mode scrubbed it, or an env file
 has an empty `GH_TOKEN=` line to remove. The operations still refuse on their own. The node's typed
 `source` is what the `ci` and `update-pr-body` agents act through.
+Run `archon workflow run archon-forge-check` from a checkout to see the same check's
+result without starting delivery.
 
 ## Public writes belong to a script
 
-An agent judges and authors; the node after it performs the one public write and
-proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
-request; on a pull request the run continues it only pushes, and `prepare` writes no
-body for it when the caller named the PR or selected no branch. If the caller
+An agent judges and authors; one node owns the public writes and
+proves they landed. `publish-pr` pushes the branch and opens or reuses the pull
+request; on a pull request the run continues it pushes and opens nothing, and
+`prepare` writes no body for it when the caller named the PR or selected no branch. If the caller
 selected a branch without naming a PR, prepare writes a body even if it found an
 existing PR: publish may need to open one from the selected branch. That body is
-used only when opening a PR. The description of a continued pull request belongs to `update-pr-body`
-in delivery, which brings it up to date once the rounds end; a standalone `archon-pr`
-leaves it as its author left it. `publish-review` upserts the one marked review
+used only when opening a PR. In delivery, content the work requires in the
+description is written during the round that prepared it, before that round's
+review reads the pull request: `prepare` copies it to `pr-description.md`, and
+`publish-pr` writes it between `archon-delivery-description` markers, keeps the
+rest of the description as it is, and reads it back. Markers in Markdown code
+examples and raw HTML containers are literal text; top-level markers are reserved
+for the managed section and are refused in prepared content before pushing. The
+composed body must expose exactly the intended pair before any description edit;
+unclosed fences or HTML containers that hide either delimiter refuse publication.
+A blank line separates the closing delimiter from prepared content, including terminal tables;
+legacy sections whose closing delimiter follows a table row remain replaceable.
+If publication verifies a created or reused PR but a later description edit fails,
+the failure report still names that PR from its verified publication record. If writing that record
+fails, publication fails and the node error names the verified PR URL and recording
+error for explicit continuation. The failure report selects the latest verified publication
+by artifact write time across the typed output and creation record, and reports an
+unreadable creation record. An unresolved
+creation claim reports `pr_create_unresolved`; the build queue refuses to select
+another PR or branch until a newer triage settles it: it names the reconciled PR, or
+names none and the next round opens one. `update-pr-body` corrects the
+description's stale claims and links the issue once the rounds end. A standalone
+`archon-pr` leaves a continued pull request's description as its author left it:
+its `publish_description` input defaults off. `publish-review` upserts the one marked review
 comment, and deliver's `threads` posts the thread replies `settle-threads`
 declared and resolves those threads. Every pack label is declared in `.shared/labels.ts`, and every stage writes
 labels through its `writeLabels`, which adds and removes them as a delta so labels
-another writer adds survive. On the `forge` source it still writes the whole label set back, because
-the forge contract has no single-label add or remove yet. No delivery node files
+another writer adds survive, on both sources. No delivery node files
 discoveries: the run's terminal report relays them to the operator, and
 [`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver-block` and
 `archon-ship-block` that is the `report` node, which also runs when a node fails, so a
@@ -173,8 +206,9 @@ head that was left behind before it judges anything, ending `other` if it cannot
 `update-pr-body` edits the description, because judging which claims are stale and
 rewriting them is the whole job; and `ci` marks the pull request ready and back to
 draft around its CI wait. The last two act through the source the `forge` node
-certified, bound to them as a typed input. No script reads an
-agent-written file to find out what to write.
+certified, bound to them as a typed input. PR publication reads the agent-authored
+`pr-body.md` and `pr-description.md` content through certified artifact pointers;
+the publisher owns the writes and verifies the description edit.
 
 Which remote holds a repository is decided by its configured URL, never by the
 remote's name (`.shared/remote.ts`), so a fork checkout whose `origin` is the fork
@@ -204,6 +238,13 @@ covers every TypeScript file under `.archon/workflows/`, so it needs no globs of
 own. A script placed outside the type-check globs fails `pack-scripts-validation.test.ts`
 rather than going quietly unchecked.
 
+The scripts' tool-boundary tests live under `.archon/scripts/__tests__/`. CI runs the
+merge-sweep conformance test through `merge-sweep-contract`; the other pack tests do not run
+on pull requests or pushes. Run `bun run test --plan pack` when you change
+`.archon/workflows/` or `.archon/scripts/`, or dispatch the Test Suite workflow with
+`pack-tests` set. The workflow fixtures likewise run only locally
+(`bun run validate --only workflow-fixtures`) or on a dispatch with `pack-fixtures` set.
+
 Three rules, each protecting something a script cannot get back on its own:
 
 - **Read every binding as a literal `process.env.INPUTS_<NAME>`.** The engine scans
@@ -221,9 +262,8 @@ Three rules, each protecting something a script cannot get back on its own:
   the pack and the standard library are the whole surface, which is what keeps
   these workflows runnable against a project in any language.
 
-A vocabulary a node declares in YAML has exactly one owner. A script that routes on
-one imports it from `.shared/verdict.ts`; a script that merely consumes another
-node's certified value does not restate the list at all.
+A vocabulary a node declares in YAML has exactly one owner, its `output_format`. A
+script that consumes another node's certified value does not restate the list.
 
 ## Evidence never carries credentials
 
@@ -261,15 +301,16 @@ new pack prompt that writes or judges code follows the same rule.
 A project's policy for a decision the pack makes, such as what triage accepts, is
 one more sidecar document, kept at `.archon/sdlc/policy/<topic>.md`. The pack ships
 a default for each policy document a prompt names, in
-[`.shared/policy/`](.shared/policy). A project's own file replaces its default
-whole; with no project file, the default applies. To change one, copy the default
-to `.archon/sdlc/policy/` and reword it. A policy document may be only a pointer to
+[`.shared/policy/`](.shared/policy). A node reads the default first and then
+the project's own file, whose lines add to the default and win where the two conflict;
+with no project file, the default applies. To change one, write only the lines to add
+or override in `.archon/sdlc/policy/<topic>.md`. A policy document may be only a pointer to
 documents the project already has, and the agent reads what it points to. A prompt
 names only the policy documents its decision needs, through the shared sentence
 ending "the SDLC policy files this decision names, at `.archon/sdlc/policy/`,
 falling back to the pack's defaults"; triage names `triage.md`, and plan and review
 synthesis name `rulings.md`, the answers a project's maintainers have already given,
-read before either stops for a person. The build queue's agents name `build.md`, what
+read before either stops to ask. The build queue's agents name `build.md`, what
 the queue may decide on its own, and its route and answer agents `rulings.md` too. The
 merge queue's sweep names `merge.md`, which pull requests merge on their own.
 Agents interpret
@@ -281,10 +322,9 @@ captures its source before it starts, from a binary's embedded bundle as from a
 source checkout, and runs its scripts from that capture, so
 [`.shared/policy-defaults.ts`](.shared/policy-defaults.ts) finds `.shared/policy/`
 from its own location and the node binds that directory into the prompt with `with:`. The script hands over
-the directory only; the agent chooses between the project's file and the default,
-and no script opens either. The default is a file rather than text in the prompt
-because a prompt carrying the default would hold it even after a project replaced
-it.
+the directory only; the agent reads the default and the project's file, and no
+script opens either. The default is a file rather than text in the prompt, so a node
+whose decision names no policy carries none of it.
 
 ## A stage pauses where nothing takes it forward
 
@@ -308,6 +348,30 @@ the review eval, and `archon-ship-block` and `archon-deliver-block` themselves. 
 composer owns what follows the stage's ending and asks through its own attention item
 when it needs a person, so one decision never raises two items.
 
+## Models per stage
+
+Each stage names the concern it serves as a model preference list. The first alias
+your config defines wins. When it defines none, the node runs on the size tier it has
+always used. A user who sets nothing gets the same models as before.
+
+| Alias | Nodes | Falls back to |
+|---|---|---|
+| `@triage` | triage | `medium` |
+| `@planner` | plan | `large` |
+| `@investigator` | investigate | `medium` |
+| `@implementer` | implement, including delivery's reshape | `large` |
+| `@reviewer` | every agent node of review (scope, lenses, synthesis) and simplify | each node's tier |
+| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code`, `medium` for the rest) |
+
+Review's lens router stays on `small`, and the queue, attention and delivery judges
+keep their tiers. Moving those means rebinding the tier.
+
+Set an alias for every run with `archon ai alias set @reviewer codex gpt-5.5`, or in
+`aliases:` in `.archon/config.yaml`. Set it for one run with
+`archon workflow run ... --model @reviewer=codex/gpt-5.5`. A lens alias overrides only
+its lens: with `@reviewer` on Codex and `@review-seams` on Claude, seams runs on
+Claude and every other lens on Codex.
+
 ## A node's streams are the operator's channel
 
 Retention is not the only reader. Anything a node writes to stderr is sent to the
@@ -321,17 +385,23 @@ too — a `gh` update notice merged into a read becomes the value.
 ## Intake
 
 [`archon-intake`](intake/archon-intake.yaml) is the front of the label-driven pack.
-Trigger bindings start it on issue events; only an eval run (below) is started by
-hand. Each issue has a work item, the state document `work/<number>` in the
+Trigger bindings start it on issue events. Each issue has a work item, the state document `work/<number>` in the
 project's scope, owned by [`.shared/workitem.ts`](.shared/workitem.ts). The
-document is the item's state: its trust, stage, triage fields, promotion, claim and
-a short history. The issue's pack labels mirror it, and a label a person adds is a
+document is the item's state: its trust, stage, triage fields (the five judged
+fields and the related work triage found: overlapping issues, earlier attempts and
+merged changes on the same surface, which plan reads), promotion, claim and a short
+history. The issue's pack labels mirror it, and a label a person adds is a
 request, never the state.
 
-- **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` (a JSON
-  array of forge logins) at the head of the default branch and records once whether
-  the issue's author is on it. No file means an empty list, so every author is
-  outside. A file that is not an array of logins refuses the run.
+- **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` at the
+  head of the default branch and records once whether the issue's author is on it.
+  The file is a JSON array whose entries are forge logins, or objects naming one with
+  opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
+  login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
+  open pull requests in the merge queue, except one a work item already names or one
+  from a `build/` branch in the repository itself, so a hand-made pull request on a
+  `build/` branch does not enroll (see Pickup there); on the `gh` source only. No file means an empty list, so every author is outside. Any other
+  shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
 - **Promotion.** A listed maintainer promotes an outside item by adding
@@ -346,9 +416,9 @@ request, never the state.
   and is ignored. The outcome also refuses to add a request label to an outside item
   no maintainer promoted, so the install's own identity cannot promote anything.
 - **Pickup.** Every run records its event as a request on its issue, then claims the
-  waiting item that sorts first by the `order` input (default
-  `["urgency desc","importance desc","size asc","created asc"]`; an untriaged item
-  sorts after triaged ones, oldest first) with a conditional write. A request that
+  waiting item that sorts first (most urgent, then most important, then smallest,
+  then oldest; an untriaged item sorts after triaged ones, oldest first) with a
+  conditional write. Every queue claims in this order. A request that
   arrives while its item is claimed waits for the next intake run. A request label
   whose request no run has claimed may have a request on its way, so a run leaves
   it for the run that claims that request. It waits one pickup; the next pickup
@@ -372,10 +442,13 @@ request, never the state.
   outcome writes the work item and labels, then comments on the issue with a link to
   the original or the change and closes it as `duplicate` or `completed`. A
   duplicate's original gets a comment linking back. Each comment is one marked
-  comment, so a repeated run edits it rather than adding another. An item already
+  comment, so a repeated run edits it rather than adding another. The one exception, on
+  the `gh` source only: a comment write that lands but returns a retryable response (5xx, or a rate limit) or no response
+  is repeated, and if the listing lags it posts a second marked comment; the next upsert then refuses on the two, and an
+  operator deletes one. An item already
   closed for the verdict's reason (an earlier run that stopped after its close)
   still records the work item and its labels, but posts no comment and doesn't close
-  it again; one closed for another reason fails the run before any comment. A demoted item, an eval run and every other verdict close nothing.
+  it again; one closed for another reason fails the run before any comment. A demoted item and every other verdict close nothing.
   Intake is the one workflow that closes: `archon-triage` run alone, even with
   `publish`, only labels the item `archon-close`, because inside intake triage runs
   unpublished so the outcome can withhold a verdict judged on text no maintainer
@@ -384,27 +457,8 @@ request, never the state.
   decision, no stage change, no label write.
 - **Inputs.** `label_actor` is the one input that can create a promotion, never
   trust. Only the binding, or someone with access to the install, can supply it.
-  `trust: outside` sends the item down the outside path whatever the maintainer
-  list says. It only lowers trust a run decides: an item whose trust is already
-  recorded as a maintainer's refuses the run, since recorded trust never changes.
-  There is no `maintainer` value; `facts` refuses any value but `auto` and
-  `outside`, and any `mode` but `live` and `eval`, before it reads or writes
-  anything.
-- **Eval mode.** `mode: eval` runs intake on the issue named by `number` and
-  writes nothing: no request, claim, work item, label or comment. It reads the
-  maintainer list and the issue, and decides the issue as a fresh item as it was
-  opened, unlabelled and open. Triage is shown only the title and body at creation,
-  recovered from GitHub's edit history, without the issue's number, state or links.
-  The `forge` source has no edit history and shows the current text; the outcome's
-  `evaluation.seen.body_from` says which one triage saw. The outcome returns the
-  whole decision as `evaluation`: the trust input, what triage saw, the label delta
-  live would write, this run's history entries, and triage's verdict with its five
-  fields and, for `NO_ACTION`, the closure live would perform. The triage agent
-  keeps its read tools and can still look the issue up, and it reads the run's
-  message too, so launch an eval run without a message that names the issue.
 
-The pack installs no binding, and none should be installed on a repository until the
-backlog bench passes. Two bindings in the GitHub source plugin's configuration start
+The pack installs no binding. Two bindings in the GitHub source plugin's configuration start
 it; both share one resource so runs queue rather than overlap:
 
 ```json
@@ -442,109 +496,39 @@ The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
 The predicate only saves runs; intake ignores any other label. A binding installed before the investigate label was renamed still lists `archon-issue`: replace it with `archon-investigate` in that binding, and in any build-queue binding that selects on it, because `label.name` predicates match exactly.
 
-### The backlog bench
-
-[`intake/scripts/bench/bench.ts`](intake/scripts/bench/bench.ts) compares intake and
-triage versions on issues whose outcome is already known. Run it with `bun` from a
-checkout of the repository; the set, the dispositions file and the output directory
-are the operator's and stay outside the pack and the repository.
-
-- **Set.** `select` pins issues closed as duplicates (with the issue they duplicate),
-  closed by a merged pull request, closed as not planned, open with a human type
-  label, and open issues the operator dispositioned (`--dispositions`, a JSON array
-  of `{number, contract, route?, note?}`), each with its title and body at creation.
-  It also pins which workflow judges each row: a listed maintainer's issue runs
-  through intake in eval mode; an outside author's runs through `archon-triage-block`
-  directly on the same creation text with `publish=false`, because eval intake never
-  triages an outside item; and some maintainer issues get a second `trust: outside`
-  row, which must take the outside path with no agent node. A group that finds
-  fewer issues than its count pins nothing.
-- **Versions.** A version file is `{label, pack_sha}` for the baseline, the model
-  triage's tier resolves to today, plus `provider` and `model` for any other. Every
-  version runs with a config layer pinning that tier, with the baseline's effort, so
-  versions differ only in the model. The binding is resolved by a dry run on the
-  pack's own `triage/fixtures/deliver.stubs.yaml` at `pack_sha`. A version that
-  cannot be resolved refuses the batch before any run.
-- **Batches.** `run` takes the set's n-th five rows and runs every version on them,
-  one ordinary run each at one base commit. Each run has its own worktree of the
-  checkout, so `--concurrency` never puts two runs on one checkout. Every run
-  appends one line, labelled with its version, to `samples.jsonl`. The batch then
-  fails if any batch issue or state document of the repository changed, if a
-  `trust: outside` row ran an agent node, if text outside a declared live closure was posted (`posted_text`), or if a run was
-  cancelled, did not finish, or failed before any agent ran; a failed batch is
-  reported before anyone evaluates it. A run that failed after its agent ran is the
-  version's result, not a batch failure. A `trust: auto`
-  run that returns no triage verdict, or a verdict whose transcript is missing so no
-  leak check ran, is recorded as failed: it counts against the bars as not right.
-  Eval batches are cheap dry checks that the bench works, not fair scored
-  comparisons: an eval run can read the issue's current state, including its outcome.
-- **Live batches.** Use live batches on scratch copies for scored comparisons.
-  `copy` opens copies of a batch's issues and each duplicate's canonical issue in scratch repositories
-  the operator prepared, one per version, and `run --live` runs intake for real
-  there, reading each verdict from the copy's work item. `posted_text` permits only
-  the exact comments of that run's declared closure on scratch copies, including
-  a duplicate's backlink to that row's mapped canonical copy. A duplicate destination
-  elsewhere fails the check. The bench snapshots all issues and issue comments in the
-  source and scratch repositories, so concurrent changes there can invalidate a batch.
-  Any other new or edited comment in those monitored repositories fails `posted_text`;
-  eval permits no posted text there. Posts to other repositories are outside the bench's view.
-  Recorded batches retain their recorded check values and
-  need a rerun to measure this behavior. The work item keeps no
-  summary, maintainer recommendation or links, so a live verdict shows none. A
-  scratch repository may not be the set's own or another version's. Its remote
-  default branch and local checkout must both be at the batch base before `run --live`.
-  An empty repository is refused before any run. From the scratch checkout, publish
-  the base with `git push origin <base>:refs/heads/bench-base`, then set it with
-  `gh repo edit <host/owner/repo> --default-branch bench-base` (use the scratch
-  remote's name if it is not `origin`). The preflight prints the repair commands. Each row copy holds
-  the pinned creation text, and canonical copies use their creation-time title and
-  body. If creation text cannot be recovered, `copy` refuses it. Duplicate text is
-  unchanged: intake finds the canonical by searching the scratch repository. Each live line records
-  merged pull requests on the base that reference the original issue, for scoring.
-  If that evidence is incomplete, the row does not run and its line says why;
-  reference histories exceeding the first 100 events are refused. Rows with
-  references also require a complete source history: unshallow the source checkout
-  before rerunning. Complete empty reference responses need no history check. Older
-  live lines without collected evidence keep close proposals pending until rerun or
-  marked right or wrong.
-- **Evaluation.** `page` serves one batch's page on the loopback interface: each
-  row's versions side by side with the verdict, the five fields, any close proposal
-  or maintainer recommendation with its links, cost, time and the triage report. The
-  operator marks each run right, wrong or partly right, and marks land in
-  `marks.jsonl`, so they tally across batches. A mark also overrides the scorer's
-  expected answer for false closes and dispositions, not for `type`. The score uses
-  these marks; the page shows the selected mark and any note.
-- **Score.** `score` prints one column per version from each version's latest line
-  per row, with live lines in their own `<label> (live)` column: which workflow
-  judged the rows (`archon-triage`, `intake eval` or `intake live`), the hard checks, each bar (the duplicates, fixed and not-planned bars by
-  the operator's marks), false closes (a close proposal on an issue that was still
-  open, unless the operator dispositioned it closed or marked the run right; a wrong
-  mark overrides a close disposition. A merged pull request on the base that only
-  references the issue leaves the close bar pending until the operator marks the
-  run right or wrong),
-  dispositions matched (a right or wrong mark decides), the `type` confusion matrix
-  with `enhancement` read as `feature`, leaks (a command, fetch or search that
-  looked up the judged issue, left out of the accuracy numbers), cost over the runs in
-  which an agent ran (`unreported` when no provider reported one) and wall time, and
-  which versions got each disagreement right. A bar with no applicable rows reads
-  `not applicable`. It does not choose a winner.
-
 ## Build queue
 
 [`archon-build-queue`](build-queue/archon-build-queue.yaml) takes intake's triaged
 items to a reviewed, ready pull request, and stops only for decisions that belong to a
 person. It acts on its own when a case is clear and asks when it is not; the default
 policy for which is which is [`.shared/policy/build.md`](.shared/policy/build.md),
-which a project replaces with its own `.archon/sdlc/policy/build.md`.
+which a project extends with its own `.archon/sdlc/policy/build.md`.
 
-- **Pickup.** A run claims one item with intake's claim and order (the `order`
-  input). An item waits for the build queue when its work item's stage is a READY
+- **Pickup.** A run claims one item with intake's claim and order. An item waits for the build queue when its work item's stage is a READY
   route (`deliver`, `continue`, `plan` or `investigate`) and the queue has not
   recorded it, or recorded it as waiting for its next round. A re-triage after the
   queue's last decision starts the item over. The build queue's claim takes none of
   the item's intake requests, so an edit or label request recorded while it holds the
   item waits for intake's next pickup. The queue writes no labels; intake's mirror
   stays as it is.
+- **A named item.** The `number` input makes the run claim that issue instead of the
+  first in order, so an operator chooses what a run builds and, with the launch's
+  config, which provider builds it: one launch per issue, such as
+  `--input number=123` with the config that selects Codex. An issue that cannot be
+  claimed refuses the run before any agent, with why: it has no work item, another
+  run holds it, or its stage and build status show it does not wait.
+- **Blocked items.** Intake's blocked verdict can go stale while work lands in
+  parallel: a blocker's outcome can arrive another way while its issue is still open.
+  When `retriage_as` names a maintainer login, a run that names no item also revisits
+  the blocked items, beside the item it builds. `blocked` lists the unclaimed blocked
+  items not revisited in the last six hours, independently of item pickup and PR
+  resolution. An unresolved PR create refuses the item's continuation without
+  suppressing these revisits. A scheduled queue does not judge the same items every
+  run. One `revisit` agent reads each issue, what it waits on and the default branch, and names the items that no longer look blocked. `retriage` adds
+  `archon-triage` to each and starts `archon-intake` detached with that label event,
+  recorded as added by `retriage_as`. Intake stays the judge: it re-triages only when
+  that login is on the maintainer list, and its verdict decides whether the item now
+  waits for the build queue. Every listed item records the revisit.
 - **Route.** The `route` agent checks that the issue body is a contract (the six
   elements, with its dated "Current scope" sections), proves a bug's symptom before
   its first round, and writes the brief `archon-ship` starts from. A bug that needs a
@@ -556,40 +540,63 @@ which a project replaces with its own `.archon/sdlc/policy/build.md`.
   head commit, `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. It declares the pull request when the round left commits unpushed.
-  A round for an item with an open pull request in its repository passes it to
+  A `continue` starts the item's next round at once, a detached `archon-build-queue
+  --input number=<n>` on the run config and the `retriage_as` and
+  `round_limit` this run started with; if that launch fails, the item waits for the
+  next queue run.
+  Facts reports the open pull request in the item's repository as the candidate, and
+  the `route` agent declares whether the round continues it: unless a dated scope
+  section or a recorded answer supersedes it. A continued pull request goes to
   `archon-ship` as `pull_request`, and delivery finishes it whichever route triage
-  takes, pushing onto its head so the same pull request updates. A round that failed
-  after publishing still records its pull request. Otherwise the round opens its
+  takes, pushing onto its head so the same pull request updates. A superseded one is
+  never checked out or pushed to: ship gets `none`, so its triage cannot route the
+  round back onto it. The round starts fresh, refusing a checkout that is not on the
+  default branch, and its brief asks for the old
+  pull request to be closed as superseded once the replacement opens. A round that failed
+  after publishing still records its pull request. A round that continues none opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
-  merged pull request, or one from a fork, is asked about.
-- **Give up.** When a round ends wanting another and `round_limit` rounds (default 3)
+  merged pull request, or one from a fork, is asked about; a round launched anyway
+  never continues it, since ship gets `none` for it too.
+- **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
   have run since the item's scope last changed, by a re-triage or a maintainer's
-  answer, the `give-up` agent compares their reviews. Each round finding new defects
-  asks the scope question instead of running another round.
+  answer, the `answer` agent also compares their reviews. Each round finding new
+  defects asks the scope question instead of running another round.
 - **Writes.** The `apply` script refuses an attention item without the choice it
   recommends, pushes the declared commits (never forcing, and reading the remote head
   back), then records the decision on the work item and releases the claim, in one
   conditional write. A run that asks keeps its claim while it is paused.
+  When route finds the pull request already reviewed at its current head, apply
+  checks that head before and after taking it out of draft. A changed read-back
+  head fails readiness and, unless already draft, triggers one draft correction
+  through the selected forge source. The failure reports the observed head, state
+  and draft status; a failed correction preserves its error and attempts one
+  diagnostic read. If verification fails, inspect the PR, restore draft if still
+  open and ready, and review its current head before readiness. These observations
+  cannot prevent another actor changing it afterwards. The merge queue still owns
+  exact-head review and merge checks.
 - **Attention.** An unclear decision pauses the run as one `select` attention item
   labelled `build: route`, `build: stop` or `build: scope`. It says what the decision
   is, why it matters, the agent's recommendation with its evidence, confidence and
   what would change it, the choices and what each does, what happens if nobody
-  answers, and the links to the evidence. The answer is one declared choice, so the
-  queue never reads the answer's prose for a decision. The `ruling` script writes the
+  answers, and the links to the evidence. The answer is one declared choice, or
+  `other`, which every item offers: its text says what to do instead and becomes the
+  ruling, and the item continues from it. The queue never reads the answer's prose for
+  a decision. The `ruling` script writes the
   choice's ruling and the person's words into the issue body as one dated "Current
-  scope" section, reads it back, and records the answer: a `continue` choice launches
-  the next round from it, and a `park` choice stops working the item until a
-  re-triage. A run cancelled while it waits leaves the item asking, and only a
+  scope" section, reads it back, and records the answer: a `continue` choice starts
+  the item's next round at once, a detached `archon-build-queue --input number=<n>`
+  run on the run config (`--config-from-run`) and the `retriage_as` and
+  `round_limit` the answered run started with. A `ready` choice hands the pull
+  request to the merge queue as it stands, as after a maintainer finished it by hand;
+  the merge gate still checks it, and an item with no pull request refuses the answer.
+  A `park` choice stops working the item until a re-triage. If a continue's launch
+  fails, the item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
   re-triage starts it over.
-- **Record.** The work item's `facts.build` holds the item's status (`next`,
-  `asking`, `ready` or `parked`), the brief its next round starts from, its last ten
-  rounds and its last twenty decisions with any maintainer's answer.
-- **Eval mode.** `mode: eval` claims, launches and writes nothing. It decides the
-  issue named by `number`: with an empty `replay` it makes the route decision, and
-  otherwise it answers the last of the recorded rounds in `replay` (the earlier ones
-  are its history), reading the issue body as it was at `as_of`. The agents keep
-  their read tools, so they can still see the pull request and comments as they are
-  now.
+- **Record.** The work item's `facts.build` holds the item's status, which says who
+  owns it: the build queue (`next`, `asking`), the merge queue (`ready`), or no queue
+  (`parked`). It also holds the brief its next round
+  starts from, its last ten rounds and its last twenty decisions with any maintainer's
+  answer.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
 item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
@@ -628,79 +635,144 @@ resource, with intake's label selector narrowed to the route labels intake write
 the build queue finished, and stops only for decisions that belong to a person. It
 merges on its own when a case is clear and asks when it is not; the default policy for
 which is which is [`.shared/policy/merge.md`](.shared/policy/merge.md), which a project
-replaces with its own `.archon/sdlc/policy/merge.md`.
+extends with its own `.archon/sdlc/policy/merge.md`: the sweep reads the default and
+then the project's file, whose lines win where the two conflict.
 
 - **Pickup.** A run claims every waiting item, up to `limit` (default 10), with
   intake's claim and order. An item waits for the merge queue when its build record is
   `ready` and the merge queue has not settled it: it never decided it, or left it
   waiting or asking. When the build queue readies an item again after the merge queue
-  returned or parked it, it waits again. The pull request is the one the build
-  queue's last round delivered. One already merged or closed is recorded without the
-  agent.
+  returned or parked it, it waits again. The pull request is the latest one a build
+  round recorded, or, when no round recorded one, the one triage routed the item to
+  continue. One already merged or closed is recorded without the
+  agent. Before claiming, the run enrolls each open, non-draft pull request by a
+  maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
+  work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
+  a build round recorded, or one triage routed an item to continue, is named by its
+  build item and never enrolls. Neither does one from a `build/` branch in the
+  repository itself, the namespace every build round opens its pull request from, even
+  before the round records it. A hand-made pull request on a `build/` branch therefore
+  does not enroll; name the branch something else. An own-PR
+  item has no build record of its own, so where another would go back to the build queue
+  (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
+  sweep asks instead, naming what is wrong and the command a maintainer can launch, and
+  its question offers no `return`. The record never hands one to the build queue.
+  The queue never starts that run itself. An own-PR item answered `park` or `other`
+  waits again only when its current head differs from its latest merge decision's
+  head. At the same head it stays parked. Merged own-PR items and other kinds of
+  settlement, including unreadable and superseded parks, do not recover this way.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
-  head, how many commits of the default branch it lacks, whether it merges cleanly, its size, CI and unresolved review threads at the
+  head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
-  (`.archon/sdlc/policy/maintainers.json` on the default branch) counts, so nobody
-  else can post a verdict. The trusted report is written under the run's
-  `merge/<number>/review/` with the commit it reviewed beside it, ready for a delta
-  review.
+  (`.archon/sdlc/policy/maintainers.json` on the default branch) counts; verdicts
+  from other authors are ignored. The login that authors the pack's published review comment
+  must be listed in that file on the default branch for its verdict to count.
+  With the default `gh` source, this is the identity `gh` acts as; with the opt-in
+  `forge` source, it is the forge plugin's credential identity, which may differ.
+  Check the published comment's author when choosing which login to list.
+  A failed PR read waits once; a second consecutive failure
+  parks the item with the read error recorded until the build queue readies it again.
+  Renewed build readiness gives a parked item another first-read wait. A successful
+  read resets that sequence even if later work fails. An unreadable own-PR park stays
+  parked; it is not an answered park. To reconsider an answered own-PR park, facts
+  reads its snapshot before claiming and reuses it in the sweep. A failed recovery
+  read leaves that unclaimed item unchanged and reports the error. If the default branch
+  cannot be read, facts passes its diagnostic and the batch to record without a sweep.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
-  It merges the default branch into any whose head lacks commits of it, resolving each
-  conflict and regenerating generated files with their owning script, and pushes
-  without force. Each merge moves the default branch, so the pull requests after it
-  sync and wait for their delta review and CI: a sweep merges at most one pull request. A
-  push, by the sweep or anyone else, makes the verdict stale, and so does a comment
-  published before verdicts were stamped: one such pull request gets a delta review in
-  the same run, through an included `archon-review-block` continuing from its last report,
-  and the rest wait for the next sweep. Red CI in code a pull request does not touch
-  gets one rerun of its failed jobs; the record stores the head it re-ran at and
-  refuses a second rerun there. What the build queue can fix (a verdict that is
-  not Ready, an unresolved thread, red the change caused) goes back to it with a
-  brief. A clear pull request whose gate passes is merged.
+  The queue never pushes, never changes its checkout and never waits for CI. A Ready
+  pull request with green CI that the forge reports merges cleanly into the default
+  branch merges, reshape or not, even when it is behind; the default branch's CI on the
+  merge is the next sweep's first fact. Every pull request that can merge in a sweep
+  merges in it. What the build queue can fix goes back to it with a brief: a verdict
+  that is not Ready or is for another commit (a push after the review), a conflict with
+  the default branch (the round merges it in and resolves the conflict, regenerating
+  generated files with their owning script), an unresolved thread that raises a defect
+  in the change, and red the change caused. Red CI in code a pull request does not touch
+  gets one rerun of its failed jobs; the record stores the head it re-ran at, and the
+  sweep reads it so it never reruns twice at one head. The sweep measures each diff
+  with git against the merge base, not the forge's counts. An unclear pull request is
+  asked as soon as its verdict is Ready at its head, even while its CI is pending or it
+  conflicts; the approval is pinned to that head and a later sweep merges it once the
+  gate passes. An approval carries to a later head only when the sweep judges that
+  everything since the approved head is merges of the default branch and their
+  conflict resolutions, and the verdict is Ready at the later head; any doubt voids it.
 - **Gate.** The sweep merges only through
-  [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request fresh and
-  refuses unless the verdict says Ready at the head, CI is green there and no review
-  thread is unresolved, and the pull request is open, not a draft, into the default
-  branch, at the head the sweep named, and that head contains the default branch's
-  head, so CI and the review judged the composed result before the merge. It merges with `--match-head-commit`,
-  writes a receipt as soon as the forge accepts the merge, and reads it back. A pull
-  request that reads back unmerged, as when the forge queues merges, loses its receipt
-  and fails the gate.
-- **The default branch.** While its CI is red, the sweep merges nothing. After a
-  batch it waits for CI on the default branch, rerunning a red in code the batch did
-  not touch once; red after that is raised to a maintainer.
-- **Record.** The `record` script refuses, before it writes anything, a sweep that
-  left a claimed pull request undecided, decided one twice, offered an attention item
-  a person could not answer, says it merged a pull request without the gate's receipt
-  at that head, declared anything else for one the gate merged, merged a pull request
-  it did not claim, merged without checking the default branch afterwards, or raised
-  the default branch without merging. It reads every pull request back: the forge, not
-  the sweep, says what merged, and a merge with no receipt is recorded as made outside
-  the run. A pull request that cannot be read waits for the next sweep, and is parked
-  when it could not be read the sweep before either; a work item that cannot be
-  written is reported, so one bad item never loses the rest of the batch's record.
-  It runs even when the delta review failed. It writes one decision per item under
+  [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request and the
+  default branch fresh and refuses unless the verdict says Ready for the head, CI is
+  green at the head, the default branch's CI is not red (pending does not hold a
+  merge), and the pull request is open, not a draft, into the default branch, at the
+  head the sweep named, and that head contains the default branch's head or the forge
+  reports it merges cleanly. Open review threads are the sweep's judgment. It merges with `--match-head-commit`
+  and reads the merge back. A pull request that reads back unmerged, as when the forge
+  queues merges, fails the gate.
+- **The default branch.** The sweep judges it first. While its CI is red the gate
+  refuses every merge. Red in code no recent merge touched gets one rerun of its failed
+  jobs; red after that, or red in code a recent merge touched, is raised to a
+  maintainer, naming the pull requests merged since it was last green, with a revert
+  or fix-forward recommendation. An unreadable default branch permits no sweep or merge;
+  independent bookkeeping completes before the run fails with the read diagnostic.
+- **Record.** When the default branch could not be read, `record` writes the independent
+  settlements, releasing only claims it still owns. Open companions remain unchanged;
+  the next pickup releases their claims after the run fails. It makes no further forge
+  reads and fails with the original diagnostic and any settlement write failures.
+  Otherwise, the `record` script skips and reports a decision for a pull request this
+  run did not claim, because that item belongs to another run. It refuses a
+  `return` without a brief, a `return` for an own pull request, an `ask` without its
+  question, an `ask` that offers a `return` on an own pull request or with a blank
+  brief, and a red default branch the sweep neither re-ran nor raised: the pull
+  request waits for the next sweep, and the record fails, naming each, once every
+  other decision is written. A claimed pull request
+  the sweep left undecided waits for the next sweep, and an ask with no attention item
+  waits the same way. It reads every pull request back: the forge, not the sweep, says
+  what merged, at the head the forge merged. A sweep that says it merged a pull
+  request the forge does not show merged fails the record after every other decision
+  is written: that pull request is recorded as waiting, or parked if it was closed,
+  and the failure names a red default branch the run could not raise and any work
+  item it could not write. A pull
+  request that cannot be read waits for the next sweep; a work item that cannot be written is reported, so one bad item never loses
+  the rest of the batch's record.
+  It writes one decision per item under
   `facts.merge` (status `waiting`, `asking`, `merged`, `returned` or `parked`, any
   approval pinned to the head it approved, and
   the last twenty decisions), and a return sets the build record to `next` with the
   brief, so the build queue picks it up.
+- **Merged issues.** A pull request that links its issue with `Refs #N` merges
+  without closing it, and the issue keeps its intake stage, so the build queue could
+  claim it again. When `retriage_as` names a maintainer login, `retriage` reads the
+  issue of each build item whose pull request merged, by the gate this run or before
+  it. One still open gets `archon-triage` and an `archon-intake` run started detached
+  with that label event, recorded as added by `retriage_as`. Intake stays the judge:
+  it re-triages only when that login is on the maintainer list, and closes the issue
+  as delivered or keeps it with what is still open. A closed issue and an own pull
+  request, which has no issue, are left alone. A failed read, label write or launch
+  is named in the node's summary and stops nothing else. Empty `retriage_as`
+  re-triages nothing.
 - **Attention.** A run raises at most one attention item: a red default branch, whose
   one choice holds merges until it is green, or else the first pull request the sweep
-  asked about, labelled `merge: dev` or `merge: pr`. It carries the build queue's
+  asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
-  links. On a pull request, `merge` approves it at the head that was asked about, and
-  a later sweep merges it once the gate passes there; `return` writes the choice's
+  links. A build-owned ask with a blank brief still raises its question when it
+  offers no `return`. Every pull-request item also offers `other`; for a build item with a nonblank
+  brief, it returns the pull request to the build queue with the answer's text as
+  the ruling. Without a brief, `other` records the text and parks until the build
+  queue readies the item again; no build round starts. A red default branch is only
+  ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
+  a sweep the answer starts at once (on the answered run's config and its
+  `limit`, `merge_method` and `retriage_as`) merges it once the
+  gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
-  back to the build queue; `park` stops working it until the build queue readies it
-  again. Any other ask waits for a later sweep, which decides it again.
-- **Eval mode.** `mode: eval` claims, pushes, reruns and merges nothing. It decides
-  the pull requests named in `replay`, each from the facts recorded with it, and
-  returns the decisions as the record's `evaluation`.
+  back to the build queue, whose next round starts at once on the build queue's own
+  input defaults; `park` stops working it until the build queue readies it
+  again. For an own PR, both `park` and `other` stop queue work until a later sweep
+  observes a different head from the one asked about. The `other` answer stays on
+  the work item as its ruling; it writes no issue body and starts no build round.
+  New CI or review results at the same head do not unpark it. Approval remains pinned
+  to its approved head, subject to the existing conflict-only carry rule. Any other
+  ask waits for a later sweep, which decides it again.
 
-The pack installs no binding. A schedule sweeps the queue; each run changes its
-checkout when it syncs a pull request, so it needs its own worktree, and one sweep at a
-time keeps two runs from syncing the same branch:
+The pack installs no binding. A schedule sweeps the queue. A run never changes its
+checkout, and the claim keeps two runs off the same item:
 
 ```json
 {
@@ -717,8 +789,7 @@ time keeps two runs from syncing the same branch:
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-merge-queue",
-      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
-      "isolation": { "kind": "worktree" }
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
@@ -735,43 +806,36 @@ terminal report lists.
 
 - **Queue.** A pass lists this project's runs that ended (completed, failed or
   cancelled) inside `since` and `until`, oldest first, and claims up to `limit` of
-  them that still have undecided records. A record is decided once a decision record
-  that is not `asked` lists it. A run's work item is the state document
-  `discoveries/runs/<run-id>`, which holds the claim of the pass working it. A claim is
-  released only when the claiming run is completed, failed or cancelled, never on age.
-  A run whose records cannot be read is left queued and named on the pass's stderr.
+  them that still have undecided records. A run's state document
+  `discoveries/runs/<run-id>` is its memory and its work item: the refs a pass decided
+  for it, the questions a pass asked about it with their answers, and the claim of the
+  pass working it. A record is decided once its run's document lists it. Every run
+  document is read in one call. A claim is released only when the claiming run is
+  completed, failed or cancelled, never on age. A run whose records cannot be read is
+  left queued and named on the pass's stderr.
 - **Decisions.** One agent decides every queued record, under the project's direction
   document and the policy files `discoveries.md`, `triage.md` and `rulings.md`. It
   verifies each claim against the default branch's head with `git show` and
-  `git grep`, merges duplicates across runs and with earlier decisions, and searches
-  the tracker before filing. Each discovery ends in one decision: `file` an issue with
-  a full brief, `track` it on the open issue that already covers it (with one marked
-  evidence comment per key, only when it adds something), `drop` it with a reason, or
-  `ask` a maintainer.
-- **Memory.** Every decision is the state document `discoveries/decisions/<key>`: the
-  outcome, the reason, the commit it was verified at, every run record that found it
-  (`<run-id>:<ref>`), and the last question with its answer. Each pass writes them all as one readable
-  `drain/discovery-decisions.md` in its artifacts, which is what the agent reads. List
-  them with `archon state list --prefix discoveries/decisions/`.
+  `git grep`, merges duplicates across runs, and searches the tracker before filing.
+  There is no store of decisions across runs: a defect a later run finds again is
+  judged again against the tracker. Each discovery ends in one decision: `file` an
+  issue with a full brief, `track` it on the open issue that already covers it (with
+  one marked evidence comment per key, only when it adds something), `drop` it with a
+  reason, or `ask` a maintainer.
 - **Writes.** The `outcome` script checks before any write that every queued record is
-  decided exactly once and that a key which already has an issue is not filed again,
-  and that a tracking issue is open. It writes every decision record before any public
-  write. A filed record keeps the issue's body until the issue reads back, and a
-  tracked record keeps its evidence comment until it is posted. A filed issue's body
-  begins with `<!-- archon-discovery <key> -->`, and the create looks for that marker
-  across every issue first; the evidence comment carries the same marker and is
-  replaced in place. So the next live pass, idle or not, finishes any write an earlier
-  pass stopped before, without a second issue or comment. Filed issues carry no
-  labels: intake triages them like any other issue, which it does only when the
-  install's forge identity is on `maintainers.json`.
+  decided exactly once and that a tracking issue is open. Then it makes the public
+  writes. A filed issue's body begins with `<!-- archon-discovery <key> -->`, and the
+  create looks for that marker across every issue first; the evidence comment carries
+  the same marker and is replaced in place. So a pass run again after a stop, or a key
+  filed twice, never opens a second issue, nor a second comment except as [Intake](#intake)
+  describes. Last it records the decided refs
+  and the questions on each run's document. Filed issues carry no labels: intake
+  triages them like any other issue, which it does only when the install's forge
+  identity is on `maintainers.json`.
 - **Questions.** Every `ask` in a pass becomes one attention item labelled
-  `discoveries: question`. The answer is stored on each asked record. The runs those
-  records came from stay claimed by the asking run until it ends, so no other pass asks
-  again; the next pass then decides them with the answer in memory.
-- **Eval mode.** `mode: eval` reads the stored decisions and writes nothing: no state
-  document, issue or comment. It ignores which runs earlier passes drained, so it
-  decides the window's runs as unhandled, and returns every decision, and every check
-  that would have refused the pass, as the outcome's `evaluation`.
+  `discoveries: question`. The answer is stored on the asking run's document. The runs
+  those records came from stay claimed by the asking run until it ends, so no other
+  pass asks again; the next pass then decides them with the answer beside the records.
 
 The pack installs no binding, so the workflow runs only when started by hand until an
 operator adds one. A native schedule starts a pass every few hours; `overlap: skip`
@@ -801,24 +865,36 @@ back:
 }
 ```
 
-To seed decisions an operator already made, put one record per key with
-`archon state put discoveries/decisions/<key> --if-revision 0`, reading the record's
-JSON on stdin in the shape `.shared/discoveries.ts` parses. A record that does not
-parse refuses every pass, naming the document.
-
 ## Worktree cleanup
 
 [`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
 `archon isolation cleanup --merged` across every project registered on the install. It
-removes each worktree whose pull request merged, with the branch Archon created and its
-remote branch. A worktree with uncommitted changes, a run that can still claim it, or a
-commit its pull request did not carry stays and is reported. With `include_closed: "true"`
+removes each merged worktree with its local branch, including a branch the worktree
+adopted rather than created. Git ancestry or patch equivalence proves a merge without a
+pull request; otherwise the branch's merged pull request does. Remote
+branches are retained with a warning: after registration retirement, a Git commit
+ID cannot prove whether the branch belongs to a replacement registration. Force
+does not bypass this refusal. For manual cleanup, follow the
+[remote branch recovery procedure](https://archon.diy/reference/cli/#recovering-remote-branch-cleanup)
+in the CLI reference. It covers destination inspection, ownership verification and leased deletion.
+On GitHub, enable **Automatically delete head branches** in repository settings to have
+GitHub remove merged pull requests' branches automatically.
+
+A worktree with uncommitted changes, a run
+that can still claim it, or a commit the merge does not cover stays and is reported. With `include_closed: "true"`
 it also removes worktrees whose pull request was closed without merging. It runs in place
 and creates no worktree of its own.
 
-A worktree that never opened a pull request is not its concern. A completed run removes
-its own worktree when the checkout is clean, every commit is on a remote, and the branch
-was never published; otherwise the run's terminal record says why it stayed.
+Who removes each checkout:
+
+- Intake, triage, discoveries, the merge queue, forge check and this workflow create no
+  worktree. They run in the launch checkout as it stands, so point a binding's `cwd` at a
+  checkout that tracks the default branch.
+- A run that creates a worktree on its own run-named branch, such as a build round,
+  removes it when the run completes if the checkout is clean and every commit is on a
+  remote; its pushed branch counts. The branch stays. Otherwise the run reports what
+  removing it would lose, and the checkout stays listed by `archon isolation list`.
+- A worktree launched with `--branch` waits for this workflow's merged sweep.
 
 A server already runs a merged sweep on its cleanup schedule, so this binding is for
 installs that run only the CLI. The pack installs no binding. A native schedule starts a
@@ -846,28 +922,3 @@ pass every few hours:
   "schedule": { "intervalSeconds": 21600, "runAtLoad": false }
 }
 ```
-
-## Composition validation
-
-[archon-validate](validate/README.md) accepts an explicit composition request to run
-the same project gate on two pinned parts and their composed tree. Its `interaction`
-result remains red; delivery holds it rather than treating it as inherited or
-environmental. The report retains revision, tree and check evidence for an existing
-merger to consume. It does not install a queue or authorize a merge.
-
-## CI agent eval
-
-The fast-rerun eval runs the shipped CI command through the Claude provider with
-in-memory forge responses. A rerun returns a newer attempt that is already green,
-with a changed check-unit ID. The state read either shows it immediately or first
-returns the old failed attempt on the same revision. The agent must read through
-the stale attempt, finish green, leave the PR ready, and record the newer attempt
-in its reports within the tool-call budget.
-
-Run it explicitly with native Claude authentication (it makes paid model calls):
-
-```bash
-ARCHON_TEST_CI_AGENT=1 bun run test .archon/scripts/__tests__/ci-rerun-agent.test.ts
-```
-
-Ordinary package tests skip this live eval. It has no real forge access.

@@ -94,6 +94,13 @@ export const providerResultSchema = z.object({
    * use `false` to surface a warning rather than swallow the loss.
    */
   resumed: z.boolean().optional(),
+  /**
+   * Set only on a failed result of a turn that asked to resume a session, when the provider
+   * confirmed through a structured check (never the vendor's error text) that the session no
+   * longer exists, and the rejection did no model work. The engine may retry the turn once on
+   * a fresh session; a provider that cannot tell leaves it out.
+   */
+  sessionNotFound: z.literal(true).optional(),
 });
 export type ProviderResult = z.infer<typeof providerResultSchema>;
 
@@ -155,12 +162,7 @@ export function addResultUsage(
   if (total.tokensUnknown === true || result.tokensUnknown === true) {
     next.tokensUnknown = true;
   } else {
-    const incoming =
-      result.tokens !== undefined &&
-      Number.isFinite(result.tokens.input) &&
-      Number.isFinite(result.tokens.output)
-        ? result.tokens
-        : undefined;
+    const incoming = finiteTokenUsage(result.tokens);
     // The first result passes through untouched; merging is only for the second onward.
     const tokens =
       total.tokens === undefined || incoming === undefined
@@ -174,4 +176,10 @@ export function addResultUsage(
       : total.cost;
   if (cost !== undefined) next.cost = cost;
   return next;
+}
+
+function finiteTokenUsage(tokens: TokenUsage | undefined): TokenUsage | undefined {
+  return tokens !== undefined && Number.isFinite(tokens.input) && Number.isFinite(tokens.output)
+    ? tokens
+    : undefined;
 }

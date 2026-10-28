@@ -2,14 +2,15 @@
  * `buildNodeSummaries` projects a run's event log into the per-node view that
  * `archon workflow get/status --verbose` renders, and the `nodes` array their
  * `--json` form emits.
- *
- * `.spec.ts` rather than `.test.ts`: `packages/cli/tsconfig.json` excludes
- * `**\/*.test.ts`, so a `.test.ts` here would not be type-checked.
  */
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
-import { NODE_SUMMARY_EVENT_TYPES, buildNodeSummaries, buildRunNodes } from './workflow';
+import {
+  NODE_SUMMARY_EVENT_TYPES,
+  buildNodeSummaries,
+  buildRunNodes,
+} from './workflow-node-summaries';
 
 function event(
   id: string,

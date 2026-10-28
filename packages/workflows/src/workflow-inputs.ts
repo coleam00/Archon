@@ -2,7 +2,7 @@
  * The declared-input contract (#2470, #2554), shared by every call surface.
  *
  * A workflow's `inputs:` block is one contract with three callers:
- *   - `include:` resolves it at LOAD time (include-expander.ts), splicing values into
+ *   - `include:` resolves it at LOAD time (include/inputs-macro.ts), splicing values into
  *     `$INPUTS.<name>` before the DAG is ever persisted;
  *   - `workflow:` resolves it at RUN time (executor.ts), persisting the resolved map to
  *     the child's `metadata.inputs`;
@@ -21,7 +21,7 @@
  * `required` input, and rejects a caller key the workflow does not declare.
  */
 import type { WorkflowDefinition } from './schemas/workflow';
-import { INPUT_NAME_PATTERN } from './schemas/dag-node';
+import { INPUT_NAME_PATTERN } from './schemas/node-bindings';
 import type { JsonValue } from './output-ref';
 
 /** A workflow's declared `inputs:` block, or undefined when it declares none. */

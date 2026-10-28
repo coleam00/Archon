@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Installed workflow packs in the one catalog: every consumer resolves them through
  * `discoverWorkflowsWithConfig`, only manifest entrypoints are dispatchable, and a run
@@ -9,19 +10,19 @@
 import { providerRegistry, claudeDescriptor } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { readHomeMcpDirectory } from './compiled-command';
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from './router';
 import { validateWorkflowResources } from './validator';
-import { loadCommandPrompt } from './executor-shared';
+import { loadCommandPrompt } from './load-command-prompt';
 import { discoverScriptsForCwd } from './script-discovery';
-import { resolveContinuationWorkflow } from './executor';
-import { resolveFanOutChildDefinition } from './dag-executor';
+import { resolveContinuationWorkflow } from './run-source';
+import { resolveFanOutChildDefinition } from './dag/nodes/compose-fan-out/compose-fan-out';
 import {
   captureWorkflowSource,
   capturedSourceRoots,
@@ -31,6 +32,23 @@ import {
 import { WORKFLOW_SOURCE_METADATA_KEY } from './schemas/workflow-run';
 import { isAgentNode, type ResolvedWorkflow } from './schemas';
 import type { WorkflowDeps } from './deps';
+import * as bundleInventory from './defaults/bundle-inventory';
+
+// A fake bundled pack stands in for the shipped one. Its workflow declares an MCP file
+// so the checkout-only MCP assertion below has a bundled node to hold to.
+const bundleRoot = await mkdtemp(join(tmpdir(), 'installed-packs-bundle-'));
+afterAll(() => removeTempTree(bundleRoot));
+await mkdir(join(bundleRoot, 'fake', 'review'), { recursive: true });
+await writeFile(
+  join(bundleRoot, 'fake', 'review', 'fake-review.yaml'),
+  'name: fake-review\ndescription: Bundled review\nnodes:\n  - id: check\n    prompt: Check\n    mcp: servers.json\n'
+);
+const actualPaths = await import('@archon/paths');
+mock.module('@archon/paths', () => ({
+  ...actualPaths,
+  getBundledWorkflowsPath: () => bundleRoot,
+}));
+spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['fake']);
 
 const trackTempRoot = trackTempRoots();
 const loadConfig = async (): Promise<Record<string, never>> => ({});
@@ -220,9 +238,9 @@ nodes:
     expect(issues[0].message).toBe(
       `MCP config file not found: 'servers.json'. Tried: ${join(project, 'servers.json')}`
     );
-    for (const bundled of catalog.workflows.filter(e => e.source === 'bundled')) {
-      for (const node of bundled.workflow.nodes) expect(readHomeMcpDirectory(node)).toBeUndefined();
-    }
+    const bundled = catalog.workflows.find(e => e.workflow.name === 'fake-review');
+    expect(bundled?.source).toBe('bundled');
+    expect(bundled?.workflow.nodes.map(node => readHomeMcpDirectory(node))).toEqual([undefined]);
   });
 
   test('entrypoints are dispatchable as owner/plugin:entrypoint; support workflows only compose', async () => {
@@ -243,9 +261,7 @@ nodes:
     expect(names(workflows)).not.toContain('code-review');
     expect(names(support ?? [])).toEqual([HELPER]);
     // Bundled workflows are still there, as before.
-    expect(workflows.find(entry => entry.workflow.name === 'archon-review')?.source).toBe(
-      'bundled'
-    );
+    expect(workflows.find(entry => entry.workflow.name === 'fake-review')?.source).toBe('bundled');
   });
 
   test('consumer parity: run, routing, validation and resume resolve the same installed workflow', async () => {

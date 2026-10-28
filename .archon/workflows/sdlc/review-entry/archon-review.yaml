@@ -3,7 +3,9 @@ description: |
   Review a change through parallel specialist lenses and produce one evidence-based
   verdict, held to the accepted contract (archon-review-block). Advisory and
   read-only on the code: it judges, it never edits, and it posts its report to the
-  pull request as one canonical comment. When the verdict is Ready on a pull
+  pull request as one canonical comment (on `gh`, a write that landed but returned
+  a retryable response (5xx, or a rate limit) or no response can leave a second one; the next upsert then
+  refuses: inspect both and delete one). When the verdict is Ready on a pull
   request that is still a draft, the run pauses as one attention item instead of
   ending with nothing to hand it on. The answer takes the pull request out of draft
   for review and merge, or ends the run with the draft as it stands.

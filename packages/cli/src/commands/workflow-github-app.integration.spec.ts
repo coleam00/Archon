@@ -6,13 +6,16 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
-import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+import {
+  stopDetachedTestOwner,
+  waitForDetachedTestOwnerExit,
+} from '../test-support/detached-owner';
+import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 
 const repo = resolve(import.meta.dir, '../../../..');
 const roots: string[] = [];
 const children = new Set<Bun.Subprocess>();
-const detachedRuns: { id: string; home: string }[] = [];
+const detachedRuns: { id: string; home: string; pidFile: string }[] = [];
 afterEach(async () => {
   for (const child of children) {
     child.kill();
@@ -23,10 +26,7 @@ afterEach(async () => {
   try {
     for (const run of detachedRuns.splice(0)) {
       process.env.ARCHON_HOME = run.home;
-      if (await canConnectToRunLiveOwner(runLiveOwnerPath(run.id))) {
-        const target = await requestDetachedRunStop(run.id);
-        await target.stop();
-      }
+      await stopDetachedTestOwner(run.id, run.pidFile);
     }
   } finally {
     if (savedHome === undefined) delete process.env.ARCHON_HOME;
@@ -34,6 +34,7 @@ afterEach(async () => {
   }
   for (const root of roots.splice(0)) await removeTempTree(root);
 });
+
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
   .privateKey.export({
     type: 'pkcs1',
@@ -47,6 +48,7 @@ interface Fixture {
   home: string;
   entry: string;
   env: NodeJS.ProcessEnv;
+  ownerPidFile: string;
 }
 interface RunRow {
   id: string;
@@ -91,36 +93,8 @@ async function run(
   );
   return { code, output, stdout };
 }
-async function fixture(
-  options: {
-    wait?: 'event' | 'timer' | 'attention';
-    fail?: boolean;
-    mintFailure?: boolean;
-    git?: boolean;
-    repositoryUrl?: string;
-    mode?: CredentialMode;
-  } = {}
-): Promise<Fixture> {
-  const root = await canonicalizeProjectPath(mkdtempSync(join(tmpdir(), 'archon-cli-app-')));
-  roots.push(root);
-  let project = join(root, 'project');
-  const home = join(root, 'home');
-  const entry = join(root, 'entry.ts');
-  mkdirSync(join(project, '.archon/workflows'), { recursive: true });
-  project = await canonicalizeProjectPath(project);
-  const marker = join(root, 'marker');
-  if (options.git) {
-    for (const args of [
-      ['init', '-q', '-b', 'main'],
-      ['config', 'user.name', 'Fixture'],
-      ['config', 'user.email', 'fixture@example.test'],
-    ]) {
-      expect(Bun.spawnSync(['git', ...args], { cwd: project }).exitCode).toBe(0);
-    }
-  }
-  const mode = options.mode ?? 'bot';
-  const deliveryMode = options.mintFailure ? 'absent' : mode;
-  const env: NodeJS.ProcessEnv = {
+function fixtureEnvironment(home: string, mode: CredentialMode): NodeJS.ProcessEnv {
+  return {
     ...process.env,
     ARCHON_HOME: home,
     DATABASE_URL: '',
@@ -139,11 +113,113 @@ async function fixture(
     ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK: mode === 'fallback' ? 'true' : '',
     ARCHON_ALLOW_ORG_PROVIDER_TOKEN_FALLBACK: 'true',
   };
+}
+
+function bashCredentialCheck(mode: CredentialMode): string {
+  return mode === 'scrub'
+    ? '[ -z "$GH_TOKEN" ] && [ -z "$GITHUB_TOKEN" ]'
+    : mode === 'absent'
+      ? '[ "$GH_TOKEN" = "explicit-fixture" ] && [ "$GITHUB_TOKEN" = "explicit-fixture" ]'
+      : mode === 'user'
+        ? '[ "$GH_TOKEN" = "stub-user-credential" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]'
+        : '[ "${GH_TOKEN#stub-installation-}" != "$GH_TOKEN" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]';
+}
+
+function scriptCredentialCheck(mode: CredentialMode, expectedTokenFile: string): string {
+  return mode === 'scrub'
+    ? '!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN'
+    : mode === 'absent'
+      ? "process.env.GH_TOKEN === 'explicit-fixture' && process.env.GITHUB_TOKEN === 'explicit-fixture'"
+      : mode === 'user'
+        ? "process.env.GH_TOKEN === 'stub-user-credential' && process.env.GITHUB_TOKEN === process.env.GH_TOKEN"
+        : `process.env.GH_TOKEN === require('node:fs').readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8') && process.env.GITHUB_TOKEN === process.env.GH_TOKEN`;
+}
+
+function providerCredentialValue(mode: CredentialMode, expectedTokenFile: string): string {
+  return mode === 'user'
+    ? "'stub-user-credential'"
+    : mode === 'scrub'
+      ? "''"
+      : mode === 'absent'
+        ? "'explicit-fixture'"
+        : `readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8')`;
+}
+
+async function fixture(
+  options: {
+    wait?: 'event' | 'timer' | 'attention';
+    fail?: boolean;
+    mintFailure?: boolean;
+    git?: boolean;
+    repositoryUrl?: string;
+    mode?: CredentialMode;
+  } = {}
+): Promise<Fixture> {
+  const root = await canonicalizeProjectPath(mkdtempSync(join(tmpdir(), 'archon-cli-app-')));
+  roots.push(root);
+  let project = join(root, 'project');
+  const home = join(root, 'home');
+  const entry = join(root, 'entry.ts');
+  const ownerPidFile = join(root, 'owner.pid');
+  mkdirSync(join(project, '.archon/workflows'), { recursive: true });
+  project = await canonicalizeProjectPath(project);
+  const marker = join(root, 'marker');
+  if (options.git) {
+    for (const args of [
+      ['init', '-q', '-b', 'main'],
+      ['config', 'user.name', 'Fixture'],
+      ['config', 'user.email', 'fixture@example.test'],
+    ]) {
+      expect(Bun.spawnSync(['git', ...args], { cwd: project }).exitCode).toBe(0);
+    }
+  }
+  const mode = options.mode ?? 'bot';
+  const deliveryMode = options.mintFailure ? 'absent' : mode;
+  const env = fixtureEnvironment(home, mode);
   // The loader distinguishes an absent optional ID from an explicitly invalid one.
   // The entry removes only this test's suppressed empty value after Bun loads env.
   const source = (p: string): string => JSON.stringify(join(repo, p));
   const providerEntry = join(root, 'provider.ts');
   const expectedTokenFile = join(root, 'expected-token');
+  const writeWorkflowFixture = () => {
+    const check = bashCredentialCheck(deliveryMode);
+    const scriptCheck = scriptCredentialCheck(deliveryMode, expectedTokenFile);
+    writeFileSync(
+      join(project, '.archon/workflows/app.yaml'),
+      `name: app
+description: CLI App credential delivery
+provider: claude
+nodes:
+  - id: bash
+    bash: |
+      ${check} || exit 41
+      echo bash >> '${marker.replaceAll('\\', '/')}'
+${options.fail ? '  - id: refuse\n    depends_on: [bash]\n    bash: test -f allow\n' : ''}${
+  options.wait
+    ? `  - id: pause
+    depends_on: [bash]
+    wait:
+${
+  options.wait === 'attention'
+    ? '      attention: Decide\n      form: message'
+    : options.wait === 'event'
+      ? '      event: ready\n      deadline_ms: 60000'
+      : '      duration_ms: 1000'
+}
+`
+    : ''
+}  - id: script
+    depends_on: [${options.wait ? 'pause' : options.fail ? 'refuse' : 'bash'}]
+    runtime: bun
+    script: |
+      if (!(${scriptCheck})) throw new Error('Script credential delivery failed');
+      require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'script\\n');
+  - id: ai
+    depends_on: [script]
+    prompt: Verify delivery.
+`
+    );
+  };
   writeFileSync(
     providerEntry,
     `
@@ -157,7 +233,7 @@ await serveProvider({
     getCapabilities: () => claudeDescriptor.capabilities,
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
     async *sendQuery(_prompt, _cwd, _session, options) {
-      const expected = ${deliveryMode === 'user' ? "'stub-user-credential'" : deliveryMode === 'scrub' ? "''" : deliveryMode === 'absent' ? "'explicit-fixture'" : `readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8')`};
+      const expected = ${providerCredentialValue(deliveryMode, expectedTokenFile)};
       if (options?.env?.GH_TOKEN !== expected || options?.env?.GITHUB_TOKEN !== expected) throw new Error('AI credential delivery failed');
       if (${deliveryMode !== 'absent'} && !['GH_TOKEN', 'GITHUB_TOKEN'].every(key => options?.protectedEnvKeys?.includes(key))) throw new Error('Injected credentials unprotected');
       appendFileSync(${JSON.stringify(marker)}, 'ai\\n');
@@ -173,6 +249,7 @@ await serveProvider({
     `
 import { mock } from 'bun:test';
 import { appendFileSync, writeFileSync } from 'node:fs';
+if (process.env[${JSON.stringify(DETACHED_RUN_OWNER_ENV)}] === '1') writeFileSync(${JSON.stringify(ownerPidFile)}, String(process.pid));
 if (process.env.GITHUB_APP_INSTALLATION_ID === '') delete process.env.GITHUB_APP_INSTALLATION_ID;
 let currentToken;
 let minted = 0;
@@ -222,7 +299,7 @@ if (process.argv[2] === 'seed') {
   const { closeDatabase } = await import(${source('packages/core/src/db/connection.ts')});
   const { findOrCreateUserByPlatformIdentity } = await import(${source('packages/core/src/db/users.ts')});
   const { InProcessWorkflowEngine } = await import(${source('packages/workflows/src/in-process-engine.ts')});
-  const { prepareWorkflowSource, recordSelectedWorkflow } = await import(${source('packages/workflows/src/executor.ts')});
+  const { prepareWorkflowSource, recordSelectedWorkflow } = await import(${source('packages/workflows/src/run-source.ts')});
   const { discoverWorkflowsWithConfig } = await import(${source('packages/workflows/src/workflow-discovery.ts')});
   const { loadConfig } = await import(${source('packages/core/src/config/config-loader.ts')});
   const { HeadlessPlatform } = await import(${source('packages/core/src/workflows/headless-platform.ts')});
@@ -247,57 +324,7 @@ if (process.argv[2] === 'seed') {
 }
 `
   );
-  const check =
-    deliveryMode === 'scrub'
-      ? '[ -z "$GH_TOKEN" ] && [ -z "$GITHUB_TOKEN" ]'
-      : deliveryMode === 'absent'
-        ? '[ "$GH_TOKEN" = "explicit-fixture" ] && [ "$GITHUB_TOKEN" = "explicit-fixture" ]'
-        : deliveryMode === 'user'
-          ? '[ "$GH_TOKEN" = "stub-user-credential" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]'
-          : '[ "${GH_TOKEN#stub-installation-}" != "$GH_TOKEN" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]';
-  const scriptCheck =
-    deliveryMode === 'scrub'
-      ? '!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN'
-      : deliveryMode === 'absent'
-        ? "process.env.GH_TOKEN === 'explicit-fixture' && process.env.GITHUB_TOKEN === 'explicit-fixture'"
-        : deliveryMode === 'user'
-          ? "process.env.GH_TOKEN === 'stub-user-credential' && process.env.GITHUB_TOKEN === process.env.GH_TOKEN"
-          : `process.env.GH_TOKEN === require('node:fs').readFileSync(${JSON.stringify(expectedTokenFile)}, 'utf8') && process.env.GITHUB_TOKEN === process.env.GH_TOKEN`;
-  writeFileSync(
-    join(project, '.archon/workflows/app.yaml'),
-    `name: app
-description: CLI App credential delivery
-provider: claude
-nodes:
-  - id: bash
-    bash: |
-      ${check} || exit 41
-      echo bash >> '${marker.replaceAll('\\', '/')}'
-${options.fail ? '  - id: refuse\n    depends_on: [bash]\n    bash: test -f allow\n' : ''}${
-  options.wait
-    ? `  - id: pause
-    depends_on: [bash]
-    wait:
-${
-  options.wait === 'attention'
-    ? '      attention: Decide\n      form: message'
-    : options.wait === 'event'
-      ? '      event: ready\n      deadline_ms: 60000'
-      : '      duration_ms: 1000'
-}
-`
-    : ''
-}  - id: script
-    depends_on: [${options.wait ? 'pause' : options.fail ? 'refuse' : 'bash'}]
-    runtime: bun
-    script: |
-      if (!(${scriptCheck})) throw new Error('Script credential delivery failed');
-      require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'script\\n');
-  - id: ai
-    depends_on: [script]
-    prompt: Verify delivery.
-`
-  );
+  writeWorkflowFixture();
   writeFileSync(
     join(project, '.archon/config.yaml'),
     'assistant: claude\nenv:\n  GH_TOKEN: explicit-fixture\n  GITHUB_TOKEN: explicit-fixture\n' +
@@ -318,7 +345,7 @@ ${
       Bun.spawnSync(['git', 'push', '-q', '-u', 'origin', 'main'], { cwd: project }).exitCode
     ).toBe(0);
   }
-  const f = { root, project, home, entry, env };
+  const f = { root, project, home, entry, env, ownerPidFile };
   expect((await run(f, ['seed'])).code).toBe(0);
   return f;
 }
@@ -347,23 +374,13 @@ test('a detached child bootstraps App auth independently without minting in the 
   const result = await run(f, [...runArgs, '--detach', '--json']);
   expect(result.code).toBe(0);
   const ack = JSON.parse(result.stdout) as { runId: string; logPath: string | null };
-  detachedRuns.push({ id: ack.runId, home: f.home });
+  detachedRuns.push({ id: ack.runId, home: f.home, pidFile: f.ownerPidFile });
   const deadline = Date.now() + 20000;
   while (row(f)?.status !== 'completed' && Date.now() < deadline) await Bun.sleep(25);
   expect(row(f)?.status).toBe('completed');
   expect(markers(f)).toBe('bash\nscript\nai\n');
   expect(readFileSync(join(f.root, 'mint'), 'utf8')).toBe('minted\n');
-  const savedHome = process.env.ARCHON_HOME;
-  process.env.ARCHON_HOME = f.home;
-  try {
-    while (await canConnectToRunLiveOwner(runLiveOwnerPath(ack.runId))) {
-      if (Date.now() >= deadline) throw new Error('Detached owner did not release its endpoint');
-      await Bun.sleep(25);
-    }
-  } finally {
-    if (savedHome === undefined) delete process.env.ARCHON_HOME;
-    else process.env.ARCHON_HOME = savedHome;
-  }
+  await waitForDetachedTestOwnerExit(f.ownerPidFile);
   detachedRuns.pop();
   if (ack.logPath)
     expect(readFileSync(ack.logPath, 'utf8').includes('stub-installation-')).toBe(false);
@@ -536,7 +553,7 @@ test('trigger execution in a cold child delivers repository-scoped App credentia
   while (!['completed', 'failed'].includes(row(f)?.status ?? '') && Date.now() < deadline)
     await Bun.sleep(25);
   const triggered = row(f);
-  if (triggered) detachedRuns.push({ id: triggered.id, home: f.home });
+  if (triggered) detachedRuns.push({ id: triggered.id, home: f.home, pidFile: f.ownerPidFile });
   expect(triggered?.status).toBe('completed');
   expect(markers(f)).toBe('bash\nscript\nai\n');
   expect(readFileSync(join(f.root, 'scope'), 'utf8')).toBe('scoped\n');

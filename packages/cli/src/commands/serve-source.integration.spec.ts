@@ -27,6 +27,7 @@ test('source archon serve starts the server on the requested port and serves the
   await reservation.stop(true);
   await envReservation.stop(true);
   let serverPid: number | undefined;
+  let serverReady = false;
   const child = Bun.spawn(
     [process.execPath, '--no-env-file', cliEntry, 'serve', '--port', String(port)],
     {
@@ -53,58 +54,7 @@ test('source archon serve starts the server on the requested port and serves the
       stderr: Bun.file(stderr),
     }
   );
-  try {
-    let ready = false;
-    let serverReady = false;
-    const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline) {
-      const output = readFileSync(stdout, 'utf8');
-      for (const line of output.split('\n')) {
-        let event: unknown;
-        try {
-          event = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        if (
-          typeof event === 'object' &&
-          event !== null &&
-          'msg' in event &&
-          event.msg === 'server_ready'
-        )
-          serverReady = true;
-        if (
-          typeof event === 'object' &&
-          event !== null &&
-          'msg' in event &&
-          event.msg === 'server.spawned' &&
-          'serverPid' in event &&
-          typeof event.serverPid === 'number'
-        )
-          serverPid = event.serverPid;
-      }
-      if (child.exitCode !== null)
-        throw new Error(
-          `serve exited ${child.exitCode}:\n${output}\n${readFileSync(stderr, 'utf8')}`
-        );
-      try {
-        const health = await fetch(`http://127.0.0.1:${port}/api/health`, {
-          signal: AbortSignal.timeout(1000),
-        });
-        ready = health.ok && serverReady && serverPid !== undefined;
-      } catch {
-        // The child has not bound its listening socket yet.
-      }
-      if (ready) break;
-      await Bun.sleep(100);
-    }
-    expect(ready, `${readFileSync(stdout, 'utf8')}\n${readFileSync(stderr, 'utf8')}`).toBe(true);
-    const consoleResponse = await fetch(`http://127.0.0.1:${port}/`, {
-      signal: AbortSignal.timeout(1000),
-    });
-    expect(consoleResponse.ok).toBe(true);
-    expect(await consoleResponse.text()).toBe(expectedHtml);
-  } finally {
+  const stopServer = async () => {
     // Windows does not deliver SIGTERM to the launcher handler.
     if (process.platform === 'win32' && serverPid !== undefined) process.kill(serverPid);
     child.kill('SIGTERM');
@@ -131,5 +81,66 @@ test('source archon serve starts the server on the requested port and serves the
       await removeTempTree(root);
       if (ownsDist) await removeTempTree(webDist);
     }
+  };
+  const readServerEvents = (
+    output: string,
+    serverReady: boolean,
+    serverPid: number | undefined
+  ): { serverReady: boolean; serverPid: number | undefined } => {
+    for (const line of output.split('\n')) {
+      let event: unknown;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (
+        typeof event === 'object' &&
+        event !== null &&
+        'msg' in event &&
+        event.msg === 'server_ready'
+      )
+        serverReady = true;
+      if (
+        typeof event === 'object' &&
+        event !== null &&
+        'msg' in event &&
+        event.msg === 'server.spawned' &&
+        'serverPid' in event &&
+        typeof event.serverPid === 'number'
+      )
+        serverPid = event.serverPid;
+    }
+    return { serverReady, serverPid };
+  };
+  try {
+    let ready = false;
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const output = readFileSync(stdout, 'utf8');
+      ({ serverReady, serverPid } = readServerEvents(output, serverReady, serverPid));
+      if (child.exitCode !== null)
+        throw new Error(
+          `serve exited ${child.exitCode}:\n${output}\n${readFileSync(stderr, 'utf8')}`
+        );
+      try {
+        const health = await fetch(`http://127.0.0.1:${port}/api/health`, {
+          signal: AbortSignal.timeout(1000),
+        });
+        ready = health.ok && serverReady && serverPid !== undefined;
+      } catch {
+        // The child has not bound its listening socket yet.
+      }
+      if (ready) break;
+      await Bun.sleep(100);
+    }
+    expect(ready, `${readFileSync(stdout, 'utf8')}\n${readFileSync(stderr, 'utf8')}`).toBe(true);
+    const consoleResponse = await fetch(`http://127.0.0.1:${port}/`, {
+      signal: AbortSignal.timeout(1000),
+    });
+    expect(consoleResponse.ok).toBe(true);
+    expect(await consoleResponse.text()).toBe(expectedHtml);
+  } finally {
+    await stopServer();
   }
 }, 120_000);

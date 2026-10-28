@@ -6,6 +6,7 @@ import { validationErrorHook } from './openapi-defaults';
 import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 import { MAX_TOOL_OUTPUT_CHARS } from '../adapters/web/truncate';
+import { sendMessageBodySchema } from './schemas/conversation.schemas';
 
 // ---------------------------------------------------------------------------
 // Mock setup — must be before dynamic imports of mocked modules
@@ -25,7 +26,6 @@ const mockFindConversationByPlatformId = mock(
       codebase_id: string | null;
     }
 );
-const mockUpdateConversationTitle = mock(async (_id: string, _title: string) => {});
 const mockAddMessage = mock(
   async (_conversationId: string, _role: 'user' | 'assistant', _content: string) => ({
     id: 'msg-uuid-1',
@@ -126,7 +126,7 @@ mock.module('@archon/core/db/conversations', () => ({
     ai_assistant_type: 'claude',
   })),
   softDeleteConversation: mock(async () => {}),
-  updateConversationTitle: mockUpdateConversationTitle,
+  updateConversationTitle: mock(async () => {}),
   getConversationById: mock(async () => null),
 }));
 
@@ -230,6 +230,97 @@ describe('POST /api/conversations/:id/message', () => {
     mockAddMessage.mockReset();
   });
 
+  test('publishes JSON and multipart message request bodies', async () => {
+    const { app } = makeApp();
+    const response = await app.request('/api/openapi.json');
+    expect(response.status).toBe(200);
+    const doc = (await response.json()) as ReturnType<typeof app.getOpenAPIDocument>;
+    type Schema = NonNullable<NonNullable<typeof doc.components>['schemas']>[string];
+    function resolve(schema: Schema | undefined): Exclude<Schema, { $ref: string }> {
+      if (!schema) throw new Error('Missing schema');
+      if ('$ref' in schema)
+        return resolve(doc.components?.schemas?.[schema.$ref.split('/').at(-1) ?? '']);
+      return schema;
+    }
+    const body = doc.paths['/api/conversations/{id}/message']?.post?.requestBody;
+    if (!body || '$ref' in body) throw new Error('Missing message request body');
+    expect(body.required).toBe(true);
+    expect(Object.keys(body.content)).toEqual(['application/json', 'multipart/form-data']);
+    const json = resolve(body.content['application/json']?.schema);
+    const form = resolve(body.content['multipart/form-data']?.schema);
+    for (const schema of [json, form]) {
+      expect(schema.required).toEqual(['message']);
+      expect(resolve(schema.properties?.message)).toMatchObject({ type: 'string', minLength: 1 });
+    }
+    expect(json.properties?.files).toBeUndefined();
+    const files = resolve(form.properties?.files);
+    expect(files).toMatchObject({ type: 'array', maxItems: 5 });
+    if (!files.items || Array.isArray(files.items)) throw new Error('Missing file item schema');
+    expect(resolve(files.items)).toMatchObject({ type: 'string', format: 'binary' });
+  });
+
+  test.each(['json', 'multipart'] as const)(
+    '%s message validation follows the published schema',
+    async transport => {
+      mockFindConversationByPlatformId.mockResolvedValue(null);
+      const { app } = makeApp();
+      for (const message of [undefined, '', 'a', ' ', 'Hello']) {
+        mockHandleMessage.mockClear();
+        const form = new FormData();
+        if (message !== undefined) form.set('message', message);
+        const valid = sendMessageBodySchema.safeParse({ message }).success;
+        const response = await app.request('/api/conversations/web-test-abc/message', {
+          method: 'POST',
+          ...(transport === 'json'
+            ? {
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message }),
+              }
+            : { body: form }),
+        });
+        expect(response.status).toBe(valid ? 200 : 400);
+        expect(await response.json()).toEqual(
+          valid
+            ? { accepted: true, status: 'started' }
+            : { error: 'message must be a non-empty string' }
+        );
+        expect(mockHandleMessage).toHaveBeenCalledTimes(valid ? 1 : 0);
+      }
+    }
+  );
+
+  test.each(['too many', 'too large'] as const)('refuses %s attachments', async kind => {
+    mockFindConversationByPlatformId.mockResolvedValue(null);
+    const { app } = makeApp();
+    const form = new FormData();
+    form.set('message', 'Hello');
+    for (let index = 0; index < (kind === 'too many' ? 6 : 1); index++) {
+      form.append(
+        'files',
+        new File(
+          [kind === 'too large' ? new Uint8Array(10 * 1024 * 1024 + 1) : 'hello'],
+          'file.txt',
+          {
+            type: 'text/plain',
+          }
+        )
+      );
+    }
+    const response = await app.request('/api/conversations/web-test-abc/message', {
+      method: 'POST',
+      body: form,
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error:
+        kind === 'too many'
+          ? 'Maximum 5 files per message'
+          : 'File "file.txt" exceeds the 10 MB size limit',
+    });
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockAddMessage).not.toHaveBeenCalled();
+  });
+
   test('accepts a valid message and dispatches to orchestrator', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
     mockAddMessage.mockImplementationOnce(async () => ({
@@ -326,9 +417,24 @@ describe('POST /api/conversations/:id/message', () => {
     expect(response.status).toBe(400);
 
     const body = (await response.json()) as { error: string };
-    // Zod validation returns "message: Required" before the handler runs
     expect(body.error).toContain('message');
   });
+
+  test.each(['null', 'true', '42', '"Hello"', '[]', '["Hello"]'])(
+    'returns 400 for a non-object JSON body: %s',
+    async body => {
+      const { app } = makeApp();
+      const response = await app.request('/api/conversations/web-test-abc/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'message must be a non-empty string' });
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      expect(mockAddMessage).not.toHaveBeenCalled();
+    }
+  );
 
   test('returns 400 for malformed JSON body', async () => {
     const { app } = makeApp();
@@ -581,85 +687,5 @@ describe('GET /api/conversations/:id/messages — tool output bounding', () => {
     const response = await app.request('/api/conversations/web-test-abc/messages');
     const body = (await response.json()) as Array<{ metadata: string }>;
     expect(body[0]!.metadata).toBe(metadata);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests: PATCH /api/conversations/:id
-// ---------------------------------------------------------------------------
-
-describe('PATCH /api/conversations/:id', () => {
-  beforeEach(() => {
-    mockFindConversationByPlatformId.mockReset();
-    mockUpdateConversationTitle.mockReset();
-  });
-
-  test('updates conversation title and returns success', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockUpdateConversationTitle.mockImplementationOnce(async () => {});
-
-    const { app } = makeApp();
-    const response = await app.request('/api/conversations/web-test-abc', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Updated Title' }),
-    });
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { success: boolean };
-    expect(body.success).toBe(true);
-    expect(mockUpdateConversationTitle).toHaveBeenCalledWith(MOCK_CONV.id, 'Updated Title');
-  });
-
-  test('truncates title to 255 characters', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-    mockUpdateConversationTitle.mockImplementationOnce(async () => {});
-
-    const { app } = makeApp();
-    const longTitle = 'x'.repeat(400);
-    await app.request('/api/conversations/web-test-abc', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: longTitle }),
-    });
-
-    const lastCall = mockUpdateConversationTitle.mock.calls.at(-1) as [string, string];
-    expect(lastCall[1].length).toBe(255);
-  });
-
-  test('returns success without updating title when body has no title field', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
-
-    const { app } = makeApp();
-    const callsBefore = mockUpdateConversationTitle.mock.calls.length;
-    const response = await app.request('/api/conversations/web-test-abc', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ someOtherField: 'value' }),
-    });
-    expect(response.status).toBe(200);
-    expect(mockUpdateConversationTitle.mock.calls.length).toBe(callsBefore);
-  });
-
-  test('returns 404 when conversation not found', async () => {
-    mockFindConversationByPlatformId.mockImplementationOnce(async () => null);
-
-    const { app } = makeApp();
-    const response = await app.request('/api/conversations/unknown-id', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'New Title' }),
-    });
-    expect(response.status).toBe(404);
-  });
-
-  test('returns 400 for malformed JSON body', async () => {
-    const { app } = makeApp();
-    const response = await app.request('/api/conversations/web-test-abc', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: 'not valid json {{{',
-    });
-    expect(response.status).toBe(400);
   });
 });

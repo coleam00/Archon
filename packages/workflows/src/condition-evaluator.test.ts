@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, it, expect, mock } from 'bun:test';
 
 // --- Mock logger (MUST come before imports of modules under test) ---

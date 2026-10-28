@@ -1,4 +1,4 @@
-import { matchesForgeOperationResponse } from './dispatch';
+import { matchesForgeOperationResponse } from './response-match';
 import {
   forgeResponseSchema,
   mutationTarget,
@@ -53,22 +53,30 @@ export async function runForgeReadConformance(
       value.approvalPending !== fixture.expected.approvalPending
     )
       failures.push(`${fixture.name}: approval evidence differs`);
-    for (const expected of fixture.expected.units) {
-      if (
-        expected.rerun !== undefined &&
-        JSON.stringify(
-          value.units.find(unit => unit.unit.kind === expected.kind && unit.unit.id === expected.id)
-            ?.rerun
-        ) !== JSON.stringify(expected.rerun)
-      )
-        failures.push(`${fixture.name}: rerun identity or attempt differs`);
-    }
-    const identities = value.units.map(unit => `${unit.unit.kind}:${unit.unit.id}`).sort();
-    const expected = fixture.expected.units.map(unit => `${unit.kind}:${unit.id}`).sort();
-    if (JSON.stringify(identities) !== JSON.stringify(expected))
-      failures.push(`${fixture.name}: enumerated unit identities differ`);
+    checkExpectedUnits(fixture, value, failures);
   }
   return failures;
+}
+
+function checkExpectedUnits(
+  fixture: ForgeReadConformanceCase,
+  value: ChecksObservation,
+  failures: string[]
+): void {
+  for (const expected of fixture.expected.units) {
+    if (
+      expected.rerun !== undefined &&
+      JSON.stringify(
+        value.units.find(unit => unit.unit.kind === expected.kind && unit.unit.id === expected.id)
+          ?.rerun
+      ) !== JSON.stringify(expected.rerun)
+    )
+      failures.push(`${fixture.name}: rerun identity or attempt differs`);
+  }
+  const identities = value.units.map(unit => `${unit.unit.kind}:${unit.unit.id}`).sort();
+  const expected = fixture.expected.units.map(unit => `${unit.kind}:${unit.id}`).sort();
+  if (JSON.stringify(identities) !== JSON.stringify(expected))
+    failures.push(`${fixture.name}: enumerated unit identities differ`);
 }
 
 export interface ForgeMutationConformanceCase {

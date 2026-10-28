@@ -1,0 +1,446 @@
+# Node Reference
+
+Mechanical reference: every node type, its fields, how nodes wire together, and
+how to prove wiring with fixtures. For design judgment (gates, primitives,
+prompting) read `authoring-workflows.md` in this folder first.
+
+## Workflow-level fields
+
+```yaml
+name: my-workflow            # unique; user workflows may shadow bundled names
+description: |
+  What this does and when to use it. Shown by `archon workflow list`.
+model: large                 # tier keyword (small|medium|large) or @alias — never a literal model id
+inputs:                      # declared signature; callers pass via --input name=value
+  work:
+    default: ""
+    description: Optional work override; prompts read $ARGUMENTS explicitly for fallback
+returns: implement           # which node's output is the workflow's terminal output
+outcome_field: green         # persist one authored boolean beside run status (e.g. green/ready/rooted)
+worktree:
+  enabled: true              # pin worktree isolation. Bounds git files ONLY —
+                             # not ~/.archon, env vars, database, or sessions
+mutates_checkout: false      # declare when the workflow never touches the working tree
+```
+
+An input default does not fall back to the invocation message automatically.
+When both are valid sources, give the model both values and state the precedence:
+
+```yaml
+- id: implement
+  prompt: |
+    Optional work override: $INPUTS.work
+    Original invocation: $ARGUMENTS
+    Use the work override when it is non-empty; otherwise use the original invocation.
+```
+
+## The eleven node types
+
+Exactly one of these appears per node: `command`, `prompt`, `bash`, `script`,
+`loop`, `loop_group`, `approval`, `cancel`, `wait`, `workflow`, `include`.
+`approval` is deprecated; new pauses use `wait: { attention: ..., form: ... }`.
+
+### command / prompt — AI nodes
+
+```yaml
+- id: plan
+  command: plan              # loads <workflow-folder>/commands/plan.md — prefer files over inline prose
+  depends_on: [investigate]
+```
+```yaml
+- id: classify
+  prompt: "Classify $ARGUMENTS. Set type to BUG or FEATURE."
+  allowed_tools: []          # no tools needed for pure judgment
+  output_format:             # declare ONLY when a machine consumes a field (gate/until_field/script)
+    type: object
+    properties:
+      type: { type: string, enum: [BUG, FEATURE] }
+    required: [type]
+```
+
+Key fields on AI nodes: `model`/`provider` (tiers), `output_format` (+ `output_type`
+for typed artifact sidecars), `allowed_tools`/`denied_tools`, `effort`/`thinking`,
+`retry` (default 2x on transient), `persist_session` (continues across runs only on a
+provider that supports session forks; others start fresh each run), `idle_timeout`.
+
+Session context is explicit when it matters:
+
+- Omitted context inherits the prior compatible provider session in a sequential
+  layer and starts fresh in a parallel layer.
+- `context: fresh` always starts clean. Use it for independent verification.
+- `context: shared` explicitly inherits the ambient session in a sequential
+  layer. It is invalid where parallel structure makes that ancestry ambiguous.
+- `context: { resume: plan }` forks the named completed upstream node's session.
+  Use it when one exact ancestry matters; the provider must support session forks.
+  Inside a `loop_group` body the source can be an enclosing node, whose session the
+  body continues across iterations, or an upstream node in the same body, whose
+  session of that iteration the consumer forks. The same-body form suits a follow-up that asks the agent to
+  finish a step it skipped.
+
+### bash — deterministic shell, no AI
+
+```yaml
+- id: test-gate
+  bash: bun run test
+  timeout: 300000            # ms; stdout captured as $test-gate.output
+```
+Exit code decides pass/fail. On `timeout`, Archon signals a host node's process tree,
+so work behind `bun run` or another wrapper stops too. A process that leaves the node's
+process group (`setsid`) escapes. In a container node, a timeout ends only the local
+`docker exec` client, and the command inside the container may keep running. In a detached run on macOS or Linux, a timeout whose
+cleanup cannot be confirmed fails the node, even with `on_timeout: skip`.
+
+The same node shape verifies non-code work:
+`bash: python3 scripts/reconcile.py --period 2026-08` (totals must balance),
+or a script that checks every imported row has an owner. One-or-two-line glue
+only; anything with branching is a script node.
+
+### script — TypeScript (bun) or Python (uv), no AI
+
+```yaml
+- id: verify-report
+  script: verify-report      # loads <workflow-folder>/scripts/verify-report.py
+  runtime: uv
+  depends_on: [implement, review]
+  with:                      # typed value transport into INPUTS_<UPPER_SNAKE> env vars
+    green: "$implement.output.green"
+    prior: {from: "$review.output", if_skipped: "none"}
+```
+
+Prefer named script files over inline bodies. Python (`runtime: uv`) preferred,
+TypeScript (`runtime: bun`) fine. `deps:` adds uv dependencies.
+
+### Result contracts — the producer owns the schema
+
+Use the producing node's `output_format` for a JSON result. `returns:` selects
+that node; it does not declare another schema. No value-shape declaration belongs
+on `inputs:` or `returns:`.
+
+```yaml
+name: certified-result
+description: Certify a deterministic result and bind its field downstream
+returns: build
+nodes:
+  - id: build
+    bash: printf '%s' '{"ready":true}'
+    output_format:
+      type: object
+      properties:
+        ready: {type: boolean}
+      required: [ready]
+  - id: consume
+    depends_on: [build]
+    with:
+      ready: "$build.output.ready"
+    runtime: uv
+    script: |
+      import os
+      print(os.environ["INPUTS_READY"])
+```
+
+A `bash:` or `script:` node with `output_format` must print one strict JSON
+document satisfying that schema. Send diagnostics to stderr. There is no JSON
+repair or reask; a contract violation fails the node and is not retried, even
+with `retry:`. A schema that cannot compile is a load error. Without
+`output_format`, exec stdout remains raw text. Named scripts use the same rule;
+the small bash example above keeps the handoff visible.
+
+An `include:` alias exposes the selected producer's contract through flattening.
+A `workflow:` caller receives the child's selected result and declared field
+names, persisted for cold resume. Do not repeat the schema on the caller:
+`output_format` on a `workflow:` node is a load error; on `include:` it is ignored
+with a warning. A schemaless child stays schemaless. Fan-out returns an ordered
+array of item values; consume the whole aggregate, not a field on the array.
+
+For field-access and file-pointer rules, read `variables.md` → Node Output Details and
+Artifact pointers. The docs' `reference/workflow-language.md` → Result contracts
+gives the full composition examples.
+
+### loop — iterate ONE AI job
+
+```yaml
+- id: implement
+  loop:
+    command: implement
+    until_field: done        # boolean in this node's output_format
+    max_iterations: 5
+  depends_on: [plan]
+  output_format:
+    type: object
+    properties:
+      done: {type: boolean}
+    required: [done]
+```
+
+Completion channels — declare at least one, pick by tier:
+
+- `until_bash: "<exit-0 check>"` — completion externally checkable (deterministic)
+- `until_field: <bool>` — completion is the model's judgment, via `output_format`
+- `until: TOKEN` — deprecated prose sentinel; use one of the channels above
+
+Also: `fresh_context: true` (each iteration starts clean) and `$LOOP_PREV_OUTPUT`
+for previous-iteration state.
+A failed iteration fails the loop at `max_iterations` — bound exhaustion fails
+truthfully rather than blessing a bad last attempt.
+
+### loop_group — repeat a sub-DAG
+
+```yaml
+- id: fix-cycle
+  depends_on: [review-findings]
+  loop_group:
+    nodes:
+      - id: fix
+        prompt: "Address findings: $review-findings.output"
+      - id: recheck
+        prompt: "Verify each finding is fixed with evidence."
+        depends_on: [fix]
+        context: fresh
+        output_format: {type: object, properties: {ready: {type: boolean}}, required: [ready]}
+    until_bash: 'ready=$recheck.output.ready; test "$ready" = "true"'
+    max_iterations: 5
+```
+
+Body is sealed (no external `depends_on`); outer outputs reach bodies via
+`$nodeId.output`. In a `loop_group` body, `$LOOP_PREV.<body-id>.output` reads the
+previous iteration: prompts text-substitute it, while `when:` conditions resolve it
+as a typed condition reference. A failed body node fails the group immediately.
+
+### approval — deprecated
+
+`approval:` still loads and runs, but the loader warns once per workflow file, naming
+each node and its replacement. Do not write new ones. Replace:
+
+- `approval: { message }` → `wait: { attention: <message>, form: approval }`. A legacy
+  reject cancels the run; the attention form continues with `{decision: 'reject'}`, so
+  add a `cancel:` node with `when: "$<id>.output.decision == 'reject'"` where rejecting
+  should end the run.
+- `approval.decisions` → `wait: { attention, form: select, options }` with the same ids
+  and labels; same `{decision, text}` output.
+- `capture_response` → read the answer's `$<id>.output.text`; every form records text.
+- `on_reject` / `$REJECTION_REASON` → a rework node with
+  `when: "$<id>.output.decision == 'reject'"` that reads `$<id>.output.text`, inside a
+  `loop_group` if it should repeat.
+
+### cancel — terminate deliberately
+
+```yaml
+- id: refuse
+  cancel: "This workflow handles bugs only."
+  when: "$classify.output.type != 'BUG'"
+```
+
+### workflow / include — reuse another workflow
+
+Use `workflow:` to start a governed child run with its own artifacts, gates, cost,
+and audit trail. Use `include:` to flatten a reusable workflow block into the
+current run at load time.
+
+```yaml
+- id: review-child
+  workflow: archon-review
+  with:
+    scope: "$INPUTS.branch"
+  isolation: worktree
+
+- id: review-inline
+  include: archon-review
+  with:
+    scope: "$INPUTS.branch"
+```
+
+The `workflow:` target name is static YAML but resolves when the node executes,
+so a prior node may author the child workflow. `workflow:` also accepts `input:`
+instead of `with:` and can declare `fan_out:`. A plain `include:` resolves and
+expands fully at load time; the directive carries only structural graph fields
+plus `with:` and has no execution surface of its own. The include's `when:` gates the
+whole block. Inside a `loop_group` it reads `$LOOP_PREV` from the loop that contains
+the include.
+
+On a `workflow:` node, `fan_out.max_parallel` limits unfinished children (default
+`5`). `max_parallel: all` starts every item at once: use it when each child asks an
+independent attention question, because a paused child keeps its slot and a numeric
+window leaves later questions unstarted. Under `join: all_done` the node completes once
+every child is terminal, even when some failed, never started or were cancelled; the run
+records each slot's outcome for operators (`workflow get`), but a downstream node that
+judges the results reads the `archon_failed` markers in `$<id>.output`.
+
+Put `fan_out:` on `include:` when runtime data determines how many copies of a
+static block should run inside the parent run:
+
+```yaml
+- id: list-scopes
+  bash: printf '["packages/cli","packages/workflows"]'
+
+- id: review-each
+  include: archon-review
+  depends_on: [list-scopes]
+  fan_out:
+    items: "$list-scopes.output"
+    as: scope               # required; each instance receives $INPUTS.scope
+    max_parallel: 1         # serial escape when the included block may write
+    join: all_done
+```
+
+This form creates no child runs. It returns an item-ordered JSON array under
+`$review-each.output`. With `join: all_done`, a failed instance contributes an
+`archon_failed` marker; `all_success` fails the node. To run instances
+concurrently, the complete included block must declare `mutates_checkout: false`.
+Approval gates, durable waits, and other suspension paths are not supported
+inside composed fan-out; put them before or after the fan-out.
+
+### wait — suspend durably
+
+```yaml
+- id: pause-for-ci
+  wait:
+    duration_ms: 300000
+```
+
+A wait declares exactly one condition: `duration_ms`, an ISO timestamp under
+`until`, `event` plus `deadline_ms`, or `attention`. Archon persists the suspension and
+releases the worker slot. A time or event wait's fixed structured output includes
+`status` (`satisfied` or `expired`) and `waited_ms`; event waits may also return `event`
+and `payload`.
+
+`attention` asks a question that pauses the run until someone answers it in its `form`:
+
+```yaml
+- id: ask
+  depends_on: [plan]
+  wait:
+    attention: "$plan.output.question"
+    form: select              # message (default) | approval | select | multi_select
+    options:                  # select and multi_select only; or one whole "$plan.output.options"
+      - { id: use-main, label: "Base on main" }
+      - { id: use-dev }
+    labels:                   # optional; plain strings, runtime refs resolved at pause
+      about: "$plan.output.topic"
+```
+
+The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`
+and `select`, `{decisions, text}` for `multi_select`. In the `approval` form `reject` is
+an answer and never cancels the run; branch on `$ask.output.decision` with `when:`:
+
+```yaml
+- id: review
+  depends_on: [plan]
+  wait:
+    attention: "Approve this plan? $plan.output"
+    form: approval
+- id: stop
+  depends_on: [review]
+  when: "$review.output.decision == 'reject'"
+  cancel: "Plan rejected."
+- id: implement
+  depends_on: [review]
+  when: "$review.output.decision == 'approve'"
+  command: implement
+```
+
+Pause only for an interactive session or a super load-bearing action. The run pauses
+in the attention queue until answered, however it was started. To ask after each pass
+of a repeated body, end a `loop_group` body in the wait (it must be the body's sole
+terminal sink) and read the answer next iteration as `$LOOP_PREV.<wait-id>.output.text`.
+
+`labels` mean nothing to the engine; they let the user's handler workflows pick the
+pause out of `archon workflow attention --label k=v`.
+
+## Wiring nodes together
+
+**`depends_on`** creates edges; independent nodes in one topological layer run
+concurrently.
+
+**Data flow** — declared values carry scalars, artifacts carry documents:
+
+- `$nodeId.output` — whole text of an upstream node; unknown/skipped producer → `''`
+- `$nodeId.output.field` — strict JSON access: missing key **fails the consumer**
+  (never silent-empty); declared-optional field resolves to `''`
+- `with:` bindings (#2637) — prompt/command files read bound values as
+  `$INPUTS.<name>`; bash/script processes receive `INPUTS_<UPPER_SNAKE>` env vars.
+  `{from, if_skipped}` discriminates skipped producers from ran ones; a failed
+  producer fails the binding
+- `$INPUTS.<name>` — declared workflow inputs, also delivered as
+  `INPUTS_<UPPER_SNAKE>` to bash/script
+- `$ARTIFACTS_DIR` — pre-created directory for reports/evidence humans read.
+  Throwaway checkouts and dependency installs go under `$ARTIFACTS_DIR/.archon/scratch/`
+  (create it with `mkdir -p`), which Archon deletes once the run ends and its nodes have
+  stopped (a container run's when its container is removed); the rest of
+  `$ARTIFACTS_DIR` is kept
+- In `bash:` and `script:` sources, user-controlled variables (`$ARGUMENTS`,
+  `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`,
+  `$CONTEXT`) are **not** spliced as raw text (injection guard); they arrive as
+  environment variables (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`,
+  `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`, `EXTERNAL_CONTEXT`,
+  `ISSUE_CONTEXT`). Read an environment-delivered value in `bash:` as `"$ARGUMENTS"`.
+  In `script:` read it via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']`
+  (uv/python).
+  A `loop_group` body's `bash:` node is the exception: the loop scope splices the
+  reply (`$LOOP_USER_INPUT`) into its source, shell-quoted, so the reply arrives
+  already quoted. Read the spliced reply as an already-quoted value — assign it
+  and quote the variable (`value=$LOOP_USER_INPUT; printf '%s' "$value"`) — rather
+  than as `"$LOOP_USER_INPUT"`.
+  `$nodeId.output` refs ARE substituted; give prose producers an `output_format`
+  before assigning their output directly in a script.
+
+**`when:` conditions** skip a node when false (skipped propagates to dependants):
+
+```yaml
+when: "$classify.output.type == 'BUG'"
+when: "$score.output.confidence >= '0.9' && $gate.output.proceed == true"
+```
+
+Operators: `==`, `!=`, `<`, `>`, `<=`, `>=` (numbers auto-parse, fail-closed on
+non-numeric), compound with `&&`/`||` (`&&` binds tighter, no parentheses).
+Malformed expression → node skipped + warning. Dot-access contract violation →
+node FAILS loudly. Guard optional paths with `when:` or `trigger_rule`.
+
+**`trigger_rule`** — join semantics over dependencies:
+
+| Value | Behavior |
+|-------|----------|
+| `all_success` | all deps succeeded (default) |
+| `one_success` | at least one dep succeeded |
+| `none_failed_min_one_success` | none failed AND ≥1 succeeded (skips OK) |
+| `all_done` | all deps terminal (completed, failed, OR skipped) |
+
+## Fixtures — prove wiring without AI spend
+
+Every authored workflow ships dry-run fixtures in
+`<workflow-folder>/fixtures/<name>.stubs.yaml`:
+
+```yaml
+# Declared expectations + node stubs. Every non-reserved key is a node output.
+fixture:
+  expect: completed          # or failed / paused / cancelled
+  fail-node: assert-changed  # required when expect: failed — must match exactly
+  inputs:
+    branch: task-42
+implement:
+  done: true
+  green: true
+  summary: "stub summary"
+exec-code: false             # true executes bash/script nodes for real (requires a git checkout)
+```
+
+Run them:
+
+```bash
+archon workflow test                    # everything discovered
+archon workflow test my-workflow        # one workflow's fixtures
+```
+
+A reachable attention wait pauses the simulation unless the fixture stubs it; the stub
+stands in for the answer and must match the form's output, e.g.
+`review: { decision: approve, text: "" }`. Deprecated `approval:` gates auto-approve.
+
+Expected-red fixtures are the important ones: a guard that has never been seen
+failing proves nothing. Prove reds red before trusting them. `workflow test`
+mirrors what a real run does with its two directories: named scripts and command
+files come from one frozen capture of your working tree taken per invocation —
+uncommitted edits included, so authoring works as normal — while exec-code nodes
+execute against a scratch worktree of HEAD. So a script that reaches outside
+`.archon/` with a `__file__`-relative path fails the fixture exactly as it would
+fail the run, and nothing a node executes can touch your checkout. Exec-code
+fixtures require a git checkout and fail explicitly outside one. Validate
+load-time errors with `archon workflow list`.

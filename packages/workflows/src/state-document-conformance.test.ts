@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { expect, test } from 'bun:test';
 import { assertStatePutRace, assertStatePatchRace } from './state-document-conformance';
 import { applyStatePatch, type StateRevision } from './state-document-store';

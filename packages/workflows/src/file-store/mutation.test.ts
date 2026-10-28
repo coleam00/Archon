@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { expect, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';

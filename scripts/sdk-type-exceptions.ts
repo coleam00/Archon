@@ -28,7 +28,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     reason: 'Derived Slack Bolt command handler, not an OpenCode command.',
   },
   {
-    file: 'packages/cli/src/commands/workflow.ts',
+    file: 'packages/cli/src/commands/workflow-shared.ts',
     name: 'WorkflowRunOptions',
     kind: 'independent',
     reason: 'Archon CLI dispatch flags, not Copilot workflow execution options.',
@@ -124,13 +124,13 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     reason: 'Archon host startup options, not OpenCode server launch options.',
   },
   {
-    file: 'packages/server/src/routes/api.ts',
+    file: 'packages/server/src/routes/api.workflow-runs.ts',
     name: 'WorkflowRunStatus',
     kind: 'independent',
     reason: 'Derived Archon workflow-run schema status, not Copilot workflow status.',
   },
   {
-    file: 'packages/server/src/routes/api.ts',
+    file: 'packages/server/src/routes/api.artifacts.ts',
     name: 'FileEntry',
     kind: 'independent',
     reason: 'Artifact HTTP response with size and modification time, not Pi file-tree entry.',
@@ -193,7 +193,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
       'Engine-owned JSON value domain for workflow bindings and validation; generic JSON vocabulary, not a provider boundary copy.',
   },
   {
-    file: 'packages/workflows/src/schemas/dag-node.ts',
+    file: 'packages/workflows/src/schemas/provider-options.ts',
     name: 'SandboxSettings',
     kind: 'boundary',
     reason:
@@ -203,7 +203,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     conformanceTest: CONFORMANCE,
   },
   {
-    file: 'packages/workflows/src/schemas/dag-node.ts',
+    file: 'packages/workflows/src/schemas/agent-node.ts',
     name: 'PromptSource',
     kind: 'independent',
     reason: 'Archon prompt file/text union, not an OpenCode message source.',
@@ -219,7 +219,7 @@ export const SDK_TYPE_EXCEPTIONS: readonly SdkTypeException[] = [
     conformanceTest: CONFORMANCE,
   },
   {
-    file: 'packages/workflows/src/schemas/workflow-run.ts',
+    file: 'packages/workflows/src/schemas/run-status.ts',
     name: 'WorkflowRunStatus',
     kind: 'independent',
     reason: 'Persisted Archon run-state schema, not Copilot workflow status.',

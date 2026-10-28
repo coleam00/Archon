@@ -134,6 +134,52 @@ export function AgentCredentialCard({
     />
   );
 
+  const renderStaticCredentials = (): ReactElement => (
+    <>
+      {inlineRows.length > 0 ? (
+        <div className="flex flex-col gap-2">{inlineRows.map(row)}</div>
+      ) : isMultiBackend ? (
+        <p className="text-[12px] text-text-tertiary">No backends connected yet.</p>
+      ) : null}
+
+      {groups && connectEnabled ? (
+        <BackendPicker
+          addable={groups.addable}
+          modelCounts={piModelCounts}
+          onPick={vendor => {
+            setKeyVendor(vendor);
+            setLoginVendor(null);
+          }}
+        />
+      ) : null}
+
+      {pickedAddable ? row(pickedAddable) : null}
+
+      {groups && groups.ambient.length > 0 ? (
+        <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
+          {groups.ambient.map(cred => (
+            <div
+              key={cred.vendor}
+              className="flex items-center justify-between gap-3 px-1 text-[11.5px]"
+            >
+              <span className="text-text-secondary">
+                {cred.displayName}{' '}
+                <span className="font-mono text-[10px] text-text-tertiary">{cred.vendor}</span>
+              </span>
+              {cred.ambientConfigured === true ? (
+                <span className="font-mono text-[10.5px] text-success">
+                  configured via {ambientSource(cred.vendor)}
+                </span>
+              ) : (
+                <span className="font-mono text-[10.5px] text-text-tertiary">not detected</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
+
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-surface-elevated p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -152,53 +198,7 @@ export function AgentCredentialCard({
         </span>
       </div>
 
-      {agent.catalog === 'dynamic' ? (
-        <OpencodeBackends />
-      ) : (
-        <>
-          {inlineRows.length > 0 ? (
-            <div className="flex flex-col gap-2">{inlineRows.map(row)}</div>
-          ) : isMultiBackend ? (
-            <p className="text-[12px] text-text-tertiary">No backends connected yet.</p>
-          ) : null}
-
-          {groups && connectEnabled ? (
-            <BackendPicker
-              addable={groups.addable}
-              modelCounts={piModelCounts}
-              onPick={vendor => {
-                setKeyVendor(vendor);
-                setLoginVendor(null);
-              }}
-            />
-          ) : null}
-
-          {pickedAddable ? row(pickedAddable) : null}
-
-          {groups && groups.ambient.length > 0 ? (
-            <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
-              {groups.ambient.map(cred => (
-                <div
-                  key={cred.vendor}
-                  className="flex items-center justify-between gap-3 px-1 text-[11.5px]"
-                >
-                  <span className="text-text-secondary">
-                    {cred.displayName}{' '}
-                    <span className="font-mono text-[10px] text-text-tertiary">{cred.vendor}</span>
-                  </span>
-                  {cred.ambientConfigured === true ? (
-                    <span className="font-mono text-[10.5px] text-success">
-                      configured via {ambientSource(cred.vendor)}
-                    </span>
-                  ) : (
-                    <span className="font-mono text-[10.5px] text-text-tertiary">not detected</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </>
-      )}
+      {agent.catalog === 'dynamic' ? <OpencodeBackends /> : renderStaticCredentials()}
 
       {message !== null ? <p className="font-mono text-[11px] text-error">{message}</p> : null}
     </div>
@@ -211,20 +211,7 @@ export function AgentCredentialCard({
  * disconnect affordances. The inline key form and login flow render below the
  * row so the row itself stays scannable.
  */
-function CredentialRow({
-  cred,
-  label,
-  connectEnabled,
-  keyFormOpen,
-  loginOpen,
-  busy,
-  modelCount,
-  onOpenKeyForm,
-  onCloseKeyForm,
-  onOpenLogin,
-  onCloseLogin,
-  onDisconnect,
-}: {
+interface CredentialRowProps {
   cred: AgentCredentialStatus;
   label: string | null;
   connectEnabled: boolean;
@@ -237,70 +224,15 @@ function CredentialRow({
   onOpenLogin: () => void;
   onCloseLogin: () => void;
   onDisconnect: () => void;
-}): ReactElement {
-  // Deliberate gating asymmetry: key connect derives from the declared
-  // `kinds`, but login uses `subscriptionAvailable` — the server-evaluated
-  // runtime gate (it can disable a declared 'subscription' kind, as it did
-  // for Codex until #1924). Don't "fix" login to follow the `kinds` pattern.
-  const canConnectKey = connectEnabled && cred.kinds.includes('api_key') && cred.connected === null;
-  const canLogin = connectEnabled && cred.subscriptionAvailable && cred.connected !== 'oauth';
-  // An unconsumed connection (a Claude subscription on Pi's Anthropic row) belongs to the
-  // agent that uses it; disconnecting it here would remove that agent's credential.
-  const canDisconnect = connectEnabled && cred.connectionConsumed;
-  const unconsumedNote = unconsumedConnectionNote(cred);
+}
 
+function CredentialRow(props: CredentialRowProps): ReactElement {
+  const { cred, label, modelCount, keyFormOpen, loginOpen, onCloseKeyForm, onCloseLogin } = props;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-border bg-surface-inset px-3 py-2 text-[12px]">
-        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="font-medium text-text-primary">{cred.displayName}</span>
-          <span className="font-mono text-[10px] text-text-tertiary">{cred.vendor}</span>
-          {unconsumedNote !== null ? (
-            <span className="font-mono text-[10.5px] text-text-tertiary">{unconsumedNote}</span>
-          ) : cred.connected === 'api_key' ? (
-            <span className="font-mono text-[10.5px] text-success">
-              API key connected{label ? ` · ${label}` : ''}
-            </span>
-          ) : cred.connected === 'oauth' ? (
-            <span className="font-mono text-[10.5px] text-success">subscription connected</span>
-          ) : null}
-          {cred.installEnv ? (
-            <span className="rounded-full border border-border px-2 py-px font-mono text-[10px] text-text-tertiary">
-              using install env
-            </span>
-          ) : null}
-          {modelCount !== undefined ? (
-            <span className="font-mono text-[10px] text-text-tertiary">
-              {modelCount} model{modelCount === 1 ? '' : 's'}
-            </span>
-          ) : null}
-        </span>
-        <span className="flex shrink-0 items-center gap-2">
-          {canLogin ? (
-            <button
-              type="button"
-              onClick={onOpenLogin}
-              disabled={loginOpen}
-              className={BRAND_BUTTON}
-            >
-              Login
-            </button>
-          ) : null}
-          {canConnectKey ? (
-            <button
-              type="button"
-              onClick={keyFormOpen ? onCloseKeyForm : onOpenKeyForm}
-              className={GHOST_BUTTON}
-            >
-              {keyFormOpen ? 'Cancel' : 'Connect key'}
-            </button>
-          ) : null}
-          {canDisconnect ? (
-            <button type="button" onClick={onDisconnect} disabled={busy} className={GHOST_BUTTON}>
-              {busy ? 'Disconnecting…' : 'Disconnect'}
-            </button>
-          ) : null}
-        </span>
+        <CredentialIdentity cred={cred} label={label} modelCount={modelCount} />
+        <CredentialActions {...props} />
       </div>
       {keyFormOpen ? <KeyConnectForm cred={cred} onDone={onCloseKeyForm} /> : null}
       {loginOpen ? (
@@ -311,6 +243,96 @@ function CredentialRow({
         />
       ) : null}
     </div>
+  );
+}
+
+function CredentialIdentity({
+  cred,
+  label,
+  modelCount,
+}: Pick<CredentialRowProps, 'cred' | 'label' | 'modelCount'>): ReactElement {
+  const unconsumedNote = unconsumedConnectionNote(cred);
+  return (
+    <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+      <span className="font-medium text-text-primary">{cred.displayName}</span>
+      <span className="font-mono text-[10px] text-text-tertiary">{cred.vendor}</span>
+      {unconsumedNote !== null ? (
+        <span className="font-mono text-[10.5px] text-text-tertiary">{unconsumedNote}</span>
+      ) : cred.connected === 'api_key' ? (
+        <span className="font-mono text-[10.5px] text-success">
+          API key connected{label ? ` · ${label}` : ''}
+        </span>
+      ) : cred.connected === 'oauth' ? (
+        <span className="font-mono text-[10.5px] text-success">subscription connected</span>
+      ) : null}
+      {cred.installEnv ? (
+        <span className="rounded-full border border-border px-2 py-px font-mono text-[10px] text-text-tertiary">
+          using install env
+        </span>
+      ) : null}
+      {modelCount !== undefined ? (
+        <span className="font-mono text-[10px] text-text-tertiary">
+          {modelCount} model{modelCount === 1 ? '' : 's'}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function CredentialActions({
+  cred,
+  connectEnabled,
+  keyFormOpen,
+  loginOpen,
+  busy,
+  onOpenKeyForm,
+  onCloseKeyForm,
+  onOpenLogin,
+  onDisconnect,
+}: Pick<
+  CredentialRowProps,
+  | 'cred'
+  | 'connectEnabled'
+  | 'keyFormOpen'
+  | 'loginOpen'
+  | 'busy'
+  | 'onOpenKeyForm'
+  | 'onCloseKeyForm'
+  | 'onOpenLogin'
+  | 'onDisconnect'
+>): ReactElement {
+  // Deliberate gating asymmetry: key connect derives from the declared
+  // `kinds`, but login uses `subscriptionAvailable` — the server-evaluated
+  // runtime gate (it can disable a declared 'subscription' kind, as it did
+  // for Codex until #1924). Don't "fix" login to follow the `kinds` pattern.
+  const canConnectKey = connectEnabled && cred.kinds.includes('api_key') && cred.connected === null;
+  const canLogin = connectEnabled && cred.subscriptionAvailable && cred.connected !== 'oauth';
+  // An unconsumed connection (a Claude subscription on Pi's Anthropic row) belongs to the
+  // agent that uses it; disconnecting it here would remove that agent's credential.
+  const canDisconnect = connectEnabled && cred.connectionConsumed;
+
+  return (
+    <span className="flex shrink-0 items-center gap-2">
+      {canLogin ? (
+        <button type="button" onClick={onOpenLogin} disabled={loginOpen} className={BRAND_BUTTON}>
+          Login
+        </button>
+      ) : null}
+      {canConnectKey ? (
+        <button
+          type="button"
+          onClick={keyFormOpen ? onCloseKeyForm : onOpenKeyForm}
+          className={GHOST_BUTTON}
+        >
+          {keyFormOpen ? 'Cancel' : 'Connect key'}
+        </button>
+      ) : null}
+      {canDisconnect ? (
+        <button type="button" onClick={onDisconnect} disabled={busy} className={GHOST_BUTTON}>
+          {busy ? 'Disconnecting…' : 'Disconnect'}
+        </button>
+      ) : null}
+    </span>
   );
 }
 

@@ -4,13 +4,9 @@
  *
  * Community forge adapter — see packages/adapters/src/community/forge/README.md
  */
-import { resolveSavedCheckout } from '@archon/core/services/registration-remote';
 import { giteaPolicy } from './policy';
 import { createHmac, timingSafeEqual } from 'crypto';
-import { readdir, access } from 'fs/promises';
-import { join } from 'path';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
-import type { IsolationHints } from '@archon/isolation';
 import {
   ConversationNotFoundError,
   handleMessage,
@@ -20,39 +16,25 @@ import {
   type ConversationLockManager,
 } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
-import {
-  ensureProjectStructure,
-  getCommandFolderSearchPaths,
-  getProjectSourcePath,
-  resolveRepoProjectIdentity,
-  createLogger,
-} from '@archon/paths';
-import {
-  cloneRepository,
-  syncRepository,
-  addSafeDirectory,
-  toRepoPath,
-  toBranchName,
-} from '@archon/git';
 import * as db from '@archon/core/db/conversations';
-import * as codebaseDb from '@archon/core/db/codebases';
 import { parseAllowedUsers, isGiteaUserAuthorized } from './auth';
-import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
-import type { WebhookEvent } from './types';
-
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('adapter.gitea');
-  return cachedLog;
-}
-
-const MAX_LENGTH = 65000; // Gitea comment limit (similar to GitHub)
-
-/** Hidden marker added to bot comments to prevent self-triggering loops */
-const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
+import type { GiteaClient, WebhookEvent } from './types';
+import { getLog } from './log';
+import { BOT_RESPONSE_MARKER, buildConversationId, sendComment } from './comment-delivery';
+import { ensureRepoReady } from './repository-readiness';
+import { autoDetectAndLoadCommands, getOrCreateCodebaseForRepo } from './registration';
+import {
+  buildCommentMessage,
+  buildIsolationHints,
+  fetchCommentHistory,
+  hasMention,
+  parseWebhookEvent,
+  stripMention,
+  type ParsedWebhookEvent,
+} from './webhook-intake';
 
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+type CommentEvent = Extract<ParsedWebhookEvent, { kind: 'comment' }>;
 
 export class GiteaAdapter implements IPlatformAdapter {
   readonly capabilities = {
@@ -95,24 +77,8 @@ export class GiteaAdapter implements IPlatformAdapter {
     getLog().info({ baseUrl: this.baseUrl }, 'adapter_initialized');
   }
 
-  /**
-   * Check if an error is retryable (transient network issues)
-   */
-  private isRetryableError(error: unknown): boolean {
-    const err = error as Error | undefined;
-    const message = err?.message ?? '';
-    const causeErr = (error as { cause?: Error }).cause;
-    const cause = causeErr?.message ?? '';
-    const combined = `${message} ${cause}`.toLowerCase();
-
-    // Retry on transient network errors
-    return (
-      combined.includes('timeout') ||
-      combined.includes('econnrefused') ||
-      combined.includes('econnreset') ||
-      combined.includes('etimedout') ||
-      combined.includes('fetch failed')
-    );
+  private get client(): GiteaClient {
+    return { baseUrl: this.baseUrl, token: this.token };
   }
 
   /**
@@ -125,112 +91,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     message: string,
     _metadata?: MessageMetadata
   ): Promise<void> {
-    const parsed = this.parseConversationId(conversationId);
-    if (!parsed) {
-      getLog().error({ conversationId }, 'invalid_conversation_id');
-      return;
-    }
-
-    getLog().debug({ conversationId, messageLength: message.length }, 'send_message');
-
-    // Check if message needs splitting
-    if (message.length <= MAX_LENGTH) {
-      await this.postComment(parsed, message);
-    } else {
-      getLog().debug({ messageLength: message.length }, 'message_splitting');
-      const chunks = splitIntoParagraphChunks(message, MAX_LENGTH - 500);
-
-      // Fail-fast: if any chunk fails, stop and propagate error with context
-      for (let i = 0; i < chunks.length; i++) {
-        try {
-          await this.postComment(parsed, chunks[i]);
-        } catch (error) {
-          const err = error as Error;
-          getLog().error(
-            { err, chunkIndex: i + 1, totalChunks: chunks.length, conversationId },
-            'chunk_post_failed'
-          );
-          // Wrap error with context about partial delivery
-          const partialError = new Error(
-            `Failed to post comment chunk ${String(i + 1)}/${String(chunks.length)}. ` +
-              `${String(i)} chunk(s) were posted before failure.`
-          );
-          partialError.cause = error;
-          throw partialError;
-        }
-      }
-    }
-  }
-
-  /**
-   * Post a single comment to a Gitea issue or PR.
-   * Uses issues endpoint for both issues and PRs (Gitea API behavior).
-   * Includes retry logic with exponential backoff (3 attempts max).
-   * Throws on failure after exhausting retries so caller can handle appropriately.
-   */
-  private async postComment(
-    parsed: { owner: string; repo: string; number: number; isPR: boolean },
-    message: string
-  ): Promise<void> {
-    const markedMessage = `${message}\n\n${BOT_RESPONSE_MARKER}`;
-    const maxRetries = 3;
-    const conversationId = this.buildConversationId(
-      parsed.owner,
-      parsed.repo,
-      parsed.number,
-      parsed.isPR
-    );
-
-    // Gitea uses issues endpoint for PR comments too
-    const url = `${this.baseUrl}/api/v1/repos/${parsed.owner}/${parsed.repo}/issues/${String(parsed.number)}/comments`;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            Authorization: `token ${this.token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ body: markedMessage }),
-        });
-
-        if (!response.ok) {
-          const body = await response.text();
-          throw new Error(
-            `Gitea API error: ${String(response.status)} ${response.statusText} - ${body}`
-          );
-        }
-
-        getLog().debug({ conversationId }, 'comment_posted');
-        return;
-      } catch (error) {
-        const isRetryable = this.isRetryableError(error);
-        if (attempt < maxRetries && isRetryable) {
-          const delay = this.retryDelayFn(attempt);
-          getLog().warn(
-            { attempt, maxRetries, conversationId, delayMs: delay },
-            'comment_post_retry'
-          );
-          await new Promise(resolve => setTimeout(resolve, delay));
-          continue;
-        }
-        // Log with full context for debugging
-        getLog().error(
-          {
-            err: error,
-            conversationId,
-            attempt,
-            maxRetries,
-            wasRetryable: isRetryable,
-            messageLength: message.length,
-          },
-          'comment_post_failed'
-        );
-        // Re-throw so caller can handle (e.g., notify user, stop chunk loop)
-        throw error;
-      }
-    }
+    await sendComment(this.client, conversationId, message, this.retryDelayFn);
   }
 
   /**
@@ -310,368 +171,6 @@ export class GiteaAdapter implements IPlatformAdapter {
   }
 
   /**
-   * Parse webhook event and extract relevant data
-   *
-   * Handles:
-   * - issues.closed / pull_request.closed → cleanup (isCloseEvent: true)
-   * - issue_comment.created → bot @mention detection
-   * - pull_request_comment.created → bot @mention detection on PR review comments
-   *
-   * Does NOT handle:
-   * - issues.opened / pull_request.opened → returns null (descriptions are not commands)
-   */
-  private parseEvent(event: WebhookEvent): {
-    owner: string;
-    repo: string;
-    number: number;
-    comment: string;
-    eventType: 'issue' | 'issue_comment' | 'pull_request';
-    isPR: boolean;
-    issue?: WebhookEvent['issue'];
-    pullRequest?: WebhookEvent['pull_request'];
-    isCloseEvent?: boolean;
-    isMerged?: boolean;
-  } | null {
-    const owner = event.repository.owner.login;
-    const repo = event.repository.name;
-
-    // Detect issue closed
-    if (event.issue && event.action === 'closed' && !event.issue.pull_request) {
-      return {
-        owner,
-        repo,
-        number: event.issue.number,
-        comment: '',
-        eventType: 'issue',
-        isPR: false,
-        issue: event.issue,
-        isCloseEvent: true,
-      };
-    }
-
-    // Detect PR merged/closed
-    if (event.pull_request && event.action === 'closed') {
-      return {
-        owner,
-        repo,
-        number: event.pull_request.number,
-        comment: '',
-        eventType: 'pull_request',
-        isPR: true,
-        pullRequest: event.pull_request,
-        isCloseEvent: true,
-        isMerged: event.pull_request.merged === true,
-      };
-    }
-
-    // issue_comment (covers both issues and PRs in Gitea)
-    if (event.comment) {
-      const number = event.issue?.number ?? event.pull_request?.number;
-      if (!number) return null;
-
-      // In Gitea, issue.pull_request is an object (not null) when comment is on a PR
-      const isPR = !!event.issue?.pull_request || !!event.pull_request;
-
-      return {
-        owner,
-        repo,
-        number,
-        comment: event.comment.body,
-        eventType: 'issue_comment',
-        isPR,
-        issue: event.issue,
-        pullRequest: event.pull_request,
-      };
-    }
-
-    return null;
-  }
-
-  /**
-   * Check if text contains @mention for the configured bot
-   */
-  private hasMention(text: string): boolean {
-    const pattern = new RegExp(`@${this.botMention}[\\s,:;]`, 'i');
-    return pattern.test(text) || text.trim().toLowerCase() === `@${this.botMention.toLowerCase()}`;
-  }
-
-  /**
-   * Strip @mention from text for the configured bot
-   */
-  private stripMention(text: string): string {
-    const pattern = new RegExp(`@${this.botMention}[\\s,:;]+`, 'gi');
-    return text.replace(pattern, '').trim();
-  }
-
-  /**
-   * Fetch comment history from issue or PR
-   * Returns comments in chronological order (oldest first)
-   */
-  private async fetchCommentHistory(
-    owner: string,
-    repo: string,
-    number: number
-  ): Promise<string[]> {
-    try {
-      const url = `${this.baseUrl}/api/v1/repos/${owner}/${repo}/issues/${String(number)}/comments`;
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `token ${this.token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Gitea API error: ${String(response.status)}`);
-      }
-
-      const comments = (await response.json()) as {
-        user?: { login: string } | null;
-        body?: string | null;
-      }[];
-
-      // Gitea returns comments in chronological order by default
-      // Take last 20 for context
-      return comments.slice(-20).map(comment => {
-        const author = comment.user?.login ?? 'unknown';
-        const body = comment.body ?? '';
-        return `${author}: ${body}`;
-      });
-    } catch (error) {
-      getLog().error(
-        { err: error, owner, repo, issueNumber: number },
-        'comment_history_fetch_failed'
-      );
-      return [];
-    }
-  }
-
-  /**
-   * Build conversationId from owner, repo, number, and type
-   * Uses # for issues, ! for PRs
-   */
-  private buildConversationId(owner: string, repo: string, number: number, isPR: boolean): string {
-    const separator = isPR ? '!' : '#';
-    return `${owner}/${repo}${separator}${String(number)}`;
-  }
-
-  /**
-   * Parse conversationId into owner, repo, number, and isPR
-   */
-  private parseConversationId(
-    conversationId: string
-  ): { owner: string; repo: string; number: number; isPR: boolean } | null {
-    // Try PR format first (!)
-    const prRegex = /^([^/]+)\/([^!]+)!(\d+)$/;
-    const prMatch = prRegex.exec(conversationId);
-    if (prMatch) {
-      return { owner: prMatch[1], repo: prMatch[2], number: parseInt(prMatch[3], 10), isPR: true };
-    }
-
-    // Try issue format (#)
-    const issueRegex = /^([^/]+)\/([^#]+)#(\d+)$/;
-    const issueMatch = issueRegex.exec(conversationId);
-    if (issueMatch) {
-      return {
-        owner: issueMatch[1],
-        repo: issueMatch[2],
-        number: parseInt(issueMatch[3], 10),
-        isPR: false,
-      };
-    }
-
-    return null;
-  }
-
-  /**
-   * Ensure repository is cloned and ready.
-   * Uses @archon/git functions for safe, testable git operations.
-   *
-   * Without a checkout (no source/ or an empty one): clone
-   * With content (a checkout, or a registered subdirectory of one): sync if
-   * shouldSync=true, skip if shouldSync=false
-   *
-   * @param shouldSync - Whether to sync an existing checkout (pass true to ensure latest code)
-   */
-  private async ensureRepoReady(
-    owner: string,
-    repo: string,
-    defaultBranch: string,
-    codebase: { name: string; default_cwd: string },
-    shouldSync: boolean
-  ): Promise<void> {
-    const { name: projectName, default_cwd: repoPath } = codebase;
-    let repositoryExists = false;
-    try {
-      repositoryExists = (await readdir(repoPath)).length > 0;
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code !== 'ENOENT') {
-        // Real error - permission denied, I/O failure, etc.
-        getLog().error({ repoPath, errorCode: err.code, err }, 'repo_path_access_failed');
-        throw new Error(
-          `Cannot access repository at ${repoPath}: ${err.code ?? err.message}. ` +
-            'Check permissions and disk health.'
-        );
-      }
-    }
-
-    if (repositoryExists) {
-      if (shouldSync) {
-        getLog().info({ repoPath, defaultBranch }, 'repo_syncing');
-        const syncResult = await syncRepository(toRepoPath(repoPath), toBranchName(defaultBranch));
-        if (!syncResult.ok) {
-          getLog().error({ repoPath, defaultBranch }, 'repo_sync_failed');
-          throw new Error(
-            `Failed to sync repository to ${defaultBranch}. ` +
-              'Try /reset or check if the branch exists.'
-          );
-        }
-      }
-      return;
-    }
-
-    // Directory doesn't exist - clone the repository
-    getLog().info({ owner, repo, repoPath }, 'repo_cloning');
-
-    // Create project structure (source/, worktrees/, artifacts/, logs/) before
-    // cloning so worktree paths resolve correctly on first webhook clone.
-    const storage = resolveRepoProjectIdentity(projectName, repoPath);
-    if (!storage) throw new Error(`Cannot derive project storage for ${repoPath}`);
-    await ensureProjectStructure(storage.owner, storage.repo);
-
-    // Parse URL to get host for authenticated clone
-    const urlObj = new URL(this.baseUrl);
-    const repoUrl = `${urlObj.protocol}//${urlObj.host}/${owner}/${repo}.git`;
-
-    const token = process.env.GITEA_TOKEN;
-    await addSafeDirectory(toRepoPath(repoPath));
-    const cloneResult = await cloneRepository(
-      repoUrl,
-      toRepoPath(repoPath),
-      token ? { credentials: { username: token, password: '' } } : undefined
-    );
-
-    if (!cloneResult.ok) {
-      getLog().error({ owner, repo, repoPath, error: cloneResult.error }, 'repo_clone_failed');
-
-      switch (cloneResult.error.code) {
-        case 'not_a_repo':
-          throw new Error(
-            `Repository ${owner}/${repo} not found or is private. Check repository access.`
-          );
-        case 'permission_denied':
-          throw new Error(
-            `Authentication failed for ${owner}/${repo}. Check GITEA_TOKEN permissions.`
-          );
-        case 'no_space':
-          throw new Error(
-            `No space left while cloning ${owner}/${repo} to ${cloneResult.error.path}.`
-          );
-        case 'branch_not_found':
-          throw new Error(
-            `Failed to clone ${owner}/${repo}: branch ${cloneResult.error.branch} not found.`
-          );
-        case 'unknown':
-          throw new Error(`Failed to clone ${owner}/${repo}: ${cloneResult.error.message}`);
-      }
-      const unhandled: never = cloneResult.error;
-      throw new Error(`Unhandled clone error: ${JSON.stringify(unhandled)}`);
-    }
-  }
-
-  /**
-   * Auto-detect and load commands from .archon/commands/ (or configured folder)
-   */
-  private async autoDetectAndLoadCommands(repoPath: string, codebaseId: string): Promise<void> {
-    const commandFolders = getCommandFolderSearchPaths();
-
-    for (const folder of commandFolders) {
-      try {
-        const fullPath = join(repoPath, folder);
-        await access(fullPath);
-
-        const files = (await readdir(fullPath)).filter(f => f.endsWith('.md'));
-        if (files.length === 0) continue;
-
-        const commands = await codebaseDb.getCodebaseCommands(codebaseId);
-        files.forEach(file => {
-          commands[file.replace('.md', '')] = {
-            path: join(folder, file),
-            description: `From ${folder}`,
-          };
-        });
-
-        await codebaseDb.updateCodebaseCommands(codebaseId, commands);
-        getLog().info({ commandCount: files.length, folder }, 'commands_loaded');
-        return;
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        // Folder not existing is expected - silently continue to next folder
-        if (err.code === 'ENOENT') {
-          continue;
-        }
-        // Log unexpected errors (database failures, permission issues) but don't fail setup
-        getLog().error({ err, folder, errorCode: err.code }, 'commands_load_error');
-        continue;
-      }
-    }
-  }
-
-  /**
-   * Get or create codebase for repository
-   * Returns: codebase record, path to use, and whether it's new
-   * Always uses canonical path (not worktree paths) for codebase registration
-   */
-  private async getOrCreateCodebaseForRepo(
-    owner: string,
-    repo: string
-  ): Promise<{
-    codebase: { id: string; name: string; default_cwd: string };
-    repoPath: string;
-    isNew: boolean;
-  }> {
-    // Parse Gitea URL for repo URL storage
-    const urlObj = new URL(this.baseUrl);
-    const repoUrlNoGit = `${urlObj.protocol}//${urlObj.host}/${owner}/${repo}`;
-    const repoUrlWithGit = `${repoUrlNoGit}.git`;
-
-    let existing = await codebaseDb.findCodebaseByRepoUrl(repoUrlNoGit);
-    existing ??= await codebaseDb.findCodebaseByRepoUrl(repoUrlWithGit);
-
-    // Canonical path uses the project source/ subdirectory so that worktrees/,
-    // artifacts/, and logs/ live as siblings of the cloned repo (not nested
-    // inside it). Mirrors the CLI /clone path; see issue #1547.
-    const canonicalPath = getProjectSourcePath(owner, repo);
-
-    if (existing) {
-      const checkout = await resolveSavedCheckout(existing, repoUrlNoGit);
-      if (checkout !== existing.default_cwd) {
-        await codebaseDb.updateCodebase(existing, { default_cwd: checkout });
-        existing.default_cwd = checkout;
-        getLog().info(
-          { codebaseName: existing.name, canonicalPath: checkout },
-          'stale_worktree_path_fixed'
-        );
-      }
-
-      getLog().info(
-        { codebaseName: existing.name, path: existing.default_cwd },
-        'existing_codebase_found'
-      );
-      return { codebase: existing, repoPath: existing.default_cwd, isNew: false };
-    }
-
-    const codebase = await codebaseDb.createManagedCodebase({
-      name: `${owner}/${repo}`,
-      repository_url: repoUrlNoGit,
-      default_cwd: canonicalPath,
-    });
-
-    getLog().info({ codebaseName: codebase.name, path: codebase.default_cwd }, 'codebase_created');
-    return { codebase, repoPath: codebase.default_cwd, isNew: true };
-  }
-
-  /**
    * Clean up worktree when an issue/PR is closed
    * Delegates to cleanup service for unified handling
    */
@@ -680,9 +179,9 @@ export class GiteaAdapter implements IPlatformAdapter {
     repo: string,
     number: number,
     isPR: boolean,
-    merged = false
+    merged: boolean
   ): Promise<void> {
-    const conversationId = this.buildConversationId(owner, repo, number, isPR);
+    const conversationId = buildConversationId(owner, repo, number, isPR);
     getLog().info({ conversationId, merged }, 'isolation_cleanup_started');
 
     try {
@@ -696,60 +195,10 @@ export class GiteaAdapter implements IPlatformAdapter {
   }
 
   /**
-   * Build context-rich message for issue.
-   * Includes a hint to use the `tea` CLI for full issue details.
-   */
-  private buildIssueContext(issue: WebhookEvent['issue'], userComment: string): string {
-    if (!issue) return userComment;
-    const labels = issue.labels.map(l => l.name).join(', ');
-
-    return `[Gitea Issue Context]
-Issue #${String(issue.number)}: "${issue.title}"
-Author: ${issue.user.login}
-Labels: ${labels}
-Status: ${issue.state}
-
-Description:
-${issue.body ?? ''}
-
----
-
-${userComment}
-
-Use 'tea issue view ${String(issue.number)}' for full details if needed.`;
-  }
-
-  /**
-   * Build context-rich message for pull request.
-   * Includes a hint to use the `tea` CLI for full PR details and diff.
-   */
-  private buildPRContext(pr: WebhookEvent['pull_request'], userComment: string): string {
-    if (!pr) return userComment;
-    const stats = pr.changed_files
-      ? `Changed files: ${String(pr.changed_files)} (+${String(pr.additions ?? 0)}, -${String(pr.deletions ?? 0)})`
-      : '';
-
-    return `[Gitea Pull Request Context]
-PR #${String(pr.number)}: "${pr.title}"
-Author: ${pr.user.login}
-Status: ${pr.state}
-${stats}
-
-Description:
-${pr.body ?? ''}
-
----
-
-${userComment}
-
-Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
-  }
-
-  /**
    * Handle incoming webhook event
    */
   async handleWebhook(payload: Uint8Array, signature: string): Promise<void> {
-    // 1. Verify signature over the bytes Gitea signed, before any decoding
+    // Verify signature over the bytes Gitea signed, before any decoding
     if (!this.verifySignature(payload, signature)) {
       getLog().error(
         { signaturePrefix: signature?.substring(0, 15) + '...', payloadSize: payload.byteLength },
@@ -758,198 +207,95 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       return;
     }
 
-    // 2. Parse event (the default decoder drops a leading BOM, which JSON.parse rejects)
+    // The default decoder drops a leading BOM, which JSON.parse rejects
     const event = JSON.parse(
       new TextDecoder('utf-8', { fatal: true }).decode(payload)
     ) as WebhookEvent;
 
-    // 2b. Authorization check - verify sender is in whitelist
-    const senderUsername = event.sender?.login;
-    if (!isGiteaUserAuthorized(senderUsername, this.allowedUsers)) {
+    if (!isGiteaUserAuthorized(event.sender?.login, this.allowedUsers)) {
       getLog().info({ platform: giteaPolicy.id }, 'unauthorized_webhook');
       return; // Silent rejection - no error response
     }
 
-    const parsed = this.parseEvent(event);
+    const parsed = parseWebhookEvent(event);
     if (!parsed) return;
 
-    const {
-      owner,
-      repo,
-      number,
-      comment,
-      eventType,
-      isPR,
-      issue,
-      pullRequest,
-      isCloseEvent,
-      isMerged,
-    } = parsed;
-
-    // 3. Handle close/merge events (cleanup worktree)
-    if (isCloseEvent) {
-      const mergeLabel = isMerged ? 'merge' : 'close';
+    if (parsed.kind === 'close') {
+      const { owner, repo, number, isPR, merged } = parsed;
+      const mergeLabel = merged ? 'merge' : 'close';
       getLog().info({ event: mergeLabel, owner, repo, number }, 'close_event_received');
-      await this.cleanupWorktree(owner, repo, number, isPR, isMerged ?? false);
-      return; // Don't process as a message
+      await this.cleanupWorktree(owner, repo, number, isPR, merged);
+      return;
     }
 
-    // 4. Ignore bot's own comments to prevent self-triggering
+    if (!this.acceptsComment(event, parsed)) return;
+    await this.dispatchComment(event, parsed);
+  }
+
+  /** Drop the bot's own comments and comments without an @mention. */
+  private acceptsComment(event: WebhookEvent, parsed: CommentEvent): boolean {
     // Primary: Check for hidden marker in comment body (works with user's token)
     const commentBody = event.comment?.body ?? '';
     if (commentBody.includes(BOT_RESPONSE_MARKER)) {
       getLog().debug('ignoring_marked_comment');
-      return;
+      return false;
     }
     // Secondary: Check comment author (works with dedicated bot account)
     const commentAuthor = event.comment?.user?.login;
     if (commentAuthor?.toLowerCase() === this.botMention.toLowerCase()) {
       getLog().debug('ignoring_own_comment');
-      return;
+      return false;
     }
+    return hasMention(parsed.comment, this.botMention);
+  }
 
-    // 5. Check @mention
-    if (!this.hasMention(comment)) return;
-
-    getLog().info({ eventType, owner, repo, number, isPR }, 'webhook_processing');
+  /** Prepare the repository and conversation for a comment, then route it to the orchestrator. */
+  private async dispatchComment(event: WebhookEvent, parsed: CommentEvent): Promise<void> {
+    const { owner, repo, number, isPR, issue, pullRequest } = parsed;
+    getLog().info({ eventType: 'issue_comment', owner, repo, number, isPR }, 'webhook_processing');
 
     // Comment author may differ from event.sender for PR-review comments; prefer
     // the comment author when present so individual reviewers get their own row.
-    // Resolution failure must not drop the webhook — warn-log and continue with
-    // archonUserId undefined so the conversation/run rows fall back to NULL.
-    // 6. Resolve webhook sender to Archon user UUID
-    const attributedLogin = commentAuthor ?? senderUsername;
-    let archonUserId: string | undefined;
-    if (attributedLogin) {
-      try {
-        const user = await userDb.findOrCreateUserByPlatformIdentity(
-          giteaPolicy.id,
-          attributedLogin,
-          attributedLogin
-        );
-        archonUserId = user.id;
-      } catch (err) {
-        getLog().warn({ err: toError(err), platform: giteaPolicy.id }, 'gitea.user_resolve_failed');
-      }
-    }
+    const archonUserId = await resolveArchonUser(event.comment?.user?.login ?? event.sender?.login);
+    const conversationId = buildConversationId(owner, repo, number, isPR);
 
-    // 7. Build conversationId
-    const conversationId = this.buildConversationId(owner, repo, number, isPR);
-
-    // 9. Get/create codebase (checks for existing first!)
     const {
       codebase,
       repoPath,
       isNew: isNewCodebase,
-    } = await this.getOrCreateCodebaseForRepo(owner, repo);
-
-    // 10. Get default branch from repository info
-    const defaultBranch = event.repository.default_branch;
-
-    // 11. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, codebase, isNewCodebase);
-
-    const existingConv = await db.getOrCreateConversation(
-      giteaPolicy.id,
-      conversationId,
-      codebase.id
+    } = await getOrCreateCodebaseForRepo(this.baseUrl, owner, repo);
+    // Clone if needed, sync if new conversation
+    await ensureRepoReady(
+      this.baseUrl,
+      owner,
+      repo,
+      event.repository.default_branch,
+      codebase,
+      isNewCodebase
     );
-    const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+    await linkConversationToCodebase(conversationId, codebase.id, repoPath);
+    if (isNewCodebase) await autoDetectAndLoadCommands(repoPath, codebase.id);
 
-    if (needsProjectContext) {
-      try {
-        await db.updateConversation(existingConv.id, {
-          codebase_id: codebase.id,
-          cwd: repoPath,
-        });
-      } catch (updateError) {
-        if (updateError instanceof ConversationNotFoundError) {
-          getLog().error(
-            { conversationId: existingConv.id, codebaseId: codebase.id },
-            'conversation_codebase_link_failed'
-          );
-          // Re-throw as this is a critical setup step
-          throw new Error('Failed to set up Gitea conversation - please try again');
-        }
-        throw updateError;
-      }
-    }
+    const isolationHints = buildIsolationHints(parsed, pullRequest);
+    const { message, issueContext } = buildCommentMessage(
+      stripMention(parsed.comment, this.botMention),
+      isPR,
+      issue,
+      pullRequest
+    );
 
-    // 12. Auto-load commands if new codebase
-    if (isNewCodebase) {
-      await this.autoDetectAndLoadCommands(repoPath, codebase.id);
-    }
-
-    // 13. Gather isolation hints for orchestrator
-    const isolationHints: IsolationHints = {
-      workflowType: isPR ? 'pr' : 'issue',
-      workflowId: String(number),
-    };
-
-    // For PRs: get branch info from the event payload
-    if (isPR && pullRequest?.head) {
-      isolationHints.prBranch = toBranchName(pullRequest.head.ref);
-      isolationHints.prSha = pullRequest.head.sha;
-
-      // Detect if PR is from a fork
-      const headRepoFullName = pullRequest.head.repo?.full_name;
-      const baseRepoFullName = pullRequest.base?.repo?.full_name;
-      isolationHints.isForkPR = headRepoFullName !== baseRepoFullName;
-
-      getLog().info(
-        {
-          prNumber: number,
-          headRef: pullRequest.head.ref,
-          headSha: pullRequest.head.sha?.substring(0, 7),
-          isFork: isolationHints.isForkPR,
-        },
-        'pr_head_info'
-      );
-    }
-
-    // 14. Build message with context
-    const strippedComment = this.stripMention(comment);
-    let finalMessage = strippedComment;
-    let contextToAppend: string | undefined;
-
-    // IMPORTANT: Slash commands must be processed deterministically (not by AI)
-    const isSlashCommand = strippedComment.trim().startsWith('/');
-
-    if (isSlashCommand) {
-      // For slash commands, use only the first line
-      finalMessage = strippedComment.split('\n')[0].trim();
-      getLog().debug('slash_command_processing');
-
-      // Add issue/PR reference context
-      if (isPR && pullRequest) {
-        contextToAppend = `Gitea Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'tea pr view ${String(pullRequest.number)}' for full details if needed.`;
-      } else if (issue) {
-        contextToAppend = `Gitea Issue #${String(issue.number)}: "${issue.title}"\nUse 'tea issue view ${String(issue.number)}' for full details if needed.`;
-      }
-    } else {
-      // For non-command messages, add rich context
-      if (isPR && pullRequest) {
-        finalMessage = this.buildPRContext(pullRequest, strippedComment);
-        contextToAppend = `Gitea Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"\nUse 'tea pr view ${String(pullRequest.number)}' for full details if needed.`;
-      } else if (issue) {
-        finalMessage = this.buildIssueContext(issue, strippedComment);
-        contextToAppend = `Gitea Issue #${String(issue.number)}: "${issue.title}"\nUse 'tea issue view ${String(issue.number)}' for full details if needed.`;
-      }
-    }
-
-    // 15. Fetch comment history for thread context
-    const commentHistory = await this.fetchCommentHistory(owner, repo, number);
+    const commentHistory = await fetchCommentHistory(this.client, owner, repo, number);
     const threadContext = commentHistory.length > 0 ? commentHistory.join('\n') : undefined;
     getLog().debug(
       { commentCount: threadContext ? commentHistory.length : 0, conversationId },
       'thread_context_loaded'
     );
 
-    // 16. Route to orchestrator with isolation hints (with lock for concurrency control)
+    // Route to orchestrator with isolation hints (with lock for concurrency control)
     await this.lockManager.acquireLock(conversationId, async () => {
       try {
-        await handleMessage(this, conversationId, finalMessage, {
-          issueContext: contextToAppend,
+        await handleMessage(this, conversationId, message, {
+          issueContext,
           threadContext,
           isolationHints,
           actor: archonUserId ? { kind: 'user', userId: archonUserId } : { kind: 'unidentified' },
@@ -965,5 +311,43 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
         }
       }
     });
+  }
+}
+
+/**
+ * Resolve a Gitea login to an Archon user, creating it on first sight.
+ * Resolution failure must not drop the webhook — warn-log and continue with
+ * no user so the conversation/run rows fall back to NULL.
+ */
+async function resolveArchonUser(login: string | undefined): Promise<string | undefined> {
+  if (!login) return undefined;
+  try {
+    const user = await userDb.findOrCreateUserByPlatformIdentity(giteaPolicy.id, login, login);
+    return user.id;
+  } catch (err) {
+    getLog().warn({ err: toError(err), platform: giteaPolicy.id }, 'gitea.user_resolve_failed');
+    return undefined;
+  }
+}
+
+async function linkConversationToCodebase(
+  conversationId: string,
+  codebaseId: string,
+  repoPath: string
+): Promise<void> {
+  const existingConv = await db.getOrCreateConversation(giteaPolicy.id, conversationId, codebaseId);
+  if (existingConv.codebase_id && existingConv.cwd) return;
+  try {
+    await db.updateConversation(existingConv.id, { codebase_id: codebaseId, cwd: repoPath });
+  } catch (updateError) {
+    if (updateError instanceof ConversationNotFoundError) {
+      getLog().error(
+        { conversationId: existingConv.id, codebaseId },
+        'conversation_codebase_link_failed'
+      );
+      // Re-throw as this is a critical setup step
+      throw new Error('Failed to set up Gitea conversation - please try again');
+    }
+    throw updateError;
   }
 }

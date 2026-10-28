@@ -2,7 +2,7 @@
  * Claude provider config: the schema owns the shape, and the defaults type is
  * derived from it.
  */
-import { SETTING_SOURCES } from '@archon/paths/skills';
+import { DEFAULT_SETTING_SOURCES, SETTING_SOURCES } from '@archon/paths/skills';
 import { snapshotConfigSchema, type ProviderConfigScope } from '@archon/provider-contract';
 import { z } from 'zod';
 import { configStringSchema, parseConfigLenient, parseConfigSchema } from '../shared/run-config';
@@ -49,4 +49,12 @@ export function parseClaudeConfigStrict(
   scope: ProviderConfigScope = 'install'
 ): ClaudeProviderDefaults {
   return parseConfigSchema(configSchemas[scope], raw);
+}
+
+/** The Claude setting sources a run loads: the node's own, then the provider config's. */
+export function resolveSettingSources(
+  nodeSettingSources: readonly (typeof SETTING_SOURCES)[number][] | undefined,
+  config: ClaudeProviderDefaults
+): readonly (typeof SETTING_SOURCES)[number][] {
+  return nodeSettingSources ?? config.settingSources ?? DEFAULT_SETTING_SOURCES;
 }

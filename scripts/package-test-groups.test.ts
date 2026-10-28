@@ -3,7 +3,14 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { resolvePackageTestGroups, TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
+import {
+  parseTestPart,
+  partitionTestGroups,
+  resolvePackageTestConcurrency,
+  resolvePackageTestGroups,
+  TEST_ISOLATION_DIRECTIVE,
+} from './package-test-groups';
+import weights from './test-weights.json';
 import { inspectPackage, isCollectedByRepositoryTest } from './test-inventory.test';
 
 const track = trackTempRoots();
@@ -62,6 +69,53 @@ test('legacy groups retain their order and malformed declarations fail', () => {
     { testGroups: 'src/' },
   ]) {
     expect(() => resolvePackageTestGroups(root, declaration)).toThrow();
+  }
+});
+
+test('group concurrency defaults to one and rejects anything but a positive integer', () => {
+  expect(resolvePackageTestConcurrency({})).toBe(1);
+  expect(resolvePackageTestConcurrency({ testConcurrency: 3 })).toBe(3);
+  for (const testConcurrency of [0, 1.5, '2', null]) {
+    expect(() => resolvePackageTestConcurrency({ testConcurrency })).toThrow(
+      'testConcurrency must be a positive integer'
+    );
+  }
+});
+
+test('a test part is <index>/<count> within range, and unset means the whole suite', () => {
+  expect(parseTestPart(undefined)).toBeUndefined();
+  expect(parseTestPart('')).toBeUndefined();
+  expect(parseTestPart('2/3')).toEqual({ index: 2, count: 3 });
+  for (const value of ['0/2', '3/2', '1', '1/0', 'a/b', '1/2/3', ' 1/2']) {
+    expect(() => parseTestPart(value)).toThrow('ARCHON_TEST_PART');
+  }
+});
+
+test('parts hold every group exactly once, balanced by weight and slowest first', () => {
+  const groups = [['a'], ['b'], ['c', 'c2'], ['d'], ['e']];
+  const parts = partitionTestGroups(groups, { a: 10, b: 6, c: 5, d: 1 }, 2);
+  expect(parts).toEqual([
+    [['a'], ['d'], ['e']],
+    [['b'], ['c', 'c2']],
+  ]);
+  // More parts than groups leaves the extra parts empty rather than dropping or repeating one.
+  expect(partitionTestGroups(groups, {}, 7).flat()).toHaveLength(groups.length);
+  expect(partitionTestGroups(groups, {}, 7).filter(part => part.length === 0)).toHaveLength(2);
+});
+
+// The coverage proof for CI's split shards: whatever the recorded weights, the parts of every
+// real package together are exactly its groups.
+test('every package splits into parts that together run each of its groups once', async () => {
+  const packagesDir = join(import.meta.dir, '..', 'packages');
+  for (const manifestPath of new Bun.Glob('*/package.json').scanSync({ cwd: packagesDir })) {
+    const manifest = (await Bun.file(join(packagesDir, manifestPath)).json()) as { name: string };
+    const groups = resolvePackageTestGroups(join(packagesDir, manifestPath, '..'), manifest);
+    const packageWeights = (weights as Record<string, Record<string, number>>)[manifest.name];
+    for (const count of [1, 2, 3]) {
+      const parts = partitionTestGroups(groups, packageWeights ?? {}, count);
+      expect(parts).toHaveLength(count);
+      expect(parts.flat().sort()).toEqual([...groups].sort());
+    }
   }
 });
 

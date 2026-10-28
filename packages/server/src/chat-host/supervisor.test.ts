@@ -1,4 +1,4 @@
-import { afterEach, expect, test, mock } from 'bun:test';
+import { afterEach, expect, test, mock, setSystemTime } from 'bun:test';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -83,6 +83,32 @@ test.each(['crash', 'retry'])(
     expect(records.join('\n')).not.toContain('USER_MESSAGE');
   },
   testTimeout(25_000)
+);
+
+test(
+  'a sustained connection resets restart backoff after quick failures',
+  async () => {
+    try {
+      const { supervisor, live, pids } = await fixture('crash');
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await until(live);
+        if (attempt === 2) setSystemTime(new Date(Date.now() + 60_000));
+        const pid = Number((await pids())[attempt]);
+        process.kill(pid, 'SIGTERM');
+        await until(
+          () => records.filter(record => record.includes('restart_scheduled')).length > attempt
+        );
+      }
+      await supervisor.stop();
+      const delays = records
+        .filter(record => record.includes('restart_scheduled'))
+        .map(record => JSON.parse(record).data.delayMs);
+      expect(delays).toEqual([20, 40, 20]);
+    } finally {
+      setSystemTime();
+    }
+  },
+  testTimeout(10_000)
 );
 
 test(

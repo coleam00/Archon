@@ -55,10 +55,14 @@ async function readBoundedBody(request: Request): Promise<BoundedBody> {
     return { kind: 'too_large' };
   }
 
+  return readBodyStream(request.body);
+}
+
+async function readBodyStream(body: ReadableStream<Uint8Array> | null): Promise<BoundedBody> {
   const chunks: Uint8Array[] = [];
   let size = 0;
-  if (request.body) {
-    const reader = request.body.getReader();
+  if (body) {
+    const reader = body.getReader();
     try {
       while (true) {
         const { done, value } = await reader.read();

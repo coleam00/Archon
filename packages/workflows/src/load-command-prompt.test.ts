@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, unlinkSync } from 'fs';
 import { symlink as fsSymlink } from 'fs/promises';
@@ -59,7 +60,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { loadCommandPrompt } from './executor-shared';
+import { loadCommandPrompt } from './load-command-prompt';
 import type { WorkflowDeps } from './deps';
 import { formatPackagedResourceReference } from './packaged-workflow';
 

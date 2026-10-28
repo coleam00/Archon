@@ -258,7 +258,7 @@ describe('workflow-events', () => {
       expect(mockQuery).toHaveBeenCalledWith(
         `SELECT * FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1
-       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+       ORDER BY COALESCE(event_order, 0) ASC, created_at ASC, id ASC`,
         ['run-456']
       );
     });
@@ -315,7 +315,7 @@ describe('workflow-events', () => {
       );
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining(
-          'ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC'
+          'ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC'
         ),
         [
           'run-a',
@@ -388,7 +388,7 @@ describe('workflow-events', () => {
       expect(mockQuery).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining(
-          'ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC'
+          'ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC'
         ),
         ['run-a', 'run-b', 'run-c', 'node_started', 'node_completed', 'node_failed']
       );
@@ -880,7 +880,7 @@ describe('workflow-events', () => {
       expect(result.tokens).toEqual({ input: 1, output: 2 });
     });
 
-    test('preserves valid outputs while ignoring malformed and non-finite tokens', async () => {
+    test('preserves valid outputs while marking malformed and non-finite token totals unknown', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
           {
@@ -914,7 +914,8 @@ describe('workflow-events', () => {
           ['node-d', { output: 'also valid' }],
         ])
       );
-      expect(result.tokens).toEqual({ input: 10, output: 1 });
+      expect(result.tokens).toBeUndefined();
+      expect(result.tokensUnknown).toBe(true);
       expect(mockLogger.warn).toHaveBeenCalledTimes(2);
     });
 
@@ -1053,7 +1054,7 @@ describe('workflow-events', () => {
 
       const result = await getDagResumeSnapshot('run-cost-absent');
 
-      expect(result.costUsd).toBe(0);
+      expect(result.costUsd).toBeUndefined();
       expect(mockLogger.warn).not.toHaveBeenCalled();
     });
 
@@ -1547,7 +1548,7 @@ describe('workflow-events', () => {
       expect(snapshot.tokens).toEqual({ input: 30, output: 15 });
     });
 
-    test('deferred usage preserves reusable success and ignores malformed numeric usage', async () => {
+    test('deferred usage preserves reusable success and marks malformed tokens unknown', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
           { step_name: 'review', event_type: 'node_completed', data: { node_output: 'kept' } },
@@ -1560,8 +1561,9 @@ describe('workflow-events', () => {
       );
       const snapshot = await getDagResumeSnapshot('run-invalid-deferred');
       expect(snapshot.completedNodeOutputs.get('review')?.output).toBe('kept');
-      expect(snapshot.costUsd).toBe(0);
+      expect(snapshot.costUsd).toBeUndefined();
       expect(snapshot.tokens).toBeUndefined();
+      expect(snapshot.tokensUnknown).toBe(true);
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.anything(),
         'db.workflow_dag_node_tokens_invalid_ignored'
@@ -1579,7 +1581,7 @@ describe('workflow-events', () => {
 
       expect(result.completedNodeOutputs.size).toBe(0);
       expect(result.tokens).toBeUndefined();
-      expect(result.costUsd).toBe(0);
+      expect(result.costUsd).toBeUndefined();
       expect(result.fanOutSnapshots.size).toBe(0);
       expect(result.unresolvedNodeStarts.size).toBe(0);
     });

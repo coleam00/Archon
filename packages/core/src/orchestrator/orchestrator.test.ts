@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
@@ -18,13 +19,10 @@ import { MockPlatformAdapter } from '../test/mocks/platform';
 import { createMockLogger } from '../test/mocks/logger';
 import {
   makeTestResolvedWorkflow,
-  makeTestWorkflowList,
   withObservableCapturedSource,
 } from '@archon/workflows/test-utils';
 import type { Conversation, Codebase, Session } from '../types';
 import { ConversationNotFoundError } from '../types';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
-import { resolveWorkflow } from '@archon/workflows/graph-plan';
 import type { IAgentProvider, ProviderCapabilities } from '@archon/providers/types';
 import type * as Providers from '@archon/providers';
 import type * as CodebaseDb from '../db/codebases';
@@ -36,7 +34,9 @@ import type * as WorkflowDiscovery from '@archon/workflows/workflow-discovery';
 import type * as WorkflowExecutor from '@archon/workflows/executor';
 import type * as WorkflowRouter from '@archon/workflows/router';
 import type * as WorkflowSourceRoot from '../utils/workflow-source-root';
-import type * as Orchestrator from './orchestrator';
+import type * as IsolationResolver from './dispatch/isolation-resolver';
+import type * as BackgroundDispatch from './dispatch/background';
+import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import type * as PromptBuilder from './prompt-builder';
 import type * as TitleGenerator from '../services/title-generator';
 import type * as WorkflowDb from '../db/workflows';
@@ -256,7 +256,7 @@ const providerCapabilities: ProviderCapabilities = {
   fallbackModel: true,
   sandbox: true,
   settingSources: true,
-  // The command-scan tests below model a provider without in-process tools.
+  // Model the CLI transport for providers without in-process tools.
   nativeTools: false,
   containerExec: true,
   requiresAllPropertiesRequired: false,
@@ -379,39 +379,53 @@ mock.module('../utils/workflow-source-root', () => ({
 }));
 
 // Orchestrator (isolation & dispatch) mocks
-const mockValidateAndResolveIsolation = mock<typeof Orchestrator.validateAndResolveIsolation>(() =>
-  Promise.resolve({
-    status: 'existing',
-    cwd: '/workspace/project',
-    env: {
-      id: 'env-1',
-      codebase_id: 'codebase-789',
-      workflow_type: 'task',
-      workflow_id: 'task-1',
-      provider: 'worktree',
-      working_path: '/workspace/project',
-      branch_name: 'task-1',
-      status: 'active',
-      created_at: new Date(),
-      created_by_platform: 'test',
-      created_by_user_id: null,
-      metadata: {},
-    },
-  })
+const mockValidateAndResolveIsolation = mock<typeof IsolationResolver.validateAndResolveIsolation>(
+  () =>
+    Promise.resolve({
+      status: 'existing',
+      cwd: '/workspace/project',
+      env: {
+        id: 'env-1',
+        codebase_id: 'codebase-789',
+        workflow_type: 'task',
+        workflow_id: 'task-1',
+        provider: 'worktree',
+        working_path: '/workspace/project',
+        branch_name: 'task-1',
+        status: 'active',
+        created_at: new Date(),
+        created_by_platform: 'test',
+        created_by_user_id: null,
+        metadata: {},
+      },
+    })
 );
-const mockDispatchBackgroundWorkflow = mock<typeof Orchestrator.dispatchBackgroundWorkflow>(() =>
-  Promise.resolve()
+const mockDispatchBackgroundWorkflow = mock<typeof BackgroundDispatch.dispatchBackgroundWorkflow>(
+  () => Promise.resolve()
 );
 
-mock.module('./orchestrator', () => ({
+mock.module('./dispatch/isolation-resolver', () => ({
+  ensureIsolationConfigured: mock(() => undefined),
   validateAndResolveIsolation: mockValidateAndResolveIsolation,
+}));
+mock.module('./dispatch/background', () => ({
   dispatchBackgroundWorkflow: mockDispatchBackgroundWorkflow,
-  IsolationBlockedError: class IsolationBlockedError extends Error {
-    constructor(message: string) {
-      super(message);
-      this.name = 'IsolationBlockedError';
-    }
-  },
+}));
+
+// The real live owner opens a socket and a lock file keyed by the run id, and every dispatch
+// here shares 'prepared-run-id'. On Windows that socket is a machine-global named pipe.
+const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+  close: () => Promise.resolve(),
+  isStopRequested: () => false,
+  registerTerminationPreparation: () => () => undefined,
+};
+const realRunLiveOwner = { ...(await import('../services/run-live-owner')) };
+mock.module('../services/run-live-owner', () => ({
+  ...realRunLiveOwner,
+  startRunLiveOwner: mock(() => Promise.resolve(mockRunLiveOwner)),
+  withRunLiveOwner: mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
+    async (_runId, _options, body) => body(mockRunLiveOwner)
+  ),
 }));
 
 // Prompt builder mock
@@ -439,15 +453,19 @@ mock.module('../utils/error-formatter', () => ({
 mock.module('@archon/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflows,
 }));
-/** Ownership calls the dispatch path makes on its capture, in order. */
 const capturedSourceOwnerCalls: string[] = [];
 
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
+}));
+mock.module('@archon/workflows/run-resume', () => ({
+  hydrateResumableRun: mock(() => Promise.resolve(null)),
+}));
+mock.module('@archon/workflows/run-source', () => ({
   finalizeWorkflowSource: mock(
-    async (_deps: unknown, source: WorkflowExecutor.PreparedWorkflowSource) => source
+    async (_deps: unknown, source: WorkflowRunSource.PreparedWorkflowSource) => source
   ),
-  preparedWorkflowSourceRecord: (source: WorkflowExecutor.PreparedWorkflowSource) => ({
+  preparedWorkflowSourceRecord: (source: WorkflowRunSource.PreparedWorkflowSource) => ({
     version: 1,
     root: source.anchor.root,
     origin: source.origin,
@@ -457,10 +475,7 @@ mock.module('@archon/workflows/executor', () => ({
     file_count: source.manifest.file_count,
     byte_count: source.manifest.byte_count,
   }),
-  hydrateResumableRun: mock(() => Promise.resolve(null)),
-  // Source capture runs before dispatch and does real filesystem work; stub it so these
-  // tests stay about routing. `mock.module` MERGES, so an export omitted here keeps its
-  // REAL implementation — which is exactly how a stub silently starts doing disk I/O.
+  // Bun merges module mocks: stub each capture export to avoid real I/O.
   prepareWorkflowSource: mock(() =>
     Promise.resolve({
       runId: 'prepared-run-id',
@@ -515,7 +530,7 @@ mock.module('@archon/workflows/executor', () => ({
 }));
 mock.module('@archon/workflows/router', () => ({
   findWorkflow: mockFindWorkflow,
-  // Statically imported by the background dispatch path (see orchestrator.ts).
+  // Statically imported by the background dispatch path (see dispatch/background.ts).
   resolveWorkflowName: mock((name: string, workflows: { name: string }[]) =>
     workflows.find(w => w.name === name)
   ),
@@ -558,7 +573,7 @@ mock.module('../db/workflows', () => ({
 
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────
 
-import { handleMessage, parseOrchestratorCommands } from './orchestrator-agent';
+import { handleMessage } from './orchestrator-agent';
 
 // ─── Test Fixtures ──────────────────────────────────────────────────────────
 
@@ -612,12 +627,6 @@ const mockSession: Session = {
   transition_reason: null,
   ended_reason: null,
 };
-
-const testWorkflowDefs = makeTestWorkflowList(['fix-bug', 'add-feature', 'archon-investigate']);
-const testWorkflows = testWorkflowDefs.map(workflow => ({
-  workflow: resolveWorkflow(workflow),
-  source: 'bundled' as const,
-}));
 
 const mockClientSendQuery = mock<IAgentProvider['sendQuery']>(async function* () {
   yield { type: 'result', sessionId: 'session-id' };
@@ -682,150 +691,6 @@ function clearAllMocks(): void {
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
-
-describe('parseOrchestratorCommands', () => {
-  const codebases: Codebase[] = [mockCodebase];
-  const workflows: WorkflowDefinition[] = testWorkflowDefs;
-
-  test('parses /invoke-workflow with --project', () => {
-    const response = 'I will fix this.\n/invoke-workflow fix-bug --project test-project';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation).not.toBeNull();
-    expect(result.workflowInvocation?.workflowName).toBe('fix-bug');
-    expect(result.workflowInvocation?.projectName).toBe('test-project');
-    expect(result.workflowInvocation?.remainingMessage).toBe('I will fix this.');
-  });
-
-  test('case-insensitive project name matching', () => {
-    const response = '/invoke-workflow fix-bug --project TEST-PROJECT';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation).not.toBeNull();
-    expect(result.workflowInvocation?.projectName).toBe('test-project');
-  });
-
-  test('returns null for unknown workflow name', () => {
-    const response = '/invoke-workflow nonexistent --project test-project';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation).toBeNull();
-  });
-
-  test('returns null for unknown project name', () => {
-    const response = '/invoke-workflow fix-bug --project unknown-project';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation).toBeNull();
-  });
-
-  test('parses /register-project', () => {
-    const response = 'Sure!\n/register-project my-app /home/user/my-app';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.projectRegistration).not.toBeNull();
-    expect(result.projectRegistration?.projectName).toBe('my-app');
-    expect(result.projectRegistration?.projectPath).toBe('/home/user/my-app');
-  });
-
-  test('returns empty commands when no commands in text', () => {
-    const response = 'Just a conversational response.';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation).toBeNull();
-    expect(result.projectRegistration).toBeNull();
-  });
-
-  test('extracts remaining message before /invoke-workflow', () => {
-    const response =
-      'Let me analyze this for you.\n\n/invoke-workflow fix-bug --project test-project';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation?.remainingMessage).toBe('Let me analyze this for you.');
-  });
-
-  test('handles --project= (equals syntax)', () => {
-    const response = '/invoke-workflow fix-bug --project=test-project';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation).not.toBeNull();
-    expect(result.workflowInvocation?.projectName).toBe('test-project');
-  });
-
-  test('parses --prompt with double quotes', () => {
-    const response =
-      'I will analyze this.\n/invoke-workflow archon-investigate --project test-project --prompt "Analyze the orchestrator module architecture"';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation).not.toBeNull();
-    expect(result.workflowInvocation?.workflowName).toBe('archon-investigate');
-    expect(result.workflowInvocation?.projectName).toBe('test-project');
-    expect(result.workflowInvocation?.synthesizedPrompt).toBe(
-      'Analyze the orchestrator module architecture'
-    );
-    expect(result.workflowInvocation?.remainingMessage).toBe('I will analyze this.');
-  });
-
-  test('parses --prompt with single quotes', () => {
-    const response =
-      "/invoke-workflow fix-bug --project test-project --prompt 'Fix the null pointer in data processor'";
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation?.synthesizedPrompt).toBe(
-      'Fix the null pointer in data processor'
-    );
-  });
-
-  test('returns undefined synthesizedPrompt when --prompt not provided', () => {
-    const response = '/invoke-workflow fix-bug --project test-project';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation).not.toBeNull();
-    expect(result.workflowInvocation?.synthesizedPrompt).toBeUndefined();
-  });
-
-  test('parses --prompt with spaces in the quoted value', () => {
-    const response =
-      '/invoke-workflow archon-investigate --project test-project --prompt "Analyze the database schema and migration patterns in the project, focusing on table structure and relationships"';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation?.synthesizedPrompt).toBe(
-      'Analyze the database schema and migration patterns in the project, focusing on table structure and relationships'
-    );
-  });
-
-  test('backwards compatibility: existing format without --prompt still works', () => {
-    const response = 'I will fix this.\n/invoke-workflow fix-bug --project test-project';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation).not.toBeNull();
-    expect(result.workflowInvocation?.workflowName).toBe('fix-bug');
-    expect(result.workflowInvocation?.projectName).toBe('test-project');
-    expect(result.workflowInvocation?.remainingMessage).toBe('I will fix this.');
-    expect(result.workflowInvocation?.synthesizedPrompt).toBeUndefined();
-  });
-
-  test('parses --prompt with --project= equals syntax', () => {
-    const response =
-      '/invoke-workflow archon-investigate --project=test-project --prompt "Summarize the README"';
-    const result = parseOrchestratorCommands(response, codebases, workflows);
-
-    expect(result.workflowInvocation?.projectName).toBe('test-project');
-    expect(result.workflowInvocation?.synthesizedPrompt).toBe('Summarize the README');
-  });
-
-  test('matches partial project name (last path segment)', () => {
-    const namespacedCodebases: Codebase[] = [
-      { ...mockCodebase, name: 'dynamous-community/test-project' },
-    ];
-    const response = '/invoke-workflow fix-bug --project test-project --prompt "Fix the bug"';
-    const result = parseOrchestratorCommands(response, namespacedCodebases, workflows);
-
-    expect(result.workflowInvocation).not.toBeNull();
-    expect(result.workflowInvocation?.projectName).toBe('dynamous-community/test-project');
-    expect(result.workflowInvocation?.synthesizedPrompt).toBe('Fix the bug');
-  });
-});
 
 describe('orchestrator-agent handleMessage', () => {
   let platform: MockPlatformAdapter;
@@ -974,7 +839,7 @@ describe('orchestrator-agent handleMessage', () => {
         expect.objectContaining({ id: expect.any(String) }),
         [mockCodebase],
         expect.any(Array),
-        'commands'
+        'cli'
       );
     });
 
@@ -1016,7 +881,7 @@ describe('orchestrator-agent handleMessage', () => {
         expect.objectContaining({ codebase_id: 'codebase-789' }),
         [mockCodebase],
         expect.any(Array),
-        'commands'
+        'cli'
       );
     });
 
@@ -1250,150 +1115,6 @@ describe('orchestrator-agent handleMessage', () => {
       });
       expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Done');
     });
-
-    test('silences further output after /invoke-workflow detected but captures sessionId', async () => {
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
-      mockFindWorkflow.mockImplementation(
-        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
-          workflows.find(workflow => workflow.name === name)
-      );
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'agent_message_chunk',
-          // Trailing \n terminates the line so INVOKE_WORKFLOW_FULL_RE fires immediately,
-          // setting commandFullyParsed=true before the second chunk is processed.
-          text: '/invoke-workflow fix-bug --project test-project\n',
-        };
-        // These are silenced (not sent to platform) but loop continues to capture result
-        yield { type: 'agent_message_chunk', text: 'This should not appear' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
-
-      // Should dispatch the workflow
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-      // The /invoke-workflow chunk itself should NOT be streamed to the frontend
-      expect(platform.sendMessage).not.toHaveBeenCalledWith(
-        'chat-456',
-        '/invoke-workflow fix-bug --project test-project'
-      );
-      // Subsequent chunks should also NOT be sent
-      expect(platform.sendMessage).not.toHaveBeenCalledWith('chat-456', 'This should not appear');
-    });
-
-    test('streams prefix text but not the /invoke-workflow chunk', async () => {
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
-      mockFindWorkflow.mockImplementation(
-        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
-          workflows.find(workflow => workflow.name === name)
-      );
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        // First chunk: user-visible explanation text - should be streamed
-        yield { type: 'agent_message_chunk', text: "I'll help with that." };
-        // Second chunk: the command - should NOT be streamed
-        yield {
-          type: 'agent_message_chunk',
-          text: '\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
-
-      // Prefix text streamed to platform
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', "I'll help with that.");
-      // Command chunk NOT sent
-      expect(platform.sendMessage).not.toHaveBeenCalledWith(
-        'chat-456',
-        '\n/invoke-workflow fix-bug --project test-project'
-      );
-      // Workflow should be dispatched
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-    });
-
-    test('suppresses /register-project chunk in stream mode', async () => {
-      mockExistsSync.mockReturnValue(true);
-      mockListCodebases.mockResolvedValue([]);
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'agent_message_chunk',
-          text: '/register-project my-app /home/user/my-app',
-        };
-        yield { type: 'agent_message_chunk', text: 'This should not appear' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'set up my app', { actor: operator });
-
-      // The /register-project chunk itself should NOT be streamed
-      expect(platform.sendMessage).not.toHaveBeenCalledWith(
-        'chat-456',
-        '/register-project my-app /home/user/my-app'
-      );
-      // Subsequent chunks should also NOT be sent
-      expect(platform.sendMessage).not.toHaveBeenCalledWith('chat-456', 'This should not appear');
-    });
-
-    test('sends partial command text when command is split across chunks', async () => {
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
-      mockFindWorkflow.mockImplementation(
-        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
-          workflows.find(workflow => workflow.name === name)
-      );
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        // Chunk 1: partial command — does not match regex yet, so it IS sent
-        yield { type: 'agent_message_chunk', text: '/invoke-work' };
-        // Chunk 2: completes the command — accumulated string matches, NOT sent
-        yield { type: 'agent_message_chunk', text: 'flow fix-bug --project test-project' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
-
-      // Partial chunk is sent (pre-existing behavior: detection fires on accumulated text)
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', '/invoke-work');
-      // Completing chunk is NOT sent
-      expect(platform.sendMessage).not.toHaveBeenCalledWith(
-        'chat-456',
-        'flow fix-bug --project test-project'
-      );
-      // Workflow is still dispatched
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-    });
-
-    test('dispatches workflow when command body arrives after /invoke-workflow detection', async () => {
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
-      mockFindWorkflow.mockImplementation(
-        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
-          workflows.find(workflow => workflow.name === name)
-      );
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: '/invoke-workflow ' };
-        yield { type: 'agent_message_chunk', text: 'fix-bug ' };
-        yield { type: 'agent_message_chunk', text: '--project test-project' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
-
-      expect(
-        platform.sendMessage.mock.calls.some(
-          ([id, content]) =>
-            id === 'chat-456' && typeof content === 'string' && content.includes('/invoke-workflow')
-        )
-      ).toBe(false);
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-    });
   });
 
   // ─── Batch Mode ────────────────────────────────────────────────────────
@@ -1440,201 +1161,6 @@ describe('orchestrator-agent handleMessage', () => {
       await handleMessage(platform, 'chat-456', 'hello', { actor: operator });
 
       expect(platform.sendMessage).not.toHaveBeenCalled();
-    });
-  });
-
-  // ─── Workflow Routing ──────────────────────────────────────────────────
-
-  describe('workflow routing via AI', () => {
-    beforeEach(() => {
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
-      mockFindWorkflow.mockImplementation(
-        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
-          workflows.find(workflow => workflow.name === name)
-      );
-    });
-
-    test('dispatches workflow when AI responds with /invoke-workflow', async () => {
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'agent_message_chunk',
-          text: 'I will fix this bug.\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the login bug', { actor: operator });
-
-      // Should dispatch to workflow after validation
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-    });
-
-    test('sends remaining message before dispatching workflow', async () => {
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'agent_message_chunk',
-          text: 'Let me investigate this.\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix it', { actor: operator });
-
-      // First sendMessage should be the explanation text
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Let me investigate this.');
-    });
-
-    test('sends error for unknown project in workflow invocation', async () => {
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'agent_message_chunk',
-          text: '/invoke-workflow fix-bug --project nonexistent-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix it', { actor: operator });
-
-      // Since parseOrchestratorCommands won't match (unknown project), the response
-      // is sent as-is in stream mode
-      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-    });
-
-    test('conversational response passes through without routing', async () => {
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'Let me help you with that!' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'what can you do?', { actor: operator });
-
-      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-      expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
-      expect(platform.sendMessage).toHaveBeenCalledWith('chat-456', 'Let me help you with that!');
-    });
-
-    test('batch mode dispatches workflow correctly', async () => {
-      platform.getStreamingMode.mockReturnValue('batch');
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'agent_message_chunk',
-          text: 'Fixing the bug.\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
-
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-    });
-
-    test('batch mode dispatches workflow when command body arrives after detection', async () => {
-      platform.getStreamingMode.mockReturnValue('batch');
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: '/invoke-workflow ' };
-        yield { type: 'agent_message_chunk', text: 'fix-bug ' };
-        yield { type: 'agent_message_chunk', text: '--project test-project' };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the bug', { actor: operator });
-
-      expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
-      expect(
-        platform.sendMessage.mock.calls.some(
-          ([id, content]) =>
-            id === 'chat-456' && typeof content === 'string' && content.includes('/invoke-workflow')
-        )
-      ).toBe(false);
-    });
-
-    test('passes synthesizedPrompt to workflow dispatch instead of original message', async () => {
-      platform.getStreamingMode.mockReturnValue('batch');
-      const synthesized = 'Analyze the orchestrator module architecture in detail';
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'agent_message_chunk',
-          text: `Running analysis.\n/invoke-workflow archon-investigate --project test-project --prompt "${synthesized}"`,
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'do that analysis thing', { actor: operator });
-
-      expect(mockExecuteWorkflow).toHaveBeenCalledWith(
-        expect.anything(), // deps
-        expect.anything(), // platform
-        expect.anything(), // conversationId
-        expect.anything(), // cwd
-        expect.anything(), // workflow
-        synthesized, // synthesizedPrompt, not original message
-        expect.objectContaining({
-          conversationId: 'conv-123',
-          parentConversationId: 'conv-123',
-        }),
-        expect.anything()
-      );
-    });
-
-    test('falls back to original message when --prompt not provided', async () => {
-      platform.getStreamingMode.mockReturnValue('batch');
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'agent_message_chunk',
-          text: 'On it.\n/invoke-workflow fix-bug --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'fix the login bug', { actor: operator });
-
-      expect(mockExecuteWorkflow).toHaveBeenCalledWith(
-        expect.anything(), // deps
-        expect.anything(), // platform
-        expect.anything(), // conversationId
-        expect.anything(), // cwd
-        expect.anything(), // workflow
-        'fix the login bug', // original message used as fallback
-        expect.objectContaining({
-          conversationId: 'conv-123',
-          parentConversationId: 'conv-123',
-        }),
-        expect.anything()
-      );
-    });
-
-    test('sends error when workflow found in parsing but not in dispatch', async () => {
-      platform.getStreamingMode.mockReturnValue('batch');
-
-      let callCount = 0;
-      mockFindWorkflow.mockImplementation(
-        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) => {
-          callCount++;
-          // First call (parseOrchestratorCommands) finds the workflow
-          // Second call (handleWorkflowInvocationResult) does not
-          if (callCount === 1) return workflows.find(w => w.name === name);
-          return undefined;
-        }
-      );
-
-      mockClient.sendQuery.mockImplementation(async function* () {
-        yield {
-          type: 'agent_message_chunk',
-          text: '/invoke-workflow archon-investigate --project test-project',
-        };
-        yield { type: 'result', sessionId: 'session-id' };
-      });
-
-      await handleMessage(platform, 'chat-456', 'help me', { actor: operator });
-
-      expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'chat-456',
-        expect.stringContaining('archon-investigate')
-      );
     });
   });
 
@@ -1913,34 +1439,26 @@ describe('orchestrator-agent handleMessage', () => {
       }
     }
 
-    for (const mode of ['stream', 'batch'] as const) {
-      test(`agent ${mode} project registration reports detection failure without persistence`, async () => {
-        const projectPath = await mkdtemp(join(tmpdir(), 'archon-agent-registration-failure-'));
-        try {
-          await writeFile(join(projectPath, '.git'), `gitdir: ${join(projectPath, 'missing')}\n`);
-          mockExistsSync.mockReturnValue(true);
-          mockListCodebases.mockResolvedValue([]);
-          platform.getStreamingMode.mockReturnValue(mode);
-          mockClient.sendQuery.mockImplementation(async function* () {
-            yield {
-              type: 'agent_message_chunk',
-              text: `/register-project my-app ${projectPath}\n`,
-            };
-            yield { type: 'result', sessionId: 'session-id' };
-          });
-          await handleMessage(platform, 'chat-456', 'Register my app', { actor: operator });
-          expect(platform.sendMessage).toHaveBeenCalledWith(
-            'chat-456',
-            expect.stringContaining('Nothing was registered')
-          );
-          expect(mockCreateCodebase).not.toHaveBeenCalled();
-          expect(mockUpdateCodebase).not.toHaveBeenCalled();
-          expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
-        } finally {
-          await removeTempTree(projectPath);
-        }
-      });
-    }
+    test('explicit project registration reports detection failure without persistence', async () => {
+      const projectPath = await mkdtemp(join(tmpdir(), 'archon-agent-registration-failure-'));
+      try {
+        await writeFile(join(projectPath, '.git'), `gitdir: ${join(projectPath, 'missing')}\n`);
+        mockExistsSync.mockReturnValue(true);
+        mockListCodebases.mockResolvedValue([]);
+        await handleMessage(platform, 'chat-456', `/register-project my-app ${projectPath}`, {
+          actor: operator,
+        });
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'chat-456',
+          expect.stringContaining('Nothing was registered')
+        );
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+        expect(mockUpdateCodebase).not.toHaveBeenCalled();
+        expect(mockRepairCodebaseRegistration).not.toHaveBeenCalled();
+      } finally {
+        await removeTempTree(projectPath);
+      }
+    });
 
     test('/register-project refuses a path that disappears during detection', async () => {
       const canonicalPath = await canonicalizeForTest('/vanished/path');
@@ -1956,7 +1474,7 @@ describe('orchestrator-agent handleMessage', () => {
         });
         expect(platform.sendMessage).toHaveBeenCalledWith(
           'chat-456',
-          `Path does not exist: ${canonicalPath}`
+          `Could not register project: Path does not exist: ${canonicalPath}`
         );
         expect(mockCreateCodebase).not.toHaveBeenCalled();
         expect(mockUpdateCodebase).not.toHaveBeenCalled();

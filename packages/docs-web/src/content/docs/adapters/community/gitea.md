@@ -16,7 +16,7 @@ Connect Archon to a self-hosted Gitea instance so you can interact with your AI 
 
 ## Prerequisites
 
-- Archon server running (see [Getting Started](/getting-started/overview/))
+- Archon server running (`archon serve`; see [Web UI](/adapters/web/))
 - A Gitea instance with API access enabled
 - A Gitea personal access token (or dedicated bot account token)
 - Public endpoint for webhooks (or a tunnel for local development)
@@ -96,7 +96,7 @@ Interact by @mentioning the bot in issue or PR **comments**:
 ```
 
 **First mention behavior:**
-- Automatically clones the repository to `~/.archon/workspaces/`
+- Reuses an existing local registration at its saved checkout path. Otherwise, registers and clones the repository to `~/.archon/workspaces/`
 - Detects and loads commands from `.archon/commands/` if present
 - Injects full issue/PR context (title, description, labels) for the AI assistant
 
@@ -114,7 +114,7 @@ The Gitea adapter is a webhook-based forge adapter, similar to the GitHub adapte
 
 - **Transport**: Receives HTTP POST webhooks from Gitea
 - **Signature verification**: HMAC SHA-256 over the exact received bytes, using the `X-Gitea-Signature` header
-- **Streaming mode**: Always batch (single coherent comment per response, no comment spam)
+- **Streaming mode**: Always batch (assembles the assistant reply after processing; long replies may span multiple comments; see [batch mode](/reference/configuration/#batch-mode) for filtering and fallback behavior)
 - **Conversation ID format**: `owner/repo#number` for issues, `owner/repo!number` for PRs
 - **Self-loop prevention**: Bot comments include a hidden HTML marker (`<!-- archon-bot-response -->`) to avoid re-triggering on its own messages
 - **Retry logic**: Transient network errors (timeouts, connection resets) are retried up to 3 times with exponential backoff

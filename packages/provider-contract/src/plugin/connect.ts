@@ -19,7 +19,7 @@ import {
   toolCallRequestSchema,
   logNotificationSchema,
   type ProviderLog,
-  checkCredentialRequestSchema,
+  checkCredentialParamsSchema,
   resolveCredentialModelRequestSchema,
   HOST_ONLY_REQUEST_KEYS,
   initializeResponseSchema,
@@ -27,7 +27,6 @@ import {
   promptResponseSchema,
   providerSessionRequestSchema,
   resolveCredentialModelResponseSchema,
-  providerPluginDescriptorSchema,
   type ProviderPluginDescriptor,
 } from './wire';
 
@@ -73,11 +72,13 @@ function omitUndefinedFields(value: unknown): unknown {
 
 // Reads only what a plugin on any protocol advertises, so a mismatch names both versions
 // instead of failing the full descriptor parse.
-const advertisedProtocolSchema = z.object({
-  agentCapabilities: z.object({
-    _meta: z.object({
-      archon: providerPluginDescriptorSchema
-        .pick({ id: true })
+const agentCapabilitiesSchema = initializeResponseSchema.shape.agentCapabilities;
+const agentMetaSchema = agentCapabilitiesSchema.shape._meta;
+const advertisedProtocolSchema = initializeResponseSchema.pick({ agentCapabilities: true }).extend({
+  agentCapabilities: agentCapabilitiesSchema.pick({ _meta: true }).extend({
+    _meta: agentMetaSchema.extend({
+      archon: agentMetaSchema.shape.archon
+        .pick({ id: true, protocol: true })
         .extend({ protocol: z.number().int().positive() }),
     }),
   }),
@@ -151,48 +152,48 @@ export async function connectProvider(
     close: () => rpc.close(),
     async diagnose(request): Promise<ProviderDiagnostics> {
       request.signal.throwIfAborted();
-      return rpc.parse(
-        providerDiagnosticsSchema,
-        await abortable(
-          rpc.request(
-            '_archon/diagnose',
-            diagnoseRequestSchema.parse({
-              assistantConfig: omitUndefinedFields(request.assistantConfig),
-            })
-          ),
-          request.signal
-        )
+      return abortable(
+        rpc.request(
+          '_archon/diagnose',
+          diagnoseRequestSchema.parse({
+            assistantConfig: omitUndefinedFields(request.assistantConfig),
+          }),
+          providerDiagnosticsSchema
+        ),
+        request.signal
       );
     },
     async listModels(request): Promise<ProviderModelList> {
       request.signal.throwIfAborted();
-      return rpc.parse(
-        providerModelListSchema,
-        await abortable(
-          rpc.request('_archon/list_models', listModelsRequestSchema.parse({})),
-          request.signal
-        )
+      return abortable(
+        rpc.request(
+          '_archon/list_models',
+          listModelsRequestSchema.parse({}),
+          providerModelListSchema
+        ),
+        request.signal
       );
     },
     async checkCredential(request): Promise<CredentialStatus> {
       request.signal.throwIfAborted();
+      const { env, signal, ...params } = request;
       const response = rpc.request(
         '_archon/check_credential',
-        checkCredentialRequestSchema.parse({
-          model: request.model,
-          assistantConfig: request.assistantConfig,
-        })
+        checkCredentialParamsSchema.parse({
+          ...params,
+          ...(request.execContext?.kind === 'container' ? { env } : {}),
+        }),
+        credentialStatusSchema
       );
-      return rpc.parse(credentialStatusSchema, await abortable(response, request.signal));
+      return abortable(response, signal);
     },
     async resolveCredentialModel(request): Promise<string | undefined> {
-      return rpc.parse(
-        resolveCredentialModelResponseSchema,
-        await rpc.request(
-          '_archon/resolve_credential_model',
-          resolveCredentialModelRequestSchema.parse(request)
-        )
-      ).model;
+      const { model } = await rpc.request(
+        '_archon/resolve_credential_model',
+        resolveCredentialModelRequestSchema.parse(request),
+        resolveCredentialModelResponseSchema
+      );
+      return model;
     },
     async *sendQuery(
       prompt: string,
@@ -224,13 +225,10 @@ export async function connectProvider(
         cwd,
         resumeSessionId,
       });
-      const { sessionId } = rpc.parse(
-        newSessionResponseSchema,
-        await rpc.request('session/new', {
-          cwd,
-          mcpServers: [],
-          _meta: { archon: { request } },
-        })
+      const { sessionId } = await rpc.request(
+        'session/new',
+        { cwd, mcpServers: [], _meta: { archon: { request } } },
+        newSessionResponseSchema
       );
       if (options.abortSignal?.aborted) {
         await rpc.notify('session/cancel', { sessionId });
@@ -258,13 +256,13 @@ export async function connectProvider(
         });
       };
       options.abortSignal?.addEventListener('abort', cancel, { once: true });
-      const prompted = rpc.request('session/prompt', {
-        sessionId,
-        prompt: [{ type: 'text', text: prompt }],
-      });
+      const prompted = rpc.request(
+        'session/prompt',
+        { sessionId, prompt: [{ type: 'text', text: prompt }] },
+        promptResponseSchema
+      );
       void prompted
-        .then(raw => {
-          rpc.parse(promptResponseSchema, raw);
+        .then(() => {
           if (!turn.settled && !turn.cancelled)
             throw rpc.error('provider stream ended before settled');
           if (turn.settled && !turn.ended) turn.controller.enqueue(turn.settled);

@@ -9,7 +9,15 @@ import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
+import {
+  ForgeOperationError,
+  ghApi,
+  ghRetryWait,
+  retryTransient,
+  TransientForgeError,
+} from '../../workflows/sdlc/.shared/forge';
+import { trackTempRoots } from './temp-roots';
 import {
   PACK,
   PR,
@@ -31,6 +39,7 @@ const REPORT = 'Round 1: ready';
 
 /** The engine's typed-artifact listing for a run with no typed artifacts yet. */
 const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
+const DESCRIPTION = { type: 'archon_artifact', run_id: 'run', path: 'pr-description.md' };
 const PREPARED_BODY = { type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' };
 
 interface Target {
@@ -76,24 +85,40 @@ function publishPr(
 }
 
 describe('publish-pr opens the pull request at most once', () => {
-  it('keeps prepare schema and command aligned with the body pointer publish accepts', () => {
+  it.each(['gh', 'forge'] as const)('continues without a publication record when no description is prepared through %s', source => {
+    for (const existing of [42, null]) {
+      const result = publishPr({
+        source,
+        target: { existing },
+        prepareBody: false,
+        forgeAt: head => ({ kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }) }),
+        preload: `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');`,
+      });
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
+      expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
+      expect(result.bodies).toEqual([]);
+    }
+  });
+
+  it.each([{ field: 'body', pointer: PREPARED_BODY }, { field: 'description', pointer: DESCRIPTION }])('keeps the $field pointer schema and command aligned with publish', ({ field, pointer }) => {
     const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8')) as {
       nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[];
     };
-    expect(workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties.body).toEqual({
+    expect(workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties[field]).toEqual({
       type: ['object', 'null'],
       properties: {
-        type: { type: 'string', enum: [PREPARED_BODY.type] },
+        type: { type: 'string', enum: [pointer.type] },
         run_id: { type: 'string' },
-        path: { type: 'string', enum: [PREPARED_BODY.path] },
+        path: { type: 'string', enum: [pointer.path] },
       },
-      required: Object.keys(PREPARED_BODY),
+      required: Object.keys(pointer),
     });
     const command = readFileSync(join(PACK, 'pr/commands/pr.md'), 'utf8');
     expect(command).toContain(
-      `{"type": "${PREPARED_BODY.type}", "run_id": "$WORKFLOW_ID", "path": "${PREPARED_BODY.path}"}`
+      `{"type": "${pointer.type}", "run_id": "$WORKFLOW_ID", "path": "${pointer.path}"}`
     );
-    expect(command).toContain(`$ARTIFACTS_DIR/${PREPARED_BODY.path}`);
+    expect(command).toContain(`$ARTIFACTS_DIR/${pointer.path}`);
   });
 
   it.each(['gh', 'forge'] as const)(
@@ -493,6 +518,277 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   });
 });
 
+const { start: START, end: END } = DESCRIPTION_SECTION;
+
+/** publish-pr continuing pull request 42, with a prepared description section. */
+function publishSection(options: Parameters<typeof publishPr>[0] & { live?: string; allowed?: boolean } = {}) {
+  const { live = 'Written by hand.', allowed = true, ...rest } = options;
+  return publishPr({
+    target: { existing: 42 },
+    prepareBody: false,
+    ...rest,
+    gh: { ...rest.gh, pr: { headRefName: 'feature', body: live, ...rest.gh?.pr } },
+    inputs: {
+      INPUTS_DESCRIPTION: JSON.stringify(DESCRIPTION),
+      ...(allowed ? { INPUTS_PUBLISH_DESCRIPTION: 'true' } : {}),
+      ...rest.inputs,
+    },
+    artifacts: { [DESCRIPTION.path]: '| case | ms |\n| --- | --- |\n| a | 12 |\n', ...rest.artifacts },
+  });
+}
+
+describe('publish-pr writes the description section a delivery round prepared', () => {
+  it('appends the section to a hand-written description and reads it back', () => {
+    const result = publishSection();
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
+    expect(result.bodies).toEqual([`Written by hand.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`]);
+  });
+
+  it.each([
+    { trailing: '', gap: '\n\n' },
+    { trailing: '\n', gap: '\n' },
+    { trailing: '\n\n', gap: '' },
+  ])('publishes terminal tables and replaces legacy table sections: $trailing', ({ trailing, gap }) => {
+    const table = `| case | ms |\n| --- | --- |\n| a | 12 |${trailing}`;
+    const first = publishSection({ artifacts: { [DESCRIPTION.path]: table } });
+    expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
+    expect(first.bodies[0]).toBe(`Written by hand.\n\n${START}\n${table}${gap}${END}\n`);
+    const again = publishSection({ live: first.bodies[0], artifacts: { [DESCRIPTION.path]: table } });
+    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
+    expect(again.bodies).toEqual([]);
+    const legacy = `Author.  \n\n${START}\n${table}${trailing ? '' : '\n'}${END}\nAfter.  \n`;
+    const replaced = publishSection({ live: legacy, artifacts: { [DESCRIPTION.path]: 'Replacement evidence.' } });
+    expect({ code: replaced.code, stderr: replaced.stderr }).toMatchObject({ code: 0 });
+    expect(replaced.bodies).toEqual([`Author.  \n\n${START}\nReplacement evidence.\n\n${END}\nAfter.  \n`]);
+  });
+
+  it.each(['gh', 'forge'] as const)('preserves fenced and inline marker examples through %s', source => {
+    const live = `Author text.  \n\n\`\`\`md\n${START}\nexample\n${END}\n\`\`\`\nInline: \`${START}\` and \`${END}\`.  \n\n`;
+    const result = publishSection({
+      live, source,
+      forgeAt: head => ({ kind: 'fake', response: [
+        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
+        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
+        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
+        forgeOperation('pr.edit-body', { pr: forgePrRecord({ head_revision: head }) }),
+      ] }),
+    });
+    expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
+    const body = source === 'gh' ? result.bodies[0] : JSON.parse(result.forgeRequests.at(-1) ?? '{}').body;
+    expect(body).toBe(`${live}${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`);
+  });
+
+  it('preserves trailing authored whitespace exactly', () => {
+    const live = 'Author text.  \n\n';
+    const result = publishSection({ live });
+    expect(result.code).toBe(0);
+    expect(result.bodies[0]).toBe(`${live}${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`);
+  });
+
+  it('can publish prepared fenced marker examples again', () => {
+    const section = `\`\`\`md\n${START}\nliteral\n${END}\n\`\`\``;
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+    expect(result.code).toBe(0);
+    const again = publishSection({ live: result.bodies[0], artifacts: { [DESCRIPTION.path]: section } });
+    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
+    expect(again.bodies).toEqual([]);
+  });
+
+  it.each([
+    `    ${START}\n    literal\n    ${END}\n`,
+    ...['pre', 'code', 'script', 'style', 'textarea', 'table', 'thead', 'tbody', 'tr', 'th', 'td'].map(tag => `<${tag}>\n\n${START}\nliteral\n${END}\n\n</${tag}>`),
+  ])('preserves literal marker containers in both ingresses and can publish again: %s', section => {
+    const live = `Authored.\n\n${section}\n\n`;
+    const first = publishSection({ live, artifacts: { [DESCRIPTION.path]: section } });
+    expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
+    expect(first.bodies[0]).toBe(`${live}${START}\n${section}${section.endsWith('\n\n') ? '' : section.endsWith('\n') ? '\n' : '\n\n'}${END}\n`);
+    const again = publishSection({ live: first.bodies[0], artifacts: { [DESCRIPTION.path]: section } });
+    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
+    expect(again.bodies).toEqual([]);
+  });
+
+  it.each(['```', '~~~', '<pre>', '<code>', '<script>', '<style>', '<textarea>', '<table>'])(
+    'refuses a composed pair swallowed by an unclosed %s in either ingress', opening => {
+      for (const options of [
+        { artifacts: { [DESCRIPTION.path]: `${opening}\nunfinished` } },
+        { live: `Author text.\n\n${opening}\nunfinished` },
+      ]) {
+        const result = publishSection(options);
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('composed description');
+        expect(result.bodies).toEqual([]);
+      }
+    }
+  );
+
+  it.each([START, END, `${START}\nnested\n${END}`])('refuses reserved structural markers in prepared content before pushing: %s', section => {
+    const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('reserved description markers');
+    expect(spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: result.cwd, encoding: 'utf8' }).stdout).toBe('');
+    expect(result.gh).toEqual([]);
+  });
+
+  it('refuses reserved prepared markers before creating a pull request', () => {
+    const result = publishSection({
+      target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
+      artifacts: { [DESCRIPTION.path]: `${START}\nnested\n${END}` },
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('reserved description markers');
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+    expect(result.gh).toEqual([]);
+  });
+
+  it('publishes and reads back the section when creating a pull request', () => {
+    const result = publishSection({ target: { existing: null }, prepareBody: true, gh: { noOpenPr: true } });
+    expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(true);
+    expect(result.bodies).toEqual([`A body\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`]);
+    expect(result.gh.at(-1)).toContain('pr view 42');
+  });
+
+  it.each(['gh', 'forge'] as const)('keeps a created PR in the failure report when its description edit fails through %s', source => {
+    const result = publishSection({ source, target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
+      forgeAt: head => ({ kind: 'fake', response: [
+        forgeOperation('pr.view', null),
+        forgeOperation('pr.create', { target: PR.repo, outcome: 'applied', changed: true, pr: forgePrRecord({ head_revision: head }) }),
+        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
+        forgeFailure('pr.edit-body', 'refused', 'edit unavailable'),
+      ] }),
+      preload: `const spawn = Bun.spawnSync.bind(Bun); Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'edit' ? { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('edit unavailable') } : spawn(argv, settings) });`,
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('edit unavailable');
+    const report = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null' },
+      artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
+    });
+    expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
+  });
+
+  it.each(['gh', 'forge'] as const)('retains named and reconciled PR identities after a failed description edit through %s', source => {
+    for (const { existing, priorClaim } of [42, null].flatMap(existing => [false, true].map(priorClaim => ({ existing, priorClaim })))) {
+      const result = publishSection({ source, target: { existing },
+        artifacts: priorClaim ? { 'pr-create-started': JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) } : {},
+        forgeAt: head => ({ kind: 'fake', response: [
+          ...(existing === null ? [] : [forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) })]),
+          forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
+          forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
+          forgeFailure('pr.edit-body', 'refused', 'edit unavailable'),
+        ] }),
+        preload: `const spawn = Bun.spawnSync.bind(Bun); Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'edit' ? { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('edit unavailable') } : spawn(argv, settings) });`,
+      });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('edit unavailable');
+      const report = runPackScript('deliver/scripts/report', {
+        inputs: { INPUTS_OUTCOME: 'null' },
+        artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
+      });
+      expect(report.code).toBe(0);
+      expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
+    }
+  });
+
+  it.each([
+    { name: 'replacement', live: `${START}\nold\n${END}` },
+    { name: 'reusing a head PR', target: { existing: null }, prepareBody: true },
+    { name: 'creating a PR', target: { existing: null }, prepareBody: true, gh: { noOpenPr: true } },
+  ])('refuses invalid composition when $name', ({ name: _name, ...options }) => {
+    const result = publishSection({ ...options, artifacts: { [DESCRIPTION.path]: '```\nunclosed' } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('composed description');
+    expect(result.bodies).toEqual([]);
+  });
+
+  it('replaces only the content between its markers', () => {
+    const result = publishSection({ live: `Before.\n\n${START}\nold\n${END}\n\nAfter.` });
+    expect(result.code).toBe(0);
+    expect(result.bodies).toEqual([`Before.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n\nAfter.`]);
+  });
+
+  it('writes nothing when the section is already current', () => {
+    const result = publishSection({ live: `Before.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n` });
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
+  });
+
+  it('writes through the plugin, never gh, on the forge source', () => {
+    const result = publishSection({
+      source: 'forge',
+      forgeAt: head => {
+        const view = forgeOperation('pr.view', {
+          pr: forgePrRecord({ head_revision: head }),
+          title: 'A title',
+          body: 'Written by hand.',
+        });
+        return {
+          kind: 'fake',
+          response: [
+            view,
+            view,
+            view,
+            forgeOperation('pr.edit-body', {
+              target: PR,
+              outcome: 'applied',
+              changed: true,
+              pr: forgePrRecord({ head_revision: head }),
+              bodyDigest: 'digest',
+            }),
+          ],
+        };
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(result.forge[3]).toContain('forge pr.edit-body --json --data-file');
+    expect(JSON.parse(result.forgeRequests[3])).toEqual({
+      ref: { repo: PR.repo, number: 42 },
+      body: `Written by hand.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`,
+    });
+  });
+
+  it.each([
+    { ...DESCRIPTION, type: 'file' },
+    { ...DESCRIPTION, run_id: 'another-run' },
+    { ...DESCRIPTION, path: 'pr-body.md' },
+  ])('refuses an uncertified description pointer before pushing: %j', pointer => {
+    const result = publishSection({ inputs: { INPUTS_DESCRIPTION: JSON.stringify(pointer) } });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('prepare must declare the pr-description.md artifact from this run');
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+    expect(result.gh).toEqual([]);
+  });
+
+  it('refuses a prepared section before pushing when the caller did not allow one', () => {
+    const result = publishSection({ allowed: false });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('the caller did not allow publishing one');
+    expect(remoteHead(result.cwd, 'feature')).toBe('');
+    expect(result.bodies).toEqual([]);
+  });
+
+  it('refuses rather than guessing at an unpaired marker', () => {
+    const result = publishSection({ live: `Before.\n\n${START}\nold` });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('unpaired or repeated archon-delivery-description marker');
+    expect(result.bodies).toEqual([]);
+  });
+
+  it('fails when the written description does not read back', () => {
+    const result = publishSection({ gh: { writeLost: true } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('does not read back the written description');
+  });
+
+  it('names the same markers in the update-pr-body prompt that keeps them', () => {
+    const prompt = readFileSync(join(PACK, 'deliver/commands/update-pr-body.md'), 'utf8');
+    expect(prompt).toContain(`\`${START}\``);
+    expect(prompt).toContain(`\`${END}\``);
+  });
+});
+
 /** The commit the `upstream` remote holds for a branch, or empty when it has none. */
 function remoteHead(cwd: string, branch: string): string {
   const remote = spawnSync('git', ['ls-remote', 'upstream', `refs/heads/${branch}`], { cwd, encoding: 'utf8' });
@@ -617,26 +913,27 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   });
 
   it('upserts through the plugin on the forge source, with the report in the request file', () => {
+    const forge: ScriptOptions['forge'] = {
+      kind: 'fake',
+      response: [
+        prView,
+        forgeOperation('comment.upsert', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          comment: {
+            ref: PR,
+            id: '900',
+            url: `${PR_URL}#issuecomment-900`,
+            bodyDigest: 'digest',
+          },
+        }),
+      ],
+    };
     const result = publishReview({
       source: 'forge',
       inputs: report,
-      forge: {
-        kind: 'fake',
-        response: [
-          prView,
-          forgeOperation('comment.upsert', {
-            target: PR,
-            outcome: 'applied',
-            changed: true,
-            comment: {
-              ref: PR,
-              id: '900',
-              url: `${PR_URL}#issuecomment-900`,
-              bodyDigest: 'digest',
-            },
-          }),
-        ],
-      },
+      forge,
     });
     expect(result.code).toBe(0);
     expect(result.gh).toEqual([]);
@@ -647,7 +944,19 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     // The comment names the commit it reviewed from the round's own record, not the report text.
     expect(request.body.split('\n')[1]).toBe(`Reviewed commit: \`${REVIEWED}\``);
     expect(request.body.split('\n')[2]).toBe('Verdict: ready');
+    // A Ready verdict whose review left an acceptance item open is stamped open, so no merge closes the issue on it.
+    expect(request.body.split('\n')[3]).toBe('Contract: open');
     expect(result.forge.join(' ')).not.toContain(REPORT);
+
+    // A review that left nothing open is stamped complete: only that lets a merge close the issue.
+    const complete = publishReview({
+      source: 'forge',
+      inputs: { ...report, INPUTS_CONTRACT_LEFT: '[]' },
+      forge,
+    });
+    expect(complete.code).toBe(0);
+    const completeRequest = JSON.parse(complete.forgeRequests[1]) as { body: string };
+    expect(completeRequest.body.split('\n')[3]).toBe('Contract: complete');
   });
 
   it('still reports the verdict when the host could not audit the comment write', () => {
@@ -690,6 +999,178 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('outcome_unknown');
+  });
+});
+
+// A forge that fails a request it may answer the next time (a gateway timeout, a
+// rate limit) must not end a run that has done hours of work. The repeat starts
+// from the marker read, so a first attempt that landed is found when the next
+// listing shows it; a listing that lags behind it lets the repeat post again.
+describe('publish-review repeats a comment write the forge failed transiently', () => {
+  const report = { INPUTS_REPORT: '{ARTIFACTS}/review-report.md' };
+  const posts = (result: ScriptRun): number => result.gh.filter(call => call.includes('--method POST')).length;
+
+  it('publishes exactly one comment after a 504 on the first write', () => {
+    const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 504 }] } });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ready: true });
+    expect(posts(result)).toBe(2);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('finds a 504 write that landed instead of writing it again', () => {
+    const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 504, landed: true }] } });
+    expect(result.code).toBe(0);
+    expect(posts(result)).toBe(1);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('repeats a comment listing that got no response and publishes one comment', () => {
+    const result = publishReview({ inputs: report, gh: { commentListDrops: [0] } });
+    expect(result.code).toBe(0);
+    expect(result.gh.filter(call => call.includes('/comments?per_page=100')).length).toBe(3);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('gives up on a listing that never answers, with its evidence', () => {
+    const result = publishReview({ inputs: report, gh: { commentListDrops: [0, 1, 2, 3, 4, 5] } });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('connection reset');
+    expect(result.gh.filter(call => call.includes('/comments?per_page=100'))).toHaveLength(4);
+    expect(posts(result)).toBe(0);
+    // The three waits (1s, 2s, 4s) outlast bun's default test timeout.
+  }, 15_000);
+
+  it('finds a landed write when its read-back got no response', () => {
+    const result = publishReview({ inputs: report, gh: { commentListDrops: [1] } });
+    expect(result.code).toBe(0);
+    expect(posts(result)).toBe(1);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('never writes again after a successful POST whose read-back cannot find it', () => {
+    const result = publishReview({ inputs: report, gh: { commentListDrops: [1], commentListLags: [2] } });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('does not read back as written');
+    expect(posts(result)).toBe(1);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('finds a landed PATCH after a 504 instead of writing it again', () => {
+    const result = publishReview({
+      inputs: report,
+      gh: {
+        comments: [{ id: 5, body: `${MARKER}\nRound 1: ready\n` }],
+        commentWriteFaults: [{ status: 504, landed: true }],
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh.filter(call => call.includes('--method PATCH'))).toHaveLength(1);
+    expect(posts(result)).toBe(0);
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]?.body).toContain(REPORT);
+  });
+
+  it('repeats a 403 carrying a Retry-After header once', () => {
+    const result = publishReview({
+      inputs: report,
+      gh: { commentWriteFaults: [{ status: 403, headers: { 'Retry-After': '0' } }] },
+    });
+    expect(result.code).toBe(0);
+    expect(posts(result)).toBe(2);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('fails at once with the forge evidence on a permanent error', () => {
+    const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 404 }] } });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('(HTTP 404)');
+    expect(posts(result)).toBe(1);
+    expect(result.comments).toEqual([]);
+  });
+});
+
+describe('a gh api failure is classified from its HTTP status and headers', () => {
+  const at = (status: number, headers: Record<string, string> = {}) =>
+    ghRetryWait(1, { status, headers: new Map(Object.entries(headers)) });
+
+  it('repeats a 5xx or a request that got no response, but not missing authentication', () => {
+    expect(at(502)).toBe(0);
+    expect(at(504)).toBe(0);
+    expect(ghRetryWait(1, undefined)).toBe(0);
+    expect(ghRetryWait(4, undefined)).toBeUndefined();
+  });
+
+  it('waits out a rate limit for the time GitHub names, or a minute', () => {
+    expect(at(429, { 'retry-after': '30' })).toBe(30_000);
+    expect(at(403, { 'retry-after': '5' })).toBe(5_000);
+    expect(at(429)).toBe(60_000);
+  });
+
+  it('waits at least a valid Retry-After on a 5xx', () => {
+    expect(at(503, { 'retry-after': '120' })).toBe(120_000);
+    expect(at(503, { 'retry-after': 'soon' })).toBe(0);
+    expect(at(404, { 'retry-after': '5' })).toBeUndefined();
+  });
+
+  it('fails a permission refusal or any other 4xx at once', () => {
+    expect(at(403)).toBeUndefined();
+    expect(at(404)).toBeUndefined();
+    expect(at(422)).toBeUndefined();
+  });
+
+  it('reads a mixed-case Retry-After from the raw gh api response', () => {
+    const spawnSync = Bun.spawnSync;
+    const raw = 'HTTP/2.0 503 Service Unavailable\nRetry-After: 120\r\nContent-Type: application/json\r\n\r\n{}';
+    Object.defineProperty(Bun, 'spawnSync', {
+      value: () => ({ exitCode: 1, stdout: Buffer.from(raw), stderr: Buffer.from('gh: (HTTP 503)') }),
+    });
+    let thrown: unknown;
+    try {
+      ghApi('gh api comment write', ['repos/example/repo/issues/42/comments']);
+    } catch (error) {
+      thrown = error;
+    } finally {
+      Object.defineProperty(Bun, 'spawnSync', { value: spawnSync });
+    }
+    expect(thrown).toBeInstanceOf(TransientForgeError);
+    expect((thrown as TransientForgeError).waitMs).toBe(120_000);
+  });
+
+  it('waits at least the time the failure asked for', () => {
+    const waits: number[] = [];
+    let attempts = 0;
+    const result = retryTransient(
+      () => {
+        if (attempts++ === 0) throw new TransientForgeError('gh api failed (HTTP 503)', 30_000);
+        return 'done';
+      },
+      ms => waits.push(ms)
+    );
+    expect(result).toBe('done');
+    expect(waits).toEqual([30_000]);
+  });
+
+  it('stops repeating after its last wait and never repeats another failure', () => {
+    const waits: number[] = [];
+    let attempts = 0;
+    const transient = () => {
+      attempts++;
+      throw new TransientForgeError('gh api failed (HTTP 504)', 0);
+    };
+    expect(() => retryTransient(transient, ms => waits.push(ms))).toThrow('HTTP 504');
+    expect(attempts).toBe(4);
+    expect(waits).toEqual([1_000, 2_000, 4_000]);
+
+    attempts = 0;
+    const permanent = () => {
+      attempts++;
+      throw new ForgeOperationError('forge comment.upsert refused', undefined);
+    };
+    expect(() => retryTransient(permanent, () => {})).toThrow('refused');
+    expect(attempts).toBe(1);
   });
 });
 

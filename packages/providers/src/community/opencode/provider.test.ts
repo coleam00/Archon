@@ -1036,6 +1036,158 @@ describe('OpencodeProvider', () => {
     ]);
   });
 
+  // OpenCode records each model step as its own assistant message, so a prompt that calls a
+  // tool produces two, each priced separately (recorded against opencode 1.1.49).
+  const assistantStep = (
+    id: string,
+    sessionID: string,
+    cost: number,
+    input: number,
+    output: number,
+    finish: string
+  ) => ({
+    type: 'message.updated',
+    properties: {
+      info: {
+        id,
+        role: 'assistant',
+        sessionID,
+        providerID: 'anthropic',
+        modelID: 'claude-sonnet',
+        cost,
+        finish,
+        tokens: { input, output, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+    },
+  });
+
+  test('a tool-using prompt reports the usage of every assistant message it produced', async () => {
+    scriptedEvents = [
+      // A message is updated as it streams; only its latest figures count.
+      assistantStep('message-1', 'session-1', 0.0001, 50, 5, 'tool-calls'),
+      assistantStep('message-1', 'session-1', 0.00012, 100, 10, 'tool-calls'),
+      assistantStep('message-2', 'session-1', 0.00024, 200, 20, 'stop'),
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([
+      {
+        type: 'result',
+        sessionId: 'session-1',
+        tokens: {
+          input: 300,
+          output: 30,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 330,
+          cost: expect.closeTo(0.00036, 12),
+        },
+        cost: expect.closeTo(0.00036, 12),
+        stopReason: 'end_turn',
+        resolvedModel: { id: 'claude-sonnet' },
+      },
+    ]);
+  });
+
+  test('multi-agent usage sums every assistant message of each sub-agent', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      assistantStep('scout-1', 'scout-session', 0.1, 100, 10, 'tool-calls'),
+      assistantStep('scout-2', 'scout-session', 0.2, 200, 20, 'stop'),
+      assistantStep('reviewer-1', 'reviewer-session', 0.4, 400, 40, 'stop'),
+      { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+      { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'result',
+          cost: expect.closeTo(0.7, 12),
+          tokens: {
+            input: 700,
+            output: 70,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 770,
+            cost: expect.closeTo(0.7, 12),
+          },
+        }),
+      ])
+    );
+  });
+
+  test('multi-agent cost includes a sub-agent whose tokens cannot normalize', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    runtimeQueue.push(
+      makeRuntime({
+        sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+      })
+    );
+    scriptedEvents = [
+      assistantStep('scout-1', 'scout-session', 0.25, 100, 10, 'stop'),
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'reviewer-1',
+            role: 'assistant',
+            sessionID: 'reviewer-session',
+            cost: 0.5,
+            tokens: { output: 20 },
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+      { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toContainEqual({
+      type: 'result',
+      cost: 0.75,
+      tokens: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0.25 },
+    });
+  });
+
   test('session resume handoff falls back to a fresh session with warning', async () => {
     const runtime = makeRuntime({
       sessionGet: mock(async () => {
@@ -1283,6 +1435,90 @@ describe('OpencodeProvider', () => {
     expect(failure?.evidence).toContain('upstream request failed');
     expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
   });
+
+  test.each(['create', 'resume', 'subscribe'] as const)(
+    'cancellation during single-session %s prevents prompt dispatch',
+    async stage => {
+      const controller = new AbortController();
+      const reason = new Error('cancel during setup');
+      const runtime = makeRuntime();
+      const cancel = async () => {
+        controller.abort(reason);
+        return { data: { id: 'session-1' }, stream: createEventStream([]) };
+      };
+      if (stage === 'create') runtime.client.session.create = mock(cancel);
+      if (stage === 'resume') runtime.client.session.get = mock(cancel);
+      if (stage === 'subscribe') runtime.client.event.subscribe = mock(cancel);
+      runtimeQueue.push(runtime);
+
+      const { error } = await consume(
+        new OpencodeProvider().sendQuery(
+          'hi',
+          '/tmp',
+          stage === 'resume' ? 'session-1' : undefined,
+          {
+            assistantConfig: TEST_MODEL,
+            abortSignal: controller.signal,
+          }
+        )
+      );
+
+      expect(error).toBe(reason);
+      expect(runtime.client.session.promptAsync).not.toHaveBeenCalled();
+      expect(runtime.server.close).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  test.each(['subscribe', 'first-child', 'last-child', 'first-prompt'] as const)(
+    'cancellation during multi-agent %s prevents subsequent prompts',
+    async stage => {
+      const cwd = await createTempProjectDir();
+      const controller = new AbortController();
+      const reason = new Error('cancel during multi-agent setup');
+      let children = 0;
+      const runtime = makeRuntime({
+        subscribe: mock(async () => {
+          if (stage === 'subscribe') controller.abort(reason);
+          return { stream: createEventStream([]) };
+        }),
+        sessionCreate: mock(async () => {
+          children++;
+          if (stage === 'first-child' || (stage === 'last-child' && children === 2)) {
+            controller.abort(reason);
+          }
+          return { data: { id: `child-${children}` } };
+        }),
+        promptAsync: mock(async () => {
+          if (stage === 'first-prompt') controller.abort(reason);
+        }),
+      });
+      runtimeQueue.push(runtime);
+
+      const { error } = await consume(
+        new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+          assistantConfig: TEST_MODEL,
+          abortSignal: controller.signal,
+          nodeConfig: {
+            nodeId: 'review',
+            agents: {
+              first: { description: 'First', prompt: 'Review' },
+              second: { description: 'Second', prompt: 'Review' },
+            },
+          },
+        })
+      );
+
+      expect(error).toBe(reason);
+      expect(runtime.client.session.promptAsync).toHaveBeenCalledTimes(
+        stage === 'first-prompt' ? 1 : 0
+      );
+      if (stage === 'subscribe') expect(runtime.client.session.create).not.toHaveBeenCalled();
+      if (stage === 'first-prompt') {
+        expect(runtime.client.session.abort).toHaveBeenCalledTimes(2);
+      }
+      expect(runtime.server.close).toHaveBeenCalledTimes(1);
+    }
+  );
 
   test('abort propagates to the OpenCode session and surfaces aborted error', async () => {
     const runtime = makeRuntime({

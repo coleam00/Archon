@@ -4,6 +4,10 @@ import {
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
 import {
+  TERMINAL_RUN_EVENT_TYPES,
+  terminalRunStatusForEventType,
+  type RunTerminalStatus,
+  TERMINAL_RUN_EVENT_TYPE,
   nodeSkipReasonSchema,
   skipCauseSchema,
   type NodeSkipReason,
@@ -31,23 +35,11 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         workflowName: '',
         status: 'running',
         timestamp: Date.now(),
-      });
+      } satisfies WorkflowStatusSsePayload);
     case 'workflow_started':
     case 'workflow_completed':
     case 'workflow_failed':
-      return JSON.stringify({
-        type: 'workflow_status',
-        runId: event.runId,
-        workflowName: event.workflowName,
-        status:
-          event.type === 'workflow_started'
-            ? 'running'
-            : event.type === 'workflow_completed'
-              ? 'completed'
-              : 'failed',
-        error: event.type === 'workflow_failed' ? event.error : undefined,
-        timestamp: Date.now(),
-      });
+      return mapWorkflowStatusEvent(event);
 
     case 'loop_iteration_started':
       return JSON.stringify({
@@ -109,27 +101,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
     case 'node_completed':
     case 'node_failed':
     case 'node_skipped': {
-      const payload: DagNodeSseEvent = {
-        type: 'dag_node',
-        runId: event.runId,
-        nodeId: event.nodeId,
-        name: event.nodeName,
-        status:
-          event.type === 'node_started' || event.type === 'node_suspended'
-            ? 'running'
-            : event.type === 'node_completed'
-              ? 'completed'
-              : event.type === 'node_failed'
-                ? 'failed'
-                : 'skipped',
-        duration: event.type === 'node_completed' ? event.duration : undefined,
-        error: event.type === 'node_failed' ? event.error : undefined,
-        reason: event.type === 'node_skipped' ? event.reason : undefined,
-        cause: event.type === 'node_skipped' ? event.cause : undefined,
-        execution: event.execution,
-        timestamp: Date.now(),
-      };
-      return JSON.stringify(payload);
+      return mapDagNodeEvent(event);
     }
 
     case 'node_skipped_prior_success':
@@ -159,7 +131,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
           decisions: event.decisions,
           pauseId: event.pauseId,
         },
-      });
+      } satisfies WorkflowStatusSsePayload);
 
     case 'workflow_cancelled':
       return JSON.stringify({
@@ -168,7 +140,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         workflowName: '',
         status: 'cancelled',
         timestamp: Date.now(),
-      });
+      } satisfies WorkflowStatusSsePayload);
 
     case 'container_lifecycle':
       return JSON.stringify({
@@ -188,6 +160,56 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
       return null;
     }
   }
+}
+
+function mapWorkflowStatusEvent(
+  event: Extract<
+    WorkflowEmitterEvent,
+    { type: 'workflow_started' | 'workflow_completed' | 'workflow_failed' }
+  >
+): string {
+  return JSON.stringify({
+    type: 'workflow_status',
+    runId: event.runId,
+    workflowName: event.workflowName,
+    status:
+      event.type === 'workflow_started'
+        ? 'running'
+        : event.type === 'workflow_completed'
+          ? 'completed'
+          : 'failed',
+    error: event.type === 'workflow_failed' ? event.error : undefined,
+    timestamp: Date.now(),
+  } satisfies WorkflowStatusSsePayload);
+}
+
+function mapDagNodeEvent(
+  event: Extract<
+    WorkflowEmitterEvent,
+    { type: 'node_started' | 'node_suspended' | 'node_completed' | 'node_failed' | 'node_skipped' }
+  >
+): string {
+  const payload: DagNodeSseEvent = {
+    type: 'dag_node',
+    runId: event.runId,
+    nodeId: event.nodeId,
+    name: event.nodeName,
+    status:
+      event.type === 'node_started' || event.type === 'node_suspended'
+        ? 'running'
+        : event.type === 'node_completed'
+          ? 'completed'
+          : event.type === 'node_failed'
+            ? 'failed'
+            : 'skipped',
+    duration: event.type === 'node_completed' ? event.duration : undefined,
+    error: event.type === 'node_failed' ? event.error : undefined,
+    reason: event.type === 'node_skipped' ? event.reason : undefined,
+    cause: event.type === 'node_skipped' ? event.cause : undefined,
+    execution: event.execution,
+    timestamp: Date.now(),
+  };
+  return JSON.stringify(payload);
 }
 
 /** Read the first present string field from a parsed event `data` object. */
@@ -210,16 +232,18 @@ function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
 }
 
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
-type RowWorkflowStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+type RowWorkflowStatus = 'running' | RunTerminalStatus | 'paused';
 const ROW_WORKFLOW_STATUS: Partial<Record<string, RowWorkflowStatus>> = {
+  ...Object.fromEntries(
+    TERMINAL_RUN_EVENT_TYPES.map(
+      eventType => [eventType, terminalRunStatusForEventType(eventType)] as const
+    )
+  ),
   workflow_started: 'running',
   run_attention_changed: 'running',
   wait_started: 'paused',
   wait_completed: 'running',
   source_released: 'paused',
-  workflow_completed: 'completed',
-  workflow_failed: 'failed',
-  workflow_cancelled: 'cancelled',
 } satisfies Partial<Record<WorkflowEventType, RowWorkflowStatus>>;
 
 /** DB event_type → node-level status, emitted as a `dag_node` SSE event. */
@@ -246,7 +270,7 @@ interface WorkflowStatusSsePayload {
   type: 'workflow_status';
   runId: string;
   workflowName: string;
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+  status: RowWorkflowStatus;
   error?: string;
   approval?: Pick<
     Extract<WorkflowEmitterEvent, { type: 'approval_pending' }>,
@@ -278,64 +302,78 @@ export const DASHBOARD_SOURCE_EVENT_TYPES: readonly WorkflowEventType[] =
  * best-effort (the REST refetch is the source of truth).
  */
 export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
+  const timestamp = Date.now();
+  const workflowStatus = ROW_WORKFLOW_STATUS[row.event_type];
+  if (workflowStatus) return mapWorkflowStatusRow(row, workflowStatus, timestamp);
+  const approvalStatus = ROW_APPROVAL_STATUS[row.event_type];
+  if (approvalStatus) return mapApprovalRow(row, approvalStatus, timestamp);
+  const nodeStatus = ROW_NODE_STATUS[row.event_type];
+  if (nodeStatus) return mapNodeRow(row, nodeStatus, timestamp);
+  return null;
+}
+
+function mapWorkflowStatusRow(
+  row: WorkflowEventRow,
+  workflowStatus: RowWorkflowStatus,
+  timestamp: number
+): string {
   const runId = row.workflow_run_id;
   const data = row.data;
-  const timestamp = Date.now();
+  const payload: WorkflowStatusSsePayload = {
+    type: 'workflow_status',
+    runId,
+    workflowName: dataStr(data, 'workflow_name', 'workflowName') ?? '',
+    status: workflowStatus,
+    error: row.event_type === TERMINAL_RUN_EVENT_TYPE.failed ? dataStr(data, 'error') : undefined,
+    timestamp,
+  };
+  return JSON.stringify(payload);
+}
 
-  const workflowStatus = ROW_WORKFLOW_STATUS[row.event_type];
-  if (workflowStatus) {
-    const payload: WorkflowStatusSsePayload = {
-      type: 'workflow_status',
-      runId,
-      workflowName: dataStr(data, 'workflow_name', 'workflowName') ?? '',
-      status: workflowStatus,
-      error: row.event_type === 'workflow_failed' ? dataStr(data, 'error') : undefined,
-      timestamp,
-    };
-    return JSON.stringify(payload);
-  }
+function mapApprovalRow(
+  row: WorkflowEventRow,
+  approvalStatus: NonNullable<(typeof ROW_APPROVAL_STATUS)[string]>,
+  timestamp: number
+): string {
+  const runId = row.workflow_run_id;
+  const data = row.data;
+  const payload: WorkflowStatusSsePayload = {
+    type: 'workflow_status',
+    runId,
+    workflowName: '',
+    status: approvalStatus,
+    timestamp,
+    approval:
+      approvalStatus === 'paused'
+        ? {
+            nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
+            message: dataStr(data, 'message') ?? '',
+          }
+        : undefined,
+  };
+  return JSON.stringify(payload);
+}
 
-  const approvalStatus = ROW_APPROVAL_STATUS[row.event_type];
-  if (approvalStatus) {
-    const payload: WorkflowStatusSsePayload = {
-      type: 'workflow_status',
-      runId,
-      workflowName: '',
-      status: approvalStatus,
-      timestamp,
-      approval:
-        approvalStatus === 'paused'
-          ? {
-              nodeId: row.step_name ?? dataStr(data, 'nodeId', 'node_id') ?? '',
-              message: dataStr(data, 'message') ?? '',
-            }
-          : undefined,
-    };
-    return JSON.stringify(payload);
-  }
-
-  const nodeStatus = ROW_NODE_STATUS[row.event_type];
-  if (nodeStatus) {
-    const record = readNodeRecordEvent(row);
-    const payload: DagNodeSseEvent = {
-      type: 'dag_node',
-      runId,
-      nodeId: row.step_name ?? '',
-      name: row.step_name ?? '',
-      status: nodeStatus,
-      error:
-        row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'
-          ? dataStr(data, 'error')
-          : undefined,
-      reason: row.event_type === 'node_skipped' ? dataSkipReason(data) : undefined,
-      cause: row.event_type === 'node_skipped' ? dataSkipCause(data) : undefined,
-      execution: record?.metadata,
-      timestamp,
-    };
-    return JSON.stringify(payload);
-  }
-
-  return null;
+function mapNodeRow(row: WorkflowEventRow, nodeStatus: RowNodeStatus, timestamp: number): string {
+  const runId = row.workflow_run_id;
+  const data = row.data;
+  const record = readNodeRecordEvent(row);
+  const payload: DagNodeSseEvent = {
+    type: 'dag_node',
+    runId,
+    nodeId: row.step_name ?? '',
+    name: row.step_name ?? '',
+    status: nodeStatus,
+    error:
+      row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'
+        ? dataStr(data, 'error')
+        : undefined,
+    reason: row.event_type === 'node_skipped' ? dataSkipReason(data) : undefined,
+    cause: row.event_type === 'node_skipped' ? dataSkipCause(data) : undefined,
+    execution: record?.metadata,
+    timestamp,
+  };
+  return JSON.stringify(payload);
 }
 
 export class WorkflowEventBridge {

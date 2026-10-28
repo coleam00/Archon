@@ -61,50 +61,64 @@ const sessionRequest = {
   env: { KEY: 'value' },
 } satisfies ProviderSessionRequest;
 
-test('a protocol-1 host gets the current descriptor and cannot start a session', async () => {
-  const pair = streamPair();
-  const serving = serveProvider({ descriptor, create: () => fixtureProvider() }, pair.provider);
-  const host = new PluginRpc(pair.host);
-  try {
-    expect(await host.request('initialize', initializeParams(1))).toMatchObject({
-      agentCapabilities: { _meta: { archon: { protocol: PROVIDER_PLUGIN_PROTOCOL } } },
-    });
-    await expect(
-      host.request('session/new', {
-        cwd: '/',
-        mcpServers: [],
-        _meta: { archon: { request: { prompt: 'turn', cwd: '/' } } },
-      })
-    ).rejects.toThrow('initialize must complete');
-  } finally {
-    await host.close();
-    await serving;
-  }
-});
-
-test('connect names both versions when the plugin speaks another protocol', async () => {
-  for (const protocol of [PROVIDER_PLUGIN_PROTOCOL - 1, PROVIDER_PLUGIN_PROTOCOL + 1]) {
+test.each(['full', 'minimal'] as const)(
+  'a protocol-1 host with a %s envelope gets the current descriptor and cannot start a session',
+  async envelope => {
     const pair = streamPair();
-    const agent = new PluginRpc(pair.provider);
-    agent.handle('initialize', () => ({
-      protocolVersion: 1,
-      agentCapabilities: { _meta: { archon: { ...descriptor, protocol } } },
-      authMethods: [],
-    }));
-    const error: unknown = await connectProvider(pair.host).catch((error: unknown) => error);
-    expect(error).toBeInstanceOf(PluginProtocolMismatchError);
-    expect(error).toMatchObject({
-      plugin: 'test-provider',
-      hostProtocol: PROVIDER_PLUGIN_PROTOCOL,
-      pluginProtocol: protocol,
-      message: expect.stringContaining(
-        `plugin speaks protocol ${String(protocol)}; this Archon speaks protocol ${String(PROVIDER_PLUGIN_PROTOCOL)}`
-      ),
-    });
-    await agent.done;
-    await agent.close();
+    const serving = serveProvider({ descriptor, create: () => fixtureProvider() }, pair.provider);
+    const host = new PluginRpc(pair.host);
+    try {
+      const params =
+        envelope === 'full'
+          ? initializeParams(1)
+          : { clientCapabilities: { _meta: { archon: { protocol: 1 } } } };
+      expect(await host.request('initialize', params)).toMatchObject({
+        agentCapabilities: { _meta: { archon: { protocol: PROVIDER_PLUGIN_PROTOCOL } } },
+      });
+      await expect(
+        host.request('session/new', {
+          cwd: '/',
+          mcpServers: [],
+          _meta: { archon: { request: { prompt: 'turn', cwd: '/' } } },
+        })
+      ).rejects.toThrow('initialize must complete');
+    } finally {
+      await host.close();
+      await serving;
+    }
   }
-});
+);
+
+test.each(['full', 'minimal'] as const)(
+  'connect names both versions when the plugin speaks another protocol with a %s envelope',
+  async envelope => {
+    for (const protocol of [PROVIDER_PLUGIN_PROTOCOL - 1, PROVIDER_PLUGIN_PROTOCOL + 1]) {
+      const pair = streamPair();
+      const agent = new PluginRpc(pair.provider);
+      agent.handle('initialize', () =>
+        envelope === 'full'
+          ? {
+              protocolVersion: 1,
+              agentCapabilities: { _meta: { archon: { ...descriptor, protocol } } },
+              authMethods: [],
+            }
+          : { agentCapabilities: { _meta: { archon: { id: descriptor.id, protocol } } } }
+      );
+      const error: unknown = await connectProvider(pair.host).catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(PluginProtocolMismatchError);
+      expect(error).toMatchObject({
+        plugin: 'test-provider',
+        hostProtocol: PROVIDER_PLUGIN_PROTOCOL,
+        pluginProtocol: protocol,
+        message: expect.stringContaining(
+          `plugin speaks protocol ${String(protocol)}; this Archon speaks protocol ${String(PROVIDER_PLUGIN_PROTOCOL)}`
+        ),
+      });
+      await agent.done;
+      await agent.close();
+    }
+  }
+);
 
 test('the baseline is the current protocol', () => {
   expect(baseline.$defs.ProviderPluginDescriptor.properties.protocol.const).toBe(

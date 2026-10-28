@@ -1,46 +1,13 @@
-import { escapeRegExp } from '@archon/paths/regexp';
 /**
- * Shared helpers for executor.ts and dag-executor.ts.
- *
- * Extracted here once the Rule of Three was met — both files had
- * identical copies of these retry and prompt-building
- * utilities. Single source of truth; no logic changes from either copy.
+ * Retry classification, subprocess failure formatting and completion-signal detection
+ * shared by the executors.
  */
-import { readFile } from 'fs/promises';
-import { AsyncLocalStorage } from 'node:async_hooks';
-import { join } from 'path';
-import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
-import * as archonPaths from '@archon/paths';
-import {
-  liveSourceRoots,
-  capturedSourceReadGuard,
-  assertCapturedFilesPresent,
-  packagedWorkflowDirectory,
-  workflowSourceConfigForRoots,
-  type WorkflowSourceRoots,
-} from './workflow-source';
-import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
-import { bundlesPackagedResources } from './defaults/bundle-inventory';
-import { createLogger } from '@archon/paths';
-import { isValidCommandName } from './command-validation';
-import type { LoadCommandResult } from './schemas';
+import { escapeRegExp } from '@archon/paths/regexp';
+import type { ExecNode, DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
-import {
-  inputRefToken,
-  substituteTemplate,
-  templateToken,
-  type JsonValue,
-  type TemplateToken,
-} from './output-ref';
-import { parsePackagedResourceReference } from './packaged-workflow';
-
-/** Lazy-initialized logger */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('workflow.executor-shared');
-  return cachedLog;
-}
+import { transitiveDepsLookup } from './depends-on';
+import type { hostSpawnFailure, RawSubprocessRejection } from './subprocess';
 
 // ─── Retry Classification ────────────────────────────────────────────────────
 
@@ -96,10 +63,34 @@ export function providerLimitResumeAt(
 }
 
 /**
+ * The failed nodes of one scope that no failure lies upstream of: none of the nodes they
+ * transitively depend on failed, whatever state lies between. A failure downstream of
+ * another is deferred, whatever caused it: the node may have failed only on its upstream's
+ * poisoned output, and nothing typed tells that from a failure of its own. Continuation runs
+ * it again with its upstream, so it cannot hold a run in a provider-limit wait: once the
+ * upstream succeeds, a failure of its own fails the run.
+ */
+export function rootFailures(
+  nodes: readonly Pick<DagNode, 'id' | 'depends_on'>[],
+  outputs: ReadonlyMap<string, NodeOutput>
+): { nodeId: string; output: Extract<NodeOutput, { state: 'failed' }> }[] {
+  const depsOf = transitiveDepsLookup(nodes);
+  const inScope = new Set(nodes.map(node => node.id));
+  const failed = (id: string): boolean => inScope.has(id) && outputs.get(id)?.state === 'failed';
+  return nodes.flatMap(node => {
+    const output = outputs.get(node.id);
+    return output?.state === 'failed' && ![...depsOf(node.id)].some(failed)
+      ? [{ nodeId: node.id, output }]
+      : [];
+  });
+}
+
+/**
  * The typed provider failure an aggregate node (a loop group, a composed fan-out instance,
  * the fan-out itself) reports for its failed descendants; the provider-limit wait reads only
- * the aggregate's. A lone failure is the aggregate's, unchanged. Several are reported only
- * when every one is a provider limit, so the wait never pauses a run beside an unrelated
+ * the aggregate's. Callers pass the {@link rootFailures} of a scope, or the fan-out's sibling
+ * instances. A lone failure is the aggregate's, unchanged. Several are reported only when
+ * every one is a provider limit, so the wait never pauses a run beside an unrelated root
  * failure that each continuation would repeat. Among limits, a usage limit without a reported
  * reset wins because the run cannot wait on it; otherwise the latest
  * {@link providerLimitResumeAt} does, the same deadline the wait ranks top-level nodes by.
@@ -251,21 +242,34 @@ export function retainStreamTail(text: string | undefined): string | undefined {
   )}`;
 }
 
-/**
- * Raw ExecFileException shape from Node's `child_process.execFile`. For inline
- * scripts via `bash -c <body>` / `bun -e <body>` the entire script body is
- * embedded in `err.message`, `err.cmd`, and the first line of `err.stack` —
- * which is why `formatSubprocessFailure` strips the prefix and exposes a
- * controlled `logFields` subset rather than the raw error.
- */
-interface RawSubprocessError {
-  message?: string;
-  stderr?: string;
-  stdout?: string;
-  // Numeric exit code OR errno symbol (e.g. 'ENOENT') — mirrors ExecFileException.
-  code?: number | string | null;
-  killed?: boolean;
-  cmd?: string;
+export function formatHostSpawnFailure(
+  failure: ReturnType<typeof hostSpawnFailure>,
+  runtime: ExecNode['runtime'],
+  command: string,
+  label: string
+): string | undefined {
+  if (runtime === 'sh' && (failure === 'ENOENT' || failure === 'ENOTDIR')) {
+    return (
+      `${label} failed: bash executable not found at '${command}'. ` +
+      'Set ARCHON_BASH_PATH if Git Bash is installed elsewhere ' +
+      '(e.g. user-scope installer at %LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe).'
+    );
+  }
+  if (failure === 'ENOENT') return `${label} failed: '${command}' executable not found in PATH`;
+  if (failure === 'EACCES') return `${label} failed: permission denied (check cwd permissions)`;
+  return undefined;
+}
+
+const STDERR_LABEL = '[stderr]\n';
+const STDOUT_LABEL = '\n[stdout]\n';
+
+function subprocessDiagnostic(
+  stderrTail: string | undefined,
+  stdoutTail: string | undefined,
+  fallback: string
+): string {
+  if (stderrTail && stdoutTail) return `${STDERR_LABEL}${stderrTail}${STDOUT_LABEL}${stdoutTail}`;
+  return stderrTail || stdoutTail || fallback;
 }
 
 /**
@@ -280,27 +284,60 @@ interface RawSubprocessError {
  * of the script body (`err.message`, `err.stack`, `err.cmd`).
  */
 export function formatSubprocessFailure(
-  err: RawSubprocessError,
+  err: Partial<
+    Pick<
+      RawSubprocessRejection,
+      'message' | 'stderr' | 'stdout' | 'code' | 'killed' | 'commandFailed'
+    >
+  >,
   label: string
 ): { userMessage: string; logFields: Record<string, unknown> } {
   const stderr = (err.stderr ?? '').trim();
   const stdout = (err.stdout ?? '').trim();
   const rawMessage = (err.message ?? '').trim();
 
-  // The first line of Node's ExecFileException.message is `Command failed: <cmd>`,
-  // and for `bash -c <body>` / `bun -e <body>` that line embeds the full script
-  // body. Strip it so user-facing output never re-leaks the body.
-  const hasCommandFailedPrefix = rawMessage.startsWith('Command failed:');
-  const bodyAfterPrefix = hasCommandFailedPrefix
-    ? rawMessage.split('\n').slice(1).join('\n').trim()
-    : rawMessage;
+  // Node embeds multiline argv in this message, so none of it is safe as a
+  // fallback diagnostic. Actual process output belongs to stdout and stderr.
+  const hasCommandFailedPrefix = err.commandFailed || rawMessage.startsWith('Command failed:');
 
+  const { stderrTail, stdoutTail } = subprocessStreamTails(stderr, stdout);
+
+  const diagnostic = subprocessDiagnostic(
+    stderrTail,
+    stdoutTail,
+    hasCommandFailedPrefix ? 'no diagnostic output' : rawMessage || 'unknown error'
+  );
+
+  const truncated =
+    diagnostic.length > SUBPROCESS_ERROR_MAX_CHARS
+      ? diagnostic.slice(-SUBPROCESS_ERROR_MAX_CHARS) + '\n…[truncated]'
+      : diagnostic;
+
+  const errorCode = typeof err.code === 'string' ? err.code : undefined;
+  const codeSuffix =
+    typeof err.code === 'number'
+      ? ` [exit ${String(err.code)}]`
+      : errorCode
+        ? ` [error ${errorCode}]`
+        : '';
+
+  return {
+    userMessage: `${label} failed${codeSuffix}: ${truncated}`,
+    logFields: {
+      exitCode: typeof err.code === 'number' ? err.code : undefined,
+      errorCode,
+      killed: err.killed === true,
+      stderrTail,
+      stdoutTail,
+    },
+  };
+}
+
+function subprocessStreamTails(stderr: string, stdout: string) {
   // Well-behaved scripts print failure context to stdout, so both streams share
   // the cap. stderr keeps budget priority; the leftover goes to stdout, and each
   // stream is labelled only when both are present. The budget accounts for the
   // label overhead so the joined diagnostic never truncates away a label.
-  const STDERR_LABEL = '[stderr]\n';
-  const STDOUT_LABEL = '\n[stdout]\n';
   const bothPresent = stderr.length > 0 && stdout.length > 0;
   const labelsOverhead = bothPresent ? STDERR_LABEL.length + STDOUT_LABEL.length : 0;
   const halfCap = Math.floor(SUBPROCESS_ERROR_MAX_CHARS / 2);
@@ -310,558 +347,7 @@ export function formatSubprocessFailure(
     SUBPROCESS_ERROR_MAX_CHARS - labelsOverhead - (stderrTail?.length ?? 0)
   );
 
-  let diagnostic: string;
-  if (stderrTail && stdoutTail) {
-    diagnostic = `${STDERR_LABEL}${stderrTail}${STDOUT_LABEL}${stdoutTail}`;
-  } else if (stderrTail || stdoutTail) {
-    diagnostic = (stderrTail ?? '') + (stdoutTail ?? '');
-  } else if (bodyAfterPrefix) {
-    diagnostic = bodyAfterPrefix;
-  } else if (hasCommandFailedPrefix) {
-    // Prefix was the entire message — exit code in the suffix is the only signal.
-    diagnostic = 'no diagnostic output';
-  } else {
-    diagnostic = 'unknown error';
-  }
-
-  const truncated =
-    diagnostic.length > SUBPROCESS_ERROR_MAX_CHARS
-      ? diagnostic.slice(-SUBPROCESS_ERROR_MAX_CHARS) + '\n…[truncated]'
-      : diagnostic;
-
-  const exitSuffix = err.code != null ? ` [exit ${String(err.code)}]` : '';
-
-  return {
-    userMessage: `${label} failed${exitSuffix}: ${truncated}`,
-    logFields: {
-      exitCode: err.code ?? undefined,
-      killed: err.killed === true,
-      stderrTail,
-      stdoutTail,
-    },
-  };
-}
-
-// ─── Command Loading ─────────────────────────────────────────────────────────
-
-/**
- * Load command prompt from file.
- *
- * Two directories are in play and they are not interchangeable. `cwd` is the workspace
- * the run acts on: it owns config, and it is where a `commands.folder` setting is read
- * from. `sourceRoots` is where the command TEXT lives — the authoring checkout, or a
- * run's frozen capture of it. They describe the same place for an ordinary in-place run
- * and differ whenever a workflow authored in one checkout executes against another.
- * Passing `cwd` for both is what made a workflow's own commands invisible inside its
- * isolated worktree.
- *
- * @param deps - Workflow dependencies (for config loading)
- * @param cwd - Target workspace; owns config only
- * @param commandName - Name of the command (without .md extension)
- * @param configuredFolder - Optional additional folder from config to search
- * @param sourceRoots - Roots to resolve command files under; defaults to reading `cwd` live
- * @returns On success: `{ success: true, content }`. On failure: `{ success: false, reason, message }`.
- */
-export async function loadCommandPrompt(
-  deps: Pick<WorkflowDeps, 'loadConfig'>,
-  cwd: string,
-  commandName: string,
-  configuredFolder?: string,
-  sourceRoots?: WorkflowSourceRoots,
-  verifiedFiles?: ReadonlySet<string>
-): Promise<LoadCommandResult> {
-  const roots = sourceRoots ?? liveSourceRoots(cwd);
-  const sourceConfig = sourceRoots && workflowSourceConfigForRoots(sourceRoots);
-  // Validate command name first
-  if (!isValidCommandName(commandName)) {
-    getLog().error({ commandName }, 'invalid_command_name');
-    return {
-      success: false,
-      reason: 'invalid_name',
-      message: `Invalid command name (potential path traversal): ${commandName}`,
-    };
-  }
-
-  // Opt-out comes from the SOURCE when there is one — a capture carries the settings that
-  // were in force when it was taken, so a resume cannot let the target's `defaults:`
-  // decide whether the bundled scope counts. Falls back to reading `cwd` live.
-  let loadDefaultCommands = sourceConfig?.load_default_commands;
-  if (loadDefaultCommands === undefined) {
-    try {
-      loadDefaultCommands = (await deps.loadConfig(cwd)).defaults?.loadDefaultCommands ?? true;
-    } catch (error) {
-      const err = error as Error;
-      getLog().warn(
-        {
-          err,
-          cwd,
-          note: 'Default commands will be loaded. Check your .archon/config.yaml if this is unexpected.',
-        },
-        'config_load_failed_using_defaults'
-      );
-      loadDefaultCommands = true;
-    }
-  }
-
-  const packaged = parsePackagedResourceReference(commandName);
-  if (packaged !== null) {
-    if (packaged.owner.source === 'bundled') {
-      if (
-        !loadDefaultCommands ||
-        (roots.kind === 'live' &&
-          !isBinaryBuild() &&
-          !(await bundlesPackagedResources(packaged.owner.pack)))
-      ) {
-        return {
-          success: false,
-          reason: 'not_found',
-          message: `Packaged command not found: ${packaged.name}.md`,
-        };
-      }
-      // A captured run reads the bundled bytes IT froze, even in a binary: the capture
-      // materialized the constants to files, and those are what its digest covers.
-      if (isBinaryBuild() && roots.kind === 'live') {
-        const content = BUNDLED_COMMANDS[commandName];
-        if (content === undefined) {
-          return {
-            success: false,
-            reason: 'not_found',
-            message: `Packaged command not found: ${packaged.name}.md`,
-          };
-        }
-        if (!content.trim()) {
-          return {
-            success: false,
-            reason: 'empty_file',
-            message: `Command file is empty: ${packaged.name}.md`,
-          };
-        }
-        return { success: true, content };
-      }
-    }
-
-    const workflowDir = await packagedWorkflowDirectory(roots, packaged.owner);
-    await assertCapturedFilesPresent(verifiedFiles);
-    if (workflowDir === null) {
-      return {
-        success: false,
-        reason: 'not_found',
-        message: `Packaged command not found (no ${packaged.owner.source} source): ${packaged.name}.md`,
-      };
-    }
-    const filePath = join(workflowDir, 'commands', `${packaged.name}.md`);
-    try {
-      const content = await readFile(filePath, 'utf-8');
-      if (!content.trim()) {
-        return {
-          success: false,
-          reason: 'empty_file',
-          message: `Command file is empty: ${filePath}`,
-        };
-      }
-      return { success: true, content };
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      let reason: 'permission_denied' | 'not_found' | 'read_error';
-      if (err.code === 'EACCES') {
-        reason = 'permission_denied';
-      } else if (err.code === 'ENOENT') {
-        reason = 'not_found';
-      } else {
-        reason = 'read_error';
-      }
-      if (err.code !== 'ENOENT') {
-        getLog().error({ err, commandName, filePath }, 'packaged_command_file_read_error');
-      }
-      return {
-        success: false,
-        reason,
-        cause: error,
-        message:
-          err.code === 'ENOENT'
-            ? `Packaged command not found: ${filePath}`
-            : `Error reading packaged command ${filePath}: ${err.message}`,
-      };
-    }
-  }
-
-  // Use command folder paths with optional configured folder.
-  // Each scope is walked 1 subfolder deep so `triage/review.md` resolves as
-  // `review` — matching the workflows/scripts convention. Resolution
-  // precedence: repo > home (~/.archon/commands/) > a capture's frozen flat defaults.
-  // The SOURCE's command folder, when a capture supplied one. `configuredFolder` is the
-  // target's, which is the right answer only for an in-place run — for a captured run it
-  // would search folders the frozen source never used.
-  const searchPaths = archonPaths.getCommandFolderSearchPaths(
-    sourceConfig?.command_folder ?? configuredFolder
-  );
-  const projectRoot = roots.project;
-  const resolvedSearchPaths: string[] = [
-    ...(projectRoot !== null ? searchPaths.map(folder => join(projectRoot, folder)) : []),
-    roots.globalCommands,
-  ];
-
-  for (const dir of resolvedSearchPaths) {
-    const entries = await archonPaths.findCommandFiles(dir, capturedSourceReadGuard(verifiedFiles));
-    await assertCapturedFilesPresent(verifiedFiles);
-    const match = entries.find(e => e.commandName === commandName);
-    if (!match) continue;
-
-    const filePath = join(dir, match.relativePath);
-    try {
-      const content = await readFile(filePath, 'utf-8');
-      if (!content.trim()) {
-        getLog().error({ commandName }, 'command_file_empty');
-        return {
-          success: false,
-          reason: 'empty_file',
-          message: `Command file is empty: ${commandName}.md`,
-        };
-      }
-      getLog().debug({ commandName, filePath }, 'command_loaded');
-      return { success: true, content };
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'EACCES') {
-        getLog().error({ commandName, filePath }, 'command_file_permission_denied');
-        return {
-          success: false,
-          reason: 'permission_denied',
-          cause: error,
-          message: `Permission denied reading command: ${commandName}.md`,
-        };
-      }
-      // Other unexpected errors (ENOENT shouldn't happen since the walk just found it,
-      // but if the file was deleted between walk and read we fall through to 'not found'
-      // with a log.)
-      getLog().error({ err, commandName, filePath }, 'command_file_read_error');
-      return {
-        success: false,
-        reason: 'read_error',
-        cause: error,
-        message: `Error reading command ${commandName}.md: ${err.message}`,
-      };
-    }
-  }
-
-  // Every bundled command a build ships now is packaged and resolved above. A run captured
-  // by an older build may have frozen flat bundled commands; it keeps reading those bytes,
-  // with the basename walk, so it can resume across the upgrade.
-  if (loadDefaultCommands && roots.kind === 'captured') {
-    const appDefaultsPath = roots.bundledCommands;
-    const entries = await archonPaths.findCommandFiles(
-      appDefaultsPath,
-      capturedSourceReadGuard(verifiedFiles)
-    );
-    await assertCapturedFilesPresent(verifiedFiles);
-    const match = entries.find(e => e.commandName === commandName);
-    if (match) {
-      try {
-        const content = await readFile(join(appDefaultsPath, match.relativePath), 'utf-8');
-        if (!content.trim()) {
-          getLog().error({ commandName }, 'command_app_default_empty');
-          return {
-            success: false,
-            reason: 'empty_file',
-            message: `App default command file is empty: ${commandName}.md`,
-          };
-        }
-        getLog().debug({ commandName }, 'command_loaded_app_defaults');
-        return { success: true, content };
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        if (err.code !== 'ENOENT') {
-          getLog().warn({ err, commandName }, 'command_app_default_read_error');
-        } else {
-          getLog().debug({ commandName }, 'command_app_default_not_found');
-        }
-        return {
-          success: false,
-          reason: 'read_error',
-          cause: error,
-          message: `Error reading app default command ${commandName}.md: ${err.message}`,
-        };
-      }
-    } else {
-      getLog().debug({ commandName }, 'command_app_default_not_found');
-    }
-  }
-
-  // Not found anywhere
-  const allSearchPaths =
-    loadDefaultCommands && roots.kind === 'captured'
-      ? [...searchPaths, 'app defaults']
-      : searchPaths;
-  getLog().error({ commandName, searchPaths: allSearchPaths }, 'command_not_found');
-  return {
-    success: false,
-    reason: 'not_found',
-    message: `Command prompt not found: ${commandName}.md (searched: ${allSearchPaths.join(', ')})`,
-  };
-}
-
-// ─── Variable Substitution ───────────────────────────────────────────────────
-
-/**
- * Scope holding the current run's adopted artifact directory (#2747), entered by
- * the executor around DAG execution. A scoped context rather than another
- * positional parameter because the value is RUN-level (like `artifactsDir`) but
- * is consumed at every substitution site several layers down; a child sub-run's
- * `executeWorkflow` re-enters with its own (absent) scope, correctly shadowing
- * the parent's adoption.
- */
-const adoptedRunDirContext = new AsyncLocalStorage<string | undefined>();
-
-export function runWithAdoptedRunDir<T>(
-  adoptedRunDir: string | undefined,
-  fn: () => Promise<T>
-): Promise<T> {
-  return adoptedRunDirContext.run(adoptedRunDir, fn);
-}
-
-export function currentAdoptedRunDir(): string | undefined {
-  return adoptedRunDirContext.getStore();
-}
-
-/** Pattern string for context variables - used to create fresh regex instances */
-export const CONTEXT_VAR_PATTERN_STR =
-  '\\$(?:CONTEXT|EXTERNAL_CONTEXT|ISSUE_CONTEXT)(?![A-Za-z0-9_])';
-
-/**
- * Reference grammars resolved in the same pass as the workflow variables, so nothing a
- * variable inserts is scanned again (#4046). `before` wins a `$` a workflow variable could
- * also match (an enclosing loop_group's `$LOOP_USER_INPUT` over the run-level one); `after`
- * loses it (`$node.output` references).
- */
-export interface TemplateReferences {
-  before: readonly TemplateToken[];
-  after: readonly TemplateToken[];
-}
-
-/**
- * Substitute workflow variables in a prompt.
- *
- * Supported variables:
- * - $WORKFLOW_ID - The workflow run ID
- * - $USER_MESSAGE, $ARGUMENTS - The user's trigger message
- * - $ARTIFACTS_DIR - External artifacts directory for this workflow run
- * - $STATE_DIR - External per-PROJECT cross-run state directory (shared by every
- *   workflow in the project; pre-created by the executor). Throws if referenced
- *   without a resolved value.
- * - $ADOPTED_RUN_DIR (#2747) - The adopted run's artifact directory, resolved
- *   through its persisted `output_root`. Read-only by contract; throws if
- *   referenced without an adoption active.
- * - $TYPED_ARTIFACTS_FILE - This invocation's typed-artifact listing (JSON). Throws
- *   if referenced by a context that never materialized one (see below).
- * - $BASE_BRANCH - The base branch (from config or auto-detected)
- * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
- * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
- * - $LOOP_USER_INPUT - User feedback from interactive loop approval. Only populated on the
- *   first iteration of a resumed interactive loop; empty string on all other iterations.
- * - $REJECTION_REASON - Reviewer feedback from approval node rejection (on_reject prompts only).
- * - $LOOP_PREV_OUTPUT - Cleaned output of the previous loop iteration. Empty string on the
- *   first iteration (no prior output exists). Useful for fresh_context loops that need
- *   to reference what the previous pass produced or why it failed.
- * - $INPUTS.<name> - Named sub-run inputs (#2470), supplied by a caller's `with:` on a
- *   `workflow:` node. Resolved from `options.inputs` in the non-shell branch only; an
- *   unknown name THROWS. Shell (bash/script) nodes read `INPUTS_<UPPER_SNAKE>` env vars.
- *
- * Every variable and every `options.references` grammar resolves in one scan of the
- * template: a substituted value is inserted verbatim and never read as template syntax.
- *
- * When issueContext is undefined, context variables are replaced with empty string
- * to avoid sending literal "$CONTEXT" to the AI.
- */
-export function substituteWorkflowVariables(
-  prompt: string,
-  workflowId: string,
-  userMessage: string,
-  artifactsDir: string,
-  baseBranch: string,
-  docsDir: string,
-  issueContext?: string,
-  loopUserInput?: string,
-  rejectionReason?: string,
-  loopPrevOutput?: string,
-  options?: {
-    shellSafe?: boolean;
-    stateDir?: string;
-    inputs?: Record<string, JsonValue>;
-    /** Adopted run's artifact directory (#2747). Undefined = no adoption active. */
-    adoptedRunDir?: string;
-    /**
-     * This invocation's typed-artifact listing path. Undefined means the caller never
-     * supplied one (a coordination node, or a wiring bug) and a prompt that references
-     * `$TYPED_ARTIFACTS_FILE` throws. An explicit `''` is a caller stating it has no
-     * listing — the dry-run preview — and substitutes empty without throwing.
-     */
-    typedArtifactsFile?: string;
-    references?: TemplateReferences;
-  }
-): { prompt: string; contextSubstituted: boolean } {
-  const variable = (name: string, value: () => string): TemplateToken =>
-    templateToken(`\\$${name}`, value);
-
-  const tokens: TemplateToken[] = [
-    variable('WORKFLOW_ID', () => workflowId),
-    variable('ARTIFACTS_DIR', () => artifactsDir),
-    // Engine-controlled like $ARTIFACTS_DIR — substituted even under shellSafe,
-    // or `bash:`/`script:` bodies would never see it. The state directory is threaded
-    // from the executor to every substitution site; a site that forgot to pass it would
-    // otherwise leave the variable literal (AI nodes) or empty (shell nodes), silently
-    // writing state to the wrong place. Loud beats silent.
-    variable('STATE_DIR', () => {
-      if (!options?.stateDir) {
-        throw new Error(
-          '$STATE_DIR is referenced but no state directory was resolved for this run. ' +
-            '$STATE_DIR is only available inside a workflow run; if you are seeing this from a workflow node, ' +
-            'please report it as a bug.'
-        );
-      }
-      return options.stateDir;
-    }),
-    // $ADOPTED_RUN_DIR (#2747) resolves only under an explicit adoption. A run
-    // that references it without one throws — mirroring $BASE_BRANCH/$STATE_DIR —
-    // because a literal or empty substitution would silently point work at
-    // nothing instead of telling the author the run was never started with --adopt.
-    variable('ADOPTED_RUN_DIR', () => {
-      if (!options?.adoptedRunDir && !currentAdoptedRunDir()) {
-        throw new Error(
-          '$ADOPTED_RUN_DIR is referenced but this run did not adopt a prior run. ' +
-            'Start it with `workflow run <name> --adopt <run-id>` (or adopt_run_id on the API) ' +
-            "to read an earlier run's artifacts by reference."
-        );
-      }
-      return options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '';
-    }),
-    // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
-    // script, agent prompt, loop attempt), and to exec subprocesses as TYPED_ARTIFACTS_FILE.
-    // A context that never supplied one must fail loudly: substituting '' would read as
-    // "no typed artifacts", which is the exact silent-empty lookup this contract exists to
-    // remove. An explicit empty string is different — a caller that knows it has no
-    // listing (the dry-run preview) says so.
-    variable('TYPED_ARTIFACTS_FILE', () => {
-      if (options?.typedArtifactsFile === undefined) {
-        throw new Error(
-          '$TYPED_ARTIFACTS_FILE is referenced but this invocation has no typed-artifact listing. ' +
-            'It is available inside bash, script, agent, loop, and approval-rework nodes; ' +
-            'if you are seeing this from one of those, please report it as a bug.'
-        );
-      }
-      return options.typedArtifactsFile;
-    }),
-    variable('BASE_BRANCH', () => {
-      if (!baseBranch) {
-        throw new Error(
-          'No base branch could be resolved. Auto-detection failed and `worktree.baseBranch` is not set in .archon/config.yaml. ' +
-            'Set the config value or use the --from flag to select a branch (e.g., --from dev).'
-        );
-      }
-      return baseBranch;
-    }),
-    // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
-    variable('DOCS_DIR', () => docsDir || 'docs/'),
-  ];
-
-  // When shellSafe is true, user-controlled variables stay literal — they are passed via
-  // subprocess environment variables instead to prevent shell injection (#2115).
-  if (!options?.shellSafe) {
-    tokens.push(
-      variable('USER_MESSAGE', () => userMessage),
-      variable('ARGUMENTS', () => userMessage),
-      variable('LOOP_USER_INPUT', () => loopUserInput ?? ''),
-      variable('REJECTION_REASON', () => rejectionReason ?? ''),
-      variable('LOOP_PREV_OUTPUT', () => loopPrevOutput ?? ''),
-      // $INPUTS.<name> — named sub-run inputs (#2470). Non-shell branch ONLY: a sub-run's
-      // input value can derive from AI output (e.g. `with: {plan: $plan.output}`), the
-      // exact user-controlled class shellSafe keeps out of shell source (#2115). An
-      // unknown name THROWS (mirrors $node.output.field strictness) rather than
-      // substituting '' — a typo'd input silently emptying is worse than a load-visible error.
-      inputRefToken(options?.inputs),
-      templateToken(CONTEXT_VAR_PATTERN_STR, () => issueContext ?? '')
-    );
-  }
-
-  const hasContextVariables = new RegExp(CONTEXT_VAR_PATTERN_STR).test(prompt);
-  if (!options?.shellSafe && !issueContext && hasContextVariables) {
-    getLog().debug(
-      {
-        action: 'clearing variables',
-        variables: ['$CONTEXT', '$EXTERNAL_CONTEXT', '$ISSUE_CONTEXT'],
-      },
-      'context_variables_cleared'
-    );
-  }
-
-  const references = options?.references;
-  return {
-    prompt: substituteTemplate(prompt, [
-      ...(references?.before ?? []),
-      ...tokens,
-      ...(references?.after ?? []),
-    ]),
-    contextSubstituted: hasContextVariables && !!issueContext,
-  };
-}
-
-/**
- * Apply variable substitution and optionally append issue context.
- * Appends context only if it wasn't already substituted via $CONTEXT variables.
- * This prevents duplicate context being sent to the AI.
- *
- * @param template - The command prompt template with variable placeholders
- * @param workflowId - The workflow run ID for variable substitution
- * @param userMessage - The user's trigger message for variable substitution
- * @param artifactsDir - The external artifacts directory for $ARTIFACTS_DIR substitution
- * @param baseBranch - The resolved base branch for $BASE_BRANCH substitution
- * @param docsDir - The resolved docs directory for $DOCS_DIR substitution
- * @param issueContext - Optional GitHub issue/PR context to substitute or append
- * @param logLabel - Human-readable label for logging (e.g., 'workflow step prompt')
- * @param options - Forwarded to {@link substituteWorkflowVariables}; carries `stateDir`
- *   for `$STATE_DIR` and `typedArtifactsFile` for `$TYPED_ARTIFACTS_FILE`, each of
- *   which throws when referenced without one, `rejectionReason` for
- *   `$REJECTION_REASON`, and the `references` resolved in the same pass.
- * @returns The final prompt with variables substituted and context optionally appended
- */
-export function buildPromptWithContext(
-  template: string,
-  workflowId: string,
-  userMessage: string,
-  artifactsDir: string,
-  baseBranch: string,
-  docsDir: string,
-  issueContext: string | undefined,
-  logLabel: string,
-  options?: {
-    shellSafe?: boolean;
-    stateDir?: string;
-    inputs?: Record<string, JsonValue>;
-    typedArtifactsFile?: string;
-    rejectionReason?: string;
-    references?: TemplateReferences;
-  }
-): string {
-  const { rejectionReason, ...variableOptions } = options ?? {};
-  const { prompt, contextSubstituted } = substituteWorkflowVariables(
-    template,
-    workflowId,
-    userMessage,
-    artifactsDir,
-    baseBranch,
-    docsDir,
-    issueContext,
-    undefined,
-    rejectionReason,
-    undefined,
-    variableOptions
-  );
-
-  if (issueContext && !contextSubstituted) {
-    getLog().debug({ logLabel }, 'issue_context_appended');
-    return prompt + '\n\n---\n\n' + issueContext;
-  }
-
-  return prompt;
+  return { stderrTail, stdoutTail };
 }
 
 // ─── Completion Signal Detection ────────────────────────────────────────────
@@ -956,43 +442,7 @@ export function isInlineScript(script: string): boolean {
   return script.includes('\n') || /[;(){}&|<>$`"' ]/.test(script);
 }
 
-// ─── Platform Message Sending ────────────────────────────────────────────────
-
-/** Context for platform message sending */
-export interface SendMessageContext {
-  workflowId?: string;
-  nodeName?: string;
-}
-
-/**
- * Send a message to the platform without failing the run when the send fails.
- * Returns true if the message was sent, false otherwise. A send failure is logged and
- * suppressed whatever it says: no adapter reports a typed send failure, and the run's
- * results persist whether or not the platform heard about them.
- */
-export async function safeSendMessage(
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  message: string,
-  context?: SendMessageContext,
-  metadata?: WorkflowMessageMetadata
-): Promise<boolean> {
-  try {
-    await platform.sendMessage(conversationId, message, metadata);
-    return true;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error(
-      {
-        err,
-        conversationId,
-        messageLength: message.length,
-        platformType: platform.getPlatformType(),
-        ...context,
-        stack: err.stack,
-      },
-      'platform_message_send_failed'
-    );
-    return false;
-  }
-}
+/** A phase of `executeWorkflow` either hands its value on or ends the execution with a result. */
+export type RunPhase<T> =
+  | { stopped: false; value: T }
+  | { stopped: true; result: WorkflowExecutionResult };

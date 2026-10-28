@@ -1,6 +1,6 @@
 /**
- * The attention queue as a stream (#3050): every change to the items in scope, across
- * every run, including runs started after the stream did.
+ * The attention queue as a stream (#3050), across runs including those started later.
+ * Unreadable run deliveries may be omitted after a `degraded` warning.
  *
  * Queue items reflect the current row; lifecycle lines follow committed events so
  * transitions survive even when the row has already moved on. Out-of-process runs are
@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import {
+  attentionItemRunContextFields,
   attentionQueueItemForRun,
   attentionQueueItemSchema,
   isInAttentionScope,
@@ -29,7 +30,6 @@ import type {
   WorkflowEventDoorbell,
   WorkflowRunDelivery,
 } from './engine-port';
-import type { TERMINAL_RUN_EVENT_TYPES } from './file-store/transaction-view';
 import { followWorkflowEventFeed, type WorkflowEventFeedFollower } from './run-subscription';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -39,6 +39,7 @@ import {
   isApprovalContext,
   isGateResolved,
   isWorkflowWaitContext,
+  terminalRunStatusForEventType,
   terminalWorkflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowRunStatusSchema,
@@ -46,8 +47,15 @@ import {
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
-import type { IWorkflowStore, WorkflowEventCursor, WorkflowEventPage } from './store';
-import { getTerminalRecord } from './terminal-record';
+import {
+  executionClaim,
+  WorkflowEventCursorError,
+  type IWorkflowStore,
+  type WorkflowEventCursor,
+  type WorkflowEventPage,
+} from './store';
+import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
+import { firstFailedNodeEvent, getTerminalRecord, recordedFailureKind } from './terminal-record';
 
 function getLog(): ReturnType<typeof createLogger> {
   return createLogger('workflow.attention_watch');
@@ -60,12 +68,21 @@ const RUNNING_PAGE_LIMIT = 100;
 const cursorSchema = z.custom<WorkflowEventCursor>(
   value => typeof value === 'string' && value.length > 0
 );
-const lineBase = { cursor: cursorSchema, project: projectRefSchema.nullable(), runId: z.string() };
+/** What a run is part of, from its row; both null when the stream could not read the row. */
+const runContextFields = { workflow: z.string().nullable(), parentRunId: z.string().nullable() };
+const lineBase = {
+  cursor: cursorSchema,
+  project: projectRefSchema.nullable(),
+  runId: z.string(),
+  ...runContextFields,
+};
 
 /**
  * One line of the stream. `cursor` is the feed position the line was produced at;
- * `--after` it replays what followed. `attention` carries the queue item exactly as the
- * snapshot and `workflow attention <run>` build it.
+ * `--after` it replays later readable feed events, excluding every line at that cursor.
+ * `attention` carries the queue item exactly as the snapshot and
+ * `workflow attention <run>` build it. Every run line carries the run's `workflow` and
+ * `parentRunId` (null for a top-level run), so a consumer can filter on them.
  */
 export const attentionStreamLineSchema = z.discriminatedUnion('type', [
   z.object({
@@ -74,6 +91,7 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     /** True for the open items sent before `ready`. */
     snapshot: z.boolean(),
     project: projectRefSchema.nullable(),
+    ...attentionItemRunContextFields,
     item: attentionQueueItemSchema,
   }),
   z.discriminatedUnion('reason', [
@@ -106,24 +124,36 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     ...lineBase,
     status: terminalWorkflowRunStatusSchema,
     outcome: workflowRunOutcomeSchema.nullable(),
+    /**
+     * Where a failed run failed: its terminal record's first failed node and the failure
+     * kind that node's `node_failed` event recorded (null when it recorded none). Null
+     * for any other status and when the record names no failed node or there is no record.
+     */
+    cause: z.object({ node: z.string(), errorClass: nodeFailureKindSchema.nullable() }).nullable(),
   }),
   z.object({ type: z.literal('resumed'), ...lineBase, status: z.literal('running') }),
   z.object({ type: z.literal('owner_lost'), ...lineBase, observedStatus: workflowRunStatusSchema }),
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
   /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
   z.object({ type: z.literal('bookmark'), cursor: cursorSchema }),
+  z.object({
+    type: z.literal('degraded'),
+    reason: z.literal('run_unreadable'),
+    cursor: cursorSchema,
+  }),
   /** The store cannot read the stream's cursor; the last line of the stream. */
   z.object({ type: z.literal('error'), error: z.literal('cursor_invalid') }),
 ]);
 export type AttentionStreamLine = z.infer<typeof attentionStreamLineSchema>;
 
 /**
- * Watches one running run until its owner is lost (`observedStatus`) or it stops needing
- * one (null). Rejects or resolves early when `signal` aborts.
+ * Watches one execution claim until its owner is lost (`observedStatus`), the claim
+ * changes, or it stops needing an owner (null). Rejects or resolves early when `signal` aborts.
  */
 export type RunOwnerLossWatch = (
   runId: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  claim: ReturnType<typeof executionClaim>
 ) => Promise<{ observedStatus: WorkflowRunStatus } | null>;
 
 /** What a host gives the watch beyond the store. */
@@ -143,17 +173,8 @@ export type AttentionWatchStore = Pick<
   | 'getWorkflowRun'
   | 'getCodebase'
   | 'listWorkflowRuns'
+  | 'listEventsForRuns'
 >;
-
-const TERMINAL_EVENT_STATUS = {
-  workflow_completed: 'completed',
-  workflow_failed: 'failed',
-  workflow_cancelled: 'cancelled',
-} as const satisfies Record<(typeof TERMINAL_RUN_EVENT_TYPES)[number], RunTerminalStatus>;
-
-function isTerminalEventType(type: string): type is keyof typeof TERMINAL_EVENT_STATUS {
-  return Object.hasOwn(TERMINAL_EVENT_STATUS, type);
-}
 
 /** The occurrence an answer resolves; null for an item nobody answers. */
 function occurrenceOf(item: AttentionQueueItem): string | null {
@@ -215,12 +236,42 @@ interface RunView {
   project: ProjectRef | null;
 }
 
-function terminalOutcome(
+interface RunContext {
+  workflow: string | null;
+  parentRunId: string | null;
+}
+
+function runContext(run: WorkflowRun | null): RunContext {
+  return { workflow: run?.workflow_name ?? null, parentRunId: run?.parent_run_id ?? null };
+}
+
+/** The fields of a line about the delivered event's run, from the row the stream read. */
+function lifecycleFields(
+  { cursor, event }: WorkflowRunDelivery,
+  view: RunView | null
+): { cursor: WorkflowEventCursor; project: ProjectRef | null; runId: string } & RunContext {
+  return {
+    cursor,
+    project: view?.project ?? null,
+    runId: event.workflow_run_id,
+    ...runContext(view?.run ?? null),
+  };
+}
+
+function itemContext(
+  item: AttentionQueueItem
+): Pick<AttentionQueueItem, 'workflow' | 'parentRunId'> {
+  return { workflow: item.workflow, parentRunId: item.parentRunId };
+}
+
+/** What the terminal record riding on `event` says, or nulls when it cannot be read. */
+function terminalFacts(
   event: WorkflowEventRow,
-  status: (typeof TERMINAL_EVENT_STATUS)[keyof typeof TERMINAL_EVENT_STATUS]
-): 'succeeded' | 'failed' | null {
+  status: RunTerminalStatus
+): { outcome: 'succeeded' | 'failed' | null; firstFailedNode: string | null } {
   try {
-    return getTerminalRecord(status, [event])?.outcome ?? null;
+    const record = getTerminalRecord(status, [event]);
+    return { outcome: record?.outcome ?? null, firstFailedNode: record?.first_failed_node ?? null };
   } catch (error) {
     // A malformed record must not stall the stream on one row; the line still reports
     // the status, and `workflow get` remains the full read.
@@ -228,13 +279,14 @@ function terminalOutcome(
       { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
       'workflow.attention_watch_terminal_record_unreadable'
     );
-    return null;
+    return { outcome: null, firstFailedNode: null };
   }
 }
 
 /**
  * Start a watch: snapshot the open items in scope, emit `ready`, then follow the feed.
- * Resolves once the snapshot and `ready` were delivered. Rejects with
+ * Resolves once the snapshot and `ready` were accepted by the listener; an initial
+ * listener failure rejects startup with its cause before background watches start. Rejects with
  * `WorkflowEventCursorError` before any line when `after` cannot be read; a tail that
  * later cannot read its cursor ends the stream with an `error` line.
  */
@@ -262,40 +314,45 @@ export async function watchAttentionQueue(
   const position = (): WorkflowEventCursor => follower?.cursor() ?? start;
 
   // Every line, including asynchronous liveness lines, goes through one chain so the
-  // listener sees one line at a time, and the tail awaits it.
-  function emit(line: AttentionStreamLine): void {
-    if (closed) return;
+  // listener sees one line at a time. Feed handlers await the original delivery.
+  function emit(line: AttentionStreamLine): Promise<void> {
+    if (closed) return Promise.resolve();
     lastLineAt = Date.now();
-    chain = chain.then(async () => {
-      try {
-        await listener(line);
-      } catch (error) {
-        getLog().warn(
-          { err: error as Error, type: line.type },
-          'workflow.attention_watch_listener_failed'
-        );
-      }
+    const delivery = chain.then(() => listener(line));
+    chain = delivery.catch(error => {
+      getLog().warn(
+        { err: error as Error, type: line.type },
+        'workflow.attention_watch_listener_failed'
+      );
     });
+    return delivery;
   }
 
   const inQuery = (item: AttentionQueueItem): boolean =>
     isInAttentionScope(item.project, scope) && matchesAttentionLabels(item, labels);
 
-  // Liveness: one waiter per running run in scope, and one report per loss until the
-  // run commits another event.
-  const waiters = new Map<string, AbortController>();
-  const lost = new Set<string>();
-  const arm = (runId: string, project: ProjectRef | null): void => {
+  // A replayed event is not new life: only a new execution claim re-arms a lost run.
+  const waiters = new Map<string, { claim: string | null; controller: AbortController }>();
+  const lost = new Map<string, string | null>();
+  const disarm = (runId: string): void => {
+    waiters.get(runId)?.controller.abort();
+    waiters.delete(runId);
+  };
+  const arm = (run: WorkflowRun, project: ProjectRef | null): void => {
     const watchOwner = host.ownerLoss;
-    if (watchOwner === undefined || closed || waiters.has(runId) || lost.has(runId)) return;
+    if (watchOwner === undefined || closed) return;
+    const runId = run.id;
+    const claim = executionClaim(run.metadata);
+    if (waiters.get(runId)?.claim === claim || lost.get(runId) === claim) return;
+    disarm(runId);
     const controller = new AbortController();
     const { signal } = controller;
-    waiters.set(runId, controller);
+    waiters.set(runId, { claim, controller });
     void (async (): Promise<void> => {
       let result: Awaited<ReturnType<RunOwnerLossWatch>>;
       for (;;) {
         try {
-          result = await watchOwner(runId, signal);
+          result = await watchOwner(runId, signal, claim);
           break;
         } catch (error) {
           if (signal.aborted) return;
@@ -309,25 +366,22 @@ export async function watchAttentionQueue(
           if (signal.aborted) return;
         }
       }
-      if (waiters.get(runId) !== controller || signal.aborted) return;
+      if (waiters.get(runId)?.controller !== controller || signal.aborted) return;
       waiters.delete(runId);
       if (result === null) return;
-      lost.add(runId);
+      lost.set(runId, claim);
       emit({
         type: 'owner_lost',
         cursor: position(),
         project,
         runId,
+        ...runContext(run),
         observedStatus: result.observedStatus,
       });
     })();
   };
-  const disarm = (runId: string): void => {
-    waiters.get(runId)?.abort();
-    waiters.delete(runId);
-  };
   const stopLiveness = (): void => {
-    for (const controller of waiters.values()) controller.abort();
+    for (const { controller } of waiters.values()) controller.abort();
     waiters.clear();
   };
 
@@ -350,10 +404,16 @@ export async function watchAttentionQueue(
   });
   for (const item of snapshot) {
     open.set(item.runId, item);
-    emit({ type: 'attention', cursor: start, snapshot: true, project: item.project, item });
+    await emit({
+      type: 'attention',
+      cursor: start,
+      snapshot: true,
+      project: item.project,
+      ...itemContext(item),
+      item,
+    });
   }
-  emit({ type: 'ready', cursor: start });
-  await chain;
+  await emit({ type: 'ready', cursor: start });
 
   // 2. Arm liveness for every run already running in scope.
   const armRunning = async (): Promise<void> => {
@@ -366,7 +426,7 @@ export async function watchAttentionQueue(
       });
       for (const run of page.runs) {
         const project = await runProject(source, run);
-        if (isInAttentionScope(project, scope)) arm(run.id, project);
+        if (isInAttentionScope(project, scope)) arm(run, project);
       }
       if (page.runs.length < RUNNING_PAGE_LIMIT || offset + RUNNING_PAGE_LIMIT >= page.total) break;
     }
@@ -377,29 +437,114 @@ export async function watchAttentionQueue(
   let views = new Map<string, Promise<RunView | null>>();
   let codebases = new Map<string, ReturnType<IWorkflowStore['getCodebase']>>();
   let answers = new Map<string, string | null>();
+  const projectRun = async (
+    runId: string,
+    cache = new Map<string, ReturnType<IWorkflowStore['getCodebase']>>()
+  ): Promise<RunView | null> => {
+    const run = await store.getWorkflowRun(runId);
+    if (run === null) return null;
+    const item = await attentionQueueItemForRun(source, run, cache);
+    return { run, item, project: item?.project ?? (await runProject(source, run, cache)) };
+  };
   const viewOf = (runId: string): Promise<RunView | null> => {
     let view = views.get(runId);
     if (view === undefined) {
-      view = (async (): Promise<RunView | null> => {
-        const run = await store.getWorkflowRun(runId);
-        if (run === null) return null;
-        const item = await attentionQueueItemForRun(source, run, codebases);
-        return { run, item, project: item?.project ?? (await runProject(source, run, codebases)) };
-      })();
-      // A failed read is not cached: it fails the delivery, which is retried.
+      view = projectRun(runId, codebases);
       view.catch(() => views.delete(runId));
       views.set(runId, view);
     }
     return view;
   };
+  let blocked: { cursor: WorkflowEventCursor; warned: boolean } | undefined;
+  const isolated = new Set<string>();
+
+  const probeRunWitness = async (event: WorkflowRunDelivery['event']): Promise<boolean> => {
+    try {
+      // A cached success says nothing about whether reads work now.
+      await projectRun(event.workflow_run_id);
+      return true;
+    } catch (error) {
+      if (error instanceof WorkflowEventCursorError) throw error;
+      getLog().debug(
+        { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
+        'workflow.attention_watch_probe_failed'
+      );
+      return false;
+    }
+  };
+
+  const hasReadableWitness = async (delivery: WorkflowRunDelivery): Promise<boolean> => {
+    let cursor = delivery.cursor;
+    const probed = new Set([delivery.event.workflow_run_id]);
+    while (!closed) {
+      const page = await store.readWorkflowEventsAfter(cursor, { limit: 100 });
+      if (closed || page.events.length === 0) return false;
+      for (const { event } of page.events) {
+        if (closed) return false;
+        if (probed.has(event.workflow_run_id)) continue;
+        probed.add(event.workflow_run_id);
+        if (await probeRunWitness(event)) return !closed;
+      }
+      cursor = page.next;
+    }
+    return false;
+  };
+
+  const retryDeliveryView = async (
+    { event, cursor }: WorkflowRunDelivery,
+    error: unknown
+  ): Promise<RunView | null | undefined> => {
+    const runId = event.workflow_run_id;
+    const fields = { err: error as Error, runId, eventId: event.id, cursor };
+    try {
+      const view = await projectRun(runId);
+      if (closed) throw error;
+      views.set(runId, Promise.resolve(view));
+      blocked = undefined;
+      return view;
+    } catch (retryError) {
+      if (retryError instanceof WorkflowEventCursorError) throw retryError;
+      if (closed) throw retryError;
+      getLog().warn({ ...fields, retryError }, 'workflow.attention_watch_delivery_unreadable');
+      isolated.add(runId);
+      blocked = undefined;
+      return undefined;
+    }
+  };
+
+  const deliveryView = async (
+    delivery: WorkflowRunDelivery
+  ): Promise<RunView | null | undefined> => {
+    const { event, cursor } = delivery;
+    const runId = event.workflow_run_id;
+    try {
+      const view = await viewOf(runId);
+      blocked = undefined;
+      return view;
+    } catch (error) {
+      if (error instanceof WorkflowEventCursorError) throw error;
+      const fields = { err: error as Error, runId, eventId: event.id, cursor };
+      if (blocked?.cursor !== cursor) {
+        blocked = { cursor, warned: false };
+        getLog().warn(fields, 'workflow.attention_watch_delivery_failed');
+        throw error;
+      }
+      if (!blocked.warned && !closed) {
+        await emit({ type: 'degraded', reason: 'run_unreadable', cursor: position() });
+        blocked.warned = true;
+      }
+      if (closed || !(await hasReadableWitness(delivery))) throw error;
+      return retryDeliveryView(delivery, error);
+    }
+  };
   const reconciled = new Set<string>();
 
-  const resolve = (
+  const resolve = async (
     runId: string,
     prev: AttentionQueueItem,
     cursor: WorkflowEventCursor,
     run: WorkflowRun | null
-  ): void => {
+  ): Promise<void> => {
     const occurrence = occurrenceOf(prev);
     const fromRow = run === null ? undefined : rowResolution(run, occurrence);
     const via = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
@@ -408,44 +553,75 @@ export async function watchAttentionQueue(
       (via !== undefined
         ? { reason: 'answered', answeredVia: via, answeredAt: null }
         : { reason: 'withdrawn' });
-    emit({
+    await emit({
       type: 'resolved',
       cursor,
       project: prev.project,
       runId,
+      ...itemContext(prev),
       occurrence,
       ...resolution,
     });
   };
 
-  const reconcile = (runId: string, view: RunView | null, cursor: WorkflowEventCursor): void => {
+  const reconcile = async (
+    runId: string,
+    view: RunView | null,
+    cursor: WorkflowEventCursor
+  ): Promise<void> => {
     const prev = open.get(runId);
     const item = view?.item ?? null;
     if (item !== null && inQuery(item)) {
       const occurrence = occurrenceOf(item);
       const replaced = prev !== undefined && occurrenceOf(prev) !== occurrence;
-      if (replaced) resolve(runId, prev, cursor, view?.run ?? null);
+      if (replaced) await resolve(runId, prev, cursor, view?.run ?? null);
       if (prev === undefined || !isDeepStrictEqual(prev, item))
-        emit({ type: 'attention', cursor, snapshot: false, project: item.project, item });
+        await emit({
+          type: 'attention',
+          cursor,
+          snapshot: false,
+          project: item.project,
+          ...itemContext(item),
+          item,
+        });
       open.set(runId, item);
       return;
     }
     if (prev === undefined) return;
-    open.delete(runId);
     // Still open at the same occurrence but no longer matching the labels: the stream
     // stops tracking it, and `unmatched` tells the consumer.
-    if (item !== null && occurrenceOf(item) === occurrenceOf(prev)) return;
-    resolve(runId, prev, cursor, view?.run ?? null);
+    if (item === null || occurrenceOf(item) !== occurrenceOf(prev))
+      await resolve(runId, prev, cursor, view?.run ?? null);
+    open.delete(runId);
   };
 
-  const handle = async ({ cursor, event }: WorkflowRunDelivery): Promise<void> => {
+  // Only the events before the delivered terminal event count, so a replayed line keeps
+  // its cause after the run resumed and failed again. A read failure fails the delivery,
+  // which the follower retries.
+  const failureCause = async (
+    event: WorkflowEventRow,
+    node: string | null
+  ): Promise<{ node: string; errorClass: NodeFailureKind | null } | null> => {
+    if (node === null) return null;
     const runId = event.workflow_run_id;
-    const view = await viewOf(runId);
-    const inScope = view === null ? scope.kind === 'all' : isInAttentionScope(view.project, scope);
-    if (!reconciled.has(runId)) {
-      reconciled.add(runId);
-      reconcile(runId, view, cursor);
-    }
+    const rows =
+      (await store.listEventsForRuns([runId], ['node_failed', 'workflow_failed'])).get(runId) ?? [];
+    const end = rows.findIndex(row => row.id === event.id);
+    const failed = firstFailedNodeEvent(
+      { first_failed_node: node },
+      end === -1 ? rows : rows.slice(0, end)
+    );
+    return {
+      node,
+      errorClass: failed === undefined ? null : (recordedFailureKind(failed) ?? null),
+    };
+  };
+
+  const emitUnmatched = async (
+    { cursor, event }: WorkflowRunDelivery,
+    view: RunView | null
+  ): Promise<void> => {
+    const runId = event.workflow_run_id;
     if (filtersLabels && event.event_type === 'attention_labeled' && view?.item) {
       const { item } = view;
       const occurrence = occurrenceOf(item);
@@ -455,32 +631,53 @@ export async function watchAttentionQueue(
         isInAttentionScope(item.project, scope) &&
         !matchesAttentionLabels(item, labels)
       )
-        emit({
+        await emit({
           type: 'unmatched',
           cursor,
           project: item.project,
           runId,
+          ...itemContext(item),
           occurrence,
           revision: item.revision,
         });
     }
-    if (isTerminalEventType(event.event_type) && inScope) {
-      const status = TERMINAL_EVENT_STATUS[event.event_type];
-      emit({
+  };
+
+  const emitLifecycle = async (
+    delivery: WorkflowRunDelivery,
+    view: RunView | null
+  ): Promise<void> => {
+    const { event } = delivery;
+    const status = terminalRunStatusForEventType(event.event_type);
+    if (status !== undefined) {
+      const { outcome, firstFailedNode } = terminalFacts(event, status);
+      await emit({
         type: 'terminal',
-        cursor,
-        project: view?.project ?? null,
-        runId,
+        ...lifecycleFields(delivery, view),
         status,
-        outcome: terminalOutcome(event, status),
+        outcome,
+        cause: status === 'failed' ? await failureCause(event, firstFailedNode) : null,
       });
     }
-    if (event.event_type === 'workflow_resumed' && inScope)
-      emit({ type: 'resumed', cursor, project: view?.project ?? null, runId, status: 'running' });
-    lost.delete(runId);
-    if (view?.run.status === 'running' && inScope) arm(runId, view.project);
-    else disarm(runId);
-    await chain;
+    if (event.event_type === 'workflow_resumed')
+      await emit({ type: 'resumed', ...lifecycleFields(delivery, view), status: 'running' });
+  };
+
+  const handle = async (delivery: WorkflowRunDelivery): Promise<void> => {
+    const { cursor, event } = delivery;
+    const runId = event.workflow_run_id;
+    if (closed || isolated.has(runId)) return;
+    const view = await deliveryView(delivery);
+    if (closed || view === undefined) return;
+    const inScope = view === null ? scope.kind === 'all' : isInAttentionScope(view.project, scope);
+    if (view?.run.status !== 'running' || !inScope) disarm(runId);
+    if (!reconciled.has(runId)) {
+      await reconcile(runId, view, cursor);
+      reconciled.add(runId);
+    }
+    await emitUnmatched(delivery, view);
+    if (inScope) await emitLifecycle(delivery, view);
+    if (view?.run.status === 'running' && inScope) arm(view.run, view.project);
   };
 
   try {
@@ -492,6 +689,7 @@ export async function watchAttentionQueue(
         views = new Map();
         codebases = new Map();
         reconciled.clear();
+        isolated.clear();
         answers = indexAnswers(page);
       },
       onCaughtUp: () => {

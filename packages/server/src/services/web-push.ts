@@ -12,7 +12,11 @@ import {
 } from '@archon/core/db/web-push-subscriptions';
 import { hasAnyAttentionNotice } from '@archon/core/db/workflow-events';
 import type { AttentionNotice } from '@archon/core/services/attention-notices';
-import type { WebPushSubscription, WebPushPayload } from '@archon/core/schemas/web-push';
+import type {
+  WebPushSubscription,
+  WebPushSubscriptionRow,
+  WebPushPayload,
+} from '@archon/core/schemas/web-push';
 import {
   recordActivationBaseline,
   type PushDestination,
@@ -102,37 +106,49 @@ export class WebPushDestination implements PushDestination {
     let failed = false;
     let delivered = 0;
     for (const subscription of subscriptions) {
-      try {
-        await this.sender(
-          {
-            endpoint: subscription.endpoint,
-            keys: { p256dh: subscription.p256dh, auth: subscription.auth },
-          },
-          payload,
-          {
-            vapidDetails: { subject: 'https://archon.diy', ...keys },
-            timeout: 10_000,
-          }
-        );
-        delivered += 1;
-      } catch (error) {
-        const status = error instanceof webPush.WebPushError ? error.statusCode : undefined;
-        // Vendor errors contain subscription URLs, headers and bodies; retain only status.
-        const err = new Error(
-          status === undefined
-            ? 'Web push transport failed'
-            : `Web push failed with status ${String(status)}`
-        );
-        this.log.error({ err }, 'web_push.delivery_failed');
-        if (status === 404 || status === 410)
-          await deleteWebPushSubscription(subscription.endpoint);
-        else failed = true;
-      }
+      const result = await this.sendToSubscription(subscription, payload, keys);
+      if (result === 'delivered') delivered += 1;
+      else if (result === 'failed') failed = true;
     }
     if (delivered === 0 && !failed)
       throw new Error('No browser received the push; expired subscriptions were removed');
     if (failed)
       throw new Error('Some web push deliveries failed; retrying the destination on the next scan');
     return {};
+  }
+
+  private async sendToSubscription(
+    subscription: WebPushSubscriptionRow,
+    payload: string,
+    keys: z.infer<typeof vapidSchema>
+  ): Promise<'delivered' | 'expired' | 'failed'> {
+    try {
+      await this.sender(
+        {
+          endpoint: subscription.endpoint,
+          keys: { p256dh: subscription.p256dh, auth: subscription.auth },
+        },
+        payload,
+        {
+          vapidDetails: { subject: 'https://archon.diy', ...keys },
+          timeout: 10_000,
+        }
+      );
+      return 'delivered';
+    } catch (error) {
+      const status = error instanceof webPush.WebPushError ? error.statusCode : undefined;
+      // Vendor errors contain subscription URLs, headers and bodies; retain only status.
+      const err = new Error(
+        status === undefined
+          ? 'Web push transport failed'
+          : `Web push failed with status ${String(status)}`
+      );
+      this.log.error({ err }, 'web_push.delivery_failed');
+      if (status === 404 || status === 410) {
+        await deleteWebPushSubscription(subscription.endpoint);
+        return 'expired';
+      }
+      return 'failed';
+    }
   }
 }

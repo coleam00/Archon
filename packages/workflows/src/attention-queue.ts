@@ -21,7 +21,7 @@ import {
   attentionLabelsSchema,
   attentionOptionSchema,
   type AttentionLabels,
-} from './schemas/dag-node';
+} from './schemas/wait-node';
 import {
   attentionLabels,
   attentionRevision,
@@ -41,7 +41,7 @@ import type { IWorkflowStore } from './store';
  * A project as the engine identifies it. `key` is the identity: the project storage key
  * state documents scope by, so `archon state --project <key>` reaches the same project.
  * `codebaseId` is null when the project has no codebase row, such as a run in an
- * unregistered directory (`_cwd/<name>`). `name` is the codebase's name, or otherwise
+ * unregistered directory (`@cwd/<basename>-<digest>`). `name` is the codebase's name, or otherwise
  * the key's last segment.
  */
 export const projectRefSchema = z.object({
@@ -67,11 +67,19 @@ export const attentionQueueContextSchema = z.object({
   branch: z.string().nullable(),
 });
 
+/** What an item's run is part of; attention stream lines carry the same two fields. */
+export const attentionItemRunContextFields = {
+  workflow: z.string(),
+  /** The run's direct parent run, for every child run; null for a top-level run. */
+  parentRunId: z.string().nullable(),
+};
+
 const itemBase = {
   runId: z.string(),
-  workflow: z.string(),
+  workflow: attentionItemRunContextFields.workflow,
   /** Null only when the run has no trusted storage root, so there is no key to give. */
   project: projectRefSchema.nullable(),
+  parentRunId: attentionItemRunContextFields.parentRunId,
   /** Set when the run is a `fan_out:` child; null for every other run. */
   fanOut: fanOutPositionSchema.nullable(),
   /** 1, plus one for every label write since the pause opened. */
@@ -191,6 +199,7 @@ export function toAttentionQueueItem(
     runId: run.id,
     workflow: run.workflow_name,
     project: projectRefForRun(run, sources.codebase),
+    parentRunId: run.parent_run_id,
     fanOut: fanOutPosition(run),
     revision: wait === undefined ? 1 : attentionRevision(wait),
     labels: wait === undefined ? {} : attentionLabels(wait),
@@ -368,7 +377,9 @@ export function isInAttentionScope(
 export type AttentionQueueOrder = { by: 'age' } | { by: 'label'; key: string };
 
 /** What a count groups by: project, or one label's value. */
-export type AttentionQueueCountBy = { by: 'project' } | { by: 'label'; key: string };
+export type AttentionQueueCountBy = {
+  [Counts in AttentionQueueCounts as Counts['by']]: Omit<Counts, 'counts'>;
+}[AttentionQueueCounts['by']];
 
 export interface AttentionQueueQuery {
   scope: AttentionQueueScope;
@@ -524,34 +535,50 @@ export function countAttentionQueue(
 ): AttentionQueueCounts {
   const selected = items.filter(item => inQuery(item, query));
   const { countBy } = query;
-  if (countBy.by === 'project') {
-    const groups = new Map<string, { project: ProjectRef | null; count: number }>();
-    for (const item of selected) {
-      const id =
-        item.project === null
-          ? 'none'
-          : item.project.codebaseId !== null
-            ? `codebase:${item.project.codebaseId}`
-            : `key:${item.project.key}`;
-      const group = groups.get(id) ?? { project: item.project, count: 0 };
-      group.count += 1;
-      groups.set(id, group);
-    }
-    return {
-      by: 'project',
-      counts: [...groups.values()].sort(
-        (a, b) => b.count - a.count || compareStrings(a.project?.key ?? '', b.project?.key ?? '')
-      ),
-    };
+  switch (countBy.by) {
+    case 'project':
+      return countQueueByProject(selected);
+    case 'label':
+      return countQueueByLabel(selected, countBy.key);
   }
+  return countBy satisfies never;
+}
+
+function countQueueByProject(
+  items: readonly AttentionQueueItem[]
+): Extract<AttentionQueueCounts, { by: 'project' }> {
+  const groups = new Map<string, { project: ProjectRef | null; count: number }>();
+  for (const item of items) {
+    const id =
+      item.project === null
+        ? 'none'
+        : item.project.codebaseId !== null
+          ? `codebase:${item.project.codebaseId}`
+          : `key:${item.project.key}`;
+    const group = groups.get(id) ?? { project: item.project, count: 0 };
+    group.count += 1;
+    groups.set(id, group);
+  }
+  return {
+    by: 'project',
+    counts: [...groups.values()].sort(
+      (a, b) => b.count - a.count || compareStrings(a.project?.key ?? '', b.project?.key ?? '')
+    ),
+  };
+}
+
+function countQueueByLabel(
+  items: readonly AttentionQueueItem[],
+  key: string
+): Extract<AttentionQueueCounts, { by: 'label' }> {
   const groups = new Map<string | null, number>();
-  for (const item of selected) {
-    const value = Object.hasOwn(item.labels, countBy.key) ? (item.labels[countBy.key] ?? '') : null;
+  for (const item of items) {
+    const value = Object.hasOwn(item.labels, key) ? (item.labels[key] ?? '') : null;
     groups.set(value, (groups.get(value) ?? 0) + 1);
   }
   return {
     by: 'label',
-    key: countBy.key,
+    key,
     counts: [...groups.entries()]
       .map(([value, count]) => ({ value, count }))
       .sort((a, b) => b.count - a.count || compareStrings(a.value ?? '', b.value ?? '')),

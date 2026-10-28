@@ -5,7 +5,7 @@
  *
  * Bodies are scanned RAW, backticks included. The engine substitutes every
  * reference verbatim and fails the load on an unknown one wherever it sits
- * (`validateDagStructure` in packages/workflows/src/loader.ts: "runtime
+ * (`templateReferenceSources` in packages/workflows/src/loader/dag-references.ts: "runtime
  * substitution is syntax-agnostic, so this scan checks each text slot
  * verbatim"). So a ref inside a fence, inside inline backticks, or inside a
  * `script:` body's JavaScript template literal is live, and earns the same
@@ -27,7 +27,7 @@
  * one definition for the whole package, mirroring the engine's loader scan.
  */
 import { findOutputRefs } from '@/lib/node-ref';
-import type { BuilderNode, BuilderWorkflow, Issue } from '../types';
+import type { BuilderNode, BuilderWorkflow, Issue, WhenAst } from '../types';
 import { makeIssue } from './make-issue';
 import { parse } from './when-grammar';
 
@@ -116,71 +116,80 @@ function upstreamSet(startId: string, depsById: Map<string, string[]>): Set<stri
   return seen;
 }
 
-/** Validate content references and `when:` expressions across the workflow. */
-export function validateContent(workflow: BuilderWorkflow): Issue[] {
-  const issues: Issue[] = [];
+/** Each node's direct `depends_on` list, keyed by node id. */
+function dependencyMap(workflow: BuilderWorkflow): Map<string, string[]> {
   const depsById = new Map<string, string[]>();
   for (const node of workflow.nodes) {
     depsById.set(node.id, node.base.depends_on ?? []);
   }
+  return depsById;
+}
 
-  for (const node of workflow.nodes) {
-    const upstream = upstreamSet(node.id, depsById);
-
-    // Output-reference scan over the node's text bodies.
-    for (const body of [...baseTextBodies(node), ...variantTextBodies(node)]) {
-      for (const refId of findOutputRefs(body)) {
-        if (!upstream.has(refId)) {
-          issues.push(
-            makeIssue({
-              rule: 'content.var.unknown',
-              severity: 'warning',
-              source: 'client-debounced',
-              message: `node '${node.id}' references '$${refId}.output' which is not an upstream dependency`,
-              path: { nodeId: node.id },
-            })
-          );
-        }
-      }
-    }
-
-    // `when:` parse check.
-    const when = node.base.when;
-    if (when !== undefined && when.trim().length > 0) {
-      const result = parse(when);
-      if (!result.ok) {
-        issues.push(
-          makeIssue({
-            rule: 'content.when.parse',
-            severity: 'error',
-            source: 'client-debounced',
-            message: `node '${node.id}': invalid when expression — ${result.error}`,
-            path: { nodeId: node.id, field: 'when' },
-          })
-        );
-      } else {
-        const refIds = new Set<string>();
-        for (const group of result.ast.or) {
-          for (const atom of group) {
-            if (atom.kind === 'node') refIds.add(atom.nodeId);
-          }
-        }
-        for (const refId of refIds) {
-          if (!upstream.has(refId)) {
-            issues.push(
-              makeIssue({
-                rule: 'content.var.unknown',
-                severity: 'warning',
-                source: 'client-debounced',
-                message: `node '${node.id}' when references node '${refId}' which is not an upstream dependency`,
-                path: { nodeId: node.id, field: 'when' },
-              })
-            );
-          }
-        }
-      }
+/** Output-reference scan over the node's text bodies. */
+function checkOutputRefs(node: BuilderNode, upstream: ReadonlySet<string>): Issue[] {
+  const issues: Issue[] = [];
+  for (const body of [...baseTextBodies(node), ...variantTextBodies(node)]) {
+    for (const refId of findOutputRefs(body)) {
+      if (upstream.has(refId)) continue;
+      issues.push(
+        makeIssue({
+          rule: 'content.var.unknown',
+          severity: 'warning',
+          source: 'client-debounced',
+          message: `node '${node.id}' references '$${refId}.output' which is not an upstream dependency`,
+          path: { nodeId: node.id },
+        })
+      );
     }
   }
-
   return issues;
+}
+
+/** Distinct node ids a parsed `when:` expression references, in first-seen order. */
+function whenNodeRefs(ast: WhenAst): Set<string> {
+  const refIds = new Set<string>();
+  for (const group of ast.or) {
+    for (const atom of group) {
+      if (atom.kind === 'node') refIds.add(atom.nodeId);
+    }
+  }
+  return refIds;
+}
+
+/** `when:` parse check, then its node references against the upstream set. */
+function checkWhen(node: BuilderNode, upstream: ReadonlySet<string>): Issue[] {
+  const when = node.base.when;
+  if (when === undefined || when.trim().length === 0) return [];
+  const result = parse(when);
+  if (!result.ok) {
+    return [
+      makeIssue({
+        rule: 'content.when.parse',
+        severity: 'error',
+        source: 'client-debounced',
+        message: `node '${node.id}': invalid when expression — ${result.error}`,
+        path: { nodeId: node.id, field: 'when' },
+      }),
+    ];
+  }
+  return [...whenNodeRefs(result.ast)]
+    .filter(refId => !upstream.has(refId))
+    .map(refId =>
+      makeIssue({
+        rule: 'content.var.unknown',
+        severity: 'warning',
+        source: 'client-debounced',
+        message: `node '${node.id}' when references node '${refId}' which is not an upstream dependency`,
+        path: { nodeId: node.id, field: 'when' },
+      })
+    );
+}
+
+/** Validate content references and `when:` expressions across the workflow. */
+export function validateContent(workflow: BuilderWorkflow): Issue[] {
+  const depsById = dependencyMap(workflow);
+  return workflow.nodes.flatMap(node => {
+    const upstream = upstreamSet(node.id, depsById);
+    return [...checkOutputRefs(node, upstream), ...checkWhen(node, upstream)];
+  });
 }

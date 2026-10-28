@@ -1,3 +1,4 @@
+import type { paths } from '../../../lib/api.generated';
 import { requestJson, HttpError } from '../lib/http';
 import type { TierName } from '../lib/tiers';
 
@@ -33,6 +34,15 @@ export interface StartRunArgs {
   aliases?: Record<string, string>;
 }
 
+type WorkflowRunLaunchJson =
+  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['application/json'];
+type WorkflowRunLaunchMultipart =
+  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['multipart/form-data'];
+type WorkflowRunFormFields = Pick<
+  WorkflowRunLaunchJson,
+  keyof WorkflowRunLaunchJson & keyof WorkflowRunLaunchMultipart
+>;
+
 interface CreateConversationResponse {
   conversationId: string;
 }
@@ -57,48 +67,53 @@ export async function startRun({
   const hasTiers = tiers !== undefined && Object.keys(tiers).length > 0;
   const hasAliases = aliases !== undefined && Object.keys(aliases).length > 0;
 
+  const body = {
+    conversationId: conv.conversationId,
+    message,
+    ...(hasInputs ? { inputs } : {}),
+    ...(hasTiers ? { tiers } : {}),
+    ...(hasAliases ? { aliases } : {}),
+  } satisfies WorkflowRunLaunchJson;
+
   if (files === undefined || files.length === 0) {
     await requestJson<{ accepted: boolean; status: string }>(url, {
       method: 'POST',
-      body: JSON.stringify({
-        conversationId: conv.conversationId,
-        message,
-        ...(hasInputs ? { inputs } : {}),
-        ...(hasTiers ? { tiers } : {}),
-        ...(hasAliases ? { aliases } : {}),
-      }),
+      body: JSON.stringify(body),
     });
     return;
   }
 
+  const form = buildRunForm(body, files);
+  const res = await fetch(url, { method: 'POST', body: form });
+  if (!res.ok) await throwRunError(res, url);
+}
+
+function buildRunForm(body: WorkflowRunFormFields, files: File[]): FormData {
   // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
-  form.append('conversationId', conv.conversationId);
-  form.append('message', message);
-  // A form field can only be a string, so the input map travels JSON-encoded — the
-  // shape the multipart branch of the run route parses.
-  if (hasInputs) {
-    form.append('inputs', JSON.stringify(inputs));
+  for (const [key, value] of Object.entries(body)) {
+    if (value !== undefined) {
+      form.append(key, typeof value === 'string' ? value : JSON.stringify(value));
+    }
   }
-  if (hasTiers) form.append('tiers', JSON.stringify(tiers));
-  if (hasAliases) form.append('aliases', JSON.stringify(aliases));
   for (const file of files) {
     form.append('files', file, file.name);
   }
-  const res = await fetch(url, { method: 'POST', body: form });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    let parsed: { error?: string } = {};
-    try {
-      parsed = JSON.parse(text) as { error?: string };
-    } catch {
-      /* not JSON */
-    }
-    // Match requestJson's 200-char truncation so a 502 HTML body doesn't
-    // land in the error toast as raw markup.
-    const raw = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
-    const msg = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
-    const path = new URL(url, window.location.origin).pathname;
-    throw new HttpError(res.status, path, msg);
+  return form;
+}
+
+async function throwRunError(res: Response, url: string): Promise<never> {
+  const text = await res.text().catch(() => '');
+  let parsed: { error?: string } = {};
+  try {
+    parsed = JSON.parse(text) as { error?: string };
+  } catch {
+    /* not JSON */
   }
+  // Match requestJson's 200-char truncation so a 502 HTML body doesn't
+  // land in the error toast as raw markup.
+  const raw = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
+  const msg = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
+  const path = new URL(url, window.location.origin).pathname;
+  throw new HttpError(res.status, path, msg);
 }

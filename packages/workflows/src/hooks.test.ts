@@ -1,137 +1,10 @@
+// @archon-test-isolated
 import { providerRegistry } from '@archon/providers';
 import { describe, test, expect } from 'bun:test';
-import { parseNodeHooks } from './loader';
-import { buildSDKHooksFromYAML } from '@archon/providers/claude/provider';
+import { buildSDKHooksFromYAML } from '@archon/providers/claude';
 import type { WorkflowNodeHooks, DagNode } from './schemas';
+import { dagNodeSchema } from './schemas';
 import { parseWorkflow } from './loader';
-
-describe('parseNodeHooks', () => {
-  test('undefined returns undefined', () => {
-    const errors: string[] = [];
-    expect(parseNodeHooks(undefined, { id: 'test', errors })).toBeUndefined();
-    expect(errors).toHaveLength(0);
-  });
-
-  test('non-object (string) pushes error and returns undefined', () => {
-    const errors: string[] = [];
-    expect(parseNodeHooks('bad', { id: 'test', errors })).toBeUndefined();
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('hooks');
-  });
-
-  test('non-object (array) pushes error and returns undefined', () => {
-    const errors: string[] = [];
-    expect(parseNodeHooks([], { id: 'test', errors })).toBeUndefined();
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('hooks');
-  });
-
-  test('non-object (null) pushes error and returns undefined', () => {
-    const errors: string[] = [];
-    expect(parseNodeHooks(null, { id: 'test', errors })).toBeUndefined();
-    expect(errors).toHaveLength(1);
-  });
-
-  test('unknown event name pushes error', () => {
-    const errors: string[] = [];
-    parseNodeHooks({ FakeEvent: [{ response: { x: 1 } }] }, { id: 'test', errors });
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('FakeEvent');
-  });
-
-  test('valid event with non-array matchers pushes error', () => {
-    const errors: string[] = [];
-    parseNodeHooks({ PreToolUse: 'bad' }, { id: 'test', errors });
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('PreToolUse');
-  });
-
-  test('matcher missing response pushes error', () => {
-    const errors: string[] = [];
-    parseNodeHooks({ PreToolUse: [{ matcher: 'Bash' }] }, { id: 'test', errors });
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('response');
-  });
-
-  test('matcher with string response pushes error', () => {
-    const errors: string[] = [];
-    parseNodeHooks({ PreToolUse: [{ response: 'bad' }] }, { id: 'test', errors });
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('response');
-  });
-
-  test('matcher with array response pushes error', () => {
-    const errors: string[] = [];
-    parseNodeHooks({ PreToolUse: [{ response: [] }] }, { id: 'test', errors });
-    expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain('response');
-  });
-
-  test('valid PreToolUse with matcher and response returns parsed structure', () => {
-    const errors: string[] = [];
-    const result = parseNodeHooks(
-      { PreToolUse: [{ matcher: 'Bash', response: { decision: 'block' } }] },
-      { id: 'test', errors }
-    );
-    expect(errors).toHaveLength(0);
-    expect(result).toEqual({
-      PreToolUse: [{ matcher: 'Bash', response: { decision: 'block' } }],
-    });
-  });
-
-  test('valid PostToolUse without matcher returns parsed', () => {
-    const errors: string[] = [];
-    const result = parseNodeHooks(
-      { PostToolUse: [{ response: { systemMessage: 'check output' } }] },
-      { id: 'test', errors }
-    );
-    expect(errors).toHaveLength(0);
-    expect(result).toEqual({
-      PostToolUse: [{ response: { systemMessage: 'check output' } }],
-    });
-  });
-
-  test('timeout field preserved when positive number', () => {
-    const errors: string[] = [];
-    const result = parseNodeHooks(
-      { PreToolUse: [{ response: { x: 1 }, timeout: 30 }] },
-      { id: 'test', errors }
-    );
-    expect(errors).toHaveLength(0);
-    expect(result?.PreToolUse?.[0]?.timeout).toBe(30);
-  });
-
-  test('empty hooks object returns undefined', () => {
-    const errors: string[] = [];
-    expect(parseNodeHooks({}, { id: 'test', errors })).toBeUndefined();
-    expect(errors).toHaveLength(0);
-  });
-
-  test('multiple events with multiple matchers parsed correctly', () => {
-    const errors: string[] = [];
-    const result = parseNodeHooks(
-      {
-        PreToolUse: [
-          { matcher: 'Bash', response: { decision: 'block' } },
-          { matcher: 'Write', response: { decision: 'block' } },
-        ],
-        PostToolUse: [{ response: { systemMessage: 'verify' } }],
-      },
-      { id: 'test', errors }
-    );
-    expect(errors).toHaveLength(0);
-    expect(result?.PreToolUse).toHaveLength(2);
-    expect(result?.PostToolUse).toHaveLength(1);
-  });
-
-  test('event with empty matchers array returns undefined (event filtered out)', () => {
-    const errors: string[] = [];
-    const result = parseNodeHooks({ PreToolUse: [] }, { id: 'test', errors });
-    expect(errors).toHaveLength(0);
-    // Empty array means no matchers, so the whole hooks result is undefined
-    expect(result).toBeUndefined();
-  });
-});
 
 describe('buildSDKHooksFromYAML', () => {
   test('single event with one matcher creates SDK structure', () => {
@@ -196,6 +69,30 @@ describe('buildSDKHooksFromYAML', () => {
 });
 
 describe('parseWorkflow with hooks', () => {
+  test.each([0, 1, 2])('rejects unknown hook events at loop-group depth %i', depth => {
+    const knownHooks: WorkflowNodeHooks = { PreToolUse: [{ response: { decision: 'block' } }] };
+    const wrap = (hooks: object): object => {
+      let node: object = { id: 'gen', prompt: 'Generate code', hooks };
+      for (let i = 0; i < depth; i++) {
+        node = {
+          id: `group-${i}`,
+          loop_group: { until: 'DONE', max_iterations: 2, nodes: [node] },
+        };
+      }
+      return node;
+    };
+
+    expect(dagNodeSchema.safeParse(wrap(knownHooks)).success).toBe(true);
+    const result = dagNodeSchema.safeParse(
+      wrap({ ...knownHooks, FakeEvent: [{ response: { decision: 'block' } }] })
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(issue => issue.path.at(-1) === 'hooks')).toBe(true);
+      expect(result.error.message).toContain('FakeEvent');
+    }
+  });
+
   test('full YAML with hooks field on a node parses correctly', () => {
     const yaml = `
 name: test-hooks
@@ -206,6 +103,7 @@ nodes:
     hooks:
       PreToolUse:
         - matcher: "Bash"
+          timeout: 30
           response:
             hookSpecificOutput:
               hookEventName: PreToolUse
@@ -222,7 +120,31 @@ nodes:
     expect(node.hooks).toBeDefined();
     expect(node.hooks!.PreToolUse).toHaveLength(1);
     expect(node.hooks!.PreToolUse![0].matcher).toBe('Bash');
+    expect(node.hooks!.PreToolUse![0].timeout).toBe(30);
     expect(node.hooks!.PostToolUse).toHaveLength(1);
+  });
+
+  test.each([
+    ['a string', '"bad"'],
+    ['an array', '[]'],
+    ['null', 'null'],
+    ['an unknown event', '{ FakeEvent: [{ response: { x: 1 } }] }'],
+    ['non-array matchers', '{ PreToolUse: "bad" }'],
+    ['a matcher without response', '{ PreToolUse: [{ matcher: Bash }] }'],
+    ['a string response', '{ PreToolUse: [{ response: "bad" }] }'],
+    ['an array response', '{ PreToolUse: [{ response: [] }] }'],
+  ])('rejects hooks given as %s', (_label, hooks) => {
+    const yaml = `
+name: test-bad-hooks
+description: Test workflow with malformed hooks
+nodes:
+  - id: gen
+    prompt: "Generate code"
+    hooks: ${hooks}
+`;
+    const result = parseWorkflow(yaml, 'test.yaml', providerRegistry);
+    expect(result.workflow).toBeNull();
+    expect(result.error?.error).toContain("Node 'gen': 'hooks");
   });
 
   test('hooks on bash node are warned and excluded', () => {

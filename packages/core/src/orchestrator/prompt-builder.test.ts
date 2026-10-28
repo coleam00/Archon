@@ -5,36 +5,47 @@ import {
   formatWorkflowContextSection,
   buildOrchestratorSystemAppend,
   buildRunManagementSection,
+  formatWorkflowSection,
   formatPausedGateSection,
   type LaunchChannel,
 } from './prompt-builder';
+import { buildReportWorkflowNoMatchTool } from './chat-tools';
 import { join } from 'node:path';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
-import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
+
+const invoked = (p: string): string[] => [...p.matchAll(/workflow: "([^"]+)"/g)].map(m => m[1]);
 
 describe('buildRoutingRulesWithProject', () => {
-  test('routing rules include --prompt in invocation format', () => {
-    const rules = buildRoutingRulesWithProject('commands');
-
-    expect(rules).toContain('--prompt');
-    expect(rules).toContain('self-contained task description');
-  });
-
-  test('routing rules include --prompt with project-scoped prompt', () => {
-    const rules = buildRoutingRulesWithProject('commands', 'my-project');
-
-    expect(rules).toContain('--prompt');
-    expect(rules).toContain('my-project');
-  });
-
-  test('invocation format line includes exact --prompt flag syntax', () => {
-    const rules = buildRoutingRulesWithProject('commands');
-
-    // The format template must include --prompt as part of the command, not just in prose
+  test.each(['tools', 'cli'] as const)('%s gives useful options when no workflow fits', channel => {
+    const rules = buildRoutingRulesWithProject(channel);
+    expect(rules).toContain('no listed workflow fits');
     expect(rules).toContain(
-      '/invoke-workflow {workflow-name} --project {project-name} --prompt "{task description}"'
+      channel === 'tools' ? buildReportWorkflowNoMatchTool().name : 'archon telemetry no-match'
     );
+    expect(rules).toContain('Do not report no match for ordinary questions');
+    expect(rules).toContain('closest available option and its limits');
+    expect(rules).toContain('author a workflow for repeatable work');
+    expect(rules).toContain('coding agent directly for one-off work');
+  });
+
+  test('CLI launches use complete tasks, inputs and headless semantics once scoped', () => {
+    const rules = buildRoutingRulesWithProject('cli', 'my-project');
+    expect(rules).toContain('archon workflow run <workflow> "<message>" --detach');
+    expect(rules).toContain('--input name=value');
+    expect(rules).toContain('self-contained task description');
+    expect(rules).toContain('Quote every shell argument safely');
+    expect(rules).toContain('headless');
+    expect(rules).toContain('CLI identity');
+    expect(rules).not.toContain('/invoke-workflow');
+  });
+
+  test('projectless CLI chats request selection and explicit user registration', () => {
+    const rules = buildRoutingRulesWithProject('cli');
+    expect(rules).toContain('Before launching or managing runs, ask the user to select');
+    expect(rules).toContain('Displaying a command does not execute it');
+    expect(rules).toContain('Registration alone does not bind');
+    expect(rules).toContain('/register-project --folder');
   });
 
   test('the tools channel teaches the typed tools and no command line the scan would read', () => {
@@ -49,39 +60,23 @@ describe('buildRoutingRulesWithProject', () => {
     }
   });
 
-  test('routing rules never steer work into archon-assist (#3525)', () => {
-    for (const channel of ['tools', 'commands'] as const) {
-      for (const rules of [
-        buildRoutingRulesWithProject(channel),
-        buildRoutingRulesWithProject(channel, 'p'),
-      ]) {
-        expect(rules).not.toContain('archon-assist');
-      }
-    }
-  });
-
-  test.each(['tools', 'commands'] as const)(
-    'every workflow the %s routing examples name is bundled and not deprecated (#3525)',
-    channel => {
-      const rules = buildRoutingRulesWithProject(channel);
-      // Our own prompt text, not user prose: the examples name workflows as
-      // `/invoke-workflow <name>`, `workflow: "<name>"` and `**<name>** workflow`.
-      const named = [
-        ...[...rules.matchAll(/\/invoke-workflow ([a-z0-9-]+) --project/g)].map(m => m[1]),
-        ...[...rules.matchAll(/workflow: "([a-z0-9-]+)"/g)].map(m => m[1]),
-        ...[...rules.matchAll(/\*\*([a-z0-9-]+)\*\* workflow/g)].map(m => m[1]),
-      ];
-      expect(named.length).toBeGreaterThan(1);
-      for (const name of named) {
-        const yaml = BUNDLED_WORKFLOWS[name];
-        expect(yaml, `${name} is not a bundled workflow`).toBeDefined();
-        const declared = Bun.YAML.parse(yaml!) as { deprecated?: unknown };
-        expect(declared.deprecated, `${name} is deprecated`).toBeUndefined();
-      }
+  test.each([
+    ['tools', undefined, 'but do NOT call `invoke_workflow`'],
+    ['tools', 'p', 'but do NOT call `invoke_workflow`'],
+  ] as const)(
+    '%s examples (project %s) invoke only the placeholder and answer questions directly',
+    (channel, project, noInvoke) => {
+      const rules = buildRoutingRulesWithProject(channel, project);
+      const routing = rules.split('## Project Setup')[0];
+      expect(routing).not.toMatch(/\barchon-[\w-]+\b/);
+      const [, action, question] = routing.split(/Example \((?:clear intent|ambiguous[^)]*)\):/);
+      expect(invoked(action)).toEqual(['{workflow-name}']);
+      expect(invoked(question)).toEqual([]);
+      expect(rules).toContain(noInvoke);
     }
   );
 
-  test.each(['tools', 'commands'] as const)(
+  test.each(['tools', 'cli'] as const)(
     '%s rules state prompt must be self-contained with no conversation knowledge',
     channel => {
       expect(buildRoutingRulesWithProject(channel)).toContain(
@@ -127,6 +122,35 @@ describe('formatWorkflowContextSection', () => {
       { workflowName: 'assist', runId: 'r-1', summary: 'Done.' },
     ]);
     expect(result).toBe(result.trimEnd());
+  });
+});
+
+describe('formatWorkflowSection', () => {
+  test('carries deprecation guidance only for deprecated workflows', () => {
+    const section = formatWorkflowSection([
+      { name: 'current', description: 'Current', nodes: [] },
+      { name: 'legacy', description: 'Legacy', nodes: [], deprecated: { message: 'Use current.' } },
+    ]);
+    expect(section).toContain('**current**\n  Current\n  Type:');
+    expect(section).toContain('**legacy**\n  Legacy\n  Deprecated: Use current.\n  Type:');
+  });
+
+  test('lists declared inputs so the agent can supply them', () => {
+    const section = formatWorkflowSection([
+      {
+        name: 'release',
+        description: 'Release',
+        nodes: [],
+        inputs: {
+          base_branch: { required: true, description: 'Branch to release from' },
+          dry_run: { default: false },
+          note: {},
+        },
+      },
+    ]);
+    expect(section).toContain(
+      '  Inputs:\n    - base_branch (required): Branch to release from\n    - dry_run (default: false)\n    - note (optional)\n  Type:'
+    );
   });
 });
 
@@ -183,7 +207,7 @@ describe('buildOrchestratorSystemAppend', () => {
       makeConversation(null),
       codebases,
       workflows,
-      'commands'
+      'cli'
     );
     expect(result).toContain('# Archon Orchestrator');
     expect(result).toContain('## Registered Projects');
@@ -195,7 +219,7 @@ describe('buildOrchestratorSystemAppend', () => {
       makeConversation('cb-1'),
       codebases,
       workflows,
-      'commands'
+      'cli'
     );
     expect(result).toContain('# Archon Orchestrator');
     expect(result).toContain('## Active Project');
@@ -207,28 +231,40 @@ describe('buildOrchestratorSystemAppend', () => {
       makeConversation('nonexistent'),
       codebases,
       workflows,
-      'commands'
+      'cli'
     );
     expect(result).toContain('## Registered Projects');
   });
 
-  test('does NOT include the run-management section (orchestrator gates it per-provider)', async () => {
-    // The CLI run-management pointer is appended by orchestrator-agent.ts only for
-    // project-scoped chats on providers WITHOUT the native manage_run tool — never
-    // here, so Claude/Pi (nativeTools) don't get a redundant pointer.
+  test('includes CLI management exactly once only for a resolved scoped project', async () => {
     const scoped = await buildOrchestratorSystemAppend(
       makeConversation('cb-1'),
       codebases,
       workflows,
-      'commands'
+      'cli'
     );
     const unscoped = await buildOrchestratorSystemAppend(
       makeConversation(null),
       codebases,
       workflows,
-      'commands'
+      'cli'
     );
-    expect(scoped).not.toContain('## Managing Workflow Runs');
+    expect(scoped.split('## Managing Workflow Runs')).toHaveLength(2);
+    expect(scoped).toContain('--chat-project-id "cb-1"');
+    const native = await buildOrchestratorSystemAppend(
+      makeConversation('cb-1'),
+      codebases,
+      workflows,
+      'tools'
+    );
+    const missing = await buildOrchestratorSystemAppend(
+      makeConversation('missing'),
+      codebases,
+      workflows,
+      'cli'
+    );
+    expect(native).not.toContain('## Managing Workflow Runs');
+    expect(missing).not.toContain('## Managing Workflow Runs');
     expect(unscoped).not.toContain('## Managing Workflow Runs');
   });
 });
@@ -297,7 +333,7 @@ describe('workspaces root in the prompt', () => {
     for (const key of envKeys) delete process.env[key];
     Object.assign(process.env, env);
 
-    const commandPrompts = await promptsFor('commands');
+    const commandPrompts = await promptsFor('cli');
     const toolPrompts = await promptsFor('tools');
     for (const prompt of [...commandPrompts, ...toolPrompts, buildRunManagementSection()]) {
       expect(prompt).toContain(`${root}/`);
@@ -347,19 +383,18 @@ describe('buildRunManagementSection', () => {
     expect(section).toContain('discard a run whose owner is gone');
   });
 
-  test('states the status fallback without weakening the non-repository boundary', () => {
+  test('scopes CLI operations to registered repo and folder directories', () => {
     const section = buildRunManagementSection();
-
-    expect(section).toContain('unregistered git checkout');
-    expect(section).toContain('install-wide active runs');
-    expect(section).toContain('scopeFallback: true');
-    expect(section).toContain('non-repo path');
-    expect(section).toContain('Not in a git repository');
+    expect(section).toContain('registered project directory (repo or folder)');
+    expect(section).toContain('not the projectless workspace');
+    expect(section).toContain('do not use `--all`');
+    expect(section).toContain('/setproject <name>');
+    expect(section).not.toContain('install-wide visibility');
   });
 
   test('tells the CLI-path providers to pass the user’s own words', () => {
-    // Codex/OpenCode/Copilot reach the verbs only through this section — without
-    // the clause they get less instruction density than Claude/Pi, which also see
+    // OpenCode/Copilot reach the verbs only through this section — without
+    // the clause they get less instruction density than native-tool providers, which see
     // the manage_run tool help.
     const section = buildRunManagementSection();
 
@@ -487,7 +522,7 @@ describe('formatPausedGateSection', () => {
   });
 
   test('names no tool, so the section stays usable by every provider', () => {
-    // Claude/Pi reach the verbs through `manage_run`; Codex/OpenCode/Copilot reach
+    // Claude/Codex/Pi reach the verbs through `manage_run`; OpenCode/Copilot reach
     // them through the CLI section. Naming either here advertises the wrong route
     // to half the providers.
     const section = formatPausedGateSection(openGate);

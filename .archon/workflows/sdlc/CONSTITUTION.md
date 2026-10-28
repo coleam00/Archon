@@ -58,13 +58,13 @@ Adding a handler changes neither the pack's main path nor the engine.
 
 ## 12. Policy is a project document
 
-Pack policy, such as what triage accepts or when a pull request may merge, lives in markdown policy documents the project can reword. They work like the project's other sidecar documents: a judging node reads them at `.archon/sdlc/policy/<topic>.md`, falling back to the pack's default. The pack ships a default for each, and the project's own document replaces it whole. A policy document may be nothing but a pointer to documents the project already has, such as "Triage against `.archon/direction.md`, and against `docs/product/` for feature scope", and the agent reads what it points to.
+Pack policy, such as what triage accepts or when a pull request may merge, lives in markdown policy documents the project can reword. They work like the project's other sidecar documents: a judging node reads them at `.archon/sdlc/policy/<topic>.md`, falling back to the pack's default. The pack ships a default for each, and a project's own document adds to it: the node reads the default first and the project's document after it, and where the two conflict, the project's line wins. A project's document may be nothing but its additions, or a pointer to documents the project already has, such as "Triage against `.archon/direction.md`, and against `docs/product/` for feature scope", and the agent reads what it points to.
 
 Each node names only the policy documents its decision needs; no policy goes to every node. Agents interpret policy prose, and nothing parses it. Anything that must be exact, such as label names, allow-lists of users or numeric caps, stays typed configuration.
 
 ## 13. Tests check behavior, not structure
 
-The engine tests the workflow language: that `when:` gates, includes expand, loops stop and outputs validate. The pack doesn't test those again.
+The engine tests the workflow language: that `when:` gates, includes expand, loops stop and outputs validate. The pack doesn't test those again, and it supplies no fixture for an engine test. The engine tests itself with its own fixtures.
 
 A pack test checks what a script does at a tool boundary, such as writing an issue exactly once, reading back a pushed head, or merging only what was approved. Agent judgment is checked by evaluating the outcome, not with fixtures. Nothing tests a prompt's wording, the YAML's shape or the route a run takes. Pins like that make the pack harder to change and teach agents to satisfy the pins instead of reaching the outcome.
 

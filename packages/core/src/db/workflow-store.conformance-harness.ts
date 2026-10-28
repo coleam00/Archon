@@ -1,8 +1,12 @@
-import { mock } from 'bun:test';
+import { expect, mock, test } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
+import { WorkflowStatusReadError } from './workflows';
 import type { IDatabase, SqlDialect, QueryResult } from './adapters/types';
 import type { WorkflowTerminalProperties } from '@archon/paths';
 import {
   CONFORMANCE_CODEBASE_ID,
+  resourceStartFixtures,
   CONFORMANCE_CONVERSATION_ID,
   type WorkflowStoreHarness,
 } from '@archon/workflows/store-conformance';
@@ -68,7 +72,154 @@ export async function makeSqlConformanceHarness(
         ]);
       }
     },
+    seedPersistedWait: async (id, wait): Promise<void> => {
+      const write =
+        type === 'postgresql'
+          ? "jsonb_set(metadata, '{wait}', $2::jsonb, true)"
+          : "json_set(metadata, '$.wait', json($2))";
+      await db.query(`UPDATE remote_agent_workflow_runs SET metadata = ${write} WHERE id = $1`, [
+        id,
+        JSON.stringify(wait),
+      ]);
+    },
     terminalReports: (): string[] => [...reports],
     close,
   };
+}
+
+export function describeSqlStatusReadConformance(
+  makeHarness: () => Promise<WorkflowStoreHarness & { db: IDatabase }>
+): void {
+  test.each(['runStatus', 'blockerRunStatus'] as const)(
+    'resource-start inspection validates %s without lifecycle writes',
+    async field => {
+      const harness = await makeHarness();
+      try {
+        const { db, store } = harness;
+        const { start } = resourceStartFixtures(
+          CONFORMANCE_CODEBASE_ID,
+          CONFORMANCE_CONVERSATION_ID
+        );
+        const owner = start();
+        const waiting = start();
+        await store.admitResourceStart(owner);
+        await store.admitResourceStart(waiting);
+        const requestId = waiting.launch.run.id;
+        const runId = field === 'runStatus' ? requestId : owner.launch.run.id;
+        const otherField = field === 'runStatus' ? 'blockerRunStatus' : 'runStatus';
+        const otherStatus = field === 'runStatus' ? 'pending' : null;
+        if (field === 'blockerRunStatus') {
+          await db.query(
+            'UPDATE remote_agent_resource_start_requests SET blocker_run_id = $1 WHERE id = $2',
+            [randomUUID(), requestId]
+          );
+        }
+        expect(await store.getResourceStartRequest(randomUUID())).toBeNull();
+        expect(await store.getResourceStartRequest(requestId)).toMatchObject({
+          [field]: null,
+          [otherField]: otherStatus,
+        });
+        expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+          { id: requestId, [field]: null, [otherField]: otherStatus },
+        ]);
+        if (field === 'runStatus') await store.createWorkflowRun(waiting.launch.run);
+        else
+          await db.query(
+            'UPDATE remote_agent_resource_start_requests SET blocker_run_id = $1 WHERE id = $2',
+            [runId, requestId]
+          );
+
+        const snapshot = async () => ({
+          runs: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
+          requests: (
+            await db.query('SELECT * FROM remote_agent_resource_start_requests ORDER BY id')
+          ).rows,
+          holders: (
+            await db.query(
+              'SELECT * FROM remote_agent_resource_slot_holders ORDER BY resource_key, holder_id'
+            )
+          ).rows,
+          events: await store.listWorkflowEvents(runId),
+          head: await store.getWorkflowEventHead(),
+          reports: harness.terminalReports(),
+        });
+        for (const status of [...workflowRunStatusSchema.options, 'unexpected', '']) {
+          await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+            status,
+            runId,
+          ]);
+          const before = await snapshot();
+          if (workflowRunStatusSchema.safeParse(status).success) {
+            expect(await store.getResourceStartRequest(requestId)).toMatchObject({
+              [field]: status,
+              [otherField]: otherStatus,
+            });
+            expect(await store.listQueuedResourceStartsForHost('host')).toMatchObject([
+              { id: requestId, [field]: status, [otherField]: otherStatus },
+            ]);
+          } else {
+            const message = `Unsupported workflow run status for run ${runId}: ${JSON.stringify(status)}`;
+            const read = store.getResourceStartRequest(requestId);
+            await expect(read).rejects.toBeInstanceOf(WorkflowStatusReadError);
+            await expect(read).rejects.toMatchObject({
+              workflowRunId: runId,
+              storedStatus: status,
+              message,
+            });
+            const queued = await store.listQueuedResourceStartsForHost('host');
+            expect(queued).toHaveLength(1);
+            expect(queued[0]).toMatchObject({
+              id: requestId,
+              error: { workflowRunId: runId, storedStatus: status, message },
+            });
+            if (!queued[0] || !('error' in queued[0])) throw new Error('Expected inspection error');
+            expect(queued[0].error).toBeInstanceOf(WorkflowStatusReadError);
+          }
+          expect(await snapshot()).toEqual(before);
+        }
+      } finally {
+        await harness.close();
+      }
+    }
+  );
+  test('status reads validate persisted values without lifecycle writes', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const run = await store.createWorkflowRun({ workflow_name: 'status-read', user_message: '' });
+      expect(await store.getWorkflowRunStatus(randomUUID())).toBeNull();
+      for (const status of workflowRunStatusSchema.options) {
+        await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+          status,
+          run.id,
+        ]);
+        expect(await store.getWorkflowRunStatus(run.id)).toBe(status);
+      }
+      for (const status of ['unexpected', '']) {
+        await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+          status,
+          run.id,
+        ]);
+        const snapshot = async () => ({
+          rows: (await db.query('SELECT * FROM remote_agent_workflow_runs WHERE id = $1', [run.id]))
+            .rows,
+          events: await store.listWorkflowEvents(run.id),
+          head: await store.getWorkflowEventHead(),
+          reports: harness.terminalReports(),
+        });
+        const before = await snapshot();
+        const read = store.getWorkflowRunStatus(run.id);
+        await expect(read).rejects.toBeInstanceOf(WorkflowStatusReadError);
+        await expect(read).rejects.toMatchObject({
+          name: 'WorkflowStatusReadError',
+          workflowRunId: run.id,
+          storedStatus: status,
+          message: `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`,
+        });
+        expect(await snapshot()).toEqual(before);
+      }
+    } finally {
+      await harness.close();
+    }
+  });
 }

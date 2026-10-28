@@ -36,6 +36,10 @@ export type RunResolution =
     }
   | { kind: 'ownerless' };
 
+type OwnerRequired = Extract<RunResolution, { kind: 'owner_required' }>;
+type AttentionResolution = Extract<RunResolution, { kind: 'attention' }>;
+type BlockedAttention = Extract<RunAttention, { kind: 'blocked_on_child' | 'blocked_on_children' }>;
+
 function unreadable(
   runId: string,
   reason: 'child_run_missing' | 'child_chain_too_deep',
@@ -58,7 +62,7 @@ async function ownerRequired(
   store: RunAttentionReadStore,
   activeRun: WorkflowRun,
   executionChain: readonly WorkflowRun[]
-): Promise<Extract<RunResolution, { kind: 'owner_required' }>> {
+): Promise<OwnerRequired> {
   const newestFirst = [...executionChain].reverse();
   const ownerCandidateIds = newestFirst.map(candidate => candidate.id);
   let recordedOwner = newestFirst
@@ -104,66 +108,10 @@ async function resolveFrom(
   visited: Set<string>
 ): Promise<RunResolution> {
   const attention = runAttention(current);
-  const isRoot = executionChain.length === 1;
   if (attention?.kind === 'blocked_on_child' || attention?.kind === 'blocked_on_children') {
-    const childRunIds =
-      attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
-    const children: WorkflowRun[] = [];
-    for (const childRunId of childRunIds) {
-      if (visited.has(childRunId) || visited.size >= MAX_CHAIN_RUNS) {
-        // Names the walk's root: the budget and the revisit are properties of this walk,
-        // and a walk started from the run below would read that run's tree fine.
-        return {
-          kind: 'attention',
-          attention: unreadable(
-            executionChain[0].id,
-            'child_chain_too_deep',
-            `sub-run tree is larger than ${String(MAX_CHAIN_RUNS)} runs or revisits a run`
-          ),
-        };
-      }
-      visited.add(childRunId);
-      const child = await store.getWorkflowRun(childRunId);
-      if (!child) {
-        return {
-          kind: 'attention',
-          attention: unreadable(
-            attention.runId,
-            'child_run_missing',
-            `blocked on sub-run ${childRunId}, which has no row`
-          ),
-        };
-      }
-      children.push(child);
-    }
-    // A finished fan-out child's hook stands down until the gate is released, so until
-    // then nothing owns that child.
-    const approval = current.metadata?.approval;
-    const released =
-      attention.kind === 'blocked_on_child' ||
-      (isApprovalContext(approval) &&
-        isFanOutBlockReleased(approval, id => children.find(child => child.id === id)?.status));
-    const ownerNeeded: Extract<RunResolution, { kind: 'owner_required' }>[] = [];
-    for (const child of children) {
-      if (!released && isTerminalRunStatus(child.status)) continue;
-      const resolution = await resolveFrom(store, child, [...executionChain, child], visited);
-      if (resolution.kind === 'attention') return resolution;
-      if (resolution.kind === 'owner_required') ownerNeeded.push(resolution);
-    }
-    const [first] = ownerNeeded;
-    if (!first) return { kind: 'ownerless' };
-    // Once released, whichever child finished last continues the parent and the rows do
-    // not record which one that is, so any of their owners proves the parent owned, and
-    // the parent is proven lost only when every recorded owner is checkable from here.
-    if (!released || ownerNeeded.length === 1) return first;
-    return {
-      ...first,
-      ownerCandidateIds: [...new Set(ownerNeeded.flatMap(r => r.ownerCandidateIds))],
-      recordedOwner: (ownerNeeded.find(r => !isOwnerEndpointLocal(r.recordedOwner)) ?? first)
-        .recordedOwner,
-    };
+    return resolveBlockedRun(store, current, attention, executionChain, visited);
   }
-
+  const isRoot = executionChain.length === 1;
   // A terminal child's hook is expected to continue its parent, in the child's process.
   if (attention?.kind === 'terminal' && !isRoot) {
     return ownerRequired(store, current, executionChain);
@@ -173,4 +121,96 @@ async function resolveFrom(
     return ownerRequired(store, current, executionChain);
   }
   return { kind: 'ownerless' };
+}
+
+async function resolveBlockedRun(
+  store: RunAttentionReadStore,
+  current: WorkflowRun,
+  attention: BlockedAttention,
+  executionChain: readonly WorkflowRun[],
+  visited: Set<string>
+): Promise<RunResolution> {
+  const read = await readBlockingChildren(store, attention, executionChain, visited);
+  if (read.kind === 'attention') return read;
+  const { children } = read;
+  const released = isBlockReleased(current, attention, children);
+  const ownerNeeded: OwnerRequired[] = [];
+  for (const child of children) {
+    if (!released && isTerminalRunStatus(child.status)) continue;
+    const resolution = await resolveFrom(store, child, [...executionChain, child], visited);
+    if (resolution.kind === 'attention') return resolution;
+    if (resolution.kind === 'owner_required') ownerNeeded.push(resolution);
+  }
+  return mergeOwnerNeeded(ownerNeeded, released);
+}
+
+async function readBlockingChildren(
+  store: RunAttentionReadStore,
+  attention: BlockedAttention,
+  executionChain: readonly WorkflowRun[],
+  visited: Set<string>
+): Promise<{ kind: 'children'; children: WorkflowRun[] } | AttentionResolution> {
+  const childRunIds =
+    attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
+  const children: WorkflowRun[] = [];
+  for (const childRunId of childRunIds) {
+    if (visited.has(childRunId) || visited.size >= MAX_CHAIN_RUNS) {
+      // Names the walk's root: the budget and the revisit are properties of this walk,
+      // and a walk started from the run below would read that run's tree fine.
+      return {
+        kind: 'attention',
+        attention: unreadable(
+          executionChain[0].id,
+          'child_chain_too_deep',
+          `sub-run tree is larger than ${String(MAX_CHAIN_RUNS)} runs or revisits a run`
+        ),
+      };
+    }
+    visited.add(childRunId);
+    const child = await store.getWorkflowRun(childRunId);
+    if (!child) {
+      return {
+        kind: 'attention',
+        attention: unreadable(
+          attention.runId,
+          'child_run_missing',
+          `blocked on sub-run ${childRunId}, which has no row`
+        ),
+      };
+    }
+    children.push(child);
+  }
+  return { kind: 'children', children };
+}
+
+/**
+ * A finished fan-out child's hook stands down until the gate is released, so until then
+ * nothing owns that child.
+ */
+function isBlockReleased(
+  current: WorkflowRun,
+  attention: BlockedAttention,
+  children: readonly WorkflowRun[]
+): boolean {
+  if (attention.kind === 'blocked_on_child') return true;
+  const approval = current.metadata?.approval;
+  return (
+    isApprovalContext(approval) &&
+    isFanOutBlockReleased(approval, id => children.find(child => child.id === id)?.status)
+  );
+}
+
+function mergeOwnerNeeded(ownerNeeded: readonly OwnerRequired[], released: boolean): RunResolution {
+  const [first] = ownerNeeded;
+  if (!first) return { kind: 'ownerless' };
+  // Once released, whichever child finished last continues the parent and the rows do
+  // not record which one that is, so any of their owners proves the parent owned, and
+  // the parent is proven lost only when every recorded owner is checkable from here.
+  if (!released || ownerNeeded.length === 1) return first;
+  return {
+    ...first,
+    ownerCandidateIds: [...new Set(ownerNeeded.flatMap(r => r.ownerCandidateIds))],
+    recordedOwner: (ownerNeeded.find(r => !isOwnerEndpointLocal(r.recordedOwner)) ?? first)
+      .recordedOwner,
+  };
 }

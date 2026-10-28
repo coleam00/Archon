@@ -1,4 +1,6 @@
+// @archon-test-isolated
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { join } from 'path';
 
 // Mock fs/promises before importing the module under test
 const mockReaddir = mock(async (_path: string): Promise<string[]> => []);
@@ -316,6 +318,26 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
     await expect(discoverScriptsForCwd('/repo')).rejects.toThrow(
       'Failed to inspect packaged workflow pack'
     );
+  });
+
+  test('preserves workflow directory context and cause for permission failures', async () => {
+    const workflowPath = join('/home/workflows', 'personal-pack', 'private-workflow');
+    const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    mockReaddir.mockImplementation(async (path: string) => {
+      const p = norm(path);
+      if (p === '/home/workflows') return ['personal-pack'];
+      if (p === '/home/workflows/personal-pack') return ['private-workflow'];
+      return [];
+    });
+    mockStat.mockImplementation(async (path: string) => {
+      if (norm(path) === norm(workflowPath)) throw permissionError;
+      return { isDirectory: () => true };
+    });
+
+    await expect(discoverScriptsForCwd('/repo')).rejects.toMatchObject({
+      message: `Failed to inspect packaged workflow "${workflowPath}": permission denied`,
+      cause: permissionError,
+    });
   });
 
   test('isolates identical local script names in repo and home packaged workflows', async () => {

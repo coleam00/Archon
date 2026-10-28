@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, spyOn } from 'bun:test';
 
 // Mock logger before importing bridge
 const mockLogger = {
@@ -51,6 +51,14 @@ const suspendedExecution: NodeExecutionMetadata = {
   lifecycle: { status: 'suspended', point: 'child_workflow' },
 };
 
+const completedExecution: NodeExecutionMetadata = {
+  ...suspendedExecution,
+  path: 'build',
+  node: { id: 'build', kind: 'workflow' },
+  timing: { startedAt: '2026-09-22T10:00:00Z', durationMs: 100 },
+  lifecycle: { status: 'completed' },
+};
+
 test('suspended node stays running and carries only public execution metadata', () => {
   const event: WorkflowEmitterEvent = {
     type: 'node_suspended',
@@ -68,10 +76,70 @@ test('suspended node stays running and carries only public execution metadata', 
   expect(JSON.stringify(payload)).not.toContain('sessionId');
 });
 
+test.each([
+  [
+    { type: 'workflow_completed', runId: 'run-1', workflowName: 'build', duration: 100 },
+    { type: 'workflow_status', runId: 'run-1', workflowName: 'build', status: 'completed' },
+  ],
+  [
+    { type: 'workflow_failed', runId: 'run-1', workflowName: 'build', error: 'failed' },
+    {
+      type: 'workflow_status',
+      runId: 'run-1',
+      workflowName: 'build',
+      status: 'failed',
+      error: 'failed',
+    },
+  ],
+  [
+    { type: 'node_started', runId: 'run-1', nodeId: 'build', nodeName: 'Build' },
+    { type: 'dag_node', runId: 'run-1', nodeId: 'build', name: 'Build', status: 'running' },
+  ],
+  [
+    {
+      type: 'node_completed',
+      runId: 'run-1',
+      nodeId: 'build',
+      nodeName: 'Build',
+      duration: 100,
+      execution: completedExecution,
+    },
+    {
+      type: 'dag_node',
+      runId: 'run-1',
+      nodeId: 'build',
+      name: 'Build',
+      status: 'completed',
+      duration: 100,
+      execution: completedExecution,
+    },
+  ],
+  [
+    { type: 'node_failed', runId: 'run-1', nodeId: 'build', nodeName: 'Build', error: 'failed' },
+    {
+      type: 'dag_node',
+      runId: 'run-1',
+      nodeId: 'build',
+      name: 'Build',
+      status: 'failed',
+      error: 'failed',
+    },
+  ],
+] satisfies [WorkflowEmitterEvent, Record<string, unknown>][])(
+  'projects %j with its status-specific fields and no unrelated fields',
+  (event, expected) => {
+    expect(JSON.parse(mapWorkflowEvent(event) ?? '{}')).toEqual({
+      ...expected,
+      timestamp: expect.any(Number),
+    });
+  }
+);
+
 test('persisted typed node rows retain public execution metadata through dashboard replay', () => {
   const { runId: _runId, path: _path, lifecycle: _lifecycle, ...data } = suspendedExecution;
-  const payload = JSON.parse(
-    mapWorkflowEventRow({
+  const clock = spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    const frame = mapWorkflowEventRow({
       id: 'event-1',
       workflow_run_id: 'run-1',
       event_type: 'node_suspended',
@@ -79,10 +147,13 @@ test('persisted typed node rows retain public execution metadata through dashboa
       step_name: 'review',
       created_at: '2026-09-22T10:00:25Z',
       data: { ...data, suspend_point: 'child_workflow' },
-    }) ?? '{}'
-  ) as Record<string, unknown>;
-  expect(payload).toMatchObject({ status: 'running', execution: suspendedExecution });
-  expect(JSON.stringify(payload)).not.toContain('sessionId');
+    });
+    expect(frame).toBe(
+      '{"type":"dag_node","runId":"run-1","nodeId":"review","name":"review","status":"running","execution":{"runId":"run-1","path":"review","node":{"id":"review","kind":"workflow"},"invocation":{"id":"inv-1","startedAt":"2026-09-22T10:00:00Z","loopPath":[]},"attempt":{"id":"attempt-1","startedAt":"2026-09-22T10:00:00Z"},"binding":{"sessionPreview":"12345678","sessionOrigin":"resumed"},"timing":{"startedAt":"2026-09-22T10:00:00Z","durationMs":25},"spend":{"tokens":{"source":"unavailable","reason":"not_applicable"},"costUsd":{"source":"unavailable","reason":"not_applicable"},"stopReason":{"source":"unavailable","reason":"not_applicable"},"numTurns":{"source":"unavailable","reason":"not_applicable"}},"accounting":"node","lifecycle":{"status":"suspended","point":"child_workflow"}},"timestamp":1000}'
+    );
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 test.each(['conv-1', null])(

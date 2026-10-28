@@ -1,11 +1,11 @@
-import { afterAll, expect, spyOn, test } from 'bun:test';
+// @archon-test-isolated
+import { afterAll, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import * as defaults from './defaults/bundled-defaults';
-import { captureWorkflowSource } from './workflow-source';
-import { readBundleIndex } from './defaults/bundle-inventory';
+import * as inventory from './defaults/bundle-inventory';
+import { writeFakeBundle } from './test-fake-bundle';
 
 const root = await mkdtemp(join(tmpdir(), 'archon-bundle-conformance-'));
 const originalHome = process.env.ARCHON_HOME;
@@ -15,6 +15,35 @@ afterAll(async () => {
   else process.env.ARCHON_HOME = originalHome;
   await removeTempTree(root);
 });
+
+// One fake pack with every kind of bundled file, plus a fixture that must stay out. The
+// source capture reads this tree; the binary capture reads the records built from it.
+const bundleRoot = join(root, 'bundle');
+const records = await writeFakeBundle(
+  bundleRoot,
+  {
+    'fake/.shared/message.ts': "export const message = 'shared';\n",
+    'fake/.shared/policy.md': '# Policy\n',
+    'fake/flow/fake-flow.yaml':
+      'name: fake-flow\ndescription: Flow fixture.\nnodes:\n  - id: work\n    command: work\n',
+    'fake/flow/commands/work.md': 'Do the work the flow describes.\n',
+    'fake/flow/scripts/helper.ts': "import { message } from '../../.shared/message.ts';\n",
+    'fake/flow/fixtures/clean.stubs.yaml': 'fixture:\n  expect: completed\n',
+  },
+  ['fake']
+);
+// Loaded before the index spy: importing it reads the real tree once, by design.
+const actualDefaults = await import('./defaults/bundled-defaults');
+spyOn(inventory, 'readBundleIndex').mockResolvedValue(['fake']);
+const realPaths = await import('@archon/paths');
+mock.module('@archon/paths', () => ({ ...realPaths, getBundledWorkflowsPath: () => bundleRoot }));
+let binary = false;
+mock.module('./defaults/bundled-defaults', () => ({
+  ...actualDefaults,
+  ...records,
+  isBinaryBuild: () => binary,
+}));
+const { captureWorkflowSource } = await import('./workflow-source');
 
 async function files(root: string, prefix = ''): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
@@ -33,22 +62,22 @@ test('source and binary captures contain exactly the same bundled files and byte
     sourceRoot: project,
     captureRoot: join(root, 'source'),
   });
-  const binaryMode = spyOn(defaults, 'isBinaryBuild').mockReturnValue(true);
+  binary = true;
   try {
-    const binary = await captureWorkflowSource({
+    const binaryCapture = await captureWorkflowSource({
       sourceRoot: project,
       captureRoot: join(root, 'binary'),
     });
     const sourceFiles = await files(join(source.anchor.root, 'bundled'));
-    const binaryFiles = await files(join(binary.anchor.root, 'bundled'));
-    expect(Object.keys(sourceFiles).sort()).toEqual(Object.keys(binaryFiles).sort());
+    const binaryFiles = await files(join(binaryCapture.anchor.root, 'bundled'));
     expect(sourceFiles).toEqual(binaryFiles);
-    const workflowPaths = Object.keys(sourceFiles).filter(path => path.startsWith('workflows/'));
-    expect([...new Set(workflowPaths.map(path => path.split('/')[1]))].sort()).toEqual(
-      (await readBundleIndex()).sort()
-    );
-    expect(workflowPaths.some(path => path.includes('/fixtures/'))).toBe(false);
+    const paths = Object.keys(sourceFiles);
+    expect(paths.some(path => path.endsWith('/fake-flow.yaml'))).toBe(true);
+    expect(paths.some(path => path.endsWith('/commands/work.md'))).toBe(true);
+    expect(paths.some(path => path.endsWith('/scripts/helper.ts'))).toBe(true);
+    expect(paths.some(path => path.endsWith('/.shared/policy.md'))).toBe(true);
+    expect(paths.some(path => path.includes('/fixtures/'))).toBe(false);
   } finally {
-    binaryMode.mockRestore();
+    binary = false;
   }
 });

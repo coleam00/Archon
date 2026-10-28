@@ -48,33 +48,42 @@ export async function checkFailureClasses(
       );
       continue;
     }
-    if (results.length !== 1) {
-      violations.push(`${failureCase.name}: expected one result, got ${String(results.length)}`);
-      continue;
-    }
-    const { failure, isError } = results[0];
-    if (failure === undefined) {
-      violations.push(`${failureCase.name}: result carries no failure`);
-      continue;
-    }
-    const parsed = providerFailureSchema.safeParse(failure);
-    if (!parsed.success) {
-      violations.push(`${failureCase.name}: failure is malformed (${parsed.error.message})`);
-      continue;
-    }
-    if (parsed.data.class !== failureCase.expected) {
-      violations.push(
-        `${failureCase.name}: reported ${parsed.data.class}, expected ${failureCase.expected}`
-      );
-    }
-    if (!parsed.data.evidence.includes(failureCase.evidence)) {
-      violations.push(
-        `${failureCase.name}: evidence does not keep the vendor text "${failureCase.evidence}"`
-      );
-    }
-    if (isError !== true) {
-      violations.push(`${failureCase.name}: a failed result does not set isError`);
-    }
+    violations.push(...checkFailureResult(failureCase, results));
+  }
+  return violations;
+}
+
+function checkFailureResult(
+  failureCase: ProviderFailureCase,
+  results: { failure?: unknown; isError?: unknown }[]
+): string[] {
+  const violations: string[] = [];
+  if (results.length !== 1) {
+    violations.push(`${failureCase.name}: expected one result, got ${String(results.length)}`);
+    return violations;
+  }
+  const { failure, isError } = results[0];
+  if (failure === undefined) {
+    violations.push(`${failureCase.name}: result carries no failure`);
+    return violations;
+  }
+  const parsed = providerFailureSchema.safeParse(failure);
+  if (!parsed.success) {
+    violations.push(`${failureCase.name}: failure is malformed (${parsed.error.message})`);
+    return violations;
+  }
+  if (parsed.data.class !== failureCase.expected) {
+    violations.push(
+      `${failureCase.name}: reported ${parsed.data.class}, expected ${failureCase.expected}`
+    );
+  }
+  if (!parsed.data.evidence.includes(failureCase.evidence)) {
+    violations.push(
+      `${failureCase.name}: evidence does not keep the vendor text "${failureCase.evidence}"`
+    );
+  }
+  if (isError !== true) {
+    violations.push(`${failureCase.name}: a failed result does not set isError`);
   }
   return violations;
 }
@@ -134,45 +143,54 @@ export async function checkBackgroundSettle(
 ): Promise<string[]> {
   if (cases.length === 0) return ['reported provider has no background conformance cases'];
   const violations: string[] = [];
-  for (const turn of cases) {
-    const observed = new Set<string>();
-    let resultWhileLive = false;
-    let settled = false;
-    try {
-      for await (const raw of turn.run()) {
-        const parsed = providerChunkSchema.safeParse(raw);
-        if (!parsed.success) continue;
-        const chunk = parsed.data;
-        if (chunk.type === 'subtask') {
-          observed.add(chunk.taskId);
-          if (
-            TERMINAL_SUBTASK_STATUSES.has(chunk.status) &&
-            turn.runtimeStatus(chunk.taskId) !== chunk.status
-          ) {
-            violations.push(`${turn.name}: invented ${chunk.status} for ${chunk.taskId}`);
-          }
-        } else if (chunk.type === 'result') {
-          resultWhileLive ||= [...observed].some(
-            id => !TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')
-          );
-        } else if (chunk.type === 'settled') {
-          settled = true;
-          for (const id of observed) {
-            if (!TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')) {
-              violations.push(`${turn.name}: runtime still reports ${id} live at settled`);
-            }
+  for (const turn of cases) violations.push(...(await checkBackgroundTurn(turn)));
+  return violations;
+}
+
+async function checkBackgroundTurn(turn: ProviderBackgroundCase): Promise<string[]> {
+  const violations: string[] = [];
+  const observed = new Set<string>();
+  let resultWhileLive = false;
+  let settled = false;
+  const isLive = (id: string): boolean =>
+    !TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '');
+  const observe = (chunk: ProviderChunk): void => {
+    switch (chunk.type) {
+      case 'subtask':
+        observed.add(chunk.taskId);
+        if (
+          TERMINAL_SUBTASK_STATUSES.has(chunk.status) &&
+          turn.runtimeStatus(chunk.taskId) !== chunk.status
+        ) {
+          violations.push(`${turn.name}: invented ${chunk.status} for ${chunk.taskId}`);
+        }
+        break;
+      case 'result':
+        resultWhileLive ||= [...observed].some(isLive);
+        break;
+      case 'settled':
+        settled = true;
+        for (const id of observed) {
+          if (isLive(id)) {
+            violations.push(`${turn.name}: runtime still reports ${id} live at settled`);
           }
         }
-      }
-    } catch (error) {
-      violations.push(
-        `${turn.name}: threw before its background work settled (${(error as Error).message})`
-      );
-      continue;
+        break;
     }
-    if (!settled || observed.size === 0 || !resultWhileLive) {
-      violations.push(`${turn.name}: background case must settle after a result with live work`);
+  };
+  try {
+    for await (const raw of turn.run()) {
+      const parsed = providerChunkSchema.safeParse(raw);
+      if (parsed.success) observe(parsed.data);
     }
+  } catch (error) {
+    violations.push(
+      `${turn.name}: threw before its background work settled (${(error as Error).message})`
+    );
+    return violations;
+  }
+  if (!settled || observed.size === 0 || !resultWhileLive) {
+    violations.push(`${turn.name}: background case must settle after a result with live work`);
   }
   return violations;
 }
@@ -228,19 +246,8 @@ function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
   for (const chunk of chunks) {
     switch (chunk.type) {
       case 'tool_call':
-        if (startedCalls.has(chunk.toolCallId)) {
-          violations.push(`rule 2, tool call ${chunk.toolCallId} is started twice`);
-        } else {
-          startedCalls.add(chunk.toolCallId);
-          openCalls.add(chunk.toolCallId);
-        }
-        break;
       case 'tool_call_update':
-        if (!startedCalls.has(chunk.toolCallId)) {
-          violations.push(`rule 3, tool call ${chunk.toolCallId} is updated before it starts`);
-        } else if (!openCalls.delete(chunk.toolCallId) && !lateCalls.has(chunk.toolCallId)) {
-          violations.push(`rule 2, tool call ${chunk.toolCallId} is closed twice`);
-        }
+        observeToolCallClosure(chunk, startedCalls, openCalls, lateCalls, violations);
         break;
       case 'subtask':
         if (TERMINAL_SUBTASK_STATUSES.has(chunk.status)) openSubtasks.delete(chunk.taskId);
@@ -265,6 +272,29 @@ function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
     violations.push(`rule 2, tool call ${toolCallId} is never closed`);
   }
   return violations;
+}
+
+function observeToolCallClosure(
+  chunk: Extract<ProviderChunk, { type: 'tool_call' | 'tool_call_update' }>,
+  startedCalls: Set<string>,
+  openCalls: Set<string>,
+  lateCalls: ReadonlySet<string>,
+  violations: string[]
+): void {
+  if (chunk.type === 'tool_call') {
+    if (startedCalls.has(chunk.toolCallId)) {
+      violations.push(`rule 2, tool call ${chunk.toolCallId} is started twice`);
+    } else {
+      startedCalls.add(chunk.toolCallId);
+      openCalls.add(chunk.toolCallId);
+    }
+    return;
+  }
+  if (!startedCalls.has(chunk.toolCallId)) {
+    violations.push(`rule 3, tool call ${chunk.toolCallId} is updated before it starts`);
+  } else if (!openCalls.delete(chunk.toolCallId) && !lateCalls.has(chunk.toolCallId)) {
+    violations.push(`rule 2, tool call ${chunk.toolCallId} is closed twice`);
+  }
 }
 
 /**

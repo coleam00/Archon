@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { trackTempRoots } from './__tests__/temp-roots';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

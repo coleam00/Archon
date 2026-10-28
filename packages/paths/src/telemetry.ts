@@ -1,1079 +1,129 @@
 /**
- * Anonymous PostHog telemetry for Archon.
+ * Anonymous PostHog usage metrics. README.md owns the event/property inventory.
+ * A random install UUID lives at `${ARCHON_HOME}/telemetry-id`; no user identity,
+ * code, prompts, message content, paths, custom workflow names or error text is sent.
+ * Run references hash the install UUID and run id, allowing joins without sending ids.
+ * Every event disables person profiles and clears the source IP at ingest.
  *
- * Emits a small set of anonymous events — `archon_started` (once per invocation),
- * `archon_active` (daily server heartbeat), `chat_turn_handled` (each direct
- * AI chat turn), `workflow_invoked` (each workflow start or resume segment),
- * `workflow_completed` / `workflow_failed` / `workflow_cancelled` (each committed
- * terminal transition, reported by the run store), `workflow_approval_resolved`
- * (each human approve/reject decision), and `codebase_registered` (count only) —
- * so maintainers can see active installs, which surfaces and workflows get real
- * usage, and run outcomes. Run events carry `run_ref`, a hash of the install id
- * and the run id, so one run's events join without the run id leaving the
- * machine. No PII, no user identity.
- * A random UUID is persisted to `${ARCHON_HOME}/telemetry-id` so we can count
- * distinct installs.
- *
- * Every event carries the privacy invariants `$process_person_profile: false`
- * (anonymous tier — no person profile ever created) and `$ip: ''` (PostHog
- * drops the source IP at ingest). Machine context (os, arch, version,
- * is_binary, install channel, build commit, runtime, is_ci, is_tty) rides along
- * on every event via PostHog super-properties. What is collected is categorical
- * only: workflow name (real for bundled workflows, `"custom"` for user-authored),
- * platform, provider, model, node shape, run outcome/duration, a fixed-enum error class (never
- * raw error text), chat-turn activity (platform + provider + model + outcome),
- * aggregate usage numbers (token counts, cost USD, turn/run duration, loop
- * iterations — numeric totals only), approval decisions (approved/rejected,
- * nothing else), a bare project-registration count, and deployment shape
- * (which adapters are enabled, db kind, auth mode — booleans/enums only).
- * Never sent: code, prompts, message content, conversation ids, file paths,
- * IP, geo, error text, or custom workflow names/descriptions.
- *
- * Opt-out (any one disables telemetry):
- *   - ARCHON_TELEMETRY_DISABLED=1
- *   - DO_NOT_TRACK=1                          (de facto standard)
- *   - CI=true                                 (auto-disabled in CI environments)
- *   - POSTHOG_API_KEY=off | 0 | false | disabled | '' (or whitespace-only)
- *
- * All capture functions are fire-and-forget: telemetry errors are swallowed
- * (logged at `debug`, with the first network failure on a custom POSTHOG_HOST
- * also logged at `warn` so self-hosters notice typo'd hosts). Capture must
- * never crash Archon.
+ * This module is the capture entry for each event. Consent (opt-out, install id,
+ * first-run notice) lives in `telemetry-consent.ts`, event building in
+ * `telemetry-events.ts`, and sending in `telemetry-transport.ts`. Every capture
+ * is fire-and-forget: it never awaits and never throws.
  */
-import { createHash, randomUUID } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
-import type { PostHog } from 'posthog-node';
-import { getArchonHome, isDocker } from './archon-paths';
-import { BUNDLED_GIT_COMMIT, BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
-import { readSourceCommit } from './source-commit';
-import { createLogger } from './logger';
+import {
+  isTelemetryDisabled,
+  maybeShowFirstRunNotice,
+  resetConsentForTests,
+} from './telemetry-consent';
+import {
+  archonSurfaceEventProperties,
+  chatTurnEventProperties,
+  TELEMETRY_SCHEMA_VERSION,
+  WORKFLOW_TERMINAL_EVENT_TYPE,
+  workflowInvokedEventProperties,
+  workflowTerminalEventProperties,
+} from './telemetry-events';
+import type {
+  ArchonStartedProperties,
+  ChatTurnProperties,
+  WorkflowInvokedProperties,
+  WorkflowTerminalProperties,
+} from './telemetry-events';
+import { resetTransportForTests, sendEvent } from './telemetry-transport';
 
 /**
- * Bumped when the captured property set changes (documented in README). 7 is
- * skipped: a fork shipping this embedded key already sends it.
- */
-export const TELEMETRY_SCHEMA_VERSION = 10;
-
-type PostHogFetch = NonNullable<NonNullable<ConstructorParameters<typeof PostHog>[1]>['fetch']>;
-type PostHogFetchOptions = Parameters<PostHogFetch>[1];
-type PostHogFetchResponse = Awaited<ReturnType<PostHogFetch>>;
-
-// Leave room for warm CLI startup within the 150 ms help budget.
-const TELEMETRY_SHUTDOWN_TIMEOUT_MS = 75;
-
-/**
- * Embedded write-only PostHog project key. Safe to ship in source: `phc_*`
- * keys can only write events, never read data. Override with POSTHOG_API_KEY
- * for self-hosted PostHog or a different project, or set it to `off` / `0` /
- * `false` / `disabled` / empty string to opt out entirely.
- */
-const EMBEDDED_POSTHOG_API_KEY = 'phc_rR7oacut9mm4upGRbuoMptnyjRium34TTbbqobiQYS7x';
-const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
-
-/**
- * Filename for the one-time notice stamp written to ARCHON_HOME. Presence
- * means the first-run notice has been shown; absence means it hasn't.
- */
-// Bumped to `-v2` when the captured property set expanded (machine context +
-// run outcomes), to `-v3` when chat-turn activity, deployment shape, and
-// registration counts were added, and to `-v4` when aggregate usage totals
-// (tokens/cost/duration/loop iterations) and approval decisions were added, and
-// to `-v5` when install channel and build commit were added, and to `-v6` when
-// runs gained an anonymous per-run reference and cancellations were reported, and
-// to `-v7` when workflow shape (node-type counts, depth, fan-out, command-reference
-// count, prompt-size bucket) and bundled-workflow ancestry were added. Bumping re-shows the updated first-run notice once per install so existing
-// users re-consent rather than silently getting broader capture.
-export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v7';
-
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('telemetry');
-  return cachedLog;
-}
-
-/** Values of POSTHOG_API_KEY that are interpreted as "explicitly disabled". */
-const KEY_OFF_VALUES = new Set(['', 'off', '0', 'false', 'disabled']);
-
-/**
- * Resolve the effective PostHog API key.
- *
- * - Unset env var → embedded default
- * - Env var set to a recognized "off" sentinel → `null` (caller treats as opt-out)
- * - Env var set to anything else → that value (self-hosted / alternate project)
- */
-function getApiKey(): string | null {
-  const env = process.env.POSTHOG_API_KEY;
-  if (env === undefined) return EMBEDDED_POSTHOG_API_KEY;
-  const trimmed = env.trim();
-  if (KEY_OFF_VALUES.has(trimmed.toLowerCase())) return null;
-  return trimmed;
-}
-
-function getHost(): string {
-  return process.env.POSTHOG_HOST ?? DEFAULT_POSTHOG_HOST;
-}
-
-/**
- * Privacy invariants attached to EVERY telemetry event. Kept per-event (not
- * relying solely on super-properties) so each capture site is visibly correct
- * and a super-property regression can never silently leak the source IP or
- * create a person profile.
- */
-const PRIVACY_INVARIANTS = {
-  $process_person_profile: false,
-  // Strip source IP at ingest. `disableGeoip: true` only prevents geo
-  // enrichment; `$ip: ''` drops the IP from the event entirely.
-  $ip: '',
-} as const;
-
-/** How this Archon was installed, from build constants and the Docker env marker. */
-export type InstallChannel = 'binary' | 'docker' | 'source';
-
-/**
- * `binary` wins because a compiled build can also run inside a container;
- * `docker` means the source tree running in Archon's image (`ARCHON_DOCKER`).
- * Never derived from a filesystem path.
- * @internal exported for tests
- */
-export function resolveInstallChannel(env: NodeJS.ProcessEnv = process.env): InstallChannel {
-  if (BUNDLED_IS_BINARY) return 'binary';
-  return isDocker(env) ? 'docker' : 'source';
-}
-
-/**
- * Short commit of the running build: stamped into binaries at build time, read
- * from the source checkout's git metadata otherwise. Public source identity,
- * not user data; omitted when unknown (e.g. a Docker image built without .git).
- */
-function resolveGitCommit(): string | undefined {
-  if (BUNDLED_IS_BINARY) return BUNDLED_GIT_COMMIT === 'unknown' ? undefined : BUNDLED_GIT_COMMIT;
-  return readSourceCommit(import.meta.dir);
-}
-
-/**
- * Stable machine/runtime context registered once as PostHog super-properties
- * (attached to every event from this client). Categorical only — no
- * identifiers, no paths.
- */
-function collectMachineProperties(): Record<string, string | boolean> {
-  const bunVersion = typeof Bun !== 'undefined' ? Bun.version : undefined;
-  const gitCommit = resolveGitCommit();
-  return {
-    os: process.platform,
-    arch: process.arch,
-    archon_version: BUNDLED_VERSION,
-    is_binary: BUNDLED_IS_BINARY,
-    install_channel: resolveInstallChannel(),
-    ...(gitCommit ? { git_commit: gitCommit } : {}),
-    runtime_version: bunVersion ? `bun-${bunVersion}` : process.version,
-    // Mirrors the CI auto-disable check; when telemetry is enabled this is
-    // effectively always false, but it's cheap and future-proof.
-    is_ci: process.env.CI?.toLowerCase() === 'true',
-    // `process.stderr.isTTY` is `undefined` at runtime when stderr is not a TTY
-    // (servers, pipes, CI), so without coercion the field is silently omitted on
-    // the primary server path. bun-types incorrectly narrows it to `boolean`, so
-    // the coercion looks redundant — it is not.
-    is_tty: Boolean(process.stderr.isTTY),
-  };
-}
-
-/** Discovery source of a workflow, mirrored from `@archon/workflows` as a
- * plain string union so `@archon/paths` keeps zero `@archon/*` dependencies. */
-export type WorkflowTelemetrySource = 'bundled' | 'global' | 'project' | 'installed';
-
-/**
- * Apply the workflow-name privacy rule: bundled (Archon-authored) workflows
- * report their real name so maintainers can see which defaults are popular;
- * user-authored (global/project) and installed-pack workflows report `"custom"` so private names
- * (e.g. "deploy-acme-prod") never leave the machine. `workflow_source` is
- * always reported for the custom-vs-default split.
- */
-export function classifyWorkflowForTelemetry(
-  name: string,
-  source: WorkflowTelemetrySource | undefined
-): { workflow_name: string; workflow_source: WorkflowTelemetrySource } {
-  return {
-    workflow_name: source === 'bundled' ? name : 'custom',
-    workflow_source: source ?? 'project',
-  };
-}
-
-/**
- * Model ids are user-supplied (forwarded verbatim from workflow/`config.yaml`
- * YAML), so unlike `provider` they're not structurally categorical. Forward a
- * value only when it looks like a real model ref (alphanumerics plus `/._:-`,
- * bounded length, and an optional short bracketed variant — covers `sonnet`,
- * `gpt-5.6-sol`, `anthropic/claude-haiku-4-5`, `openrouter/qwen/qwen3-coder`,
- * `opus[1m]`). Anything else is dropped so a stray free-text value can't slip
- * through the "categorical only" telemetry contract.
- *
- * Exported for direct testing of the privacy guard. @internal
- */
-export function sanitizeModelForTelemetry(model: string | undefined): string | undefined {
-  if (model === undefined) return undefined;
-  return /^[a-zA-Z0-9/._:-]{1,64}(\[[a-zA-Z0-9]{1,8}\])?$/.test(model) ? model : undefined;
-}
-
-/** Why telemetry is currently disabled. `null` means it's enabled. */
-export type TelemetryDisabledReason =
-  | 'ARCHON_TELEMETRY_DISABLED'
-  | 'DO_NOT_TRACK'
-  | 'CI'
-  | 'POSTHOG_API_KEY';
-
-interface TelemetryStatusBase {
-  /** Stable anonymous install UUID (always populated, even when disabled). */
-  distinctId: string;
-  /** PostHog ingest host. */
-  host: string;
-}
-
-/**
- * Full current telemetry state. Discriminated on `enabled` so an enabled status
- * can never carry a `disabledReason` (and vice versa), and so `keySource: 'none'`
- * is only representable in the disabled arm.
- */
-export type TelemetryStatus =
-  | (TelemetryStatusBase & {
-      enabled: true;
-      disabledReason: null;
-      /** Whether the active API key is the embedded default or a user override. */
-      keySource: 'embedded' | 'env';
-    })
-  | (TelemetryStatusBase & {
-      enabled: false;
-      disabledReason: TelemetryDisabledReason;
-      /** `'none'` means POSTHOG_API_KEY was set to an opt-out value. */
-      keySource: 'embedded' | 'env' | 'none';
-    });
-
-/**
- * Decide whether telemetry is disabled, and if so, why. The order here is
- * also the precedence order: the first matching reason wins.
- */
-function resolveDisabledReason(): TelemetryDisabledReason | null {
-  if (process.env.ARCHON_TELEMETRY_DISABLED === '1') return 'ARCHON_TELEMETRY_DISABLED';
-  if (process.env.DO_NOT_TRACK === '1') return 'DO_NOT_TRACK';
-  // Standard CI env var set by GitHub Actions, CircleCI, GitLab CI, Travis,
-  // Buildkite, etc. Forks running fixtures in CI shouldn't pollute telemetry.
-  // Matched case-insensitively because AppVeyor sets `CI=True`; `CI=1` is left
-  // alone (rare, and we keep the match narrow to "true").
-  if (process.env.CI?.toLowerCase() === 'true') return 'CI';
-  if (getApiKey() === null) return 'POSTHOG_API_KEY';
-  return null;
-}
-
-/**
- * Check whether telemetry is disabled via env vars or missing/disabled key.
- * Kept for backwards compatibility; new callers should prefer
- * {@link getTelemetryStatus} for richer information.
- */
-export function isTelemetryDisabled(): boolean {
-  return resolveDisabledReason() !== null;
-}
-
-/**
- * Return the full current telemetry state — enabled/disabled, reason,
- * distinct ID, host, and key source. Used by `archon telemetry status` and
- * `archon doctor` to surface what's happening without duplicating logic.
- */
-export function getTelemetryStatus(): TelemetryStatus {
-  const reason = resolveDisabledReason();
-  const host = getHost();
-  const envKeySet = process.env.POSTHOG_API_KEY !== undefined;
-  if (reason === null) {
-    // Enabled: a usable key exists, so keySource is embedded or env (never none).
-    return {
-      enabled: true,
-      disabledReason: null,
-      distinctId: getTelemetryId(),
-      host,
-      keySource: envKeySet ? 'env' : 'embedded',
-    };
-  }
-  // Disabled: read the install UUID without creating it, so inspecting status
-  // while opted out never materializes a telemetry-id file the user didn't ask for.
-  const keySource: 'embedded' | 'env' | 'none' =
-    getApiKey() === null ? 'none' : envKeySet ? 'env' : 'embedded';
-  return {
-    enabled: false,
-    disabledReason: reason,
-    distinctId: peekTelemetryId(),
-    host,
-    keySource,
-  };
-}
-
-/**
- * Load or create a stable anonymous install UUID at `${ARCHON_HOME}/telemetry-id`.
- * If the file can't be read or written (permissions, disk full), a fresh UUID
- * is returned for this session — telemetry still works, just not correlated
- * across runs.
- *
- * Exported so tests can exercise the id-resolution invariants directly
- * without spinning up the PostHog client.
- * @internal
- */
-export function getOrCreateTelemetryId(): string {
-  const idPath = join(getArchonHome(), 'telemetry-id');
-  try {
-    if (existsSync(idPath)) {
-      const existing = readFileSync(idPath, 'utf8').trim();
-      if (existing) return existing;
-    }
-  } catch (error) {
-    getLog().debug({ err: error as Error, idPath }, 'telemetry.id_read_failed');
-  }
-
-  const id = randomUUID();
-  try {
-    mkdirSync(getArchonHome(), { recursive: true });
-    writeFileSync(idPath, id, 'utf8');
-  } catch (error) {
-    getLog().debug({ err: error as Error, idPath }, 'telemetry.id_persist_failed');
-  }
-  return id;
-}
-
-let telemetryIdCache: string | undefined;
-function getTelemetryId(): string {
-  if (!telemetryIdCache) telemetryIdCache = getOrCreateTelemetryId();
-  return telemetryIdCache;
-}
-
-/**
- * Read the persisted install UUID without creating it. Returns a fresh,
- * unpersisted UUID when none exists yet. Used for status display while
- * telemetry is disabled, so inspecting state (`telemetry status` / `doctor`)
- * never writes a `telemetry-id` file for an opted-out user.
- */
-function peekTelemetryId(): string {
-  const idPath = join(getArchonHome(), 'telemetry-id');
-  try {
-    if (existsSync(idPath)) {
-      const existing = readFileSync(idPath, 'utf8').trim();
-      if (existing) return existing;
-    }
-  } catch (error) {
-    getLog().debug({ err: error as Error, idPath }, 'telemetry.id_read_failed');
-  }
-  return randomUUID();
-}
-
-/**
- * Force-rotate the persisted install UUID. Returns the new ID. Used by
- * `archon telemetry reset`. Caller is responsible for any UX around it.
- *
- * Unlike the other functions here, this is NOT fire-and-forget: it is a
- * deliberate, user-initiated write, so filesystem errors propagate.
- * @throws {NodeJS.ErrnoException} if ARCHON_HOME can't be created or the id
- *   file can't be written (e.g. EACCES, ENOSPC). The CLI caller
- *   (`telemetryResetCommand`) catches this and exits non-zero.
- */
-export function resetTelemetryId(): string {
-  const idPath = join(getArchonHome(), 'telemetry-id');
-  const newId = randomUUID();
-  mkdirSync(getArchonHome(), { recursive: true });
-  writeFileSync(idPath, newId, 'utf8');
-  telemetryIdCache = newId;
-  return newId;
-}
-
-/**
- * Show a one-time stderr notice that telemetry is collected, then stamp the
- * notice file so we don't show it again. Skipped when:
- *   - telemetry is disabled (no point notifying about a no-op)
- *   - the stamp file already exists
- *   - stderr is not a TTY (avoid polluting scripted / piped output)
- *
- * Idempotent in-process via `noticeChecked` so the worst case is one stat()
- * per process, not one per workflow.
- */
-let noticeChecked = false;
-function maybeShowFirstRunNotice(): void {
-  if (noticeChecked) return;
-  noticeChecked = true;
-
-  // Self-contained guards so the function is safe for any caller, not just
-  // captureWorkflowInvoked: never notify about telemetry that won't be sent,
-  // and never pollute scripted / piped output.
-  if (isTelemetryDisabled()) return;
-  if (!process.stderr.isTTY) return;
-
-  const stampPath = join(getArchonHome(), NOTICE_STAMP_FILENAME);
-  try {
-    if (existsSync(stampPath)) return;
-  } catch (error) {
-    getLog().debug({ err: error as Error, stampPath }, 'telemetry.notice_stat_failed');
-    return;
-  }
-
-  const message =
-    'Archon collects anonymous usage telemetry — now also the shape of each\n' +
-    'workflow (node-type counts, depth, fan-out, how many commands it uses, a\n' +
-    'prompt-size bucket) and, for a copy of a bundled workflow, which bundled one\n' +
-    "it came from — never your own workflow's name, description or text. Also\n" +
-    'sent: an anonymous per-run reference (a hash, never the run id), cancelled\n' +
-    'runs, how Archon was installed (binary, Docker, or source), the build commit,\n' +
-    'chat activity (platform/provider/model, never message content), aggregate\n' +
-    'usage totals (token counts, cost, durations, loop iterations), approval\n' +
-    'decisions (approved/rejected only), deployment shape, a categorical failure\n' +
-    'class, workflow name, run outcome, OS/arch, and version.\n' +
-    'Still no code, prompts, file paths, IP, or personal data — see README "Telemetry".\n' +
-    'Opt out anytime: DO_NOT_TRACK=1 or ARCHON_TELEMETRY_DISABLED=1\n';
-  try {
-    process.stderr.write(`\n${message}\n`);
-  } catch (error) {
-    getLog().debug({ err: error as Error }, 'telemetry.notice_write_failed');
-  }
-
-  try {
-    mkdirSync(getArchonHome(), { recursive: true });
-    writeFileSync(stampPath, new Date().toISOString(), 'utf8');
-  } catch (error) {
-    // Failure here means we'll re-show the notice on the next process run (the
-    // in-process `noticeChecked` guard still prevents a repeat this run);
-    // annoying but not broken. Log so repeat failures leave a diagnostic trace.
-    getLog().debug({ err: error as Error, stampPath }, 'telemetry.notice_stamp_failed');
-  }
-}
-
-/**
- * Lazy singleton. `undefined` = not yet initialized; `null` = disabled or
- * init failed; otherwise the live client and its transport cancellation owner.
- */
-let clientInit: ReturnType<typeof initClient> | undefined;
-
-async function getClient(): Promise<PostHog | null> {
-  if (clientInit === undefined) {
-    clientInit = initClient();
-  }
-  return (await clientInit)?.client ?? null;
-}
-
-/**
- * Fetch wrapper that masks all failures as 200 responses. The PostHog SDK's
- * internal `logFlushError` writes to stderr via `console.error` on any network
- * or HTTP error, bypassing logger configuration (see `@posthog/core`
- * `posthog-core-stateless.mjs` `logFlushError`). For a fire-and-forget
- * telemetry path we want no user-visible noise on the default host when
- * PostHog is unreachable (offline, firewalled, DNS broken, rate-limited), so
- * we intercept failures before the SDK sees them.
- *
- * Self-hosters who override POSTHOG_HOST need *some* feedback when they typo a
- * URL, so on a custom host the first failure in a process is logged at `warn`
- * (visible at default log levels) and subsequent failures drop to `debug`.
- * On the default host every failure stays at `debug`.
- */
-const FAKE_OK_RESPONSE: PostHogFetchResponse = {
-  status: 200,
-  text: () => Promise.resolve('{"status":"ok"}'),
-  json: () => Promise.resolve({ status: 'ok' }),
-  headers: { get: () => null },
-};
-
-let firstFailureLogged = false;
-function logFetchFailure(ctx: { status?: number; err?: Error }, event: string): void {
-  // Only self-hosters (POSTHOG_HOST overridden) get a visible warning about a
-  // typo'd host. Default-host users who are simply offline/firewalled stay at
-  // `debug`, per the "no user-visible noise on the default host" goal above.
-  if (process.env.POSTHOG_HOST !== undefined && !firstFailureLogged) {
-    firstFailureLogged = true;
-    getLog().warn(
-      { ...ctx, host: getHost() },
-      `${event} (first failure shown; subsequent suppressed to debug)`
-    );
-    return;
-  }
-  getLog().debug(ctx, event);
-}
-
-async function silentFetch(
-  url: string,
-  options: PostHogFetchOptions
-): Promise<PostHogFetchResponse> {
-  try {
-    const res = await fetch(url, options);
-    if (res.status < 200 || res.status >= 400) {
-      logFetchFailure({ status: res.status }, 'telemetry.http_non_2xx_suppressed');
-      return FAKE_OK_RESPONSE;
-    }
-    return res;
-  } catch (error) {
-    logFetchFailure({ err: error as Error }, 'telemetry.fetch_failed_suppressed');
-    return FAKE_OK_RESPONSE;
-  }
-}
-
-async function initClient(): Promise<{ client: PostHog; abortController: AbortController } | null> {
-  if (isTelemetryDisabled()) return null;
-  const apiKey = getApiKey();
-  if (apiKey === null) return null;
-  try {
-    const posthogModule = await import('posthog-node');
-    const abortController = new AbortController();
-    const client = new posthogModule.PostHog(apiKey, {
-      host: getHost(),
-      flushAt: 20,
-      flushInterval: 10000,
-      disableGeoip: true,
-      fetch: (url, options): Promise<PostHogFetchResponse> =>
-        silentFetch(url, {
-          ...options,
-          signal: options.signal
-            ? AbortSignal.any([options.signal, abortController.signal])
-            : abortController.signal,
-        }),
-    });
-    // Defensive: also hook the client-level error channel in case a future
-    // posthog-node version routes errors there instead of (or in addition to)
-    // the internal console.error path.
-    client.on('error', (err: Error) => {
-      getLog().debug({ err }, 'telemetry.client_error');
-    });
-    // Attach machine context to every event as super-properties. The privacy
-    // invariants are NOT registered here — they stay per-event (see
-    // PRIVACY_INVARIANTS) so a register() regression can't silently drop them.
-    try {
-      await client.register(collectMachineProperties());
-    } catch (error) {
-      getLog().debug({ err: error as Error }, 'telemetry.register_failed');
-    }
-    return { client, abortController };
-  } catch (error) {
-    getLog().debug({ err: error as Error }, 'telemetry.init_failed');
-    return null;
-  }
-}
-
-export interface WorkflowInvokedProperties {
-  /** Run row id, hashed into `run_ref` here; never sent raw. */
-  runId: string;
-  /** True for a run started by a parent run's `workflow:` node. */
-  isChild: boolean;
-  workflowName: string;
-  /** Discovery source — drives the custom-vs-default split and name redaction. */
-  workflowSource?: WorkflowTelemetrySource;
-  platform?: string;
-  provider?: string;
-  model?: string;
-  nodeCount?: number;
-  usesLoop?: boolean;
-  usesLoopGroup?: boolean;
-  usesApproval?: boolean;
-  usesScript?: boolean;
-  usesBash?: boolean;
-  // Advanced-feature adoption flags (presence on any node, categorical only) —
-  // these tell maintainers which features earn their maintenance cost.
-  usesOutputFormat?: boolean;
-  usesOutputType?: boolean;
-  usesPersistSession?: boolean;
-  usesMcp?: boolean;
-  usesSkills?: boolean;
-  usesFreshContext?: boolean;
-  usedIsolation?: boolean;
-  isResume?: boolean;
-  shape?: WorkflowShapeProperties;
-  /** Only for a non-bundled workflow copied from a bundled one. */
-  ancestry?: WorkflowAncestryProperties;
-}
-
-export type PromptCharsBucket = 'none' | 'lt_1k' | '1k_5k' | '5k_20k' | 'gte_20k';
-
-/**
- * Categorical shape of a workflow: counts and buckets only, never ids, names or text.
- * Two scopes on purpose: the counts measure everything the workflow contains, loop_group
- * bodies included; depth and fan-out measure the run-level graph the engine schedules.
- */
-export interface WorkflowShapeProperties {
-  /** Nodes of each type, loop_group bodies included; a type with no nodes is absent. */
-  nodeCounts: Partial<Record<WorkflowNodeType, number>>;
-  /** Number of dependency layers in the top-level graph (loop_group bodies excluded). */
-  graphDepth: number;
-  /** Most direct dependents of any one top-level node (loop_group bodies excluded). */
-  maxFanOut: number;
-  /** Distinct command names referenced by agent and loop nodes. */
-  commandRefs: number;
-  /** Total inline prompt characters, bucketed. Command bodies are not read. */
-  promptCharsBucket: PromptCharsBucket;
-}
-
-export interface WorkflowAncestryProperties {
-  /** The bundled workflow's name. Bundled names are public; a custom name never is. */
-  derivedFrom: string;
-  derivedSimilarity: 'identical' | 'modified';
-}
-
-/**
- * Deployment-shape context for server installs. Categorical only — booleans
- * and fixed enums derived from which integrations are configured, never the
- * configuration values themselves. Distinguishes solo-laptop installs from
- * team server deployments.
- */
-export interface DeploymentShapeProperties {
-  dbKind?: 'sqlite' | 'postgresql';
-  webAuthEnabled?: boolean;
-  /** Per-user credentials mode (TOKEN_ENCRYPTION_KEY configured). */
-  multiUser?: boolean;
-  githubAuthMode?: 'app' | 'pat' | 'none' | 'conflict';
-  adapterSlack?: boolean;
-  adapterTelegram?: boolean;
-  adapterDiscord?: boolean;
-  adapterGitea?: boolean;
-  adapterGitlab?: boolean;
-}
-
-/** Once-per-process startup event — the basis for active-install counting. */
-export interface ArchonStartedProperties extends DeploymentShapeProperties {
-  surface: 'cli' | 'server';
-}
-
-/**
- * One completed direct-chat AI turn (NOT workflow execution — workflows emit
- * `workflow_invoked` instead). Carries only platform + provider; never
- * message content, conversation ids, or prompt/response data.
- *
- * `platform`/`provider` are open strings because this leaf package cannot
- * import the adapter/provider unions without inverting the dependency graph.
- * Callers MUST pass only registry identifiers (`platform.getPlatformType()`,
- * `aiClient.getType()`) — both are structurally categorical (fixed literals
- * per adapter/provider implementation), never user input.
- */
-export interface ChatTurnProperties {
-  platform?: string;
-  provider?: string;
-  /** Resolved model ref — passed through {@link sanitizeModelForTelemetry}. */
-  model?: string;
-  outcome: 'completed' | 'failed';
-  durationMs?: number;
-  /** Provider-reported aggregate usage for the turn. Numbers only. */
-  costUsd?: number;
-  tokensIn?: number;
-  tokensOut?: number;
-}
-
-/**
- * Why a failed run ended — a fixed enum, never raw error text. Mirrored from the
- * engine's terminal-reason type in `@archon/workflows` (conformance-tested there).
- */
-export type WorkflowExitReason =
-  | 'no_nodes_completed'
-  | 'node_error'
-  | 'unhandled_error'
-  // File-presence gate (#2230): all nodes succeeded but `evidence_policy.required`
-  // found no conventional `$ARTIFACTS_DIR/evidence.json` marker, so the run failed.
-  | 'evidence_missing'
-  // The run budget refused new work, or its spend could not be measured (#2814).
-  | 'budget_refused'
-  | 'source_unavailable'
-  | 'not_finalized'
-  | 'process_terminated'
-  | 'launch_failed'
-  | 'run_not_created';
-
-/** Why a run was cancelled — a fixed enum. Mirrored from `@archon/workflows`. */
-export type WorkflowCancelReason =
-  | 'approval_rejected'
-  | 'operator'
-  | 'halt_node'
-  | 'precondition_failed'
-  | 'conversation_reset'
-  | 'fan_out';
-
-/**
- * Why the first failed node failed, as recorded where the failure happened.
- * `fatal`/`transient`/`rate_limited`/`unknown` classify a provider error; the rest are
- * engine-detected causes. Mirrored from `NodeFailureKind` in `@archon/workflows`.
- * A fixed enum — raw error text never leaves the machine.
- */
-export type WorkflowErrorClass =
-  | 'fatal'
-  | 'transient'
-  | 'unknown'
-  | 'rate_limited'
-  | 'overloaded'
-  | 'timeout'
-  | 'exec_failed'
-  | 'output_contract'
-  | 'max_iterations'
-  | 'child_failed'
-  | 'cancelled'
-  | 'config';
-
-/** Closed set of DAG node types, mirrored from `@archon/workflows` schemas. */
-export type WorkflowNodeType =
-  | 'command'
-  | 'prompt'
-  | 'bash'
-  | 'script'
-  | 'loop'
-  | 'loop_group'
-  | 'approval'
-  | 'wait'
-  | 'workflow'
-  | 'cancel'
-  | 'compose_fan_out';
-
-/**
- * One terminal workflow-run event: `workflow_completed`, `workflow_failed`, or
- * `workflow_cancelled`. Sent once per committed terminal transition by the run
- * store (see `buildRunTerminalTelemetry` in `@archon/workflows`), so every path
- * that ends a run reports it — plus `run_not_created` from the executor when no
- * run row could be written.
- */
-export interface WorkflowTerminalProperties {
-  outcome: 'completed' | 'failed' | 'cancelled';
-  /** Run row id, hashed into `run_ref` here; never sent raw. Absent without a row. */
-  runId?: string;
-  isChild?: boolean;
-  workflowName: string;
-  workflowSource?: WorkflowTelemetrySource;
-  provider?: string;
-  /** Model ref — passed through {@link sanitizeModelForTelemetry}. */
-  model?: string;
-  /** Surface the run started on (a child reports `workflow`). */
-  platform?: string;
-  /** Wall-clock from the run's first start to the terminal transition, waits included. */
-  durationMs?: number;
-  nodesCompleted?: number;
-  nodesFailed?: number;
-  nodesSkipped?: number;
-  nodesTotal?: number;
-  exitReason?: WorkflowExitReason;
-  cancelReason?: WorkflowCancelReason;
-  /** Failure class of the first failed node: fixed enum, never error text. */
-  errorClass?: WorkflowErrorClass;
-  /** Type of the first failed node. */
-  failedNodeType?: WorkflowNodeType;
-  /** Provider-reported cost (USD) across every segment, a child's spend included. */
-  costUsd?: number;
-  /** Provider-reported gross input tokens across every segment. */
-  tokensIn?: number;
-  tokensOut?: number;
-  /** Cache-read input tokens; absent when no contribution reported the axis. */
-  cacheReadTokens?: number;
-  /** Cache-write input tokens; absent when no contribution reported the axis. */
-  cacheWriteTokens?: number;
-  /**
-   * True when the two cache totals above are a FLOOR because at least one contributing
-   * node did not report that axis. Without it a narrowed total would be indistinguishable
-   * from a complete one and would bias aggregate cache figures low (#2662).
-   */
-  cachePartialTokens?: true;
-  /** Completed loop iterations across every segment. */
-  loopIterations?: number;
-}
-
-/**
- * Run a telemetry capture fire-and-forget: never awaited, never throws. Resolves
- * the lazy client, skips when disabled/uninitialized, and swallows every error
- * (network, SDK, malformed props) at `debug` — telemetry must never crash Archon.
- * The per-event error policy lives here, in exactly one place.
- */
-function fireAndForget(capture: (client: PostHog) => void): void {
-  void (async (): Promise<void> => {
-    try {
-      const client = await getClient();
-      if (!client) return;
-      capture(client);
-    } catch (error) {
-      getLog().debug({ err: error as Error }, 'telemetry.capture_failed');
-    }
-  })();
-}
-
-/**
- * Fire-and-forget capture of a `workflow_invoked` event. Never throws, never
- * awaits — safe to call from hot paths. Shows the first-run notice on first
- * invocation when telemetry is enabled and stderr is interactive.
+ * Capture a `workflow_invoked` event. Safe to call from hot paths. Shows the
+ * first-run notice on first invocation when telemetry is enabled and stderr is
+ * interactive.
  */
 export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
   if (isTelemetryDisabled()) return;
   maybeShowFirstRunNotice();
-  const model = sanitizeModelForTelemetry(props.model);
-  fireAndForget(client => {
-    client.capture({
-      distinctId: getTelemetryId(),
-      event: 'workflow_invoked',
-      properties: {
-        ...PRIVACY_INVARIANTS,
-        ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
-        schema_version: TELEMETRY_SCHEMA_VERSION,
-        run_ref: runRefForTelemetry(props.runId),
-        is_child: props.isChild,
-        ...(props.platform ? { platform: props.platform } : {}),
-        ...(props.provider ? { provider: props.provider } : {}),
-        ...(model ? { model } : {}),
-        ...(props.nodeCount !== undefined ? { node_count: props.nodeCount } : {}),
-        uses_loop: Boolean(props.usesLoop),
-        uses_loop_group: Boolean(props.usesLoopGroup),
-        uses_approval: Boolean(props.usesApproval),
-        uses_script: Boolean(props.usesScript),
-        uses_bash: Boolean(props.usesBash),
-        uses_output_format: Boolean(props.usesOutputFormat),
-        uses_output_type: Boolean(props.usesOutputType),
-        uses_persist_session: Boolean(props.usesPersistSession),
-        uses_mcp: Boolean(props.usesMcp),
-        uses_skills: Boolean(props.usesSkills),
-        uses_fresh_context: Boolean(props.usesFreshContext),
-        used_isolation: Boolean(props.usedIsolation),
-        is_resume: Boolean(props.isResume),
-        ...(props.shape ? workflowShapeWireProps(props.shape) : {}),
-        ...(props.ancestry
-          ? {
-              derived_from: props.ancestry.derivedFrom,
-              derived_similarity: props.ancestry.derivedSimilarity,
-            }
-          : {}),
-      },
-    });
-  });
-}
-
-function workflowShapeWireProps(shape: WorkflowShapeProperties): Record<string, string | number> {
-  const counts: Record<string, number> = {};
-  for (const [type, count] of Object.entries(shape.nodeCounts))
-    if (count) counts[`nodes_${type}`] = count;
-  return {
-    ...counts,
-    graph_depth: shape.graphDepth,
-    max_fan_out: shape.maxFanOut,
-    command_refs: shape.commandRefs,
-    prompt_chars_bucket: shape.promptCharsBucket,
-  };
+  sendEvent('workflow_invoked', () => workflowInvokedEventProperties(props));
 }
 
 /**
- * Serialize deployment-shape fields to wire properties, omitting absent ones
- * (the CLI surface passes none; the server surface passes all). Kept in one
- * place so `archon_started` and `archon_active` can never drift apart.
- */
-function deploymentShapeWireProps(
-  props: DeploymentShapeProperties
-): Record<string, string | boolean> {
-  return {
-    ...(props.dbKind !== undefined ? { db_kind: props.dbKind } : {}),
-    ...(props.webAuthEnabled !== undefined ? { web_auth_enabled: props.webAuthEnabled } : {}),
-    ...(props.multiUser !== undefined ? { multi_user: props.multiUser } : {}),
-    ...(props.githubAuthMode !== undefined ? { github_auth_mode: props.githubAuthMode } : {}),
-    ...(props.adapterSlack !== undefined ? { adapter_slack: props.adapterSlack } : {}),
-    ...(props.adapterTelegram !== undefined ? { adapter_telegram: props.adapterTelegram } : {}),
-    ...(props.adapterDiscord !== undefined ? { adapter_discord: props.adapterDiscord } : {}),
-    ...(props.adapterGitea !== undefined ? { adapter_gitea: props.adapterGitea } : {}),
-    ...(props.adapterGitlab !== undefined ? { adapter_gitlab: props.adapterGitlab } : {}),
-  };
-}
-
-/**
- * Fire-and-forget capture of an `archon_started` event. Call once per CLI
- * invocation and per server boot (the single call sites in `cli.ts` / the
- * server entrypoint enforce that — there is no in-function dedup guard; the CLI
- * leaves `serve` and detached run owners to the process that reports them). This (not just `workflow_invoked`) is what makes
- * active-install / DAU metrics honest, since users who only run
+ * Capture an `archon_started` event. Call once per CLI invocation and per server
+ * boot (the single call sites in `cli.ts` / the server entrypoint enforce that —
+ * there is no in-function dedup guard; the CLI leaves `serve` and detached run
+ * owners to the process that reports them). This (not just `workflow_invoked`) is
+ * what makes active-install / DAU metrics honest, since users who only run
  * `doctor`/`serve`/chat would otherwise be invisible. Machine context rides
  * along via the registered super-properties. Also shows the first-run notice.
  */
 export function captureArchonStarted(props: ArchonStartedProperties): void {
   if (isTelemetryDisabled()) return;
   maybeShowFirstRunNotice();
-  fireAndForget(client => {
-    client.capture({
-      distinctId: getTelemetryId(),
-      event: 'archon_started',
-      properties: {
-        ...PRIVACY_INVARIANTS,
-        surface: props.surface,
-        schema_version: TELEMETRY_SCHEMA_VERSION,
-        ...deploymentShapeWireProps(props),
-      },
-    });
-  });
+  sendEvent('archon_started', () => archonSurfaceEventProperties(props));
 }
 
 /**
- * Fire-and-forget capture of an `archon_active` heartbeat. Long-running
- * servers emit `archon_started` once per boot and then go silent, which would
- * make a server-only install drop out of active-install (DAU/WAU) metrics
- * after day one. The server entrypoint calls this on a daily interval so
- * "active installs" stays honest for the server surface. CLI invocations do
- * NOT need this — each one already emits `archon_started`. Carries the same
- * categorical properties as `archon_started` (this event alone would not have
- * justified a schema bump; the v3 bump covers the full revision it shipped
- * with). Intentionally does not show the first-run notice (heartbeats are
- * background, never interactive).
+ * Capture an `archon_active` heartbeat. Long-running servers emit
+ * `archon_started` once per boot and then go silent, which would make a
+ * server-only install drop out of active-install (DAU/WAU) metrics after day one.
+ * The server entrypoint calls this on a daily interval so "active installs"
+ * stays honest for the server surface. CLI invocations do NOT need this — each
+ * one already emits `archon_started`. Carries the same categorical properties as
+ * `archon_started`. Intentionally does not show the first-run notice (heartbeats
+ * are background, never interactive).
  */
 export function captureArchonActive(props: ArchonStartedProperties): void {
   if (isTelemetryDisabled()) return;
-  fireAndForget(client => {
-    client.capture({
-      distinctId: getTelemetryId(),
-      event: 'archon_active',
-      properties: {
-        ...PRIVACY_INVARIANTS,
-        surface: props.surface,
-        schema_version: TELEMETRY_SCHEMA_VERSION,
-        ...deploymentShapeWireProps(props),
-      },
-    });
-  });
+  sendEvent('archon_active', () => archonSurfaceEventProperties(props));
+}
+
+/** Agent-reported no-fit decisions only; no request text or workflow names leave the install. */
+export function captureWorkflowNoMatch(transport: 'native_tool' | 'cli'): void {
+  if (isTelemetryDisabled()) return;
+  sendEvent('workflow_no_match', () => ({ schema_version: TELEMETRY_SCHEMA_VERSION, transport }));
 }
 
 /**
- * Fire-and-forget capture of a `chat_turn_handled` event — one per direct-chat
- * AI turn across all platforms (slack/telegram/discord/github/web/cli).
- * Workflow runs are excluded by construction (they emit `workflow_invoked`
- * from the executor instead; the orchestrator capture sites sit on the
- * chat-only completion paths). Carries platform + provider + outcome only —
- * never message content or conversation ids.
+ * Capture a `chat_turn_handled` event — one per direct-chat AI turn across all
+ * platforms (slack/telegram/discord/github/web/cli). Workflow runs are excluded
+ * by construction (they emit `workflow_invoked` from the executor instead; the
+ * orchestrator capture sites sit on the chat-only completion paths). Carries
+ * platform + provider + outcome only — never message content or conversation ids.
  */
 export function captureChatTurn(props: ChatTurnProperties): void {
   if (isTelemetryDisabled()) return;
-  const chatModel = sanitizeModelForTelemetry(props.model);
-  fireAndForget(client => {
-    client.capture({
-      distinctId: getTelemetryId(),
-      event: 'chat_turn_handled',
-      properties: {
-        ...PRIVACY_INVARIANTS,
-        outcome: props.outcome,
-        schema_version: TELEMETRY_SCHEMA_VERSION,
-        ...(props.platform ? { platform: props.platform } : {}),
-        ...(props.provider ? { provider: props.provider } : {}),
-        ...(chatModel ? { model: chatModel } : {}),
-        ...(props.durationMs !== undefined ? { duration_ms: props.durationMs } : {}),
-        ...(props.costUsd !== undefined ? { cost_usd: props.costUsd } : {}),
-        ...(props.tokensIn !== undefined ? { tokens_in: props.tokensIn } : {}),
-        ...(props.tokensOut !== undefined ? { tokens_out: props.tokensOut } : {}),
-      },
-    });
-  });
+  sendEvent('chat_turn_handled', () => chatTurnEventProperties(props));
 }
 
 /**
- * Fire-and-forget capture of a `workflow_approval_resolved` event — one per
- * human approve/reject decision at an approval gate, across every surface
- * (chat command, CLI, web API, Slack buttons, manage_run tool, natural
- * language). Carries ONLY the binary resolution — no run ids, workflow
- * names, comments, or rejection reasons.
+ * Capture a `workflow_approval_resolved` event — one per human approve/reject
+ * decision at an approval gate, across every surface (chat command, CLI, web API,
+ * Slack buttons, manage_run tool, natural language). Carries ONLY the binary
+ * resolution — no run ids, workflow names, comments, or rejection reasons.
  */
 export function captureApprovalResolved(props: { resolution: 'approved' | 'rejected' }): void {
   if (isTelemetryDisabled()) return;
-  fireAndForget(client => {
-    client.capture({
-      distinctId: getTelemetryId(),
-      event: 'workflow_approval_resolved',
-      properties: {
-        ...PRIVACY_INVARIANTS,
-        resolution: props.resolution,
-        schema_version: TELEMETRY_SCHEMA_VERSION,
-      },
-    });
-  });
+  sendEvent('workflow_approval_resolved', () => ({
+    resolution: props.resolution,
+    schema_version: TELEMETRY_SCHEMA_VERSION,
+  }));
 }
 
 /**
- * Fire-and-forget capture of a `codebase_registered` event — a pure count
- * (no name, path, or remote URL ever) emitted when a new codebase row is
- * created. Together with `archon_started` this gives the activation funnel:
- * installed → registered a project → first workflow run.
+ * Capture a `codebase_registered` event — a pure count (no name, path, or remote
+ * URL ever) emitted when a new codebase row is created. Together with
+ * `archon_started` this gives the activation funnel: installed → registered a
+ * project → first workflow run.
  */
 export function captureCodebaseRegistered(): void {
   if (isTelemetryDisabled()) return;
-  fireAndForget(client => {
-    client.capture({
-      distinctId: getTelemetryId(),
-      event: 'codebase_registered',
-      properties: {
-        ...PRIVACY_INVARIANTS,
-        schema_version: TELEMETRY_SCHEMA_VERSION,
-      },
-    });
-  });
-}
-
-const TERMINAL_EVENT = {
-  completed: 'workflow_completed',
-  failed: 'workflow_failed',
-  cancelled: 'workflow_cancelled',
-} as const satisfies Record<WorkflowTerminalProperties['outcome'], string>;
-
-/**
- * Anonymous per-run reference: the same for every segment of one run on one
- * install, unlinkable to the run's database id without that install's id.
- * @internal exported for tests
- */
-export function runRefForTelemetry(runId: string): string {
-  return createHash('sha256').update(`${getTelemetryId()}:${runId}`).digest('hex').slice(0, 16);
+  sendEvent('codebase_registered', () => ({ schema_version: TELEMETRY_SCHEMA_VERSION }));
 }
 
 /**
- * Fire-and-forget capture of a terminal workflow run. Intentionally does not
- * show the first-run notice (that fires on start events, not completion).
+ * Capture a terminal workflow run. Intentionally does not show the first-run
+ * notice (that fires on start events, not completion).
  */
 export function captureWorkflowTerminal(props: WorkflowTerminalProperties): void {
   if (isTelemetryDisabled()) return;
-  const model = sanitizeModelForTelemetry(props.model);
-  fireAndForget(client => {
-    client.capture({
-      distinctId: getTelemetryId(),
-      event: TERMINAL_EVENT[props.outcome],
-      properties: {
-        ...PRIVACY_INVARIANTS,
-        ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
-        schema_version: TELEMETRY_SCHEMA_VERSION,
-        ...(props.runId !== undefined ? { run_ref: runRefForTelemetry(props.runId) } : {}),
-        ...(props.isChild !== undefined ? { is_child: props.isChild } : {}),
-        ...(props.provider ? { provider: props.provider } : {}),
-        ...(model ? { model } : {}),
-        ...(props.platform ? { platform: props.platform } : {}),
-        ...(props.durationMs !== undefined ? { duration_ms: props.durationMs } : {}),
-        ...(props.nodesCompleted !== undefined ? { nodes_completed: props.nodesCompleted } : {}),
-        ...(props.nodesFailed !== undefined ? { nodes_failed: props.nodesFailed } : {}),
-        ...(props.nodesSkipped !== undefined ? { nodes_skipped: props.nodesSkipped } : {}),
-        ...(props.nodesTotal !== undefined ? { nodes_total: props.nodesTotal } : {}),
-        ...(props.exitReason ? { exit_reason: props.exitReason } : {}),
-        ...(props.cancelReason ? { cancel_reason: props.cancelReason } : {}),
-        ...(props.errorClass ? { error_class: props.errorClass } : {}),
-        ...(props.failedNodeType ? { failed_node_type: props.failedNodeType } : {}),
-        ...(props.costUsd !== undefined ? { cost_usd: props.costUsd } : {}),
-        ...(props.tokensIn !== undefined ? { tokens_in: props.tokensIn } : {}),
-        ...(props.tokensOut !== undefined ? { tokens_out: props.tokensOut } : {}),
-        ...(props.cacheReadTokens !== undefined
-          ? { cache_read_tokens: props.cacheReadTokens }
-          : {}),
-        ...(props.cacheWriteTokens !== undefined
-          ? { cache_write_tokens: props.cacheWriteTokens }
-          : {}),
-        ...(props.cachePartialTokens ? { cache_partial: true } : {}),
-        ...(props.loopIterations !== undefined ? { loop_iterations: props.loopIterations } : {}),
-      },
-    });
-  });
-}
-
-/**
- * Best-effort exit flush. Slow ingestion drops pending events after 75 ms;
- * telemetry must not hold up CLI exit or server shutdown. Tests may override the
- * budget to wait for delivery rather than exercise best-effort exit behavior.
- */
-export async function shutdownTelemetry(timeoutMs = TELEMETRY_SHUTDOWN_TIMEOUT_MS): Promise<void> {
-  if (clientInit === undefined) return;
-  try {
-    const initialized = await clientInit;
-    if (initialized) {
-      try {
-        await initialized.client.shutdown(timeoutMs);
-      } finally {
-        // The SDK deadline only races its flush; it leaves fetch running.
-        initialized.abortController.abort();
-      }
-    }
-  } catch (error) {
-    getLog().debug({ err: error as Error }, 'telemetry.shutdown_failed');
-  } finally {
-    clientInit = undefined;
-  }
+  sendEvent(WORKFLOW_TERMINAL_EVENT_TYPE[props.outcome], () =>
+    workflowTerminalEventProperties(props)
+  );
 }
 
 /**
@@ -1081,8 +131,6 @@ export async function shutdownTelemetry(timeoutMs = TELEMETRY_SHUTDOWN_TIMEOUT_M
  * @internal
  */
 export function resetTelemetryForTests(): void {
-  clientInit = undefined;
-  telemetryIdCache = undefined;
-  noticeChecked = false;
-  firstFailureLogged = false;
+  resetConsentForTests();
+  resetTransportForTests();
 }

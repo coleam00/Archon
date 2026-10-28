@@ -2,11 +2,14 @@ import { z } from 'zod';
 import { NODE_STATE_EVENT_TYPES } from './store';
 import {
   nodeExecutionMetadataSchema,
+  nodeExecutionMetadataPayloadSchema,
+  nodeInvocationSchema,
   type NodeExecutionMetadata,
   type NodeInvocation,
 } from './schemas/node-execution';
 import {
   DEFERRED_NODE_USAGE_EVENT_TYPE,
+  isPersistedExecType,
   serializedDeferredNodeUsageDataSchema,
   serializedNodeDataSchema,
   type SerializedNodeData,
@@ -32,17 +35,18 @@ export interface ReadNodeRecordEvent {
   metadata?: NodeExecutionMetadata;
 }
 
+export function isExecNodeRecord(record: ReadNodeRecordEvent): boolean {
+  return record.metadata
+    ? record.metadata.node.kind === 'exec'
+    : isPersistedExecType(record.data.type);
+}
+
 const eventDataSchema = z.record(z.string(), z.unknown());
 const eventTypes = new Set<string>(NODE_STATE_EVENT_TYPES);
-const metadataKeys = [
-  'node',
-  'invocation',
-  'attempt',
-  'binding',
-  'timing',
-  'spend',
-  'accounting',
-] as const;
+const metadataKeys = Object.keys(nodeExecutionMetadataPayloadSchema.shape);
+const requiredMetadataKeys = Object.entries(nodeExecutionMetadataPayloadSchema.shape)
+  .filter(([, schema]) => !schema.isOptional())
+  .map(([key]) => key);
 
 export function readNodeRecordData(value: unknown): Record<string, unknown> {
   return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
@@ -52,10 +56,8 @@ function projectSerializedData(raw: Record<string, unknown>): SerializedNodeData
   const projected: Record<string, unknown> = {};
   for (const [key, schema] of Object.entries(serializedNodeDataSchema.shape)) {
     if (!Object.hasOwn(raw, key)) continue;
-    if (key === 'declared_output_paths') {
-      projected[key] = serializedNodeDataSchema.shape.declared_output_paths
-        .unwrap()
-        .parse(raw[key]);
+    if (key === 'declared_output_paths' || key === 'child_usage') {
+      projected[key] = serializedNodeDataSchema.shape[key].unwrap().parse(raw[key]);
       continue;
     }
     const parsed = schema.safeParse(raw[key]);
@@ -69,6 +71,20 @@ function projectSerializedData(raw: Record<string, unknown>): SerializedNodeData
   return data;
 }
 
+function failedLifecycle(
+  data: SerializedNodeData
+): Extract<NodeExecutionMetadata['lifecycle'], { status: 'failed' }> | undefined {
+  return typeof data.error === 'string'
+    ? {
+        status: 'failed',
+        error: data.error,
+        ...(data.retryable === false ? { retryable: false } : {}),
+        ...(data.failure_kind !== undefined ? { failureKind: data.failure_kind } : {}),
+        ...(data.provider_failure !== undefined ? { providerFailure: data.provider_failure } : {}),
+      }
+    : undefined;
+}
+
 function lifecycleFor(
   eventType: SerializedNodeEvent['event_type'],
   data: SerializedNodeData
@@ -79,17 +95,7 @@ function lifecycleFor(
     case 'node_completed':
       return { status: 'completed' };
     case 'node_failed':
-      return typeof data.error === 'string'
-        ? {
-            status: 'failed',
-            error: data.error,
-            ...(data.retryable === false ? { retryable: false } : {}),
-            ...(data.failure_kind !== undefined ? { failureKind: data.failure_kind } : {}),
-            ...(data.provider_failure !== undefined
-              ? { providerFailure: data.provider_failure }
-              : {}),
-          }
-        : undefined;
+      return failedLifecycle(data);
     case 'node_skipped':
       return data.reason !== undefined &&
         data.reason !== 'stale_dependency' &&
@@ -122,25 +128,17 @@ export function readNodeRecordEvent(
     eventType === 'node_failed' ||
     eventType === 'node_skipped' ||
     eventType === 'node_suspended';
-  const presentMetadataKeys = isExecutionEvent
-    ? metadataKeys.filter(key => Object.hasOwn(raw, key))
-    : [];
+  const hasMetadata = isExecutionEvent && metadataKeys.some(key => Object.hasOwn(raw, key));
   let metadata: NodeExecutionMetadata | undefined;
-  if (presentMetadataKeys.length > 0) {
-    if (presentMetadataKeys.length !== metadataKeys.length)
+  if (hasMetadata) {
+    if (requiredMetadataKeys.some(key => !Object.hasOwn(raw, key)))
       throw new Error('Node execution metadata is incomplete');
     const lifecycle = lifecycleFor(eventType, data);
     if (lifecycle === undefined) throw new Error('Node execution lifecycle is invalid');
     metadata = nodeExecutionMetadataSchema.parse({
+      ...raw,
       runId: envelope.workflow_run_id,
       path: envelope.step_name,
-      node: raw.node,
-      invocation: raw.invocation,
-      attempt: raw.attempt,
-      binding: raw.binding,
-      timing: raw.timing,
-      spend: raw.spend,
-      accounting: raw.accounting,
       lifecycle,
     });
   }
@@ -163,6 +161,17 @@ export function readNodeRecordEvent(
 
 export function nodeInvocationKey(path: string, loopPath: NodeInvocation['loopPath']): string {
   return JSON.stringify([path, loopPath]);
+}
+
+const nodeInvocationKeySchema = z.tuple([z.string(), nodeInvocationSchema.shape.loopPath]);
+
+/** Inverse of {@link nodeInvocationKey}; throws on a key it did not produce. */
+export function parseNodeInvocationKey(key: string): {
+  path: string;
+  loopPath: NodeInvocation['loopPath'];
+} {
+  const [path, loopPath] = nodeInvocationKeySchema.parse(JSON.parse(key));
+  return { path, loopPath };
 }
 
 export function readDeferredNodeUsageEvent(envelope: NodeRecordEventEnvelope):

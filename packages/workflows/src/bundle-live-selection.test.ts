@@ -1,9 +1,11 @@
+// @archon-test-isolated
 import { providerRegistry } from '@archon/providers';
 import { afterAll, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { setLogSink } from '@archon/paths';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { WorkflowDeps } from './deps';
 
@@ -20,14 +22,34 @@ mock.module('@archon/paths', () => ({
   getBundledWorkflowsPath: () => join(app, 'workflows'),
 }));
 
+await mkdir(join(app, 'workflows'), { recursive: true });
+await pack(join(app, 'workflows'), 'shipped', 'shipped-flow');
+await pack(join(app, 'workflows'), 'excluded', 'excluded-flow');
+await pack(join(project, '.archon', 'workflows'), 'project-only', 'project-flow');
+await pack(join(home, 'workflows'), 'home-only', 'home-flow');
+
 const inventory = await import('./defaults/bundle-inventory');
+// A binary embeds the records the build reads from the indexed tree; these stand in for it.
+const actualDefaults = await import('./defaults/bundled-defaults');
+const embedded = await inventory.readBundleRecords(
+  await inventory.collectBundleSources(join(app, 'workflows'), ['shipped'])
+);
+let binary = false;
+mock.module('./defaults/bundled-defaults', () => ({
+  ...actualDefaults,
+  BUNDLED_COMMANDS: embedded.commands,
+  BUNDLED_WORKFLOWS: embedded.workflows,
+  BUNDLED_WORKFLOW_PATHS: embedded.workflowPaths,
+  BUNDLED_WORKFLOW_OWNERS: embedded.workflowOwners,
+  BUNDLED_SCRIPT_PACKS: embedded.scriptPacks,
+  isBinaryBuild: () => binary,
+}));
 const defaults = await import('./defaults/bundled-defaults');
 let selectedPacks = ['shipped'];
 const index = spyOn(inventory, 'readBundleIndex').mockImplementation(async () => selectedPacks);
-const binary = spyOn(defaults, 'isBinaryBuild').mockReturnValue(false);
 const { discoverWorkflows } = await import('./workflow-discovery');
 const { discoverScriptsForCwd } = await import('./script-discovery');
-const { loadCommandPrompt } = await import('./executor-shared');
+const { loadCommandPrompt } = await import('./load-command-prompt');
 const { validateWorkflowResources } = await import('./validator');
 const { captureWorkflowSource, capturedSourceRoots } = await import('./workflow-source');
 const { formatPackagedResourceReference } = await import('./packaged-workflow');
@@ -60,21 +82,14 @@ async function pack(directory: string, packName: string, name: string): Promise<
   await write(join(path, 'scripts', 'helper.ts'), `console.log('${name}')`);
 }
 
-await mkdir(join(app, 'workflows'), { recursive: true });
-await pack(join(app, 'workflows'), 'shipped', 'shipped-flow');
-await pack(join(app, 'workflows'), 'excluded', 'excluded-flow');
-await pack(join(project, '.archon', 'workflows'), 'project-only', 'project-flow');
-await pack(join(home, 'workflows'), 'home-only', 'home-flow');
-
 beforeEach(() => {
   app = join(root, 'app');
   selectedPacks = ['shipped'];
   index.mockImplementation(async () => selectedPacks);
-  binary.mockReturnValue(false);
+  binary = false;
 });
 
 afterAll(async () => {
-  binary.mockRestore();
   index.mockRestore();
   if (originalHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalHome;
@@ -154,7 +169,7 @@ test('a captured bundle retains formerly indexed resources without reading the l
 test('a capture an older binary took keeps resolving the flat commands it froze', async () => {
   // Current builds bundle only packaged commands. An older binary embedded flat ones and
   // wrote them into its captures, so a run paused before an upgrade must still find them.
-  binary.mockReturnValue(true);
+  binary = true;
   Object.assign(defaults.BUNDLED_COMMANDS, { 'flat-command': 'flat command' });
   let roots: ReturnType<typeof capturedSourceRoots>;
   try {
@@ -215,7 +230,7 @@ test('binary discovery preserves an authored yml filename when a project overrid
     join(project, '.archon', 'workflows', `${name}.yml`),
     yaml.replace('bundled version', 'project version')
   );
-  binary.mockReturnValue(true);
+  binary = true;
   index.mockImplementation(async () => {
     throw new Error('A binary must not read the source index');
   });
@@ -230,6 +245,55 @@ test('binary discovery preserves an authored yml filename when a project overrid
     Reflect.deleteProperty(paths, name);
   }
 });
+
+test.each([false, true])(
+  'bundled parse logs exclude source in binary mode %s',
+  async binaryMode => {
+    const name = 'private-bundle';
+    const filename = `${name}.yaml`;
+    const yaml = 'name: private\ndescription: ARCHON_BUNDLE_SECRET_SENTINEL\nnodes: [';
+    const path = join(app, 'workflows', 'shipped', name, filename);
+    const lines: string[] = [];
+    await write(path, yaml);
+    Object.assign(defaults.BUNDLED_WORKFLOWS, { [name]: yaml });
+    Object.assign(defaults.BUNDLED_WORKFLOW_PATHS, {
+      [name]: `workflows/shipped/${name}/${filename}`,
+    });
+    binary = binaryMode;
+    const message = 'Unexpected token at line 3: ARCHON_BUNDLE_SECRET_SENTINEL';
+    const parse = Bun.YAML.parse;
+    const parser = spyOn(Bun.YAML, 'parse').mockImplementation(content => {
+      if (content === yaml) throw new SyntaxError(message);
+      return parse(content);
+    });
+    setLogSink(line => lines.push(line));
+    try {
+      const result = await discoverWorkflows(project, { providers: providerRegistry });
+      expect(result.errors).toContainEqual({
+        filename,
+        errorType: 'parse_error',
+        error: `YAML parse error (near line 3): ${message}`,
+      });
+      expect(lines.join('')).not.toContain('ARCHON_BUNDLE_SECRET_SENTINEL');
+      expect(lines.join('')).not.toContain('name: private');
+      const event = lines
+        .map(line => JSON.parse(line))
+        .find(
+          entry =>
+            entry.msg ===
+            (binaryMode ? 'bundled_workflow_parse_failed' : 'app_default_workflow_errors')
+        );
+      expect(event).toBeDefined();
+      expect(JSON.stringify(event)).toContain(filename);
+    } finally {
+      parser.mockRestore();
+      setLogSink(undefined);
+      Reflect.deleteProperty(defaults.BUNDLED_WORKFLOWS, name);
+      Reflect.deleteProperty(defaults.BUNDLED_WORKFLOW_PATHS, name);
+      await removeTempTree(join(app, 'workflows', 'shipped', name));
+    }
+  }
+);
 
 test('SDK discovery without an installed source tree retains project and home resources', async () => {
   app = join(root, 'absent-app');

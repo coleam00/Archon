@@ -1,6 +1,6 @@
 {
   "name": "@archon/web",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -66,6 +66,9 @@
     ],
     [
       "src/experiments/ApprovalPanelResponse.test.tsx"
+    ],
+    [
+      "src/experiments/SubscriptionLoginFlow.test.tsx"
     ]
   ]
 }

@@ -8,7 +8,9 @@ import { discoverPlugins } from '@archon/forge/discovery';
 import { compileDiscoveryPlugin } from '@archon/forge/test-fixtures';
 import { removeTempTree, skipCompiledBinaryTests, trackTempRoots } from '@archon/paths/test-utils';
 import { receiptPath } from '@archon/plugin-manifest/store';
-import { parsePluginRef, pluginCommand, stagingName, type PluginEnvironment } from './plugin';
+import { pluginCommand } from './plugin';
+import { stagingName, type PluginEnvironment } from './plugin-common';
+import { parsePluginRef } from './plugin-source';
 
 // A local stand-in for GitHub: the repository is served over git's dumb HTTP
 // protocol (so `git ls-remote` runs for real), next to the `releases/latest`
@@ -248,7 +250,7 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
     const before = await snapshot(env.pluginsDir);
     const result = await run(env, 'update', `${ID}@v4.0.0`);
     expect(result.code).toBe(1);
-    expect(result.err).toContain('does not match checksums.txt');
+    expect(result.err).toContain('does not match checksums.txt of release v4.0.0');
     expect(await snapshot(env.pluginsDir)).toEqual(before);
   });
 

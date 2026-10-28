@@ -13,7 +13,8 @@ How-to guides for building and running AI coding workflows with Archon.
 
 ## Workflow Authoring
 
-- [Authoring Workflows](/guides/authoring-workflows/) — Create multi-step YAML workflows with DAG nodes, conditional branching, and parallel execution
+- [Build your first workflow](/getting-started/first-workflow/) — Build, validate, dry-run and test a workflow with an approval gate
+- [Workflow language](/reference/workflow-language/) — Every workflow field, node type and engine behavior
 - [Authoring Commands](/guides/authoring-commands/) — Write prompt templates that serve as building blocks for workflow nodes
 
 ## Node Types
@@ -26,7 +27,6 @@ How-to guides for building and running AI coding workflows with Archon.
 
 - [Workflow Triggers](/guides/workflow-triggers/) — Start workflows from schedules and verified GitHub events
 - [Proactive Workflows](/guides/proactive-workflows/) — Let a cheap agent decide whether an event matters, then keep a person on the loop before the run acts
-- [The Attention Queue](/guides/attention-queue/) — List, read, label and answer paused runs as JSON, and route classes of questions to your own handlers
 
 ## Node Features
 
@@ -38,27 +38,7 @@ Support varies by provider. See the [provider capability matrix](/reference/prov
 
 ## Bundled Workflows
 
-Archon ships the `sdlc` workflow pack, which covers the software development lifecycle from an incoming issue to a reviewed pull request. You do not need to write any YAML to use these -- just describe what you want and the router picks the right one.
-
-| Workflow | What It Does |
-|----------|-------------|
-| `archon-ship` | Triage an issue or request, investigate or plan as needed, then deliver a reviewed PR |
-| `archon-triage` | Check an issue against the current code and decide what it needs next |
-| `archon-intake` | Triage new issues from listed maintainers automatically; label outside issues for a maintainer. Started by trigger bindings |
-| `archon-build-queue` | Work triaged issues to reviewed PRs, asking a person only what the issue and policy don't answer. Started by a trigger binding |
-| `archon-merge-queue` | Merge the PRs the build queue finished once each is reviewed Ready and green at its head, asking a person about the ones policy doesn't clear. Started by a trigger binding |
-| `archon-discoveries` | Drain what finished runs discovered outside their scope into issues, evidence comments, recorded drops or questions for a maintainer |
-| `archon-worktree-cleanup` | Remove worktrees whose pull request merged, across every registered project. Started by hand or by a schedule binding |
-| `archon-investigate` | Prove the root cause of a bug or open question |
-| `archon-plan` | Turn decided intent into an implementable plan |
-| `archon-implement` | Build decided work until the project's checks pass (commits, no PR) |
-| `archon-pr` | Open a pull request for committed work |
-| `archon-deliver` | Implement, open a draft PR, review, fix findings, validate, and flip it ready |
-| `archon-review` | Review a PR or the working diff through parallel specialist lenses |
-| `archon-validate` | Run the project's own checks and report a verdict |
-| `archon-upkeep` | Update one dependency through the reviewed delivery tail |
-
-For usage examples and guidance on which one to pick, see [The Essential Workflows](/book/essential-workflows/).
+Archon ships the `sdlc` workflow pack, a software factory from an incoming issue to a merged pull request. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it on your repository, and [SDLC pack workflows](/reference/sdlc-workflows/) describes each workflow.
 
 To customize the pack, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it -- same-named workflows override the bundled ones. Copy the pack rather than one workflow folder: its workflows include each other and share scripts in `sdlc/.shared/`.
 

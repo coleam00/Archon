@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, open, readdir, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
@@ -68,20 +68,32 @@ function hasCode(error: unknown, code: string): boolean {
 }
 
 const windowsHandleCodes = ['EPERM', 'EBUSY', 'EACCES'];
+/** How long a Windows handle error is retried before the original error is rethrown. */
+const windowsHandleDeadlineMs = 2000;
+
+interface HandleRetryClock {
+  now(): number;
+  sleep(ms: number): Promise<void>;
+}
+const systemClock: HandleRetryClock = { now: () => Date.now(), sleep: ms => Bun.sleep(ms) };
 
 /**
  * Windows reports a name it cannot touch yet as EPERM, EBUSY or EACCES: another
  * process holds a handle that denies delete sharing, or the file was unlinked
  * while open and stays delete-pending until the last handle closes. Every read,
- * link, rename and unlink of a shared lock or store file retries those codes a
- * bounded number of times; the retry never changes what the operation decides.
+ * link, rename and unlink of a shared lock or store file retries those codes for
+ * up to `windowsHandleDeadlineMs` of elapsed time, then rethrows the original
+ * error. The bound is time, not attempts, because a loaded runner makes each
+ * attempt slower. The retry never changes what the operation decides.
  */
 export async function retryFileStoreHandles<T>(
   operation: string,
   path: string,
-  attempt: () => Promise<T>
+  attempt: () => Promise<T>,
+  clock: HandleRetryClock = systemClock
 ): Promise<{ value: T; retries: number }> {
   const codes: string[] = [];
+  const startedAt = clock.now();
   for (;;) {
     try {
       const value = await attempt();
@@ -91,9 +103,23 @@ export async function retryFileStoreHandles<T>(
       return { value, retries: codes.length };
     } catch (error) {
       const code = windowsHandleCodes.find(candidate => hasCode(error, candidate));
-      if (process.platform !== 'win32' || codes.length === 20 || !code) throw error;
+      if (process.platform !== 'win32' || !code) throw error;
+      const elapsedMs = clock.now() - startedAt;
+      if (elapsedMs >= windowsHandleDeadlineMs) {
+        log.warn(
+          {
+            operation,
+            path,
+            attempts: codes.length + 1,
+            codes: [...new Set([...codes, code])],
+            elapsedMs,
+          },
+          'file_store.windows_handle_retry_exhausted'
+        );
+        throw error;
+      }
       codes.push(code);
-      await Bun.sleep(10);
+      await clock.sleep(10);
     }
   }
 }
@@ -159,6 +185,28 @@ async function readOwner(path: string): Promise<ProcessOwner | null> {
   return parseProcessOwner(record, path);
 }
 
+const hostFingerprint = createHash('sha256').update(currentProcessOwner.host).digest('hex');
+const scratchUuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const scratchPattern = new RegExp(
+  `^\\.(lock|probe)-v1-([0-9a-f]{64})-([1-9][0-9]*)-(${scratchUuid})-${scratchUuid}(\\.link)?$`
+);
+
+function scratchName(kind: 'lock' | 'probe'): string {
+  return `.${kind}-v1-${hostFingerprint}-${String(currentProcessOwner.pid)}-${currentProcessOwner.instance}-${randomUUID()}`;
+}
+
+async function readScratchOwner(name: string, path: string): Promise<ProcessOwner | null> {
+  // Older writers used UUID-only names; their owner evidence is still in the contents.
+  if (!name.startsWith('.lock-v1-') && !name.startsWith('.probe-v1-')) return readOwner(path);
+  const match = scratchPattern.exec(name);
+  if (!match || (match[1] === 'lock' && match[5])) throw new ProcessOwnerRecordError(path);
+  const owner = parseProcessOwner(
+    { host: currentProcessOwner.host, pid: Number(match[3]), instance: match[4] },
+    path
+  );
+  return match[2] === hostFingerprint ? owner : null;
+}
+
 async function tryLink(source: string, target: string): Promise<boolean> {
   const { value } = await retryFileStoreHandles('link', target, async () => {
     try {
@@ -182,71 +230,96 @@ async function tryLink(source: string, target: string): Promise<boolean> {
  * and the owner record are both per copy.
  */
 async function acquire(root: string, timeoutMs: number): Promise<() => Promise<void>> {
-  const path = join(root, 'lock');
-  const breaker = join(root, 'lock.break');
-  const candidate = join(root, `.lock-${randomUUID()}`);
-  const deadline = Date.now() + timeoutMs;
+  const attempt: LockAttempt = {
+    path: join(root, 'lock'),
+    breaker: join(root, 'lock.break'),
+    candidate: join(root, scratchName('lock')),
+    deadline: Date.now() + timeoutMs,
+  };
+  const { path, candidate, deadline } = attempt;
   let reported = false;
   try {
     await writeOwner(candidate);
     for (;;) {
-      if (await tryLink(candidate, path)) {
-        stranded.delete(path);
-        return async () => {
-          try {
-            await remove(path);
-          } catch (error) {
-            stranded.add(path);
-            throw error;
-          }
-        };
-      }
-      const owner = await readOwner(path);
-      if (!owner) {
-        // The holder released between our link and read; retry at once. A name
-        // that keeps existing for link but not for read must not outlast the deadline.
-        if (Date.now() >= deadline) throw new FileStoreLockHeldError(path, null);
-        continue;
-      }
-      if (stranded.has(path) && isSameOwner(owner, currentProcessOwner)) {
-        log.warn({ path }, 'file_store.lock_reclaimed');
-        await remove(path);
-        stranded.delete(path);
-        continue;
-      }
+      if (await tryLink(candidate, path)) return claimLock(path);
+      const owner = await readHolder(path, deadline);
+      if (!owner) continue;
+      if (await reclaimStranded(path, owner)) continue;
       if (!reported) {
         log.info({ path, owner }, 'file_store.lock_wait');
         reported = true;
       }
-      if (isOwnerProvablyGone(owner)) {
-        if (await tryLink(candidate, breaker)) {
-          stranded.delete(breaker);
-          try {
-            const now = await readOwner(path);
-            if (now && isSameOwner(owner, now) && isOwnerProvablyGone(now)) await remove(path);
-          } finally {
-            if (!(await discard(breaker))) stranded.add(breaker);
-          }
-          continue;
-        }
-        const breakOwner = await readOwner(breaker);
-        if (breakOwner && stranded.has(breaker) && isSameOwner(breakOwner, currentProcessOwner)) {
-          log.warn({ path: breaker }, 'file_store.lock_reclaimed');
-          await remove(breaker);
-          stranded.delete(breaker);
-          continue;
-        }
-        // A second automatic breaker would recreate the race this mutex prevents.
-        if (breakOwner && (isOwnerProvablyGone(breakOwner) || Date.now() >= deadline)) {
-          throw new FileStoreLockHeldError(breaker, breakOwner);
-        }
-      }
+      if (isOwnerProvablyGone(owner) && (await breakStaleLock(attempt, owner))) continue;
       if (Date.now() >= deadline) throw new FileStoreLockHeldError(path, owner);
       await Bun.sleep(5 + Math.floor(Math.random() * 10));
     }
   } finally {
     await discard(candidate);
   }
+}
+
+interface LockAttempt {
+  readonly path: string;
+  readonly breaker: string;
+  /** This attempt's owner record, linked to `path` to take the lock and to `breaker` to break it. */
+  readonly candidate: string;
+  readonly deadline: number;
+}
+
+/** Records the lock as held; the returned release marks it stranded when removal fails. */
+function claimLock(path: string): () => Promise<void> {
+  stranded.delete(path);
+  return async () => {
+    try {
+      await remove(path);
+    } catch (error) {
+      stranded.add(path);
+      throw error;
+    }
+  };
+}
+
+/** The lock's owner, or null when the holder released between our link and read. */
+async function readHolder(path: string, deadline: number): Promise<ProcessOwner | null> {
+  const owner = await readOwner(path);
+  // Retry at once on null. A name that keeps existing for link but not for read must not
+  // outlast the deadline.
+  if (!owner && Date.now() >= deadline) throw new FileStoreLockHeldError(path, null);
+  return owner;
+}
+
+/** Removes `path` when this process stranded it and it still names this process. */
+async function reclaimStranded(path: string, owner: ProcessOwner | null): Promise<boolean> {
+  if (!owner || !stranded.has(path) || !isSameOwner(owner, currentProcessOwner)) return false;
+  log.warn({ path }, 'file_store.lock_reclaimed');
+  await remove(path);
+  stranded.delete(path);
+  return true;
+}
+
+/**
+ * Breaks a lock whose owner is provably gone, holding `lock.break` so only one process
+ * breaks it. True when the caller should retry at once; false when it should wait.
+ */
+async function breakStaleLock(attempt: LockAttempt, owner: ProcessOwner): Promise<boolean> {
+  const { path, breaker, candidate, deadline } = attempt;
+  if (await tryLink(candidate, breaker)) {
+    stranded.delete(breaker);
+    try {
+      const now = await readOwner(path);
+      if (now && isSameOwner(owner, now) && isOwnerProvablyGone(now)) await remove(path);
+    } finally {
+      if (!(await discard(breaker))) stranded.add(breaker);
+    }
+    return true;
+  }
+  const breakOwner = await readOwner(breaker);
+  if (await reclaimStranded(breaker, breakOwner)) return true;
+  // A second automatic breaker would recreate the race this mutex prevents.
+  if (breakOwner && (isOwnerProvablyGone(breakOwner) || Date.now() >= deadline)) {
+    throw new FileStoreLockHeldError(breaker, breakOwner);
+  }
+  return false;
 }
 
 /**
@@ -264,7 +337,7 @@ const unsupportedLinkCodes = [
 
 export async function probeFileStoreFilesystem(root: string): Promise<void> {
   await mkdir(root, { recursive: true });
-  const source = join(root, `.probe-${randomUUID()}`);
+  const source = join(root, scratchName('probe'));
   const target = `${source}.link`;
   try {
     await writeOwner(source);
@@ -284,9 +357,9 @@ export async function probeFileStoreFilesystem(root: string): Promise<void> {
 
 /**
  * Removes `.lock-*` and `.probe-*` scratch files a process left when it died
- * between creating and removing them. Each holds its creator's owner record; a
- * file whose owner is not provably gone, or whose record cannot be read (a live
- * creator may not have written it yet), stays.
+ * between creating and removing them. Versioned names carry ownership even before
+ * the contents are written. Legacy files need a readable owner record; unprovable
+ * ownership always stays for operator inspection.
  */
 async function sweepScratch(root: string): Promise<void> {
   let names: string[];
@@ -301,7 +374,7 @@ async function sweepScratch(root: string): Promise<void> {
     if (!name.startsWith('.lock-') && !name.startsWith('.probe-')) continue;
     const path = join(root, name);
     try {
-      const owner = await readOwner(path);
+      const owner = await readScratchOwner(name, path);
       if (owner && isOwnerProvablyGone(owner)) await discard(path);
     } catch (error) {
       log.warn({ path, err: error }, 'file_store.scratch_sweep_skipped');

@@ -76,7 +76,7 @@ export function buildDockerExecArgs(
   pidFile: string
 ): string[] {
   return [
-    ...dockerExecPrefix(execContext, options.cwd, options.env),
+    ...buildDockerExecPrefix(execContext, options.cwd, options.env),
     'sh',
     '-c',
     `echo $$ > ${pidFile}; exec ${CONTAINER_CLAUDE_BIN} "$@"`,
@@ -96,7 +96,7 @@ export function buildDockerExecCommandArgs(
   env: NodeJS.ProcessEnv,
   cliArgs: readonly string[]
 ): string[] {
-  return [...dockerExecPrefix(execContext, cwd, env), CONTAINER_CLAUDE_BIN, ...cliArgs];
+  return [...buildDockerExecPrefix(execContext, cwd, env), CONTAINER_CLAUDE_BIN, ...cliArgs];
 }
 
 export function buildDockerExecTranscriptReadArgs(
@@ -120,7 +120,7 @@ export function buildDockerExecTranscriptReadArgs(
     'cat "$found"',
   ].join('\n');
   return [
-    ...dockerExecPrefix(
+    ...buildDockerExecPrefix(
       execContext,
       cwd,
       env.CLAUDE_CONFIG_DIR === undefined
@@ -139,7 +139,7 @@ export function buildDockerExecTranscriptReadArgs(
 }
 
 /** `exec -i [-u user] [-w cwd] -e K=V... <container>`, shared by container commands. */
-function dockerExecPrefix(
+export function buildDockerExecPrefix(
   execContext: Extract<ExecutionContext, { kind: 'container' }>,
   cwd: string | undefined,
   env: NodeJS.ProcessEnv | Record<string, string | undefined>

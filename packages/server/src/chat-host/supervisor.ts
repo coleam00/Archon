@@ -134,110 +134,8 @@ export class ChatSupervisor implements ChatConnection {
     this.onState('starting');
     let failures = 0;
     while (!this.stopping) {
-      let retryable = true;
-      const child = spawn(argv[0], argv.slice(1), {
-        detached: process.platform !== 'win32',
-        windowsHide: true,
-        env: buildProviderSubprocessEnv({}),
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      // Bun may clear child.pid on exit; retain the launched process group identity.
-      const pid = child.pid;
-      let exited = false;
-      let stderrBytes = 0;
-      child.stderr.on('data', (data: Buffer) => {
-        stderrBytes += data.byteLength;
-      });
-      child.stdin.on('error', () => {
-        /* RPC reports writer failure. */
-      });
-      const spawnFailure = new Promise<never>((_, reject) => {
-        child.once('error', () => {
-          reject(new ChatPluginUnavailableError(descriptor.id));
-        });
-      });
-      const closed = new Promise<void>(resolve =>
-        child.once('close', () => {
-          resolve();
-        })
-      );
-      const ended = new Promise<void>(resolve =>
-        child.once('exit', () => {
-          exited = true;
-          resolve();
-        })
-      );
-      let disposal: Promise<void> | undefined;
-      this.dispose = (): Promise<void> =>
-        (disposal ??= (async (): Promise<void> => {
-          child.stdin.end();
-          await Promise.race([
-            closed,
-            new Promise<void>(resolve => {
-              const timer = setTimeout(resolve, this.options.graceMs ?? 10_000);
-              void closed.then(() => {
-                clearTimeout(timer);
-              });
-            }),
-          ]);
-          try {
-            // POSIX groups survive their leader. On Windows, descendants of a root that
-            // already exited are not reaped, the same gap provider plugins accept.
-            if (pid !== undefined && (!exited || process.platform !== 'win32'))
-              await terminateTree(pid);
-          } finally {
-            child.stdin.destroy();
-            child.stdout.destroy();
-            child.stderr.destroy();
-          }
-          await closed;
-        })());
-      try {
-        const connection = await Promise.race([
-          withTimeout(
-            connectChat(
-              {
-                readable: Readable.toWeb(child.stdout),
-                writable: Writable.toWeb(child.stdin),
-              },
-              descriptor
-            ),
-            BOOTSTRAP_TIMEOUT_MS
-          ),
-          spawnFailure,
-        ]);
-        this.register(connection);
-        this.connection = connection;
-        await Promise.race([withTimeout(connection.start(), BOOTSTRAP_TIMEOUT_MS), spawnFailure]);
-        if (!this.stopping) {
-          this.sendTimeouts = 0;
-          this.onState('live');
-          this.log.info({ plugin: descriptor.id }, 'chat.plugin.started');
-          const started = Date.now();
-          await Promise.race([connection.closed, ended, spawnFailure]);
-          if (Date.now() - started >= 60_000) failures = 0;
-        }
-      } catch (error) {
-        retryable =
-          !(error instanceof ChatStartError && !error.retryable) &&
-          !(error instanceof PluginProtocolError && error.reason === 'invalid_message');
-        this.log.error(
-          {
-            plugin: descriptor.id,
-            retryable,
-            ...(error instanceof PluginProtocolMismatchError
-              ? { hostProtocol: error.hostProtocol, pluginProtocol: error.pluginProtocol }
-              : {}),
-          },
-          'chat.plugin.failed'
-        );
-      } finally {
-        this.connection = undefined;
-        this.onState(this.stopping ? 'stopped' : retryable ? 'starting' : 'failed');
-        await this.dispose();
-        this.dispose = undefined;
-        this.log.debug({ plugin: descriptor.id, stderrBytes }, 'chat.plugin.closed');
-      }
+      const { retryable, sustained } = await this.runAttempt();
+      if (sustained) failures = 0;
       if (this.stopping || !retryable) return;
       const delayMs = Math.min(
         (this.options.backoffMs ?? 1_000) * 2 ** Math.min(failures++, 16),
@@ -253,5 +151,115 @@ export class ChatSupervisor implements ChatConnection {
       });
       this.wakeBackoff = undefined;
     }
+  }
+
+  private async runAttempt(): Promise<{ retryable: boolean; sustained: boolean }> {
+    const { descriptor, argv } = this.plugin;
+    let retryable = true;
+    let sustained = false;
+    const child = spawn(argv[0], argv.slice(1), {
+      detached: process.platform !== 'win32',
+      windowsHide: true,
+      env: buildProviderSubprocessEnv({}),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    // Bun may clear child.pid on exit; retain the launched process group identity.
+    const pid = child.pid;
+    let exited = false;
+    let stderrBytes = 0;
+    child.stderr.on('data', (data: Buffer) => {
+      stderrBytes += data.byteLength;
+    });
+    child.stdin.on('error', () => {
+      /* RPC reports writer failure. */
+    });
+    const spawnFailure = new Promise<never>((_, reject) => {
+      child.once('error', () => {
+        reject(new ChatPluginUnavailableError(descriptor.id));
+      });
+    });
+    const closed = new Promise<void>(resolve =>
+      child.once('close', () => {
+        resolve();
+      })
+    );
+    const ended = new Promise<void>(resolve =>
+      child.once('exit', () => {
+        exited = true;
+        resolve();
+      })
+    );
+    let disposal: Promise<void> | undefined;
+    this.dispose = (): Promise<void> =>
+      (disposal ??= (async (): Promise<void> => {
+        child.stdin.end();
+        await Promise.race([
+          closed,
+          new Promise<void>(resolve => {
+            const timer = setTimeout(resolve, this.options.graceMs ?? 10_000);
+            void closed.then(() => {
+              clearTimeout(timer);
+            });
+          }),
+        ]);
+        try {
+          // POSIX groups survive their leader. On Windows, descendants of a root that
+          // already exited are not reaped, the same gap provider plugins accept.
+          if (pid !== undefined && (!exited || process.platform !== 'win32'))
+            await terminateTree(pid);
+        } finally {
+          child.stdin.destroy();
+          child.stdout.destroy();
+          child.stderr.destroy();
+        }
+        await closed;
+      })());
+    try {
+      const connection = await Promise.race([
+        withTimeout(
+          connectChat(
+            {
+              readable: Readable.toWeb(child.stdout),
+              writable: Writable.toWeb(child.stdin),
+            },
+            descriptor
+          ),
+          BOOTSTRAP_TIMEOUT_MS
+        ),
+        spawnFailure,
+      ]);
+      this.register(connection);
+      this.connection = connection;
+      await Promise.race([withTimeout(connection.start(), BOOTSTRAP_TIMEOUT_MS), spawnFailure]);
+      if (!this.stopping) {
+        this.sendTimeouts = 0;
+        this.onState('live');
+        this.log.info({ plugin: descriptor.id }, 'chat.plugin.started');
+        const started = Date.now();
+        await Promise.race([connection.closed, ended, spawnFailure]);
+        if (Date.now() - started >= 60_000) sustained = true;
+      }
+    } catch (error) {
+      retryable =
+        !(error instanceof ChatStartError && !error.retryable) &&
+        !(error instanceof PluginProtocolError && error.reason === 'invalid_message');
+      this.log.error(
+        {
+          plugin: descriptor.id,
+          retryable,
+          ...(error instanceof PluginProtocolMismatchError
+            ? { hostProtocol: error.hostProtocol, pluginProtocol: error.pluginProtocol }
+            : {}),
+        },
+        'chat.plugin.failed'
+      );
+    } finally {
+      this.connection = undefined;
+      this.onState(this.stopping ? 'stopped' : retryable ? 'starting' : 'failed');
+      await this.dispose();
+      this.dispose = undefined;
+      this.log.debug({ plugin: descriptor.id, stderrBytes }, 'chat.plugin.closed');
+    }
+    return { retryable, sustained };
   }
 }

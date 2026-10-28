@@ -222,6 +222,8 @@ Each test should capture the full command output for the final report. If a test
 
 ### Test 2 — Bundled workflows load
 
+From 0.12.0, release binaries ship without providers, and a config that names one fails to load until it's installed. Run `"$BINARY" provider add claude codex pi` (the ones the config uses) before this test. That is the documented upgrade step, and it is part of what this test checks.
+
 Create a temporary git repository so the CLI has something to operate on:
 
 ```bash

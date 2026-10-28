@@ -92,8 +92,8 @@ export * as isolationOperations from './operations/isolation-operations';
 // =============================================================================
 // Orchestrator
 // =============================================================================
-export { handleMessage, resolveTitleRequest } from './orchestrator/orchestrator-agent';
-export type { TitleRequest } from './orchestrator/orchestrator-agent';
+export { handleMessage } from './orchestrator/orchestrator-agent';
+export { resolveTitleRequest, type TitleRequest } from './orchestrator/chat-request';
 export {
   buildOrchestratorPrompt,
   buildProjectScopedPrompt,
@@ -190,7 +190,11 @@ export { type TransitionTrigger, getTriggerForCommand } from './state/session-tr
 // =============================================================================
 
 // Conversation lock
-export { ConversationLockManager, type LockAcquisitionResult } from './utils/conversation-lock';
+export {
+  ConversationLockManager,
+  type ConversationLockSnapshot,
+  type LockAcquisitionResult,
+} from './utils/conversation-lock';
 
 // Webhook delivery dedup
 export { DeliveryDeduplicator } from './utils/delivery-dedup';

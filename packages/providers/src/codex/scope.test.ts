@@ -47,6 +47,15 @@ describe('applyNodeScope', () => {
     expect(scoped.declared).toEqual(['alpha_srv']);
   });
 
+  test('feature switches already on the thread config survive, and scoping still wins', () => {
+    const config = { ...base, features: { multi_agent: false, apps: true, plugins: true } };
+    expect(applyNodeScope(config, inventory, []).config.features).toEqual({
+      multi_agent: false,
+      apps: false,
+      plugins: false,
+    });
+  });
+
   test('a declared server that reuses a configured name fails before the thread starts', () => {
     const scope = (): unknown =>
       applyNodeScope({ ...base, mcp_servers: { posthog: { command: 'x' } } }, inventory, []);

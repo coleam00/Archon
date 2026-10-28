@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, it, expect } from 'bun:test';
 import { formatDeprecationNotice } from './deprecation';
 import type { WorkflowDefinition } from './schemas/workflow';

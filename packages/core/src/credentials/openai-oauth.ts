@@ -196,28 +196,7 @@ async function postTokenRequest(
       `OpenAI token ${operation} request failed: ${error instanceof Error ? error.message : String(error)}`
     );
   }
-  if (!response.ok) {
-    // Strip the error body down to the OAuth `error` code: this message flows
-    // into the bridge's session.detail (and on to the browser/CLI), and OpenAI
-    // error bodies can carry account identifiers. Never include the raw body.
-    const text = await response.text().catch(() => '');
-    let errorCode = '';
-    try {
-      const parsed = JSON.parse(text) as { error?: unknown };
-      if (typeof parsed.error === 'string') {
-        errorCode = parsed.error;
-      } else if (parsed.error && typeof parsed.error === 'object') {
-        const code = (parsed.error as { code?: unknown }).code;
-        if (typeof code === 'string') errorCode = code;
-      }
-    } catch {
-      // Non-JSON error body — drop it entirely; the status code must suffice.
-    }
-    throw new OpenAiTokenError(
-      `OpenAI token ${operation} failed (${response.status})${errorCode ? `: ${errorCode}` : ''}`,
-      response.status
-    );
-  }
+  if (!response.ok) throw await tokenResponseError(response, operation);
   let raw: unknown;
   try {
     raw = await response.json();
@@ -229,6 +208,32 @@ async function postTokenRequest(
     );
   }
   return raw as OpenAiTokenResponse;
+}
+
+async function tokenResponseError(
+  response: Response,
+  operation: 'exchange' | 'refresh'
+): Promise<OpenAiTokenError> {
+  // Strip the error body down to the OAuth `error` code: this message flows
+  // into the bridge's session.detail (and on to the browser/CLI), and OpenAI
+  // error bodies can carry account identifiers. Never include the raw body.
+  const text = await response.text().catch(() => '');
+  let errorCode = '';
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown };
+    if (typeof parsed.error === 'string') {
+      errorCode = parsed.error;
+    } else if (parsed.error && typeof parsed.error === 'object') {
+      const code = (parsed.error as { code?: unknown }).code;
+      if (typeof code === 'string') errorCode = code;
+    }
+  } catch {
+    // Non-JSON error body — drop it entirely; the status code must suffice.
+  }
+  return new OpenAiTokenError(
+    `OpenAI token ${operation} failed (${response.status})${errorCode ? `: ${errorCode}` : ''}`,
+    response.status
+  );
 }
 
 /**

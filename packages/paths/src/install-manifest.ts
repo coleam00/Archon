@@ -2,7 +2,7 @@
 import { randomUUID } from 'crypto';
 import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { dirname, resolve } from 'path';
-import { getInstallManifestPath } from './archon-paths';
+import { getInstallManifestPath } from './home-paths';
 import { createLogger } from './logger';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;

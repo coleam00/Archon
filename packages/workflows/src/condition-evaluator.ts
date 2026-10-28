@@ -86,7 +86,7 @@ function resolveOutputRef(
     // A `.field` ref that resolves to no output (a typo, or a real node that hasn't
     // run before this reference) fails the consuming node loudly, matching
     // `resolveNodeOutputField`'s strict no-silent-drop posture (and
-    // `substituteNodeOutputRefs` in dag-executor). A whole-text `$id.output` stays
+    // `substituteNodeOutputRefs` in dag/references). A whole-text `$id.output` stays
     // lenient ('').
     if (field) {
       throw new OutputRefError(nodeId, field, 'unknown-node', {
@@ -143,7 +143,7 @@ function resolveOutputRef(
  * Loud, never `''`: a typo'd input that silently emptied would make the condition
  * quietly false and skip the node — the exact silent-branch failure #2566 removes
  * from the whole-output case. The prompt surface already throws for the same
- * reference (`substituteWorkflowVariables` in executor-shared.ts); this is the
+ * reference (`substituteWorkflowVariables` in workflow-variables.ts); this is the
  * `when:` twin of it, worded the same way so an author sees one message for one
  * mistake regardless of where they made it.
  */

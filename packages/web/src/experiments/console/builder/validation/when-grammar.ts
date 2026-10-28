@@ -35,7 +35,7 @@ const INPUTS_SCOPE = 'INPUTS';
 
 /**
  * An input name, as the engine's `with:` key validator defines it
- * (`INPUT_NAME_SOURCE` in packages/workflows/src/schemas/dag-node.ts).
+ * (`INPUT_NAME_PATTERN` in packages/workflows/src/schemas/node-bindings.ts).
  *
  * Identical to `NODE_ID_SOURCE` today, and kept separate anyway: they are
  * different vocabularies that happen to coincide, and writing the coincidence
@@ -154,6 +154,28 @@ function parseAtom(raw: string): { ok: true; atom: AtomNode } | { ok: false; err
     };
   }
 
+  const path = resolveNodePath(trimmed, nodeId, segment1, segment2);
+  if (!path.ok) return path;
+  const { field, shorthand } = path;
+
+  const atom: AtomNode = {
+    kind: 'node',
+    nodeId,
+    op: op as WhenOp,
+    value: rhs,
+    ...(field !== undefined ? { field } : {}),
+    ...(shorthand ? { shorthand: true } : {}),
+    ...spelling,
+  };
+  return { ok: true, atom };
+}
+
+function resolveNodePath(
+  trimmed: string,
+  nodeId: string,
+  segment1: string,
+  segment2: string | undefined
+): { ok: true; field: string | undefined; shorthand: boolean } | { ok: false; error: string } {
   // Canonical-vs-shorthand path resolution, matching the engine's parseWhenAtom:
   //   `$node.output`        → bare output reference (field undefined)
   //   `$node.output.field`  → field access on the output
@@ -174,16 +196,7 @@ function parseAtom(raw: string): { ok: true; atom: AtomNode } | { ok: false; err
     field = segment1;
   }
 
-  const atom: AtomNode = {
-    kind: 'node',
-    nodeId,
-    op: op as WhenOp,
-    value: rhs,
-    ...(field !== undefined ? { field } : {}),
-    ...(shorthand ? { shorthand: true } : {}),
-    ...spelling,
-  };
-  return { ok: true, atom };
+  return { ok: true, field, shorthand };
 }
 
 /**

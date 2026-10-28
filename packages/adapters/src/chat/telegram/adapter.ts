@@ -6,6 +6,7 @@ import { telegramPolicy } from './policy';
 import { Bot, Context } from 'grammy';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
 import { createLogger } from '@archon/paths';
+import { deprecatedNotice } from '@archon/providers/community/deprecation';
 import { parseAllowedUserIds, isUserAuthorized } from './auth';
 import { convertToTelegramMarkdown, stripMarkdown } from './markdown';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
@@ -84,19 +85,7 @@ export class TelegramAdapter implements IPlatformAdapter {
     // If chunk is still too long after paragraph splitting, fall back to plain text
     if (chunk.length > MAX_LENGTH) {
       getLog().debug({ chunkLength: chunk.length }, 'telegram.chunk_too_long_plain_text');
-      const plainText = stripMarkdown(chunk);
-      // Split by lines if still too long
-      const lines = plainText.split('\n');
-      let subChunk = '';
-      for (const line of lines) {
-        if (subChunk.length + line.length + 1 > MAX_LENGTH - 100) {
-          if (subChunk) await this.bot.api.sendMessage(id, subChunk);
-          subChunk = line;
-        } else {
-          subChunk += (subChunk ? '\n' : '') + line;
-        }
-      }
-      if (subChunk) await this.bot.api.sendMessage(id, subChunk);
+      await this.sendPlainTextLines(id, stripMarkdown(chunk));
       return;
     }
 
@@ -109,6 +98,20 @@ export class TelegramAdapter implements IPlatformAdapter {
       getLog().warn({ chunkLength: chunk.length }, 'telegram.markdownv2_failed');
       await this.bot.api.sendMessage(id, stripMarkdown(chunk));
     }
+  }
+
+  private async sendPlainTextLines(id: number, plainText: string): Promise<void> {
+    const lines = plainText.split('\n');
+    let subChunk = '';
+    for (const line of lines) {
+      if (subChunk.length + line.length + 1 > MAX_LENGTH - 100) {
+        if (subChunk) await this.bot.api.sendMessage(id, subChunk);
+        subChunk = line;
+      } else {
+        subChunk += (subChunk ? '\n' : '') + line;
+      }
+    }
+    if (subChunk) await this.bot.api.sendMessage(id, subChunk);
   }
 
   /**
@@ -164,6 +167,56 @@ export class TelegramAdapter implements IPlatformAdapter {
    * Makes up to 3 attempts on 409 Conflict (stale getUpdates connection).
    */
   async start(options?: { retryDelayMs?: number }): Promise<void> {
+    getLog().warn({ notice: deprecatedNotice('Telegram') }, 'telegram.deprecated');
+
+    this.registerMessageHandler();
+
+    // Retry on 409 Conflict — another getUpdates is still active (Telegram's long-poll timeout is 50s).
+    // Wait 60s between attempts to outlast the stale connection. Do NOT recreate the bot instance
+    // on each retry — that adds more stale connections rather than fewer.
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = options?.retryDelayMs ?? 60_000;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        // drop_pending_updates: true — discard queued messages from while the bot was offline
+        // to avoid reprocessing stale commands after a container restart.
+        // grammY's start() resolves only when the bot stops; use onStart callback to detect
+        // successful launch and return immediately while the bot continues running in background.
+        await new Promise<void>((resolve, reject) => {
+          this.bot
+            .start({
+              drop_pending_updates: true,
+              onStart: () => {
+                resolve();
+              },
+            })
+            .catch((err: unknown) => {
+              const error = telegramError(err);
+              // Log post-startup crashes — after onStart fires the reject() below is a no-op
+              // (Promise already settled), but the error should still be observable in logs.
+              getLog().error({ err: error }, 'telegram.bot_runtime_error');
+              reject(error);
+            });
+        });
+        getLog().info('telegram.bot_started');
+        return;
+      } catch (err) {
+        const error = telegramError(err);
+        const is409 = error.message.includes('409');
+        if (is409 && attempt < MAX_ATTEMPTS) {
+          getLog().warn(
+            { err, attempt, maxAttempts: MAX_ATTEMPTS, retryDelayMs: RETRY_DELAY_MS },
+            'telegram.start_conflict_retrying'
+          );
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  private registerMessageHandler(): void {
     // Register message handler before launch
     this.bot.on('message:text', ctx => {
       const message = ctx.message.text;
@@ -194,50 +247,6 @@ export class TelegramAdapter implements IPlatformAdapter {
         getLog().debug('telegram.message_dropped_no_handler');
       }
     });
-
-    // Retry on 409 Conflict — another getUpdates is still active (Telegram's long-poll timeout is 50s).
-    // Wait 60s between attempts to outlast the stale connection. Do NOT recreate the bot instance
-    // on each retry — that adds more stale connections rather than fewer.
-    const MAX_ATTEMPTS = 3;
-    const RETRY_DELAY_MS = options?.retryDelayMs ?? 60_000;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        // drop_pending_updates: true — discard queued messages from while the bot was offline
-        // to avoid reprocessing stale commands after a container restart.
-        // grammY's start() resolves only when the bot stops; use onStart callback to detect
-        // successful launch and return immediately while the bot continues running in background.
-        await new Promise<void>((resolve, reject) => {
-          this.bot
-            .start({
-              drop_pending_updates: true,
-              onStart: () => {
-                resolve();
-              },
-            })
-            .catch((err: unknown) => {
-              const error = err instanceof Error ? err : new Error(String(err));
-              // Log post-startup crashes — after onStart fires the reject() below is a no-op
-              // (Promise already settled), but the error should still be observable in logs.
-              getLog().error({ err: error }, 'telegram.bot_runtime_error');
-              reject(error);
-            });
-        });
-        getLog().info('telegram.bot_started');
-        return;
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const is409 = message.includes('409');
-        if (is409 && attempt < MAX_ATTEMPTS) {
-          getLog().warn(
-            { err, attempt, maxAttempts: MAX_ATTEMPTS, retryDelayMs: RETRY_DELAY_MS },
-            'telegram.start_conflict_retrying'
-          );
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
-        } else {
-          throw err instanceof Error ? err : new Error(message);
-        }
-      }
-    }
   }
 
   /**
@@ -247,4 +256,8 @@ export class TelegramAdapter implements IPlatformAdapter {
     this.bot.stop();
     getLog().info('telegram.bot_stopped');
   }
+}
+
+function telegramError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

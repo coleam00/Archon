@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
-import { buildRequestSubprocessEnv } from './provider';
+import { buildRequestSubprocessEnv, ClaudeProvider } from './provider';
 import { resolveBundledClaudeBinary } from './plugins';
 
 const cloudSelectors = [
@@ -184,3 +184,155 @@ for (const selector of ['CLAUDE_CODE_USE_MANTLE', 'CLAUDE_CODE_USE_ANTHROPIC_AWS
     );
   }
 }
+
+for (const key of ['', 'preflight-test-key']) {
+  test(
+    `native preflight checks Claude account without a model request (key=${Boolean(key)})`,
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'claude-preflight-'));
+      let requests = 0;
+      const server = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        fetch() {
+          requests++;
+          return new Response('No model request expected', { status: 500 });
+        },
+      });
+      try {
+        const env: Record<string, string> = {
+          CLAUDE_CONFIG_DIR: dir,
+          ANTHROPIC_API_KEY: key,
+          CLAUDE_API_KEY: '',
+          CLAUDE_CODE_OAUTH_TOKEN: '',
+          ANTHROPIC_AUTH_TOKEN: '',
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          ANTHROPIC_BASE_URL: `http://127.0.0.1:${server.port}`,
+        };
+        for (const selector of cloudSelectors) env[selector] = '0';
+        expect(
+          await new ClaudeProvider().checkCredential({
+            env,
+            assistantConfig: { settingSources: [] },
+            signal: AbortSignal.timeout(15000),
+          })
+        ).toEqual({ state: key ? 'usable' : 'not_connected', source: 'native' });
+        expect(requests).toBe(0);
+      } finally {
+        server.stop(true);
+        await removeTempTree(dir);
+      }
+    },
+    testTimeout(30000)
+  );
+}
+
+for (const credential of ['', 'ANTHROPIC_API_KEY', 'CLAUDE_API_KEY', 'ANTHROPIC_AUTH_TOKEN']) {
+  // Helpers are Bun scripts so the env assertions hold under cmd.exe, which does not expand $VAR.
+  for (const [helper, expected] of [
+    ['process.exit(1)', 'unusable'],
+    ['', 'unusable'],
+    [
+      "process.env.PREFLIGHT_HELPER_KEY === 'helper-key' && process.stdout.write('helper-key')",
+      'usable',
+    ],
+    [
+      "process.env.CLAUDE_CODE_ENTRYPOINT === 'sdk-ts' && !process.env.NODE_OPTIONS && process.stdout.write('helper-key')",
+      'usable',
+    ],
+    [
+      "process.env.CLAUDE_CODE_ENTRYPOINT !== 'sdk-ts' && process.stdout.write('helper-key')",
+      'unusable',
+    ],
+  ] as const) {
+    test(
+      `native preflight resolves apiKeyHelper: ${helper || '(no output)'} with ${credential || 'no env key'}`,
+      async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'claude-helper-preflight-'));
+        try {
+          const script = join(dir, 'helper.js');
+          await writeFile(script, helper);
+          await writeFile(
+            join(dir, 'settings.json'),
+            JSON.stringify({
+              apiKeyHelper: `"${process.execPath}" "${script}"`,
+              env: { PREFLIGHT_HELPER_KEY: 'helper-key' },
+            })
+          );
+          const env: Record<string, string> = {
+            CLAUDE_CONFIG_DIR: dir,
+            ANTHROPIC_API_KEY: '',
+            CLAUDE_API_KEY: '',
+            CLAUDE_CODE_OAUTH_TOKEN: '',
+            ANTHROPIC_AUTH_TOKEN: '',
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          };
+          env.NODE_OPTIONS = '--no-warnings';
+          env.CLAUDE_CODE_ENTRYPOINT = '';
+          if (credential) env[credential] = 'environment-key';
+          for (const selector of cloudSelectors) env[selector] = '0';
+          const status = await new ClaudeProvider().checkCredential({
+            env,
+            assistantConfig: { settingSources: ['user'] },
+            signal: AbortSignal.timeout(15000),
+          });
+          expect(status.state).toBe(credential ? 'usable' : expected);
+          if (status.state === 'unusable') expect(status.evidence).toContain('apiKeyHelper');
+        } finally {
+          await removeTempTree(dir);
+        }
+      },
+      testTimeout(30000)
+    );
+  }
+}
+
+test(
+  'native preflight uses target cwd and node setting sources over assistant defaults',
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'claude-project-preflight-'));
+    try {
+      const project = join(dir, 'project');
+      await mkdir(join(project, '.claude'), { recursive: true });
+      const script = join(dir, 'helper.js');
+      await writeFile(
+        script,
+        "const { existsSync } = require('node:fs');\nif (existsSync('.claude/settings.json')) process.stdout.write('project-key');\n"
+      );
+      await writeFile(
+        join(project, '.claude/settings.json'),
+        JSON.stringify({ apiKeyHelper: `"${process.execPath}" "${script}"` })
+      );
+      const env: Record<string, string> = {
+        CLAUDE_CONFIG_DIR: dir,
+        ANTHROPIC_API_KEY: '',
+        CLAUDE_API_KEY: '',
+        CLAUDE_CODE_OAUTH_TOKEN: '',
+        ANTHROPIC_AUTH_TOKEN: '',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      };
+      for (const selector of cloudSelectors) env[selector] = '0';
+      const provider = new ClaudeProvider();
+      const request = {
+        env,
+        cwd: project,
+        assistantConfig: { settingSources: [] },
+        signal: AbortSignal.timeout(15000),
+      };
+      expect(await provider.checkCredential(request)).toEqual({
+        state: 'not_connected',
+        source: 'native',
+      });
+      expect(await provider.checkCredential({ ...request, settingSources: ['project'] })).toEqual({
+        state: 'usable',
+        source: 'native',
+      });
+      expect(
+        await provider.checkCredential({ ...request, cwd: dir, settingSources: ['project'] })
+      ).toEqual({ state: 'not_connected', source: 'native' });
+    } finally {
+      await removeTempTree(dir);
+    }
+  },
+  testTimeout(30000)
+);

@@ -5,10 +5,7 @@
  * Both sources prove the number names an issue on the tracker before anything is
  * returned or written, so a pull request with the same number is never read or
  * closed as the issue.
- * `issueAtCreation` recovers the text an issue was opened with, from GitHub's edit
- * history; the forge source has no history and answers with the current text.
- * `issueBodyAt` recovers the body at a past moment the same way, and `appendSection`
- * adds a dated section to the body, the one body write the pack makes.
+ * `appendSection` adds a dated section to the body, the one body write the pack makes.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -295,136 +292,21 @@ export function closeIssue(item: QualifiedPr, reason: CloseReason): void {
   }
 }
 
-/** `current` when the creation body could not be recovered and the current one stands in. */
-export const BODY_SOURCES = ['creation', 'current'] as const;
-
-/** The title and body an issue was opened with, and whether the body really is that. */
-export interface IssueAtCreation {
-  readonly title: string;
-  readonly body: string;
-  readonly body_from: (typeof BODY_SOURCES)[number];
-}
-
-const CREATION_QUERY = [
-  'query($owner: String!, $name: String!, $number: Int!) {',
-  'repository(owner: $owner, name: $name) { issue(number: $number) {',
-  'createdAt',
-  'userContentEdits(last: 1) { totalCount nodes { editedAt diff } }',
-  'timelineItems(first: 1, itemTypes: [RENAMED_TITLE_EVENT]) {',
-  'nodes { ... on RenamedTitleEvent { previousTitle } } }',
-  '} } }',
-].join(' ');
-
-export function issueAtCreation(item: QualifiedPr, current: IssueView): IssueAtCreation {
-  if (forgeSource() === 'forge') {
-    return { title: current.title, body: current.body, body_from: 'current' };
-  }
-  const history = graphql(item, CREATION_QUERY, `issue ${String(item.number)} history`);
-  const edits = record(history?.userContentEdits);
-  if (history === undefined || typeof edits?.totalCount !== 'number') {
-    throw new Error(`issue ${String(item.number)} has no edit history to read`);
-  }
-  // Edits are newest first and each holds the whole body at that revision, so the
-  // last one is the oldest. It is the creation body when it was made at creation; a
-  // deleted revision has no diff, and then the current body stands in, visibly.
-  const oldest = record(Array.isArray(edits.nodes) ? edits.nodes[0] : undefined);
-  const recovered =
-    edits.totalCount === 0
-      ? current.body
-      : typeof oldest?.diff === 'string' && oldest.editedAt === history.createdAt
-        ? oldest.diff
-        : undefined;
-  const renames = record(history.timelineItems)?.nodes;
-  const previousTitle = record(Array.isArray(renames) ? renames[0] : undefined)?.previousTitle;
-  return {
-    title: typeof previousTitle === 'string' ? previousTitle : current.title,
-    body: recovered ?? current.body,
-    body_from: recovered === undefined ? 'current' : 'creation',
-  };
-}
-
-function graphql(item: QualifiedPr, query: string, what: string): Record<string, unknown> | undefined {
-  const slash = item.repo.path.indexOf('/');
-  const result = Bun.spawnSync(
-    [
-      'gh',
-      'api',
-      'graphql',
-      '--hostname',
-      item.repo.host,
-      '-f',
-      `query=${query}`,
-      '-f',
-      `owner=${item.repo.path.slice(0, slash)}`,
-      '-f',
-      `name=${item.repo.path.slice(slash + 1)}`,
-      '-F',
-      `number=${String(item.number)}`,
-    ],
-    { stdout: 'pipe', stderr: 'pipe' }
-  );
-  if (result.exitCode !== 0) {
-    throw new Error(`gh api graphql (${what}) failed: ${result.stderr.toString().trim()}`);
-  }
-  const data = record(record(JSON.parse(result.stdout.toString()))?.data);
-  return record(record(data?.repository)?.issue);
-}
-
-const EDITS_QUERY = [
-  'query($owner: String!, $name: String!, $number: Int!) {',
-  'repository(owner: $owner, name: $name) { issue(number: $number) {',
-  'createdAt body',
-  'userContentEdits(first: 100) { totalCount nodes { editedAt diff } }',
-  '} } }',
-].join(' ');
-
-/**
- * The issue's body as it was at `at`, from GitHub's edit history. Edits are newest
- * first and each holds the whole body at that revision. A history it cannot read
- * whole, a deleted revision, or a time before the issue existed refuses: a replay must
- * never judge text the issue did not have at that moment.
- */
-export function issueBodyAt(item: QualifiedPr, at: string): string {
-  if (forgeSource() === 'forge') {
-    throw new Error('the forge source has no edit history, so the body at a past time is unknown');
-  }
-  const when = Date.parse(at);
-  if (Number.isNaN(when)) throw new Error(`"${at}" is not a time`);
-  const issue = graphql(item, EDITS_QUERY, `issue ${String(item.number)} history`);
-  const edits = record(issue?.userContentEdits);
-  if (
-    typeof issue?.createdAt !== 'string' ||
-    typeof issue.body !== 'string' ||
-    typeof edits?.totalCount !== 'number' ||
-    !Array.isArray(edits.nodes)
-  ) {
-    throw new Error(`issue ${String(item.number)} has no edit history to read`);
-  }
-  if (when < Date.parse(issue.createdAt)) throw new Error(`issue ${String(item.number)} did not exist at ${at}`);
-  if (edits.totalCount === 0) return issue.body;
-  if (edits.totalCount > edits.nodes.length) {
-    throw new Error(`issue ${String(item.number)} has more edits than one history read returns`);
-  }
-  const revision = edits.nodes.map(record).find(
-    edit => typeof edit?.editedAt === 'string' && Date.parse(edit.editedAt) <= when
-  );
-  if (typeof revision?.diff !== 'string') {
-    throw new Error(`issue ${String(item.number)} has no readable revision at ${at}`);
-  }
-  return revision.diff;
-}
-
 /**
  * Append `## <heading>` and `text` to the issue's body and read it back. A body that
  * already ends with that section is left as it is, so a repeated write adds nothing.
- * GitHub has no conditional body write: an edit someone saves between the read here
- * and the write is lost, and the read-back cannot tell.
+ * Neither source has a conditional body write: an edit someone saves between the read
+ * here and the write is lost, and the read-back cannot tell.
  */
 export function appendSection(item: QualifiedPr, heading: string, text: string): void {
-  if (forgeSource() === 'forge') {
-    throw new Error('the forge contract has no issue body write, so the section cannot be added');
-  }
   const section = `## ${heading}\n\n${text.trim()}\n`;
+  if (forgeSource() === 'forge') {
+    const body = forgeView(item).body;
+    if (body.trimEnd().endsWith(section.trimEnd())) return;
+    // `workitem.edit-body` reads its own write back, and a failure throws with its outcome.
+    invokeForge('workitem.edit-body', { ref: item, body: `${body.trimEnd()}\n\n\n${section}` });
+    return;
+  }
   const before = ghIssue(item);
   const body = typeof before.body === 'string' ? before.body : '';
   if (body.trimEnd().endsWith(section.trimEnd())) return;

@@ -9,9 +9,9 @@ sidebar:
   order: 12
 ---
 
-[Folder projects](/getting-started/concepts/#folder-projects) — directories with or without git, where Archon applies no git machinery — run **in place** at the live root by default: every write lands immediately. That is honest but ungoverned, and unsafe for unattended automation against real client data. **Container isolation** runs the whole workflow inside a Docker container over a **read-only mount of the project root plus a writable overlay upper layer**, so nothing touches the live folder until you approve it.
+[Folder projects](/guides/multi-repo-projects/) — directories with or without git, where Archon applies no git machinery — run **in place** at the live root by default: every write lands immediately. That is honest but ungoverned, and unsafe for unattended automation against real client data. **Container isolation** runs the whole workflow inside a Docker container over a **read-only mount of the project root plus a writable overlay upper layer**, so nothing touches the live folder until you approve it.
 
-This is folder-project-only. Repo projects use [git worktrees](/book/isolation/) and are unaffected.
+This is folder-project-only. Repo projects use [git worktrees](/guides/worktrees/) and are unaffected.
 
 ## How it works
 
@@ -20,7 +20,7 @@ prepare → container (root mounted read-only, overlay upper on a per-run volume
    claude + bash/script nodes all run INSIDE via `docker exec`
    env = the Archon-managed bag + auth only (never the host process.env)
         │
-   … approval gate?  →  docker stop (0 RAM while paused)  →  approve/resume → docker start
+   … approval gate?  →  docker stop (0 RAM while stopped)  →  approve/resume → docker start
         │
    nodes done → WRITE-BACK GATE: overlay diff summarized, run pauses
         │
@@ -29,6 +29,8 @@ prepare → container (root mounted read-only, overlay upper on a per-run volume
         │
    teardown → container + volume removed
 ```
+
+The diagram shows a normal gate pause. Failed resume setup or suspension can leave the container running; see [Pause economics](#pause-economics).
 
 The overlay's upper layer **is** the diff by overlayfs construction, so computing what changed is a directory walk, not a tree comparison. Claude nodes run via the SDK's `spawnClaudeCodeProcess` hook into `docker exec`; `bash:`/`script:` nodes exec in the same container rather than silently falling back to host execution.
 
@@ -76,7 +78,13 @@ An **empty diff** skips the gate and completes silently. Set `container.write_ba
 
 ## Pause economics
 
-Any pause — an approval/interactive gate mid-run, or the write-back gate at the end — **`docker stop`s the container**. A multi-day wait costs ~0 CPU/RAM. Approve/reject/resume rediscover the container by its `diy.archon.env-id` label and `docker start` it (or recreate one over the persisted upper volume if the container is gone). If the volume itself is gone — the only place the un-applied work lived — resume **fails loudly** rather than silently restarting from an empty overlay.
+On a normal pause, including unreadable-source recovery before or inside the DAG, an approval/interactive gate mid-run, or the write-back gate at the end, Archon **`docker stop`s the container**. Once stopped, a multi-day wait costs ~0 CPU/RAM. Failed resume setup or suspension can leave the container running, as described below. Approve/reject/resume rediscover the container by its `diy.archon.env-id` label and `docker start` it (or recreate one over the persisted upper volume if the container is gone). If the volume itself is gone — the only place the un-applied work lived — resume **fails loudly** rather than silently restarting from an empty overlay.
+
+The CLI acquires the run's authoritative resume claim before restarting its container, including write-back-only continuations. A stale or competing attempt that loses admission cannot restart or suspend the container. If restart or container credential setup fails before execution, the engine marks the admitted run failed and surfaces the setup error. The overlay and write-back decision remain available for ordinary failed-run resume; the prior pause reason is cleared and failed nodes replay on retry. During setup, SIGINT and SIGTERM wait for the in-flight operation to settle, then fail the admitted run before exiting with an error. Setup can fail or be interrupted after restart succeeds; in that case the container may remain running, and its overlay is preserved.
+
+Unreadable-source suspension uses a one-second Docker stop grace and a two-second timeout per Docker call (ownership restoration, stop, and failure inspection), keeping Docker work under the file store's ten-second lock wait. Other pauses retain Docker's default stop grace.
+
+Stopping is best-effort: a backend failure is logged and reported to the operator, and the run stays paused for retry. No `container_stopped` event is emitted on failure; the container may keep consuming resources until resume or teardown.
 
 Container pauses are only resumable **from the CLI**, where the Docker backend is wired. Approving or rejecting a container run from chat or the Web UI records the decision but cannot continue the container. The run stays paused until you run `archon workflow resume <run-id>` from the CLI in the same project. Do not re-send the decision: the gate is already resolved.
 
@@ -84,7 +92,7 @@ Container pauses are only resumable **from the CLI**, where the Docker backend i
 
 Precedence: `--container` flag > workflow `container.enabled` > config `container.enabled` > off. See [configuration](/reference/configuration/#container-isolation-folder-projects) for the `container:` config block (image, network, memory, pids) and the `container.write_back` workflow policy.
 
-`archon isolation list` shows active container environments (a paused run's container appears here with its age and is **never** auto-pruned); `archon isolation cleanup` reaps the containers + volumes of terminal or orphaned runs older than the threshold.
+`archon isolation list` shows active container environments with their age. `archon isolation cleanup` reaps containers and volumes older than the threshold only when no claimable run owns the environment and platform policy permits removal. It preserves containers for pending, running, paused, and resumable failed runs, including failed resume setup. The displayed run status or `no run (orphan)` label does not establish eligibility: cleanup checks run metadata, conversation links, and same-codebase checkout paths. If that ownership lookup fails, cleanup reports the error and skips removal. To discard a failed run and its retry overlay, use `archon workflow abandon <run-id>`.
 
 ## Provider support
 
@@ -103,7 +111,7 @@ The container is the isolation boundary: read-only lower bind + overlay upper on
 
 Overlay mount mode is chosen least-privilege-first: `fuse-overlayfs` (only `--device /dev/fuse`, no `CAP_SYS_ADMIN`) is attempted first and works on rootless / userns-remap daemons. Native fallback requires the runner to report a FUSE mount failure with exit status 78. Docker startup failures, including a missing `/dev/fuse`, readiness timeouts, unconfirmed exit status, and failed log checks stop preparation without fallback. A transient inspection failure can recover: a later inspection confirming exit 78 permits fallback. On a standard rootful daemon, a confirmed FUSE mount failure permits `native` (kernel overlay + `CAP_SYS_ADMIN`), which lets in-container root remount the read-only lower — so `native` is isolation-hardening, **not** a sandbox against a hostile agent. The full threat model, the `native` caveat, and the `docker exec -e` secrets-in-`ps` limitation are documented in `packages/isolation/docker/SECURITY.md` — read it before running untrusted work.
 
-Two Archon-owned host directories are bound into the container at their host paths: the run's frozen workflow source, read-only, and `$ARTIFACTS_DIR`, read-write. The artifacts bind is what lets an in-container node leave screenshots, reports, or the `evidence_policy` marker where the engine and the operator read them. It is the only host directory the container can write; its contents are run output and the host never executes them. On a rootful Linux daemon the container's root user owns what it writes there, so Archon attempts to restore host ownership when the container is suspended or destroyed. This is best-effort: failures are logged as `isolation.container_artifacts_chown_failed` and do not stop suspension or destruction.
+Two Archon-owned host directories are bound into the container at their host paths: the run's frozen workflow source, read-only, and `$ARTIFACTS_DIR`, read-write. The artifacts bind is what lets an in-container node leave screenshots, reports, or the `evidence_policy` marker where the engine and the operator read them. It is the only host directory the container can write; its contents are run output and the host never executes them. Archon's own host writes into it refuse a symlinked parent directory and replace a symlinked file instead of writing through it, so a link planted by a node cannot redirect an engine write elsewhere on the host. On a rootful Linux daemon the container's root user owns what it writes there, so Archon attempts to restore host ownership when the container is suspended or destroyed. This is best-effort: failures are logged as `isolation.container_artifacts_chown_failed` and do not stop suspension or destruction.
 
 Before a named script or other capture-backed read is dispatched, Archon hashes the host capture and compares it with the run's pinned source identity. This refuses a mismatch present at that checkpoint; it does not close the check-to-exec race, contain a same-UID host process, or cancel parallel nodes already running.
 

@@ -8,7 +8,7 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 
 // TokenUsage is used by IPlatformAdapter below.
 import type { TokenUsage } from '@archon/providers/types';
-import type { PlatformStructuredEvent } from '@archon/workflows/deps';
+import type { PlatformStructuredEvent, WorkflowMessageMetadata } from '@archon/workflows/deps';
 
 // Re-export schema-derived types so existing imports from '@archon/core/types' keep working.
 export type {
@@ -65,9 +65,8 @@ export interface HandleMessageContext {
    *
    * Set ONLY by the `POST /api/workflows/:name/run` route, whose body carries an
    * `inputs` map. It rides the context rather than the message text so a supplied value
-   * is never confused with `$ARGUMENTS`, and so chat platforms — which have no channel
-   * for it and never populate this field — keep their existing behaviour unchanged
-   * (#2555 tracks giving them one).
+   * is never confused with `$ARGUMENTS`. Chat launches never populate this field; they
+   * carry inputs on the `invoke_workflow` launch instead.
    */
   readonly workflowInputs?: Readonly<Record<string, string>>;
   /** Sparse tier/@alias rebindings supplied by the workflow run route (#2481). */
@@ -103,21 +102,7 @@ export interface CommandResult {
   workflow?: WorkflowRequest;
 }
 
-/**
- * Generic platform adapter interface
- * Allows supporting multiple platforms (Telegram, Slack, GitHub, etc.)
- */
-export interface MessageMetadata {
-  category?:
-    | 'tool_call_formatted'
-    | 'workflow_status'
-    | 'workflow_dispatch_status'
-    | 'isolation_context'
-    | 'workflow_result';
-  segment?: 'new' | 'auto';
-  workflowDispatch?: { workerConversationId: string; workflowName: string };
-  workflowResult?: { workflowName: string; runId: string };
-}
+export type MessageMetadata = WorkflowMessageMetadata;
 
 export { toPersistedMessageMetadata } from './message-metadata';
 

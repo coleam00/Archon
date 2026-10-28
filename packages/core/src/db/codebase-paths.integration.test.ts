@@ -74,7 +74,7 @@ test('SQLite rejects legacy paths and preserves registration identity on explici
   const repoPath = await canonicalizeProjectPath(import.meta.dir);
   const folderPath = join(root, 'plain-folder');
   await mkdir(folderPath);
-  const { resolveProjectPaths } = await import('@archon/workflows/executor');
+  const { resolveProjectPaths } = await import('@archon/workflows/run-paths');
   for (const kind of ['folder', 'repo'] as const) {
     await db.query('UPDATE remote_agent_codebases SET kind = $1, default_cwd = $2 WHERE id = $3', [
       kind,

@@ -11,10 +11,10 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createReleaseRepo, serveFixtureGit } from '../test-support/plugin-fixture';
-import * as plugin from './plugin';
+import * as plugin from './plugin-install';
 
 mock.module('@archon/paths', () => ({ ...paths, BUNDLED_IS_BINARY: true }));
-const { collectAIConfig } = await import('./setup');
+const { collectAIConfig } = await import('./setup-ai');
 
 test.skipIf(process.platform === 'win32')(
   'binary setup adds a provider through the real command and loads its receipt',

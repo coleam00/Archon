@@ -1,10 +1,17 @@
+import { prepareWorkflowRunFailure } from '../workflow-run-failure';
+import { resumeRun } from './run-resume';
 import {
+  createTransactionReads,
+  isResumable,
+  listRunEvents,
+  newestFirst,
+} from './transaction-reads';
+import {
+  TERMINAL_RUN_EVENT_TYPE,
+  CANCELLATION_NOOP_WORKFLOW_STATUSES,
   CAPACITY_WAIT_METADATA_KEY,
-  SOURCE_RELEASE_METADATA_KEY,
   TOOL_CALL_ATTENTION_METADATA_KEY,
-  isContainerRun,
   readCapacityWait,
-  readSourceRelease,
   toolCallAttentionArraySchema,
 } from '../schemas/workflow-run';
 import { randomUUID } from 'node:crypto';
@@ -22,32 +29,28 @@ import {
   answeredAttentionWait,
   attentionLabeledEvent,
   waitContinuedEvent,
-  workflowUnpausedEvent,
   sourceReleaseMetadata,
   executionClaim,
   EXECUTION_CLAIM_METADATA_KEY,
   sourceReleasedEvent,
 } from '../store';
 import {
-  answeredPauseContinuation,
   isTerminalRunStatus,
-  workflowRunStatusSchema,
   isWorkflowWaitContext,
-  isScheduledWorkflowResume,
-  pendingWorkflowWaitDeadline,
-  pausedUsageLimitWait,
-  workflowWaitDue,
-  isAttentionQueueRow,
+  readWorkflowWaitContext,
   workflowWaitStepName,
   workflowWaitContextSchema,
+  validateWorkflowWaitMetadata,
   type WorkflowRun,
 } from '../schemas/workflow-run';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
-import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
-import { buildTerminalRecord } from '../terminal-record';
+import {
+  PAUSE_CAUSE_METADATA_KEY,
+  pauseCauseOfApproval,
+  pauseCauseOfWait,
+} from '../schemas/pause-cause';
+import { buildTerminalRecord, observeRunArtifacts } from '../terminal-record';
 import { isDeepStrictEqual } from 'node:util';
-import { readProviderEventRows } from '../provider-event-reader';
-import type { DashboardWorkflowRun } from '../schemas/workflow-run-listing';
 
 export type TransactionView = Omit<
   IWorkflowStore,
@@ -66,17 +69,11 @@ export type TransactionView = Omit<
    * otherwise. Lets a store decide slot admission before the resume changes anything.
    */
   resumableRun(id: string, cursor?: WorkflowResumeCursor): WorkflowRun;
-  /** Record a paused run's first capacity refusal; false when there is nothing to record. */
-  recordCapacityWait(id: string): boolean;
+  recordCapacityWait(id: string): void;
   clearCapacityWait(id: string): void;
 };
 
-/** Events that end a run; a commit that adds one reports the run's terminal telemetry. */
-export const TERMINAL_RUN_EVENT_TYPES = [
-  'workflow_completed',
-  'workflow_failed',
-  'workflow_cancelled',
-] as const;
+export { TERMINAL_RUN_EVENT_TYPES } from '../schemas/workflow-run';
 
 export function createTransactionView(
   runs: Map<string, WorkflowRun>,
@@ -102,35 +99,11 @@ export function createTransactionView(
       event_order: ++eventOrder,
     });
   };
-  const listEvents = (id: string): WorkflowEventRow[] =>
-    structuredClone(events.filter(event => event.workflow_run_id === id));
-  const newest = (rows: WorkflowRun[]): WorkflowRun[] =>
-    rows.sort((a, b) => b.started_at.getTime() - a.started_at.getTime());
-  const resumable = (run: WorkflowRun): boolean =>
-    run.status === 'paused' ||
-    run.status === 'failed' ||
-    (run.status === 'running' &&
-      (run.last_activity_at === null || run.last_activity_at.getTime() < Date.now() - 86_400_000));
   const resumableRun = (id: string, cursor?: WorkflowResumeCursor): WorkflowRun => {
     const run = row(id);
-    if (!resumable(run) || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
+    if (!isResumable(run) || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
       throw new WorkflowNotResumableError(id, run.status);
     return run;
-  };
-  // An answered gate has no time of its own; it sorts after every timed continuation.
-  const continuationTime = (run: WorkflowRun): number => {
-    const retry = run.metadata.continuation_retry_at;
-    const wait = pendingWorkflowWaitDeadline(run);
-    const schedule = run.metadata.scheduled_resume;
-    const at =
-      typeof retry === 'string'
-        ? retry
-        : wait
-          ? wait.resumeAt
-          : run.status === 'failed' && isScheduledWorkflowResume(schedule)
-            ? schedule.resumeAt
-            : undefined;
-    return at === undefined ? Number.POSITIVE_INFINITY : Date.parse(at);
   };
   const gateOpen = (
     run: WorkflowRun | undefined,
@@ -160,12 +133,13 @@ export function createTransactionView(
     const prepared = await Promise.all(
       changes.map(async ({ run, event, precedingEvents = [] }) => {
         run.completed_at = new Date();
-        const terminalRecord = await buildTerminalRecord({
+        const terminalRecord = buildTerminalRecord({
           run,
           events: [
-            ...listEvents(run.id),
+            ...listRunEvents(events, run.id),
             ...precedingEvents.map(event => ({ ...event, data: event.data ?? {} })),
           ],
+          artifacts: await observeRunArtifacts(run),
         });
         return {
           run,
@@ -191,6 +165,7 @@ export function createTransactionView(
   const createRun: IWorkflowStore['createWorkflowRun'] = async (
     input
   ): ReturnType<IWorkflowStore['createWorkflowRun']> => {
+    validateWorkflowWaitMetadata(input.metadata);
     const origin =
       input.origin && Object.values(input.origin).some(value => value !== undefined)
         ? structuredClone(input.origin)
@@ -221,34 +196,7 @@ export function createTransactionView(
     return structuredClone(run);
   };
   const store: TransactionView = {
-    listDueWorkflowContinuations: async (
-      now,
-      limit = 25
-    ): ReturnType<IWorkflowStore['listDueWorkflowContinuations']> =>
-      structuredClone(
-        [...runs.values()]
-          .filter(run => {
-            const retry = run.metadata.continuation_retry_at;
-            if (typeof retry === 'string' && Date.parse(retry) > now.getTime()) return false;
-            const wait = pendingWorkflowWaitDeadline(run);
-            if (wait) return workflowWaitDue(wait, now.getTime());
-            if (answeredPauseContinuation(run)) return true;
-            if (run.status === 'paused' && readSourceRelease(run.metadata) && !isContainerRun(run))
-              return true;
-            const scheduled = run.metadata.scheduled_resume;
-            return (
-              run.status === 'failed' &&
-              isScheduledWorkflowResume(scheduled) &&
-              !scheduled.triggeredAt &&
-              Date.parse(scheduled.resumeAt) <= now.getTime()
-            );
-          })
-          .sort((a, b) => {
-            const [x, y] = [continuationTime(a), continuationTime(b)];
-            return x === y ? 0 : x < y ? -1 : 1;
-          })
-          .slice(0, limit)
-      ),
+    ...createTransactionReads(runs, events, getCodebase),
     deferWorkflowContinuation: async (id, retryAt, cursor) => {
       const run = runs.get(id);
       if (run && resumeCursorMatches(run, cursor)) run.metadata.continuation_retry_at = retryAt;
@@ -266,17 +214,17 @@ export function createTransactionView(
       const run = runs.get(id);
       const labeled = run && labeledAttentionWait(run, write);
       if (!run || !labeled) return { labeled: false };
-      run.metadata.wait = labeled;
+      run.metadata.wait = workflowWaitContextSchema.parse(labeled);
       record(attentionLabeledEvent(id, labeled, write));
       return { labeled: true, wait: structuredClone(labeled) };
     },
     signalWorkflowWait: async (id, expected, payload) => {
       const run = runs.get(id);
       if (!run) return { signaled: false };
-      const wait = run.metadata.wait;
+      const wait = readWorkflowWaitContext(run.metadata.wait);
       if (
         run.status !== 'paused' ||
-        !isWorkflowWaitContext(wait) ||
+        !wait ||
         wait.kind !== 'event' ||
         wait.signaledAt ||
         wait.event !== expected.event ||
@@ -286,11 +234,11 @@ export function createTransactionView(
         Date.parse(wait.resumeAt) <= Date.now()
       )
         return { signaled: false };
-      run.metadata.wait = {
+      run.metadata.wait = workflowWaitContextSchema.parse({
         ...wait,
         signaledAt: new Date().toISOString(),
         ...(payload === undefined ? {} : { payload: structuredClone(payload) }),
-      };
+      });
       record({
         workflow_run_id: id,
         event_type: 'wait_signaled',
@@ -300,8 +248,6 @@ export function createTransactionView(
       return { signaled: true };
     },
     createWorkflowRun: createRun,
-    getWorkflowRun: async id => structuredClone(runs.get(id) ?? null),
-    getWorkflowRunStatus: async id => runs.get(id)?.status ?? null,
     claimPendingWorkflowRun: async (
       id,
       workingPath
@@ -314,6 +260,7 @@ export function createTransactionView(
       return structuredClone(run);
     },
     updateWorkflowRun: async (id, updates): ReturnType<IWorkflowStore['updateWorkflowRun']> => {
+      validateWorkflowWaitMetadata(updates.metadata);
       const run = row(id);
       if (updates.status !== undefined && isTerminalRunStatus(updates.status))
         throw new Error('Terminal workflow status requires a lifecycle writer');
@@ -322,6 +269,13 @@ export function createTransactionView(
         output_root: run.output_root ?? updates.output_root ?? null,
         working_path: run.working_path ?? updates.working_path ?? null,
       });
+    },
+    updateWorkflowRunMetadataIfRunning: async (id, metadata) => {
+      validateWorkflowWaitMetadata(metadata);
+      const run = runs.get(id);
+      if (run?.status !== 'running') return false;
+      Object.assign(run.metadata, structuredClone(metadata));
+      return true;
     },
     updateWorkflowActivity: async (id): ReturnType<IWorkflowStore['updateWorkflowActivity']> => {
       const run = runs.get(id);
@@ -340,33 +294,23 @@ export function createTransactionView(
       completion,
       metadata
     ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
+      validateWorkflowWaitMetadata(metadata);
       const run = structuredClone(row(id));
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';
       Object.assign(run.metadata, metadata);
       await terminal(run, {
         workflow_run_id: id,
-        event_type: 'workflow_completed',
+        event_type: TERMINAL_RUN_EVENT_TYPE.completed,
         data: completion,
       });
     },
     failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
-      const run = structuredClone(row(id));
-      if (isTerminalRunStatus(run.status)) return { failed: false };
-      if (run.status !== 'running' && run.status !== 'pending')
-        throw new Error('Run not in pending/running state');
-      run.status = 'failed';
-      delete run.metadata.scheduled_resume;
-      delete run.metadata.stop_reason;
-      run.metadata.error = error;
-      if (options?.exitReason)
-        run.metadata.stop_reason = {
-          reason: options.exitReason,
-          ...(options.signal ? { signal: options.signal } : {}),
-        };
+      const run = prepareWorkflowRunFailure(id, runs.get(id), error, options);
+      if (!run) return { failed: false };
       await terminal(run, {
         workflow_run_id: id,
-        event_type: 'workflow_failed',
+        event_type: TERMINAL_RUN_EVENT_TYPE.failed,
         data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
       });
       return { failed: true };
@@ -381,6 +325,7 @@ export function createTransactionView(
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
       run.status = 'paused';
       run.metadata = { ...run.metadata, ...metadata, approval: structuredClone(approval) };
+      run.metadata[PAUSE_CAUSE_METADATA_KEY] = pauseCauseOfApproval(approval);
       // A gate replaces a finished wait's context, exactly as the SQL store does.
       delete run.metadata.wait;
       if (event) record(event);
@@ -391,6 +336,7 @@ export function createTransactionView(
       gateEvents,
       expected
     ): ReturnType<IWorkflowStore['resolveApprovalGate']> => {
+      validateWorkflowWaitMetadata(metadata);
       const run = runs.get(id);
       if (!run || !gateOpen(run, expected)) return { resolved: false };
       Object.assign(run.metadata, structuredClone(metadata));
@@ -400,54 +346,13 @@ export function createTransactionView(
     resumableRun: (id, cursor) => structuredClone(resumableRun(id, cursor)),
     recordCapacityWait: id => {
       const run = row(id);
-      if (run.status !== 'paused' || readCapacityWait(run.metadata) !== undefined) return false;
+      if (run.status !== 'paused' || readCapacityWait(run.metadata) !== undefined) return;
       run.metadata[CAPACITY_WAIT_METADATA_KEY] = { since: new Date().toISOString() };
-      return true;
     },
     clearCapacityWait: id => {
       Reflect.deleteProperty(row(id).metadata, CAPACITY_WAIT_METADATA_KEY);
     },
-    resumeWorkflowRun: async (id, cursor) => {
-      const run = resumableRun(id, cursor);
-      const scheduled = run.metadata.scheduled_resume;
-      const error =
-        typeof run.metadata.error === 'string' && run.metadata.error !== ''
-          ? run.metadata.error
-          : null;
-      if (run.status === 'failed' || error !== null)
-        record({
-          workflow_run_id: id,
-          event_type: 'workflow_resumed',
-          data: error === null ? {} : { error },
-        });
-      if (run.status === 'paused') record(workflowUnpausedEvent(id));
-      // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
-      if (pausedUsageLimitWait(run)) delete run.metadata.wait;
-      if (
-        run.status === 'failed' &&
-        isScheduledWorkflowResume(scheduled) &&
-        scheduled.triggeredAt === undefined
-      ) {
-        run.metadata.scheduled_resume = { ...scheduled, triggeredAt: new Date().toISOString() };
-        record({
-          workflow_run_id: id,
-          event_type: 'quota_resume_triggered',
-          data: { attempt: scheduled.attempt, resume_at: scheduled.resumeAt },
-        });
-      }
-      delete run.metadata.error;
-      delete run.metadata.stop_reason;
-      Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
-      delete run.metadata.continuation_retry_at;
-      Reflect.deleteProperty(run.metadata, CAPACITY_WAIT_METADATA_KEY);
-      Reflect.deleteProperty(run.metadata, SOURCE_RELEASE_METADATA_KEY);
-      run.status = 'running';
-      run.completed_at = null;
-      run.started_at = new Date();
-      run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
-      run.last_activity_at = new Date();
-      return structuredClone(run);
-    },
+    resumeWorkflowRun: async (id, cursor) => resumeRun(resumableRun(id, cursor), record),
     setToolCallAttention: async (id, streamId, calls) => {
       const snapshot = toolCallAttentionArraySchema.parse(calls);
       if (snapshot.some(call => call.streamId !== streamId))
@@ -490,146 +395,6 @@ export function createTransactionView(
       record(input);
       return { persisted: true };
     },
-    listWorkflowEvents: async (id, options) =>
-      listEvents(id).filter(event => !options?.excludeEventTypes?.includes(event.event_type)),
-    listEventsForRuns: async (ids, types) =>
-      new Map(
-        ids.map(id => [
-          id,
-          listEvents(id).filter(event => types.some(type => type === event.event_type)),
-        ])
-      ),
-    getDagResumeSnapshot: async id => foldDagResumeSnapshot(listEvents(id), id),
-    findChildRuns: async id =>
-      structuredClone(
-        [...runs.values()]
-          .filter(run => run.parent_run_id === id)
-          .sort((a, b) => a.started_at.getTime() - b.started_at.getTime())
-      ),
-    getRunAncestry: async (id): ReturnType<IWorkflowStore['getRunAncestry']> => {
-      const ancestors: WorkflowRun[] = [];
-      let parent = runs.get(id)?.parent_run_id;
-      const seen = new Set([id]);
-      while (parent && ancestors.length < 32 && !seen.has(parent)) {
-        seen.add(parent);
-        const run = runs.get(parent);
-        if (!run) break;
-        ancestors.push(structuredClone(run));
-        parent = run.parent_run_id;
-      }
-      return ancestors;
-    },
-    getActiveWorkflowRunByPath: async (path, self) =>
-      structuredClone(
-        [...runs.values()]
-          .filter(
-            run =>
-              run.working_path === path &&
-              run.id !== self?.id &&
-              !self?.excludeRunIds?.includes(run.id) &&
-              (run.status === 'running' ||
-                run.status === 'paused' ||
-                (run.status === 'pending' && run.started_at.getTime() > Date.now() - 300_000)) &&
-              (!self ||
-                run.started_at < self.startedAt ||
-                (run.started_at.getTime() === self.startedAt.getTime() && run.id < self.id))
-          )
-          .sort(
-            (a, b) => a.started_at.getTime() - b.started_at.getTime() || a.id.localeCompare(b.id)
-          )[0] ?? null
-      ),
-    findResumableRun: async (name, path) =>
-      structuredClone(
-        newest(
-          [...runs.values()].filter(
-            run => run.workflow_name === name && run.working_path === path && resumable(run)
-          )
-        )[0] ?? null
-      ),
-    findWorkflowRunsByIdPrefix: async (prefix, codebaseId) =>
-      structuredClone(
-        prefix.length > 0 && /^[0-9a-f-]+$/i.test(prefix)
-          ? [...runs.values()]
-              .filter(
-                run => run.id.startsWith(prefix.toLowerCase()) && run.codebase_id === codebaseId
-              )
-              .slice(0, 2)
-          : []
-      ),
-    findAdoptingRuns: async id =>
-      structuredClone(newest([...runs.values()].filter(run => run.adopted_from_run_id === id))),
-    listAttentionQueueRows: async () =>
-      structuredClone(newest([...runs.values()].filter(isAttentionQueueRow))),
-    findOpenWorkRuns: async options =>
-      structuredClone(
-        newest(
-          [...runs.values()].filter(
-            run =>
-              (!options?.codebaseId || run.codebase_id === options.codebaseId) &&
-              run.status === 'failed' &&
-              ![...runs.values()].some(other => other.adopted_from_run_id === run.id)
-          )
-        ).slice(0, options?.limit ?? 50)
-      ),
-    listWorkflowRuns: async (options): ReturnType<IWorkflowStore['listWorkflowRuns']> => {
-      const scoped = [...runs.values()].filter(
-        run =>
-          (!options?.codebaseId || run.codebase_id === options.codebaseId) &&
-          (!options?.search ||
-            run.workflow_name.includes(options.search) ||
-            run.user_message.includes(options.search)) &&
-          (!options?.after || run.started_at >= new Date(options.after)) &&
-          (!options?.before || run.started_at < new Date(options.before))
-      );
-      const counts = {
-        all: scoped.length,
-        running: 0,
-        pending: 0,
-        paused: 0,
-        completed: 0,
-        failed: 0,
-        cancelled: 0,
-      };
-      for (const run of scoped) counts[workflowRunStatusSchema.parse(run.status)]++;
-      const filtered = scoped.filter(
-        run =>
-          !options?.status ||
-          (Array.isArray(options.status)
-            ? options.status.includes(run.status)
-            : run.status === options.status)
-      );
-      const listed: DashboardWorkflowRun[] = [];
-      for (const run of filtered
-        .sort((a, b) => b.started_at.getTime() - a.started_at.getTime())
-        .slice(options?.offset ?? 0, (options?.offset ?? 0) + (options?.limit ?? 50))) {
-        const codebase = run.codebase_id ? await getCodebase(run.codebase_id) : null;
-        listed.push({
-          ...structuredClone(run),
-          codebase_name: codebase?.name ?? null,
-          platform_type: null,
-          worker_platform_id: null,
-          parent_platform_id: null,
-          active_nodes: [],
-          current_step_name: null,
-          current_step_status: null,
-          total_steps: null,
-          agents_completed: null,
-          agents_failed: null,
-          agents_total: null,
-        });
-      }
-      return { runs: listed, total: filtered.length, counts };
-    },
-    getCodebase: getCodebase,
-    getCodebaseEnvVars: async () => ({}),
-    listProviderEvents: async (id, query = {}) =>
-      readProviderEventRows(
-        id,
-        listEvents(id).filter(
-          row => query.stepName === undefined || row.step_name === query.stepName
-        ),
-        query
-      ),
     deleteOldWorkflowRuns: async days => {
       if (!Number.isInteger(days) || days < 0) throw new Error('Invalid olderThanDays');
       const ids = [...runs.values()]
@@ -654,23 +419,21 @@ export function createTransactionView(
       const run = structuredClone(runs.get(id));
       if (!run || !gateOpen(run, expected)) return { resolved: false };
       run.status = 'cancelled';
+      const { step_name, ...data } = cancellation;
       await terminal(
         run,
         {
           workflow_run_id: id,
-          event_type: 'workflow_cancelled',
-          step_name: cancellation.step_name,
-          data: {
-            cancel_reason: 'approval_rejected',
-            ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
-          },
+          event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
+          step_name,
+          data: { ...data, cancel_reason: 'approval_rejected' },
         },
         gateEvents.map(event => ({ ...event, workflow_run_id: id }))
       );
       return { resolved: true };
     },
     cancelResumableRunsForConversation: async (id, assertMayCancel) => {
-      const targets = newest(
+      const targets = newestFirst(
         [...runs.values()].filter(
           run =>
             (run.conversation_id === id || run.parent_conversation_id === id) &&
@@ -684,7 +447,7 @@ export function createTransactionView(
           run: { ...structuredClone(target), status: 'cancelled' },
           event: {
             workflow_run_id: target.id,
-            event_type: 'workflow_cancelled',
+            event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
             data: { cancel_reason: 'conversation_reset' },
           },
         }))
@@ -693,29 +456,27 @@ export function createTransactionView(
     },
     cancelWorkflowRun: async (id, details) => {
       const run = structuredClone(runs.get(id));
-      if (!run || run.status === 'completed' || run.status === 'cancelled')
+      if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
         return { cancelled: false };
       run.status = 'cancelled';
+      const { step_name, ...data } = details ?? {};
       await terminal(run, {
         workflow_run_id: id,
-        event_type: 'workflow_cancelled',
-        step_name: details?.step_name,
-        data: {
-          ...(details?.reason === undefined ? {} : { reason: details.reason }),
-          ...(details?.cancel_reason === undefined ? {} : { cancel_reason: details.cancel_reason }),
-        },
+        event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
+        step_name,
+        data,
       });
       return { cancelled: true };
     },
     cancelFanOutRun: async (id, reason) => {
       const run = structuredClone(runs.get(id));
-      if (!run || run.status === 'completed' || run.status === 'cancelled')
+      if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
         return { cancelled: false };
       run.status = 'cancelled';
       run.metadata.cancelled_reason = reason;
       await terminal(run, {
         workflow_run_id: id,
-        event_type: 'workflow_cancelled',
+        event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
         data: { reason, cancel_reason: 'fan_out' },
       });
       return { cancelled: true };
@@ -738,7 +499,7 @@ export function createTransactionView(
         const event = events[index];
         if (
           event?.workflow_run_id === id &&
-          event.event_type === 'workflow_cancelled' &&
+          event.event_type === TERMINAL_RUN_EVENT_TYPE.cancelled &&
           FAN_OUT_CANCEL_REASONS.some(reason => reason === event.data.reason)
         )
           events.splice(index, 1);
@@ -746,10 +507,11 @@ export function createTransactionView(
       record({ workflow_run_id: id, event_type: 'workflow_resumed' });
       return structuredClone(run);
     },
-    releaseRunForUnreadableSource: async (id, release) => {
+    releaseRunForUnreadableSource: async (id, release, beforePublish) => {
       const run = row(id);
       if (run.status !== 'running' || executionClaim(run.metadata) !== release.claimId)
         return { released: false };
+      await beforePublish?.();
       run.status = 'paused';
       run.last_activity_at = new Date();
       Object.assign(run.metadata, sourceReleaseMetadata(release, new Date().toISOString()));
@@ -764,6 +526,7 @@ export function createTransactionView(
       // stale answered gate left beside the wait would read as a gate awaiting continuation.
       delete run.metadata.approval;
       run.metadata.wait = workflowWaitContextSchema.parse(wait);
+      run.metadata[PAUSE_CAUSE_METADATA_KEY] = pauseCauseOfWait(wait);
       if (pause.kind === 'started')
         record({
           workflow_run_id: id,

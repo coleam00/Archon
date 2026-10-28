@@ -1,21 +1,21 @@
+import { runUsageSchema } from './run-usage';
 import { declaredOutputPathsSchema } from '../output-ref';
 import { z } from 'zod';
+import { fanOutOutcomeSchema } from './fan-out-outcome';
 import {
   providerFailureSchema,
   SESSION_PREVIEW_LENGTH,
   tokenUsageSchema,
 } from '@archon/provider-contract';
-import {
-  agentNodeSchema,
-  execNodeSchema,
-  loopNodeSchema,
-  loopGroupNodeSchema,
-  gateNodeSchema,
-  haltNodeSchema,
-  waitNodeSchema,
-  workflowNodeSchema,
-  composeFanOutNodeSchema,
-} from './dag-node';
+import { agentNodeSchema } from './agent-node';
+import { execNodeSchema } from './exec-node';
+import { loopNodeSchema } from './loop-node';
+import { loopGroupNodeSchema } from './dag-node';
+import { gateNodeSchema } from './gate-node';
+import { haltNodeSchema } from './halt-node';
+import { waitNodeSchema } from './wait-node';
+import { workflowNodeSchema } from './workflow-node';
+import { composeFanOutNodeSchema } from './include-node';
 import { effortLevelSchema } from './effort';
 import { tierNameSchema } from './model-binding';
 import { nodeSkipReasonSchema, skipCauseSchema, suspendReasonSchema } from './node-state';
@@ -185,6 +185,8 @@ export const mcpUnavailableSchema = z.object({
 });
 export type McpUnavailable = z.infer<typeof mcpUnavailableSchema>;
 
+export const childUsageSchema = runUsageSchema.extend({ childRunId: z.string() });
+
 export const executionDiagnosticsSchema = z.object({
   iteration: z.number().optional(),
   loopIterations: z.number().optional(),
@@ -198,6 +200,8 @@ export const executionDiagnosticsSchema = z.object({
   backgroundTasksIncomplete: z.array(z.string()).optional(),
   /** The child run this node ran, or is suspended on. */
   childRunId: z.string().optional(),
+  /** Cumulative child totals covered by this node's incremental spend. */
+  childUsage: z.array(childUsageSchema).optional(),
   /**
    * The node FAILED because this child run is still live and ownership is ambiguous;
    * abandoning that run is what unblocks the parent. Distinct from `childRunId` so a
@@ -205,6 +209,8 @@ export const executionDiagnosticsSchema = z.object({
    */
   blockedOnChildRunId: z.string().optional(),
   fanOut: z.boolean().optional(),
+  /** A settled `workflow:` fan-out's per-slot record and tally. */
+  fanOutOutcome: fanOutOutcomeSchema.optional(),
   identity: z.string().optional(),
   ordinal: z.number().optional(),
   approvalDecision: z.string().optional(),
@@ -212,6 +218,7 @@ export const executionDiagnosticsSchema = z.object({
   /** The node's optional MCP servers were not loaded, and why. */
   mcpUnavailable: mcpUnavailableSchema.optional(),
 });
+export type ExecutionDiagnostics = z.infer<typeof executionDiagnosticsSchema>;
 
 export const nodeExecutionMetadataSchema = z.object({
   runId: z.string(),
@@ -234,6 +241,13 @@ export const nodeExecutionMetadataSchema = z.object({
   lifecycle: executionLifecycleSchema,
 });
 export type NodeExecutionMetadata = z.infer<typeof nodeExecutionMetadataSchema>;
+
+/** Run identity comes from the event envelope; lifecycle is reconstructed from its type. */
+export const nodeExecutionMetadataPayloadSchema = nodeExecutionMetadataSchema.omit({
+  runId: true,
+  path: true,
+  lifecycle: true,
+});
 
 /** What a node row's `cost_usd` measures: the node's own spend, or a total restating spend other rows carry. */
 export const nodeCostScopeSchema = z.enum(['own', 'total']);

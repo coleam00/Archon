@@ -56,6 +56,22 @@ export const descriptor = providerPluginDescriptorSchema.parse({
 });
 
 export function createProvider(stateFile?: string, log?: ProviderLogSink): TestProvider {
+  async function* parityQuery(
+    options: Parameters<TestProvider['sendQuery']>[3]
+  ): ReturnType<TestProvider['sendQuery']> {
+    await log?.({ level: 'info', msg: 'provider.parity', bindings: { transport: 'ready' } });
+    const tool = options?.nativeTools?.[0];
+    if (!tool) throw new Error('missing host tool');
+    yield {
+      type: 'result',
+      structuredOutput: {
+        tool: await tool.handler({ action: 'inspect', enabled: true }),
+        env: options?.env ?? {},
+        hostPath: process.env.PATH ?? '',
+      },
+    };
+    yield { type: 'settled' };
+  }
   return {
     getType: () => descriptor.id,
     getCapabilities: () => descriptor.capabilities,
@@ -76,18 +92,7 @@ export function createProvider(stateFile?: string, log?: ProviderLogSink): TestP
     checkCredential: async () => ({ state: 'usable', source: 'native' }),
     async *sendQuery(prompt, _cwd, resume, options): ReturnType<TestProvider['sendQuery']> {
       if (prompt === 'parity') {
-        await log?.({ level: 'info', msg: 'provider.parity', bindings: { transport: 'ready' } });
-        const tool = options?.nativeTools?.[0];
-        if (!tool) throw new Error('missing host tool');
-        yield {
-          type: 'result',
-          structuredOutput: {
-            tool: await tool.handler({ action: 'inspect', enabled: true }),
-            env: options?.env ?? {},
-            hostPath: process.env.PATH ?? '',
-          },
-        };
-        yield { type: 'settled' };
+        yield* parityQuery(options);
         return;
       }
       if (prompt === 'failure') {

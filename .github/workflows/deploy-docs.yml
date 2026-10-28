@@ -20,7 +20,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Schedules run on the default branch (dev), which the github-pages
+  # environment refuses to deploy. The scheduled run only asks for a run
+  # on main; that run builds and deploys.
+  dispatch-main:
+    if: github.event_name == 'schedule'
+    permissions:
+      actions: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch the deploy on main
+        run: gh workflow run deploy-docs.yml --ref main --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   build:
+    if: github.event_name != 'schedule'
     permissions:
       contents: read
     runs-on: ubuntu-latest

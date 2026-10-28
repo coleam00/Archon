@@ -390,8 +390,8 @@ for (const scenario of [
         {}
       )(input([`${probe} | tee github-environment`]));
       expect(await readFile(join(root, 'github-environment'), 'utf8')).toBe(scenario.expected);
-      const { resolveWorkflowGithubEnvironment } = await import('@archon/workflows/executor');
-      const environment = await resolveWorkflowGithubEnvironment(
+      const credentials = await import('@archon/workflows/run-credential-env');
+      const environment = await credentials.resolveWorkflowGithubEnvironment(
         credentialsDeps,
         'project',
         scenario.user,

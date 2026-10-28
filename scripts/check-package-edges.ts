@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, posix, resolve } from 'node:path';
 import ts from 'typescript';
 
 const dependencySections = [
@@ -158,15 +158,8 @@ function importedPackages(file: SourceFile): { specifier: string; line: number }
   return imports;
 }
 
-export function findEdgeViolations(input: {
-  packages: readonly PackageManifest[];
-  files: readonly SourceFile[];
-}): Violation[] {
+function workflowDependencyViolations(workflows: PackageManifest | undefined): Violation[] {
   const violations: Violation[] = [];
-  const packages = new Map(
-    input.packages.map(manifest => [packageDirectory(manifest.path), manifest])
-  );
-  const workflows = packages.get('workflows');
   for (const field of dependencySections) {
     if (workflows && '@hono/zod-openapi' in (workflows[field] ?? {})) {
       violations.push({
@@ -175,42 +168,183 @@ export function findEdgeViolations(input: {
       });
     }
   }
+  return violations;
+}
+
+function fileEdgeViolations(
+  file: SourceFile,
+  name: string,
+  manifest: PackageManifest
+): Violation[] {
+  const violations: Violation[] = [];
+  const path = normalizePath(file.path);
+  const test = isTestFile(path);
+  const declared = declaredArchonPackages(
+    manifest,
+    test ? dependencySections : runtimeDependencySections
+  );
+  for (const { specifier, line } of importedPackages({ ...file, path })) {
+    if (
+      (path.startsWith('packages/workflows/src/') ||
+        path === 'packages/core/src/schemas/user.ts') &&
+      (specifier === '@hono/zod-openapi' || specifier.startsWith('@hono/zod-openapi/'))
+    ) {
+      violations.push({
+        file: file.path,
+        line,
+        message: 'Engine schemas must import plain zod instead of @hono/zod-openapi',
+      });
+    }
+    const target = packageTarget(specifier);
+    if (target === undefined || target === name) continue;
+    const workspaceSpecifier = `@archon/${target}`;
+    if (!declared.has(target)) {
+      violations.push({
+        file: file.path,
+        line,
+        message: `${name} → ${workspaceSpecifier} is undeclared in ${(test ? dependencySections : runtimeDependencySections).join(', ')}`,
+      });
+    }
+  }
+  return violations;
+}
+
+export function findEdgeViolations(input: {
+  packages: readonly PackageManifest[];
+  files: readonly SourceFile[];
+}): Violation[] {
+  const packages = new Map(
+    input.packages.map(manifest => [packageDirectory(manifest.path), manifest])
+  );
+  const violations = workflowDependencyViolations(packages.get('workflows'));
   for (const file of input.files) {
     const path = normalizePath(file.path);
+    if (!path.startsWith('packages/')) continue;
     const name = packageDirectory(path);
     if (name === undefined) continue;
     const manifest = packages.get(name);
     if (!manifest) continue;
-    const test = isTestFile(path);
-    const declared = declaredArchonPackages(
-      manifest,
-      test ? dependencySections : runtimeDependencySections
-    );
-    for (const { specifier, line } of importedPackages({ ...file, path })) {
-      if (
-        (path.startsWith('packages/workflows/src/') ||
-          path === 'packages/core/src/schemas/user.ts') &&
-        (specifier === '@hono/zod-openapi' || specifier.startsWith('@hono/zod-openapi/'))
-      ) {
-        violations.push({
-          file: file.path,
-          line,
-          message: 'Engine schemas must import plain zod instead of @hono/zod-openapi',
-        });
-      }
-      const target = packageTarget(specifier);
-      if (target === undefined || target === name) continue;
-      const workspaceSpecifier = `@archon/${target}`;
-      if (!declared.has(target)) {
-        violations.push({
-          file: file.path,
-          line,
-          message: `${name} → ${workspaceSpecifier} is undeclared in ${(test ? dependencySections : runtimeDependencySections).join(', ')}`,
-        });
-      }
-    }
+    violations.push(...fileEdgeViolations(file, name, manifest));
   }
   return violations;
+}
+
+const SELF_LOCATION = new Set(['import.meta.dir', 'import.meta.dirname', '__dirname']);
+
+/**
+ * Repository paths a file builds from its own location: relative import specifiers, string
+ * literals with a `..` segment, `join`/`resolve` chains rooted at `import.meta.dir`,
+ * `import.meta.dirname`, `__dirname` or a `const` folded from one, and
+ * `new URL(<literal>, import.meta.url)`. A path built from anything else (a cwd, a mocked
+ * `/repo`, a temp dir) is not a reach into this repository's own tree.
+ */
+function selfLocatedPaths(file: SourceFile): { target: string; line: number }[] {
+  const source = ts.createSourceFile(file.path, file.content, ts.ScriptTarget.Latest, true);
+  const dir = posix.dirname(file.path);
+  const folded = new Map<string, string>();
+  const targets: { target: string; line: number }[] = [];
+  const add = (node: ts.Node, target: string): void => {
+    targets.push({
+      target,
+      line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+    });
+  };
+  const fold = (node: ts.Expression): string | undefined => {
+    if (ts.isCallExpression(node)) {
+      if (!/^(?:path\.)?(?:join|resolve)$/.test(node.expression.getText(source))) return;
+      const [base, ...rest] = node.arguments;
+      if (base === undefined || !rest.every(ts.isStringLiteralLike)) return;
+      const root = SELF_LOCATION.has(base.getText(source))
+        ? dir
+        : ts.isIdentifier(base)
+          ? folded.get(base.text)
+          : fold(base);
+      if (root === undefined) return;
+      return posix.join(root, ...rest.map(segment => segment.text));
+    }
+    if (
+      ts.isNewExpression(node) &&
+      node.expression.getText(source) === 'URL' &&
+      node.arguments?.length === 2 &&
+      ts.isStringLiteralLike(node.arguments[0]) &&
+      node.arguments[1].getText(source) === 'import.meta.url'
+    )
+      return posix.join(dir, node.arguments[0].text);
+    return undefined;
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const target = fold(node.initializer);
+      if (target !== undefined) folded.set(node.name.text, target);
+    }
+    if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+      const target = fold(node);
+      if (target !== undefined) add(node, target);
+    }
+    if (ts.isStringLiteralLike(node) && node.text.split('/').includes('..'))
+      add(node, posix.join(dir, node.text));
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return targets;
+}
+
+const isUnder = (path: string, root: string): boolean =>
+  path === root || path.startsWith(`${root}/`);
+
+/** The engine file that locates the bundled pack root for source builds and the binary build. */
+export const BUNDLED_PACK_SEAM = 'packages/workflows/src/defaults/bundled-data.ts';
+
+function boundaryPathViolation(path: string, target: string, engine: boolean): string | undefined {
+  if (engine) {
+    const intoPack =
+      isUnder(target, '.archon/scripts') ||
+      (isUnder(target, '.archon/workflows') &&
+        !(path === BUNDLED_PACK_SEAM && target === '.archon/workflows'));
+    if (intoPack)
+      return `engine code reaches ${target}; the engine may not import or read the pack`;
+  } else if (isUnder(target, 'packages')) {
+    return `pack code reaches ${target}; the pack may not import or read engine code`;
+  }
+  return undefined;
+}
+
+function filePackBoundaryViolations(file: SourceFile): Violation[] {
+  const violations: Violation[] = [];
+  const path = normalizePath(file.path);
+  const engine = /^packages\/[^/]+\/src\//.test(path);
+  const pack = isUnder(path, '.archon/workflows') || isUnder(path, '.archon/scripts');
+  if (!engine && !pack) return violations;
+  const reported = new Set<string>();
+  const report = (line: number, message: string): void => {
+    const key = `${String(line)}:${message}`;
+    if (reported.has(key)) return;
+    reported.add(key);
+    violations.push({ file: file.path, line, message });
+  };
+  const located = { ...file, path };
+  if (pack) {
+    for (const { specifier, line } of importedPackages(located)) {
+      if (specifier.startsWith('@archon/'))
+        report(line, `pack code imports ${specifier}; the pack may not import engine code`);
+    }
+  }
+  for (const { target, line } of selfLocatedPaths(located)) {
+    const message = boundaryPathViolation(path, target, engine);
+    if (message !== undefined) report(line, message);
+  }
+  return violations;
+}
+
+/**
+ * The engine (`packages/<name>/src`) and the bundled pack (`.archon/workflows`,
+ * `.archon/scripts`) meet only through the workflow language, the CLI and the forge and
+ * provider contracts. Engine code may not import or build a path into the pack, except that
+ * {@link BUNDLED_PACK_SEAM} resolves the container root `.archon/workflows`; pack code may not
+ * import `@archon/*` or reach into `packages/`.
+ */
+export function findPackBoundaryViolations(files: readonly SourceFile[]): Violation[] {
+  return files.flatMap(filePackBoundaryViolations);
 }
 
 function declaredArchonPackages(
@@ -284,6 +418,8 @@ export function findLayeringViolations(
   return violations;
 }
 
+const SCANNED_TREES = ['packages', '.archon/workflows', '.archon/scripts'];
+
 export function loadRepository(root = resolve(import.meta.dir, '..')): {
   packages: PackageManifest[];
   files: SourceFile[];
@@ -302,8 +438,8 @@ export function loadRepository(root = resolve(import.meta.dir, '..')): {
     });
   const listed = new Set<string>();
   for (const args of [
-    ['ls-files', '-z', '--', 'packages'],
-    ['ls-files', '-z', '--others', '--exclude-standard', '--', 'packages'],
+    ['ls-files', '-z', '--', ...SCANNED_TREES],
+    ['ls-files', '-z', '--others', '--exclude-standard', '--', ...SCANNED_TREES],
   ]) {
     const result = Bun.spawnSync(['git', ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
     if (result.exitCode !== 0)
@@ -324,6 +460,7 @@ if (import.meta.main) {
   const violations = [
     ...findLayeringViolations(repository.packages),
     ...findEdgeViolations(repository),
+    ...findPackBoundaryViolations(repository.files),
   ];
   for (const violation of violations) {
     console.error(

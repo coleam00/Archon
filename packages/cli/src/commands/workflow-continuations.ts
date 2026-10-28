@@ -1,3 +1,4 @@
+import type { WorkflowResumeOptions } from '@archon/workflows/engine-port';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createHash } from 'node:crypto';
@@ -12,7 +13,7 @@ import {
 } from '@archon/core/workflows/continuation-resume';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { deadlineWaitCursor, type WorkflowResumeCursor } from '@archon/workflows/store';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
@@ -48,7 +49,8 @@ export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleC
 async function admit(
   host: WorkflowHost,
   run: WorkflowRun,
-  cursor: WorkflowResumeCursor
+  cursor: WorkflowResumeCursor,
+  deferScratchCleanup?: WorkflowResumeOptions['deferScratchCleanup']
 ): Promise<ContinuationAdmission> {
   return resumeWorkflowContinuation(
     host,
@@ -99,12 +101,19 @@ async function admit(
         conversationId: freshRun.conversation_id ?? freshRun.id,
       };
     },
-    cursor
+    cursor,
+    undefined,
+    { deferScratchCleanup }
   );
 }
 
 type SettledOutcome = { runId: string; deferError?: string } & (
   | { kind: 'accepted'; status: 'paused' | 'completed' | 'failed'; error?: string }
+  | {
+      kind: 'accepted';
+      status: 'handed_off';
+      observedStatus: Exclude<WorkflowRunStatus, 'failed' | 'cancelled'> | null;
+    }
   | Exclude<ContinuationAdmission, { kind: 'accepted' }>
   | { kind: 'failed'; error: string }
 );
@@ -116,6 +125,10 @@ async function settle(outcome: ContinuationWakeOutcome): Promise<SettledOutcome>
     try {
       const result = await outcome.settled;
       if ('paused' in result) return { runId, kind: outcome.kind, status: 'paused', ...deferral };
+      if ('handedOff' in result && result.success) {
+        const { observedStatus } = result;
+        return { runId, kind: outcome.kind, status: 'handed_off', observedStatus, ...deferral };
+      }
       return result.success
         ? { runId, kind: outcome.kind, status: 'completed', ...deferral }
         : { runId, kind: outcome.kind, status: 'failed', error: result.error, ...deferral };
@@ -150,6 +163,12 @@ function successful(outcome: SettledOutcome): boolean {
   );
 }
 
+function describeOutcome(outcome: SettledOutcome): string {
+  const observed =
+    'observedStatus' in outcome ? `, observed ${outcome.observedStatus ?? 'run removed'}` : '';
+  return `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status}${observed})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`;
+}
+
 async function report(
   action: string,
   outcomes: SettledOutcome[],
@@ -175,11 +194,7 @@ async function report(
     console.log(
       `${action}: ${String(accepted)} continuation(s) accepted${ok ? '' : '; errors reported'}`
     );
-    for (const outcome of outcomes) {
-      console.log(
-        `${outcome.runId}: ${outcome.kind}${'status' in outcome ? ` (${outcome.status})` : ''}${'reason' in outcome ? `: ${outcome.reason}` : ''}${'blocker' in outcome ? `: blocked by ${outcome.blocker.kind} ${outcome.blocker.id}` : ''}${'error' in outcome ? `: ${outcome.error}` : ''}${outcome.deferError ? `; deferral failed: ${outcome.deferError}` : ''}`
-      );
-    }
+    for (const outcome of outcomes) console.log(describeOutcome(outcome));
     if (signaled && !ok)
       console.error(
         'Signal retained. Retry archon workflow wake after resolving the refusal or failure.'
@@ -334,11 +349,12 @@ async function wake(
   let ok = true;
   try {
     do {
+      const cleanups: (() => Promise<void>)[] = [];
       try {
         const outcomes = await wakeDueWorkflowContinuations(
           host.deps.store,
           new Date(),
-          (run, cursor) => admit(host, run, cursor)
+          (run, cursor) => admit(host, run, cursor, cleanup => cleanups.push(cleanup))
         );
         const passOk = await report('wake', await Promise.all(outcomes.map(settle)), json);
         ok = passOk && ok;
@@ -346,6 +362,8 @@ async function wake(
         ok = false;
         if (json) await writeJsonLine({ ok: false, action: 'wake', error: errorMessage(error) });
         else console.error(`wake: ${errorMessage(error)}`);
+      } finally {
+        await Promise.all(cleanups.map(cleanup => cleanup()));
       }
       if (!values.watch || stopped) break;
       await new Promise<void>(resolve => {

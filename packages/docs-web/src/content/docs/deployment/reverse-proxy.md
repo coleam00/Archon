@@ -13,7 +13,7 @@ You can use your own reverse proxy if it satisfies the contract below. Caddy is 
 
 ## Upstream and route contract
 
-Forward to Archon's **configured app port** (`PORT`), preserving the request path. Docker defaults to **3000**; local development defaults to **3090** (worktrees may allocate another port). See [Port configuration](/deployment/local/#port-configuration). Serve the UI and API at the same public origin.
+Forward to Archon's **configured app port** (`PORT`), preserving the request path. Docker defaults to **3000**; local development defaults to **3090** (worktrees may allocate another port). See [Start the server](/deployment/local/#start-the-server). Serve the UI and API at the same public origin.
 
 Keep the upstream private so clients cannot bypass the proxy. For a proxy on the same host, use `HOST=127.0.0.1`. A container proxy needs a reachable container interface, but the app's host port must not be exposed publicly. The base Compose file publishes the app port; follow the [GitHub App Docker setup](/adapters/github-app-setup/#canonical-docker-setup) to replace that mapping with a loopback-only mapping.
 
@@ -50,7 +50,7 @@ With [Web UI login](/reference/configuration/#web-ui-login-better-auth-optional)
 
 The proxy does not need its own login when that gate is enabled, but **it must strip client-supplied `X-Archon-User`** (or the name configured by `ARCHON_WEB_AUTH_HEADER`). Archon accepts this trusted identity header as a fallback even with Better Auth enabled; allowing clients to supply it bypasses the API gate. If you deliberately use proxy authentication and identity attribution, strip incoming values and set the header only from the authenticated identity. Keep the upstream reachable solely through that trusted boundary.
 
-Without web auth, or with its API gate disabled, the proxy must provide the access boundary for a network-accessible UI and API. Use the authentication options in the [Cloud guide](/deployment/cloud/#optional-form-based-authentication), or your proxy's equivalent, while keeping health checks and webhooks reachable. A reverse proxy alone does not add authentication.
+Without web auth, or with its API gate disabled, the proxy must provide the access boundary for a network-accessible UI and API. Use the authentication options in the [Docker guide](/deployment/docker/#protect-the-web-ui), or your proxy's equivalent, while keeping health checks and webhooks reachable. A reverse proxy alone does not add authentication.
 
 Archon's application code does not read `X-Forwarded-*` headers as an access or identity contract. For Better Auth behind a fixed-origin proxy, set **`BETTER_AUTH_URL=https://archon.example.com`** to the public origin instead of relying on the upstream HTTP URL. Preserve session cookies. `BETTER_AUTH_TRUSTED_ORIGINS` is for additional allowed origins, not a replacement for the public URL. See the [configuration reference](/reference/configuration/#web-ui-login-better-auth-optional) for signup policy and auth settings.
 

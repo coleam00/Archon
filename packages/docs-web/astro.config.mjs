@@ -28,11 +28,35 @@ const retiredRegistryRedirects = Object.fromEntries(
   ])
 );
 
+// Pages folded into the value-first path (#4622). Their URLs stay public through these redirects.
+const foldedPageRedirects = {
+  '/book/': '/getting-started/why-archon/',
+  '/book/what-is-archon/': '/getting-started/why-archon/',
+  '/book/first-five-minutes/': '/getting-started/quick-start/',
+  '/book/how-it-works/': '/reference/sdlc-workflows/',
+  '/book/essential-workflows/': '/reference/sdlc-workflows/',
+  '/book/isolation/': '/guides/worktrees/',
+  '/book/first-command/': '/getting-started/first-workflow/',
+  '/book/first-workflow/': '/getting-started/first-workflow/',
+  '/book/dag-workflows/': '/reference/workflow-language/',
+  '/book/hooks-and-quality/': '/guides/hooks/',
+  '/book/quick-reference/': '/reference/cli/',
+  '/getting-started/what-archon-is-not/': '/getting-started/why-archon/',
+  '/getting-started/concepts/': '/getting-started/why-archon/',
+  '/getting-started/overview/': '/getting-started/quick-start/',
+  '/guides/authoring-workflows/': '/reference/workflow-language/',
+  '/guides/attention-queue/': '/getting-started/operate/',
+};
+
 export default defineConfig({
   site: 'https://archon.diy',
   // Keep the existing Markdown and llms.txt rendering across Astro's processor change.
   markdown: { processor: unified() },
-  redirects: { ...retiredRegistryRedirects, '/workflows/': '/plugins/' },
+  redirects: {
+    ...retiredRegistryRedirects,
+    ...foldedPageRedirects,
+    '/workflows/': '/plugins/',
+  },
   integrations: [
     starlight({
       title: 'Archon',
@@ -41,7 +65,7 @@ export default defineConfig({
         src: './src/assets/logo.png',
         alt: 'Archon',
       },
-      description: 'AI workflow engine — package your coding workflows as YAML, run them anywhere.',
+      description: 'Archon is a factory builder: YAML workflows that agents, scripts and your decisions run, with you on the loop.',
       head: [
         {
           tag: 'script',
@@ -65,10 +89,6 @@ export default defineConfig({
         { label: '🗺️  Roadmap', link: '/roadmap/' },
         { label: '🎨  Brand', link: '/brand/' },
         { label: 'Plugins', link: '/plugins/' },
-        {
-          label: 'The Book of Archon',
-          items: [{ autogenerate: { directory: 'book' } }],
-        },
         {
           label: 'Getting Started',
           items: [{ autogenerate: { directory: 'getting-started' } }],
@@ -99,8 +119,8 @@ export default defineConfig({
       plugins: [
         starlightLlmsTxt({
           description:
-            'AI workflow engine -- package your coding workflows as YAML, run them anywhere.',
-          details: `Archon lets you define multi-step AI coding workflows (code review, bug fixes, features) in YAML and run them from CLI, Web UI, Slack, Telegram, GitHub, or Discord. Each workflow runs in an isolated git worktree.`,
+            'Archon is a factory builder: YAML workflows run by AI agents, scripts and your decisions.',
+          details: `Archon runs multi-step workflows written in YAML. Agents judge, code computes, and a run pauses as an attention item when it needs your decision. The bundled sdlc pack takes an issue to a merged pull request through intake, a build queue and a merge queue. Repository runs work in their own git worktree. Runs start from the CLI, the Web UI or a chat platform.`,
 
           // No exclusions - include all Starlight docs for maximum sitemap coverage
           exclude: [],
@@ -108,14 +128,9 @@ export default defineConfig({
           // Topic-based subsets for selective ingestion - cover all major doc sections
           customSets: [
             {
-              label: 'Quick Start',
-              description: 'Essential docs to get running with Archon',
+              label: 'Getting started',
+              description: 'Why Archon, the quickstart and a first workflow',
               paths: ['index', 'getting-started/**'],
-            },
-            {
-              label: 'The Book',
-              description: 'Tutorials and conceptual guides',
-              paths: ['book/**'],
             },
             {
               label: 'Guides',
@@ -159,7 +174,7 @@ export default defineConfig({
           ],
 
           // Control ordering - essentials first
-          promote: ['index', 'getting-started/**', 'guides/authoring-workflows'],
+          promote: ['index', 'getting-started/**', 'reference/workflow-language'],
           demote: ['contributing/**'],
 
           // Aggressive minification for small version

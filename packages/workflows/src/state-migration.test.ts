@@ -1,214 +1,73 @@
-/**
- * Tests for the legacy `.archon/state/` migration warning (#2200).
- *
- * The whole contract is "detect, warn once, never touch" — so the assertions
- * are: exactly one warn, the right event name, an actionable `mv`, an escalated
- * message inside a worktree, and ZERO filesystem mutation.
- */
-import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, mkdir, rm, readdir, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+// @archon-test-isolated
+import { beforeEach, describe, expect, it, mock } from 'bun:test';
 import { join } from 'path';
 
-const warnCalls: { payload: Record<string, unknown>; event: string }[] = [];
-const mockLogger = {
-  info: mock(() => {}),
-  warn: mock((payload: Record<string, unknown>, event: string) => {
-    warnCalls.push({ payload, event });
-  }),
-  error: mock(() => {}),
-  debug: mock(() => {}),
-  trace: mock(() => {}),
-  fatal: mock(() => {}),
-  child: mock(() => mockLogger),
-  bindings: mock(() => ({ module: 'test' })),
-  isLevelEnabled: mock(() => true),
-  level: 'info',
-};
+const fs = await import('fs/promises');
+const paths = await import('@archon/paths');
+const access = mock((_path: string): Promise<void> => Promise.resolve());
+const warn = mock((_payload: Record<string, unknown>, _event: string) => {});
+mock.module('fs/promises', () => ({ ...fs, access }));
 mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
+  ...paths,
+  createLogger: () => ({ warn }),
 }));
+const { maybeWarnLegacyCwdStoragePath } = await import('./state-migration');
 
-import {
-  maybeWarnLegacyStatePath,
-  maybeWarnLegacyArtifactsPath,
-  resetLegacyStateWarningForTests,
-} from './state-migration';
-
-let dir: string;
-
-beforeEach(async () => {
-  warnCalls.length = 0;
-  resetLegacyStateWarningForTests();
-  dir = await mkdtemp(join(tmpdir(), 'archon-state-migration-'));
+beforeEach(() => {
+  access.mockReset();
+  warn.mockClear();
 });
 
-afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
-});
+describe('legacy cwd storage warnings', () => {
+  for (const firstFails of [false, true]) {
+    for (const secondFails of [false, true]) {
+      it(`warns once for overlapping probes (first fails: ${firstFails}, second fails: ${secondFails})`, async () => {
+        const cwd = join('projects', `${firstFails}-${secondFails}`, 'notes');
+        const newRoot = join('storage', `${firstFails}-${secondFails}`);
+        const firstProbe = Promise.withResolvers<void>();
+        const secondProbe = Promise.withResolvers<void>();
+        access.mockImplementationOnce(() => firstProbe.promise);
+        access.mockImplementationOnce(() => secondProbe.promise);
 
-describe('maybeWarnLegacyStatePath', () => {
-  it('is silent when no legacy .archon/state exists (ENOENT happy path)', async () => {
-    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
-    expect(warnCalls).toHaveLength(0);
-  });
+        const first = maybeWarnLegacyCwdStoragePath(cwd, newRoot);
+        const second = maybeWarnLegacyCwdStoragePath(cwd, newRoot);
+        expect(access).toHaveBeenCalledTimes(2);
+        expect(warn).not.toHaveBeenCalled();
 
-  it('warns once with an actionable mv when the legacy directory exists', async () => {
-    const legacy = join(dir, '.archon', 'state');
-    await mkdir(legacy, { recursive: true });
-    await writeFile(join(legacy, 'triage-state.json'), '{}');
+        const error = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
+        if (firstFails) firstProbe.reject(error);
+        else firstProbe.resolve();
+        await first;
+        expect(warn).toHaveBeenCalledTimes(1);
 
-    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
-
-    expect(warnCalls).toHaveLength(1);
-    expect(warnCalls[0].event).toBe('workflow.legacy_state_path_detected');
-    expect(warnCalls[0].payload.legacyPath).toBe(legacy);
-    expect(warnCalls[0].payload.newPath).toBe('/out/root/state');
-    expect(String(warnCalls[0].payload.moveCommand)).toContain('mv ');
-    expect(String(warnCalls[0].payload.moveCommand)).toContain(legacy);
-  });
-
-  it('probes each project independently — one project cannot suppress another', async () => {
-    // Regression guard: a process-wide latch meant the first run in a server
-    // process (any project, legacy dir or not) silenced detection everywhere.
-    const other = await mkdtemp(join(tmpdir(), 'archon-state-migration-other-'));
-    await mkdir(join(other, '.archon', 'state'), { recursive: true });
-    try {
-      // A project with NO legacy dir goes first and must not latch the check.
-      await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
-      expect(warnCalls).toHaveLength(0);
-
-      await maybeWarnLegacyStatePath(other, '/out/other/state', false);
-
-      expect(warnCalls).toHaveLength(1);
-      expect(warnCalls[0].payload.legacyPath).toBe(join(other, '.archon', 'state'));
-    } finally {
-      await rm(other, { recursive: true, force: true });
+        if (secondFails) secondProbe.reject(error);
+        else secondProbe.resolve();
+        await second;
+        await maybeWarnLegacyCwdStoragePath(cwd, newRoot);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(access).toHaveBeenCalledTimes(2);
+        const legacyPath = paths.getProjectRoot('_cwd', 'notes');
+        expect(warn.mock.calls[0]).toEqual([
+          firstFails
+            ? { err: error, legacyPath }
+            : expect.objectContaining({ legacyPath, newPath: newRoot }),
+          firstFails
+            ? 'workflow.legacy_cwd_storage_probe_error'
+            : 'workflow.legacy_cwd_storage_detected',
+        ]);
+      });
     }
-  });
+  }
 
-  it('a cwd with no legacy dir does not consume its own latch', async () => {
-    // Mutation guard: with the latch set BEFORE the probe (the earlier shape),
-    // the first silent call burns the latch for this cwd and a legacy directory
-    // appearing later in the same process is never reported. The cross-project
-    // test above does NOT kill that mutant — this one does.
-    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
-    expect(warnCalls).toHaveLength(0);
+  it('stays quiet for missing storage and can warn if it appears later', async () => {
+    const cwd = join('projects', 'missing', 'notes');
+    access.mockRejectedValueOnce(Object.assign(new Error('Missing'), { code: 'ENOENT' }));
+    await maybeWarnLegacyCwdStoragePath(cwd, 'new-root');
+    expect(warn).not.toHaveBeenCalled();
 
-    await mkdir(join(dir, '.archon', 'state'), { recursive: true });
-    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
-
-    expect(warnCalls).toHaveLength(1);
-    expect(warnCalls[0].event).toBe('workflow.legacy_state_path_detected');
-  });
-
-  it('warns exactly once across concurrent workflow starts', async () => {
-    await mkdir(join(dir, '.archon', 'state'), { recursive: true });
-
-    await Promise.all([
-      maybeWarnLegacyStatePath(dir, '/out/root', false),
-      maybeWarnLegacyStatePath(dir, '/out/root', false),
-      maybeWarnLegacyStatePath(dir, '/out/root', false),
-    ]);
-
-    expect(warnCalls).toHaveLength(1);
-  });
-
-  it('escalates the wording for an isolated (worktree) run', async () => {
-    await mkdir(join(dir, '.archon', 'state'), { recursive: true });
-
-    await maybeWarnLegacyStatePath(dir, '/out/root/state', true);
-
-    expect(warnCalls).toHaveLength(1);
-    // Same event name, distinct message + an isolated flag: inside a worktree
-    // the directory is destroyed at cleanup, which is the actual data loss.
-    expect(warnCalls[0].event).toBe('workflow.legacy_state_path_detected');
-    expect(warnCalls[0].payload.isolated).toBe(true);
-    expect(String(warnCalls[0].payload.message)).toContain('ISOLATED');
-  });
-
-  it('does not warn for a worktree run that has no legacy directory (correct $STATE_DIR use)', async () => {
-    // The intended case: an isolated run using $STATE_DIR. Worktree-ness alone
-    // must never trigger the warning, or it fires on every correct use.
-    await maybeWarnLegacyStatePath(dir, '/out/root/state', true);
-    expect(warnCalls).toHaveLength(0);
-  });
-
-  it('never moves, creates, or deletes anything', async () => {
-    const legacy = join(dir, '.archon', 'state');
-    await mkdir(legacy, { recursive: true });
-    await writeFile(join(legacy, 'old.json'), '{"seen":1}');
-    const stateDir = join(dir, 'output-root', 'state');
-
-    await maybeWarnLegacyStatePath(dir, stateDir, true);
-
-    expect(await readdir(legacy)).toEqual(['old.json']);
-    // The destination is NOT created as a side effect of the probe.
-    await expect(readdir(stateDir)).rejects.toThrow();
-  });
-});
-
-// #2311: the state relocation Archon never caused got a detector; the artifacts/logs
-// relocation the ENGINE caused on the unregistered-cwd fallback got nothing. These
-// cover the detector that closes that asymmetry.
-describe('maybeWarnLegacyArtifactsPath', () => {
-  it('is silent when no legacy .archon/artifacts or logs exists', async () => {
-    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
-    expect(warnCalls).toHaveLength(0);
-  });
-
-  it('warns once, naming both legacy directories when both are present', async () => {
-    await mkdir(join(dir, '.archon', 'artifacts'), { recursive: true });
-    await mkdir(join(dir, '.archon', 'logs'), { recursive: true });
-
-    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
-    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
-
-    expect(warnCalls).toHaveLength(1);
-    expect(warnCalls[0].event).toBe('workflow.legacy_artifacts_path_detected');
-    expect(warnCalls[0].payload.legacyPaths).toEqual([
-      join(dir, '.archon', 'artifacts'),
-      join(dir, '.archon', 'logs'),
-    ]);
-  });
-
-  it('fires when only logs is present (artifacts alone is not the trigger)', async () => {
-    await mkdir(join(dir, '.archon', 'logs'), { recursive: true });
-
-    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
-
-    expect(warnCalls).toHaveLength(1);
-    expect(warnCalls[0].payload.legacyPaths).toEqual([join(dir, '.archon', 'logs')]);
-  });
-
-  // An isolated run's cwd IS the worktree, so those files were already dying at
-  // teardown — nothing is lost. In place they survive in the user's own repo and are
-  // merely unlisted. Same detection, materially different news.
-  it('tells an isolated run nothing is lost, and an in-place run the files remain', async () => {
-    await mkdir(join(dir, '.archon', 'artifacts'), { recursive: true });
-
-    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', true);
-    expect(String(warnCalls[0].payload.message)).toContain('nothing is lost');
-
-    resetLegacyStateWarningForTests();
-    warnCalls.length = 0;
-
-    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
-    expect(String(warnCalls[0].payload.message)).toContain('still on disk');
-  });
-
-  // A repo can have one legacy directory and not the other. A shared latch would let
-  // whichever probe ran first permanently suppress the other.
-  it('latches independently of the state probe', async () => {
-    await mkdir(join(dir, '.archon', 'state'), { recursive: true });
-    await mkdir(join(dir, '.archon', 'artifacts'), { recursive: true });
-
-    await maybeWarnLegacyStatePath(dir, '/out/root/state', false);
-    await maybeWarnLegacyArtifactsPath(dir, '/out/root/artifacts', false);
-
-    expect(warnCalls.map(c => c.event)).toEqual([
-      'workflow.legacy_state_path_detected',
-      'workflow.legacy_artifacts_path_detected',
-    ]);
+    access.mockResolvedValueOnce(undefined);
+    await maybeWarnLegacyCwdStoragePath(cwd, 'new-root');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][1]).toBe('workflow.legacy_cwd_storage_detected');
   });
 });

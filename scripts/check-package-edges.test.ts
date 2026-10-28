@@ -11,8 +11,10 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { describe, expect, test } from 'bun:test';
 import {
+  BUNDLED_PACK_SEAM,
   findEdgeViolations,
   findLayeringViolations,
+  findPackBoundaryViolations,
   type Layering,
   type PackageManifest,
   PACKAGE_LAYERING,
@@ -269,6 +271,64 @@ describe('plain-Zod engine boundary', () => {
           },
         ],
       })
+    ).toEqual([]);
+  });
+});
+
+describe('engine/pack boundary', () => {
+  const reaches = (content: string, path: string) =>
+    findPackBoundaryViolations([{ path, content }]).map(v => v.message);
+  const engineFile = 'packages/cli/src/commands/doctor.ts';
+  const packFile = '.archon/scripts/__tests__/intake.test.ts';
+
+  for (const source of [
+    "import { check } from '../../../../.archon/workflows/sdlc/.shared/x.ts';",
+    "const fixture = join(import.meta.dir, '../../../../.archon/workflows/p/w.yaml');",
+    "const root = join(import.meta.dir, '..', '..', '..', '..', '.archon', 'workflows');",
+    "const ROOT = join(import.meta.dir, '..', '..', '..', '..');\nconst script = join(ROOT, '.archon/scripts/x.ts');",
+    "const url = new URL('../../../../.archon/workflows/x', import.meta.url);",
+  ]) {
+    test(`rejects the engine reaching the pack: ${source}`, () => {
+      expect(
+        reaches(source, engineFile).some(m => m.startsWith('engine code reaches .archon/'))
+      ).toBe(true);
+    });
+  }
+
+  for (const source of [
+    "const workflows = join(cwd, '.archon', 'workflows');",
+    "const pack = '/repo/.archon/workflows/team-pack';",
+    '// see ../../../../.archon/workflows/sdlc for the pack\nconst x = 1;',
+  ]) {
+    test(`accepts the engine's own discovery paths and prose: ${source}`, () => {
+      expect(reaches(source, engineFile)).toEqual([]);
+    });
+  }
+
+  test('only the bundling seam may resolve the container root, and nothing beneath it', () => {
+    const container = "const root = new URL('../../../../.archon/workflows', import.meta.url);";
+    const beneath = "const root = new URL('../../../../.archon/workflows/sdlc', import.meta.url);";
+    expect(reaches(container, BUNDLED_PACK_SEAM)).toEqual([]);
+    expect(reaches(beneath, BUNDLED_PACK_SEAM)).toHaveLength(1);
+    expect(reaches(container, 'packages/workflows/src/defaults/other.ts')).toHaveLength(1);
+  });
+
+  for (const source of [
+    "import { trackTempRoots } from '@archon/paths/test-utils';",
+    "import { OPS } from '../../../packages/forge/src/operations';",
+    "const cli = resolve(import.meta.dir, '../../../packages/cli/src/cli.ts');",
+  ]) {
+    test(`rejects the pack reaching the engine: ${source}`, () => {
+      expect(reaches(source, packFile)).toHaveLength(1);
+    });
+  }
+
+  test('accepts pack prose and pack-local paths', () => {
+    expect(
+      reaches(
+        "// imports @archon/paths in the engine\nimport { x } from '../lib/x';\nconst f = join(import.meta.dir, 'fixtures');",
+        packFile
+      )
     ).toEqual([]);
   });
 });

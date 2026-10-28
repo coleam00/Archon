@@ -154,12 +154,12 @@ mock.module('@archon/core/utils/commands', () => ({
 }));
 
 import {
-  registerApiRoutes,
   resolveAuthContext,
   resolveWebUserId,
   resolveRunActor,
   requireWebUser,
-} from './api';
+} from './api-request-auth';
+import { registerApiRoutes } from './api';
 
 function makeApp(
   webAdapter?: WebAdapter,
@@ -307,6 +307,12 @@ describe('server-side /api/* gate', () => {
   test('gate on + no identity → 401 on a protected /api route', async () => {
     apiGateEnabled = true;
     const res = await makeApp().request('/api/conversations');
+    expect(res.status).toBe(401);
+  });
+
+  test('gate on + no identity → 401 on /api/dashboard/conversations (names conversations)', async () => {
+    apiGateEnabled = true;
+    const res = await makeApp().request('/api/dashboard/conversations');
     expect(res.status).toBe(401);
   });
 

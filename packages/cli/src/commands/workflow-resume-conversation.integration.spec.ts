@@ -18,12 +18,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findRepoRoot } from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
-import {
-  workflowRunCommand,
-  workflowResumeCommand,
-  workflowApproveCommand,
-  type WorkflowRunOptions,
-} from './workflow';
+import { workflowApproveCommand, workflowResumeCommand } from './workflow-control';
+import { workflowRunCommand } from './workflow-run-owned';
+import type { WorkflowRunOptions } from './workflow-shared';
 import { captureWorkflowCommand } from '../test-support/command';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 

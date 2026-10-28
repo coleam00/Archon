@@ -35,10 +35,15 @@ export const REQUIRED_FORGE_OPERATIONS = [
   'workitem.view',
   'repo.labels.list',
   'repo.label.ensure',
-  'workitem.labels.set',
   'workitem.comment.upsert',
   'workitem.close',
   'workitem.create',
+  'workitem.edit-body',
+  'workitem.label.add',
+  'workitem.label.remove',
+  'pr.threads',
+  'pr.thread.reply',
+  'pr.thread.resolve',
 ] as const;
 
 export interface ForgeProbe {
@@ -88,8 +93,8 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
   const missing = REQUIRED_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
   if (missing.length)
     throw new Error(
-      `ARCHON_SDLC_FORGE=forge needs a plugin with every pack operation; missing: ${missing.join(', ')}. ` +
-        'The released GitHub plugin v0.11.1 is insufficient. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
+      `ARCHON_SDLC_FORGE=forge needs a plugin with every delivery operation; missing: ${missing.join(', ')}. ` +
+        'The GitHub plugin has every one from v0.13.0. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
     );
 }
 
@@ -116,8 +121,8 @@ async function checkGh(env: NodeJS.ProcessEnv): Promise<string> {
       failures.push(
         `${name}: ${tokenNames.join(' or ')} is set and empty, so gh would act as ` +
           `the host's stored login. Remove an empty \`${tokenNames[0]}=\` line from an env file to use ` +
-          '`gh auth login`. If per-user GitHub is enabled, connect it with `archon auth github`, ' +
-          '`/archon connect github` in Slack, or the Web UI Settings page'
+          '`gh auth login`. If per-user GitHub is enabled, connect it with `archon auth github` ' +
+          'or the Web UI Settings page'
       );
       continue;
     }
@@ -168,7 +173,7 @@ async function checkGh(env: NodeJS.ProcessEnv): Promise<string> {
  * is enough; a mirror on a host no plugin claims must not refuse a run its canonical
  * remote can serve.
  *
- * Metadata must advertise every pack operation before the read runs. The read
+ * Metadata must advertise every delivery operation before the read runs. The read
  * is `pr.view` by head, which answers null when no open PR has that head. Any
  * head therefore proves the
  * plugin, the token and read access. No forge operation reports what the token may

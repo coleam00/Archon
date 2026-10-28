@@ -35,8 +35,10 @@ inputs:
     default: ""
     description: >-
       The number of an open pull request this run continues, as the caller
-      resolved it; empty or `null` when it names none. Delivery finishes it
-      whichever route triage takes; triage naming a different one refuses the run.
+      resolved it; `none` when the caller decided the run continues none; empty
+      or `null` when it names none and leaves it to triage. Delivery finishes a
+      named one whichever route triage takes; triage naming a different one, or
+      naming one after `none`, refuses the run.
   branch:
     default: ""
     description: >-
@@ -93,7 +95,7 @@ nodes:
     depends_on: [triage]
     when: "$triage.output.route == 'plan'"
 
-  # The planner makes the design calls. Calls only a person can make come back as
+  # The planner makes the design calls. Calls it cannot make itself come back as
   # open questions, which stop the run before delivery.
   - id: planned
     include: archon-plan-block
@@ -104,12 +106,13 @@ nodes:
         decide the implementation questions it identified. Read
         $ARTIFACTS_DIR/intel.md too: what usage data says about this work, or
         why there is none.
+      related: "$triage.output.related"
     depends_on: [triage, intel]
     when: "$triage.output.route == 'plan'"
 
-  # The pull request delivery continues has one owner: the caller's number when it
-  # resolved one, else triage's `continue` route. Two different numbers refuse
-  # before delivery spends.
+  # The pull request delivery continues has one owner: the caller's number or `none`
+  # when it resolved one, else triage's `continue` route. Two different answers
+  # refuse before delivery spends.
   - id: continues
     script: continues
     runtime: bun
@@ -157,9 +160,9 @@ nodes:
   # none_failed_min_one_success needs one completed dependency, and on the no_action
   # route `deliver` is the skipped one.
   #
-  # A failed delivery reaches this node through deliver's report (`reason: failed`)
-  # and is relayed like any other not-ready delivery. A failure before delivery
-  # skips this node, and `report` answers.
+  # A failed delivery reaches this node through deliver's report (`reason: failed`
+  # or `pr_create_unresolved`) and is relayed like any other not-ready delivery. A
+  # failure before delivery skips this node, and `report` answers.
   - id: outcome
     script: outcome
     runtime: bun
@@ -194,27 +197,10 @@ nodes:
       type: object
       properties:
         delivered: { type: boolean }
-        reason:
-          type: string
-          enum:
-            # deliver's own endings
-            - delivered
-            - implement_blocked
-            - review_open
-            - threads_open
-            - replan
-            - ci_pr_caused
-            - ci_other
-            - round_cap
-            - failed
-            # the stops before delivery
-            - no_action
-            - blocked
-            - needs_contract
-            - refuted
-            - not_rooted
-            # a planning stop, or a review or review thread that needs a person
-            - needs_human
+        # Deliver's reason when it ran (or `failed` / `pr_create_unresolved`),
+        # otherwise why no delivery ran: no_action, blocked, needs_contract, refuted,
+        # not_rooted or ask.
+        reason: { type: string }
         # The delivery's pull request, ready or not; '' when no delivery opened one.
         pr_url: { type: string }
         summary: { type: string }

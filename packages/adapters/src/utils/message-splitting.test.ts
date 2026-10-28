@@ -6,6 +6,17 @@ describe('splitIntoParagraphChunks', () => {
     expect(splitIntoParagraphChunks('', 100)).toEqual([]);
   });
 
+  test.each<[string, number, string[]]>([
+    ['\n\nA\n\n', 3, ['A\n\n']],
+    ['\n', 1, ['\n']],
+    ['A\nB\n', 3, ['A\nB']],
+    ['A\n\nBC', 5, ['A\n\nBC']],
+    ['long\n\n\nB\nC', 3, ['long', 'B\nC']],
+    ['😀\n😀', 4, ['😀', '😀']],
+  ])('preserves boundary chunks for %j at limit %i', (message, maxLength, chunks) => {
+    expect(splitIntoParagraphChunks(message, maxLength)).toEqual(chunks);
+  });
+
   test('short message returns single chunk', () => {
     const msg = 'Hello world';
     expect(splitIntoParagraphChunks(msg, 100)).toEqual(['Hello world']);
