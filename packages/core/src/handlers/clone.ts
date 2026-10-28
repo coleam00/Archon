@@ -456,28 +456,42 @@ export async function cloneRepository(
       default_branch: options.baseBranch ?? null,
     });
   } catch (error) {
-    try {
-      await codebases.removeUnregisteredCheckout(targetPath, () =>
-        rm(targetPath, { recursive: true })
-      );
-    } catch (cleanupError) {
-      getLog().error(
-        { path: targetPath, err: cleanupError },
-        'registration.checkout_cleanup_failed'
-      );
-      throw new AggregateError(
-        [error, cleanupError],
-        `${error instanceof Error ? error.message : String(error)} ` +
-          `Checkout cleanup failed at ${targetPath}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
-        { cause: error }
-      );
-    }
+    await removeFailedCheckout(codebases, targetPath, error);
     throw error;
   }
 
   const result = await loadRepositoryCommands(codebases, codebase, targetPath, workingUrl, false);
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
   return result;
+}
+
+/** Remove a fresh checkout whose registration failed; a failed removal reports both errors. */
+async function removeFailedCheckout(
+  codebases: IWorkflowHostStore['codebases'],
+  targetPath: string,
+  registrationError: unknown
+): Promise<void> {
+  // Where the checkout still is: cleanup can fail before the move, after it, or after the delete.
+  let leftover: string | undefined = targetPath;
+  try {
+    await codebases.removeUnregisteredCheckout(targetPath, async detached => {
+      leftover = detached;
+      await rm(detached, { recursive: true });
+      leftover = undefined;
+    });
+  } catch (cleanupError) {
+    getLog().error({ path: leftover, err: cleanupError }, 'registration.checkout_cleanup_failed');
+    throw new AggregateError(
+      [registrationError, cleanupError],
+      `${errorMessage(registrationError)} ` +
+        `Checkout cleanup failed${leftover ? ` at ${leftover}` : ''}: ${errorMessage(cleanupError)}`,
+      { cause: registrationError }
+    );
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Register an existing local repository in the supplied store (no git clone). */

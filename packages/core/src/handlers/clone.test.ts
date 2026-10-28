@@ -83,12 +83,15 @@ const mockFindCodebaseByName = mock<typeof CodebaseDb.findCodebaseByName>(() =>
   Promise.resolve(null)
 );
 const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
+const mockRemoveUnregisteredCheckout = mock<typeof CodebaseDb.removeUnregisteredCheckout>(
+  (path, remove) => remove(path)
+);
 const mockCreateProjectSourceSymlink = mock((): Promise<void> => Promise.resolve());
 const mockEnsureProjectStructure = mock((): Promise<void> => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
   createCodebase: mockCreateCodebase,
-  removeUnregisteredCheckout: async (_path: string, remove: () => Promise<void>) => remove(),
+  removeUnregisteredCheckout: mockRemoveUnregisteredCheckout,
   getCodebaseCommands: mockGetCodebaseCommands,
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,
@@ -1510,10 +1513,13 @@ describe('cloneRepository', () => {
 
   // ── Error handling ─────────────────────────────────────────────────────
   describe('error handling', () => {
-    test('reports both registration and cleanup failures with the retained checkout path', async () => {
+    test('reports both registration and cleanup failures with the detached checkout path', async () => {
       const registrationError = new Error('Project owner at /existing/checkout; use worktrees');
       const cleanupError = new Error('permission denied');
       mockCreateCodebase.mockRejectedValueOnce(registrationError);
+      mockRemoveUnregisteredCheckout.mockImplementationOnce((path, remove) =>
+        remove(`${path}.removing`)
+      );
       spyFsRm.mockRejectedValueOnce(cleanupError);
 
       const error = await cloneRepository('https://github.com/owner/repo').catch(
@@ -1526,11 +1532,36 @@ describe('cloneRepository', () => {
       ]);
       expect(error instanceof Error && error.cause).toBe(registrationError);
       expect(error instanceof Error && error.message).toContain(
-        '/home/test/.archon/workspaces/owner/repo/source'
+        'Checkout cleanup failed at /home/test/.archon/workspaces/owner/repo/source.removing:'
       );
       expect(error instanceof Error && error.message).toContain(cleanupError.message);
       expect(mockLogger.error).toHaveBeenCalledWith(
-        { path: '/home/test/.archon/workspaces/owner/repo/source', err: cleanupError },
+        { path: '/home/test/.archon/workspaces/owner/repo/source.removing', err: cleanupError },
+        'registration.checkout_cleanup_failed'
+      );
+    });
+
+    test('reports a cleanup failure after the delete without a leftover path', async () => {
+      const registrationError = new Error('registration failed');
+      const lockError = new Error('lock release failed');
+      mockCreateCodebase.mockRejectedValueOnce(registrationError);
+      mockRemoveUnregisteredCheckout.mockImplementationOnce(async (path, remove) => {
+        await remove(`${path}.removing`);
+        throw lockError;
+      });
+
+      const error = await cloneRepository('https://github.com/owner/repo').catch(
+        (error: unknown) => error
+      );
+      expect(error instanceof AggregateError && error.errors).toEqual([
+        registrationError,
+        lockError,
+      ]);
+      expect(error instanceof Error && error.message).toContain(
+        'Checkout cleanup failed: lock release failed'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { path: undefined, err: lockError },
         'registration.checkout_cleanup_failed'
       );
     });

@@ -20,8 +20,16 @@ export interface IWorkflowHostStore {
     /** Rows for name, storage and remote-ownership scans; an unreadable row must not fail the scan. */
     listCodebaseClaims(): Promise<readonly Codebase[]>;
     createCodebase(data: CreateCodebaseInput): Promise<Codebase>;
-    /** Hold the registration writer lock through the ownership check and removal. */
-    removeUnregisteredCheckout(path: string, remove: () => Promise<void>): Promise<void>;
+    /**
+     * Under the registration lock, check ownership and move an unregistered checkout aside.
+     * `remove` receives the moved path and runs after the lock is released, also when the
+     * locked step fails after the move; a registered checkout is left in place and `remove`
+     * is not called.
+     */
+    removeUnregisteredCheckout(
+      path: string,
+      remove: (detached: string) => Promise<void>
+    ): Promise<void>;
     updateCodebase(target: Pick<Codebase, 'id' | 'name'>, data: UpdateCodebaseInput): Promise<void>;
     getCodebaseCommands(id: string): Promise<Codebase['commands']>;
     updateCodebaseCommands(id: string, commands: Codebase['commands']): Promise<void>;
