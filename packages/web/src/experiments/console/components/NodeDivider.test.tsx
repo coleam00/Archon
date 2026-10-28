@@ -47,6 +47,13 @@ describe('NodeDivider cost', () => {
     }
   );
 
+  test.each([
+    { cost: 0.036, formatted: '0.04' },
+    { cost: 0.00006, formatted: '0.0001' },
+  ])('rounds complete cost to the nearest displayed amount (%j)', ({ cost, formatted }) => {
+    expect(render(cost)).toContain(`· $${formatted}`);
+  });
+
   test('keeps sub-cent precision', () => {
     expect(render(0.0012)).toContain('· $0.0012');
   });

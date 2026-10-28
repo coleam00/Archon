@@ -113,9 +113,13 @@ function formatNodeCost(
   costScope: NodeDividerProps['costScope'],
   costPartial: NodeDividerProps['costPartial']
 ): string {
-  return typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd >= 0
-    ? ` · ${costScope === 'total' ? 'total ' : ''}${costPartial ? 'at least ' : ''}$${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
-    : '';
+  if (typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd < 0) return '';
+  const digits = costUsd >= 0.01 ? 2 : 4;
+  let amount = costUsd.toFixed(digits);
+  if (costPartial && Number(amount) > costUsd) {
+    amount = (Number(amount) - 10 ** -digits).toFixed(digits);
+  }
+  return ` · ${costScope === 'total' ? 'total ' : ''}${costPartial ? 'at least ' : ''}$${amount}`;
 }
 
 /**

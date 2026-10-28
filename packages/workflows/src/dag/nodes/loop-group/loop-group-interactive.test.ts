@@ -44,21 +44,24 @@ describe('interactive loop_group gate and resume', () => {
   });
 
   it.each([
-    { feedback: false, priorCost: undefined },
-    { feedback: true, priorCost: undefined },
-    { feedback: false, priorCost: 0.02 },
-    { feedback: true, priorCost: 0.02 },
+    { feedback: false, priorCost: undefined, priorComplete: false },
+    { feedback: true, priorCost: undefined, priorComplete: false },
+    { feedback: false, priorCost: 0.02, priorComplete: false },
+    { feedback: true, priorCost: 0.02, priorComplete: false },
+    { feedback: true, priorCost: 0.02, priorComplete: true },
   ])(
-    'retains captured incomplete cost without charging prior spend again (%j)',
-    async ({ feedback, priorCost }) => {
+    'retains captured cost completeness without charging prior spend again (%j)',
+    async ({ feedback, priorCost, priorComplete }) => {
       mockSendQueryDag.mockImplementation(async function* () {
         yield { type: 'agent_message_chunk', text: 'APPROVED' };
         yield {
           type: 'result',
           sessionId: 'unpriced',
-          ...(priorCost !== undefined && mockSendQueryDag.mock.calls.length === 2
-            ? { cost: priorCost }
-            : {}),
+          ...(priorComplete && priorCost !== undefined
+            ? { cost: priorCost / 2 }
+            : priorCost !== undefined && mockSendQueryDag.mock.calls.length === 2
+              ? { cost: priorCost }
+              : {}),
         };
       });
       const workflow = {
@@ -108,7 +111,7 @@ describe('interactive loop_group gate and resume', () => {
       expect(approval?.execution?.spend.costUsd).toEqual(
         priorCost === undefined
           ? { source: 'unavailable', reason: 'incomplete' }
-          : { source: 'provider', value: priorCost, partial: true }
+          : { source: 'provider', value: priorCost, ...(priorComplete ? {} : { partial: true }) }
       );
       mockSendQueryDag.mockClear();
       mockSendQueryDag.mockImplementation(async function* () {
@@ -139,11 +142,11 @@ describe('interactive loop_group gate and resume', () => {
       const completed = persistedEvents(second.store).find(
         e => e.event_type === 'node_completed' && e.step_name === 'grp'
       );
-      expect(completed?.data?.spend).toMatchObject({
-        costUsd: feedback
-          ? { source: 'provider', value: 0.03, partial: true }
-          : { source: 'unavailable', reason: 'incomplete' },
-      });
+      expect(completed?.data?.spend?.costUsd).toEqual(
+        feedback
+          ? { source: 'provider', value: 0.03, ...(priorComplete ? {} : { partial: true }) }
+          : { source: 'unavailable', reason: 'incomplete' }
+      );
     }
   );
 
