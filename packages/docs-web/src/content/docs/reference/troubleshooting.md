@@ -26,15 +26,21 @@ causing a credential check to report "no usable login".
 
 Archon rechecks that result once in a fresh Codex process, using the same caller
 deadline and requesting a refresh again. It logs `codex.native_login_rechecked`
-with the resulting credential state. Errors, timeouts and malformed responses
-remain inconclusive checks; the recheck does not bypass authentication or send a
-model request.
+with the resulting credential state. The recheck does not bypass authentication or
+send a model request. If the recheck errors, times out or returns a malformed
+response, the check is inconclusive: the run starts with a
+`credential_check_inconclusive` warning, as any inconclusive credential check does.
 
-Run `archon doctor` under the same OS user and environment as the server to check
-its current native login. `codex login status` alone does not prove that a refresh
-will succeed. If doctor reports the login usable, resume an affected run by its
-existing ID after resolving any outstanding run-specific gates. If the native
-login remains unavailable, use `codex login` and check again before resuming.
+Run `archon doctor` under the same OS user and environment as the server. Its
+Assistant login line must read `codex: usable` to show the native login works. A
+line reading `codex: uses the credential connected in Archon` means doctor skipped
+the native check because an `openai` credential is connected; it says nothing about
+the native login. If the native login remains unavailable, run `codex login` and
+check again. `codex login status` alone does not prove that a refresh will succeed.
+
+A refused launch never created a run, so there is nothing to resume: repeat the
+original `archon workflow run` command. Resume only a run that already exists, by
+its ID.
 
 ## Project uses an unexpected provider
 
