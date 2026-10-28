@@ -97,15 +97,19 @@ Bot: [Claude analyzes and responds...]
 ```
 You: /status
 
-Bot: Platform: telegram
-     AI Assistant: claude
+Bot: ## Orchestrator Status
 
-     Codebase: my-project
-     Repository: https://github.com/user/my-project
+     **Platform**: telegram
+     **AI Assistant**: claude
 
-     Repository: my-project @ main
+     ## Registered Projects (1)
+     - my-project (github.com)
 
-     Worktrees: 0/10
+     ## Conversation Context
+     - Project: my-project @ main
+     - Working Directory: /workspace/my-project
+
+     Worktrees: 0 total
 ```
 
 ### Reset Session
