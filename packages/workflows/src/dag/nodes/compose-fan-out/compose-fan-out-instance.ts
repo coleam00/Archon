@@ -170,6 +170,7 @@ function instanceRunContext(
 ): RunLayersContext {
   const { ctx, resumeSnapshot } = instance.scope;
   return {
+    providerLimitDeadline: ctx.providerLimitDeadline,
     toolAttention: ctx.toolAttention,
     unfinishedInvocations: resumeSnapshot.unfinishedInvocations,
     reportedChildUsage: resumeSnapshot.reportedChildUsage,
@@ -346,7 +347,8 @@ async function settleInstance(
       rootFailures(instanceCtx.layers.flat(), instanceCtx.nodeOutputs).map(
         ({ output }) => output.providerFailure
       ),
-      Date.now()
+      Date.now(),
+      instanceCtx.providerLimitDeadline
     );
     const outcome: ComposeInstanceOutcome = {
       status: 'failed',

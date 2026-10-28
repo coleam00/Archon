@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { createProviderLimitDeadlineResolver } from '../../../executor-shared';
 import { expect, mock, test } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -287,6 +288,7 @@ test('resumed completion preserves enclosing previous-output scopes', async () =
       bodyNodes: [body, check],
       ctx: {
         ...options,
+        providerLimitDeadline: createProviderLimitDeadlineResolver(),
         toolAttention: createRunToolCallAttention({ store, runId: 'run' }),
         workflowName: 'scope',
         workflowSourceRoots: liveSourceRoots(root),
