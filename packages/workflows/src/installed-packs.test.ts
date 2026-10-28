@@ -399,9 +399,43 @@ describe('installed pack boundaries', () => {
       workflowName: HELPER,
       errorType: 'validation_error',
     });
+    expect(findWorkflowLoadError(errors, REVIEW)?.error).toContain(
+      findWorkflowLoadError(errors, HELPER)!.error
+    );
     expect(findWorkflowLoadError(errors, 'unrelated')?.error).toContain(
       "include target 'helper' not found"
     );
+  });
+
+  test('a pack fan-out preserves its rejected support workflow validation error', async () => {
+    const pack = reviewKit();
+    await install({
+      ...pack,
+      files: {
+        ...pack.files,
+        'review/code-review.yaml': `name: code-review
+description: Review
+nodes:
+  - id: helpers
+    include: helper
+    fan_out:
+      items: '[1]'
+      as: item
+      join: all_success
+`,
+        'helper/helper.yaml': 'name: helper\nthinking: high\n',
+      },
+    });
+    const { errors } = await discover();
+    const helperError = findWorkflowLoadError(errors, HELPER);
+    expect(helperError?.error).toContain('thinking');
+    expect(findWorkflowLoadError(errors, REVIEW)?.error).toContain(helperError!.error);
+    await expect(resolveFanOutChildDefinition(deps, project, HELPER)).resolves.toEqual({
+      unresolved: helperError!.error,
+    });
+    await expect(resolveFanOutChildDefinition(deps, project, 'helper')).resolves.toEqual({
+      unresolved: "no workflow named 'helper' was found",
+    });
   });
 
   test('installed entrypoint errors keep manifest names and unnamed support errors keep filenames', async () => {

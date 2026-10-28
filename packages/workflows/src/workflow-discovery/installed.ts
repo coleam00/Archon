@@ -17,6 +17,7 @@ interface LoadedInstalledPack {
   pack: InstalledPack;
   label: string;
   files: PackWorkflowFile[];
+  rejectedSupportNames: Map<string, string[]>;
   /** Manifest entrypoint name by its `<folder>/<file>` path. */
   entrypointByPath: Map<string, string>;
 }
@@ -86,9 +87,13 @@ async function loadInstalledPack(
   const entrypointByPath = new Map(
     Object.entries(pack.manifest.entrypoints).map(([entry, path]) => [path, entry])
   );
-  const explainedEntrypoints = reportPackLoadErrors(context, pack, label, loaded.errors, [
-    ...entrypointByPath,
-  ]);
+  const { explainedEntrypoints, rejectedSupportNames } = reportPackLoadErrors(
+    context,
+    pack,
+    label,
+    loaded.errors,
+    [...entrypointByPath]
+  );
   for (const [path, entry] of entrypointByPath) {
     if (
       !explainedEntrypoints.has(entry) &&
@@ -102,24 +107,30 @@ async function loadInstalledPack(
       });
     }
   }
-  return { pack, label, files: loaded.files, entrypointByPath };
+  return { pack, label, files: loaded.files, entrypointByPath, rejectedSupportNames };
 }
 
-/** Report each load error, under every entrypoint it explains; returns those entrypoints. */
+/** Report load errors and retain rejected support identities for pack-local references. */
 function reportPackLoadErrors(
   context: DiscoveryContext,
   pack: InstalledPack,
   label: string,
   errors: readonly WorkflowLoadError[],
   entrypointPaths: readonly (readonly [string, string])[]
-): Set<string> {
+): { explainedEntrypoints: Set<string>; rejectedSupportNames: Map<string, string[]> } {
   const explainedEntrypoints = new Set<string>();
+  const rejectedSupportNames = new Map<string, string[]>();
   for (const error of errors) {
     const affected = entrypointPaths.filter(([path]) => {
       const filename = `${label}/${path}`;
       return filename === error.filename || filename.startsWith(`${error.filename}/`);
     });
     if (affected.length === 0) {
+      if (error.workflowName !== undefined) {
+        const targets = rejectedSupportNames.get(error.workflowName) ?? [];
+        targets.push(installedWorkflowName(pack, error.workflowName));
+        rejectedSupportNames.set(error.workflowName, targets);
+      }
       context.allErrors.push(
         error.workflowName === undefined
           ? error
@@ -131,7 +142,7 @@ function reportPackLoadErrors(
       context.allErrors.push({ ...error, workflowName: installedWorkflowName(pack, entry) });
     }
   }
-  return explainedEntrypoints;
+  return { explainedEntrypoints, rejectedSupportNames };
 }
 
 function qualifiedPackName(loaded: LoadedInstalledPack, file: PackWorkflowFile): string {
@@ -147,7 +158,7 @@ function qualifyPackNames(
   loaded: LoadedInstalledPack,
   reservedNames: Set<string>
 ): { qualifiedByName: Map<string, string[]>; entrypoints: Set<string> } {
-  const qualifiedByName = new Map<string, string[]>();
+  const qualifiedByName = new Map(loaded.rejectedSupportNames);
   const entrypoints = new Set<string>();
   for (const file of loaded.files) {
     const qualified = qualifiedPackName(loaded, file);
