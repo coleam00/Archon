@@ -24,7 +24,7 @@ describe('missing include discovery errors', () => {
       "Node 'wrapped': include target 'Missing' not found; it may be declared in an unreadable source (unreadable.yaml: source unavailable)",
       'read_error',
     ],
-  ])('attributes only an exact declared name (%s)', (workflowName, message, errorType) => {
+  ] as const)('attributes only an exact declared name (%s)', (workflowName, message, errorType) => {
     const result = expandWorkflowIncludes(mapOf(root), undefined, [
       { filename: 'unreadable.yaml', error: 'source unavailable', errorType: 'read_error', cause },
       {
