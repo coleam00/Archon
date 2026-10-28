@@ -423,7 +423,7 @@ export function registerCostTests() {
       expect(runUsageWrites(store)).toEqual([{ total_cost_usd: 0.004 }]);
       expect(
         (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
-          call => call[1] === 'loop_node.usage_cost_non_finite_ignored'
+          call => call[1] === 'loop_node.usage_cost_invalid_ignored'
         )
       ).toBe(true);
 
