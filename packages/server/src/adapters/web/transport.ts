@@ -55,6 +55,7 @@ export class SSETransport {
   private streams = new Map<string, Set<SSEWriter>>();
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private zombieReaperHandle: ReturnType<typeof setInterval> | null = null;
+  private replayOwners = new Map<string, symbol>();
   private eventBuffer = new Map<string, BufferedEvent[]>();
   private bufferCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastEvictionWarnAt = new Map<string, number>();
@@ -93,32 +94,54 @@ export class SSETransport {
       this.cleanupTimers.delete(conversationId);
     }
 
-    this.replayBufferedEvents(conversationId, stream);
+    this.replayBufferedEvents(conversationId);
   }
 
-  private replayBufferedEvents(conversationId: string, stream: SSEWriter): void {
-    const buffered = this.eventBuffer.get(conversationId);
-    if (!buffered || buffered.length === 0) return;
+  private replayBufferedEvents(conversationId: string): void {
+    if (this.replayOwners.has(conversationId) || !this.eventBuffer.has(conversationId)) return;
+    const owner = Symbol();
+    this.replayOwners.set(conversationId, owner);
+    void this.drainBufferedEvents(conversationId, owner);
+  }
+
+  private async drainBufferedEvents(conversationId: string, owner: symbol): Promise<void> {
+    try {
+      while (this.replayOwners.get(conversationId) === owner) {
+        const buffered = this.eventBuffer.get(conversationId);
+        if (!buffered) return;
+        this.expireBufferedEvents(conversationId, buffered);
+        const event = buffered[0];
+        if (!event) {
+          this.clearBuffer(conversationId);
+          return;
+        }
+        const stream = [...(this.streams.get(conversationId) ?? [])].find(s => !s.closed);
+        if (!stream) return;
+        getLog().debug({ conversationId, count: buffered.length }, 'sse_buffer_replay');
+        const written = await this.writeToStream(conversationId, stream, event.data);
+        if (this.replayOwners.get(conversationId) !== owner) return;
+        if (!written) continue;
+        // Retention can evict the attempted entry while its write is pending.
+        const index = buffered.indexOf(event);
+        if (index !== -1) buffered.splice(index, 1);
+      }
+    } finally {
+      if (this.replayOwners.get(conversationId) === owner) {
+        this.replayOwners.delete(conversationId);
+      }
+    }
+  }
+
+  private expireBufferedEvents(conversationId: string, buffered: BufferedEvent[]): void {
     const now = Date.now();
     const valid = buffered.filter(e => now - e.timestamp < EVENT_BUFFER_TTL_MS);
     const expired = buffered.length - valid.length;
-    this.clearBuffer(conversationId);
-    if (expired > 0) {
-      // Events outlived the buffer TTL before the client reconnected.
-      // Symptom on the UI: stuck tool cards for any tool_result that was
-      // in the expired batch. If this fires in practice, bump TTL further.
-      getLog().warn(
-        { conversationId, expired, ttlMs: EVENT_BUFFER_TTL_MS },
-        'transport.buffer_ttl_expired'
-      );
-    }
-    if (valid.length > 0) {
-      getLog().debug({ conversationId, count: valid.length }, 'sse_buffer_replay');
-      for (const event of valid) {
-        if (stream.closed) break;
-        void this.writeToStream(conversationId, stream, event.data);
-      }
-    }
+    if (expired === 0) return;
+    buffered.splice(0, buffered.length, ...valid);
+    getLog().warn(
+      { conversationId, expired, ttlMs: EVENT_BUFFER_TTL_MS },
+      'transport.buffer_ttl_expired'
+    );
   }
 
   /** Returns true when the conversation has no writers left afterwards. */
@@ -174,6 +197,7 @@ export class SSETransport {
       clearTimeout(timer);
     }
     this.cleanupTimers.clear();
+    this.replayOwners.clear();
     this.eventBuffer.clear();
     this.lastEvictionWarnAt.clear();
     for (const timer of this.bufferCleanupTimers.values()) {
@@ -184,7 +208,7 @@ export class SSETransport {
   }
 
   async emit(conversationId: string, event: string): Promise<void> {
-    const writes: Promise<void>[] = [];
+    const writes: Promise<boolean>[] = [];
     const streams = this.streams.get(conversationId);
     if (streams) {
       for (const stream of streams) {
@@ -210,9 +234,10 @@ export class SSETransport {
     conversationId: string,
     stream: SSEWriter,
     event: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await stream.writeSSE({ data: event });
+      return true;
     } catch (e: unknown) {
       getLog().warn({ conversationId, err: e }, 'sse_write_failed');
       this.removeStream(conversationId, stream);
@@ -220,6 +245,7 @@ export class SSETransport {
       stream.close().catch((err: unknown) => {
         getLog().warn({ conversationId, err }, 'sse_close_failed');
       });
+      return false;
     }
   }
 
@@ -265,6 +291,7 @@ export class SSETransport {
   }
 
   private clearBuffer(conversationId: string): void {
+    this.replayOwners.delete(conversationId);
     this.eventBuffer.delete(conversationId);
     this.lastEvictionWarnAt.delete(conversationId);
     const timer = this.bufferCleanupTimers.get(conversationId);

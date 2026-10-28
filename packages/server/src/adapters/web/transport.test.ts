@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, spyOn, jest } from 'bun:test';
 
 // Mock logger before importing transport
 const mockLogger = {
@@ -29,6 +29,10 @@ function createMockStream(overrides?: Partial<SSEWriter>): SSEWriter {
     closed: false,
     ...overrides,
   };
+}
+
+async function settleReplay(): Promise<void> {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
 }
 
 beforeEach(() => {
@@ -272,17 +276,56 @@ describe('SSETransport', () => {
       const transport = new SSETransport();
 
       try {
-        await transport.emit('conv-1', '{"type":"text"}');
+        const events = ['first', 'same', 'same', 'last'];
+        for (const event of events) await transport.emit('conv-1', event);
         const stream = createMockStream();
         transport.registerStream('conv-1', stream);
-        expect(stream.writeSSE).toHaveBeenCalledWith({ data: '{"type":"text"}' });
-        expect(stream.writeSSE).toHaveBeenCalledTimes(1);
+        await settleReplay();
+        expect(stream.writeSSE).toHaveBeenCalledTimes(events.length);
+        for (const [index, data] of events.entries()) {
+          expect(stream.writeSSE).toHaveBeenNthCalledWith(index + 1, { data });
+        }
 
         transport.removeStream('conv-1', stream);
         const reconnected = createMockStream();
         transport.registerStream('conv-1', reconnected);
+        await settleReplay();
         expect(reconnected.writeSSE).not.toHaveBeenCalled();
       } finally {
+        transport.stop();
+      }
+    });
+
+    test('retains failed and unattempted replay events for the next connection', async () => {
+      const transport = new SSETransport();
+      const second = Promise.withResolvers<void>();
+      const attempted: string[] = [];
+      const stream = createMockStream({
+        writeSSE: mock(async ({ data }) => {
+          attempted.push(data);
+          if (data === 'second') await second.promise;
+        }),
+      });
+      try {
+        for (const event of ['first', 'second', 'third']) await transport.emit('conv-1', event);
+        transport.registerStream('conv-1', stream);
+        await settleReplay();
+        expect(attempted).toEqual(['first', 'second']);
+        second.reject(new Error('disconnected during replay'));
+        await settleReplay();
+        expect(attempted).toEqual(['first', 'second']);
+        const reconnected = createMockStream();
+        transport.registerStream('conv-1', reconnected);
+        await settleReplay();
+        expect(reconnected.writeSSE).toHaveBeenCalledTimes(2);
+        expect(reconnected.writeSSE).toHaveBeenNthCalledWith(1, { data: 'second' });
+        expect(reconnected.writeSSE).toHaveBeenNthCalledWith(2, { data: 'third' });
+        const next = createMockStream();
+        transport.registerStream('conv-1', next);
+        await settleReplay();
+        expect(next.writeSSE).not.toHaveBeenCalled();
+      } finally {
+        second.resolve();
         transport.stop();
       }
     });
@@ -307,6 +350,232 @@ describe('SSETransport', () => {
       await transport.emit('conv-1', '{"type":"text"}');
 
       expect(transport.hasActiveStream('conv-1')).toBe(false);
+    });
+  });
+
+  describe('pending replay', () => {
+    test.each(['resolve', 'reject'] as const)(
+      'hands the backlog to a replacement after the old write settles: %s',
+      async outcome => {
+        const transport = new SSETransport();
+        const pending = Promise.withResolvers<void>();
+        const old = createMockStream({ writeSSE: mock(() => pending.promise) });
+        const replacement = createMockStream();
+        try {
+          await transport.emit('conv-1', 'first');
+          await transport.emit('conv-1', 'second');
+          transport.registerStream('conv-1', old);
+          transport.registerStream('conv-1', replacement);
+          expect(old.writeSSE).toHaveBeenCalledTimes(1);
+          expect(replacement.writeSSE).not.toHaveBeenCalled();
+          if (outcome === 'resolve') pending.resolve();
+          else pending.reject(new Error('old replay failed'));
+          await settleReplay();
+          const expected = outcome === 'resolve' ? ['second'] : ['first', 'second'];
+          expect(replacement.writeSSE).toHaveBeenCalledTimes(expected.length);
+          for (const [index, data] of expected.entries()) {
+            expect(replacement.writeSSE).toHaveBeenNthCalledWith(index + 1, { data });
+          }
+          expect(transport.hasActiveStream('conv-1')).toBe(true);
+          await transport.emit('conv-1', 'live');
+          expect(replacement.writeSSE).toHaveBeenLastCalledWith({ data: 'live' });
+        } finally {
+          pending.resolve();
+          transport.stop();
+        }
+      }
+    );
+
+    test.each(['closed', 'removed'] as const)(
+      'retains the suffix when the writer is %s before the next attempt',
+      async state => {
+        const transport = new SSETransport();
+        const pending = Promise.withResolvers<void>();
+        const stream = createMockStream({ writeSSE: mock(() => pending.promise) });
+        try {
+          await transport.emit('conv-1', 'first');
+          await transport.emit('conv-1', 'second');
+          transport.registerStream('conv-1', stream);
+          if (state === 'closed') Object.defineProperty(stream, 'closed', { value: true });
+          else transport.removeStream('conv-1', stream);
+          pending.resolve();
+          await settleReplay();
+          expect(stream.writeSSE).toHaveBeenCalledTimes(1);
+          const next = createMockStream();
+          transport.registerStream('conv-1', next);
+          await settleReplay();
+          expect(next.writeSSE).toHaveBeenCalledTimes(1);
+          expect(next.writeSSE).toHaveBeenCalledWith({ data: 'second' });
+        } finally {
+          pending.resolve();
+          transport.stop();
+        }
+      }
+    );
+
+    test('failure preserves original TTL while newer events remain eligible', async () => {
+      const transport = new SSETransport();
+      const clock = spyOn(Date, 'now').mockReturnValue(100_000);
+      const pending = Promise.withResolvers<void>();
+      const stream = createMockStream({ writeSSE: mock(() => pending.promise) });
+      try {
+        await transport.emit('conv-1', 'old');
+        transport.registerStream('conv-1', stream);
+        clock.mockReturnValue(140_000);
+        pending.reject(new Error('replay failed'));
+        await settleReplay();
+        await transport.emit('conv-1', 'new');
+        clock.mockReturnValue(160_000);
+        const next = createMockStream();
+        transport.registerStream('conv-1', next);
+        await settleReplay();
+        expect(next.writeSSE).toHaveBeenCalledTimes(1);
+        expect(next.writeSSE).toHaveBeenCalledWith({ data: 'new' });
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          { conversationId: 'conv-1', expired: 1, ttlMs: 60_000 },
+          'transport.buffer_ttl_expired'
+        );
+      } finally {
+        pending.resolve();
+        clock.mockRestore();
+        transport.stop();
+      }
+    });
+
+    test('expiry is checked again after a pending write', async () => {
+      const transport = new SSETransport();
+      const clock = spyOn(Date, 'now').mockReturnValue(100_000);
+      const pending = Promise.withResolvers<void>();
+      const stream = createMockStream({ writeSSE: mock(() => pending.promise) });
+      try {
+        await transport.emit('conv-1', 'first');
+        await transport.emit('conv-1', 'expired suffix');
+        transport.registerStream('conv-1', stream);
+        clock.mockReturnValue(160_000);
+        pending.resolve();
+        await settleReplay();
+        expect(stream.writeSSE).toHaveBeenCalledTimes(1);
+        const next = createMockStream();
+        transport.registerStream('conv-1', next);
+        expect(next.writeSSE).not.toHaveBeenCalled();
+      } finally {
+        pending.resolve();
+        clock.mockRestore();
+        transport.stop();
+      }
+    });
+
+    test('completion of an evicted entry cannot consume the retained head', async () => {
+      const transport = new SSETransport();
+      const pending = Promise.withResolvers<void>();
+      const stream = createMockStream({ writeSSE: mock(() => pending.promise) });
+      try {
+        await transport.emit('conv-1', 'evicted');
+        transport.registerStream('conv-1', stream);
+        transport.removeStream('conv-1', stream);
+        for (let i = 0; i < 501; i++) await transport.emit('conv-1', String(i));
+        pending.resolve();
+        await settleReplay();
+        const next = createMockStream();
+        transport.registerStream('conv-1', next);
+        for (let i = 1; i <= 500; i++) {
+          await settleReplay();
+          expect(next.writeSSE).toHaveBeenNthCalledWith(i, { data: String(i) });
+        }
+        expect(next.writeSSE).toHaveBeenCalledTimes(500);
+      } finally {
+        pending.resolve();
+        transport.stop();
+      }
+    });
+
+    test.each(['resolve', 'reject'] as const)(
+      'stop invalidates pending replay even if the transport is reused: %s',
+      async outcome => {
+        const transport = new SSETransport();
+        const pending = Promise.withResolvers<void>();
+        const old = createMockStream({ writeSSE: mock(() => pending.promise) });
+        try {
+          await transport.emit('conv-1', 'old first');
+          await transport.emit('conv-1', 'old second');
+          transport.registerStream('conv-1', old);
+          transport.stop();
+          await transport.emit('conv-1', 'new');
+          const next = createMockStream();
+          transport.registerStream('conv-1', next);
+          if (outcome === 'resolve') pending.resolve();
+          else pending.reject(new Error('stopped write'));
+          await settleReplay();
+          expect(old.writeSSE).toHaveBeenCalledTimes(1);
+          expect(next.writeSSE).toHaveBeenCalledTimes(1);
+          expect(next.writeSSE).toHaveBeenCalledWith({ data: 'new' });
+          expect(transport.hasActiveStream('conv-1')).toBe(true);
+        } finally {
+          pending.resolve();
+          transport.stop();
+        }
+      }
+    );
+
+    test('buffer cleanup invalidates old replay before a new buffer is created', async () => {
+      jest.useFakeTimers();
+      const transport = new SSETransport();
+      const pending = Promise.withResolvers<void>();
+      const nextPending = Promise.withResolvers<void>();
+      const old = createMockStream({ writeSSE: mock(() => pending.promise) });
+      const next = createMockStream({ writeSSE: mock(() => nextPending.promise) });
+      try {
+        await transport.emit('conv-1', 'old first');
+        await transport.emit('conv-1', 'old second');
+        transport.registerStream('conv-1', old);
+        transport.removeStream('conv-1', old);
+        jest.advanceTimersByTime(60_500);
+        await transport.emit('conv-1', 'new first');
+        await transport.emit('conv-1', 'new second');
+        transport.registerStream('conv-1', next);
+        pending.resolve();
+        await settleReplay();
+        expect(old.writeSSE).toHaveBeenCalledTimes(1);
+        expect(next.writeSSE).toHaveBeenCalledTimes(1);
+        const replacement = createMockStream();
+        transport.registerStream('conv-1', replacement);
+        expect(replacement.writeSSE).not.toHaveBeenCalled();
+        nextPending.resolve();
+        await settleReplay();
+        expect(replacement.writeSSE).toHaveBeenCalledTimes(1);
+        expect(replacement.writeSSE).toHaveBeenCalledWith({ data: 'new second' });
+      } finally {
+        pending.resolve();
+        nextPending.resolve();
+        transport.stop();
+        jest.useRealTimers();
+      }
+    });
+
+    test('dashboard replay has one owner and retries a failed head on another writer', async () => {
+      const transport = new SSETransport();
+      const pending = Promise.withResolvers<void>();
+      const first = createMockStream({ writeSSE: mock(() => pending.promise) });
+      const second = createMockStream();
+      try {
+        await transport.emit('__dashboard__', 'first');
+        await transport.emit('__dashboard__', 'second');
+        transport.registerStream('__dashboard__', first);
+        transport.registerStream('__dashboard__', second);
+        expect(second.writeSSE).not.toHaveBeenCalled();
+        pending.reject(new Error('dashboard disconnected'));
+        await settleReplay();
+        expect(first.writeSSE).toHaveBeenCalledTimes(1);
+        expect(second.writeSSE).toHaveBeenCalledTimes(2);
+        expect(second.writeSSE).toHaveBeenNthCalledWith(1, { data: 'first' });
+        expect(second.writeSSE).toHaveBeenNthCalledWith(2, { data: 'second' });
+        const third = createMockStream();
+        transport.registerStream('__dashboard__', third);
+        expect(third.writeSSE).not.toHaveBeenCalled();
+      } finally {
+        pending.resolve();
+        transport.stop();
+      }
     });
   });
 
