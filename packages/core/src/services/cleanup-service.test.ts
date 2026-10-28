@@ -794,8 +794,8 @@ describe('getWorktreeStatusBreakdown', () => {
           id: 'env-1',
           branchName: 'unknown-branch',
           errors: [
-            'Ancestry: ancestry unavailable',
-            'Patch equivalence: patch comparison unavailable',
+            'Ancestry: Operation failed (unstructured diagnostic omitted to protect credentials)',
+            'Patch equivalence: Operation failed (unstructured diagnostic omitted to protect credentials)',
           ],
         },
       ]);
@@ -819,7 +819,7 @@ describe('getWorktreeStatusBreakdown', () => {
           id: 'env-1',
           branchName: 'task-1',
           errors: [
-            check === 'ancestry' ? 'Ancestry: unavailable' : 'Patch equivalence: unavailable',
+            `${check === 'ancestry' ? 'Ancestry' : 'Patch equivalence'}: Operation failed (unstructured diagnostic omitted to protect credentials)`,
           ],
         },
       ]);
@@ -877,7 +877,9 @@ describe('getWorktreeStatusBreakdown', () => {
       const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
 
       expect(breakdown.total).toBe(1);
-      expect(breakdown.classificationUnavailable).toEqual({ reason: 'failed with [URL omitted]' });
+      expect(breakdown.classificationUnavailable).toEqual({
+        reason: 'Operation failed (unstructured diagnostic omitted to protect credentials)',
+      });
       expect(breakdown.merged).toBe(0);
       expect(breakdown.stale).toBe(0);
       expect(breakdown.active).toBe(0);

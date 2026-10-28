@@ -15,8 +15,17 @@ import * as environments from '../db/isolation-environments';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { getWorktreeStatusBreakdown } from './cleanup-service';
 import { getLog } from './cleanup/log';
+import { statusDiagnostic } from './cleanup/status-diagnostic';
+import { InvalidConfigError } from '../config/config-validation';
+
+const omitted = 'Operation failed (unstructured diagnostic omitted to protect credentials)';
 
 const trackRoot = trackTempRoots();
+
+const unsafeRemoteFailures = [
+  "fatal: unable to access 'http://127.0.0.1:1/repo?token=prefix topsecret-5209/': URL rejected: Malformed input to a URL function",
+  'fatal: remote git@example.test:org/repo.git?access_token=scp-secret-789 is unavailable',
+];
 
 const quotedGitFailure =
   "fatal: unable to access 'http://127.0.0.1:1234/repo?token='topsecret/': The requested URL returned error: 403";
@@ -38,10 +47,7 @@ test.each(['directory', 'missing path'])(
     const breakdown = await getWorktreeStatusBreakdown('codebase-1', repoPath);
 
     const diagnostic = breakdown.inspectionFailedEnvs[0]?.errors[0];
-    expect(diagnostic).toContain(
-      'Patch equivalence: Failed to check if task-1 is patch-equivalent to origin/main:'
-    );
-    expect(diagnostic).toContain(repoPath);
+    expect(diagnostic).toBe(`Patch equivalence: ${omitted}`);
     expect(breakdown).toEqual({
       total: 1,
       merged: 0,
@@ -81,9 +87,13 @@ function statusEnvironment(
   };
 }
 
-test.each(['config', 'default branch'])(
+test.each(
+  ['config', 'default branch'].flatMap(source =>
+    [quotedGitFailure, ...unsafeRemoteFailures].map(failure => [source, failure])
+  )
+)(
   'status retains the total when %s resolution rejects, without exposing secrets',
-  async source => {
+  async (source, failure) => {
     setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
     const codebase = makeCodebase({
       repository_url: 'https://user:secret@gitlab.example/org/repo.git?token=secret#secret',
@@ -97,8 +107,14 @@ test.each(['config', 'default branch'])(
       statusEnvironment(codebase.default_cwd),
     ]);
     const warn = spyOn(getLog(), 'warn');
-    const reason = source === 'config' ? 'Invalid worktree config' : 'Remote HEAD is unavailable';
-    const error = new Error(`${reason}: ${quotedGitFailure}`);
+    const reason =
+      source === 'config'
+        ? 'Invalid repository configuration'
+        : 'Remote default branch is unavailable';
+    const error =
+      source === 'config'
+        ? new InvalidConfigError('Invalid setting', '/repo/.archon/config.yaml', failure)
+        : new git.GitFailure('default_branch_missing', failure);
     const loadConfig = spyOn(config, 'loadRepoConfig').mockResolvedValue({});
     const defaultBranch = spyOn(git, 'getDefaultBranch');
     if (source === 'config') loadConfig.mockRejectedValueOnce(error);
@@ -117,12 +133,17 @@ test.each(['config', 'default branch'])(
     expect(warn).toHaveBeenCalledWith(
       {
         codebaseId: codebase.id,
-        reason: `${reason}: fatal: unable to access '[URL omitted] The requested URL returned error: 403`,
+        reason,
       },
       'worktree_status_base_ref_resolution_failed'
     );
     expect(result.message).toContain('(gitlab.example)');
-    expect(result.message).not.toContain('secret');
+    expect(result.message).not.toContain('topsecret');
+    expect(result.message).not.toContain('scp-secret');
+    expect(result.message).not.toContain('patch-secret');
+    expect(result.message).not.toContain('fragment-secret');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('topsecret');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('scp-secret');
     expect(result.message).not.toContain('user:');
     expect(result.message).not.toContain('example.com');
     expect(result.message).not.toContain('0 active');
@@ -132,97 +153,130 @@ test.each(['config', 'default branch'])(
 );
 
 test.each([
-  [
-    quotedGitFailure,
-    "fatal: unable to access '[URL omitted] The requested URL returned error: 403",
-  ],
-  ['ssh://patch-secret@example.com/repo#fragment-secret', '[URL omitted]'],
-])(
-  'status keeps both inspection failure categories and redacts %s',
-  async (failure, diagnostic) => {
-    setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
-    const codebase = makeCodebase();
-    spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
-    spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
-    spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
-    spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
-    spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
-    spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
-      statusEnvironment(codebase.default_cwd),
-    ]);
-    spyOn(config, 'loadRepoConfig').mockResolvedValue({ worktree: { baseBranch: 'main' } });
-    const warn = spyOn(getLog(), 'warn');
-    spyOn(git, 'isBranchMerged').mockRejectedValueOnce(
-      new Error(`ancestry unavailable: ${failure}`)
-    );
-    spyOn(git, 'isPatchEquivalent').mockRejectedValueOnce(
-      new Error(`patch unavailable: ${failure}`)
-    );
+  quotedGitFailure,
+  'ssh://patch-secret@example.com/repo#fragment-secret',
+  ...unsafeRemoteFailures,
+])('status keeps both inspection failure categories and omits %s', async failure => {
+  setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
+  const codebase = makeCodebase();
+  spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
+  spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
+  spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
+  spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
+  spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
+  spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
+    statusEnvironment(codebase.default_cwd),
+  ]);
+  spyOn(config, 'loadRepoConfig').mockResolvedValue({ worktree: { baseBranch: 'main' } });
+  const warn = spyOn(getLog(), 'warn');
+  spyOn(git, 'isBranchMerged').mockRejectedValueOnce(new Error(`ancestry unavailable: ${failure}`));
+  spyOn(git, 'isPatchEquivalent').mockRejectedValueOnce(new Error(`patch unavailable: ${failure}`));
 
-    const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
-      formatWorkflowCommand: command => command,
-    });
+  const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
+    formatWorkflowCommand: command => command,
+  });
 
-    expect(result.success).toBe(true);
-    expect(result.message).toContain('Worktrees: 1 total');
-    expect(warn).toHaveBeenCalledWith(
-      {
-        branchName: 'task-1',
-        reason: `ancestry unavailable: ${diagnostic}`,
-      },
-      'merge_check_error_in_breakdown'
-    );
-    expect(warn).toHaveBeenCalledWith(
-      { branchName: 'task-1', reason: `patch unavailable: ${diagnostic}` },
-      'patch_check_error_in_breakdown'
-    );
-    expect(result.message).toContain('task-1: merge inspection failed');
-    expect(result.message).toContain('Ancestry: ancestry unavailable');
-    expect(result.message).toContain('Patch equivalence: patch unavailable');
-    expect(result.message).not.toContain('secret');
-    expect(result.message).not.toContain('example.com');
-    expect(JSON.stringify(warn.mock.calls)).not.toContain('secret');
-  }
-);
+  expect(result.success).toBe(true);
+  expect(result.message).toContain('Worktrees: 1 total');
+  expect(warn).toHaveBeenCalledWith(
+    {
+      branchName: 'task-1',
+      reason: omitted,
+    },
+    'merge_check_error_in_breakdown'
+  );
+  expect(warn).toHaveBeenCalledWith(
+    { branchName: 'task-1', reason: omitted },
+    'patch_check_error_in_breakdown'
+  );
+  expect(result.message).toContain('task-1: merge inspection failed');
+  expect(result.message).toContain(`Ancestry: ${omitted}`);
+  expect(result.message).toContain(`Patch equivalence: ${omitted}`);
+  expect(result.message).not.toContain('topsecret');
+  expect(result.message).not.toContain('scp-secret');
+  expect(result.message).not.toContain('patch-secret');
+  expect(result.message).not.toContain('fragment-secret');
+  expect(result.message).not.toContain('example.com');
+  expect(JSON.stringify(warn.mock.calls)).not.toContain('topsecret');
+  expect(JSON.stringify(warn.mock.calls)).not.toContain('scp-secret');
+});
 
-test('status redacts a bare environment credential from the failure reason and warning', async () => {
-  const previous = process.env.ARCHON_STATUS_TEST_SECRET;
+test('status omits a bare credential from an unstructured failure and warning', async () => {
   const credential = 'unique-bare-status-credential-5209';
-  process.env.ARCHON_STATUS_TEST_SECRET = credential;
-  try {
-    setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
-    const codebase = makeCodebase();
-    spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
-    spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
-    spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
-    spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
-    spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
-    spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
-      statusEnvironment(codebase.default_cwd),
-    ]);
-    spyOn(config, 'loadRepoConfig').mockRejectedValueOnce(
-      new Error(`Invalid worktree config: rejected credential ${credential}`)
-    );
-    const warn = spyOn(getLog(), 'warn');
+  setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
+  const codebase = makeCodebase();
+  spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
+  spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
+  spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
+  spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
+  spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
+  spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
+    statusEnvironment(codebase.default_cwd),
+  ]);
+  spyOn(config, 'loadRepoConfig').mockRejectedValueOnce(
+    new Error(`Invalid worktree config: rejected credential ${credential}`)
+  );
+  const warn = spyOn(getLog(), 'warn');
 
-    const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
-      formatWorkflowCommand: command => command,
-    });
+  const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
+    formatWorkflowCommand: command => command,
+  });
 
-    expect(result.success).toBe(true);
-    expect(result.message).toContain('Worktrees: 1 total');
-    expect(result.message).toContain('Invalid worktree config: rejected credential [REDACTED]');
-    expect(result.message).not.toContain(credential);
-    expect(warn).toHaveBeenCalledWith(
-      {
-        codebaseId: codebase.id,
-        reason: 'Invalid worktree config: rejected credential [REDACTED]',
-      },
-      'worktree_status_base_ref_resolution_failed'
-    );
-    expect(JSON.stringify(warn.mock.calls)).not.toContain(credential);
-  } finally {
-    if (previous === undefined) delete process.env.ARCHON_STATUS_TEST_SECRET;
-    else process.env.ARCHON_STATUS_TEST_SECRET = previous;
+  expect(result.success).toBe(true);
+  expect(result.message).toContain('Worktrees: 1 total');
+  expect(result.message).toContain(omitted);
+  expect(result.message).not.toContain(credential);
+  expect(warn).toHaveBeenCalledWith(
+    {
+      codebaseId: codebase.id,
+      reason: omitted,
+    },
+    'worktree_status_base_ref_resolution_failed'
+  );
+  expect(JSON.stringify(warn.mock.calls)).not.toContain(credential);
+});
+
+test.each(unsafeRemoteFailures)('does not publish unstructured remote errors: %s', failure => {
+  for (const error of [failure, new Error(failure), { message: failure }]) {
+    expect(statusDiagnostic(error)).toBe(omitted);
   }
+  const cause = Object.assign(new Error(failure), { code: 128, stderr: failure });
+  expect(statusDiagnostic(new git.GitFailure('unclassified', failure, cause))).toBe(
+    'Git operation failed (exit code 128)'
+  );
+  expect(statusDiagnostic(new git.GitFailure('timeout', failure))).toBe('Git operation timed out');
+});
+
+test('real malformed remote cannot expose a credential in status or its warning', async () => {
+  const root = trackRoot(await mkdtemp(join(tmpdir(), 'archon-status-malformed-remote-')));
+  await git.execFileAsync('git', ['init', root]);
+  await git.execFileAsync('git', [
+    '-C',
+    root,
+    'remote',
+    'add',
+    'origin',
+    'http://127.0.0.1:1/repo?token=prefix topsecret-5209',
+  ]);
+  setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
+  const codebase = makeCodebase({ default_cwd: root });
+  spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
+  spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
+  spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
+  spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
+  spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([statusEnvironment(root)]);
+  spyOn(config, 'loadRepoConfig').mockResolvedValue({});
+  const warn = spyOn(getLog(), 'warn');
+
+  const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
+    formatWorkflowCommand: command => command,
+  });
+
+  expect(result.success).toBe(true);
+  expect(result.message).toContain('Worktrees: 1 total');
+  expect(result.message).toContain(
+    'Merge/stale classification unavailable (base ref resolution failed: Git operation failed (exit code 128))'
+  );
+  expect(result.message).not.toContain('topsecret-5209');
+  expect(JSON.stringify(warn.mock.calls)).not.toContain('topsecret-5209');
 });
