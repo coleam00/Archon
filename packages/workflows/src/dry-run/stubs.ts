@@ -122,7 +122,7 @@ function schemaPointer(input: unknown, target: object, path = ''): string | unde
   if (input === target) return path;
   if (input === null || typeof input !== 'object') return undefined;
   for (const [key, child] of Object.entries(input)) {
-    const segment = key.replaceAll('~', '~0').replaceAll('/', '~1');
+    const segment = encodeURIComponent(key.replaceAll('~', '~0').replaceAll('/', '~1'));
     const found = schemaPointer(child, target, `${path}/${segment}`);
     if (found !== undefined) return found;
   }
