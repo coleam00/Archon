@@ -40,6 +40,7 @@ mock.module('../db/connection', () => ({
 
 import * as git from '@archon/git';
 import { cloneRepository, registerRepository as registerInStore } from './clone';
+import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 
 const { registerFolder, registerRepository, ProjectRegistrationError } = await import(
   './sql-registration'
@@ -1441,6 +1442,32 @@ describe('project storage collisions', () => {
     expect(b.name).toBe('acme/api-2');
     expect(await storageRoot(b.codebaseId)).not.toBe(await storageRoot(a.codebaseId));
   });
+
+  test.skipIf(process.platform !== 'win32').each(['sql', 'file'] as const)(
+    'a registration stored with forward slashes and a lowercase drive is the same checkout (%s)',
+    async backend => {
+      const root = await makeHome();
+      const store =
+        backend === 'sql'
+          ? codebases
+          : (await createFileWorkflowHost(join(root, 'store'))).records.codebases;
+      const checkout = await gitCheckout(join(root, 'Quay2'), 'https://github.com/acme/quay.git');
+      const registered = await registerInStore(store, checkout);
+      const stored = checkout.charAt(0).toLowerCase() + checkout.slice(1).replaceAll('\\', '/');
+      await store.updateCodebase(
+        { id: registered.codebaseId, name: registered.name },
+        { default_cwd: stored }
+      );
+
+      const again = await registerInStore(store, checkout);
+      expect(again).toMatchObject({ alreadyExisted: true, codebaseId: registered.codebaseId });
+      expect((await resolveCodebaseForPath(checkout, store)).codebase?.id).toBe(
+        registered.codebaseId
+      );
+      expect(await store.listCodebases()).toMatchObject([{ default_cwd: stored }]);
+      expect(await store.listCodebases()).toHaveLength(1);
+    }
+  );
 
   test.each(['https://github.com/acme/app.git', 'https://github.com/acme/app.git/'])(
     'a second clone of a registered remote is refused, naming the registered checkout: %s',
