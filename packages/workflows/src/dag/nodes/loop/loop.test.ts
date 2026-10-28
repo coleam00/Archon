@@ -346,6 +346,57 @@ describe('loop node execution', () => {
     }
   );
 
+  it('persists a partial cost when an unpriced transient attempt recovers on retry', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      if (++calls === 1) {
+        yield {
+          type: 'result',
+          isError: true,
+          failure: { class: 'transient', evidence: 'temporary' },
+          errors: ['temporary'],
+        };
+      } else {
+        yield {
+          type: 'result',
+          sessionId: 'recovered-session',
+          text: '<promise>COMPLETE</promise>',
+          cost: 0.02,
+        };
+      }
+    });
+    const deps = createMockDeps();
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd: testDir,
+        workflow: {
+          name: 'retry-cost',
+          nodes: [
+            {
+              id: 'my-loop',
+              kind: 'loop',
+              retry: { max_attempts: 1, delay_ms: 0 },
+              loop: {
+                prompt: 'Work.',
+                until: 'COMPLETE',
+                max_iterations: 1,
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('retry-cost-run'),
+      })
+    );
+    expect(calls).toBe(2);
+    const completed = persistedEvents(deps.store).find(e => e.event_type === 'node_completed');
+    expect(completed?.data).toMatchObject({
+      cost_usd: 0.02,
+      spend: { costUsd: { source: 'provider', value: 0.02, partial: true } },
+    });
+  });
+
   it('resets the retry budget after a successful iteration', async () => {
     let calls = 0;
     mockSendQueryDag.mockImplementation(async function* () {
@@ -934,6 +985,101 @@ describe('loop node execution', () => {
     ).toBe(true);
   });
 
+  it.each([
+    { costs: [-0.01, 0.02], expected: 0.02, partial: true },
+    { costs: [0.02, -0.01], expected: 0.02, partial: true },
+    { costs: [Number.POSITIVE_INFINITY, 0.02], expected: 0.02, partial: true },
+    { costs: [Number.NEGATIVE_INFINITY, 0.02], expected: 0.02, partial: true },
+    { costs: [undefined, 0.02], expected: 0.02, partial: true },
+    { costs: [0.02, undefined], expected: 0.02, partial: true },
+    { costs: [0.01, 0.02], expected: 0.03, partial: false },
+    { costs: [0, 0], expected: 0, partial: false },
+    { costs: [undefined, 0], expected: 0, partial: true },
+    { costs: [undefined, undefined], expected: undefined, partial: true },
+  ])(
+    'preserves cost completeness across iterations: $costs',
+    async ({ costs, expected, partial }) => {
+      let iteration = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        const cost = costs[iteration++];
+        yield {
+          type: 'agent_message_chunk',
+          text: iteration === costs.length ? '<promise>COMPLETE</promise>' : 'Working.',
+        };
+        yield { type: 'result', sessionId: 'cost-session', cost };
+      });
+      const deps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: testDir,
+          workflow: {
+            name: 'loop-cost',
+            nodes: [
+              {
+                id: 'cost-loop',
+                kind: 'loop',
+                loop: {
+                  fresh_context: false,
+                  prompt: 'Work.',
+                  until: 'COMPLETE',
+                  max_iterations: 2,
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+      expect(iteration).toBe(2);
+      const completed = persistedEvents(deps.store).find(e => e.event_type === 'node_completed');
+      expect(completed).toBeDefined();
+      if (expected === undefined) {
+        expect(completed?.data).not.toHaveProperty('cost_usd');
+        expect(completed?.data).toMatchObject({ spend: { costUsd: { source: 'unavailable' } } });
+      } else {
+        expect(completed?.data?.cost_usd).toBeCloseTo(expected, 5);
+        expect(completed?.data).toMatchObject({
+          spend: { costUsd: { source: 'provider', value: expected } },
+        });
+        if (partial) expect(completed?.data).toHaveProperty('spend.costUsd.partial', true);
+        else expect(completed?.data).not.toHaveProperty('spend.costUsd.partial');
+      }
+    }
+  );
+
+  it('keeps the priced floor partial when a later iteration throws before reporting cost', async () => {
+    let iteration = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      if (++iteration === 2) throw new Error('Stream failed');
+      yield { type: 'agent_message_chunk', text: 'Working.' };
+      yield { type: 'result', sessionId: 'cost-session', cost: 0.02 };
+    });
+    const deps = createMockDeps();
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd: testDir,
+        workflow: {
+          name: 'loop-failed-cost',
+          nodes: [
+            {
+              id: 'cost-loop',
+              kind: 'loop',
+              loop: { fresh_context: false, prompt: 'Work.', until: 'COMPLETE', max_iterations: 2 },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(iteration).toBe(2);
+    const failed = persistedEvents(deps.store).find(e => e.event_type === 'node_failed');
+    expect(failed?.data).toMatchObject({
+      spend: { costUsd: { source: 'provider', value: 0.02, partial: true } },
+    });
+  });
+
   it('sums per-result cost when background work wakes another turn', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield {
@@ -1036,9 +1182,10 @@ describe('loop node execution', () => {
     );
     expect(completedEvent).toBeDefined();
     expect((completedEvent![0] as { data: { cost_usd?: number } }).data.cost_usd).toBe(0.1);
+    expect(completedEvent?.[0].data).toMatchObject({ spend: { costUsd: { partial: true } } });
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
-        call => call[1] === 'loop_node.usage_cost_non_finite_ignored'
+        call => call[1] === 'loop_node.usage_cost_invalid_ignored'
       )
     ).toBe(true);
   });

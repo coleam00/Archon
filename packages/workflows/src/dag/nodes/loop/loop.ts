@@ -99,7 +99,7 @@ function readSignaledCostUsd(
   context: { workflowRunId: string; nodeId: string }
 ): number | undefined {
   if (raw === undefined || raw === null) return undefined;
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
   getLog().warn({ ...context, costUsd: raw }, 'dag_loop.signaled_cost_invalid_ignored');
   return undefined;
 }
@@ -165,7 +165,10 @@ export async function executeLoopNode(
       { err, nodeId: node.id, provider: workflowProvider },
       'loop_node.provider_failed'
     );
-    return failLoopNode(ctx, node.id, state, errorMsg, { failureKind: 'config' });
+    return failLoopNode(ctx, node.id, state, errorMsg, {
+      failureKind: 'config',
+      ...loopSpend(state),
+    });
   }
 
   const execution = await beginLoopAttempt(ctx, node, savedExecution, {
@@ -234,7 +237,7 @@ function initialLoopState(
         : undefined,
     resolvedModel: undefined,
     costUsd: resume.costUsd,
-    priorCostKnown: resume.priorCostKnown,
+    costKnown: resume.priorCostKnown,
     tokens: resume.tokens,
     tokensUnknown:
       savedExecution?.spend.tokens.source === 'unavailable' &&
@@ -313,7 +316,11 @@ async function resolveCommandPromptTemplate(
 ): Promise<string | NodeExecutionResult> {
   const compiled = (node.loop as LoopNode['loop'] & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND];
   const failConfig = (message: string): Promise<NodeExecutionResult> =>
-    failLoopNode(ctx, node.id, state, message, { failureKind: 'config', data: { command } });
+    failLoopNode(ctx, node.id, state, message, {
+      failureKind: 'config',
+      data: { command },
+      ...loopSpend(state),
+    });
   const hasCompiledError = compiled !== undefined && typeof compiled.error === 'string';
   const hasCompiledPrompt = compiled !== undefined && typeof compiled.prompt === 'string';
   if (hasCompiledError && !hasCompiledPrompt) {
@@ -430,6 +437,20 @@ function readLoopGate(
       `Loop execution identity does not match '${execution.path}' in run ${workflowRun.id}`
     );
   }
+  const savedSpend = attemptSpend(savedExecution);
+  if (
+    savedExecution !== undefined &&
+    savedSpend.kind === 'unavailable' &&
+    savedSpend.reason === 'invalid'
+  ) {
+    savedExecution = {
+      ...savedExecution,
+      spend: {
+        ...savedExecution.spend,
+        costUsd: { source: 'unavailable', reason: 'invalid' },
+      },
+    };
+  }
   return { gate, savedExecution };
 }
 
@@ -459,7 +480,6 @@ function readLoopResume(
       gate !== undefined
         ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
         : undefined,
-    // A legacy gate has no saved execution, so its carried-in cost is never known complete.
     priorCostKnown: gate === undefined || attemptSpend(savedExecution).kind === 'known',
     tokens:
       gate !== undefined
