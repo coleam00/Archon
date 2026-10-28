@@ -165,6 +165,56 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
     );
   }
 
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    test.each(['branch', 'direct'])(
+      `preserves root reference context for nested ${keyword} %s candidates`,
+      async candidate => {
+        const workflow = makeTestWorkflow({
+          name: 'root-reference-stubs',
+          nodes: [
+            {
+              id: 'producer',
+              prompt: 'Produce',
+              output_format: {
+                $id: 'https://example.com/root-reference-stubs',
+                $defs: { action: { const: 'accept' }, text: { type: 'string' } },
+                type: 'object',
+                properties: {
+                  proposal:
+                    candidate === 'direct'
+                      ? {
+                          $id: '#proposal',
+                          type: 'string',
+                          minLength: 8,
+                          [keyword]: [{ $ref: '#/$defs/text', minLength: 0 }],
+                        }
+                      : {
+                          [keyword]: [
+                            {
+                              type: 'object',
+                              properties: { action: { $ref: '#/$defs/action', const: 'accept' } },
+                              required: ['action'],
+                            },
+                          ],
+                        },
+                },
+                required: ['proposal'],
+              },
+            },
+          ],
+        });
+        const scaffold = createDryRunStubScaffold(workflow);
+        const expected = { proposal: candidate === 'direct' ? 'TTTTTTTT' : { action: 'accept' } };
+        expect(scaffold.producer).toEqual(expected);
+        for (const options of [{ stubs: scaffold }, { defaultStubs: true }]) {
+          const result = await dryRunWorkflow({ workflow, ...options });
+          expect(result.outcome).toBe('completed');
+          expect(result.trace[0]?.output).toBe(JSON.stringify(expected));
+        }
+      }
+    );
+  }
+
   const overlappingConstraints = [
     {
       field: 'minimum',
