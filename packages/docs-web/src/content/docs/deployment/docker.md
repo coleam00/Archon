@@ -176,7 +176,7 @@ Compose profiles add PostgreSQL, HTTPS or form login to the base app service:
 Add `--profile auth` for the [form login sidecar](#form-login-sidecar). For an external database such as Supabase or Neon, set `DATABASE_URL` and use no database profile. There is no `external-db` profile.
 
 - **No profile:** SQLite, stored in the data volume at `/.archon/archon.db`.
-- **`with-db`:** a PostgreSQL 17 container. The app creates and upgrades the schema on every start. If you start this profile without setting `DATABASE_URL`, the app logs a warning and uses SQLite, and the container sits unused.
+- **`with-db`:** a PostgreSQL 17 container. The app creates the schema on first start and upgrades it when the Archon build changes. If you start this profile without setting `DATABASE_URL`, the app logs a warning and uses SQLite, and the container sits unused.
 - **`cloud`:** [Caddy](https://caddyserver.com/) in front of the app, with Let's Encrypt certificates, HTTP to HTTPS redirects, HTTP/3 and unbuffered `/api/stream/*` for live updates. It needs a `Caddyfile` (copied from `Caddyfile.example`), `DOMAIN` set, the DNS A record in place, and ports 80 and 443 open. Caddy waits for the app's health check before it starts.
 
 ## Protect the Web UI

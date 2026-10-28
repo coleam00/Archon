@@ -52,10 +52,14 @@ function schemaFingerprint(schemaSql: string): string {
 }
 
 /**
- * True only when this build's fingerprint is recorded, no older build has converged
- * since (an older writer stamps its own app_version and may replace functions this
- * build defines), and no data repair in the bundled schema has work left: legacy
- * provider ids an older build wrote, or an event-sequence head behind the events.
+ * True only when this build's fingerprint is recorded, the recorded applied build is
+ * this build, and no data repair in the bundled schema has work left: legacy provider
+ * ids an older build wrote, or an event-sequence head behind the events. The
+ * app_version check catches an older released build that converged since and may have
+ * replaced functions this build defines. It cannot catch a source checkout that
+ * predates this fingerprint: every checkout stamps 'dev' and that one leaves the
+ * fingerprint alone, so this build skips and the older function bodies stay until
+ * this build's schema SQL changes or schema_fingerprint is cleared.
  * The SQLite adapter checks the same repairs before skipping its convergence.
  */
 const SCHEMA_CURRENT_SQL = `

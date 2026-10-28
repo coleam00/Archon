@@ -341,11 +341,16 @@ the next open. Diagnostic creation and applied-build vintages keep their existin
 
 PostgreSQL first reads its completion fingerprint without a lock. It covers the bundled
 schema SQL, the notify trigger, and the Archon build. The database is current when that
-fingerprint is recorded, the recorded applied build is this build (an older build that
-converged since stamps its own), no legacy provider ids remain, and the event-sequence head
-is not behind. A current database starts without a transaction, lock, or DDL. Otherwise the
-adapter converges and publishes the fingerprint in the same locked transaction that installs
-the notify trigger; a role that cannot install the trigger converges on every start.
+fingerprint is recorded, the recorded applied build is this build (an older released build
+that converged since stamps its own version), no legacy provider ids remain, and the
+event-sequence head is not behind. A current database starts without a transaction, lock,
+or DDL. Otherwise the adapter converges and publishes the fingerprint in the same locked
+transaction that installs the notify trigger; a role that cannot install the trigger
+converges on every start. Source checkouts all record the applied build as `dev`, so a
+checkout that predates the PostgreSQL fingerprint can converge against the same database
+without invalidating a newer checkout's fingerprint, and the newer checkout keeps the older
+function bodies. To force convergence in that case, clear it:
+`UPDATE remote_agent_schema_version SET schema_fingerprint = NULL WHERE id = 1`.
 
 ### Workflow origin compatibility
 
