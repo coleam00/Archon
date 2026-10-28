@@ -244,17 +244,14 @@ async function readOpenInstanceUsage(
     rows.slice(lastTerminal + 1).filter(row => row.step_name?.startsWith(instance.stepNamePrefix)),
     ctx.workflowRun.id
   );
-  const executions = [
-    ...[...snapshot.completedNodeOutputs.values()].flatMap(output =>
-      output.execution ? [output.execution] : []
-    ),
-    ...(snapshot.unfinishedInvocations?.values() ?? []),
-  ];
   return {
     ...snapshot,
     costPartial:
+      snapshot.costPartial === true ||
       snapshot.budget.costUnavailable !== undefined ||
-      executions.some(execution => attemptSpend(execution).kind === 'unavailable'),
+      [...(snapshot.unfinishedInvocations?.values() ?? [])].some(
+        execution => attemptSpend(execution).kind === 'unavailable'
+      ),
   };
 }
 

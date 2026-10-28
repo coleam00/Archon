@@ -180,6 +180,17 @@ describe('composed instance accounting segments', () => {
       event_type: 'node_failed',
       data: terminalData,
     };
+    const leaf = startNodeExecution({
+      runId: 'run',
+      path,
+      provider: 'claude',
+      invocation: newNodeInvocation(),
+      node: {
+        id: 'leaf',
+        kind: 'loop',
+        loop: { prompt: 'Work', until: 'DONE', max_iterations: 1, fresh_context: false },
+      },
+    });
     const rows: DagResumeEvent[] = [
       {
         step_name: path,
@@ -187,6 +198,9 @@ describe('composed instance accounting segments', () => {
         data: { cost_usd: 0.01, tokens: { input: 7, output: 3 } },
       },
       terminal,
+      serializeNodeStateRecord(
+        finishNodeExecution(leaf, { status: 'completed' }, { costUsd: 0, costPartial: true })
+      ),
       {
         step_name: path,
         event_type: eventType,
@@ -195,6 +209,7 @@ describe('composed instance accounting segments', () => {
     ];
     const open = await foldDagResumeSnapshot(rows, 'run');
     expect(open.costUsd).toBeCloseTo(0.03);
+    expect(open.costPartial).toBe(true);
     expect(open.tokens).toEqual({ input: 21, output: 9 });
     const closed = await foldDagResumeSnapshot(
       [
@@ -208,6 +223,7 @@ describe('composed instance accounting segments', () => {
       'run'
     );
     expect(closed.costUsd).toBeCloseTo(0.03);
+    expect(closed.costPartial).toBe(false);
     expect(closed.tokens).toEqual(open.tokens);
   });
 });
@@ -254,7 +270,7 @@ describe('loop configuration failure accounting', () => {
             : exit === 'suspended'
               ? { status: 'suspended', point: 'interactive_loop' }
               : { status: 'completed' },
-          { costUsd: 0.07, costPartial: true, tokens: { input: 70, output: 7 } }
+          { costUsd: 0.07, tokens: { input: 70, output: 7 } }
         );
         const completed =
           exit !== 'completed'
@@ -267,6 +283,7 @@ describe('loop configuration failure accounting', () => {
         if (failureKind === 'config' && sameInvocation)
           expect(snapshot.loopConfigFailureBaselines?.size).toBe(0);
         expect(snapshot.costUsd).toBeCloseTo(expected, 5);
+        expect(snapshot.costPartial).toBe(!(failureKind === 'config' && sameInvocation));
         if (failureKind === 'config' && sameInvocation) {
           expect((await foldDagResumeSnapshot([failed, failed], 'run')).costUsd).toBeCloseTo(
             0.04,

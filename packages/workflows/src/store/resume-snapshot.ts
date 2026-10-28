@@ -36,6 +36,8 @@ export interface PriorFailedNode {
 }
 
 export interface DagResumeSnapshot extends RunUsageFigures {
+  /** Completeness of the retained cost contributions, independent of reusable outputs. */
+  costPartial?: boolean;
   /** Cumulative usage already reported for each child run, keyed by child run id. */
   reportedChildUsage?: Map<string, RunUsageFigures>;
   /** Historical workflow spend with no unambiguous child attribution, keyed by path. */

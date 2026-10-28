@@ -17,6 +17,7 @@ import { nodeFailureKindSchema, type NodeExecutionMetadata } from './schemas/nod
 import {
   RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
   addAttemptSpend,
+  attemptSpend,
   emptyRunBudgetUsage,
   type RunBudgetUsage,
 } from './run-budget';
@@ -119,6 +120,7 @@ interface UsageContribution {
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   costUsd?: number;
+  costPartial?: boolean;
 }
 
 /** What one fold accumulates across a run's rows. */
@@ -208,10 +210,14 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
 function readUsage(
   fold: ResumeFold,
   stepName: string,
-  rawUsage: NodeRecord['rawUsage']
+  rawUsage: NodeRecord['rawUsage'],
+  execution?: Pick<NodeExecutionMetadata, 'spend'>
 ): UsageContribution {
   const contribution: UsageContribution = {
     stepName,
+    ...(execution !== undefined && attemptSpend(execution).kind === 'unavailable'
+      ? { costPartial: true }
+      : {}),
     ...(rawUsage.tokensUnknown ? { tokensUnknown: true } : {}),
   };
   if (rawUsage.tokens !== undefined) {
@@ -226,9 +232,15 @@ function readUsage(
   return contribution;
 }
 
-function addUsage(fold: ResumeFold, stepName: string, rawUsage: NodeRecord['rawUsage']): void {
-  const contribution = readUsage(fold, stepName, rawUsage);
+function addUsage(
+  fold: ResumeFold,
+  stepName: string,
+  rawUsage: NodeRecord['rawUsage'],
+  execution?: Pick<NodeExecutionMetadata, 'spend'>
+): void {
+  const contribution = readUsage(fold, stepName, rawUsage, execution);
   if (
+    contribution.costPartial ||
     contribution.tokensUnknown ||
     contribution.tokens !== undefined ||
     contribution.costUsd !== undefined
@@ -248,7 +260,12 @@ function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
   }
   if (usage && nodeCostScope(usage.data) !== 'total') {
     replaceLoopConfigFailure(fold, row.step_name, usage.data.invocation?.id);
-    addUsage(fold, row.step_name, usage.rawUsage);
+    addUsage(
+      fold,
+      row.step_name,
+      usage.rawUsage,
+      usage.data.spend === undefined ? undefined : { spend: usage.data.spend }
+    );
   }
 }
 
@@ -466,13 +483,13 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
     const metadata = record.metadata;
     if (metadata?.node.kind === 'loop') {
       replaceLoopConfigFailure(fold, row.step_name, metadata.invocation.id);
-      const contribution = readUsage(fold, row.step_name, record.rawUsage);
+      const contribution = readUsage(fold, row.step_name, record.rawUsage, metadata);
       if (metadata.lifecycle.status === 'failed' && metadata.lifecycle.failureKind === 'config') {
         contribution.loopConfigFailure = metadata;
       }
       fold.usageContributions.push(contribution);
     } else {
-      addUsage(fold, row.step_name, record.rawUsage);
+      addUsage(fold, row.step_name, record.rawUsage, metadata);
     }
   }
 }
@@ -582,7 +599,7 @@ async function foldRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
 
 function countedUsage(
   fold: ResumeFold
-): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd'> {
+): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd' | 'costPartial'> {
   const counted = fold.usageContributions;
   const tokensUnknown = counted.some(contribution => contribution.tokensUnknown);
   return {
@@ -595,6 +612,7 @@ function countedUsage(
           )
         ),
     costUsd: sumReportedCost(counted),
+    costPartial: counted.some(contribution => contribution.costPartial),
   };
 }
 
