@@ -360,11 +360,10 @@ async function branchHolderFailure(
     w => w.branch === branchName && !isSameWorktreePath(w.path, worktreePath)
   );
   if (!holder) return undefined;
-  const quotedPath = "'" + holder.path.replaceAll("'", "'\"'\"'") + "'";
   return new IsolationFailure(
     'branch_checked_out',
     `Branch '${branchName}' is checked out at ${holder.path}. ` +
-      `Detach that worktree with \`git -C ${quotedPath} switch --detach\`, ` +
+      `Run \`git switch --detach\` in that checkout, ` +
       'or remove it after preserving any changes, then retry.',
     cause
   );

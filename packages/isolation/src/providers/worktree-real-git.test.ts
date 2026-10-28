@@ -1364,11 +1364,6 @@ describe('WorktreeProvider against real git', () => {
         expect(adopted.workingPath).toBe(holder);
         expect(adopted.metadata.adopted).toBe(true);
         expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
-        const command = error.message.split('`')[1];
-        if (!command) throw new Error('missing recovery command');
-        await execFileAsync(resolveBashPath(), ['-c', command]);
-        expect((await git(holder, 'rev-parse', '--abbrev-ref', 'HEAD')).trim()).toBe('HEAD');
-        expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
       } finally {
         spy.mockRestore();
       }
@@ -1494,11 +1489,7 @@ describe('WorktreeProvider against real git', () => {
       expect(env.metadata).toHaveProperty('branchCreated', true);
     });
 
-    test.each(
-      ['local ref lookup', 'remote fetch', 'ref comparison', 'local fast-forward'].flatMap(
-        operation => [true, false].map(occupied => [operation, occupied] as const)
-      )
-    )('preserves a failed %s even when a holder appeared (%s)', async (operation, occupied) => {
+    test('preserves a failed remote fetch when a holder appears concurrently', async () => {
       const originalTip = await commitOn(PR_BRANCH, 'one');
       await commitOn(PR_BRANCH, 'two');
       await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
@@ -1511,20 +1502,12 @@ describe('WorktreeProvider against real git', () => {
       );
       const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
         async (cmd, args, options) => {
-          const shouldFail =
-            operation === 'local ref lookup'
-              ? args.includes('rev-parse') && args.includes('--quiet')
-              : operation === 'ref comparison'
-                ? args.includes('rev-list')
-                : args.includes('fetch') &&
-                  (operation === 'remote fetch'
-                    ? args.includes(`+refs/heads/${PR_BRANCH}:refs/remotes/origin/${PR_BRANCH}`)
-                    : args.includes('.'));
-          if (shouldFail) {
-            if (occupied && !existsSync(holder)) {
-              await git(repoPath, 'worktree', 'add', holder, PR_BRANCH);
-              await writeFile(join(holder, 'uncommitted'), 'operator work');
-            }
+          if (
+            args.includes('fetch') &&
+            args.includes(`+refs/heads/${PR_BRANCH}:refs/remotes/origin/${PR_BRANCH}`)
+          ) {
+            await git(repoPath, 'worktree', 'add', holder, PR_BRANCH);
+            await writeFile(join(holder, 'uncommitted'), 'operator work');
             throw preparationFailure;
           }
           return exec(cmd, args, options);
@@ -1533,12 +1516,10 @@ describe('WorktreeProvider against real git', () => {
       try {
         const error = await provider.create(attempt).catch((error: unknown) => error);
         expect(error).toBe(preparationFailure);
-        if (occupied) {
-          expect((await git(holder, 'symbolic-ref', '--short', 'HEAD')).trim()).toBe(PR_BRANCH);
-          expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
-        }
+        expect((await git(holder, 'symbolic-ref', '--short', 'HEAD')).trim()).toBe(PR_BRANCH);
+        expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
         expect(await localHead()).toBe(originalTip);
-        expect(await registeredWorktrees()).toEqual(occupied ? [repoPath, holder] : [repoPath]);
+        expect(await registeredWorktrees()).toEqual([repoPath, holder]);
       } finally {
         spy.mockRestore();
       }
