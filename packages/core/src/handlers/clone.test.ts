@@ -88,7 +88,8 @@ const mockEnsureProjectStructure = mock((): Promise<void> => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
   createCodebase: mockCreateCodebase,
-  removeUnregisteredCheckout: async (_path: string, remove: () => Promise<void>) => remove(),
+  removeUnregisteredCheckout: async (path: string, remove: (detached: string) => Promise<void>) =>
+    remove(path),
   getCodebaseCommands: mockGetCodebaseCommands,
   updateCodebaseCommands: mockUpdateCodebaseCommands,
   findCodebaseByRepoUrl: mockFindCodebaseByRepoUrl,

@@ -27,7 +27,7 @@ import {
 } from '@archon/isolation/types';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
-import { isCheckoutRegistered } from '../services/project-registration-identity';
+import { detachCheckout, isCheckoutRegistered } from '../services/project-registration-identity';
 import {
   findRemoteOwner,
   assertProjectRegistrationAvailable,
@@ -135,10 +135,13 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
         return rows.find(row => row.repository_url === url) ?? findRemoteOwner(rows, url);
       },
       removeUnregisteredCheckout: async (path, remove) => {
-        await commit(root, [], async () => {
-          if (!(await isCheckoutRegistered(path, await codebases()))) await remove();
-          return { result: undefined, changes: {} };
-        });
+        const detached = await commit(root, [], async () => ({
+          result: (await isCheckoutRegistered(path, await codebases()))
+            ? undefined
+            : await detachCheckout(path),
+          changes: {},
+        }));
+        if (detached) await remove(detached);
       },
       createCodebase: async input => {
         assertAbsoluteDefaultCwd(input.default_cwd, input.name);

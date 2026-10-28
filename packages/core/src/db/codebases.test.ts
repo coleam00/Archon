@@ -1,12 +1,17 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, sep, resolve } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
 import { quoteCommandArg } from '../utils/command-args';
 import { getArchonWorkspacesPath } from '@archon/paths';
 
 const mockQuery = createMockQuery();
+let transactionOpen = false;
+const trackTempRoot = trackTempRoots();
 
 // Mock the connection module before importing the module under test
 mock.module('./connection', () => ({
@@ -14,7 +19,14 @@ mock.module('./connection', () => ({
     query: mockQuery,
   },
   getDatabase: () => ({
-    withTransaction: <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => fn(mockQuery),
+    withTransaction: async <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => {
+      transactionOpen = true;
+      try {
+        return await fn(mockQuery);
+      } finally {
+        transactionOpen = false;
+      }
+    },
   }),
   getDatabaseType: () => 'postgresql',
   getDialect: () => mockPostgresDialect,
@@ -194,9 +206,12 @@ describe('codebases', () => {
   });
 
   test.each(['registered', 'unregistered'])(
-    'checkout cleanup shares the registration lock for a %s checkout',
+    'checkout cleanup takes the registration lock and removes a %s checkout only after release',
     async state => {
       const owned = state === 'registered';
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'codebase-cleanup-')));
+      const checkout = join(root, 'checkout');
+      await mkdir(checkout);
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
@@ -206,16 +221,22 @@ describe('codebases', () => {
       mockQuery.mockClear();
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
-        .mockResolvedValueOnce(createQueryResult(owned ? [mockCodebase] : []));
-      const remove = mock(async () => {
-        expect(mockQuery.mock.calls[0]).toEqual(registrationLock);
+        .mockResolvedValueOnce(
+          createQueryResult(owned ? [{ ...mockCodebase, default_cwd: checkout }] : [])
+        );
+      const remove = mock(async (detached: string) => {
+        expect(transactionOpen).toBe(false);
+        expect(detached).not.toBe(checkout);
+        await rm(detached, { recursive: true });
       });
 
-      await removeUnregisteredCheckout(mockCodebase.default_cwd, remove);
+      await removeUnregisteredCheckout(checkout, remove);
 
       expect(registrationLock?.[0]).toContain('pg_advisory_xact_lock');
       expect(mockQuery.mock.calls[0]).toEqual(registrationLock);
       expect(remove).toHaveBeenCalledTimes(owned ? 0 : 1);
+      if (owned) await access(checkout);
+      else await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
     }
   );
 

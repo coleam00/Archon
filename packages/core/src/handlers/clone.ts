@@ -457,8 +457,8 @@ export async function cloneRepository(
     });
   } catch (error) {
     try {
-      await codebases.removeUnregisteredCheckout(targetPath, () =>
-        rm(targetPath, { recursive: true })
+      await codebases.removeUnregisteredCheckout(targetPath, detached =>
+        rm(detached, { recursive: true })
       );
     } catch (cleanupError) {
       getLog().error(

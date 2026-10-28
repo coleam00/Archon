@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { drainResourceStartHost, ResourceStartDrainError } from './resource-start-host';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
-import { afterEach, expect, expectTypeOf, spyOn, test } from 'bun:test';
+import { afterEach, expect, expectTypeOf, mock, spyOn, test } from 'bun:test';
 import type { z } from 'zod';
 import {
   type IsolationEnvironmentRow,
@@ -452,18 +452,18 @@ test('file checkout cleanup preserves registered paths and aliases, and removes 
   });
 
   for (const path of [checkout, alias, home, join(checkout, 'subdirectory')]) {
-    await second.records.codebases.removeUnregisteredCheckout(path, () =>
-      rm(path, { recursive: true })
+    await second.records.codebases.removeUnregisteredCheckout(path, detached =>
+      rm(detached, { recursive: true })
     );
     expect(await readFile(join(checkout, 'operator-work.txt'), 'utf8')).toBe('keep my work');
   }
-  await second.records.codebases.removeUnregisteredCheckout(unowned, () =>
-    rm(unowned, { recursive: true })
+  await second.records.codebases.removeUnregisteredCheckout(unowned, detached =>
+    rm(detached, { recursive: true })
   );
   await expect(access(unowned)).rejects.toThrow();
 });
 
-test('file checkout removal holds the registration lock until removal finishes', async () => {
+test('file checkout removal releases the registration lock before removing', async () => {
   const home = roots(await mkdtemp(join(tmpdir(), 'file-cleanup-lock-')));
   process.env.ARCHON_HOME = home;
   const root = join(home, 'store');
@@ -471,41 +471,20 @@ test('file checkout removal holds the registration lock until removal finishes',
   const second = await createFileWorkflowHost(root);
   const checkout = join(home, 'checkout');
   await mkdir(checkout);
-  const entered = Promise.withResolvers<boolean>();
-  const release = Promise.withResolvers<void>();
-  const cleanup = first.records.codebases.removeUnregisteredCheckout(checkout, async () => {
-    entered.resolve(
-      await access(join(root, 'lock')).then(
-        () => true,
-        () => false
-      )
-    );
-    await release.promise;
-    await rm(checkout, { recursive: true });
-  });
-  const lockHeldDuringRemoval = await entered.promise;
-  let registered = false;
-  const registration = second.records.codebases
-    .createCodebase({
+  const remove = mock(async (detached: string) => {
+    await expect(access(join(root, 'lock'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
+    await second.records.codebases.createCodebase({
       name: 'owner',
       kind: 'folder',
       default_cwd: checkout,
-    })
-    .then(row => {
-      registered = true;
-      return row;
     });
-  try {
-    expect(lockHeldDuringRemoval).toBe(true);
-    await new Promise(resolve => setTimeout(resolve, 100));
-    expect(registered).toBe(false);
-  } finally {
-    release.resolve();
-    await cleanup;
-    await registration;
-  }
-  expect(registered).toBe(true);
-  await expect(access(checkout)).rejects.toThrow();
+    await rm(detached, { recursive: true });
+  });
+
+  await first.records.codebases.removeUnregisteredCheckout(checkout, remove);
+
+  expect(remove).toHaveBeenCalledTimes(1);
   expect(await first.records.codebases.listCodebases()).toHaveLength(1);
 });
 

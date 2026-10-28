@@ -1,5 +1,6 @@
-import { realpath, stat } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { realpath, rename, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getGitCheckoutIdentity, GitFailure } from '@archon/git';
 import {
@@ -37,6 +38,17 @@ export async function isCheckoutRegistered(
     if (await projectClaimsCheckout(project, checkout)) return true;
   }
   return false;
+}
+
+/**
+ * Move a checkout to a hidden sibling no registration names. A same-directory rename is one
+ * short step under the registration lock, so the slow recursive delete can run after it.
+ */
+export async function detachCheckout(path: string): Promise<string> {
+  const checkout = resolve(path);
+  const detached = join(dirname(checkout), `.${basename(checkout)}.removing-${randomUUID()}`);
+  await rename(checkout, detached);
+  return detached;
 }
 
 /**
