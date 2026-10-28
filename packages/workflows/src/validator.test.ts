@@ -299,6 +299,20 @@ describe('validateWorkflowResources — bundled workflow: target check', () => {
     expect(issues.some(i => i.field === 'workflow')).toBe(false);
   });
 
+  test('bundled workflow rejects a near-name workflow: target', async () => {
+    const workflow = makeWorkflow('test', [{ id: 'sub', kind: 'workflow', workflow: 'review' }]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {
+      workflowSource: 'bundled',
+    });
+    expect(issues.filter(issue => issue.field === 'workflow')).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        nodeId: 'sub',
+        message: "Node 'sub' targets sub-run 'review', which is not a bundled workflow",
+      }),
+    ]);
+  });
+
   test('bundled workflow with a workflow: node to a non-existent bundled name fails', async () => {
     const workflow = makeWorkflow('test', [
       { id: 'sub', kind: 'workflow', workflow: 'definitely-not-a-bundled-workflow' } as DagNode,
