@@ -51,3 +51,25 @@ test('explicit deletion retains SQL feed payloads from an earlier cursor', async
     await harness.close();
   }
 });
+
+test('parent deletion preserves the surviving child spawning-node provenance', async () => {
+  const harness = await makeHarness();
+  try {
+    const { store } = harness;
+    const parent = await store.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
+    const child = await store.createWorkflowRun({
+      workflow_name: 'child',
+      user_message: '',
+      parent_run_id: parent.id,
+      metadata: { parent_node_id: 'nested-workflow' },
+    });
+    await store.cancelWorkflowRun(parent.id);
+    const { deleteWorkflowRun } = await import('./workflows');
+    await deleteWorkflowRun(parent.id);
+    const surviving = await store.getWorkflowRun(child.id);
+    expect(surviving?.parent_run_id).toBeNull();
+    expect(surviving?.metadata.parent_node_id).toBe('nested-workflow');
+  } finally {
+    await harness.close();
+  }
+});

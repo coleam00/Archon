@@ -87,7 +87,7 @@ Pick the command by what is wrong:
 
 `cancel` works only on a `running` run. It stops the process that owns the run, confirms it stopped, and then records `cancelled`. When no owner answers, it refuses and changes nothing, because a database update cannot prove the work on the host stopped. A foreground `archon workflow run` can't be stopped from another shell: interrupt it in its terminal.
 
-`abandon` is for a paused or failed run, or one whose owner is gone. It stops a live owner on this host first, records `cancelled`, and removes the worktree Archon created for the run. Removal is forced: uncommitted and untracked files in that worktree are deleted. The branch stays, so committed work is recoverable. Archon never decides a run is dead from its age.
+`abandon` is for a paused or failed run, or one whose owner is gone. It stops a live owner on this host first, records `cancelled`, and attempts to remove the worktree Archon created for the run. When removal proceeds, it is forced: uncommitted and untracked files in that worktree are deleted. A sub-run whose execution owner cannot be accounted for retains its checkout with a cleanup warning; cancellation still succeeds. See the [abandon reference](/reference/cli/#workflow-abandon) for retention and recovery guidance. The branch stays, so committed work is recoverable. Archon never decides a run is dead from its age.
 
 The [CLI reference](/reference/cli/#workflow-cancel) covers sub-run trees, containers and the Windows job rules.
 

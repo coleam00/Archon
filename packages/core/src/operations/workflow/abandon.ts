@@ -1,6 +1,10 @@
 import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
-import { readExecutionOwner, readOwnedWorktree } from '@archon/workflows/schemas/workflow-run';
+import {
+  readExecutionOwner,
+  readOwnedWorktree,
+  readSubrunMetadata,
+} from '@archon/workflows/schemas/workflow-run';
 import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { ReleasedWorktree, RunWorktreeRelease } from '../../services/cleanup/run-worktree';
 import type { RunActor } from '../run-authorization';
@@ -197,12 +201,23 @@ export async function collectAbandonmentTree(
   return { runs: runs.slice(0, MAX_CASCADE_RUNS), failures };
 }
 
+interface WorktreeOwnerCheck {
+  safe: boolean;
+  warnings: string[];
+  releaseEvidence?: 'stopped_owner' | 'silent_subrun';
+}
+
+function isSubrun(run: WorkflowRun): boolean {
+  // Parent deletion clears the foreign key, but not the spawning node's metadata.
+  return run.parent_run_id !== null || readSubrunMetadata(run.metadata).parentNodeId !== undefined;
+}
+
 async function checkWorktreeOwner(
   ctx: OperationContext,
   row: WorkflowRun,
   root?: WorkflowRun,
   rootOutcome?: AbandonOwnerOutcome
-): Promise<{ safe: boolean; warnings: string[] }> {
+): Promise<WorktreeOwnerCheck> {
   if (!readOwnedWorktree(row.metadata) && !(root && readOwnedWorktree(root.metadata)))
     return { safe: true, warnings: [] };
   const recorded = readExecutionOwner(row.metadata);
@@ -214,7 +229,7 @@ async function checkWorktreeOwner(
         `Retained checkout ${row.working_path ?? ''} for run ${row.id}: ${reason}; stop that owner and retry abandonment from its host and user.`,
       ],
     };
-  if (root?.parent_run_id && rootOutcome?.kind === 'no_owner_answered')
+  if (root && isSubrun(root) && rootOutcome?.kind === 'no_owner_answered')
     return retainUnresolvedSubrunCheckout(row, root);
   if (root?.id === row.id)
     return {
@@ -229,7 +244,7 @@ async function checkOwnerStopForRelease(
   row: WorkflowRun,
   root: WorkflowRun | undefined,
   rootOutcome: AbandonOwnerOutcome | undefined
-): Promise<{ safe: boolean; warnings: string[] }> {
+): Promise<WorktreeOwnerCheck> {
   let outcome: Awaited<ReturnType<typeof stopLiveOwner>>;
   try {
     outcome =
@@ -247,17 +262,24 @@ async function checkOwnerStopForRelease(
   }
   if (outcome.kind === 'not_stopped')
     return { safe: false, warnings: [`Retained checkout for run ${row.id}: ${outcome.message}`] };
-  if (!root && row.parent_run_id && outcome.kind === 'no_owner_answered')
+  if (!root && isSubrun(row) && outcome.kind === 'no_owner_answered')
     return retainUnresolvedSubrunCheckout(row, row);
   const warnings = outcome.kind === 'stopped' ? (outcome.cleanupWarnings ?? []) : [];
-  return { safe: warnings.length === 0, warnings };
+  return {
+    safe: warnings.length === 0,
+    warnings,
+    ...(outcome.kind === 'stopped' && !warnings.length
+      ? { releaseEvidence: 'stopped_owner' as const }
+      : {}),
+  };
 }
 
-function retainUnresolvedSubrunCheckout(row: WorkflowRun, target: WorkflowRun) {
+function retainUnresolvedSubrunCheckout(row: WorkflowRun, target: WorkflowRun): WorktreeOwnerCheck {
   return {
     safe: false,
+    releaseEvidence: 'silent_subrun',
     warnings: [
-      `Retained checkout ${row.working_path ?? ''} for run ${row.id}: no owner answered for sub-run ${target.id} (parent ${target.parent_run_id}); its enclosing execution may still be using this checkout. Cancellation is recorded, but removal was skipped. Inspect the owning execution and stop or abandon it only if you intend to stop its whole scope. Repeating abandonment of this silent sub-run alone may continue retaining the checkout.`,
+      `Retained checkout ${row.working_path ?? ''} for run ${row.id}: no owner answered for sub-run ${target.id} (parent ${target.parent_run_id ?? 'parent record deleted'}); its enclosing execution may still be using this checkout. Cancellation is recorded, but removal was skipped. Inspect the owning execution and stop or abandon it only if you intend to stop its whole scope. Repeating abandonment of this silent sub-run alone may continue retaining the checkout.`,
     ],
   };
 }
@@ -399,6 +421,17 @@ async function checkBatchWorktreeOwners(
       owner,
       check: await checkWorktreeOwner(ctx, run, root, rootOutcome),
     });
+  }
+  if (!root) {
+    for (const entry of ownerChecks) {
+      if (entry.check.releaseEvidence !== 'silent_subrun' || !entry.owner) continue;
+      const owner = entry.owner;
+      const stopped = ownerChecks.some(
+        other =>
+          sameExecutionOwner(owner, other.owner) && other.check.releaseEvidence === 'stopped_owner'
+      );
+      if (stopped) entry.check = { safe: true, warnings: [] };
+    }
   }
   return ownerChecks.map(({ run, owner, check }) => {
     // An endpoint can disappear when a sibling stops their shared owner. Resolve

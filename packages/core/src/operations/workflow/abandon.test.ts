@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
@@ -954,6 +955,104 @@ describe('abandon owned worktrees', () => {
       data: { warnings: expect.arrayContaining([expect.stringContaining('owning execution')]) },
     });
   });
+
+  test.each(['abandon', 'reset'] as const)(
+    '%s retains a file-store child checkout after deleting its terminal parent',
+    async operation => {
+      const fileStore = await createFileWorkflowStore({ root: scratchRoot() });
+      const parent = await fileStore.createWorkflowRun({
+        workflow_name: 'parent',
+        user_message: '',
+      });
+      const child = await fileStore.createWorkflowRun({
+        workflow_name: 'child',
+        user_message: '',
+        parent_run_id: parent.id,
+        origin: { conversationId: 'conv-1' },
+        metadata: { ...owned().metadata, parent_node_id: 'nested-workflow' },
+      });
+      await fileStore.cancelWorkflowRun(parent.id);
+      await fileStore.deleteWorkflowRun(parent.id);
+      expect((await fileStore.getWorkflowRun(child.id))?.parent_run_id).toBeNull();
+      const fileOperations = createWorkflowOperations({
+        getUserRole: async () => undefined,
+        store: fileStore,
+        hostStore: { isolation: isolationStore },
+        requestDetachedRunStop: mockRequestDetachedRunStop,
+        isRunOwnedByThisProcess,
+        isRunOwnerAnswering,
+        reclaimContainerEnv: mockReclaimContainerEnv,
+        reclaimRunWorktree: reclaim,
+      });
+      if (operation === 'reset') {
+        await fileStore.failWorkflowRun(child.id, 'interrupted');
+      }
+      const result =
+        operation === 'abandon'
+          ? await fileOperations.abandonWorkflow(child.id, operator)
+          : await fileOperations.abandonResumableRunsForConversation('conv-1', operator);
+      expect((await fileStore.getWorkflowRun(child.id))?.status).toBe('cancelled');
+      expect(result.cleanupWarnings?.join(' ')).toContain('owning execution');
+      expect(reclaim).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each(['abandon', 'reset'] as const)(
+    '%s retains a silent child after parent deletion clears its foreign key',
+    async operation => {
+      const child = owned('child', { parent_run_id: null, status: 'cancelled' });
+      child.metadata.parent_node_id = 'nested-workflow';
+      mockGetWorkflowRun.mockResolvedValue(child);
+      if (operation === 'reset')
+        mockCancelResumableRunsForConversation.mockResolvedValueOnce([child]);
+
+      const result =
+        operation === 'abandon'
+          ? await operations.abandonWorkflow(child.id, operator)
+          : await operations.abandonResumableRunsForConversation('conv-1', operator);
+
+      expect(reclaim).not.toHaveBeenCalled();
+      expect(result.cleanupWarnings?.join(' ')).toContain('owning execution');
+      expect(result.cleanupWarnings?.join(' ')).toContain('parent record deleted');
+      expect(mockRequestDetachedRunStop.mock.calls).toEqual([[child.id]]);
+    }
+  );
+
+  test.each([false, true])(
+    'reset reconciles shared stops in either row order: reversed=%s',
+    async reversed => {
+      for (const answering of ['run-1', 'child', 'grandchild']) {
+        for (const warned of [false, true]) {
+          reclaim.mockClear();
+          const rows = [
+            owned('run-1'),
+            owned('child', { parent_run_id: 'run-1' }),
+            owned('grandchild', { parent_run_id: 'child' }),
+          ];
+          if (reversed) rows.reverse();
+          mockCancelResumableRunsForConversation.mockResolvedValueOnce(rows);
+          mockRequestDetachedRunStop.mockImplementation(async id => {
+            if (id !== answering)
+              throw new DetachedRunOwnerUnavailableError(id, 'ENOENT', 'unreachable');
+            return {
+              pid: 4242,
+              stop: async () => ({ warnings: warned ? ['Held output'] : [] }),
+              release: () => undefined,
+            };
+          });
+
+          const result = await operations.abandonResumableRunsForConversation('conv-1', operator);
+
+          expect(result.abandoned).toBe(3);
+          expect(reclaim.mock.calls.map(call => call[0].id)).toEqual(
+            warned ? [] : rows.map(row => row.id)
+          );
+          if (warned) expect(result.cleanupWarnings).toContain('Held output');
+          else expect(result.cleanupWarnings).toBeUndefined();
+        }
+      }
+    }
+  );
 
   test.each([true, false])(
     'retains a silent selected subtree when the target has creation proof: %s',
