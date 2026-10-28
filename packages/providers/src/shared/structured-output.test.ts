@@ -132,7 +132,7 @@ describe('one-level conditional schemas', () => {
     required: ['status', 'message'],
   };
 
-  for (const keyword of ['oneOf', 'anyOf', 'allOf']) {
+  for (const keyword of ['oneOf', 'anyOf']) {
     test(`${keyword} preserves valid answers, branch rules and strict closure`, () => {
       const branch = (status: string) => ({
         properties: { status: { const: status } },
@@ -140,10 +140,7 @@ describe('one-level conditional schemas', () => {
       });
       const schema = {
         ...parent,
-        [keyword]:
-          keyword === 'allOf'
-            ? [{ properties: { status: { enum: ['success', 'blocked'] } } }]
-            : [branch('success'), branch('blocked')],
+        [keyword]: [branch('success'), branch('blocked')],
       };
       const before = structuredClone(schema);
       const prepared = normalizeJsonSchemaForOpenAiStrict(schema);
@@ -170,6 +167,73 @@ describe('one-level conditional schemas', () => {
       expect(schema).toEqual(before);
     });
   }
+
+  test.each(['oneOf', 'anyOf', 'allOf'])(
+    '%s refuses implicit nested object intersections',
+    keyword => {
+      for (const location of ['parent', 'branch']) {
+        for (const properties of [{ a: true }, {}]) {
+          const nested = { properties, required: Object.keys(properties) };
+          const schema = {
+            properties: { payload: location === 'parent' ? nested : {} },
+            required: ['payload'],
+            [keyword]: [{ properties: { payload: location === 'branch' ? nested : {} } }],
+          };
+          expect(new Ajv({ strict: false }).compile(schema)({ payload: { a: 1, b: 2 } })).toBe(
+            true
+          );
+          expect(findPreparedStrictSchemaIssues(schema)).toEqual([
+            expect.objectContaining({ kind: 'unsupported-conversion' }),
+          ]);
+          expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow('output_format');
+        }
+      }
+    }
+  );
+
+  test.each(['oneOf', 'anyOf', 'allOf'])(
+    '%s refuses boolean-only nested property maps',
+    keyword => {
+      const schema = {
+        properties: { payload: { properties: { a: true }, required: ['a'] } },
+        required: ['payload'],
+        [keyword]: [{ properties: { payload: { properties: { b: true }, required: ['b'] } } }],
+      };
+      expect(new Ajv({ strict: false }).compile(schema)({ payload: { a: 1, b: 2 } })).toBe(true);
+      expect(findPreparedStrictSchemaIssues(schema)).toEqual([
+        expect.objectContaining({ kind: 'unsupported-conversion' }),
+      ]);
+    }
+  );
+
+  test.each([
+    ['allOf', [{ properties: { status: { const: 'success' } } }]],
+    ['dependentRequired', { status: ['message'] }],
+    ['dependentSchemas', { status: true }],
+    ['dependentSchemas', { status: false }],
+    ['dependentSchemas', { status: {} }],
+    ['dependentSchemas', {}],
+  ] as const)('refuses strict-mode keyword %s by presence', (keyword, value) => {
+    for (const [schema, path] of [
+      [{ ...parent, [keyword]: value }, `output_format.${keyword}`],
+      [
+        { ...parent, properties: { ...parent.properties, status: { [keyword]: value } } },
+        `output_format.properties.status.${keyword}`,
+      ],
+      [
+        { ...parent, anyOf: [{ properties: { status: {} }, [keyword]: value }] },
+        `output_format.anyOf[0].${keyword}`,
+      ],
+    ] as const) {
+      expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow(path);
+      expect(findPreparedStrictSchemaIssues(schema)).toEqual([
+        expect.objectContaining({
+          kind: 'unsupported-conversion',
+          message: expect.stringContaining(path),
+        }),
+      ]);
+    }
+  });
 
   test('keeps oneOf exclusivity and optional fields', () => {
     const schema = {
@@ -212,7 +276,7 @@ describe('one-level conditional schemas', () => {
       },
     ],
     [
-      'output_format.items',
+      'output_format.allOf',
       {
         type: 'array',
         items: { properties: { a: {} }, required: ['a'] },
@@ -221,7 +285,7 @@ describe('one-level conditional schemas', () => {
     ],
     ['output_format.allOf', { allOf: [{ properties: { a: {} } }, { properties: { b: {} } }] }],
     ...['dependencies', 'dependentSchemas'].map<[string, Record<string, unknown>]>(keyword => [
-      `output_format.${keyword}.status`,
+      `output_format.${keyword}${keyword === 'dependencies' ? '.status' : ''}`,
       { ...parent, [keyword]: { status: { properties: {} } } },
     ]),
     ...['if', 'then', 'else', 'not', 'contains', 'unevaluatedItems'].map<
@@ -326,9 +390,21 @@ describe('one-level conditional schemas', () => {
 
   test('ignores annotation data and property names that resemble schema keywords', () => {
     const schema = {
-      properties: { properties: { type: 'string' }, not: { type: 'string' } },
-      required: ['properties', 'not'],
-      default: { if: {}, properties: { anyOf: [] } },
+      properties: {
+        properties: { type: 'string' },
+        not: { type: 'string' },
+        allOf: { type: 'string' },
+        dependentRequired: { type: 'string' },
+        dependentSchemas: { type: 'string' },
+      },
+      required: ['properties', 'not', 'allOf', 'dependentRequired', 'dependentSchemas'],
+      default: {
+        if: {},
+        allOf: [],
+        dependentRequired: {},
+        dependentSchemas: {},
+        properties: { anyOf: [] },
+      },
       oneOf: [{ properties: { not: { const: 'value' } } }],
     };
     const prepared = normalizeJsonSchemaForOpenAiStrict(schema);

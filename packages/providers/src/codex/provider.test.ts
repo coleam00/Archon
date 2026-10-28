@@ -1368,31 +1368,42 @@ describe('CodexProvider', () => {
     test.each(['explicit', 'workflow', 'split'] as const)(
       'rejects unsupported conditional schemas before starting Codex through the %s path',
       async path => {
-        const unsupported = {
+        const parent = {
           type: 'object',
           properties: { status: { type: 'string' }, message: { type: 'string' } },
           required: ['status', 'message'],
-          oneOf: [{ $ref: '#/external' }],
         };
-        const { provider, server } = providerWith();
-        const result = resultOf(
-          await run(provider, {
-            ...(path === 'explicit'
-              ? { outputFormat: { type: 'json_schema', schema: unsupported } as const }
-              : { nodeConfig: { output_format: unsupported } }),
-            ...(path === 'split'
-              ? {
-                  assistantConfig: {
-                    model: 'glm-5.3',
-                    toolFreeStructuredOutputModels: ['glm-5.3'],
-                  },
-                }
-              : {}),
-          })
-        );
-        expect(result.isError).toBe(true);
-        expect(result.failure?.evidence).toContain('complete inline');
-        expect(server.processes).toHaveLength(0);
+        for (const unsupported of [
+          { ...parent, oneOf: [{ $ref: '#/external' }] },
+          { ...parent, allOf: [{ properties: { status: { const: 'success' } } }] },
+          { ...parent, dependentRequired: { status: ['message'] } },
+          { ...parent, dependentSchemas: { status: true } },
+          {
+            properties: { payload: { properties: { a: true }, required: ['a'] } },
+            required: ['payload'],
+            anyOf: [{ properties: { payload: { properties: { b: true }, required: ['b'] } } }],
+          },
+        ]) {
+          const { provider, server } = providerWith();
+          const result = resultOf(
+            await run(provider, {
+              ...(path === 'explicit'
+                ? { outputFormat: { type: 'json_schema', schema: unsupported } as const }
+                : { nodeConfig: { output_format: unsupported } }),
+              ...(path === 'split'
+                ? {
+                    assistantConfig: {
+                      model: 'glm-5.3',
+                      toolFreeStructuredOutputModels: ['glm-5.3'],
+                    },
+                  }
+                : {}),
+            })
+          );
+          expect(result.isError).toBe(true);
+          expect(result.failure?.evidence).toContain('complete inline');
+          expect(server.processes).toHaveLength(0);
+        }
       }
     );
 

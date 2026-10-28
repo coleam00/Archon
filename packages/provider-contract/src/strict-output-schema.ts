@@ -45,7 +45,17 @@ export function normalizeJsonSchemaForOpenAiStrict(
 ): Record<string, unknown> {
   const result = structuredClone(schema);
   visitJsonSchema(result, 'output_format', (node, path) => {
-    for (const keyword of ['if', 'then', 'else', 'not', 'contains', 'unevaluatedItems']) {
+    for (const keyword of [
+      'allOf',
+      'dependentRequired',
+      'dependentSchemas',
+      'if',
+      'then',
+      'else',
+      'not',
+      'contains',
+      'unevaluatedItems',
+    ]) {
       if (keyword in node) refuse(`${path}.${keyword}`);
     }
     for (const child of jsonSchemaChildren(node, path)) {
@@ -101,6 +111,7 @@ function assertFlatProperty(property: Record<string, unknown>, path: string): vo
   assertSupportedKeywords(property, path);
   const types = Array.isArray(property.type) ? property.type : [property.type];
   if (types.includes('object') || types.includes('array')) refuse(`${path}.type`);
+  if (isObjectSchemaNode(property)) refuse(`${path}.properties`);
   const composition = Object.keys(property).find(isJsonSchemaCompositionKeyword);
   if (composition) refuse(`${path}.${composition}`);
   const nested = jsonSchemaChildren(property, path)[0];
@@ -124,13 +135,6 @@ function completeBranches(parent: Record<string, unknown>, keyword: string, path
   if (!Array.isArray(branches)) refuse(`${path}.${keyword}`);
   const enclosing = isRecord(parent.properties) ? parent.properties : undefined;
   if (!enclosing && (isObjectSchemaNode(parent) || 'required' in parent)) {
-    refuse(`${path}.${keyword}`);
-  }
-  if (
-    !enclosing &&
-    keyword === 'allOf' &&
-    branches.some(branch => isRecord(branch) && isObjectSchemaNode(branch))
-  ) {
     refuse(`${path}.${keyword}`);
   }
   for (const [index, branch] of branches.entries()) {

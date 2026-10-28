@@ -2131,7 +2131,7 @@ describe('validateWorkflowResources — strict-schema compatibility', () => {
     } as DagNode;
   }
 
-  test.each(['oneOf', 'anyOf', 'allOf'] as const)(
+  test.each(['oneOf', 'anyOf'] as const)(
     'accepts inherited required fields in %s and reports unsupported conversions',
     async operator => {
       const schema = {

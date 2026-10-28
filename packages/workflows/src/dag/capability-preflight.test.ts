@@ -521,7 +521,7 @@ describe('assertRunCapabilities', () => {
       properties: { status: { type: 'string' }, message: { type: 'string' } },
       required: ['status', 'message'],
     };
-    for (const keyword of ['oneOf', 'anyOf', 'allOf']) {
+    for (const keyword of ['oneOf', 'anyOf']) {
       const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
         name: 'conditional',
         nodes: [
@@ -547,6 +547,43 @@ describe('assertRunCapabilities', () => {
       expect(() =>
         assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
       ).toThrow('output_format.items');
+      expect(() =>
+        assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
+      ).not.toThrow();
+    }
+  });
+
+  it('refuses implicit nested objects and strict-mode keywords at launch', () => {
+    const implicitObjects = ['oneOf', 'anyOf', 'allOf'].flatMap(keyword =>
+      ['parent', 'branch'].flatMap(location =>
+        [{ a: true }, {}].map(properties => {
+          const nested = { properties, required: Object.keys(properties) };
+          return {
+            properties: { payload: location === 'parent' ? nested : {} },
+            required: ['payload'],
+            [keyword]: [{ properties: { payload: location === 'branch' ? nested : {} } }],
+          };
+        })
+      )
+    );
+    const keywords = [
+      { allOf: [{ properties: {} }] },
+      { dependentRequired: { status: ['message'] } },
+      { dependentSchemas: { status: true } },
+      { dependentSchemas: { status: false } },
+      { dependentSchemas: { status: {} } },
+      { dependentSchemas: {} },
+    ];
+    for (const output_format of [...implicitObjects, ...keywords]) {
+      const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
+        name: 'unsupported-output',
+        nodes: [
+          { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Work' }, output_format },
+        ],
+      };
+      expect(() =>
+        assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
+      ).toThrow(/node 'work'.*output_format.*complete inline oneOf\/anyOf branches/);
       expect(() =>
         assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
       ).not.toThrow();
