@@ -104,8 +104,9 @@ describe('post-result turn settlement timeout', () => {
   }
 
   for (const kind of ['agent', 'loop'] as const) {
-    for (const result of ['first', 'second'] as const) {
-      it(`${kind}: fails a Codex plugin with live work that never settles after its ${result} result`, async () => {
+    it.each(['first', 'second'] as const)(
+      `${kind}: fails a Codex plugin with live work that never settles after its %s result`,
+      async result => {
         const pair = streamPair();
         let aborted = false;
         const serving = serveProvider(
@@ -144,8 +145,8 @@ describe('post-result turn settlement timeout', () => {
           await serving;
         }
         expect(aborted).toBe(true);
-      });
-    }
+      }
+    );
 
     for (const transport of ['native', 'plugin'] as const) {
       for (const output of ['prose', 'silent', 'structured'] as const) {
