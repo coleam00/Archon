@@ -56,6 +56,8 @@ export interface FakeTurnScript {
   /** Never answer `initialize`, as a Codex that hangs on startup would not. */
   ignoreInitialize?: boolean;
   ignoreAccountRead?: boolean;
+  /** Answer `account/read` only when the test calls `answer`, as a slow refresh would. */
+  deferAccountRead?: (answer: () => void) => void;
   /** Notifications sent after `turn/start` answers, in order. */
   notifications?: ServerNotification[];
   /** End the turn with this `turn/completed` status (default `completed`); `null` sends none. */
@@ -234,7 +236,8 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
     let experimentalApi = false;
     let buffered = '';
     const readAccount = (id: number): void => {
-      if (!turn.ignoreAccountRead)
+      if (turn.ignoreAccountRead) return;
+      const answer = (): void =>
         send({
           id,
           result:
@@ -246,6 +249,8 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
                   requiresOpenaiAuth: turn.requiresOpenaiAuth ?? true,
                 } satisfies GetAccountResponse),
         });
+      if (turn.deferAccountRead) turn.deferAccountRead(answer);
+      else answer();
     };
     const loginAccount = (id: number, params: unknown): void => {
       const login = params as LoginAccountParams;

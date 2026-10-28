@@ -402,17 +402,15 @@ describe('Codex native credential check', () => {
   const check = async (
     script:
       | import('../test/codex-app-server-fake').FakeTurnScript
-      | import('../test/codex-app-server-fake').FakeTurnScript[]
+      | import('../test/codex-app-server-fake').FakeTurnScript[],
+    signal: AbortSignal = AbortSignal.timeout(1000)
   ) => {
     const { CodexProvider } = await import('./provider');
     const { createFakeAppServer } = await import('../test/codex-app-server-fake');
     const scripts = Array.isArray(script) ? script : [script];
     let attempt = 0;
     const server = createFakeAppServer(() => scripts[attempt++] ?? {});
-    const status = await new CodexProvider(server, 1).checkCredential({
-      env,
-      signal: AbortSignal.timeout(1000),
-    });
+    const status = await new CodexProvider(server, 1).checkCredential({ env, signal });
     expect(server.processes).toHaveLength(scripts.length);
     for (const process of server.processes) {
       expect(process.methods).toEqual(['initialize', 'account/read']);
@@ -475,7 +473,7 @@ describe('Codex native credential check', () => {
       ])
     ).toEqual({ state: 'usable', source: 'native' });
   });
-  test('an inconclusive fresh recheck fails closed and redacts its evidence', async () => {
+  test('an inconclusive fresh recheck is check_failed with its evidence redacted', async () => {
     expect(
       await check([
         { account: null },
@@ -492,10 +490,23 @@ describe('Codex native credential check', () => {
       evidence: expect.stringContaining('account/read'),
     });
   });
-  test('the fresh recheck shares the caller deadline', async () => {
-    expect(await check([{ account: null }, { ignoreAccountRead: true }])).toMatchObject({
-      state: 'check_failed',
-    });
+  test('the fresh recheck ends at the caller deadline, before a late login can certify it', async () => {
+    const deadline = new AbortController();
+    expect(
+      await check(
+        [
+          { account: null },
+          {
+            account: { type: 'chatgpt', email: null, planType: 'pro' },
+            deferAccountRead: answer => {
+              deadline.abort(new Error('caller deadline'));
+              answer();
+            },
+          },
+        ],
+        deadline.signal
+      )
+    ).toMatchObject({ state: 'check_failed', evidence: 'caller deadline' });
   });
   test('no account is not_checked when Codex needs no OpenAI login', async () => {
     expect(await check({ account: null, requiresOpenaiAuth: false })).toEqual({
@@ -646,5 +657,33 @@ describe('Codex native credential check', () => {
       ])
     ).toEqual([]);
     expect(spawner).not.toHaveBeenCalled();
+  });
+  test('a cancel after an Archon-supplied login is checked rejects nothing unobserved', async () => {
+    const { CodexProvider } = await import('./provider');
+    const unhandled: unknown[] = [];
+    const record = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', record);
+    try {
+      const envs: Record<string, string>[] = [
+        { CODEX_API_KEY: 'planted-key' },
+        {
+          ARCHON_CODEX_CHATGPT_ACCESS_TOKEN: 'planted-token',
+          ARCHON_CODEX_CHATGPT_ACCOUNT_ID: 'a',
+        },
+        { ARCHON_CODEX_CHATGPT_ACCESS_TOKEN: 'planted-token' },
+      ];
+      for (const env of envs) {
+        const controller = new AbortController();
+        const status = new CodexProvider().checkCredential({ env, signal: controller.signal });
+        controller.abort(new Error('caller cancelled'));
+        await status;
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', record);
+    }
   });
 });

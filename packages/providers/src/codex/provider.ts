@@ -36,7 +36,7 @@ import { parseCodexConfig, type CodexProviderDefaults } from './config';
 import { buildCodexNativeTools } from './native-tools';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { CODEX_CREDENTIAL_ENV } from './credential-env';
-import { resolveCodexBinaryWithSource } from './binary-resolver';
+import { type CodexBinary, resolveCodexBinaryWithSource } from './binary-resolver';
 import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { closeOpenToolCalls } from '../shared/tool-calls';
 import {
@@ -282,42 +282,58 @@ export class CodexProvider implements IAgentProvider {
     request: Parameters<IAgentProvider['checkCredential']>[0]
   ): Promise<CredentialStatus> {
     const { signal } = request;
+    const { env, resolveBinary } = codexLaunch(request.assistantConfig, request.env);
     let onAbort: (() => void) | undefined;
-    // Keep one cancellation subscription across both processes and their cleanup.
-    const aborted = new Promise<never>((_resolve, reject) => {
-      onAbort = (): void => {
-        const reason: unknown = signal.reason;
-        reject(reason instanceof Error ? reason : new Error(String(reason)));
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-    });
     try {
-      const status = await this.checkCredentialOnce(request, aborted);
+      signal.throwIfAborted();
+      if (codexLogin(env)) return { state: 'usable', source: 'native' };
+      // Created only once a process is due: every await below races it, so its rejection
+      // is always observed. One subscription spans both processes and their cleanup.
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = (): void => {
+          const reason: unknown = signal.reason;
+          reject(reason instanceof Error ? reason : new Error(String(reason)));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+      const binary = await Promise.race([aborted, resolveBinary()]);
+      const status = await this.readNativeAccount(binary, env, signal, aborted);
       if (status.state !== 'unusable') return status;
       // Concurrent Codex processes can refresh the same native login. The losing process
       // retains its rejected token even after the winner saves a working one. A new process
       // reloads that login; it must still pass the refresh check within the caller's deadline.
-      const rechecked = await this.checkCredentialOnce(request, aborted);
+      const rechecked = await this.readNativeAccount(binary, env, signal, aborted);
       getLog().info({ state: rechecked.state }, 'codex.native_login_rechecked');
       return rechecked;
+    } catch (error) {
+      const reason: unknown = signal.aborted ? signal.reason : error;
+      return {
+        state: 'check_failed',
+        source: 'native',
+        evidence: redactCredentialValues(
+          reason instanceof ConnectionClosedError
+            ? reason.evidence
+            : reason instanceof Error
+              ? reason.message
+              : String(reason),
+          collectCredentialValues(env)
+        ),
+      };
     } finally {
       if (onAbort) signal.removeEventListener('abort', onAbort);
     }
   }
 
-  private async checkCredentialOnce(
-    request: Parameters<IAgentProvider['checkCredential']>[0],
+  /** Reads the native account through one app-server process; a failure throws. */
+  private async readNativeAccount(
+    binary: CodexBinary,
+    env: Record<string, string>,
+    signal: AbortSignal,
     aborted: Promise<never>
   ): Promise<CredentialStatus> {
-    const { signal } = request;
-    const { env, resolveBinary } = codexLaunch(request.assistantConfig, request.env);
-    let connection: AppServerConnection | undefined;
+    signal.throwIfAborted();
+    const connection = AppServerConnection.start(binary, [], env, this.spawner);
     try {
-      signal.throwIfAborted();
-      if (codexLogin(env)) return { state: 'usable', source: 'native' };
-      const binary = await Promise.race([aborted, resolveBinary()]);
-      signal.throwIfAborted();
-      connection = AppServerConnection.start(binary, [], env, this.spawner);
       await Promise.race([
         aborted,
         connection.request('initialize', {
@@ -352,22 +368,8 @@ export class CodexProvider implements IAgentProvider {
         evidence:
           'Codex reports no usable login: it is not signed in, or its sign-in could not be refreshed. Run `codex login`.',
       };
-    } catch (error) {
-      const reason: unknown = signal.aborted ? signal.reason : error;
-      return {
-        state: 'check_failed',
-        source: 'native',
-        evidence: redactCredentialValues(
-          reason instanceof ConnectionClosedError
-            ? reason.evidence
-            : reason instanceof Error
-              ? reason.message
-              : String(reason),
-          collectCredentialValues(env)
-        ),
-      };
     } finally {
-      await connection?.shutdown(this.shutdownGraceMs);
+      await connection.shutdown(this.shutdownGraceMs);
     }
   }
 
