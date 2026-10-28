@@ -333,6 +333,7 @@ async function streamIterationAttempt(
 function foldIterationUsage(state: LoopState, usage: AttemptUsage, nodeId: string): void {
   if (usage.folded) return;
   usage.folded = true;
+  state.costKnown &&= usage.cost !== undefined;
   if (usage.cost !== undefined) {
     state.costUsd = (state.costUsd ?? 0) + usage.cost;
   }
@@ -639,6 +640,7 @@ function addResultUsage(
   msg: ResultChunk
 ): void {
   const nodeId = run.node.id;
+  state.costKnown &&= msg.cost !== undefined && Number.isFinite(msg.cost);
   if (msg.cost !== undefined) {
     if (Number.isFinite(msg.cost)) {
       usage.cost = (usage.cost ?? 0) + msg.cost;

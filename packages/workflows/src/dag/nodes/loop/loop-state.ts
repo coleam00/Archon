@@ -66,8 +66,8 @@ export interface LoopState {
    */
   resolvedModel: ResolvedModel | undefined;
   costUsd: number | undefined;
-  /** The gate recorded the cost it carried in as complete; otherwise `costUsd` is only a floor. */
-  priorCostKnown: boolean;
+  /** Every consumed attempt and result, including carried-in gate spend, reported finite cost. */
+  costKnown: boolean;
   tokens: TokenUsage | undefined;
   tokensUnknown: boolean;
   /**
@@ -132,7 +132,7 @@ export async function failLoopNode(
             execution.spend.tokens.reason === 'incomplete') ||
           extras.tokensUnknown,
         costUsd: extras.costUsd,
-        costPartial: !state.priorCostKnown,
+        costPartial: !state.costKnown,
         stopReason: state.stopReason,
         numTurns: state.numTurns,
         resolvedModel: state.resolvedModel?.id,

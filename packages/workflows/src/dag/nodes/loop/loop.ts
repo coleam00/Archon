@@ -234,7 +234,7 @@ function initialLoopState(
         : undefined,
     resolvedModel: undefined,
     costUsd: resume.costUsd,
-    priorCostKnown: resume.priorCostKnown,
+    costKnown: resume.priorCostKnown,
     tokens: resume.tokens,
     tokensUnknown:
       savedExecution?.spend.tokens.source === 'unavailable' &&
