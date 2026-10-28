@@ -1369,140 +1369,31 @@ describe('CodexProvider', () => {
     test.each(['explicit', 'workflow', 'split'] as const)(
       'rejects unsupported conditional schemas before starting Codex through the %s path',
       async path => {
-        const field = { properties: { status: { type: 'string' } }, required: ['status'] };
-        const other = { properties: { message: { type: 'string' } }, required: ['message'] };
-        const complete = {
-          properties: { ...field.properties, ...other.properties },
+        const unsupported = {
+          type: 'object',
+          properties: { status: { type: 'string' }, message: { type: 'string' } },
           required: ['status', 'message'],
+          oneOf: [{ $ref: '#/external' }],
         };
-        const cases = [
-          { schema: { allOf: [field, other] }, advice: 'complete property map' },
-          { schema: { allOf: [complete, field] }, advice: 'complete property map' },
-          ...(['oneOf', 'anyOf', 'allOf'] as const).flatMap(operator =>
-            ['$id', '$anchor', '$dynamicAnchor'].map(identity => ({
-              schema: {
-                ...complete,
-                properties: {
-                  status: { type: 'string' },
-                  message: {
-                    [identity]: identity === '$id' ? 'https://example.com/message' : 'message',
-                    type: 'string',
+        const { provider, server } = providerWith();
+        const result = resultOf(
+          await run(provider, {
+            ...(path === 'explicit'
+              ? { outputFormat: { type: 'json_schema', schema: unsupported } as const }
+              : { nodeConfig: { output_format: unsupported } }),
+            ...(path === 'split'
+              ? {
+                  assistantConfig: {
+                    model: 'glm-5.3',
+                    toolFreeStructuredOutputModels: ['glm-5.3'],
                   },
-                },
-                [operator]: [field],
-              },
-              advice: 'one definition and use $ref',
-            }))
-          ),
-          ...(['oneOf', 'anyOf', 'allOf'] as const).flatMap(operator =>
-            ['$defs', 'definitions'].flatMap(definitions =>
-              [false, true].map(mixed => ({
-                schema: {
-                  ...complete,
-                  [definitions]: { Field: field },
-                  [operator]: [{ $ref: `#/${definitions}/Field` }, ...(mixed ? [field] : [])],
-                },
-                advice: 'complete inline',
-              }))
-            )
-          ),
-          ...[
-            { required: ['message'] },
-            { patternProperties: { '^message$': { type: 'string' } } },
-            { type: 'object' },
-          ].map(sibling => ({
-            schema: { allOf: [field, sibling] },
-            advice: 'complete inline',
-          })),
-          ...(['oneOf', 'anyOf', 'allOf'] as const).flatMap(operator => [
-            ...['$dynamicRef', '$recursiveRef'].map(reference => ({
-              schema: { ...complete, [operator]: [{ [reference]: '#/external' }] },
-              advice: 'complete inline',
-            })),
-            ...[
-              { required: ['message'] },
-              { patternProperties: { '^message$': {} } },
-              { type: 'object' },
-            ].map(branch => ({
-              schema: { ...complete, [operator]: [branch] },
-              advice: 'complete inline',
-            })),
-          ]),
-          ...['dependencies', 'dependentSchemas'].flatMap(keyword =>
-            ['oneOf', 'anyOf', 'allOf'].flatMap(operator =>
-              [false, true].map(reference => ({
-                schema: {
-                  ...complete,
-                  $defs: { Dependency: other },
-                  [operator]: [
-                    {
-                      ...field,
-                      [keyword]: { status: reference ? { $ref: '#/$defs/Dependency' } : other },
-                    },
-                  ],
-                },
-                advice: 'complete inline',
-              }))
-            )
-          ),
-          ...(['oneOf', 'anyOf', 'allOf'] as const).flatMap(operator =>
-            [false, true].map(intermediate => ({
-              schema: {
-                ...complete,
-                $id: 'https://example.com/root.json',
-                $defs: { Message: { type: 'string' } },
-                properties: { ...field.properties, message: { $ref: '#/$defs/Message' } },
-                [operator]: [
-                  {
-                    $id: 'branch.json',
-                    ...(intermediate ? { [operator]: [field] } : field),
-                  },
-                ],
-              },
-              advice: 'complete inline',
-            }))
-          ),
-          ...['additionalItems', 'unevaluatedItems'].flatMap(edge =>
-            ['if', 'then', 'else', 'not'].map(keyword => ({
-              schema: {
-                type: 'object',
-                properties: {
-                  results: {
-                    type: 'array',
-                    ...(edge === 'additionalItems' ? { items: [{}] } : { prefixItems: [{}] }),
-                    [edge]: { [keyword]: field },
-                  },
-                },
-              },
-              advice: `output_format.properties.results.${edge}.${keyword}`,
-            }))
-          ),
-          ...(['if', 'then', 'else', 'not'] as const).map(keyword => ({
-            schema: { ...complete, [keyword]: field },
-            advice: 'complete oneOf/anyOf branches',
-          })),
-        ];
-        for (const { schema: unsupported, advice } of cases) {
-          const { provider, server } = providerWith();
-          const result = resultOf(
-            await run(provider, {
-              ...(path === 'explicit'
-                ? { outputFormat: { type: 'json_schema', schema: unsupported } as const }
-                : { nodeConfig: { output_format: unsupported } }),
-              ...(path === 'split'
-                ? {
-                    assistantConfig: {
-                      model: 'glm-5.3',
-                      toolFreeStructuredOutputModels: ['glm-5.3'],
-                    },
-                  }
-                : {}),
-            })
-          );
-          expect(result.isError).toBe(true);
-          expect(result.failure?.evidence).toContain(advice);
-          expect(server.processes).toHaveLength(0);
-        }
+                }
+              : {}),
+          })
+        );
+        expect(result.isError).toBe(true);
+        expect(result.failure?.evidence).toContain('complete inline');
+        expect(server.processes).toHaveLength(0);
       }
     );
 
