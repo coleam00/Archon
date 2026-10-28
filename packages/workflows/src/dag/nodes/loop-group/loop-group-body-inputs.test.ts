@@ -652,6 +652,74 @@ describe('loop_group body inputs: included blocks, command files and loop variab
     expect(includedCompletions.map(event => event.data?.iteration)).toEqual([1, 2]);
   });
 
+  it.each([
+    [undefined, 0.03, true],
+    [0.01, 0.03, false],
+    [0, 0, false],
+  ] as const)(
+    'retains retry cost proof for %s then %s through nested groups',
+    async (first, last, partial) => {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls === 1) {
+          yield {
+            type: 'result',
+            isError: true,
+            errors: ['Retry me'],
+            failure: { class: 'transient', evidence: 'Retry me' },
+            cost: first,
+          };
+        } else {
+          yield { type: 'agent_message_chunk', text: 'DONE' };
+          yield { type: 'result', cost: last };
+        }
+      });
+      const group = (id: string, child: DagNode): DagNode => ({
+        id,
+        kind: 'loop_group',
+        loop_group: { until: 'DONE', max_iterations: 1, fresh_context: false, nodes: [child] },
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('retry-proof'),
+          workflow: {
+            name: 'retry-proof',
+            nodes: [
+              group(
+                'outer',
+                group('inner', {
+                  id: 'work',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Work' },
+                  retry: { max_attempts: 1, delay_ms: 1 },
+                })
+              ),
+            ],
+          },
+        })
+      );
+      expect(calls).toBe(2);
+      for (const path of ['outer.inner', 'outer']) {
+        const row = persistedEvents(store).find(
+          e => e.step_name === path && e.event_type === 'node_completed'
+        );
+        expect(row?.data?.spend).toEqual(
+          expect.objectContaining({
+            costUsd: {
+              source: 'provider',
+              value: (first ?? 0) + last,
+              ...(partial ? { partial: true } : {}),
+            },
+          })
+        );
+      }
+    }
+  );
+
   it.each([false, true])(
     'preserves inner loop cost completeness through nested=%s groups',
     async nested => {

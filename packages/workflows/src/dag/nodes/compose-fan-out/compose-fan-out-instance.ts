@@ -1,4 +1,5 @@
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import { attemptSpend } from '../../../run-budget';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import {
   startNodeExecution,
@@ -6,13 +7,13 @@ import {
   newNodeInvocation,
 } from '../../../node-execution';
 import {
+  type NodeExecutionResult,
   serializeNodeEmitter,
   serializeNodeStateRecord,
   serializeNodeTranscript,
 } from '../../../node-record-serialization';
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { NodeEventWriteError } from '../../../node-event-write';
-import type { TokenUsage } from '@archon/provider-contract';
 import { type ProviderFailure } from '@archon/provider-contract';
 import type { ComposeFanOutNode, DagNode, NodeOutput, ResolvedWorkflow } from '../../../schemas';
 import { planGraph } from '../../../graph-plan';
@@ -26,21 +27,23 @@ import { aggregateProviderFailure, rootFailures } from '../../../executor-shared
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { RunSourceUnreadableError } from '../../node-source';
-import { sumReportedCost, sumFanOutTokens, type RunUsageFigures } from '../../usage';
+import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { type RunLayersContext } from '../../run-context';
 import { expandComposeInstance } from './compose-fan-out-expansion';
 
+type InstanceUsage = Pick<
+  NodeExecutionResult,
+  'costUsd' | 'costPartial' | 'tokens' | 'tokensUnknown'
+>;
+
 /** One composed fan-out instance's execution outcome, reduced into the aggregate (#2512). */
-export interface ComposeInstanceOutcome {
+export interface ComposeInstanceOutcome extends InstanceUsage {
   status: 'completed' | 'failed' | 'cancelled' | 'ambiguous';
   output: string;
   structuredOutput?: unknown;
   error?: string;
   /** The failed instance's typed provider failure, from {@link aggregateProviderFailure}. */
   providerFailure?: ProviderFailure;
-  costUsd?: number;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
 }
 
 /** What every instance of one composed fan-out pass shares. */
@@ -62,7 +65,7 @@ interface InstanceRun {
   /** The prefix on every inner node's step name. */
   stepNamePrefix: string;
   execution: NodeExecutionRecord;
-  priorUsage: RunUsageFigures;
+  priorUsage: InstanceUsage;
 }
 
 /** A previously completed instance, threaded without re-running it. */
@@ -222,7 +225,7 @@ function instanceRunContext(
 
 async function readOpenInstanceUsage(
   instance: Pick<InstanceRun, 'scope' | 'scopeName' | 'stepNamePrefix'>
-): Promise<RunUsageFigures> {
+): Promise<InstanceRun['priorUsage']> {
   const { ctx } = instance.scope;
   const rows = await ctx.deps.store.listWorkflowEvents(ctx.workflowRun.id);
   let lastTerminal = rows.length - 1;
@@ -237,10 +240,22 @@ async function readOpenInstanceUsage(
   }
   // Earlier instance terminals already own their segment's usage. An unfinished
   // segment can span multiple starts, so a recovery start must not reset its spend.
-  return foldDagResumeSnapshot(
+  const snapshot = await foldDagResumeSnapshot(
     rows.slice(lastTerminal + 1).filter(row => row.step_name?.startsWith(instance.stepNamePrefix)),
     ctx.workflowRun.id
   );
+  const executions = [
+    ...[...snapshot.completedNodeOutputs.values()].flatMap(output =>
+      output.execution ? [output.execution] : []
+    ),
+    ...(snapshot.unfinishedInvocations?.values() ?? []),
+  ];
+  return {
+    ...snapshot,
+    costPartial:
+      snapshot.budget.costUnavailable !== undefined ||
+      executions.some(execution => attemptSpend(execution).kind === 'unavailable'),
+  };
 }
 
 function isLifecycleWriteError(error: unknown): boolean {
@@ -271,6 +286,7 @@ async function releaseSourceUnreadableInstance(
       { status: 'failed', error: error.message, failureKind: 'child_failed' },
       {
         costUsd: usage.costUsd,
+        costPartial: usage.costPartial,
         tokens: usage.tokens,
         tokensUnknown: usage.tokensUnknown,
         output: { text: '' },
@@ -314,6 +330,7 @@ async function recordInstanceTerminal(
         ...(outcome.structuredOutput !== undefined ? { structured: outcome.structuredOutput } : {}),
       },
       costUsd: sumReportedCost([instance.priorUsage, outcome]),
+      costPartial: instance.priorUsage.costPartial === true || outcome.costPartial === true,
       tokens: sumFanOutTokens([instance.priorUsage, outcome]),
       tokensUnknown: instance.priorUsage.tokensUnknown === true || outcome.tokensUnknown === true,
       diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
@@ -337,9 +354,10 @@ async function settleInstance(
   primarySink: string
 ): Promise<ComposeInstanceOutcome> {
   // Every instance exit carries the work it already paid for.
-  const instanceUsage: Pick<ComposeInstanceOutcome, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
+  const instanceUsage: InstanceUsage = {
     ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
     ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
+    costPartial: instance.priorUsage.costPartial === true || instanceCtx.totalCostPartial === true,
     tokensUnknown: instanceCtx.totalTokensUnknown,
   };
   const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
@@ -436,7 +454,7 @@ export async function runComposeInstance(
 
   const stepNamePrefix = `${scopeName}__`;
   const threaded = threadCompletedInnerNodes(expanded.nodes, priorOutputs, stepNamePrefix);
-  let priorUsage: RunUsageFigures;
+  let priorUsage: InstanceRun['priorUsage'];
   try {
     priorUsage = await readOpenInstanceUsage({ scope, scopeName, stepNamePrefix });
   } catch (error) {

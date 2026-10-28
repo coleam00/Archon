@@ -153,7 +153,7 @@ export async function runNodeRetryLoop(
   iteration?: number
 ): Promise<NodeExecutionResult> {
   let output = initialOutput;
-  let usage: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'> = {
+  let usage: Pick<NodeExecutionResult, 'costUsd' | 'costPartial' | 'tokens' | 'tokensUnknown'> = {
     tokensUnknown: false,
   };
   // Once a rate-limited failure is seen, the budget widens to RATE_LIMIT_MAX_RETRIES
@@ -191,6 +191,7 @@ export async function runNodeRetryLoop(
     attempt++;
   }
   output.costUsd = usage.costUsd;
+  output.costPartial = usage.costPartial;
   output.tokens = usage.tokens;
   output.tokensUnknown = usage.tokensUnknown;
   return output;
@@ -245,10 +246,10 @@ export async function runNodeRetryLoop(
 }
 
 function accumulateAttemptUsage(
-  accumulated: Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'>,
+  accumulated: Pick<NodeExecutionResult, 'costUsd' | 'costPartial' | 'tokens' | 'tokensUnknown'>,
   output: NodeExecutionResult,
   nodeId: string
-): Pick<NodeExecutionResult, 'costUsd' | 'tokens' | 'tokensUnknown'> {
+): Pick<NodeExecutionResult, 'costUsd' | 'costPartial' | 'tokens' | 'tokensUnknown'> {
   const costUsd =
     output.costUsd === undefined
       ? accumulated.costUsd
@@ -260,7 +261,12 @@ function accumulateAttemptUsage(
   } else if (output.tokens !== undefined) {
     tokens = sumTokenUsage([...(tokens !== undefined ? [tokens] : []), output.tokens], { nodeId });
   }
-  return { costUsd, tokens, tokensUnknown };
+  return {
+    costUsd,
+    costPartial: accumulated.costPartial === true || output.costPartial === true,
+    tokens,
+    tokensUnknown,
+  };
 }
 
 /**
