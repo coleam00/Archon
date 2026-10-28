@@ -529,6 +529,7 @@ mock.module('@archon/workflows/run-source', () => ({
   ),
 }));
 mock.module('@archon/workflows/router', () => ({
+  suggestWorkflowNames: mock<typeof WorkflowRouter.suggestWorkflowNames>(() => []),
   findWorkflow: mockFindWorkflow,
   // Statically imported by the background dispatch path (see dispatch/background.ts).
   resolveWorkflowName: mock((name: string, workflows: { name: string }[]) =>

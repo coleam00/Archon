@@ -11,6 +11,18 @@ import {
 } from './include-expander.fixtures';
 
 describe('expandWorkflowIncludes — namespacing', () => {
+  test.each(['review', 'archon', 'ARCHON-REVIEW'])(
+    'rejects the non-exact include target %s',
+    target => {
+      const child = wf('archon-review', [{ id: 'check', prompt: 'review' }]);
+      const parent = wf('parent', [{ id: 'sub', include: target }]);
+      const { workflows, errors } = expandWorkflowIncludes(mapOf(child, parent));
+      expect(workflows.has('parent')).toBe(false);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.error).toContain(target);
+    }
+  );
+
   test('inlines the block as flattened, namespaced nodes with no include remaining', () => {
     const parent = wf('parent', [
       { id: 'setup', bash: 'echo setup' },

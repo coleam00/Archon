@@ -500,9 +500,7 @@ export function findWorkflowLoadError(
 ): WorkflowLoadError | undefined {
   return (
     errors.find(error => error.workflowName === name) ??
-    errors.find(error => error.workflowName?.toLowerCase() === name.toLowerCase()) ??
-    errors.find(error => workflowLoadErrorName(error) === name) ??
-    errors.find(error => workflowLoadErrorName(error).toLowerCase() === name.toLowerCase())
+    errors.find(error => workflowLoadErrorName(error) === name)
   );
 }
 

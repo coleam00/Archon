@@ -20,7 +20,7 @@ import {
   type ResolvedContinuation,
 } from '@archon/workflows/run-source';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { resolveWorkflowName } from '@archon/workflows/router';
+import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import { resolveTopLevelInputs } from '@archon/workflows/utils/workflow-requirements';
 import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import {
@@ -385,16 +385,20 @@ function workflowNotFoundError(
       `Workflow '${workflowName}' failed to load: ${loadError.error}\n\nFix the YAML file and try again.`
     );
   }
-  return availableWorkflowsError(workflowName, workflowEntries);
+  return unknownWorkflowError(workflowName, workflowEntries);
 }
 
-function availableWorkflowsError(
+function unknownWorkflowError(
   workflowName: string,
   workflowEntries: readonly WorkflowWithSource[]
 ): Error {
-  const availableWorkflows = workflowEntries.map(ws => `  - ${ws.workflow.name}`).join('\n');
+  const suggestions = suggestWorkflowNames(
+    workflowName,
+    workflowEntries.map(entry => entry.workflow)
+  );
+  const suggestedWorkflows = suggestions.map(name => `  - ${name}`).join('\n');
   return new Error(
-    `Workflow '${workflowName}' not found.\n\nAvailable workflows:\n${availableWorkflows}`
+    `Workflow '${workflowName}' not found.\n\nDid you mean:\n${suggestedWorkflows || '  (none)'}`
   );
 }
 
@@ -499,7 +503,7 @@ export async function recaptureForLane(
     workflowName,
     rediscovered.workflows.map(ws => ws.workflow)
   );
-  if (!workflow) throw availableWorkflowsError(workflowName, rediscovered.workflows);
+  if (!workflow) throw unknownWorkflowError(workflowName, rediscovered.workflows);
   admission.workflow = workflow;
   admission.workflowEntry = rediscovered.workflows.find(ws => ws.workflow === workflow);
   await recordSelectedWorkflow(preparedSource.anchor.root, workflow.name);

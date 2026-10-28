@@ -3,7 +3,7 @@ import {
   WorkflowSourceIntegrityError,
   resolveContinuationWorkflow,
 } from '@archon/workflows/run-source';
-import { resolveWorkflowName } from '@archon/workflows/router';
+import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import { findWorkflowLoadError, type ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
   spellWorkflowCommand,
@@ -70,10 +70,18 @@ export async function resolveRunWorkflow(
       message: `Workflow \`${run.workflow_name}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`,
     };
   }
+  const suggestions = suggestWorkflowNames(
+    run.workflow_name,
+    discovery.workflows.map(entry => entry.workflow)
+  );
   return {
     ok: false,
     message:
-      `Workflow \`${run.workflow_name}\` for run ${run.id} was not found.\n\n` +
+      `Workflow \`${run.workflow_name}\` for run ${run.id} was not found.` +
+      (suggestions.length
+        ? `\n\nDid you mean:\n${suggestions.map(name => `  - ${name}`).join('\n')}`
+        : '') +
+      '\n\n' +
       `Use ${spellWorkflowCommand(surface, 'list')} to check available workflows.`,
   };
 }

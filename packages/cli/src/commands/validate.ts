@@ -6,6 +6,7 @@
 
 import { providerRegistry } from '@archon/providers';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { suggestWorkflowNames } from '@archon/workflows/router';
 import { workflowLoadErrorName } from '@archon/workflows/schemas/workflow';
 import { writeStdout } from '../utils/stdout';
 import {
@@ -14,7 +15,6 @@ import {
   validateScript,
   discoverAvailableCommands,
   discoverAvailableScripts,
-  findSimilar,
   makeWorkflowResult,
 } from '@archon/workflows/validator';
 import type {
@@ -94,9 +94,7 @@ export async function validateWorkflowsCommand(
 
   let filteredResults = results;
   if (name) {
-    filteredResults = results.filter(
-      r => r.workflowName === name || r.workflowName.toLowerCase() === name.toLowerCase()
-    );
+    filteredResults = results.filter(r => r.workflowName === name);
 
     if (filteredResults.length === 0) {
       await reportMissingWorkflow(name, results, json);
@@ -171,7 +169,10 @@ async function reportMissingWorkflow(
   json: boolean | undefined
 ): Promise<void> {
   const allNames = results.map(r => r.workflowName);
-  const similar = findSimilar(name, allNames);
+  const similar = suggestWorkflowNames(
+    name,
+    allNames.map(name => ({ name }))
+  );
   if (json) {
     await writeStdout(
       `${JSON.stringify({

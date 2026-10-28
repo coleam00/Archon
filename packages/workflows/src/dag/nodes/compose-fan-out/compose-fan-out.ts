@@ -100,8 +100,6 @@ export async function resolveFanOutChildDefinition(
     // is reachable here only by the composition that names it.
     const definitions = [...workflows, ...(support ?? [])].map(w => w.workflow);
     const definition = resolveWorkflowName(targetName, definitions);
-    // resolveWorkflowName returns undefined for an unknown name and THROWS only on
-    // ambiguity, so the undefined branch is ordinary rather than exceptional.
     if (!definition) {
       return unresolvedFanOutTarget(errors, targetName, verifiedFiles);
     }

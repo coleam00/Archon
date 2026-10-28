@@ -2365,10 +2365,7 @@ nodes:
     }
   );
 
-  it('rejects a CASE-VARIANT self-reference by resolving the name before the cycle check (I3)', async () => {
-    // The node names its own workflow in a different case; resolveWorkflowName resolves
-    // 'SELFIE' → 'selfie', and the cycle check (post-resolution) catches it as a cycle
-    // rather than letting it slip to the depth cap.
+  it('rejects a non-exact child target without starting a child', async () => {
     await writeWorkflow(
       'selfie',
       `
@@ -2394,8 +2391,7 @@ nodes:
     const nodeFailed = store.events.find(
       e => e.event_type === 'node_failed' && e.step_name === 'sub'
     );
-    expect(String(nodeFailed?.data?.error)).toMatch(/cycle/i);
-    // Caught as a cycle → no child run was created.
+    expect(String(nodeFailed?.data?.error)).toContain("Unknown sub-run workflow 'SELFIE'");
     expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
   });
 

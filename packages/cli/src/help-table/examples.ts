@@ -12,11 +12,11 @@ export const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run plan --cwd /path/to/repo "Add dark mode"',
+    text: 'archon workflow run archon-plan --cwd /path/to/repo "Add dark mode"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run implement --branch feature-auth "Implement auth"',
+    text: 'archon workflow run archon-implement --branch feature-auth "Implement auth"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
@@ -24,7 +24,7 @@ export const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run investigate --folder "Explain how the repos under this root fit together"',
+    text: 'archon workflow run archon-investigate --folder "Explain how the repos under this root fit together"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
@@ -32,7 +32,7 @@ export const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run investigate --dry-run --stubs ./stubs.yaml --json',
+    text: 'archon workflow run archon-investigate --dry-run --stubs ./stubs.yaml --json',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   { text: 'archon workflow runs --json', owner: { command: 'workflow', subcommand: 'runs' } },

@@ -41,10 +41,6 @@ function parseProjectRegistration(message: string): ProjectRegistration | null {
  * Resolve a codebase by name using 4-tier fuzzy matching.
  * Tiers: exact → case-insensitive → prefix → substring.
  * Returns undefined if not found; throws on ambiguity within a tier.
- *
- * Mirrors `resolveWorkflowName` (packages/workflows/src/router.ts) but uses
- * prefix instead of suffix for tier 3 — project names don't follow the
- * `archon-X` suffix convention workflows use.
  */
 function resolveCodebaseName(name: string, codebases: readonly Codebase[]): Codebase | undefined {
   const exact = codebases.find(c => c.name === name);

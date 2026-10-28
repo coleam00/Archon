@@ -126,6 +126,78 @@ nodes:
     expect(errors).toHaveLength(0);
   });
 
+  it.each(['review', 'archon', 'ARCHON-REVIEW'])(
+    'rejects the non-exact workflow target %s at runtime',
+    async target => {
+      await writeWorkflow('archon-review', slotYaml('archon-review', 'REVIEW'));
+      await writeWorkflow(
+        'parent',
+        `
+name: parent
+description: exact child target required
+nodes:
+  - id: sub
+    workflow: ${target}
+`
+      );
+      const parent = await discover('parent');
+      const store = new InMemoryStore();
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv',
+        cwd,
+        parent,
+        'goal',
+        { conversationId: 'conv-db' }
+      );
+      expect(result.success).toBe(false);
+      const failed = store.events.find(
+        e => e.event_type === 'node_failed' && e.step_name === 'sub'
+      );
+      expect(String(failed?.data?.error)).toContain(`Unknown sub-run workflow '${target}'`);
+      expect([...store.runs.values()].filter(run => run.parent_run_id !== null)).toHaveLength(0);
+    }
+  );
+
+  it('keeps an exact child target stable as containing names are discovered', async () => {
+    await writeWorkflow('archon-review', slotYaml('archon-review', 'ORIGINAL'));
+    await writeWorkflow(
+      'parent',
+      `
+name: parent
+description: exact child target
+nodes:
+  - id: sub
+    workflow: archon-review
+`
+    );
+    const parent = await discover('parent');
+    for (const expanded of [false, true]) {
+      if (expanded) {
+        await writeWorkflow('custom-review', slotYaml('custom-review', 'OTHER'));
+        await writeWorkflow('archon-review-more', slotYaml('archon-review-more', 'OTHER'));
+      }
+      const store = new InMemoryStore();
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv',
+        cwd,
+        parent,
+        'goal',
+        { conversationId: 'conv-db' }
+      );
+      expect(result.success).toBe(true);
+      const children = [...store.runs.values()].filter(run => run.parent_run_id !== null);
+      expect(children.map(run => run.workflow_name)).toEqual(['archon-review']);
+      const done = store.events.find(
+        e => e.event_type === 'node_completed' && e.step_name === 'sub'
+      );
+      expect(String(done?.data?.node_output)).toContain('ORIGINAL');
+    }
+  });
+
   // --- Group 2: the generate-and-run mechanism -----------------------------
 
   it('a run authors a child mid-flight and a later workflow: node executes it', async () => {

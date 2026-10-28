@@ -12,7 +12,7 @@ import type { ResourceValidation } from './context';
  * bundled-set-only `workflow:` target check below — a bundled workflow's sub-run target
  * must itself resolve within the bundled set (a bundled workflow can't depend on a
  * project/global workflow that may not exist on another install). Resolution reuses the
- * runtime fuzzy `resolveWorkflowName` so a legal suffix/substring ref isn't reported broken.
+ * runtime exact-name resolver.
  * parseWorkflow never expands includes, so `workflow.name` is the authoritative id here.
  */
 const bundledWorkflowDefsCache = new WeakMap<ProviderRegistry, WorkflowDefinition[]>();
@@ -34,26 +34,14 @@ function getBundledWorkflowDefs(providers: ProviderRegistry): WorkflowDefinition
  * workflow could be absent elsewhere (#2470). Only the bundled set is checked at load/CI;
  * project sub-run targets stay RUNTIME-resolved on purpose (a load-time existence
  * check would silently kill mid-flight authoring — constitution case-law), and the
- * check uses the SAME fuzzy resolver as runtime so a legal suffix ref isn't flagged.
+ * check uses the same exact-name resolver as runtime.
  */
 export function validateBundledWorkflowTarget(validation: ResourceValidation, node: DagNode): void {
   if (validation.config?.workflowSource !== 'bundled' || !isWorkflowNode(node)) return;
-  let resolvedTarget: WorkflowDefinition | undefined;
-  try {
-    resolvedTarget = resolveWorkflowName(
-      node.workflow,
-      getBundledWorkflowDefs(validation.providers)
-    );
-  } catch (err) {
-    validation.issues.push({
-      level: 'error',
-      nodeId: node.id,
-      field: 'workflow',
-      message: `Node '${node.id}' sub-run target '${node.workflow}' is ambiguous within the bundled set: ${(err as Error).message}`,
-      hint: 'Use the full bundled workflow name.',
-    });
-    return;
-  }
+  const resolvedTarget = resolveWorkflowName(
+    node.workflow,
+    getBundledWorkflowDefs(validation.providers)
+  );
   if (!resolvedTarget) {
     validation.issues.push({
       level: 'error',
