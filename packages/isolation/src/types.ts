@@ -477,7 +477,7 @@ export type RepoConfigLoader = (repoPath: string) => Promise<WorktreeCreateConfi
 export interface WorktreeStatusBreakdown {
   total: number;
   /** When present, the classification counts and lists are unavailable, not zero findings. */
-  classificationUnavailable?: 'base-ref-resolution-failed';
+  classificationUnavailable?: { reason: string };
   merged: number;
   stale: number;
   active: number;

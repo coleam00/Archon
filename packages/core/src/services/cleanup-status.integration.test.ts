@@ -14,6 +14,7 @@ import * as config from '../config/config-loader';
 import * as environments from '../db/isolation-environments';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { getWorktreeStatusBreakdown } from './cleanup-service';
+import { getLog } from './cleanup/log';
 
 const trackRoot = trackTempRoots();
 
@@ -81,7 +82,9 @@ test.each(['config', 'default branch'])(
   'status retains the total when %s resolution rejects, without exposing secrets',
   async source => {
     setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
-    const codebase = makeCodebase();
+    const codebase = makeCodebase({
+      repository_url: 'https://user:secret@gitlab.example/org/repo.git?token=secret#secret',
+    });
     spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
     spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
     spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
@@ -90,7 +93,9 @@ test.each(['config', 'default branch'])(
     spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
       statusEnvironment(codebase.default_cwd),
     ]);
-    const error = new Error('failed with https://user:secret@example.com/repo?token=secret');
+    const warn = spyOn(getLog(), 'warn');
+    const reason = source === 'config' ? 'Invalid worktree config' : 'Remote HEAD is unavailable';
+    const error = new Error(`${reason}: https://user:secret@example.com/repo?token=secret`);
     const loadConfig = spyOn(config, 'loadRepoConfig').mockResolvedValue({});
     const defaultBranch = spyOn(git, 'getDefaultBranch');
     if (source === 'config') loadConfig.mockRejectedValueOnce(error);
@@ -105,10 +110,60 @@ test.each(['config', 'default branch'])(
     expect(result.message).toContain(
       'Merge/stale classification unavailable (base ref resolution failed'
     );
+    expect(result.message).toContain(reason);
+    expect(warn).toHaveBeenCalledWith(
+      { codebaseId: codebase.id, reason: `${reason}: [URL omitted]` },
+      'worktree_status_base_ref_resolution_failed'
+    );
+    expect(result.message).toContain('gitlab.example/org/repo.git');
     expect(result.message).not.toContain('secret');
+    expect(result.message).not.toContain('user:');
     expect(result.message).not.toContain('example.com');
     expect(result.message).not.toContain('0 active');
     expect(result.message).not.toContain('stale (');
     if (source === 'config') expect(defaultBranch).not.toHaveBeenCalled();
   }
 );
+
+test('status keeps both inspection failure categories and redacts their remote credentials', async () => {
+  setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
+  const codebase = makeCodebase();
+  spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
+  spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
+  spyOn(sessions, 'getActiveSession').mockResolvedValue(null);
+  spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(null);
+  spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
+  spyOn(environments, 'listByCodebaseWithAge').mockResolvedValue([
+    statusEnvironment(codebase.default_cwd),
+  ]);
+  spyOn(config, 'loadRepoConfig').mockResolvedValue({ worktree: { baseBranch: 'main' } });
+  const warn = spyOn(getLog(), 'warn');
+  spyOn(git, 'isBranchMerged').mockRejectedValueOnce(
+    new Error(
+      'ancestry unavailable: https://user:ancestry-secret@example.com/repo?token=query-secret'
+    )
+  );
+  spyOn(git, 'isPatchEquivalent').mockRejectedValueOnce(
+    new Error('patch unavailable: ssh://patch-secret@example.com/repo#fragment-secret')
+  );
+
+  const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
+    formatWorkflowCommand: command => command,
+  });
+
+  expect(result.success).toBe(true);
+  expect(result.message).toContain('Worktrees: 1 total');
+  expect(warn).toHaveBeenCalledWith(
+    { branchName: 'task-1', reason: 'ancestry unavailable: [URL omitted]' },
+    'merge_check_error_in_breakdown'
+  );
+  expect(warn).toHaveBeenCalledWith(
+    { branchName: 'task-1', reason: 'patch unavailable: [URL omitted]' },
+    'patch_check_error_in_breakdown'
+  );
+  expect(result.message).toContain('task-1: merge inspection failed');
+  expect(result.message).toContain('Ancestry: ancestry unavailable');
+  expect(result.message).toContain('Patch equivalence: patch unavailable');
+  expect(result.message).not.toContain('secret');
+  expect(result.message).not.toContain('example.com');
+});

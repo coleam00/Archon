@@ -8,6 +8,7 @@ import {
   makeWorkflowRun,
   makeIsolationEnvironment,
   mockGetCodebase,
+  mockListCodebases,
   mockGetWorktreeStatusBreakdown,
   mockFindCodebaseByDefaultCwd,
   mockGetActiveSession,
@@ -54,6 +55,28 @@ describe('CommandHandler', () => {
         // cwd is null → the working directory falls back to the project root
         // (issue #1993: web-created project conversations have null cwd).
         expect(result.message).toContain('Working Directory: /workspace/my-repo');
+      });
+
+      test.each([
+        [
+          'https://user:secret@gitlab.example/org/repo.git?token=secret#secret',
+          'gitlab.example/org/repo.git',
+        ],
+        ['https://user:secret@github.com/org/repo?token=secret', 'org/repo'],
+        ['ssh://secret@gitlab.example:2222/org/repo.git', 'gitlab.example:2222/org/repo.git'],
+        ['secret@github.com:org/repo.git', 'org/repo.git'],
+        ['/local/repo', '/local/repo'],
+        ['invalid-secret', 'repository identity unavailable'],
+      ])('shows a credential-free repository identity for %s', async (remote, identity) => {
+        mockGetCodebase.mockResolvedValue(makeCodebase({ repository_url: remote }));
+        mockListCodebases.mockResolvedValueOnce([makeCodebase({ repository_url: remote })]);
+        const result = await handleCommand(
+          { ...baseConversation, codebase_id: 'cb-123' },
+          '/status',
+          operator
+        );
+        expect(result.message).toContain(`(${identity})`);
+        expect(result.message).not.toContain('secret');
       });
 
       test('shows the successful worktree breakdown', async () => {

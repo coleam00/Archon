@@ -877,7 +877,7 @@ describe('getWorktreeStatusBreakdown', () => {
       const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
 
       expect(breakdown.total).toBe(1);
-      expect(breakdown.classificationUnavailable).toBe('base-ref-resolution-failed');
+      expect(breakdown.classificationUnavailable).toEqual({ reason: 'failed with [URL omitted]' });
       expect(breakdown.merged).toBe(0);
       expect(breakdown.stale).toBe(0);
       expect(breakdown.active).toBe(0);

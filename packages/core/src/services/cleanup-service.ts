@@ -22,6 +22,7 @@ import { SessionNotFoundError } from '../db/sessions';
 import { ConversationNotFoundError } from '../types';
 import { getLog } from './cleanup/log';
 import { resolveRepoGitContext } from './cleanup/merge-verdict';
+import { statusDiagnostic } from './cleanup/status-diagnostic';
 import { checkRemoval, getLiveRunBlocker } from './cleanup/run-lock';
 import { removeEnvironment } from './cleanup/remove-environment';
 import { reapContainerEnvironments, type ContainerCleanupReport } from './cleanup/containers';
@@ -253,10 +254,10 @@ export async function getWorktreeStatusBreakdown(
   let remoteMainRef: BranchName;
   try {
     ({ remoteMainRef } = await resolveRepoGitContext(repoPath, mainRepoPath));
-  } catch {
-    // Config and remote errors can contain secrets; report the failed operation without raw evidence.
-    getLog().warn({ codebaseId }, 'worktree_status_base_ref_resolution_failed');
-    return { ...breakdown, classificationUnavailable: 'base-ref-resolution-failed' };
+  } catch (error) {
+    const reason = statusDiagnostic(error);
+    getLog().warn({ codebaseId, reason }, 'worktree_status_base_ref_resolution_failed');
+    return { ...breakdown, classificationUnavailable: { reason } };
   }
 
   for (const env of environments) {
@@ -313,8 +314,9 @@ async function inspectWorktreeMerge(
       return { status: 'merged' };
     }
   } catch (error) {
-    getLog().warn({ err: error, branchName }, 'merge_check_error_in_breakdown');
-    errors.push(`Ancestry: ${error instanceof Error ? error.message : String(error)}`);
+    const reason = statusDiagnostic(error);
+    getLog().warn({ reason, branchName }, 'merge_check_error_in_breakdown');
+    errors.push(`Ancestry: ${reason}`);
   }
   // Squash merges can be patch-equivalent even when ancestry inspection fails.
   try {
@@ -326,8 +328,9 @@ async function inspectWorktreeMerge(
       return { status: 'merged' };
     }
   } catch (error) {
-    getLog().warn({ err: error, branchName }, 'patch_check_error_in_breakdown');
-    errors.push(`Patch equivalence: ${error instanceof Error ? error.message : String(error)}`);
+    const reason = statusDiagnostic(error);
+    getLog().warn({ reason, branchName }, 'patch_check_error_in_breakdown');
+    errors.push(`Patch equivalence: ${reason}`);
   }
   return errors.length > 0 ? { status: 'failed', errors } : { status: 'unmerged' };
 }
