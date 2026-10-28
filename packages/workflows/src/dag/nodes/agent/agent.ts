@@ -387,7 +387,7 @@ function assertTurnSettled(pc: AgentPassContext, state: AgentAttemptState): void
     return;
   throw new NodeFailure(
     cutOff ? 'timeout' : 'unknown',
-    `Node '${pc.node.id}' failed: ${unsettledTurnError(cutOff, state.backgroundTasksIncomplete, state.passSawResult ? pc.provider : undefined)}`
+    `Node '${pc.node.id}' failed: ${unsettledTurnError(cutOff, state.backgroundTasksIncomplete, pc.provider, state.awaitingSettlement)}`
   );
 }
 

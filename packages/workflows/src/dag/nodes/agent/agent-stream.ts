@@ -77,6 +77,7 @@ export interface AgentAttemptState {
   /** Attempt-wide: some pass ended without a result, or a result without a finite cost, so `costUsd` is at most a floor. */
   costReportMissing: boolean;
   passSawResult: boolean;
+  awaitingSettlement: boolean;
   stopReason: string | undefined;
   numTurns: number | undefined;
   resolvedModel: ResolvedModel | undefined;
@@ -107,6 +108,7 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
     costUsd: undefined,
     costReportMissing: false,
     passSawResult: false,
+    awaitingSettlement: false,
     stopReason: undefined,
     numTurns: undefined,
     resolvedModel: undefined,
@@ -150,7 +152,6 @@ export async function runStreamPass(
   resetPass(pc, state, pass);
   const providerEvents = createPassEventHandler(pc, state);
   const shouldStopStream = stopCheck(pc, state, providerEvents);
-  let awaitingSettlement = false;
   try {
     for await (const msg of withIdleTimeout(
       passChunks(pc, prompt, pass.resumeSessionId),
@@ -162,14 +163,14 @@ export async function runStreamPass(
         state.watchdogResets.observe(type, resetAt);
       },
       () =>
-        !awaitingSettlement &&
+        !state.awaitingSettlement &&
         (providerEvents.hasOpenTools() ||
           (pc.capabilities.backgroundWork === 'reported' &&
             providerEvents.liveSubtaskIds().length > 0)),
       shouldStopStream
     )) {
-      awaitingSettlement = awaitingTurnSettlement(awaitingSettlement, msg);
-      assertResultBeforeSettlement(msg, awaitingSettlement, pc.provider);
+      state.awaitingSettlement = awaitingTurnSettlement(state.awaitingSettlement, msg);
+      assertResultBeforeSettlement(msg, state.awaitingSettlement, pc.provider);
       const tickNow = Date.now();
 
       if (msg.type === 'result') recordResult(pc, state, pass, msg);
@@ -224,6 +225,7 @@ function resetPass(
   state.batchMessages.length = 0; // else a failed attempt's prose flushes during reask
   state.costUsd = undefined;
   state.passSawResult = false;
+  state.awaitingSettlement = false;
   state.tokens = undefined;
   state.cutOff = undefined;
   state.lastWatchdogReset = undefined;

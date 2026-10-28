@@ -236,7 +236,8 @@ function unsettledFailure(
   const unsettledError = unsettledTurnError(
     attempt.cutOff,
     attempt.providerEvents.liveSubtaskIds(),
-    attempt.sawResult ? run.workflowProvider : undefined
+    run.workflowProvider,
+    attempt.awaitingSettlement
   );
   getLog().error({ nodeId: node.id, iteration: i }, 'loop_node.iteration_unsettled');
   recordIterationFailed(run, i, unsettledError, Date.now() - iterationStart);

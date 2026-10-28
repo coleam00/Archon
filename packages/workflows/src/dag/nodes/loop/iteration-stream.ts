@@ -81,6 +81,7 @@ export interface StreamedAttempt {
   /** Whether this attempt's stream ended on the provider's `settled` (see the AI-node path's streamSettled). */
   settled: boolean;
   sawResult: boolean;
+  awaitingSettlement: boolean;
   /** Raw structured payload seen on this attempt, before validation. */
   structured: unknown;
   /**
@@ -228,6 +229,7 @@ function newAttempt(run: LoopRun): StreamedAttempt {
     lastWatchdogReset: undefined,
     settled: false,
     sawResult: false,
+    awaitingSettlement: false,
     structured: undefined,
     stopStatus: undefined,
     abort: new AbortController(),
@@ -460,7 +462,6 @@ async function consumeIterationStream(
       },
     }
   );
-  let awaitingSettlement = false;
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   const shouldStopStream = (): Promise<boolean> => stopStreamIfRunStopped(run, i, attempt);
   try {
@@ -495,14 +496,14 @@ async function consumeIterationStream(
         watchdogResets.observe(type, resetAt);
       },
       () =>
-        !awaitingSettlement &&
+        !attempt.awaitingSettlement &&
         (providerEvents.hasOpenTools() ||
           (capabilities.backgroundWork === 'reported' &&
             providerEvents.liveSubtaskIds().length > 0)),
       shouldStopStream
     )) {
-      awaitingSettlement = awaitingTurnSettlement(awaitingSettlement, msg);
-      assertResultBeforeSettlement(msg, awaitingSettlement, run.workflowProvider);
+      attempt.awaitingSettlement = awaitingTurnSettlement(attempt.awaitingSettlement, msg);
+      assertResultBeforeSettlement(msg, attempt.awaitingSettlement, run.workflowProvider);
       // A result is not the end of the iteration; `settled` is. See the
       // AI-node stream loop for the full rationale.
       if (msg.type === 'result') {

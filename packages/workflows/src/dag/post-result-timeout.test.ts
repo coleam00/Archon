@@ -199,6 +199,26 @@ describe('post-result turn settlement timeout', () => {
       }
     );
 
+    it.each(['running', 'tool', 'subtask'] as const)(
+      `${kind}: names the current result phase after a %s wake stalls`,
+      async wake => {
+        const store = await run(kind, async function* (_prompt, _cwd, _session, options) {
+          yield { type: 'result', text: 'Earlier result.' };
+          if (wake === 'running') yield { type: 'state_update', state: 'running' };
+          else {
+            yield liveWork[wake].start;
+            yield liveWork[wake].end;
+          }
+          await waitForAbort(options?.abortSignal);
+        });
+        const failure = persistedEvents(store).find(event => event.event_type === 'node_failed');
+        expect(failure?.data?.failure_kind).toBe('timeout');
+        expect(failure?.data?.error).toContain("waiting for result from provider 'codex'");
+        expect(failure?.data?.error).not.toContain('waiting for turn settlement after result');
+        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      }
+    );
+
     for (const transport of ['native', 'plugin'] as const) {
       for (const output of ['prose', 'silent', 'structured'] as const) {
         it(`${kind}: rejects ${transport} settlement without a result (${output})`, async () => {
