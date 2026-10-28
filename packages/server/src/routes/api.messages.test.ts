@@ -707,7 +707,8 @@ describe('SSE route replay', () => {
         new WorkflowEventBridge(transport)
       );
       const { app } = makeApp(adapter);
-      const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+      type ResponseReader = Pick<ReadableStreamDefaultReader<Uint8Array>, 'read' | 'cancel'>;
+      const readers: ResponseReader[] = [];
       const heartbeatWaits: ReturnType<typeof Promise.withResolvers<void>>[] = [];
       // Hold heartbeat scheduling outside this delivery test and release every route in teardown.
       const sleep = spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(() => {
@@ -718,7 +719,7 @@ describe('SSE route replay', () => {
       async function settleReplay(): Promise<void> {
         for (let i = 0; i < 40; i++) await Promise.resolve();
       }
-      async function connect(): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+      async function connect(): Promise<ResponseReader> {
         const response = await app.request(`/api/stream/${conversationId}`);
         expect(response.status).toBe(200);
         expect(response.headers.get('Content-Type')).toContain('text/event-stream');
@@ -728,7 +729,7 @@ describe('SSE route replay', () => {
         expect(await read(reader)).toContain('"type":"heartbeat"');
         return reader;
       }
-      async function read(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+      async function read(reader: ResponseReader): Promise<string> {
         const chunk = await reader.read();
         expect(chunk.done).toBe(false);
         return new TextDecoder().decode(chunk.value);
