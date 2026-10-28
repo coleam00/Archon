@@ -53,6 +53,8 @@ const schemaEdges: Readonly<Record<string, JsonSchemaEdge | undefined>> = {
   unevaluatedProperties: { kind: 'schema', relation: 'nested' },
   propertyNames: { kind: 'schema', relation: 'nested' },
   contains: { kind: 'schema', relation: 'nested' },
+  additionalItems: { kind: 'schema', relation: 'nested' },
+  unevaluatedItems: { kind: 'schema', relation: 'nested' },
   not: { kind: 'schema', relation: 'same-instance' },
   if: { kind: 'schema', relation: 'same-instance' },
   then: { kind: 'schema', relation: 'same-instance' },

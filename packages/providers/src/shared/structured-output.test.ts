@@ -452,6 +452,97 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
     );
   }
 
+  for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
+    for (const placement of ['direct', 'intermediate'] as const) {
+      test.each(['relative', 'absolute', 'unchanged-scope', 'complete-local'] as const)(
+        `${operator}/${placement}/%s preserves reference targets or refuses copying`,
+        shape => {
+          const rootId = `https://example.com/${operator}/${placement}/${shape}/root.json`;
+          const reference = shape === 'absolute' ? `${rootId}#/$defs/Message` : '#/$defs/Message';
+          const branch = {
+            properties: {
+              status: { enum: ['success', 'blocked'] },
+              ...(shape === 'complete-local' ? { message: { type: 'string' } } : {}),
+            },
+          };
+          const resource = {
+            ...(shape === 'unchanged-scope' ? {} : { $id: 'branch.json' }),
+            $defs: { Message: { type: 'number' } },
+          };
+          const input = {
+            ...conditionalSchema(operator),
+            $id: rootId,
+            $defs: { Message: { type: 'string' } },
+            properties: { status: { type: 'string' }, message: { $ref: reference } },
+            [operator]: [
+              placement === 'direct'
+                ? { ...resource, ...branch }
+                : { ...resource, [operator]: [branch] },
+            ],
+          };
+          const original = new Ajv({ strict: false }).compile(input);
+          for (const status of ['success', 'blocked']) {
+            expect(original({ status, message: 'Finished' })).toBe(true);
+          }
+          if (shape === 'relative') {
+            expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow('complete inline');
+          } else {
+            const converted = new Ajv({ strict: false }).compile(
+              normalizeJsonSchemaForOpenAiStrict(input)
+            );
+            for (const status of ['success', 'blocked']) {
+              expect(converted({ status, message: 'Finished' })).toBe(true);
+              expect(converted({ status, message: 1 })).toBe(false);
+            }
+          }
+        }
+      );
+    }
+  }
+
+  test.each(['$ref', '$dynamicRef', '$recursiveRef'])(
+    'refuses relocated nested relative %s while allowing reference-free properties',
+    reference => {
+      const input = {
+        ...conditionalSchema('anyOf'),
+        properties: {
+          status: { type: 'string' },
+          message: { type: 'array', items: { [reference]: '#/$defs/Message' } },
+        },
+        anyOf: [{ $id: 'branch.json', properties: { status: { type: 'string' } } }],
+      };
+      expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow(`relative ${reference}`);
+      expect(() =>
+        normalizeJsonSchemaForOpenAiStrict({
+          ...input,
+          properties: { status: { type: 'string' }, message: { type: 'string' } },
+        })
+      ).not.toThrow();
+    }
+  );
+
+  for (const edge of ['additionalItems', 'unevaluatedItems'] as const) {
+    test.each(['if', 'then', 'else', 'not'] as const)(
+      `refuses conditional %s below ${edge}`,
+      keyword => {
+        const input = {
+          type: 'array',
+          ...(edge === 'additionalItems' ? { items: [{}] } : { prefixItems: [{}] }),
+          [edge]: {
+            [keyword]: { properties: { status: { const: 'blocked' } }, required: ['status'] },
+          },
+        };
+        const compiler = edge === 'additionalItems' ? ajv : new Ajv2020({ strict: false });
+        if (keyword === 'not') {
+          expect(compiler.compile(input)([{}, { status: 'blocked', extra: 1 }])).toBe(false);
+        }
+        expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow(
+          `output_format.${edge}.${keyword}`
+        );
+      }
+    );
+  }
+
   test('ignores conditional keyword names in property maps and annotation data', () => {
     const input = {
       type: 'object',

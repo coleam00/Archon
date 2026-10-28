@@ -1445,6 +1445,38 @@ describe('CodexProvider', () => {
               }))
             )
           ),
+          ...(['oneOf', 'anyOf', 'allOf'] as const).flatMap(operator =>
+            [false, true].map(intermediate => ({
+              schema: {
+                ...complete,
+                $id: 'https://example.com/root.json',
+                $defs: { Message: { type: 'string' } },
+                properties: { ...field.properties, message: { $ref: '#/$defs/Message' } },
+                [operator]: [
+                  {
+                    $id: 'branch.json',
+                    ...(intermediate ? { [operator]: [field] } : field),
+                  },
+                ],
+              },
+              advice: 'complete inline',
+            }))
+          ),
+          ...['additionalItems', 'unevaluatedItems'].flatMap(edge =>
+            ['if', 'then', 'else', 'not'].map(keyword => ({
+              schema: {
+                type: 'object',
+                properties: {
+                  results: {
+                    type: 'array',
+                    ...(edge === 'additionalItems' ? { items: [{}] } : { prefixItems: [{}] }),
+                    [edge]: { [keyword]: field },
+                  },
+                },
+              },
+              advice: `output_format.properties.results.${edge}.${keyword}`,
+            }))
+          ),
           ...(['if', 'then', 'else', 'not'] as const).map(keyword => ({
             schema: { ...complete, [keyword]: field },
             advice: 'complete oneOf/anyOf branches',

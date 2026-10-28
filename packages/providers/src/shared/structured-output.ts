@@ -142,7 +142,8 @@ function tryJsonParseObject(text: string): unknown {
  * conditional keywords, composition constraints without usable inline property maps,
  * incomplete schema-valued dependencies on composition ancestry,
  * incompatible allOf property name sets, and branch completion
- * that would duplicate a resource identifier throw before Codex starts.
+ * that would duplicate a resource identifier or relocate a relative reference
+ * across a resource boundary throw before Codex starts.
  *
  * The other strict-mode rule
  * (every key in `properties` must appear in `required`) is intentionally NOT
@@ -194,6 +195,7 @@ export function normalizeJsonSchemaForOpenAiStrict(
 interface ObjectConstraints {
   properties: Record<string, unknown>;
   required: string[];
+  relocatedProperties: ReadonlySet<string>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -213,12 +215,19 @@ function normalizeNode(node: unknown, enclosing?: ObjectConstraints): unknown {
   const constraints: ObjectConstraints = {
     properties: { ...enclosing?.properties, ...properties },
     required: [...new Set([...(enclosing?.required ?? []), ...required])],
+    relocatedProperties: inheritedPropertyRelocations(node, enclosing),
   };
   const expand =
     enclosing !== undefined &&
     properties !== undefined &&
     (node.additionalProperties === undefined || node.additionalProperties === true);
-  if (expand) assertInheritedPropertiesCanBeCopied(enclosing.properties, properties);
+  if (expand) {
+    assertInheritedPropertiesCanBeCopied(
+      enclosing.properties,
+      properties,
+      constraints.relocatedProperties
+    );
+  }
   const source = expand
     ? { ...node, properties: constraints.properties, required: constraints.required }
     : node;
@@ -235,13 +244,40 @@ function normalizeNode(node: unknown, enclosing?: ObjectConstraints): unknown {
   return result;
 }
 
+function inheritedPropertyRelocations(
+  node: Record<string, unknown>,
+  enclosing?: ObjectConstraints
+): ReadonlySet<string> {
+  const relocated = new Set(enclosing?.relocatedProperties);
+  if ('$id' in node) {
+    for (const name of Object.keys(enclosing?.properties ?? {})) relocated.add(name);
+  }
+  if (isRecord(node.properties)) {
+    for (const name of Object.keys(node.properties)) relocated.delete(name);
+  }
+  return relocated;
+}
+
 function assertInheritedPropertiesCanBeCopied(
   inherited: Record<string, unknown>,
-  local: Record<string, unknown>
+  local: Record<string, unknown>,
+  relocated: ReadonlySet<string>
 ): void {
   for (const [name, value] of Object.entries(inherited)) {
     if (Object.hasOwn(local, name)) continue;
     visitJsonSchema(value, 'output_format', node => {
+      for (const keyword of ['$ref', '$dynamicRef', '$recursiveRef']) {
+        const reference = node[keyword];
+        if (
+          relocated.has(name) &&
+          typeof reference === 'string' &&
+          !/^[a-z][a-z0-9+.-]*:/i.test(reference)
+        ) {
+          throw new Error(
+            `Codex output schema cannot copy a property containing relative ${keyword} across a branch $id boundary. Use complete inline composition branches or absolute property references instead.`
+          );
+        }
+      }
       for (const keyword of ['$id', '$anchor', '$dynamicAnchor']) {
         if (keyword in node) {
           throw new Error(
