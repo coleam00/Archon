@@ -71,6 +71,7 @@ export { addResultUsage, mergeTokenUsage, type ResultUsageTotal } from './result
 export {
   isObjectSchemaNode,
   findStrictSchemaIssues,
+  visitJsonSchema,
   type StrictSchemaIssue,
 } from './output-schema';
 export {
@@ -154,3 +155,9 @@ export {
 } from './config-schema';
 
 export { nativeToolInputParser } from './native-tools';
+
+export {
+  normalizeJsonSchemaForOpenAiStrict,
+  findPreparedStrictSchemaIssues,
+  type PreparedStrictSchemaIssue,
+} from './strict-output-schema';

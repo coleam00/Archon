@@ -1,8 +1,8 @@
 import {
   type ExecutionContext,
   type ProviderRegistry,
-  type StrictSchemaIssue,
-  findStrictSchemaIssues,
+  type PreparedStrictSchemaIssue,
+  findPreparedStrictSchemaIssues,
 } from '@archon/provider-contract';
 import {
   type AgentNode,
@@ -177,7 +177,7 @@ export function collectScopedCapabilityMismatches(
  * A single `output_format` issue on a provider that enforces OpenAI strict mode
  * (Codex). Reported by {@link collectStrictSchemaViolations} before any node runs.
  */
-export type StrictSchemaViolation = StrictSchemaIssue & {
+export type StrictSchemaViolation = PreparedStrictSchemaIssue & {
   /** The resolved provider that enforces the rule */
   provider: string;
   /** The node whose output_format violates the rule */
@@ -188,7 +188,8 @@ export type StrictSchemaViolation = StrictSchemaIssue & {
  * Collect output_format schema violations for providers that enforce the OpenAI
  * strict-mode object-schema rules (`requiresAllPropertiesRequired`). Walks every
  * provider-invoking node (including loop_group bodies) and reports every object
- * schema node that omits properties or does not list every property in required.
+ * schema node that omits properties or does not list every property in required
+ * after preparation. Unsupported conversions are also reported.
  *
  * A node pinned to a non-enforcing provider (e.g. `provider: claude`) is skipped
  * even when the workflow-level provider would enforce — that's the intended
@@ -207,7 +208,7 @@ export function collectStrictSchemaViolations(
     // schemas are inert even when present, so their issues cost nothing.
     if (!isOutputFormatEnforced(node)) return;
     if (node.output_format === undefined) return;
-    for (const issue of findStrictSchemaIssues(node.output_format, 'output_format')) {
+    for (const issue of findPreparedStrictSchemaIssues(node.output_format)) {
       violations.push({ provider, nodeId: node.id, ...issue });
     }
   });
@@ -269,6 +270,11 @@ export function assertRunCapabilities(
   const location =
     `output_format schema strict-mode violation: workflow '${workflow.name}', ` +
     `node '${first.nodeId}', ${first.schemaPath}`;
+  if (first.kind === 'unsupported-conversion') {
+    throw new Error(
+      `${location}: Provider '${first.provider}' rejects this schema. ${first.message}${more}`
+    );
+  }
   if (first.kind === 'missing-properties') {
     throw new Error(
       `${location} is an object schema without 'properties'${more}. ` +
