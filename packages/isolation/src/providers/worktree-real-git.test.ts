@@ -1479,7 +1479,10 @@ describe('WorktreeProvider against real git', () => {
         await git(repoPath, 'branch', '-f', PR_BRANCH, originalTip);
         const holder = join(root, 'concurrent checkout');
         const exec = gitModule.execFileAsync;
-        let fetchFailure: unknown;
+        const fetchFailure = new gitModule.GitFailure(
+          'unclassified',
+          'distinctive vendor failure 5186'
+        );
         const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
           async (cmd, args, options) => {
             if (args.includes('fetch') && args.includes('.')) {
@@ -1487,13 +1490,7 @@ describe('WorktreeProvider against real git', () => {
                 await git(repoPath, 'worktree', 'add', holder, PR_BRANCH);
                 await writeFile(join(holder, 'uncommitted'), 'operator work');
               }
-              try {
-                if (!occupied) throw new gitModule.GitFailure('unclassified', 'fetch unavailable');
-                return await exec(cmd, args, options);
-              } catch (error) {
-                fetchFailure = error;
-                throw error;
-              }
+              throw fetchFailure;
             }
             return exec(cmd, args, options);
           }
@@ -1505,7 +1502,7 @@ describe('WorktreeProvider against real git', () => {
             if (!(error instanceof IsolationFailure))
               throw new Error(`expected IsolationFailure: ${error}`);
             expect(error).toHaveProperty('kind', 'branch_checked_out');
-            expect(error).toHaveProperty('cause', fetchFailure);
+            expect(error.cause).toBe(fetchFailure);
             expect(classifyIsolationError(error)).toContain(holder);
             expect(classifyIsolationError(error)).toContain('switch --detach');
             expect((await git(holder, 'symbolic-ref', '--short', 'HEAD')).trim()).toBe(PR_BRANCH);
