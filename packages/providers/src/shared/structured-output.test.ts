@@ -346,7 +346,7 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
         expect(validate({ status: 'success', message: 1 })).toBe(false);
 
         const complete = {
-          ...input,
+          ...conditionalSchema(operator),
           properties: {
             status: { type: 'string' },
             message: {
