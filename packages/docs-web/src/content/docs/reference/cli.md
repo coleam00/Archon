@@ -507,17 +507,18 @@ Every node in the new run uses that selected checkout, including bash/script del
 
 #### Workflow name matching
 
-`workflow run`, `workflow list <name>` and the chat adapters resolve a workflow name in four tiers, stopping at the first tier that matches:
+`workflow run`, the workflow query commands and the chat adapters require an exact,
+case-sensitive workflow name. Use `archon-review`, not `review` or `Archon-Review`.
+Qualified installed names such as `owner/plugin:entrypoint` must also match exactly.
+The same rule applies to YAML `workflow:` and `include:` targets, composed fan-outs,
+resource starts and run continuation.
 
-1. Exact: `archon-investigate` matches `archon-investigate`.
-2. Case-insensitive: `Archon-Investigate` matches `archon-investigate`.
-3. Suffix: `investigate` matches `archon-investigate` (it looks for `-investigate`).
-4. Substring: `vestig` matches `archon-investigate`.
-
-When several workflows match at the same tier, the command fails and lists them:
+On a miss, CLI and chat errors suggest nearby names without selecting one:
 
 ```
-Ambiguous workflow 'review'. Did you mean:
+Workflow 'review' not found.
+
+Did you mean:
   - archon-review
   - custom-review
 ```

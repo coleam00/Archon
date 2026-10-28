@@ -8,7 +8,7 @@ import { createCliWorkflowHost } from '../utils/workflow-host';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
-import { resolveWorkflowName } from '@archon/workflows/router';
+import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import { workflowSourceConfigFrom } from '@archon/workflows/run-source';
 import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
 import type { WorkflowLoadError, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
@@ -169,22 +169,19 @@ function selectWorkflowEntries(
   name: string | undefined
 ): readonly WorkflowWithSource[] {
   if (name !== undefined) {
-    let workflow: WorkflowWithSource['workflow'] | undefined;
-    try {
-      workflow = resolveWorkflowName(
+    const workflow = resolveWorkflowName(
+      name,
+      workflowEntries.map(entry => entry.workflow)
+    );
+    if (workflow === undefined) {
+      const suggestedWorkflows = suggestWorkflowNames(
         name,
         workflowEntries.map(entry => entry.workflow)
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new WorkflowListLookupError(message, errors);
-    }
-    if (workflow === undefined) {
-      const availableWorkflows = workflowEntries
-        .map(entry => `  - ${entry.workflow.name}`)
+      )
+        .map(candidate => `  - ${candidate}`)
         .join('\n');
       throw new WorkflowListLookupError(
-        `Workflow '${name}' not found.\n\nAvailable workflows:\n${availableWorkflows || '  (none)'}`,
+        `Workflow '${name}' not found.\n\nDid you mean:\n${suggestedWorkflows || '  (none)'}`,
         errors
       );
     }

@@ -1727,7 +1727,7 @@ in the child's run metadata.
 - **No deep access.** A parent can read `$includeId.output` (the terminal) but not the
   output of an individual node inside the block. The block's internal node names are an
   implementation detail.
-- **Literal targets only.** `include:` takes a literal workflow name: no
+- **Literal targets only.** `include:` requires an exact, case-sensitive workflow name: no
   `include: $something` and no cross-repo includes.
 - **No child runs inside a `loop_group` body.** A `workflow:` node remains unsupported there;
   use `include:` when the reusable nodes should participate in the same run and repeat as
@@ -2537,7 +2537,8 @@ re-deriving it.
 - **No racing** (`join: first_success`): rejected outright, not deferred (see [Why there is no racing join](#why-there-is-no-racing-join)).
 - **Not inside a `loop_group` body**: a `workflow:` node, fanned out or not, is rejected
   there at load time ([#2439](https://github.com/coleam00/Archon/issues/2439)).
-- **Static target only.** `workflow:` takes a literal workflow name: no
+- **Static target only.** `workflow:` requires an exact, case-sensitive workflow name, resolved
+  when the node executes: no
   `workflow: $something`. Self-reference and ancestor cycles (`A` → `B` → `A`) are rejected
   at run time, and the sub-run tree is depth-capped.
 

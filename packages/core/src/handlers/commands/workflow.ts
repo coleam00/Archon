@@ -1,12 +1,11 @@
 import { providerRegistry } from '@archon/providers';
 import { getArchonWorkspacesPath } from '@archon/paths';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { resolveWorkflowName } from '@archon/workflows/router';
+import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import {
   findWorkflowLoadError,
   type WorkflowWithSource,
   type WorkflowLoadError,
-  type ResolvedWorkflow,
 } from '@archon/workflows/schemas/workflow';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { RunActor } from '../../operations/run-authorization';
@@ -237,20 +236,7 @@ export async function startWorkflow(
     'cmd.workflows_discovered'
   );
 
-  let workflow: ResolvedWorkflow | undefined;
-  try {
-    workflow = resolveWorkflowName(workflowName, workflows);
-  } catch (err) {
-    // Ambiguous match — surface the candidates to the user
-    getLog().warn(
-      { requested: workflowName, error: (err as Error).message },
-      'cmd.workflow_resolve_ambiguous'
-    );
-    return {
-      success: false,
-      message: (err as Error).message,
-    };
-  }
+  const workflow = resolveWorkflowName(workflowName, workflows);
 
   if (!workflow) {
     // Check if the requested workflow had a load error
@@ -267,7 +253,13 @@ export async function startWorkflow(
     );
     return {
       success: false,
-      message: `Workflow \`${workflowName}\` not found.\n\nUse ${cmd('list')} to see available workflows.`,
+      message: `Workflow \`${workflowName}\` not found.${
+        workflows.length
+          ? `\n\nDid you mean:\n${suggestWorkflowNames(workflowName, workflows)
+              .map(name => `  - ${name}`)
+              .join('\n')}`
+          : ''
+      }\n\nUse ${cmd('list')} to see available workflows.`,
     };
   }
 

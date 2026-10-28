@@ -224,7 +224,7 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('YAML parse error near line 5');
       });
 
-      test('should match workflow name case-insensitively', async () => {
+      test('should reject non-exact workflow name case-insensitively', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
             makeTestWorkflowWithSource({ name: 'assist', description: 'General assistant' }),
@@ -238,8 +238,10 @@ describe('CommandHandler', () => {
           operator
         );
 
-        expect(result.success).toBe(true);
-        expect(startRequest(result.workflow).definition.name).toBe('assist');
+        expect(result.success).toBe(false);
+        expect(result.workflow).toBeUndefined();
+        expect(result.message).toContain('Did you mean:');
+        expect(result.message).toContain('assist');
       });
 
       // #2213 — the run path, not just `/workflow list`. Chat and the console
@@ -289,7 +291,7 @@ describe('CommandHandler', () => {
         expect(startRequest(result.workflow).parseWarnings).toBeUndefined();
       });
 
-      test('should match workflow name via suffix match', async () => {
+      test('should reject non-exact workflow name via suffix match', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
             makeTestWorkflowWithSource({ name: 'acme-assist', description: 'General assistant' }),
@@ -303,11 +305,13 @@ describe('CommandHandler', () => {
           operator
         );
 
-        expect(result.success).toBe(true);
-        expect(startRequest(result.workflow).definition.name).toBe('acme-assist');
+        expect(result.success).toBe(false);
+        expect(result.workflow).toBeUndefined();
+        expect(result.message).toContain('Did you mean:');
+        expect(result.message).toContain('acme-assist');
       });
 
-      test('should match workflow name via substring match', async () => {
+      test('should reject non-exact workflow name via substring match', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
             makeTestWorkflowWithSource({
@@ -324,11 +328,13 @@ describe('CommandHandler', () => {
           operator
         );
 
-        expect(result.success).toBe(true);
-        expect(startRequest(result.workflow).definition.name).toBe('acme-smart-pr-review');
+        expect(result.success).toBe(false);
+        expect(result.workflow).toBeUndefined();
+        expect(result.message).toContain('Did you mean:');
+        expect(result.message).toContain('acme-smart-pr-review');
       });
 
-      test('should return failure with candidates on ambiguous suffix match', async () => {
+      test('should suggest candidates without selecting a partial name', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
             makeTestWorkflowWithSource({ name: 'archon-review', description: 'Review' }),
@@ -344,7 +350,8 @@ describe('CommandHandler', () => {
         );
 
         expect(result.success).toBe(false);
-        expect(result.message).toContain('Ambiguous workflow');
+        expect(result.message).toContain('not found');
+        expect(result.message).toContain('Did you mean:');
         expect(result.message).toContain('archon-review');
         expect(result.message).toContain('custom-review');
       });

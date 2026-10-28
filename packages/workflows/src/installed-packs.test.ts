@@ -464,7 +464,7 @@ describe('installed pack boundaries', () => {
     const definitions = (await discover()).workflows.map(entry => entry.workflow);
     expect(resolveWorkflowName('acme/review-kit:rev', definitions)).toBeUndefined();
     expect(resolveWorkflowName('acme/review:review', definitions)).toBeUndefined();
-    expect(resolveWorkflowName('ACME/review-kit:review', definitions)?.name).toBe(REVIEW);
+    expect(resolveWorkflowName('ACME/review-kit:review', definitions)).toBeUndefined();
   });
 
   test('a project workflow cannot shadow an installed name', async () => {

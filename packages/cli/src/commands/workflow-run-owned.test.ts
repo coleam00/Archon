@@ -255,7 +255,7 @@ describe('workflowRunCommand', () => {
     ).rejects.toThrow("Workflow 'nonexistent' not found");
   });
 
-  it('should include available workflows in error when workflow not found', async () => {
+  it('should include suggested workflows in error when workflow not found', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
@@ -266,149 +266,25 @@ describe('workflowRunCommand', () => {
     });
 
     const run = workflowRunCommand(createTestWorkflowHost(), '/test/path', 'nonexistent', 'hello');
-    await expect(run).rejects.toThrow('Available workflows:');
+    await expect(run).rejects.toThrow('Did you mean:');
     await expect(run).rejects.toThrow('- assist');
     await expect(run).rejects.toThrow('- plan');
   });
 
-  it('should resolve workflow by suffix match', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Help' }),
-        makeTestWorkflowWithSource({ name: 'archon-plan', description: 'Plan' }),
-      ],
-      errors: [],
-    });
-    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'conv-1',
-      platform: 'cli',
-      platform_conversation_id: 'cli-123',
-      title: null,
-      is_active: true,
-      codebase_id: null,
-    });
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-1',
-      name: 'test-repo',
-      default_cwd: '/test/path',
-    });
-
-    // Should resolve successfully — "assist" suffix-matches "acme-assist"
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello');
-
-    // Verify suffix matching tier was used
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ requested: 'assist', matched: 'acme-assist' }),
-      'workflow.resolve_suffix_match'
-    );
-  });
-
-  it('should resolve workflow by substring match', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const executionError = new Error('Execution failed after workflow resolution');
-
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'acme-smart-pr-review', description: 'Smart review' }),
-        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Help' }),
-      ],
-      errors: [],
-    });
-    (executeWorkflow as ReturnType<typeof mock>).mockRejectedValueOnce(executionError);
-
-    const error = await workflowRunCommand(
-      createTestWorkflowHost(),
-      '/test/path',
-      'smart',
-      'hello',
-      { noWorktree: true }
-    ).catch((e: unknown) => e as Error);
-    expect(error).toBe(executionError);
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).not.toContain('not found');
-    expect((error as Error).message).not.toContain('Did you mean');
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ requested: 'smart', matched: 'acme-smart-pr-review' }),
-      'workflow.resolve_substring_match'
-    );
-  });
-
-  it('should prefer case-insensitive exact match over suffix match', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const conversationDb = await import('@archon/core/db/conversations');
-    const codebaseDb = await import('@archon/core/db/codebases');
-
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'assist', description: 'Help' }),
-        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Long' }),
-      ],
-      errors: [],
-    });
-    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'conv-1',
-      platform: 'cli',
-      platform_conversation_id: 'cli-123',
-      title: null,
-      is_active: true,
-      codebase_id: null,
-    });
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-1',
-      name: 'test-repo',
-      default_cwd: '/test/path',
-    });
-
-    // "ASSIST" case-insensitive matches "assist" at tier 2, should not reach suffix tier
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'ASSIST', 'hello');
-
-    // Verify case-insensitive match was used, not suffix match
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ requested: 'ASSIST', matched: 'assist' }),
-      'workflow.resolve_case_insensitive_match'
-    );
-    expect(mockLogger.info).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'workflow.resolve_suffix_match'
-    );
-  });
-
-  it('should throw ambiguous error for multiple suffix matches', async () => {
+  it.each([
+    ['review', 'archon-review'],
+    ['vestig', 'archon-investigate'],
+    ['ARCHON-REVIEW', 'archon-review'],
+  ])('rejects non-exact %s with suggestions', async (requested, candidate) => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'archon-review', description: 'Review' }),
-        makeTestWorkflowWithSource({ name: 'custom-review', description: 'Custom review' }),
-      ],
+      workflows: [makeTestWorkflowWithSource({ name: candidate })],
       errors: [],
     });
 
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'review', 'hello')
-    ).rejects.toThrow("Ambiguous workflow 'review'. Did you mean:");
-  });
-
-  it('should throw ambiguous error for multiple substring matches', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({
-          name: 'acme-comprehensive-pr-review',
-          description: 'Full review',
-        }),
-        makeTestWorkflowWithSource({ name: 'acme-smart-pr-review', description: 'Smart review' }),
-      ],
-      errors: [],
-    });
-
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'pr-review', 'hello')
-    ).rejects.toThrow("Ambiguous workflow 'pr-review'. Did you mean:");
+    const run = workflowRunCommand(createTestWorkflowHost(), '/test/path', requested, 'hello');
+    await expect(run).rejects.toThrow(`Workflow '${requested}' not found`);
+    await expect(run).rejects.toThrow(`Did you mean:\n  - ${candidate}`);
   });
 
   it('should throw error when workflow execution fails', async () => {
