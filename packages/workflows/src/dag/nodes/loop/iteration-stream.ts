@@ -502,7 +502,7 @@ async function consumeIterationStream(
       shouldStopStream
     )) {
       awaitingSettlement = awaitingTurnSettlement(awaitingSettlement, msg);
-      assertResultBeforeSettlement(msg, attempt.sawResult, run.workflowProvider);
+      assertResultBeforeSettlement(msg, awaitingSettlement, run.workflowProvider);
       // A result is not the end of the iteration; `settled` is. See the
       // AI-node stream loop for the full rationale.
       if (msg.type === 'result') {

@@ -17,10 +17,10 @@ export function awaitingTurnSettlement(wasAwaiting: boolean, chunk: MessageChunk
 
 export function assertResultBeforeSettlement(
   chunk: MessageChunk,
-  sawResult: boolean,
+  awaitingSettlement: boolean,
   provider: string
 ): void {
-  if (chunk.type === 'settled' && !sawResult) {
+  if (chunk.type === 'settled' && !awaitingSettlement) {
     throw new NodeFailure('unknown', `provider '${provider}' sent settled before result`);
   }
 }

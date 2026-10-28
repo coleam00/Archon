@@ -104,42 +104,48 @@ describe('post-result turn settlement timeout', () => {
   }
 
   for (const kind of ['agent', 'loop'] as const) {
-    it(`${kind}: fails a Codex plugin that reports live work and a result but never settles`, async () => {
-      const pair = streamPair();
-      let aborted = false;
-      const serving = serveProvider(
-        {
-          descriptor: codexDescriptor,
-          create: () => ({
-            getType: () => 'codex',
-            getCapabilities: mockCodexCapabilities,
-            checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
-            async *sendQuery(_prompt, _cwd, _session, options) {
-              yield liveWork.subtask.start;
-              yield { type: 'result', structuredOutput: { ok: true } };
-              await waitForAbort(options?.abortSignal);
-              aborted = options?.abortSignal?.aborted ?? false;
-            },
-          }),
-        },
-        pair.provider
-      );
-      const client = await connectProvider(pair.host);
-      try {
-        const store = await run(kind, client.sendQuery.bind(client), true);
-        const failure = persistedEvents(store).find(event => event.event_type === 'node_failed');
-        expect(failure?.data?.failure_kind).toBe('timeout');
-        expect(failure?.data?.error).toContain(
-          "waiting for turn settlement after result from provider 'codex'"
+    for (const result of ['first', 'second'] as const) {
+      it(`${kind}: fails a Codex plugin with live work that never settles after its ${result} result`, async () => {
+        const pair = streamPair();
+        let aborted = false;
+        const serving = serveProvider(
+          {
+            descriptor: codexDescriptor,
+            create: () => ({
+              getType: () => 'codex',
+              getCapabilities: mockCodexCapabilities,
+              checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+              async *sendQuery(_prompt, _cwd, _session, options) {
+                if (result === 'second') {
+                  yield { type: 'result', structuredOutput: { ok: true } };
+                  yield { type: 'state_update', state: 'running' };
+                }
+                yield liveWork.subtask.start;
+                yield { type: 'result', structuredOutput: { ok: true } };
+                await waitForAbort(options?.abortSignal);
+                aborted = options?.abortSignal?.aborted ?? false;
+              },
+            }),
+          },
+          pair.provider
         );
-        expect(failure?.data?.error).toContain('command:stuck');
-        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-      } finally {
-        await client.close();
-        await serving;
-      }
-      expect(aborted).toBe(true);
-    });
+        const client = await connectProvider(pair.host);
+        try {
+          const store = await run(kind, client.sendQuery.bind(client), true);
+          const failure = persistedEvents(store).find(event => event.event_type === 'node_failed');
+          expect(failure?.data?.failure_kind).toBe('timeout');
+          expect(failure?.data?.error).toContain(
+            "waiting for turn settlement after result from provider 'codex'"
+          );
+          expect(failure?.data?.error).toContain('command:stuck');
+          expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+        } finally {
+          await client.close();
+          await serving;
+        }
+        expect(aborted).toBe(true);
+      });
+    }
 
     for (const transport of ['native', 'plugin'] as const) {
       for (const output of ['prose', 'silent', 'structured'] as const) {
@@ -187,6 +193,30 @@ describe('post-result turn settlement timeout', () => {
 
     for (const [work, chunks] of Object.entries(liveWork)) {
       for (const wake of ['running', 'work start', 'running and work start'] as const) {
+        it(`${kind}: rejects settlement using a result before the latest wake (${work}, ${wake})`, async () => {
+          const store = await run(
+            kind,
+            async function* () {
+              if (wake === 'running') yield chunks.start;
+              yield {
+                type: 'result',
+                text: 'Done. <promise>COMPLETE</promise>',
+                structuredOutput: { ok: true },
+              };
+              if (wake !== 'work start') yield { type: 'state_update', state: 'running' };
+              if (wake !== 'running') yield chunks.start;
+              yield chunks.end;
+              yield { type: 'settled' };
+            },
+            true
+          );
+          const events = persistedEvents(store);
+          const failure = events.find(event => event.event_type === 'node_failed');
+          expect(failure?.data?.error).toContain("provider 'codex' sent settled before result");
+          expect(events.some(event => event.event_type === 'node_completed')).toBe(false);
+          expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+        });
+
         it(`${kind}: protects quiet ${work} in a later wake turn (${wake})`, async () => {
           let aborted = false;
           const store = await run(kind, async function* (_prompt, _cwd, _session, options) {

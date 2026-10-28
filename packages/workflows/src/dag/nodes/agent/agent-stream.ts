@@ -169,7 +169,7 @@ export async function runStreamPass(
       shouldStopStream
     )) {
       awaitingSettlement = awaitingTurnSettlement(awaitingSettlement, msg);
-      assertResultBeforeSettlement(msg, state.passSawResult, pc.provider);
+      assertResultBeforeSettlement(msg, awaitingSettlement, pc.provider);
       const tickNow = Date.now();
 
       if (msg.type === 'result') recordResult(pc, state, pass, msg);
