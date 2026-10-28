@@ -32,6 +32,13 @@ try {
 }
 
 // ── Cookie helpers ─────────────────────────────────────────────────────────────
+function credentialFingerprint(username = USERNAME, passwordHash = PASSWORD_HASH) {
+  return createHmac('sha256', COOKIE_SECRET)
+    .update(`${username}:${passwordHash}`)
+    .digest('base64url')
+    .slice(0, 16);
+}
+
 function signCookie(value) {
   const sig = createHmac('sha256', COOKIE_SECRET).update(value).digest('base64url');
   return `${value}.${sig}`;
@@ -47,6 +54,30 @@ function verifyCookie(signed) {
   if (sigBuf.length !== expBuf.length) return null;
   if (!timingSafeEqual(sigBuf, expBuf)) return null; // constant-time
   return value;
+}
+
+function issueSessionCookie(nowSec = Math.floor(Date.now() / 1000)) {
+  const exp = nowSec + COOKIE_MAX_AGE;
+  return signCookie(`authenticated.${exp}.${credentialFingerprint()}`);
+}
+
+function verifySessionCookie(signed, nowSec = Math.floor(Date.now() / 1000)) {
+  const value = verifyCookie(signed);
+  if (!value) return false;
+  const parts = value.split('.');
+  if (parts.length !== 3 || parts[0] !== 'authenticated') return false;
+  const exp = Number(parts[1]);
+  if (!Number.isFinite(exp) || exp <= nowSec) return false;
+  return parts[2] === credentialFingerprint();
+}
+
+function safeDecodeRedirect(rawRd) {
+  if (!rawRd) return '/';
+  try {
+    return decodeURIComponent(rawRd);
+  } catch {
+    return rawRd;
+  }
 }
 
 function parseCookies(header) {
@@ -142,8 +173,7 @@ function readBody(req) {
 // GET /verify — Caddy forward_auth calls this for every protected request
 function handleVerify(req, res) {
   const cookies = parseCookies(req.headers['cookie']);
-  const session = verifyCookie(cookies[COOKIE_NAME] ?? '');
-  if (session === 'authenticated') {
+  if (verifySessionCookie(cookies[COOKIE_NAME] ?? '')) {
     res.writeHead(200, { 'X-Auth-User': USERNAME });
     return res.end();
   }
@@ -166,7 +196,7 @@ async function handleLogin(req, res) {
   const params = new URLSearchParams(body);
   const username = params.get('username') ?? '';
   const password = params.get('password') ?? '';
-  const rd = decodeURIComponent(params.get('rd') ?? '/');
+  const rd = safeDecodeRedirect(params.get('rd') ?? '/');
   const safeRd = isSafeRedirect(rd) ? rd : '/';
 
   const usernameOk = username === USERNAME;
@@ -177,7 +207,7 @@ async function handleLogin(req, res) {
     return res.end(loginPage(encodeURIComponent(safeRd), 'Invalid username or password.'));
   }
 
-  const cookieValue = signCookie('authenticated');
+  const cookieValue = issueSessionCookie();
   res.writeHead(302, {
     Location: safeRd,
     'Set-Cookie': `${COOKIE_NAME}=${cookieValue}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${COOKIE_MAX_AGE}`,
@@ -185,7 +215,7 @@ async function handleLogin(req, res) {
   res.end();
 }
 
-// /logout (any method) — clear the session cookie
+// POST /logout — clear the session cookie
 function handleLogout(req, res) {
   res.writeHead(302, {
     Location: '/login',
@@ -212,10 +242,10 @@ const ROUTES = new Map([
   ['GET /verify', handleVerify],
   ['GET /login', handleLoginPage],
   ['POST /login', handleLogin],
+  ['POST /logout', handleLogout],
 ]);
 
 function routeFor(method, pathname) {
-  if (pathname === '/logout') return handleLogout;
   return ROUTES.get(`${method} ${pathname}`) ?? handleNotFound;
 }
 
@@ -239,4 +269,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { signCookie, verifyCookie, isSafeRedirect, parseCookies };
+module.exports = {
+  signCookie,
+  verifyCookie,
+  issueSessionCookie,
+  verifySessionCookie,
+  safeDecodeRedirect,
+  isSafeRedirect,
+  parseCookies,
+};

@@ -232,9 +232,13 @@ export class SSETransport {
       return;
     }
     const results = await Promise.all(writes);
-    const buffered = this.eventBuffer.get(conversationId);
-    if (!buffered?.includes(bufferedEvent)) return;
     bufferedEvent.liveWritePending = false;
+    const buffered = this.eventBuffer.get(conversationId);
+    if (!buffered) return;
+    if (!buffered.includes(bufferedEvent)) {
+      if (buffered.length > 0) this.replayBufferedEvents(conversationId);
+      return;
+    }
     if (results.some(Boolean)) this.acknowledgeBufferedEvent(buffered, bufferedEvent);
     if (buffered.length === 0) this.clearBuffer(conversationId);
     else this.replayBufferedEvents(conversationId);

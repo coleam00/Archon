@@ -26,7 +26,13 @@ assert.equal(isSafeRedirect('relative/no-leading-slash'), false, 'no leading sla
 console.log('isSafeRedirect: all assertions passed');
 
 // ── signCookie / verifyCookie ──────────────────────────────────────────────
-const { signCookie, verifyCookie } = require('./server.js');
+const {
+  signCookie,
+  verifyCookie,
+  issueSessionCookie,
+  verifySessionCookie,
+  safeDecodeRedirect,
+} = require('./server.js');
 
 // Round-trip: sign then verify returns original value
 const signed = signCookie('authenticated');
@@ -46,5 +52,15 @@ assert.equal(verifyCookie(''), null, 'empty string returns null');
 const wrongSig = createHmac('sha256', 'wrong-secret').update('authenticated').digest('base64url');
 assert.equal(verifyCookie(`authenticated.${wrongSig}`), null, 'wrong secret returns null');
 
-console.log('signCookie/verifyCookie: all assertions passed');
+// Session cookie expiration & credential binding
+const sessionCookie = issueSessionCookie(1000);
+assert.equal(verifySessionCookie(sessionCookie, 1500), true, 'valid session cookie before expiry');
+assert.equal(verifySessionCookie(sessionCookie, 1000 + 86400), false, 'expired session cookie rejected');
+assert.equal(verifySessionCookie(signed, 1500), false, 'bare static authenticated cookie rejected by session verifier');
+
+// safeDecodeRedirect handles already-decoded or malformed % sequences without throwing URIError
+assert.equal(safeDecodeRedirect('%2Fworkflows%3Fq%3D100%25'), '/workflows?q=100%', 'decodes encoded path');
+assert.equal(safeDecodeRedirect('/workflows?q=100%'), '/workflows?q=100%', 'does not throw URIError on bare %');
+
+console.log('signCookie/verifyCookie/sessionCookie/safeDecodeRedirect: all assertions passed');
 console.log('All tests passed.');
