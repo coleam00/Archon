@@ -9,6 +9,7 @@ import {
   execFileAsync,
   fetchWithRetry,
   listWorktrees,
+  isSameWorktreePath,
   syncWorkspace,
   toBranchName,
   toRepoPath,
@@ -315,6 +316,68 @@ export async function createNewBranch(
   baseBranch: string,
   setupLockReason: string,
   remote = 'origin'
+): Promise<{ cutFromCommit?: string; resolvedBaseBranch?: string; branchCreated: boolean }> {
+  const held = await branchHolderFailure(repoPath, worktreePath, branchName);
+  if (held) throw held;
+
+  try {
+    return await checkOutNewBranch(
+      request,
+      repoPath,
+      worktreePath,
+      branchName,
+      baseBranch,
+      setupLockReason,
+      remote
+    );
+  } catch (error) {
+    if (!(error instanceof WorktreeAddError)) throw error;
+    let held: IsolationFailure | undefined;
+    try {
+      held = await branchHolderFailure(repoPath, worktreePath, branchName, error);
+    } catch (inspectionError) {
+      getLog().warn(
+        { repoPath, branchName, err: inspectionError },
+        'worktree.branch_holder_inspection_failed'
+      );
+    }
+    if (held) {
+      const { cleanupFailure } = error as Error & { cleanupFailure?: string };
+      if (cleanupFailure) recordCleanupFailure(held, cleanupFailure);
+      throw held;
+    }
+    throw error;
+  }
+}
+
+async function branchHolderFailure(
+  repoPath: string,
+  worktreePath: string,
+  branchName: string,
+  cause?: Error
+): Promise<IsolationFailure | undefined> {
+  const holder = (await listWorktrees(toRepoPath(repoPath))).find(
+    w => w.branch === branchName && !isSameWorktreePath(w.path, worktreePath)
+  );
+  if (!holder) return undefined;
+  const quotedPath = "'" + holder.path.replaceAll("'", "'\"'\"'") + "'";
+  return new IsolationFailure(
+    'branch_checked_out',
+    `Branch '${branchName}' is checked out at ${holder.path}. ` +
+      `Detach that worktree with \`git -C ${quotedPath} switch --detach\`, ` +
+      'or remove it after preserving any changes, then retry.',
+    cause
+  );
+}
+
+async function checkOutNewBranch(
+  request: IsolationRequest,
+  repoPath: string,
+  worktreePath: string,
+  branchName: string,
+  baseBranch: string,
+  setupLockReason: string,
+  remote: string
 ): Promise<{ cutFromCommit?: string; resolvedBaseBranch?: string; branchCreated: boolean }> {
   const fromBranch =
     request.workflowType === 'task' && request.taskBranch?.kind === 'new'

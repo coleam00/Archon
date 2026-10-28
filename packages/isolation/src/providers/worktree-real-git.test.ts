@@ -1290,6 +1290,118 @@ describe('WorktreeProvider against real git', () => {
     const remoteHead = async (): Promise<string> =>
       (await git(repoPath, 'ls-remote', 'origin', `refs/heads/${PR_BRANCH}`)).split('\t')[0];
 
+    test.each(['before check', 'before add', 'before add on a fresh branch'] as const)(
+      'reports a branch held %s without changing the holder',
+      async timing => {
+        const holder = join(root, "operator's checkout");
+        await git(repoPath, 'branch', PR_BRANCH);
+        const tip = await localHead();
+        if (timing === 'before check') {
+          await git(repoPath, 'worktree', 'add', holder, PR_BRANCH);
+          await writeFile(join(holder, 'uncommitted'), 'operator work');
+        }
+        if (timing === 'before add on a fresh branch') {
+          await git(repoPath, 'branch', '-D', PR_BRANCH);
+        }
+        const exec = gitModule.execFileAsync;
+        let adds = 0;
+        let addFailure: unknown;
+        const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
+          async (cmd, args, options) => {
+            if (args.includes('worktree') && args.includes('add')) {
+              adds++;
+              if (timing !== 'before check') {
+                await git(
+                  repoPath,
+                  'worktree',
+                  'add',
+                  holder,
+                  ...(timing === 'before add on a fresh branch' ? ['-b', PR_BRANCH] : [PR_BRANCH])
+                );
+                await writeFile(join(holder, 'uncommitted'), 'operator work');
+              }
+              try {
+                return await exec(cmd, args, options);
+              } catch (error) {
+                addFailure = error;
+                throw error;
+              }
+            }
+            return exec(cmd, args, options);
+          }
+        );
+        try {
+          const error = await typedFailure(provider.create(attempt));
+          expect(error.kind).toBe('branch_checked_out');
+          expect(error.message).toContain(PR_BRANCH);
+          expect(error.message).toContain(holder);
+          expect(classifyIsolationError(error)).toContain('switch --detach');
+          expect(classifyIsolationError(error)).toContain('remove');
+          expect(adds).toBe(timing === 'before check' ? 0 : 1);
+          if (timing !== 'before check') {
+            expect(error.cause).toBeInstanceOf(Error);
+            expect(error.cause).toHaveProperty('cause', addFailure);
+          }
+          expect(await localHead()).toBe(tip);
+          expect((await git(holder, 'symbolic-ref', '--short', 'HEAD')).trim()).toBe(PR_BRANCH);
+          expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
+          expect(await registeredWorktrees()).toEqual([repoPath, holder]);
+          const adopted = await provider.create({
+            ...attempt,
+            workflowType: 'task',
+            taskBranch: { kind: 'existing', branch: toBranchName(PR_BRANCH) },
+          });
+          expect(adopted.workingPath).toBe(holder);
+          expect(adopted.metadata.adopted).toBe(true);
+          expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
+        } finally {
+          spy.mockRestore();
+        }
+      }
+    );
+
+    test.each([false, true])(
+      'a failed add keeps the original failure without a holder diagnosis (inspection fails: %s)',
+      async inspectionFails => {
+        await git(repoPath, 'branch', PR_BRANCH);
+        const path = provider.getWorktreePath(attempt, PR_BRANCH);
+        const exec = gitModule.execFileAsync;
+        let addFailure: unknown;
+        const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
+          async (cmd, args, options) => {
+            if (args.includes('worktree') && args.includes('add')) {
+              await mkdir(path, { recursive: true });
+              await writeFile(join(path, 'operator-file'), 'keep');
+              try {
+                return await exec(cmd, args, options);
+              } catch (error) {
+                addFailure = error;
+                throw error;
+              }
+            }
+            if (
+              inspectionFails &&
+              addFailure &&
+              args.includes('list') &&
+              args.includes('--porcelain')
+            ) {
+              throw new Error('holder inspection unavailable');
+            }
+            return exec(cmd, args, options);
+          }
+        );
+        try {
+          const error = await provider.create(attempt).catch((error: unknown) => error);
+          expect(error).toBeInstanceOf(Error);
+          expect(error).not.toBeInstanceOf(IsolationFailure);
+          expect(error).toHaveProperty('cause', addFailure);
+          expect(await readFile(join(path, 'operator-file'), 'utf8')).toBe('keep');
+        } finally {
+          spy.mockRestore();
+        }
+      }
+    );
+
     test.each(['no remote counterpart', 'remote counterpart behind'])(
       'an existing local branch ahead of base keeps its commits (%s)',
       async counterpart => {
