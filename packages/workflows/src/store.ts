@@ -282,7 +282,7 @@ export interface IWorkflowStore
   /**
    * `metadata.parent_node_id` is creation-only: all later metadata writes ignore it,
    * preserving child provenance after parent deletion. A child created without a
-   * spawning node ID carries null under that key.
+   * spawning node ID carries null under that key. Top-level creation strips it.
    *
    * `output_root` (#2200) is write-once: the executor sets it at run start only
    * when the persisted value is null. Re-writing it on resume would re-derive

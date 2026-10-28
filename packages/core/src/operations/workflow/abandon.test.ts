@@ -922,6 +922,99 @@ describe('abandon owned worktrees', () => {
     ]);
   });
 
+  test.each([
+    'different proof',
+    'same proof',
+    'successful shared release',
+    'successful distinct release',
+  ] as const)(
+    'tree release deduplicates only a successfully released creation proof: %s',
+    async mode => {
+      const root = owned('run-1');
+      const child = owned('child', { parent_run_id: root.id });
+      child.metadata.owned_worktree = {
+        envId: 'env-run-1',
+        creationId:
+          mode === 'different proof' || mode === 'successful distinct release'
+            ? '63124212-4e48-4a1f-965c-82a7bc8fd345'
+            : '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+      };
+      mockFindChildRuns.mockImplementation(async id => (id === root.id ? [child] : []));
+      mockRequestDetachedRunStop.mockResolvedValue({
+        pid: 4242,
+        stop: async () => ({ warnings: [] }),
+        release: () => undefined,
+      });
+      reclaim.mockImplementation(async row => {
+        if (row.id === child.id) {
+          if (mode === 'different proof')
+            throw new Error('creation proof does not match its isolation record');
+          if (mode === 'same proof') return { warnings: ['worktree removal refused'] };
+        }
+        return { released: { path: '/wt/shared', branch: 'kept' }, warnings: [] };
+      });
+
+      const result = await operations.abandonWorkflow(root.id, operator);
+
+      expect(result.cancelled).toBe(true);
+      expect(mockCancelWorkflowRun.mock.calls.map(call => call[0])).toEqual([root.id, child.id]);
+      expect(reclaim.mock.calls.map(call => call[0].id)).toEqual(
+        mode === 'successful shared release' ? [child.id] : [child.id, root.id]
+      );
+      expect(result.releasedWorktrees).toEqual(
+        Array.from({ length: mode === 'successful distinct release' ? 2 : 1 }, () => ({
+          path: '/wt/shared',
+          branch: 'kept',
+        }))
+      );
+      if (mode.startsWith('successful')) expect(result.cleanupWarnings).toBeUndefined();
+      else
+        expect(result.cleanupWarnings?.join(' ')).toContain(
+          mode === 'different proof'
+            ? 'creation proof does not match its isolation record'
+            : 'worktree removal refused'
+        );
+    }
+  );
+
+  test.each(['abandon', 'reset'] as const)(
+    '%s releases a silent file-store top-level checkout with caller-supplied child metadata',
+    async operation => {
+      const fileStore = await createFileWorkflowStore({ root: scratchRoot() });
+      const root = await fileStore.createWorkflowRun({
+        workflow_name: 'root',
+        user_message: '',
+        origin: { conversationId: 'conv-1' },
+        metadata: { ...owned().metadata, parent_node_id: 'caller-value' },
+      });
+      const fileOperations = createWorkflowOperations({
+        getUserRole: async () => undefined,
+        store: fileStore,
+        hostStore: { isolation: isolationStore },
+        requestDetachedRunStop: mockRequestDetachedRunStop,
+        isRunOwnedByThisProcess,
+        isRunOwnerAnswering,
+        reclaimContainerEnv: mockReclaimContainerEnv,
+        reclaimRunWorktree: reclaim,
+      });
+      reclaim.mockResolvedValue({
+        released: { path: '/wt/root', branch: 'kept' },
+        warnings: [],
+      });
+      if (operation === 'reset') await fileStore.failWorkflowRun(root.id, 'interrupted');
+
+      const result =
+        operation === 'abandon'
+          ? await fileOperations.abandonWorkflow(root.id, operator)
+          : await fileOperations.abandonResumableRunsForConversation('conv-1', operator);
+
+      expect((await fileStore.getWorkflowRun(root.id))?.status).toBe('cancelled');
+      expect(reclaim.mock.calls.map(call => call[0].id)).toEqual([root.id]);
+      expect(result.cleanupWarnings).toBeUndefined();
+      expect(result.releasedWorktrees).toEqual([{ path: '/wt/root', branch: 'kept' }]);
+    }
+  );
+
   test.each(
     (['root', 'child'] as const).flatMap(selected =>
       (['previously cancelled', 'cancelled concurrently'] as const).flatMap(state =>

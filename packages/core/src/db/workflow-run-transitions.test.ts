@@ -363,6 +363,7 @@ describe('workflow run transitions', () => {
             workflow_name: 'test',
             origin: { conversationId: 'conv' },
             user_message: 'test',
+            parent_run_id: key === 'parent_node_id' ? 'parent-run' : undefined,
             metadata: circularObj,
           })
         ).rejects.toThrow('Failed to serialize workflow metadata');

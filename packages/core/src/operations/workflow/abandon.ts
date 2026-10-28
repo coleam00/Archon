@@ -5,7 +5,11 @@ import {
   readOwnedWorktree,
   SUBRUN_METADATA_KEYS,
 } from '@archon/workflows/schemas/workflow-run';
-import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type {
+  ExecutionOwnerRecord,
+  OwnedWorktree,
+  WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import type { ReleasedWorktree, RunWorktreeRelease } from '../../services/cleanup/run-worktree';
 import type { RunActor } from '../run-authorization';
 import { getLog, type OperationContext } from './context';
@@ -148,7 +152,7 @@ async function releaseAbandonedWorktrees(
 ): Promise<{ warnings: string[]; releasedWorktrees: ReleasedWorktree[] }> {
   const warnings = [...(result.cleanupWarnings ?? [])];
   const releasedWorktrees: ReleasedWorktree[] = [];
-  const released = new Set<string>();
+  const released: OwnedWorktree[] = [];
   let unsafeDescendant = false;
   const ownerChecks = await checkBatchWorktreeOwners(
     ctx,
@@ -158,7 +162,7 @@ async function releaseAbandonedWorktrees(
   );
   for (const { run: row, ...ownerCheck } of ownerChecks.reverse()) {
     const proof = readOwnedWorktree(row.metadata);
-    if (proof && released.has(proof.envId)) continue;
+    if (released.some(other => sameWorktreeProof(other, proof))) continue;
     if (row.id === run.id && (result.cascadeFailures || unsafeDescendant)) {
       warnings.push(
         `Retained checkout for run ${run.id}: descendants could not all be accounted for. Abandoning this run again only retries worktree removal and does not cancel descendants; abandon or stop each remaining descendant first.`
@@ -174,7 +178,7 @@ async function releaseAbandonedWorktrees(
     const release = await releaseRunWorktree(ctx, row);
     warnings.push(...release.warnings);
     if (release.released) releasedWorktrees.push(release.released);
-    if (proof) released.add(proof.envId);
+    if (release.released && proof) released.push(proof);
   }
   return { warnings, releasedWorktrees };
 }
@@ -403,12 +407,7 @@ async function checkBatchWorktreeOwners(
   }
   return ownerChecks.map(({ run, proof, check }) => {
     const sharedChecks = proof
-      ? ownerChecks
-          .filter(
-            other =>
-              other.proof?.envId === proof.envId && other.proof?.creationId === proof.creationId
-          )
-          .map(other => other.check)
+      ? ownerChecks.filter(other => sameWorktreeProof(other.proof, proof)).map(other => other.check)
       : [check];
     return {
       run,
@@ -416,4 +415,16 @@ async function checkBatchWorktreeOwners(
       warnings: [...new Set(sharedChecks.flatMap(other => other.warnings))],
     };
   });
+}
+
+function sameWorktreeProof(
+  left: OwnedWorktree | undefined,
+  right: OwnedWorktree | undefined
+): boolean {
+  return (
+    left !== undefined &&
+    right !== undefined &&
+    left.envId === right.envId &&
+    left.creationId === right.creationId
+  );
 }

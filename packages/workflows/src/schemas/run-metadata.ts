@@ -67,7 +67,7 @@ export function initialRunMetadata(
   metadata: Record<string, unknown> | undefined,
   parentRunId: string | undefined
 ): Record<string, unknown> {
-  if (parentRunId === undefined) return { ...metadata };
+  if (parentRunId === undefined) return mutableRunMetadata(metadata);
   const parentNodeId = metadata?.[SUBRUN_METADATA_KEYS.parentNodeId];
   return {
     ...metadata,

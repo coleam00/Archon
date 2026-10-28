@@ -59,6 +59,18 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       });
     });
 
+    test.each(['spawn', null, 42, undefined])(
+      'top-level creation strips caller-supplied child provenance: %s',
+      async marker => {
+        const metadata = { parent_node_id: marker, unrelated: 'preserved' };
+        const run = await create(store, { metadata });
+        expect(run.parent_run_id).toBeNull();
+        expect(run.metadata).toEqual({ unrelated: 'preserved' });
+        expect((await store.getWorkflowRun(run.id))?.metadata).toEqual({ unrelated: 'preserved' });
+        expect(metadata).toHaveProperty('parent_node_id', marker);
+      }
+    );
+
     test.each(['update', 'running-update', 'complete', 'pause', 'resolve'] as const)(
       '%s cannot erase or replace creation-only child provenance',
       async writer => {
