@@ -5,8 +5,8 @@ import {
 
 export function statusDiagnostic(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  // Remote URLs can carry secrets in userinfo, paths, queries or fragments. Keep
-  // the surrounding failure evidence, but omit the complete URL from status/logs.
-  const withoutUrls = message.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"<>]+/gi, '[URL omitted]');
+  // Remote URLs can carry secrets in any component. Git can quote URLs containing
+  // literal quotes, so only whitespace safely ends the omission.
+  const withoutUrls = message.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[URL omitted]');
   return redactCredentialValues(withoutUrls, collectCredentialValues(process.env));
 }

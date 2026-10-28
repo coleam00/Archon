@@ -58,14 +58,15 @@ describe('CommandHandler', () => {
       });
 
       test.each([
-        [
-          'https://user:secret@gitlab.example/org/repo.git?token=secret#secret',
-          'gitlab.example/org/repo.git',
-        ],
-        ['https://user:secret@github.com/org/repo?token=secret', 'org/repo'],
-        ['ssh://secret@gitlab.example:2222/org/repo.git', 'gitlab.example:2222/org/repo.git'],
-        ['secret@github.com:org/repo.git', 'org/repo.git'],
-        ['/local/repo', '/local/repo'],
+        ['https://user:secret@gitlab.example/org/repo.git?token=secret#secret', 'gitlab.example'],
+        ['https://user:secret@github.com/org/repo?token=secret', 'github.com'],
+        ['ssh://secret@gitlab.example:2222/org/repo.git', 'gitlab.example:2222'],
+        ['secret@github.com:org/repo.git', 'github.com'],
+        ['/local/repo', 'local repository'],
+        ['https://gitlab.example/org/path-secret/repo.git', 'gitlab.example'],
+        ['https://github.com/org/path-secret/repo.git', 'github.com'],
+        ['secret@gitlab.example:org/path-secret/repo.git', 'gitlab.example'],
+        ['file:///local/path-secret/repo', 'local repository'],
         ['invalid-secret', 'repository identity unavailable'],
       ])('shows a credential-free repository identity for %s', async (remote, identity) => {
         mockGetCodebase.mockResolvedValue(makeCodebase({ repository_url: remote }));

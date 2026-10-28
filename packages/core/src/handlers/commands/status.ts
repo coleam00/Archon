@@ -162,10 +162,10 @@ function repositoryIdentity(remote: string): string {
   const scp = /^(?:[^@/]+@)?([^/:]+):(.+)$/.exec(remote);
   try {
     const url = new URL(remote.includes('://') || !scp ? remote : `ssh://${scp[1]}/${scp[2]}`);
-    if (!url.host && url.protocol !== 'file:') return 'repository identity unavailable';
-    return url.hostname === 'github.com' ? url.pathname.slice(1) : `${url.host}${url.pathname}`;
+    if (url.protocol === 'file:') return 'local repository';
+    return url.host || 'repository identity unavailable';
   } catch {
-    return remote.startsWith('/') ? remote : 'repository identity unavailable';
+    return remote.startsWith('/') ? 'local repository' : 'repository identity unavailable';
   }
 }
 

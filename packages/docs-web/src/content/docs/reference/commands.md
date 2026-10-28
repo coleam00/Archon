@@ -103,7 +103,7 @@ Bot: ## Orchestrator Status
      **AI Assistant**: claude
 
      ## Registered Projects (1)
-     - my-project (user/my-project)
+     - my-project (github.com)
 
      ## Conversation Context
      - Project: my-project @ main
