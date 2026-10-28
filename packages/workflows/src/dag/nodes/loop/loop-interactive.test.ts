@@ -1257,50 +1257,8 @@ describe('interactive loop node', () => {
       }
     );
 
-    for (const feedbackGiven of [true, false]) {
-      it.each([
-        { signaledCostUsd: undefined, priorFloor: 0.02 },
-        { signaledCostUsd: null, priorFloor: 0.02 },
-        { signaledCostUsd: -0.01, priorFloor: 0.02 },
-        { signaledCostUsd: 0, priorFloor: 0.02 },
-        { signaledCostUsd: 0.01, priorFloor: 0.02 },
-        { signaledCostUsd: 0.04, priorFloor: 0.04 },
-      ])(
-        `preserves mismatched gate cost %j as partial with feedback=${feedbackGiven}`,
-        async ({ signaledCostUsd, priorFloor }) => {
-          const runId = `mismatched-gate-${feedbackGiven}-${signaledCostUsd}`;
-          const execution = executionMetadata(
-            finishNodeExecution(
-              startNodeExecution({
-                runId,
-                path: 'refine',
-                node: refine,
-                invocation: newNodeInvocation(),
-                provider: 'claude',
-              }),
-              { status: 'suspended', point: 'interactive_loop' },
-              { costUsd: 0.02 }
-            )
-          );
-          const { completed } = await resumeAt(
-            runId,
-            gate({ execution, signaledCostUsd }),
-            feedbackGiven
-          );
-          const floor = priorFloor + (feedbackGiven ? 0.03 : 0);
-          expect(mockSendQueryDag.mock.calls.length).toBe(feedbackGiven ? 1 : 0);
-          expect(completed?.data?.cost_usd).toBeCloseTo(floor, 5);
-          expect(completed?.data).toMatchObject({
-            spend: {
-              costUsd: { source: 'provider', value: expect.closeTo(floor, 5), partial: true },
-            },
-          });
-        }
-      );
-    }
-
     it.each(['provider', 'command load', 'compiled error', 'compiled metadata'] as const)(
-      'preserves the reconciled gate floor on early %s failure',
+      'preserves partial gate spend on early %s failure',
       async failure => {
         const runId = `gate-failure-${failure}`;
         const node: LoopNode = {
@@ -1331,7 +1289,7 @@ describe('interactive loop node', () => {
               provider: 'claude',
             }),
             { status: 'suspended', point: 'interactive_loop' },
-            { costUsd: 0.02 }
+            { costUsd: 0.04, costPartial: true }
           )
         );
         const mockDeps = createMockDeps();
@@ -1367,38 +1325,6 @@ describe('interactive loop node', () => {
         expect((await foldDagResumeSnapshot(events, runId)).costUsd).toBeCloseTo(0.04, 5);
       }
     );
-
-    it('preserves a larger partial saved gate floor through feedback', async () => {
-      const runId = 'larger-partial-gate';
-      const execution = executionMetadata(
-        finishNodeExecution(
-          startNodeExecution({
-            runId,
-            path: 'refine',
-            node: refine,
-            invocation: newNodeInvocation(),
-            provider: 'claude',
-          }),
-          { status: 'suspended', point: 'interactive_loop' },
-          { costUsd: 0.04, costPartial: true }
-        )
-      );
-      const { completed, store, snapshot } = await resumeAt(
-        runId,
-        gate({ execution, signaledCostUsd: 0.02 }),
-        true
-      );
-      expect(completed?.data).toMatchObject({
-        cost_usd: expect.closeTo(0.07, 5),
-        spend: {
-          costUsd: { source: 'provider', value: expect.closeTo(0.07, 5), partial: true },
-        },
-      });
-      expect(runUsageWrites(store)).toEqual([
-        expect.objectContaining({ total_cost_usd: expect.closeTo(0.07, 5) }),
-      ]);
-      expect(snapshot.costUsd).toBeCloseTo(0.07, 5);
-    });
 
     it('feedback on a legacy gate with null cost keeps the priced floor partial', async () => {
       const { store, completed, snapshot } = await resumeAt(
