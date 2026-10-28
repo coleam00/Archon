@@ -315,23 +315,29 @@ Use this when completion is a **judgment the model makes** and there is nothing 
 disk to test. It replaces a prose sentinel with a schema-validated boolean, so the
 model cannot end the loop by mentioning a word while reasoning about its criteria.
 
-Four rules are checked at load time, so a mistake fails the workflow rather than
-looping silently:
+The loader checks the following declarations at load time. These checks do not
+prove that a composed schema is satisfiable:
 
 1. the node must declare `output_format`;
 2. the property must be declared in `properties`, at the root or through
    `allOf`, `anyOf`, or `oneOf`;
 3. it must be guaranteed by `required` — an optional property the model
    omits would read as "not complete" and burn `max_iterations`;
-4. an explicit type in a composed schema must permit booleans. For `anyOf` and
-   `oneOf`, the alternatives must guarantee `type: boolean` as described below.
-   Plain properties may omit `type`; an explicit single type must be `boolean`.
+4. the field must have a boolean guarantee as described below, or pass the
+   loader's limited type checks. Without that guarantee, an explicit single type
+   must be `boolean`; in composed schemas, type arrays must permit booleans and
+   `anyOf`/`oneOf` alternatives must guarantee `type: boolean`. Plain properties
+   may omit `type`.
 
 Constraints at the root and in `allOf` combine. For `anyOf` and `oneOf`, every
 alternative except literal `false` must supply the required-field and boolean
 guarantees, unless an enclosing constraint already supplies them. Only literal
 `false` is exempt: the loader does not detect other impossible branches such as
 `{not: {}}`. A `true` branch supplies no constraint.
+
+A separate `allOf` boolean guarantee can mask an incompatible explicit type at
+load time. Keep combined types compatible: a field constrained to both `string`
+and `boolean` cannot produce a schema-valid value, even if the workflow loads.
 
 Termination is strict identity: `true` ends the loop, and nothing else does — not
 `"true"`, not `1`. A payload that fails schema validation is a failure, not a
