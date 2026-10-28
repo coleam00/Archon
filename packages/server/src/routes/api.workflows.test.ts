@@ -3,7 +3,7 @@ import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile, symlink as fsSymlink } from 'fs/promises';
+import { access, mkdir, readFile, rm, writeFile, symlink as fsSymlink } from 'fs/promises';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import * as archonPaths from '@archon/paths';
@@ -901,59 +901,6 @@ describe('GET /api/workflows/:name', () => {
       await rm(testDir, { recursive: true, force: true });
     }
   });
-
-  test.each(['file.yaml', 'pack/folder/file.yaml'])(
-    'GET identifies invalid %s by its declared name',
-    async filename => {
-      const testDir = await mkdtemp(join(tmpdir(), 'wf-get-declared-error-'));
-      const path = join(testDir, '.archon', 'workflows', filename);
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, 'name: declared-review\nthinking: high\n');
-      try {
-        const app = createTestApp();
-        registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
-        for (const [name, status] of [
-          ['declared-review', 500],
-          ['file', 404],
-          ['folder', 404],
-          ['DECLARED-REVIEW', 404],
-        ] as const) {
-          mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
-          mockParseWorkflow.mockReturnValueOnce({
-            workflow: null,
-            error: {
-              filename,
-              workflowName: 'declared-review',
-              error: 'Missing nodes',
-              errorType: 'validation_error',
-            },
-          });
-          const response = await app.request(`/api/workflows/${name}?cwd=${testDir}`);
-          expect(response.status).toBe(status);
-          if (status === 500) expect(await response.text()).toContain('Missing nodes');
-        }
-        if (filename.includes('/')) {
-          mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
-          mockParseWorkflow.mockReturnValueOnce({
-            workflow: null,
-            error: {
-              filename,
-              workflowName: 'declared-review',
-              error: 'Missing nodes',
-              errorType: 'validation_error',
-            },
-          });
-          const response = await app.request(`/api/workflows/file?cwd=${testDir}`, {
-            method: 'DELETE',
-          });
-          expect(response.status).toBe(404);
-          expect(await readFile(path, 'utf8')).toContain('declared-review');
-        }
-      } finally {
-        await removeTempTree(testDir);
-      }
-    }
-  );
 
   test('surfaces malformed YAML in the requested packaged workflow', async () => {
     const testDir = join(tmpdir(), `wf-get-malformed-packaged-${Date.now()}`);

@@ -51,7 +51,7 @@ Shared commands/scripts and legacy grouped workflows support one grouping folder
 
 YAML nested below the workflow folder is not loaded. Inside a pack, a folder with no direct YAML (tests, docs, assets) and any dot directory (`.shared`, `.github`) are not workflow folders and are skipped. A folder with two or more direct YAML files is reported as invalid rather than ignored silently.
 
-Resolution is by **filename without extension** (for commands) or **exact filename** (for workflows), regardless of which subfolder the file lives in. Duplicate basenames within the same scope are a user error -- keep each name unique within `~/.archon/commands/` (or `<repoRoot>/.archon/commands/`), across whatever subfolders you use.
+Commands resolve by **filename without extension**. Workflow launches and composition resolve by the exact, case-sensitive YAML **`name:`**, regardless of which subfolder the file lives in. Duplicate basenames within the same scope are a user error -- keep each name unique within `~/.archon/commands/` (or `<repoRoot>/.archon/commands/`), across whatever subfolders you use.
 
 ## Load Priority
 

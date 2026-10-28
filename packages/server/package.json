@@ -50,9 +50,6 @@
       "src/routes/api.workflows.test.ts"
     ],
     [
-      "src/routes/workflow-files.test.ts"
-    ],
-    [
       "src/routes/api.conversations.test.ts"
     ],
     [

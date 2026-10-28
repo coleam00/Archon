@@ -153,15 +153,9 @@ function parseWorkflowDocument(
   providers: ProviderRegistry,
   configuredEnvNames: ReadonlySet<string> | undefined
 ): ParseResult {
-  const workflowName = typeof raw?.name === 'string' && raw.name.length > 0 ? raw.name : undefined;
   const reject = (error: string): ParseResult => ({
     workflow: null,
-    error: {
-      filename,
-      ...(workflowName !== undefined ? { workflowName } : {}),
-      error,
-      errorType: 'validation_error',
-    },
+    error: { filename, error, errorType: 'validation_error' },
   });
 
   const header = parseWorkflowHeader(raw, filename);

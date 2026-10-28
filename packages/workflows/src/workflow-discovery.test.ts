@@ -72,7 +72,6 @@ import {
 } from './workflow-discovery';
 import { isAgentNode, isIncludeDirective, isLoopGroupNode } from './schemas';
 import type { DagNode, IncludeDirective } from './schemas';
-import { findWorkflowLoadError } from './schemas/workflow';
 import { readHomeMcpDirectory } from './compiled-command';
 import * as bundledDefaults from './defaults/bundled-defaults';
 import * as bundleInventory from './defaults/bundle-inventory';
@@ -138,43 +137,6 @@ describe('workflow discovery', () => {
       process.env.ARCHON_DOCKER = originalArchonDocker;
     }
   });
-
-  it.each([
-    ['header', 'thinking: high', 'thinking:'],
-    ['nodes', 'description: Review\nnodes:\n  - id: check', 'check'],
-    [
-      'graph',
-      'description: Review\nnodes:\n  - id: check\n    bash: echo hi\n    depends_on: [missing]',
-      'missing',
-    ],
-    [
-      'fields',
-      'description: Review\nmodel: 123\nnodes:\n  - id: check\n    bash: echo hi',
-      'model',
-    ],
-    [
-      'contract',
-      'description: Review\noutcome_field: success\nnodes:\n  - id: check\n    bash: echo hi',
-      'without returns:',
-    ],
-  ])(
-    'attributes %s validation errors to the declared exact name',
-    async (_phase, body, message) => {
-      await writeWorkflowFile(testDir, 'file.yaml', `name: archon-review\n${body}\n`);
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      expect(result.workflows).toEqual([]);
-      expect(result.errors).toHaveLength(1);
-      const error = findWorkflowLoadError(result.errors, 'archon-review');
-      expect(error).toMatchObject({
-        filename: 'file.yaml',
-        workflowName: 'archon-review',
-        errorType: 'validation_error',
-      });
-      expect(error?.error).toContain(message);
-      expect(findWorkflowLoadError(result.errors, 'file')).toBeUndefined();
-      expect(findWorkflowLoadError(result.errors, 'ARCHON-REVIEW')).toBeUndefined();
-    }
-  );
 
   describe('MCP declaration provenance', () => {
     it.each(['', 'nested', 'pack/flow'])(
@@ -563,8 +525,6 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain("Missing required field 'name'");
-      expect(result.errors[0].workflowName).toBeUndefined();
-      expect(findWorkflowLoadError(result.errors, 'broken')).toBe(result.errors[0]);
     });
 
     it('still reports a genuinely malformed workflow inside a pack', async () => {

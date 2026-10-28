@@ -500,7 +500,7 @@ export function findWorkflowLoadError(
 ): WorkflowLoadError | undefined {
   return (
     errors.find(error => error.workflowName === name) ??
-    errors.find(error => error.workflowName === undefined && workflowLoadErrorName(error) === name)
+    errors.find(error => workflowLoadErrorName(error) === name)
   );
 }
 
