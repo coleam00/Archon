@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { validateStructuredOutput } from './structured-output';
 import { readSubrunMetadata } from './schemas/workflow-run';
 import { describe, it, expect } from 'bun:test';
 
@@ -579,6 +580,140 @@ describe('nested output acceptance', () => {
         'proposal.action'
       )
     ).toEqual({ kind: 'value', value: 'add' });
+  });
+});
+
+describe('composed output contract', () => {
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    it(`projects and resolves mixed and composition-only ${keyword} declarations`, () => {
+      for (const direct of [{}, { properties: { direct: { type: 'number' } } }]) {
+        const schema = {
+          ...direct,
+          [keyword]: [
+            {
+              properties: { proposal: { properties: { action: { type: 'string' } } } },
+              required: keyword === 'oneOf' ? ['proposal'] : [],
+            },
+            {
+              properties: { alternate: { type: 'boolean' } },
+              required: keyword === 'oneOf' ? ['alternate'] : [],
+            },
+          ],
+        };
+        const declaredOutputPaths = declaredOutputPathsFromSchema(schema);
+        expect(declaredOutputPaths).toEqual([
+          ...('properties' in direct ? [['direct']] : []),
+          ['proposal'],
+          ['proposal', 'action'],
+          ['alternate'],
+        ]);
+        for (const value of [{ proposal: { action: 'add' } }, { alternate: true }]) {
+          expect(validateStructuredOutput(value, schema)).toEqual({ valid: true });
+          const output: NodeOutput = {
+            state: 'completed',
+            output: JSON.stringify(value),
+            declaredOutputPaths,
+          };
+          expect(resolveField(output, 'p', 'proposal.action')).toEqual(
+            'proposal' in value ? { kind: 'value', value: 'add' } : { kind: 'empty' }
+          );
+          for (const field of ['extra', 'proposal.typo']) {
+            expect(() => resolveField(output, 'p', field)).toThrow('not declared');
+          }
+        }
+      }
+    });
+    it(`keeps an empty ${keyword} contract strict`, () => {
+      const declaredOutputPaths = declaredOutputPathsFromSchema({ [keyword]: [true] });
+      expect(declaredOutputPaths).toEqual([]);
+      expect(() =>
+        resolveField(
+          { state: 'completed', output: '{"extra":1}', declaredOutputPaths },
+          'p',
+          'extra'
+        )
+      ).toThrow('not declared');
+    });
+  }
+
+  it('unions nested branches without conflating paths or traversing non-object schemas', () => {
+    const paths = declaredOutputPathsFromSchema({
+      properties: { root: {} },
+      allOf: [
+        {
+          anyOf: [
+            {
+              properties: {
+                root: {
+                  type: ['object', 'null'],
+                  oneOf: [{ properties: { a: {} } }, { properties: { b: {} } }],
+                },
+              },
+            },
+            { properties: { root: { properties: { a: {}, 'a.b': {} } } } },
+          ],
+        },
+        {
+          properties: {
+            'root.a': {},
+            scalar: { type: 'string', allOf: [{ properties: { hidden: {} } }] },
+            array: {
+              type: 'array',
+              items: { properties: { hidden: {} } },
+              anyOf: [{ properties: { hidden: {} } }],
+            },
+            branch: {
+              allOf: [
+                { type: 'number', properties: { hidden: {} } },
+                { properties: { visible: {} } },
+              ],
+            },
+            ref: { $ref: '#/$defs/object' },
+          },
+        },
+      ],
+      $defs: { object: { properties: { hidden: {} } } },
+      additionalProperties: { properties: { hidden: {} } },
+    });
+    expect(paths).toEqual([
+      ['root'],
+      ['root', 'a'],
+      ['root', 'b'],
+      ['root', 'a.b'],
+      ['root.a'],
+      ['scalar'],
+      ['array'],
+      ['branch'],
+      ['branch', 'visible'],
+      ['ref'],
+    ]);
+    for (const value of [{}, { root: null }]) {
+      expect(
+        resolveField(
+          { state: 'completed', output: JSON.stringify(value), declaredOutputPaths: paths },
+          'p',
+          'root.b'
+        )
+      ).toEqual({ kind: 'empty' });
+    }
+    for (const field of [
+      'root.a.b',
+      'scalar.hidden',
+      'array.hidden',
+      'branch.hidden',
+      'ref.hidden',
+    ]) {
+      expect(() => assertDeclaredOutputPath(paths ?? [], 'p', field, `$p.output.${field}`)).toThrow(
+        'not declared'
+      );
+    }
+    expect(() =>
+      resolveField(
+        { state: 'completed', output: '{"root":1}', declaredOutputPaths: paths },
+        'p',
+        'root.b'
+      )
+    ).toThrow('not an object');
   });
 });
 

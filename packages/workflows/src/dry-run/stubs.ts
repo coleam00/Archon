@@ -1,9 +1,10 @@
 import { z } from 'zod';
+import Ajv from 'ajv';
 import { mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { validateStructuredOutput } from '../structured-output';
 import { resolvedBodyNodes } from '../graph-plan';
-import { canonicalValueText } from '../output-ref';
+import { canonicalValueText, COMPOSITION_KEYWORDS } from '../output-ref';
 import {
   isGateNode,
   isHaltNode,
@@ -69,21 +70,104 @@ function isStubValue(value: unknown): value is DryRunStubValue {
   return dryRunStubValueSchema.safeParse(value).success;
 }
 
-function objectPlaceholder(schema: Record<string, unknown>): Record<string, unknown> {
+function objectPlaceholder(
+  schema: Record<string, unknown>,
+  rootSchema: Record<string, unknown>
+): Record<string, unknown> {
   const properties = isRecord(schema.properties) ? schema.properties : {};
   const required = Array.isArray(schema.required)
     ? schema.required.filter((name): name is string => typeof name === 'string')
     : [];
-  return Object.fromEntries(required.map(name => [name, schemaPlaceholder(properties[name])]));
+  return Object.fromEntries(
+    required.map(name => [name, schemaPlaceholder(properties[name], rootSchema)])
+  );
 }
 
 function nonnegativeInteger(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) ? Math.max(0, value) : 0;
 }
 
-function schemaPlaceholder(schema: unknown): unknown {
-  if (!isRecord(schema)) return 'TODO';
+function composedPlaceholderSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const branches = COMPOSITION_KEYWORDS.flatMap(keyword => {
+    const values = schema[keyword];
+    if (!Array.isArray(values)) return [];
+    // One deterministic candidate, not a search over branch combinations. The original
+    // schema still validates the result and rejects candidates we cannot satisfy.
+    return keyword === 'allOf' ? values : values.slice(0, 1);
+  });
+  if (branches.length === 0) return schema;
+  const parts = [schema, ...branches.filter(isRecord).map(composedPlaceholderSchema)];
+  const merged: Record<string, unknown> = Object.assign({}, ...parts);
+  if (!parts.some(part => isRecord(part.properties))) return merged;
+  const properties = new Map<string, unknown>();
+  for (const part of parts) {
+    for (const [key, value] of Object.entries(isRecord(part.properties) ? part.properties : {})) {
+      properties.set(key, properties.has(key) ? { allOf: [properties.get(key), value] } : value);
+    }
+  }
+  const required = parts.flatMap(part =>
+    Array.isArray(part.required)
+      ? part.required.filter((key): key is string => typeof key === 'string')
+      : []
+  );
+  return {
+    ...merged,
+    type: merged.type ?? 'object',
+    properties: Object.fromEntries(properties),
+    required: [...new Set(required)],
+  };
+}
 
+function schemaPointer(input: unknown, target: object, path = ''): string | undefined {
+  if (input === target) return path;
+  if (input === null || typeof input !== 'object') return undefined;
+  for (const [key, child] of Object.entries(input)) {
+    const segment = encodeURIComponent(key.replaceAll('~', '~0').replaceAll('/', '~1'));
+    const found = schemaPointer(child, target, `${path}/${segment}`);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+function candidateSatisfiesSchema(
+  value: unknown,
+  schema: Record<string, unknown>,
+  rootSchema: Record<string, unknown>
+): boolean | undefined {
+  // Compile the candidate inside the original resource so local references keep
+  // their root. AJV's fragment validator checks only the candidate, not root constraints.
+  let key = 'archonPlaceholder';
+  while (Object.hasOwn(rootSchema, key)) key += '_';
+  const pointer = schemaPointer(rootSchema, schema);
+  const context = pointer === undefined ? { ...rootSchema, [key]: schema } : rootSchema;
+  const fragment = pointer ?? `/${key}`;
+  const ajv = new Ajv({ strict: false });
+  try {
+    ajv.addSchema(context, 'archon-placeholder');
+    return ajv.getSchema(`archon-placeholder#${fragment}`)?.(value) === true;
+  } catch {
+    // Candidate selection may fall back; final full-schema certification reports
+    // an invalid or uncompilable output_format to the operator.
+    return undefined;
+  }
+}
+
+function schemaPlaceholder(input: unknown, rootSchema: Record<string, unknown>): unknown {
+  if (!isRecord(input)) return 'TODO';
+  const value = placeholderFromSchema(input, rootSchema);
+  if (
+    !COMPOSITION_KEYWORDS.some(keyword => Array.isArray(input[keyword])) ||
+    candidateSatisfiesSchema(value, input, rootSchema) === true
+  ) {
+    return value;
+  }
+  return placeholderFromSchema(composedPlaceholderSchema(input), rootSchema);
+}
+
+function placeholderFromSchema(
+  schema: Record<string, unknown>,
+  rootSchema: Record<string, unknown>
+): unknown {
   if ('const' in schema) return structuredClone(schema.const);
   if ('default' in schema) return structuredClone(schema.default);
   if (Array.isArray(schema.enum) && schema.enum.length > 0) {
@@ -92,10 +176,10 @@ function schemaPlaceholder(schema: unknown): unknown {
 
   switch (schema.type) {
     case 'object':
-      return objectPlaceholder(schema);
+      return objectPlaceholder(schema, rootSchema);
     case 'array': {
       const minItems = nonnegativeInteger(schema.minItems);
-      return Array.from({ length: minItems }, () => schemaPlaceholder(schema.items));
+      return Array.from({ length: minItems }, () => schemaPlaceholder(schema.items, rootSchema));
     }
     case 'boolean':
       return false;
@@ -124,7 +208,7 @@ export function generatedStubFor(node: DagNode): DryRunStubValue {
     );
   }
 
-  const value = schemaPlaceholder(node.output_format);
+  const value = schemaPlaceholder(node.output_format, node.output_format);
   if (isLoopNode(node) && node.loop.until_field !== undefined) {
     if (!isRecord(value)) {
       throw new Error(

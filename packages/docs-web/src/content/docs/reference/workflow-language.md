@@ -614,7 +614,7 @@ nodes:
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)
 - Use `output_format` when downstream nodes need to branch on specific values via `when:`
 - **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails**: it no longer completes-with-prose and silently feeds `''` downstream.
-- **Field access is strict at every depth.** Each segment in `$classify.output.details.type` must be an explicit `properties` entry. An undeclared segment, at any depth, fails workflow validation when the local schema is known, and fails the consumer at runtime otherwise. Arrays, `additionalProperties`, `$ref`, and schema combinators do not authorize nested properties. Declared missing/null fields or parents resolve to `''`, after the entire path is checked. A schemaless `bash:`/`script:` producer must emit every nested key and every intermediate value must be an object. Child workflow results carry the selected producer's declared paths through completion and resume; a child result recorded before nested paths carries only its top-level fields, so a nested read from it fails as undeclared until the producer reruns. See [node output references](/reference/variables/#node-output-references).
+- **Field access is strict at every depth.** Each segment in `$classify.output.details.type` must be an explicit `properties` entry. An undeclared segment, at any depth, fails workflow validation when the local schema is known, and fails the consumer at runtime otherwise. Properties in any `allOf`, `anyOf`, or `oneOf` branch count as declarations, including nested compositions. Declarations are a union across branches; a branch-only field may be absent in the selected payload. A composition-only schema is strict too: undeclared fields fail at load. Arrays, `additionalProperties`, and `$ref` do not authorize nested properties. Declared missing/null fields or parents resolve to `''`, after the entire path is checked. A schemaless `bash:`/`script:` producer must emit every nested key and every intermediate value must be an object. Child workflow results carry the selected producer's declared paths through completion and resume; a child result recorded before nested paths carries only its top-level fields, so a nested read from it fails as undeclared until the producer reruns. See [node output references](/reference/variables/#node-output-references).
 
 `output_format` is not AI-only, and it is not only a branching aid: it is how *any* producing node declares the shape of the value it hands downstream, including a workflow's own result. [Result contracts](#result-contracts) is the one description of that ownership: who declares a schema, what an `include:` alias and a `workflow:` sub-run each guarantee, and how a small result points at a large file.
 
@@ -742,7 +742,7 @@ An attention wait pauses until someone answers it, in the form it declares. For 
 | `multi_select` | one or more distinct declared option ids, plus optional text | `{ decisions, text }` |
 
 - `options` is required for `select` and `multi_select` and a load error on the other forms. Option ids are unique and kebab-case; `label` is display text only.
-- `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`. It is read when the wait pauses and must pass the same rules: an array of `{ id, label? }` with unique kebab-case ids and at least one entry. If it does not, the wait node fails with an error naming the producer; it never pauses with options nobody can answer. When the producer declares `output_format`, the loader also checks that the field is an array of `{ id, label? }`.
+- `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`. It is read when the wait pauses and must pass the same rules: an array of `{ id, label? }` with unique kebab-case ids and at least one entry. If it does not, the wait node fails with an error naming the producer; it never pauses with options nobody can answer. For plain-property declarations in the producer's `output_format`, the loader also checks that the field is an array of `{ id, label? }`. When the options declaration uses `allOf`, `anyOf`, or `oneOf` along its field path, in its items, or in an item property, its declared path is checked at load and its option shape is checked at runtime. Composition in unrelated fields does not bypass the plain-property check.
 - `form` is always a literal, because it fixes the node's output contract, so a strict `$ask.output.decision` reference is checked at load time.
 - An undeclared option is refused on every surface. In the `approval` form `reject` is an answer like any other and never cancels the run; wire `cancel:` with `when: "$ask.output.decision == 'reject'"` if a rejection should end it.
 - `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/getting-started/operate/) by them.
@@ -1792,8 +1792,13 @@ nodes:
   (threaded back as `$node.output`) becomes the `returns:` node's output.
 - **`outcome_field:`**: an optional, explicit authored verdict relative to `returns:`. The
   selected node must declare an object `output_format` (`type: object`) whose `properties`
-  declares the field, whose `required` lists it, and whose field schema sets `type: boolean`;
-  otherwise the workflow fails to load.
+  declares the field, whose `required` guarantees its presence, and whose field schema
+  guarantees `type: boolean`; otherwise the workflow fails to load. Declarations and
+  guarantees may come from the root or through `allOf`, `anyOf`, or `oneOf`.
+  Root and `allOf` constraints combine; every `anyOf`/`oneOf` alternative except
+  literal `false` must supply each guarantee unless an enclosing constraint already
+  supplies it. Only literal `false` is exempt: the loader does not detect other
+  impossible branches such as `{not: {}}`. A `true` branch adds no constraint.
   It cannot select a `loop_group` (which returns raw text) or a fan-out `workflow:` node
   (which returns an aggregate array); add a structured collector node after either one.
   Exact `true` is persisted as `outcome: succeeded`, exact `false` as `outcome: failed`.

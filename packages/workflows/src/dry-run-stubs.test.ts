@@ -156,6 +156,304 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
     );
   });
 
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    test.each(['composition-only', 'root-required', 'nested'])(
+      `generates readable ${keyword} object stubs at %s`,
+      async location => {
+        const declaration = {
+          type: 'object',
+          properties: { action: { type: 'string', const: 'accept' } },
+          required: ['action'],
+        };
+        const composed = { [keyword]: [declaration] };
+        const outputFormat =
+          location === 'nested'
+            ? { type: 'object', properties: { proposal: composed }, required: ['proposal'] }
+            : location === 'root-required'
+              ? {
+                  type: 'object',
+                  required: ['action'],
+                  [keyword]: [{ properties: declaration.properties }],
+                }
+              : composed;
+        const field = location === 'nested' ? 'proposal.action' : 'action';
+        const workflow = makeTestWorkflow({
+          name: 'composed-stubs',
+          nodes: [
+            { id: 'producer', prompt: 'Propose', output_format: outputFormat },
+            {
+              id: 'consumer',
+              prompt: `Action=$producer.output.${field}`,
+              depends_on: ['producer'],
+            },
+          ],
+        });
+        const scaffold = createDryRunStubScaffold(workflow);
+        expect(scaffold.producer).toEqual(
+          location === 'nested' ? { proposal: { action: 'accept' } } : { action: 'accept' }
+        );
+        for (const options of [{ defaultStubs: true }, { stubs: scaffold }]) {
+          const result = await dryRunWorkflow({ workflow, ...options });
+          expect(result.outcome).toBe('completed');
+          expect(result.trace[1]?.resolvedText).toBe('Action=accept');
+        }
+      }
+    );
+  }
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    test.each(['branch', 'direct'])(
+      `preserves root reference context for nested ${keyword} %s candidates`,
+      async candidate => {
+        const workflow = makeTestWorkflow({
+          name: 'root-reference-stubs',
+          nodes: [
+            {
+              id: 'producer',
+              prompt: 'Produce',
+              output_format: {
+                $id: 'https://example.com/root-reference-stubs',
+                $defs: { action: { const: 'accept' }, text: { type: 'string' } },
+                type: 'object',
+                properties: {
+                  proposal:
+                    candidate === 'direct'
+                      ? {
+                          $id: '#proposal',
+                          type: 'string',
+                          minLength: 8,
+                          [keyword]: [{ $ref: '#/$defs/text', minLength: 0 }],
+                        }
+                      : {
+                          [keyword]: [
+                            {
+                              type: 'object',
+                              properties: { action: { $ref: '#/$defs/action', const: 'accept' } },
+                              required: ['action'],
+                            },
+                          ],
+                        },
+                },
+                required: ['proposal'],
+              },
+            },
+          ],
+        });
+        const scaffold = createDryRunStubScaffold(workflow);
+        const expected = { proposal: candidate === 'direct' ? 'TTTTTTTT' : { action: 'accept' } };
+        expect(scaffold.producer).toEqual(expected);
+        for (const options of [{ stubs: scaffold }, { defaultStubs: true }]) {
+          const result = await dryRunWorkflow({ workflow, ...options });
+          expect(result.outcome).toBe('completed');
+          expect(result.trace[0]?.output).toBe(JSON.stringify(expected));
+        }
+      }
+    );
+  }
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    test.each(['a%b', 'a%2Fb', 'a%20b', 'a~/b%2F', 'plain', 'a/b', 'a~b', 'a b', 'a#b', 'å'])(
+      `preserves literal property names in ${keyword} scaffolds and defaults: %s`,
+      async property => {
+        const workflow = makeTestWorkflow({
+          name: 'literal-property-stubs',
+          nodes: [
+            {
+              id: 'producer',
+              prompt: 'Produce',
+              output_format: {
+                type: 'object',
+                properties: {
+                  [property]: {
+                    type: 'string',
+                    minLength: 8,
+                    [keyword]: [{ minLength: 0 }],
+                  },
+                },
+                required: [property],
+              },
+            },
+          ],
+        });
+        const expected = { [property]: 'TTTTTTTT' };
+        const scaffold = createDryRunStubScaffold(workflow);
+        expect(scaffold.producer).toEqual(expected);
+        for (const options of [{ stubs: scaffold }, { defaultStubs: true }]) {
+          const result = await dryRunWorkflow({ workflow, ...options });
+          expect(result.outcome).toBe('completed');
+          expect(result.trace[0]?.output).toBe(JSON.stringify(expected));
+        }
+      }
+    );
+
+    test(`preserves root reference context for ${keyword} array items`, async () => {
+      const workflow = makeTestWorkflow({
+        name: 'array-reference-stubs',
+        nodes: [
+          {
+            id: 'producer',
+            prompt: 'Produce',
+            output_format: {
+              $defs: { text: { type: 'string' } },
+              type: 'array',
+              minItems: 1,
+              items: {
+                type: 'string',
+                minLength: 8,
+                [keyword]: [{ $ref: '#/$defs/text', minLength: 0 }],
+              },
+            },
+          },
+        ],
+      });
+      const scaffold = createDryRunStubScaffold(workflow);
+      expect(scaffold.producer).toEqual(['TTTTTTTT']);
+      for (const options of [{ stubs: scaffold }, { defaultStubs: true }]) {
+        const result = await dryRunWorkflow({ workflow, ...options });
+        expect(result.outcome).toBe('completed');
+        expect(result.trace[0]?.output).toBe('["TTTTTTTT"]');
+      }
+    });
+  }
+
+  const overlappingConstraints = [
+    {
+      field: 'minimum',
+      root: { type: 'number', minimum: 10 },
+      branch: { minimum: 0 },
+      expected: 10,
+    },
+    {
+      field: 'minLength',
+      root: { type: 'string', minLength: 8 },
+      branch: { minLength: 0 },
+      expected: 'TTTTTTTT',
+    },
+    {
+      field: 'minItems',
+      root: { type: 'array', minItems: 2, items: { type: 'integer' } },
+      branch: { minItems: 0 },
+      expected: [0, 0],
+    },
+    {
+      field: 'items',
+      root: { type: 'array', minItems: 1, items: { const: 'keep' } },
+      branch: { items: { type: 'string' } },
+      expected: ['keep'],
+    },
+    {
+      field: 'enum',
+      root: { type: 'string', enum: ['keep'] },
+      branch: { enum: ['other', 'keep'] },
+      expected: 'keep',
+    },
+    {
+      field: 'default',
+      root: { type: 'string', enum: ['keep'], default: 'keep' },
+      branch: { default: 'other' },
+      expected: 'keep',
+    },
+    {
+      field: 'type',
+      root: { type: 'integer', minimum: 10 },
+      branch: { type: ['integer'] },
+      expected: 10,
+    },
+  ];
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    for (const location of ['root', 'nested']) {
+      test.each(overlappingConstraints)(
+        `preserves valid ${location} $field candidates with ${keyword} in scaffolds and defaults`,
+        async ({ root, branch, expected }) => {
+          const composed = { ...root, [keyword]: [branch] };
+          const outputFormat =
+            location === 'root'
+              ? composed
+              : { type: 'object', properties: { value: composed }, required: ['value'] };
+          const value = location === 'root' ? expected : { value: expected };
+          const workflow = makeTestWorkflow({
+            name: 'overlapping-constraints',
+            nodes: [{ id: 'producer', prompt: 'Produce', output_format: outputFormat }],
+          });
+          const scaffold = createDryRunStubScaffold(workflow);
+          expect(scaffold.producer).toEqual(
+            typeof value === 'string' ? JSON.stringify(value) : value
+          );
+          for (const options of [{ stubs: scaffold }, { defaultStubs: true }]) {
+            const result = await dryRunWorkflow({ workflow, ...options });
+            expect(result.outcome).toBe('completed');
+            expect(result.trace[0]?.output).toBe(
+              typeof value === 'string' ? value : JSON.stringify(value)
+            );
+          }
+        }
+      );
+    }
+  }
+
+  test('combines required properties and overlapping nested allOf declarations', () => {
+    const workflow = makeTestWorkflow({
+      name: 'overlapping-stubs',
+      nodes: [
+        {
+          id: 'producer',
+          prompt: 'Propose',
+          output_format: {
+            type: 'object',
+            required: ['proposal'],
+            allOf: [
+              {
+                properties: {
+                  proposal: {
+                    type: 'object',
+                    properties: { action: { type: 'string' } },
+                    required: ['action'],
+                  },
+                },
+              },
+              {
+                properties: {
+                  proposal: {
+                    properties: { action: { const: 'accept' }, reason: { type: 'string' } },
+                    required: ['reason'],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(createDryRunStubScaffold(workflow)).toEqual({
+      producer: { proposal: { action: 'accept', reason: 'TODO' } },
+    });
+  });
+
+  test('rejects a composed placeholder that fails the original schema', () => {
+    const workflow = makeTestWorkflow({
+      name: 'invalid-composed-placeholder',
+      nodes: [
+        {
+          id: 'producer',
+          prompt: 'Propose',
+          output_format: {
+            allOf: [
+              {
+                type: 'object',
+                properties: { code: { type: 'string', pattern: '^OK$' } },
+                required: ['code'],
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(() => createDryRunStubScaffold(workflow)).toThrow(
+      'Cannot generate schema-valid dry-run stub'
+    );
+  });
+
   test('does not leave a partial file when a placeholder cannot satisfy the schema', async () => {
     const workflow = makeTestWorkflow({
       name: 'unsupported-placeholder',

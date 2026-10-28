@@ -5,7 +5,12 @@
  */
 import { z } from 'zod';
 import { isValidCommandName } from '../command-validation';
-import { declaredFieldsFromSchema, jsonValueSchema, parseWholeOutputRef } from '../output-ref';
+import {
+  declaredFieldsFromSchema,
+  outputFieldConstraints,
+  jsonValueSchema,
+  parseWholeOutputRef,
+} from '../output-ref';
 import type { DagNodeFields, NodeMode } from './dag-node';
 import { bashExecAuthoringSchema, execNodeSchema, scriptExecAuthoringSchema } from './exec-node';
 import { composeFanOutNodeSchema } from './include-node';
@@ -169,37 +174,21 @@ function validateLoopUntilField(data: DagNodeFields, ctx: z.RefinementCtx): void
     );
     return;
   }
-  const required = schema.required;
-  if (!Array.isArray(required) || !required.includes(untilField)) {
+  const constraints = outputFieldConstraints(schema, untilField);
+  if (!constraints.required) {
     addIssue(
       ctx,
       `'loop.until_field' names '${untilField}', which must also be listed in output_format.required — an optional field the model omits would silently read as "not complete" and burn max_iterations`,
       path
     );
   }
-  const declaredType = declaredStringType(schema, untilField);
-  if (declaredType !== undefined && declaredType !== 'boolean') {
+  if (!constraints.boolean && constraints.requiresBooleanType) {
     addIssue(
       ctx,
-      `'loop.until_field' names '${untilField}', declared as type '${declaredType}' — it must be 'boolean'; the loop terminates on the value being exactly true`,
+      `'loop.until_field' names '${untilField}', must be 'boolean' as established by explicit root/allOf constraints or every anyOf/oneOf alternative except literal false; the loop terminates on the value being exactly true`,
       path
     );
   }
-}
-
-/**
- * A property's declared `type` when it is a single string. `output_format` is free-form
- * JSON Schema (`z.record`), so `type` may also be an array of strings
- * (`type: [boolean, 'null']`) or absent; only a declared string is judged here, anything
- * else is left to ajv.
- */
-function declaredStringType(schema: Record<string, unknown>, field: string): string | undefined {
-  const property = (schema.properties as Record<string, unknown> | undefined)?.[field];
-  const type =
-    property !== null && typeof property === 'object'
-      ? (property as { type?: unknown }).type
-      : undefined;
-  return typeof type === 'string' ? type : undefined;
 }
 
 /**

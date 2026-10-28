@@ -5,6 +5,7 @@ import {
   readNodeRecordEvent,
   readDeferredNodeUsageEvent,
 } from './node-record-reader';
+import { declaredOutputPathsFromSchema, resolveNodeOutputField } from './output-ref';
 import { describe, expect, it } from 'bun:test';
 import { execNodeSchema } from './schemas/exec-node';
 import {
@@ -466,4 +467,58 @@ it('persists the path contract beside its legacy root fields and reads either sh
         ?.data.declared_output_paths
     ).toEqual([['a'], ['b']]);
   }
+});
+
+it('round trips a composed path contract without changing its persisted shape', () => {
+  const paths = declaredOutputPathsFromSchema({
+    anyOf: [
+      { properties: { proposal: { properties: { action: { type: 'string' } } } } },
+      { properties: { proposal: { properties: { reason: { type: 'string' } } } } },
+    ],
+  });
+  const source = record();
+  source.output = { text: '{"proposal":{"reason":"needed"}}', declaredOutputPaths: paths };
+  const event = serializeNodeStateRecord(source);
+  expect(event.data).toMatchObject({
+    declared_fields: ['proposal'],
+    declared_output_paths: [['proposal'], ['proposal', 'action'], ['proposal', 'reason']],
+  });
+  const restored = readNodeRecordEvent({ ...event, data: JSON.stringify(event.data) });
+  expect(restored?.data.declared_output_paths).toEqual(paths);
+  expect(
+    resolveNodeOutputField(
+      {
+        state: 'completed',
+        output: source.output.text,
+        declaredOutputPaths: restored?.data.declared_output_paths,
+      },
+      'review',
+      'proposal.reason',
+      '$review.output.proposal.reason'
+    )
+  ).toEqual({ kind: 'value', value: 'needed' });
+});
+
+it('preserves an empty strict composed contract through persistence and authorization', () => {
+  const paths = declaredOutputPathsFromSchema({ allOf: [{}] });
+  expect(paths).toEqual([]);
+  const source = record();
+  const text = '{"undeclared":"present"}';
+  source.output = { text, declaredOutputPaths: paths };
+  const event = serializeNodeStateRecord(source);
+  expect(event.data).toMatchObject({ declared_fields: [], declared_output_paths: [] });
+  const restored = readNodeRecordEvent({ ...event, data: JSON.stringify(event.data) });
+  expect(restored?.data.declared_output_paths).toEqual([]);
+  expect(() =>
+    resolveNodeOutputField(
+      {
+        state: 'completed',
+        output: text,
+        declaredOutputPaths: restored?.data.declared_output_paths,
+      },
+      'review',
+      'undeclared',
+      '$review.output.undeclared'
+    )
+  ).toThrow('not declared');
 });

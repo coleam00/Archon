@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Output field references now accept properties declared through `allOf`, `anyOf`, and `oneOf`, including nested compositions and schemas without root properties. Undeclared fields in composition-only schemas now fail at load instead of allowing schemaless reads. Persisted path contracts keep their existing shape. (#5215)
+
 ## [0.13.0] - 2026-10-28
 
 Slack runs only as a plugin. Declared MCP servers and misplaced node keys fail before any tokens are spent. Completed runs clean up their own worktrees and scratch space. The SDLC merge queue merges clean PRs at once, and queue answers continue without waiting for the next pass.

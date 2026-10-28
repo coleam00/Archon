@@ -73,6 +73,45 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
     });
   });
 
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    test(`checks composed ${keyword} outcome selectors after include rebinding`, () => {
+      for (const [field, required, expected] of [
+        ['green', ['green'], null],
+        ['green', [], 'required'],
+        ['missing', ['green'], 'not declared'],
+      ] as const) {
+        const inner = wf(
+          'inner',
+          [
+            {
+              id: 'result',
+              prompt: 'result',
+              output_format: {
+                [keyword]: [
+                  { type: 'object', properties: { green: { type: 'boolean' } }, required },
+                  keyword === 'allOf',
+                ],
+              },
+            },
+          ],
+          { returns: 'result' }
+        );
+        const outer = wf('outer', [{ id: 'blk', include: 'inner' }], {
+          returns: 'blk',
+          outcome_field: field,
+        });
+        const { workflows, errors } = expandWorkflowIncludes(mapOf(inner, outer));
+        if (expected === null) {
+          expect(errors).toHaveLength(0);
+          expect(workflows.get('outer')?.returns).toBe('blk__result');
+        } else {
+          expect(workflows.has('outer')).toBe(false);
+          expect(errors.find(error => error.filename === 'outer')?.error).toContain(expected);
+        }
+      }
+    });
+  }
+
   test('rejects an outer outcome_field after return rebinding when the child contract is invalid', () => {
     const inner = wf(
       'inner',
