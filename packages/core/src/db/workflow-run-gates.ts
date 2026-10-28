@@ -3,6 +3,8 @@
  * compare-and-swap writes that resolve or cancel its gate. Re-exported from the
  * `./workflows` entry.
  */
+
+import { mutableRunMetadata } from '@archon/workflows/schemas/run-metadata';
 import {
   validateWorkflowWaitMetadata,
   type ApprovalContext,
@@ -124,7 +126,7 @@ export async function resolveApprovalGate(
         `UPDATE remote_agent_workflow_runs
          SET metadata = ${dialect.jsonMerge('metadata', 2)}
          WHERE id = $1 AND ${unresolvedGateClause(expectedGate === undefined ? undefined : 3)}`,
-        [id, JSON.stringify(metadata), ...expectedGateParams(expectedGate)]
+        [id, JSON.stringify(mutableRunMetadata(metadata)), ...expectedGateParams(expectedGate)]
       );
       const resolved = (result.rowCount ?? 0) > 0;
       if (resolved) {
@@ -245,7 +247,7 @@ export async function pauseWorkflowRun(
           // Caller-supplied run-level metadata (e.g. `pending_writeback`) rides the SAME
           // atomic write so there is no window where the run is paused without it (M3).
           JSON.stringify({
-            ...extraMetadata,
+            ...mutableRunMetadata(extraMetadata),
             [PAUSE_CAUSE_METADATA_KEY]: pauseCauseOfApproval(approvalContext),
           }),
           // The complete gate context. JSON.stringify drops undefined, and the write

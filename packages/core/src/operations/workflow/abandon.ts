@@ -1,7 +1,15 @@
 import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
-import { readExecutionOwner, readOwnedWorktree } from '@archon/workflows/schemas/workflow-run';
-import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  readExecutionOwner,
+  readOwnedWorktree,
+  SUBRUN_METADATA_KEYS,
+} from '@archon/workflows/schemas/workflow-run';
+import type {
+  ExecutionOwnerRecord,
+  OwnedWorktree,
+  WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import type { ReleasedWorktree, RunWorktreeRelease } from '../../services/cleanup/run-worktree';
 import type { RunActor } from '../run-authorization';
 import { getLog, type OperationContext } from './context';
@@ -117,7 +125,9 @@ async function recordAbandonment(
       run,
       cancelled: false,
       cleanupWarnings: [...stopWarnings, ...persistenceWarnings],
-      cancelledRuns: tree.runs.filter(row => row.id !== run.id && row.status === 'cancelled'),
+      cancelledDescendants: tree.runs.filter(
+        row => row.id !== run.id && row.status === 'cancelled'
+      ),
       cascadeFailures: tree.failures,
       blockedParentRunId: null,
     };
@@ -142,33 +152,34 @@ async function releaseAbandonedWorktrees(
 ): Promise<{ warnings: string[]; releasedWorktrees: ReleasedWorktree[] }> {
   const warnings = [...(result.cleanupWarnings ?? [])];
   const releasedWorktrees: ReleasedWorktree[] = [];
-  const released = new Set<string>();
-  let unsafeDescendant = false;
+  const released: ReturnType<typeof readOwnedWorktree>[] = [];
   const ownerChecks = await checkBatchWorktreeOwners(
     ctx,
-    [run, ...result.cancelledRuns],
+    [run, ...result.cancelledDescendants],
     run,
     owner
   );
+  const retainRoot =
+    result.cascadeFailures > 0 || ownerChecks.some(check => check.run.id !== run.id && !check.safe);
+  const rootProof = readOwnedWorktree(run.metadata);
+  if (retainRoot) {
+    warnings.push(
+      `Retained checkout for run ${run.id}: descendants could not all be accounted for. Abandoning this run again only retries worktree removal and does not cancel descendants; abandon or stop each remaining descendant first.`
+    );
+  }
   for (const { run: row, ...ownerCheck } of ownerChecks.reverse()) {
     const proof = readOwnedWorktree(row.metadata);
-    if (proof && released.has(proof.envId)) continue;
-    if (row.id === run.id && (result.cascadeFailures || unsafeDescendant)) {
-      warnings.push(
-        `Retained checkout for run ${run.id}: descendants could not all be accounted for. Abandoning this run again only retries worktree removal and does not cancel descendants; abandon or stop each remaining descendant first.`
-      );
-      continue;
-    }
+    if (released.some(other => sameWorktreeProof(other, proof))) continue;
     warnings.push(...(await persistCleanupWarnings(ctx, row, ownerCheck.warnings)));
     warnings.push(...ownerCheck.warnings);
-    if (!ownerCheck.safe) {
-      unsafeDescendant = true;
-      continue;
-    }
+    const isRootCheckout = row.id === run.id || sameWorktreeProof(rootProof, proof);
+    if (!ownerCheck.safe || (retainRoot && isRootCheckout)) continue;
     const release = await releaseRunWorktree(ctx, row);
     warnings.push(...release.warnings);
-    if (release.released) releasedWorktrees.push(release.released);
-    if (proof) released.add(proof.envId);
+    if (release.released) {
+      releasedWorktrees.push(release.released);
+      released.push(proof);
+    }
   }
   return { warnings, releasedWorktrees };
 }
@@ -197,12 +208,24 @@ export async function collectAbandonmentTree(
   return { runs: runs.slice(0, MAX_CASCADE_RUNS), failures };
 }
 
+interface WorktreeOwnerCheck {
+  safe: boolean;
+  warnings: string[];
+}
+
+function isSubrun(run: WorkflowRun): boolean {
+  // Parent deletion clears the foreign key, but not the spawning node's metadata.
+  return (
+    run.parent_run_id !== null || Object.hasOwn(run.metadata, SUBRUN_METADATA_KEYS.parentNodeId)
+  );
+}
+
 async function checkWorktreeOwner(
   ctx: OperationContext,
   row: WorkflowRun,
   root?: WorkflowRun,
   rootOutcome?: AbandonOwnerOutcome
-): Promise<{ safe: boolean; warnings: string[] }> {
+): Promise<WorktreeOwnerCheck> {
   if (!readOwnedWorktree(row.metadata) && !(root && readOwnedWorktree(root.metadata)))
     return { safe: true, warnings: [] };
   const recorded = readExecutionOwner(row.metadata);
@@ -214,17 +237,23 @@ async function checkWorktreeOwner(
         `Retained checkout ${row.working_path ?? ''} for run ${row.id}: ${reason}; stop that owner and retry abandonment from its host and user.`,
       ],
     };
+  if (root && isSubrun(root) && rootOutcome?.kind === 'no_owner_answered')
+    return retainUnresolvedSubrunCheckout(row, root);
   if (root?.id === row.id)
     return {
       safe: !(rootOutcome?.kind === 'stopped' && rootOutcome.cleanupWarnings?.length),
       warnings: [],
     };
+  return checkOwnerStopForRelease(ctx, row);
+}
+
+async function checkOwnerStopForRelease(
+  ctx: OperationContext,
+  row: WorkflowRun
+): Promise<WorktreeOwnerCheck> {
   let outcome: Awaited<ReturnType<typeof stopLiveOwner>>;
   try {
-    outcome =
-      ranInStoppedRootOwner(recorded, root, rootOutcome) && rootOutcome
-        ? rootOutcome
-        : await stopLiveOwner(ctx, row);
+    outcome = await stopLiveOwner(ctx, row);
   } catch (err) {
     getLog().warn({ err, runId: row.id }, 'operations.workflow_abandon_child_owner_check_failed');
     return {
@@ -236,8 +265,22 @@ async function checkWorktreeOwner(
   }
   if (outcome.kind === 'not_stopped')
     return { safe: false, warnings: [`Retained checkout for run ${row.id}: ${outcome.message}`] };
+  if (isSubrun(row) && outcome.kind === 'no_owner_answered')
+    return retainUnresolvedSubrunCheckout(row, row);
   const warnings = outcome.kind === 'stopped' ? (outcome.cleanupWarnings ?? []) : [];
-  return { safe: warnings.length === 0, warnings };
+  return {
+    safe: warnings.length === 0,
+    warnings,
+  };
+}
+
+function retainUnresolvedSubrunCheckout(row: WorkflowRun, target: WorkflowRun): WorktreeOwnerCheck {
+  return {
+    safe: false,
+    warnings: [
+      `Retained checkout ${row.working_path ?? ''} for run ${row.id}: no owner answered for sub-run ${target.id} (parent ${target.parent_run_id ?? 'parent record deleted'}); its enclosing execution may still be using this checkout. Cancellation is recorded, but removal was skipped. Inspect the owning execution and stop or abandon it only if you intend to stop its whole scope. Repeating abandonment of this silent sub-run alone may continue retaining the checkout.`,
+    ],
+  };
 }
 
 async function persistCleanupWarnings(
@@ -276,21 +319,6 @@ function unreachableOwnerReason(
   return process.getuid && recorded.uid !== process.getuid()
     ? `execution owner belongs to uid ${String(recorded.uid)}`
     : undefined;
-}
-
-/** A descendant recorded under the root's owner process, which abandon already stopped. */
-function ranInStoppedRootOwner(
-  recorded: ExecutionOwnerRecord | undefined,
-  root: WorkflowRun | undefined,
-  rootOutcome: AbandonOwnerOutcome | undefined
-): boolean {
-  const rootOwner = root ? readExecutionOwner(root.metadata) : undefined;
-  return (
-    rootOwner !== undefined &&
-    recorded !== undefined &&
-    rootOutcome?.kind === 'stopped' &&
-    sameExecutionOwner(recorded, rootOwner)
-  );
 }
 
 export async function releaseRunWorktree(
@@ -367,24 +395,20 @@ async function checkBatchWorktreeOwners(
 ) {
   const ownerChecks: {
     run: WorkflowRun;
-    owner: ExecutionOwnerRecord | undefined;
+    proof: ReturnType<typeof readOwnedWorktree>;
     check: Awaited<ReturnType<typeof checkWorktreeOwner>>;
   }[] = [];
   for (const run of runs) {
-    const owner = readExecutionOwner(run.metadata);
+    const proof = readOwnedWorktree(run.metadata);
     ownerChecks.push({
       run,
-      owner,
+      proof,
       check: await checkWorktreeOwner(ctx, run, root, rootOutcome),
     });
   }
-  return ownerChecks.map(({ run, owner, check }) => {
-    // An endpoint can disappear when a sibling stops their shared owner. Resolve
-    // the whole batch before releasing any checkout so those warnings survive.
-    const sharedChecks = owner
-      ? ownerChecks
-          .filter(other => sameExecutionOwner(owner, other.owner))
-          .map(other => other.check)
+  return ownerChecks.map(({ run, proof, check }) => {
+    const sharedChecks = proof
+      ? ownerChecks.filter(other => sameWorktreeProof(other.proof, proof)).map(other => other.check)
       : [check];
     return {
       run,
@@ -394,14 +418,14 @@ async function checkBatchWorktreeOwners(
   });
 }
 
-function sameExecutionOwner(
-  owner: ExecutionOwnerRecord,
-  other: ExecutionOwnerRecord | undefined
+function sameWorktreeProof(
+  left: OwnedWorktree | undefined,
+  right: OwnedWorktree | undefined
 ): boolean {
   return (
-    other !== undefined &&
-    owner.host === other.host &&
-    owner.pid === other.pid &&
-    owner.uid === other.uid
+    left !== undefined &&
+    right !== undefined &&
+    left.envId === right.envId &&
+    left.creationId === right.creationId
   );
 }

@@ -1,3 +1,4 @@
+import { initialRunMetadata, mutableRunMetadata } from '../schemas/run-metadata';
 import { prepareWorkflowRunFailure } from '../workflow-run-failure';
 import { resumeRun } from './run-resume';
 import { createLogger } from '@archon/paths';
@@ -193,7 +194,7 @@ export function createTransactionView(
       parent_conversation_id: origin?.parentConversationId ?? null,
       user_id: origin?.userId ?? null,
       user_message: input.user_message,
-      metadata: structuredClone(input.metadata ?? {}),
+      metadata: structuredClone(initialRunMetadata(input.metadata, input.parent_run_id)),
       codebase_id: input.codebase_id ?? null,
       status: 'pending',
       outcome: null,
@@ -280,7 +281,7 @@ export function createTransactionView(
       if (updates.status !== undefined && isTerminalRunStatus(updates.status))
         throw new Error('Terminal workflow status requires a lifecycle writer');
       Object.assign(run, updates, {
-        metadata: { ...run.metadata, ...updates.metadata },
+        metadata: { ...run.metadata, ...mutableRunMetadata(updates.metadata) },
         output_root: run.output_root ?? updates.output_root ?? null,
         working_path: run.working_path ?? updates.working_path ?? null,
       });
@@ -289,7 +290,7 @@ export function createTransactionView(
       validateWorkflowWaitMetadata(metadata);
       const run = runs.get(id);
       if (run?.status !== 'running') return false;
-      Object.assign(run.metadata, structuredClone(metadata));
+      Object.assign(run.metadata, structuredClone(mutableRunMetadata(metadata)));
       return true;
     },
     updateWorkflowActivity: async (id): ReturnType<IWorkflowStore['updateWorkflowActivity']> => {
@@ -313,7 +314,7 @@ export function createTransactionView(
       const run = structuredClone(row(id));
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';
-      Object.assign(run.metadata, metadata);
+      Object.assign(run.metadata, mutableRunMetadata(metadata));
       terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.completed,
@@ -339,7 +340,11 @@ export function createTransactionView(
       const run = row(id);
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
       run.status = 'paused';
-      run.metadata = { ...run.metadata, ...metadata, approval: structuredClone(approval) };
+      run.metadata = {
+        ...run.metadata,
+        ...mutableRunMetadata(metadata),
+        approval: structuredClone(approval),
+      };
       run.metadata[PAUSE_CAUSE_METADATA_KEY] = pauseCauseOfApproval(approval);
       // A gate replaces a finished wait's context, exactly as the SQL store does.
       delete run.metadata.wait;
@@ -354,7 +359,7 @@ export function createTransactionView(
       validateWorkflowWaitMetadata(metadata);
       const run = runs.get(id);
       if (!run || !gateOpen(run, expected)) return { resolved: false };
-      Object.assign(run.metadata, structuredClone(metadata));
+      Object.assign(run.metadata, structuredClone(mutableRunMetadata(metadata)));
       for (const event of gateEvents) record({ ...event, workflow_run_id: id });
       return { resolved: true };
     },

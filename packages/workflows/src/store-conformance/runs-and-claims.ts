@@ -59,6 +59,51 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       });
     });
 
+    test.each(['spawn', null, 42, undefined])(
+      'top-level creation strips caller-supplied child provenance: %s',
+      async marker => {
+        const metadata = { parent_node_id: marker, unrelated: 'preserved' };
+        const run = await create(store, { metadata });
+        expect(run.parent_run_id).toBeNull();
+        expect(run.metadata).toEqual({ unrelated: 'preserved' });
+        expect((await store.getWorkflowRun(run.id))?.metadata).toEqual({ unrelated: 'preserved' });
+        expect(metadata).toHaveProperty('parent_node_id', marker);
+      }
+    );
+
+    test.each(['update', 'running-update', 'complete', 'pause', 'resolve'] as const)(
+      '%s cannot erase or replace creation-only child provenance',
+      async writer => {
+        const parent = await create(store);
+        for (const marker of ['spawn', null]) {
+          for (const replacement of [null, 'another-node', undefined]) {
+            const child = await running(store, {
+              parent_run_id: parent.id,
+              metadata: marker === null ? {} : { parent_node_id: marker },
+            });
+            expect(child.metadata.parent_node_id).toBe(marker);
+            const metadata = { parent_node_id: replacement, unrelated: 'updated' };
+            if (writer === 'update') await store.updateWorkflowRun(child.id, { metadata });
+            else if (writer === 'running-update')
+              expect(await store.updateWorkflowRunMetadataIfRunning(child.id, metadata)).toBe(true);
+            else if (writer === 'complete')
+              await store.completeWorkflowRun(child.id, { duration_ms: 1 }, metadata);
+            else if (writer === 'pause') await store.pauseWorkflowRun(child.id, approval, metadata);
+            else {
+              await store.pauseWorkflowRun(child.id, approval);
+              expect(await store.resolveApprovalGate(child.id, metadata, [])).toEqual({
+                resolved: true,
+              });
+            }
+            expect((await store.getWorkflowRun(child.id))?.metadata).toMatchObject({
+              parent_node_id: marker,
+              unrelated: 'updated',
+            });
+          }
+        }
+      }
+    );
+
     test('pending claim has exactly one winner and stamps the checkout', async () => {
       await assertWorkflowClaimRace(store);
     });

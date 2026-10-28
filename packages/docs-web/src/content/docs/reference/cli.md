@@ -1335,6 +1335,20 @@ initialized submodules are deleted with it. The branch is kept, so committed wor
 pushed or not, stays recoverable. The result lists each removed worktree and its
 branch (`releasedWorktrees` in `--json`), and the isolation record is marked `destroyed`.
 
+When the selected run is a sub-run and no owner answers at its own endpoint,
+Archon retains its subtree's owned checkouts. A sub-run can execute inside an enclosing
+run without publishing its own endpoint; silence does not establish that execution
+stopped. Cancellation still succeeds, with cleanup warnings. A separately resumed
+sub-run whose exact owner is stopped without warnings can release its owned checkout.
+Each descendant needs its own owner check. A silent descendant retains its checkout
+and the selected root's checkout even if the root's owner stopped.
+Conversation reset also retains a silent sub-run's checkout, even if another run with
+matching host, PID, and user metadata stops: those fields cannot identify a process
+incarnation. Retention follows the checkout ID; a separate checkout can still release
+after its owner stops. Inspect the owning execution
+and stop or abandon it only if you intend to stop its whole scope. Repeated child-only
+abandonment may continue retaining the checkout even after its enclosing execution stops.
+
 Only a checkout this run created is removed. Adopted, reused, inherited, and legacy
 checkouts without that creation proof stay in place, with a reason. A checkout another
 resumable or live run uses, one locked with `git worktree lock`, one whose owner runs on
@@ -1342,8 +1356,8 @@ another host or as another user, or one under a descendant that could not be acc
 for is also kept.
 
 The run is cancelled even when removal fails; the failure is reported as a cleanup
-warning. Retry `workflow abandon <run-id>` on that cancelled run to finish removal
-without repeating cancellation.
+warning. Retry `workflow abandon <run-id>` on that cancelled run to retry removal
+without repeating cancellation; unresolved sub-run ownership still retains the checkout.
 
 Managed container reclamation and the `cleanupWarnings` array behave as they do for [`workflow cancel`](#workflow-cancel).
 
