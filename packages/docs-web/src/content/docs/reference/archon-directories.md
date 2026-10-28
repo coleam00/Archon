@@ -66,6 +66,7 @@ layout below. Existing projects keep their names and storage.
 ├── credential-key                  # Auto-provisioned per-user credential encryption key
 ├── store-id                        # Opaque id of this home, returned by GET /api/health
 ├── server.json                     # The server listening for this home (discovery record)
+├── server-records/                 # One discovery record per listening server
 ├── archon.db                       # SQLite database (when DATABASE_URL is unset)
 └── config.yaml                     # Global user configuration
 ```
@@ -116,7 +117,12 @@ layout below. Existing projects keep their names and storage.
   A same-machine client reads it to find the server instead of guessing a port. The record is
   advisory: treat a missing or unreadable file, or one whose `pid` is no longer running (the
   server was killed), as no server. When several servers share one home, the file names the
-  most recent to start.
+  most recent to start; when that server shuts down cleanly, it hands the file to the newest
+  server still running.
+- `server-records/` - One `<pid>.json` per listening server, with the same fields as
+  `server.json`. A client that finds `server.json` missing or naming a dead `pid` can pick the
+  live record with the latest `startedAt` here. A server removes its own record when it shuts
+  down cleanly; records of killed servers are removed by the next server to start or stop.
 - `config.yaml` - Non-secret user preferences
 
 Each run also records the project root it resolved in `workflow_runs.output_root`, so an

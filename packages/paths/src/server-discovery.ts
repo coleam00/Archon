@@ -3,7 +3,9 @@
  * serves the Archon home the client means.
  *
  * Each home holds an opaque `store-id`, generated once and kept for the home's life, and
- * a server writes `server.json` under its home while it listens. `GET /api/health`
+ * a server writes `server.json` under its home while it listens, plus its own record in
+ * `server-records/`, so the home stays discoverable while any of several servers sharing
+ * it still listens. `GET /api/health`
  * returns the same store id, so a client that compares the health response with the
  * home's own file can tell a server for another home from the right one.
  */
@@ -12,6 +14,7 @@ import {
   chmodSync,
   linkSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -29,6 +32,11 @@ export function getStoreIdPath(archonHome: string = getArchonHome()): string {
 
 export function getServerRecordPath(archonHome: string = getArchonHome()): string {
   return join(archonHome, 'server.json');
+}
+
+/** One `<pid>.json` record per listening server, so a stopping server can hand `server.json` on. */
+export function getServerRecordsDir(archonHome: string = getArchonHome()): string {
+  return join(archonHome, 'server-records');
 }
 
 function readFileIfPresent(path: string): string | null {
@@ -89,7 +97,10 @@ export function ensureStoreId(archonHome: string = getArchonHome()): string {
   return id;
 }
 
-/** The discovery record a listening server keeps at `$ARCHON_HOME/server.json`. */
+/**
+ * The discovery record a listening server keeps at `$ARCHON_HOME/server-records/<pid>.json`
+ * and, while it is the newest live server for the home, at `$ARCHON_HOME/server.json`.
+ */
 export interface ServerRecord {
   pid: number;
   port: number;
@@ -123,31 +134,17 @@ function parseServerRecord(value: unknown): ServerRecord | null {
   return { pid, port, host, version, startedAt, storeId };
 }
 
-function readServerRecord(archonHome: string): ServerRecord | null {
+function readRecordFile(path: string): ServerRecord | null {
   try {
-    const content = readFileIfPresent(getServerRecordPath(archonHome));
+    const content = readFileIfPresent(path);
     return content === null ? null : parseServerRecord(JSON.parse(content));
   } catch {
     return null;
   }
 }
 
-/**
- * The server recorded for this home, or null when there is none. The record is advisory:
- * a missing, unreadable or malformed file, or one whose process no longer exists (the
- * server was killed before it could remove it), all mean no server.
- */
-export function readLiveServerRecord(archonHome: string = getArchonHome()): ServerRecord | null {
-  const record = readServerRecord(archonHome);
-  return record && !isPidProvablyGone(record.pid) ? record : null;
-}
-
-/** Replace the home's record atomically, so a reader never sees a partial file. */
-export function writeServerRecord(
-  record: ServerRecord,
-  archonHome: string = getArchonHome()
-): void {
-  const path = getServerRecordPath(archonHome);
+/** Replace a record file atomically, so a reader never sees a partial file. */
+function writeRecordFile(path: string, record: ServerRecord): void {
   const tempPath = `${path}.${String(record.pid)}.${randomUUID()}.tmp`;
   try {
     writeFileSync(tempPath, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
@@ -160,11 +157,71 @@ export function writeServerRecord(
 }
 
 /**
- * Remove the home's record when it still names `pid`. Several servers can share one home
- * (one per worktree), and the most recent to start owns the record; an older one stopping
- * must not erase it.
+ * The per-server records whose process may still run, newest first. With `prune`, the
+ * records of servers that are provably gone (killed before they could clean up) are deleted;
+ * only servers prune, never a reader.
+ */
+function liveServerRecords(archonHome: string, prune: boolean): ServerRecord[] {
+  const dir = getServerRecordsDir(archonHome);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const live: ServerRecord[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const path = join(dir, name);
+    const record = readRecordFile(path);
+    if (record && !isPidProvablyGone(record.pid)) live.push(record);
+    else if (record && prune) rmSync(path, { force: true });
+  }
+  // Every writer stamps `startedAt` with `toISOString()`, so string order is time order.
+  return live.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+}
+
+/**
+ * The server recorded for this home, or null when there is none. The record is advisory:
+ * a missing, unreadable or malformed file, or one whose process no longer exists (the
+ * server was killed before it could remove it), all mean no server. When `server.json`
+ * names no live server, the newest live per-server record answers instead.
+ */
+export function readLiveServerRecord(archonHome: string = getArchonHome()): ServerRecord | null {
+  const record = readRecordFile(getServerRecordPath(archonHome));
+  if (record && !isPidProvablyGone(record.pid)) return record;
+  try {
+    return liveServerRecords(archonHome, false)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Publish a listening server: its own record first, so a server stopping at the same moment
+ * can already hand `server.json` to it, then `server.json`. Both writes are atomic.
+ */
+export function writeServerRecord(
+  record: ServerRecord,
+  archonHome: string = getArchonHome()
+): void {
+  mkdirSync(getServerRecordsDir(archonHome), { recursive: true });
+  liveServerRecords(archonHome, true);
+  writeRecordFile(join(getServerRecordsDir(archonHome), `${String(record.pid)}.json`), record);
+  writeRecordFile(getServerRecordPath(archonHome), record);
+}
+
+/**
+ * Withdraw a stopping server. Several servers can share one home (one per worktree), and the
+ * most recent to start owns `server.json`: an older one stopping leaves it alone, and the
+ * owner stopping hands it to the newest server still running, or removes it when none is.
  */
 export function removeServerRecord(pid: number, archonHome: string = getArchonHome()): void {
-  if (readServerRecord(archonHome)?.pid !== pid) return;
-  rmSync(getServerRecordPath(archonHome), { force: true });
+  rmSync(join(getServerRecordsDir(archonHome), `${String(pid)}.json`), { force: true });
+  const path = getServerRecordPath(archonHome);
+  if (readRecordFile(path)?.pid !== pid) return;
+  const successor = liveServerRecords(archonHome, true)[0];
+  if (successor) writeRecordFile(path, successor);
+  else rmSync(path, { force: true });
 }
