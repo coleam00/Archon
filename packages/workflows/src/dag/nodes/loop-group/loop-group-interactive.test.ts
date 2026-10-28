@@ -21,6 +21,7 @@ import {
 import { ParentStatusReadError } from '../../../parent-status-read';
 import { executeDagWorkflow } from '../../../dag-executor';
 import type { DagNode } from '../../../schemas';
+import { executionSpendSchema } from '../../../schemas/node-execution';
 import type { IWorkflowStore } from '../../../store';
 
 describe('interactive loop_group gate and resume', () => {
@@ -142,7 +143,7 @@ describe('interactive loop_group gate and resume', () => {
       const completed = persistedEvents(second.store).find(
         e => e.event_type === 'node_completed' && e.step_name === 'grp'
       );
-      expect(completed?.data?.spend?.costUsd).toEqual(
+      expect(executionSpendSchema.parse(completed?.data?.spend).costUsd).toEqual(
         feedback
           ? { source: 'provider', value: 0.03, ...(priorComplete ? {} : { partial: true }) }
           : { source: 'unavailable', reason: 'incomplete' }
