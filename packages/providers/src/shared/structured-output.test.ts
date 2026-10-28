@@ -1284,3 +1284,144 @@ describe('hasOpenAdditionalProperties', () => {
     expect(hasOpenAdditionalProperties({ additionalProperties: { type: 'string' } })).toBe(false);
   });
 });
+
+describe('nested intersections across same-instance edges', () => {
+  const ajv = new Ajv2020({ strict: false });
+  const placements = [
+    'inline',
+    'oneOf',
+    'anyOf',
+    'allOf',
+    'dependencies',
+    'dependentSchemas',
+  ] as const;
+  type Placement = (typeof placements)[number];
+  const wrap = (placement: Placement, schema: Record<string, unknown>): Record<string, unknown> => {
+    if (placement === 'inline') return schema;
+    if (placement === 'dependencies' || placement === 'dependentSchemas') {
+      return { [placement]: { inner: schema } };
+    }
+    return { [placement]: [schema] };
+  };
+  const base = { properties: { value: { type: 'string' } }, required: ['value'] };
+  const complete = {
+    properties: { ...base.properties, detail: { type: 'string' } },
+    required: ['value', 'detail'],
+  };
+  const core = (inner: Record<string, unknown>) => ({ properties: { inner }, required: ['inner'] });
+  const cases = placements.flatMap(parent =>
+    placements.flatMap(local =>
+      parent === 'inline' && local === 'inline' ? [] : [{ parent, local }]
+    )
+  );
+  for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
+    for (const shape of ['extra', 'missing', 'reference'] as const) {
+      test.each(cases)(
+        `${operator} refuses ${shape} nested intersection at %j`,
+        ({ parent, local }) => {
+          const parentInner = shape === 'missing' ? complete : base;
+          const localInner =
+            shape === 'reference'
+              ? { $ref: '#/$defs/Complete' }
+              : shape === 'missing'
+                ? base
+                : complete;
+          const input = {
+            $defs: { Complete: complete },
+            properties: { payload: wrap(parent, core(parentInner)) },
+            required: ['payload'],
+            [operator]: [{ properties: { payload: wrap(local, core(localInner)) } }],
+          };
+          const answer = { payload: { inner: { value: 'ok', detail: 'Finished' } } };
+          expect(ajv.compile(input)(answer)).toBe(true);
+          expect(findPreparedStrictSchemaIssues(input)).toEqual([
+            expect.objectContaining({
+              kind: 'unsupported-conversion',
+              message: expect.stringMatching(/payload.*inner.*(complete|inline)/),
+            }),
+          ]);
+          const supported = {
+            ...input,
+            properties: { payload: wrap(parent, core(complete)) },
+            [operator]: [{ properties: { payload: wrap(local, core(complete)) } }],
+          };
+          expect(findPreparedStrictSchemaIssues(supported)).toEqual([]);
+          expect(ajv.compile(normalizeJsonSchemaForOpenAiStrict(supported))(answer)).toBe(true);
+        }
+      );
+    }
+  }
+});
+
+describe('dependency intersections preserve enclosing closure', () => {
+  const base = { properties: { value: { type: 'string' } }, required: ['value'] };
+  const complete = {
+    properties: { ...base.properties, detail: { type: 'string' } },
+    required: ['value', 'detail'],
+  };
+  const cases = [
+    { shape: 'dependency-only field', parent: base, dependency: complete },
+    {
+      shape: 'undeclared required field',
+      parent: base,
+      dependency: { ...base, required: complete.required },
+    },
+    {
+      shape: 'nested extra',
+      parent: { properties: { value: base }, required: ['value'] },
+      dependency: { properties: { value: complete }, required: ['value'] },
+    },
+    {
+      shape: 'nested missing',
+      parent: { properties: { value: complete }, required: ['value'] },
+      dependency: { properties: { value: base }, required: ['value'] },
+    },
+    {
+      shape: 'nested reference',
+      parent: { properties: { value: base }, required: ['value'] },
+      dependency: { properties: { value: { $ref: '#/$defs/Complete' } }, required: ['value'] },
+    },
+  ];
+  for (const keyword of ['dependencies', 'dependentSchemas'] as const) {
+    const ajv =
+      keyword === 'dependencies' ? new Ajv({ strict: false }) : new Ajv2020({ strict: false });
+    test.each(cases)(`${keyword} refuses $shape`, ({ shape, parent, dependency }) => {
+      const input = { ...parent, $defs: { Complete: complete }, [keyword]: { value: dependency } };
+      const answer = shape.startsWith('nested')
+        ? { value: { value: 'ok', detail: 'Finished' } }
+        : { value: 'ok', detail: 'Finished' };
+      expect(ajv.compile(input)(answer)).toBe(true);
+      expect(findPreparedStrictSchemaIssues(input)).toEqual([
+        expect.objectContaining({
+          kind: 'unsupported-conversion',
+          message: expect.stringMatching(/output_format.*(complete|inline)/),
+        }),
+      ]);
+      const supportedMap = shape.startsWith('nested')
+        ? { properties: { value: complete }, required: ['value'] }
+        : complete;
+      const supported = { ...input, ...supportedMap, [keyword]: { value: supportedMap } };
+      expect(findPreparedStrictSchemaIssues(supported)).toEqual([]);
+      expect(ajv.compile(normalizeJsonSchemaForOpenAiStrict(supported))(answer)).toBe(true);
+    });
+  }
+});
+
+test('refuses an enclosing required name absent from a partial branch completed map', () => {
+  const input = {
+    properties: { status: { type: 'string' } },
+    required: ['status', 'detail'],
+    anyOf: [{ properties: { status: { const: 'success' } } }],
+  };
+  expect(new Ajv({ strict: false }).compile(input)({ status: 'success', detail: 'Finished' })).toBe(
+    true
+  );
+  expect(findPreparedStrictSchemaIssues(input)).toEqual([
+    expect.objectContaining({
+      kind: 'unsupported-conversion',
+      message: expect.stringMatching(
+        /output_format.anyOf\[0\].required.*detail.*complete property map/
+      ),
+    }),
+  ]);
+});

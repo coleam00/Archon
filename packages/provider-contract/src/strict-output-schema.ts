@@ -84,17 +84,8 @@ export function normalizeJsonSchemaForOpenAiStrict(
   const normalized = normalizeNode(schema, 'output_format');
   visitJsonSchema(normalized, 'output_format', (node, path) => {
     const constraints = sameInstanceNodes(node);
-    const names = new Set(sameInstancePropertyMaps(node).flatMap(map => Object.keys(map)));
     for (const dependency of constraints.flatMap(schemaDependencies)) {
-      if (
-        sameInstancePropertyMaps(dependency).some(map =>
-          [...names].some(name => !Object.hasOwn(map, name))
-        )
-      ) {
-        throw new Error(
-          `Codex output schema at ${path} cannot close partial schema-valued dependencies. Use complete inline dependency object branches declaring all enclosing properties instead.`
-        );
-      }
+      assertDependencyCanBeClosed(node, dependency, path);
     }
     if (!Array.isArray(node.allOf)) return;
     const maps = sameInstancePropertyMaps(node);
@@ -217,14 +208,39 @@ function assertNestedPropertyMapsComplete(parent: unknown, local: unknown, path:
       assertNestedPropertyNamesMatch(parentMap, localMap, path);
     }
   }
-  const parentChildren = new Map(
-    jsonSchemaChildren(parent, path).map(child => [child.path, child])
-  );
-  for (const child of jsonSchemaChildren(local, path)) {
-    if (child.relation !== 'nested') continue;
-    const inherited = parentChildren.get(child.path);
-    if (inherited) assertNestedPropertyMapsComplete(inherited.node, child.node, child.path);
+  const parentChildren = sameInstanceNestedChildren(parent, path);
+  for (const child of sameInstanceNestedChildren(local, path)) {
+    for (const inherited of parentChildren.filter(candidate => candidate.path === child.path)) {
+      assertNestedPropertyMapsComplete(inherited.node, child.node, child.path);
+    }
   }
+}
+
+function sameInstanceNestedChildren(node: Record<string, unknown>, path: string) {
+  return sameInstanceNodes(node).flatMap(constraint =>
+    jsonSchemaChildren(constraint, path).filter(child => child.relation === 'nested')
+  );
+}
+
+function assertDependencyCanBeClosed(
+  node: Record<string, unknown>,
+  dependency: Record<string, unknown>,
+  path: string
+): void {
+  const maps = sameInstancePropertyMaps(node);
+  const names = new Set(maps.flatMap(map => Object.keys(map)));
+  const required = sameInstanceNodes(node).flatMap(constraint =>
+    Array.isArray(constraint.required) ? constraint.required : []
+  );
+  if (
+    maps.some(map => [...names].some(name => !Object.hasOwn(map, name))) ||
+    required.some(name => typeof name === 'string' && !names.has(name))
+  ) {
+    throw new Error(
+      `Codex output schema at ${path} cannot close schema-valued dependencies with incomplete or different property maps or undeclared required fields. Use complete inline dependency and enclosing object schemas declaring the same properties and all required fields instead.`
+    );
+  }
+  assertNestedPropertyMapsComplete(node, dependency, path);
 }
 
 function assertNestedPropertyNamesMatch(
