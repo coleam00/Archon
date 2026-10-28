@@ -3,7 +3,7 @@ import { mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { validateStructuredOutput } from '../structured-output';
 import { resolvedBodyNodes } from '../graph-plan';
-import { canonicalValueText } from '../output-ref';
+import { canonicalValueText, COMPOSITION_KEYWORDS } from '../output-ref';
 import {
   isGateNode,
   isHaltNode,
@@ -81,8 +81,40 @@ function nonnegativeInteger(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) ? Math.max(0, value) : 0;
 }
 
-function schemaPlaceholder(schema: unknown): unknown {
-  if (!isRecord(schema)) return 'TODO';
+function composedPlaceholderSchema(schema: Record<string, unknown>): Record<string, unknown> {
+  const branches = COMPOSITION_KEYWORDS.flatMap(keyword => {
+    const values = schema[keyword];
+    if (!Array.isArray(values)) return [];
+    // One deterministic candidate, not a search over branch combinations. The original
+    // schema still validates the result and rejects candidates we cannot satisfy.
+    return keyword === 'allOf' ? values : values.slice(0, 1);
+  });
+  if (branches.length === 0) return schema;
+  const parts = [schema, ...branches.filter(isRecord).map(composedPlaceholderSchema)];
+  const merged: Record<string, unknown> = Object.assign({}, ...parts);
+  if (!parts.some(part => isRecord(part.properties))) return merged;
+  const properties = new Map<string, unknown>();
+  for (const part of parts) {
+    for (const [key, value] of Object.entries(isRecord(part.properties) ? part.properties : {})) {
+      properties.set(key, properties.has(key) ? { allOf: [properties.get(key), value] } : value);
+    }
+  }
+  const required = parts.flatMap(part =>
+    Array.isArray(part.required)
+      ? part.required.filter((key): key is string => typeof key === 'string')
+      : []
+  );
+  return {
+    ...merged,
+    type: merged.type ?? 'object',
+    properties: Object.fromEntries(properties),
+    required: [...new Set(required)],
+  };
+}
+
+function schemaPlaceholder(input: unknown): unknown {
+  if (!isRecord(input)) return 'TODO';
+  const schema = composedPlaceholderSchema(input);
 
   if ('const' in schema) return structuredClone(schema.const);
   if ('default' in schema) return structuredClone(schema.default);

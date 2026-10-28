@@ -120,6 +120,113 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
     );
   });
 
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    test.each(['composition-only', 'root-required', 'nested'])(
+      `generates readable ${keyword} object stubs at %s`,
+      async location => {
+        const declaration = {
+          type: 'object',
+          properties: { action: { type: 'string', const: 'accept' } },
+          required: ['action'],
+        };
+        const composed = { [keyword]: [declaration] };
+        const outputFormat =
+          location === 'nested'
+            ? { type: 'object', properties: { proposal: composed }, required: ['proposal'] }
+            : location === 'root-required'
+              ? {
+                  type: 'object',
+                  required: ['action'],
+                  [keyword]: [{ properties: declaration.properties }],
+                }
+              : composed;
+        const field = location === 'nested' ? 'proposal.action' : 'action';
+        const workflow = makeTestWorkflow({
+          name: 'composed-stubs',
+          nodes: [
+            { id: 'producer', prompt: 'Propose', output_format: outputFormat },
+            {
+              id: 'consumer',
+              prompt: `Action=$producer.output.${field}`,
+              depends_on: ['producer'],
+            },
+          ],
+        });
+        const scaffold = createDryRunStubScaffold(workflow);
+        expect(scaffold.producer).toEqual(
+          location === 'nested' ? { proposal: { action: 'accept' } } : { action: 'accept' }
+        );
+        for (const options of [{ defaultStubs: true }, { stubs: scaffold }]) {
+          const result = await dryRunWorkflow({ workflow, ...options });
+          expect(result.outcome).toBe('completed');
+          expect(result.trace[1]?.resolvedText).toBe('Action=accept');
+        }
+      }
+    );
+  }
+
+  test('combines required properties and overlapping nested allOf declarations', () => {
+    const workflow = makeTestWorkflow({
+      name: 'overlapping-stubs',
+      nodes: [
+        {
+          id: 'producer',
+          prompt: 'Propose',
+          output_format: {
+            type: 'object',
+            required: ['proposal'],
+            allOf: [
+              {
+                properties: {
+                  proposal: {
+                    type: 'object',
+                    properties: { action: { type: 'string' } },
+                    required: ['action'],
+                  },
+                },
+              },
+              {
+                properties: {
+                  proposal: {
+                    properties: { action: { const: 'accept' }, reason: { type: 'string' } },
+                    required: ['reason'],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(createDryRunStubScaffold(workflow)).toEqual({
+      producer: { proposal: { action: 'accept', reason: 'TODO' } },
+    });
+  });
+
+  test('rejects a composed placeholder that fails the original schema', () => {
+    const workflow = makeTestWorkflow({
+      name: 'invalid-composed-placeholder',
+      nodes: [
+        {
+          id: 'producer',
+          prompt: 'Propose',
+          output_format: {
+            allOf: [
+              {
+                type: 'object',
+                properties: { code: { type: 'string', pattern: '^OK$' } },
+                required: ['code'],
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(() => createDryRunStubScaffold(workflow)).toThrow(
+      'Cannot generate schema-valid dry-run stub'
+    );
+  });
+
   test('does not leave a partial file when a placeholder cannot satisfy the schema', async () => {
     const workflow = makeTestWorkflow({
       name: 'unsupported-placeholder',

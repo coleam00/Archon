@@ -498,3 +498,27 @@ it('round trips a composed path contract without changing its persisted shape', 
     )
   ).toEqual({ kind: 'value', value: 'needed' });
 });
+
+it('preserves an empty strict composed contract through persistence and authorization', () => {
+  const paths = declaredOutputPathsFromSchema({ allOf: [{}] });
+  expect(paths).toEqual([]);
+  const source = record();
+  const text = '{"undeclared":"present"}';
+  source.output = { text, declaredOutputPaths: paths };
+  const event = serializeNodeStateRecord(source);
+  expect(event.data).toMatchObject({ declared_fields: [], declared_output_paths: [] });
+  const restored = readNodeRecordEvent({ ...event, data: JSON.stringify(event.data) });
+  expect(restored?.data.declared_output_paths).toEqual([]);
+  expect(() =>
+    resolveNodeOutputField(
+      {
+        state: 'completed',
+        output: text,
+        declaredOutputPaths: restored?.data.declared_output_paths,
+      },
+      'review',
+      'undeclared',
+      '$review.output.undeclared'
+    )
+  ).toThrow('not declared');
+});

@@ -156,12 +156,20 @@ function hasComposedOptions(schema: unknown, path: readonly string[]): boolean {
   if (!isRecord(schema)) return false;
   const [key, ...rest] = path;
   if (key === undefined) {
-    if (hasComposition(schema) || hasComposition(schema.items)) return true;
-    const properties: unknown = isRecord(schema.items) ? schema.items.properties : undefined;
-    return isRecord(properties) && Object.values(properties).some(hasComposition);
+    if (hasComposition(schema)) return true;
+    const items = Array.isArray(schema.items)
+      ? [...schema.items, schema.additionalItems]
+      : [schema.items];
+    return items.some(hasComposedOptionItem);
   }
   if (compositionDeclaresPath(schema, path)) return true;
   return isRecord(schema.properties) && hasComposedOptions(schema.properties[key], rest);
+}
+
+function hasComposedOptionItem(schema: unknown): boolean {
+  if (hasComposition(schema)) return true;
+  const properties: unknown = isRecord(schema) ? schema.properties : undefined;
+  return isRecord(properties) && Object.values(properties).some(hasComposition);
 }
 
 function compositionDeclaresPath(

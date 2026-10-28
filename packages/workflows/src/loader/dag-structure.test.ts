@@ -519,6 +519,44 @@ nodes:
       });
     }
 
+    for (const source of ['tuple', 'additionalItems']) {
+      for (const location of ['item', 'id', 'label']) {
+        it.each(['select', 'multi_select'] as const)(
+          `defers ${keyword} at ${source} ${location} (%s)`,
+          form => {
+            const properties = { id: { type: 'string' }, label: { type: 'string' } };
+            const plain = { type: 'object', properties, required: ['id'] };
+            const item =
+              location === 'item'
+                ? { [keyword]: [plain] }
+                : {
+                    ...plain,
+                    properties: { ...properties, [location]: { [keyword]: [{ type: 'string' }] } },
+                  };
+            const optionsSchema =
+              source === 'tuple'
+                ? { type: 'array', items: [item], additionalItems: false }
+                : { type: 'array', items: [plain], additionalItems: item };
+            const schema = { properties: { options: optionsSchema } };
+            const options = [{ id: 'accept', label: 'Accept' }];
+            if (source === 'additionalItems') options.push({ id: 'decline', label: 'Decline' });
+            expect(validateStructuredOutput({ options }, schema)).toEqual({ valid: true });
+            expect(parseWithOptionsSchema(schema, 'options', form).error).toBeNull();
+            const resolve = (value: unknown) =>
+              resolveAttentionOptions(
+                'ask',
+                '$plan.output.options',
+                new Map([
+                  ['plan', { state: 'completed', output: JSON.stringify({ options: value }) }],
+                ])
+              );
+            expect(resolve(options)).toEqual(options);
+            expect(() => resolve(['bad'])).toThrow('not a valid option list');
+          }
+        );
+      }
+    }
+
     for (const location of ['root', 'parent', 'sibling']) {
       it.each(['select', 'multi_select'] as const)(
         `checks plain options beside unrelated ${keyword} at ${location} (%s)`,
