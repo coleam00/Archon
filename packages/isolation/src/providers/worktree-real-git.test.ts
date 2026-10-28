@@ -45,6 +45,7 @@ import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import * as gitModule from '@archon/git';
 
 import { WorktreeProvider } from './worktree';
+import { WorktreeAddError } from './worktree/setup-lock';
 import { IsolationResolver } from '../resolver';
 import type { IsolationRequest } from '../types';
 import {
@@ -1368,6 +1369,29 @@ describe('WorktreeProvider against real git', () => {
         await execFileAsync(resolveBashPath(), ['-c', command]);
         expect((await git(holder, 'rev-parse', '--abbrev-ref', 'HEAD')).trim()).toBe('HEAD');
         expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    test('collision-like stderr without a porcelain holder keeps the original add failure', async () => {
+      await git(repoPath, 'branch', PR_BRANCH);
+      const stderr = `fatal: '${PR_BRANCH}' is already used by worktree at '/vendor-only-5186'`;
+      const addFailure = Object.assign(new Error(stderr), { stderr });
+      const exec = gitModule.execFileAsync;
+      const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
+        async (cmd, args, options) => {
+          if (args.includes('worktree') && args.includes('add')) throw addFailure;
+          return exec(cmd, args, options);
+        }
+      );
+      try {
+        const error = await provider.create(attempt).catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(WorktreeAddError);
+        expect(error).not.toBeInstanceOf(IsolationFailure);
+        expect(error).toHaveProperty('cause', addFailure);
+        expect(error).toHaveProperty('message', stderr);
+        expect(await registeredWorktrees()).toEqual([repoPath]);
       } finally {
         spy.mockRestore();
       }

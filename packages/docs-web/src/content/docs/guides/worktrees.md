@@ -18,12 +18,14 @@ A worktree separates checkouts. It is not an execution or security sandbox: comm
 | Command | Behavior |
 |---|---|
 | `archon workflow run <name> "..."` | New worktree on a generated branch |
-| `archon workflow run <name> --branch fix/login "..."` | Worktree on that branch, created or reused |
+| `archon workflow run <name> --branch fix/login "..."` | Worktree on that branch, created or reused at the configured target path |
 | `archon workflow run <name> --no-worktree "..."` | Runs in your current checkout |
 
 Use `--branch` with a descriptive name for work that changes code; it makes worktrees and pull requests easy to identify. Use `--no-worktree` only for read-only work. A workflow can pin the choice with `worktree.enabled` in its YAML. Don't start two runs on the same branch at once: one branch maps to one worktree.
 
 By default, worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Set `worktree.path` in the repository's config for a repo-local location such as `.worktrees`, and add it to `.gitignore`.
+
+With `--branch`, Archon reuses a healthy worktree only at the configured target path. If the branch is checked out elsewhere, the run fails with `branch_checked_out` and names the holder. Preserve its changes, then detach it with `git -C <holder-path> switch --detach` or remove it before retrying. Archon leaves that checkout untouched. [Exact-branch continuation](/reference/cli/#continuing-an-existing-estate), such as `--adopt`, can reuse a registered holder at another path.
 
 A workflow can also start a child run with its own worktree by writing `isolation: worktree` on a `workflow:` node; see [Launching a separate governed run](/reference/workflow-language/#launching-a-separate-governed-run-with-workflow). Those branches have generated names such as `archon/task-3f9a1c2b-...-child-0`. A paused or failed child run resumes in its original worktree, so leave child worktrees alone until the whole run has finished.
 
@@ -39,7 +41,7 @@ worktree:
   postCreateTimeout: 300000     # per command, in milliseconds
 ```
 
-Commands run in order in the new checkout, after submodules and copied files. A command that exits nonzero, times out or cannot start stops worktree creation, and the error reports the exit code or timeout with the command's output. An existing worktree is reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. See [Configuration](/reference/configuration/) for every `worktree` option.
+Commands run in order in the new checkout, after submodules and copied files. A command that exits nonzero, times out or cannot start stops worktree creation, and the error reports the exit code or timeout with the command's output. A healthy existing worktree at the configured target path is reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. See [Configuration](/reference/configuration/) for every `worktree` option.
 
 ## Inspect and clean up
 
