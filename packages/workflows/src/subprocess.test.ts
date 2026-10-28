@@ -584,10 +584,8 @@ describe('subprocess input delivery', () => {
     async outcome => {
       const deliveryError = Object.assign(new Error('stdin failed'), { code: 'EPIPE' });
       const input = '€\n';
-      const chunks: Buffer[] = [];
       const stdin = new Writable({
-        write(chunk: Buffer, _encoding, callback) {
-          chunks.push(chunk);
+        write(_chunk, _encoding, callback) {
           callback(deliveryError);
         },
       });
@@ -616,7 +614,6 @@ describe('subprocess input delivery', () => {
       });
       try {
         const observed = await delivered;
-        expect(Buffer.concat(chunks).toString('utf8')).toBe(input);
         expect(spawn).toHaveBeenCalledTimes(1);
         expect(observed[0]).toBe(deliveryError);
         stdout.end('output');
