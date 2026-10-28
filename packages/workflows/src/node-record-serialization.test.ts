@@ -143,7 +143,7 @@ describe('node record serializers', () => {
       },
     });
     expect(Object.keys(event.data).sort()).toEqual(
-      ['accounting', 'spend', 'tokens', 'cost_usd'].sort()
+      ['accounting', 'invocation', 'spend', 'tokens', 'cost_usd'].sort()
     );
     expect(readNodeRecordEvent(event)).toBeUndefined();
   });
@@ -414,6 +414,39 @@ describe('node record serializers', () => {
     expect(serializeNodeEmitter(source)).not.toHaveProperty('duration');
     expect(serializeNodeOutput(source)).not.toHaveProperty('tokens');
     expect(serializeNodeOutput(source)).not.toHaveProperty('costUsd');
+  });
+
+  it.each([
+    { status: 'completed' },
+    { status: 'failed', error: 'body failed' },
+    {
+      status: 'skipped',
+      reason: 'trigger_rule',
+      cause: { kind: 'upstream_failed', origin: 'peer' },
+    },
+    { status: 'suspended', point: 'interactive_loop' },
+  ] as const)('preserves unpriced group usage through $status finalization', lifecycle => {
+    const started = startNodeExecution({
+      runId: 'run',
+      path: 'group',
+      invocation: newNodeInvocation(),
+      node: {
+        id: 'group',
+        kind: 'loop_group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          fresh_context: false,
+          nodes: [{ id: 'child', kind: 'agent', source: { kind: 'inline', prompt: 'Work' } }],
+        },
+      },
+    });
+    expect(started.spend.costUsd).toEqual({ source: 'unavailable', reason: 'not_applicable' });
+    const finished = finishNodeExecution(started, lifecycle, { costPartial: true });
+    const saved = readNodeRecordEvent(serializeNodeStateRecord(finished));
+    expect(saved?.metadata?.spend.costUsd).toEqual({ source: 'unavailable', reason: 'incomplete' });
+    expect(serializeNodeOutput(finished)).toMatchObject({ costPartial: true });
+    expect(serializeNodeOutput(finished)).not.toHaveProperty('costUsd');
   });
 
   it('marks a partially reported cost as a floor without changing its value', () => {

@@ -43,6 +43,7 @@ export const serializedNodeDataSchema = z.object({
   duration_ms: z.number().optional(),
   tokens: executionSpendSchema.shape.tokens.options[0].shape.value.optional(),
   cost_usd: z.number().optional(),
+  cost_partial: z.literal(true).optional(),
   stop_reason: z.string().optional(),
   num_turns: z.number().optional(),
   model_usage: z.object({ requested: z.string().optional(), resolved: z.string() }).optional(),
@@ -111,6 +112,7 @@ export interface SerializedNodeEvent {
 export const DEFERRED_NODE_USAGE_EVENT_TYPE = 'node_deferred_usage';
 export const serializedDeferredNodeUsageDataSchema = serializedNodeDataSchema.pick({
   accounting: true,
+  invocation: true,
   spend: true,
   aggregate: true,
   tokens: true,

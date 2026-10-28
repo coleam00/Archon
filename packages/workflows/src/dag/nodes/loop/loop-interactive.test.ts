@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { readNodeRecordEvent } from '../../../node-record-reader';
 import { describe, it, expect, beforeEach, afterEach, type Mock } from 'bun:test';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -939,6 +940,7 @@ describe('interactive loop node', () => {
               message: 'gate',
               completionSignaled: true,
               signaledOutput: '{"verdict":{"ok":true}}',
+              signaledCostUsd: 0.02,
             },
             loop_user_input: 'Approved',
             loop_feedback_given: false,
@@ -953,7 +955,16 @@ describe('interactive loop node', () => {
     expect(completed?.data).toMatchObject({
       declared_fields: ['verdict'],
       declared_output_paths: [['verdict'], ['verdict', 'ok']],
+      cost_usd: 0.02,
+      cost_partial: true,
     });
+    expect(
+      completed && readNodeRecordEvent({ ...completed, data: completed.data })?.data.cost_partial
+    ).toBe(true);
+    expect(
+      completed && readNodeRecordEvent({ ...completed, data: completed.data })?.metadata
+    ).toBeUndefined();
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 
   it('iterates at resume when feedback was given, even on a signal-bearing gate (#2074 C)', async () => {

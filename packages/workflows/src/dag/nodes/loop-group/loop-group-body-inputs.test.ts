@@ -710,6 +710,74 @@ describe('loop_group body inputs: included blocks, command files and loop variab
     }
   );
 
+  it('retains an all-unpriced middle group beside a priced outer sibling', async () => {
+    mockSendQueryDag.mockImplementation(async function* (prompt) {
+      yield { type: 'agent_message_chunk', text: 'DONE' };
+      yield {
+        type: 'result',
+        sessionId: 'inner',
+        ...(prompt.includes('Priced') ? { cost: 0.03 } : {}),
+      };
+    });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('unpriced-nested'),
+        workflow: {
+          name: 'unpriced-nested',
+          nodes: [
+            {
+              id: 'outer',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 1,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'middle',
+                    kind: 'loop_group',
+                    loop_group: {
+                      until: 'DONE',
+                      max_iterations: 1,
+                      fresh_context: false,
+                      nodes: [
+                        {
+                          id: 'inner',
+                          kind: 'loop',
+                          loop: {
+                            prompt: 'Unpriced',
+                            until: 'DONE',
+                            max_iterations: 1,
+                            fresh_context: false,
+                          },
+                        },
+                      ],
+                    },
+                  },
+                  { id: 'priced', kind: 'agent', source: { kind: 'inline', prompt: 'Priced' } },
+                ],
+              },
+            },
+          ],
+        },
+      })
+    );
+    const events = persistedEvents(store);
+    expect(
+      events.find(e => e.step_name === 'outer.middle' && e.event_type === 'node_completed')?.data
+    ).toMatchObject({ spend: { costUsd: { source: 'unavailable', reason: 'incomplete' } } });
+    expect(
+      events.find(e => e.step_name === 'outer' && e.event_type === 'node_completed')?.data
+    ).toMatchObject({
+      cost_usd: 0.03,
+      spend: { costUsd: { source: 'provider', value: 0.03, partial: true } },
+    });
+  });
+
   it('runs a command-backed loop node inside a loop_group body with namespaced lifecycle events', async () => {
     // A `loop:` body node may use `loop.command` like any top-level loop. The
     // command body must reach the AI, and the loop's persisted lifecycle events

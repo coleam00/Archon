@@ -134,6 +134,7 @@ export async function finalizeLoopFromSignal(
         ? persistedOutputContract(output.declaredOutputPaths)
         : {}),
       ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
+      ...(finalizeUsage?.costPartial ? { cost_partial: true } : {}),
       ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
     },
   };

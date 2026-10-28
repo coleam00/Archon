@@ -247,6 +247,7 @@ function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
     });
   }
   if (usage && nodeCostScope(usage.data) !== 'total') {
+    replaceLoopConfigFailure(fold, row.step_name, usage.data.invocation?.id);
     addUsage(fold, row.step_name, usage.rawUsage);
   }
 }
@@ -432,6 +433,21 @@ async function readCompletedOutput(
   };
 }
 
+// Configuration failures make no provider call. A cumulative continuation replaces
+// their carried gate measurement only when it proves the same invocation.
+function replaceLoopConfigFailure(
+  fold: ResumeFold,
+  stepName: string,
+  invocationId: string | undefined
+): void {
+  if (invocationId === undefined) return;
+  fold.usageContributions = fold.usageContributions.filter(
+    contribution =>
+      contribution.stepName !== stepName ||
+      contribution.loopConfigFailure?.invocation.id !== invocationId
+  );
+}
+
 function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): void {
   // Each instance terminal owns only the preceding segment. Later inner rows
   // remain counted until a subsequent terminal replaces that segment.
@@ -449,13 +465,7 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   if (row.event_type !== 'node_skipped_prior_success') {
     const metadata = record.metadata;
     if (metadata?.node.kind === 'loop') {
-      // Configuration failures make no provider call. Their carried gate measurement
-      // is replaced when the same invocation continues, rather than charged again.
-      fold.usageContributions = fold.usageContributions.filter(
-        contribution =>
-          contribution.stepName !== row.step_name ||
-          contribution.loopConfigFailure?.invocation.id !== metadata.invocation.id
-      );
+      replaceLoopConfigFailure(fold, row.step_name, metadata.invocation.id);
       const contribution = readUsage(fold, row.step_name, record.rawUsage);
       if (metadata.lifecycle.status === 'failed' && metadata.lifecycle.failureKind === 'config') {
         contribution.loopConfigFailure = metadata;
