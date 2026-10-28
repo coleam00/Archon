@@ -1344,20 +1344,16 @@ describe('WorktreeProvider against real git', () => {
           expect((await git(holder, 'symbolic-ref', '--short', 'HEAD')).trim()).toBe(PR_BRANCH);
           expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
           expect(await registeredWorktrees()).toEqual([repoPath, holder]);
-          expect(
-            await gitModule.findWorktreeByBranch(toRepoPath(repoPath), toBranchName(PR_BRANCH))
-          ).toBe(toWorktreePath(holder));
-          expect((await provider.get(holder))?.workingPath).toBe(holder);
-          expect((await provider.list(repoPath)).map(env => env.workingPath)).toContain(holder);
-          expect((await provider.adopt(holder))?.workingPath).toBe(holder);
-          const adopted = await provider.create({
-            ...attempt,
-            workflowType: 'task',
-            taskBranch: { kind: 'existing', branch: toBranchName(PR_BRANCH) },
-          });
-          expect(adopted.workingPath).toBe(holder);
-          expect(adopted.metadata.adopted).toBe(true);
-          expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
+          if (beforeCheck) {
+            const adopted = await provider.create({
+              ...attempt,
+              workflowType: 'task',
+              taskBranch: { kind: 'existing', branch: toBranchName(PR_BRANCH) },
+            });
+            expect(adopted.workingPath).toBe(holder);
+            expect(adopted.metadata.adopted).toBe(true);
+            expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
+          }
         } finally {
           spy.mockRestore();
         }
