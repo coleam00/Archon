@@ -99,7 +99,11 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
             hydrated.preCreatedRun.id,
             error instanceof Error ? error.message : String(error)
           ),
-          { workflowRunId: hydrated.preCreatedRun.id, site: 'engine.resume_preparation_failed' }
+          {
+            workflowRunId: hydrated.preCreatedRun.id,
+            site: 'engine.resume_preparation_failed',
+            failure: error,
+          }
         );
         throw error;
       }
@@ -127,7 +131,11 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
             hydrated.preCreatedRun.id,
             error instanceof Error ? error.message : String(error)
           ),
-          { workflowRunId: hydrated.preCreatedRun.id, site: 'engine.resume_execution_failed' }
+          {
+            workflowRunId: hydrated.preCreatedRun.id,
+            site: 'engine.resume_execution_failed',
+            failure: error,
+          }
         );
       }
       throw error;

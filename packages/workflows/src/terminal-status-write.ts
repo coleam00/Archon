@@ -17,8 +17,10 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 export class TerminalStatusWriteError extends Error {
   readonly cause: unknown;
+  /** See `TerminalStatusWriteContext.failure`. */
+  readonly failure: unknown;
 
-  constructor(cause: unknown) {
+  constructor(cause: unknown, failure?: unknown) {
     super(
       `Failed to persist terminal workflow status: ${
         cause instanceof Error ? cause.message : String(cause)
@@ -26,6 +28,7 @@ export class TerminalStatusWriteError extends Error {
     );
     this.name = 'TerminalStatusWriteError';
     this.cause = cause;
+    this.failure = failure;
   }
 }
 
@@ -34,14 +37,21 @@ export interface TerminalStatusWriteContext {
   workflowRunId: string;
   /** Greppable call-site tag, e.g. `executor.backstop_fail_failed`. */
   site: string;
+  /**
+   * The error a failed-status write was recording. When that write also fails, this
+   * error reached no row; the wrapper logs it and carries it on the marker so it is
+   * not replaced by the write error.
+   */
+  failure?: unknown;
 }
 
 /**
  * Await a terminal run-status write and convert a rejection into the typed marker.
  *
- * Logs the original database error here so no call site has to remember to. `site`
- * carries what the per-call `.catch()` handlers this wrapper replaced used to carry:
- * which of the ~14 terminal writes is the one that failed.
+ * Logs the original database error, and any failure the write was recording, here so
+ * no call site has to remember to. `site` carries what the per-call `.catch()` handlers
+ * this wrapper replaced used to carry: which of the ~14 terminal writes is the one
+ * that failed.
  */
 export async function requireTerminalStatusWrite<T>(
   write: Promise<T>,
@@ -50,10 +60,13 @@ export async function requireTerminalStatusWrite<T>(
   try {
     return await write;
   } catch (error) {
+    const marker = new TerminalStatusWriteError(error, context.failure);
+    // Logged as the marker: the error serializer renders its `cause` and `failure`,
+    // where a bare Error under any other log key serializes to `{}`.
     getLog().error(
-      { err: error as Error, workflowRunId: context.workflowRunId, site: context.site },
+      { err: marker, workflowRunId: context.workflowRunId, site: context.site },
       'workflow.terminal_status_write_failed'
     );
-    throw new TerminalStatusWriteError(error);
+    throw marker;
   }
 }

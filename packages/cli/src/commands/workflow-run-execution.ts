@@ -6,6 +6,7 @@ import {
   type WorkflowRunSubscription,
 } from '@archon/workflows/engine-port';
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
+import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import {
@@ -357,11 +358,7 @@ async function resumeRun(
         { err, workflowName, runId: resumable.id },
         'cli.workflow_resume_preparation_failed'
       );
-      throw new Error(
-        `Workflow '${workflowName}' failed while preparing its resumed run — ${err.message}\n` +
-          `The run is marked failed; resume it with: archon workflow resume ${resumable.id}`,
-        { cause: err }
-      );
+      throw preparationFailedError(workflowName, resumable.id, err);
     }
     getLog().error(
       { err, workflowName, runId: resumable.id },
@@ -375,6 +372,25 @@ async function resumeRun(
   if (!resumeAdmission.accepted) throw nothingToResumeError(launch, resumable);
   request.notifyResumeAccepted?.(resumeAdmission.runId);
   return resumeAdmission.settled;
+}
+
+function preparationFailedError(workflowName: string, runId: string, err: Error): Error {
+  // The engine could not record the failure either: the row still says `running`, and
+  // `resume` refuses a non-terminal run, so point at inspection instead.
+  if (err instanceof TerminalStatusWriteError) {
+    const failure = err.failure instanceof Error ? err.failure.message : String(err.failure);
+    return new Error(
+      `Workflow '${workflowName}' failed while preparing its resumed run — ${failure}\n` +
+        `The run could not be marked failed (${err.message}), so it may still show as running. ` +
+        `Inspect it with: archon workflow get ${runId}`,
+      { cause: err }
+    );
+  }
+  return new Error(
+    `Workflow '${workflowName}' failed while preparing its resumed run — ${err.message}\n` +
+      `The run is marked failed; resume it with: archon workflow resume ${runId}`,
+    { cause: err }
+  );
 }
 
 function nothingToResumeError(launch: ForegroundLaunch, resumable: WorkflowRun): Error {
