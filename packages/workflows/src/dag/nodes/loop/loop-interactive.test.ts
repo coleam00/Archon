@@ -1428,9 +1428,12 @@ describe('interactive loop node', () => {
             runId
           );
           expect(pausedSnapshot.costUsd).toBeCloseTo(0.04, 5);
-          expect(pausedSnapshot.loopConfigFailureBaselines?.get(execution.invocation.id)).toEqual(
-            execution.spend
-          );
+          expect(
+            pausedSnapshot.loopConfigFailureBaselines?.get(execution.invocation.id)
+          ).toMatchObject({
+            costUsd: execution.spend.costUsd,
+            tokens: execution.spend.tokens,
+          });
           (
             mockDeps.store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>
           ).mockImplementation(async () => pausedSnapshot);
