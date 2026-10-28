@@ -3,21 +3,21 @@ export const DEPRECATED_PROVIDERS_DOCS_PATH =
   '/getting-started/ai-assistants/#deprecated-providers';
 
 /**
- * Notice for a bundled provider or chat adapter that no maintainer owns and that is
- * removed in the next minor release. It warns; the feature keeps working until removal.
+ * Notice for a bundled provider or chat adapter that no maintainer owns. It warns;
+ * the feature keeps working, and no removal is scheduled.
  */
-export function deprecatedForRemovalNotice(name: string): string {
+export function deprecatedNotice(name: string): string {
   return (
-    `${name} is deprecated and will be removed in the next minor release: no Archon maintainer ` +
-    'owns it. It keeps working until then. If you need it, build your own plugin: ' +
+    `${name} is deprecated: no Archon maintainer owns it. It keeps working, but fixes are not ` +
+    'guaranteed. For a version you control, build your own plugin: ' +
     'https://archon.diy/guides/publishing-plugins/'
   );
 }
 
-/** Chat providers without native tools use the detached CLI until removal. */
+/** Chat providers without native tools launch through the detached CLI. */
 export function deprecatedChatProviderNotice(name: string): string {
   return (
-    deprecatedForRemovalNotice(name) +
+    deprecatedNotice(name) +
     ' Chat workflow launches use the detached CLI and are headless: they use CLI identity, ' +
     'return a run ID for inspection, and do not deliver progress or results to the originating chat.'
   );

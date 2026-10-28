@@ -25,7 +25,7 @@ archon provider add claude codex pi   # any subset
 
 ## Deprecated providers
 
-OpenCode and GitHub Copilot are deprecated and will be removed in the next minor release, 0.13.0. No Archon maintainer owns them. Both keep working until that release; [#4641](https://github.com/coleam00/Archon/issues/4641) tracks the removal. To keep using one after that, build and own it as a provider plugin: see [Publish a plugin](/guides/publishing-plugins/#provider-plugins) and [Adding a Community Provider](/contributing/adding-a-community-provider/).
+OpenCode and GitHub Copilot are deprecated: no Archon maintainer owns them. Both stay bundled and keep working, and no removal is scheduled, but fixes are not guaranteed. For a version you control, build and own it as a provider plugin: see [Publish a plugin](/guides/publishing-plugins/#provider-plugins) and [Adding a Community Provider](/contributing/adding-a-community-provider/).
 
 In chat, Claude, Codex and Pi launch and manage runs through native `invoke_workflow`, `register_project` and `manage_run` tools. Copilot and OpenCode have no native tools, so after you select a project with `/setproject <name>` they run `archon workflow run <workflow> "<message>" --detach` in its directory and return the run ID. Those runs are headless: they use CLI identity and send no progress or results back to the chat.
 
@@ -287,7 +287,7 @@ See the [Pi documentation](https://pi.dev) for extensions, the model registry an
 ## OpenCode
 
 :::caution[Deprecated]
-OpenCode will be removed in the next minor release. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+No Archon maintainer owns OpenCode. It keeps working. See [Deprecated providers](#deprecated-providers).
 :::
 
 Archon runs OpenCode through `@opencode-ai/sdk` as an embedded server that it starts, protects with a random password and stops after its last request. Connecting to an external OpenCode server is not supported.
@@ -307,7 +307,7 @@ assistants:
 ## GitHub Copilot
 
 :::caution[Deprecated]
-GitHub Copilot will be removed in the next minor release. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+No Archon maintainer owns GitHub Copilot. It keeps working. See [Deprecated providers](#deprecated-providers).
 :::
 
 Archon drives the Copilot CLI through `@github/copilot-sdk`. You need an active Copilot subscription.

@@ -29,7 +29,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 import { TelegramAdapter } from './adapter';
-import { deprecatedForRemovalNotice } from '@archon/providers/community/deprecation';
+import { deprecatedNotice } from '@archon/providers/community/deprecation';
 
 type SendMessage = Api['sendMessage'];
 
@@ -342,7 +342,7 @@ describe('TelegramAdapter', () => {
       await adapter.start();
 
       expect(mockLogger.warn).toHaveBeenCalledWith(
-        { notice: deprecatedForRemovalNotice('Telegram') },
+        { notice: deprecatedNotice('Telegram') },
         'telegram.deprecated'
       );
     });
