@@ -702,6 +702,9 @@ describe('PostgresAdapter', () => {
       expect(issued).not.toContain(mockSchemaSQL);
       expect(issued.some(sql => sql.includes('archon_notify_workflow_event'))).toBe(false);
       expect(issued.at(-1)).toBe('COMMIT');
+      const creation = issued.find(sql => sql.startsWith('SAVEPOINT '));
+      expect(creation).toBeDefined();
+      expect(issued).toContain(`RELEASE ${creation}`);
     });
 
     test('records a fingerprint with the trigger; a later boot skips convergence until the schema changes', async () => {
@@ -728,6 +731,11 @@ describe('PostgresAdapter', () => {
       expect(typeof recorded).toBe('string');
       expect(issued.filter(sql => sql === 'BEGIN')).toHaveLength(1);
       expect(issued.filter(sql => sql === 'COMMIT')).toHaveLength(1);
+      const savepoints = issued.filter(sql => sql.startsWith('SAVEPOINT '));
+      expect(savepoints).toHaveLength(2);
+      for (const creation of savepoints) {
+        expect(issued).toContain(`RELEASE ${creation}`);
+      }
       // Core DDL and completion publish in the same commit.
       const fingerprintAt = issued.findIndex(sql => sql.includes('SET schema_fingerprint'));
       expect(issued.indexOf('COMMIT', fingerprintAt)).toBeGreaterThan(fingerprintAt);
@@ -758,6 +766,10 @@ describe('PostgresAdapter', () => {
 
       await new PostgresAdapter('postgresql://localhost:5432/testdb').query('SELECT 1');
       expect(issued.some(sql => sql.includes('SET schema_fingerprint'))).toBe(false);
+      const creation = issued.filter(sql => sql.startsWith('SAVEPOINT ')).at(-1);
+      expect(creation).toBeDefined();
+      expect(issued).toContain(`ROLLBACK TO ${creation}`);
+      expect(issued).toContain(`RELEASE ${creation}`);
     });
 
     test.each(['42P01', '42703'])(
@@ -777,6 +789,10 @@ describe('PostgresAdapter', () => {
 
         await new PostgresAdapter('postgresql://localhost:5432/testdb').query('SELECT 1');
         expect(issued).toContain('-- schema sql');
+        const creation = issued.find(sql => sql.startsWith('SAVEPOINT '));
+        expect(creation).toBeDefined();
+        expect(issued).toContain(`ROLLBACK TO ${creation}`);
+        expect(issued).toContain(`RELEASE ${creation}`);
       }
     );
 

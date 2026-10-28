@@ -12,6 +12,8 @@ import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION } from '../schema-version';
 
 const SCHEMA_LOCK_SQL = 'SELECT pg_advisory_xact_lock(1796)';
+const SCHEMA_CURRENT_SAVEPOINT = 'schema_current';
+const NOTIFY_TRIGGER_SAVEPOINT = 'notify_trigger';
 
 /**
  * Postgres-only: NOTIFY `archon_dashboard_event` on every workflow_events insert, so
@@ -206,7 +208,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
 
   private async recoverSavepoint(
     client: PoolClient,
-    savepoint: 'schema_current' | 'notify_trigger',
+    savepoint: typeof SCHEMA_CURRENT_SAVEPOINT | typeof NOTIFY_TRIGGER_SAVEPOINT,
     originalError: unknown
   ): Promise<void> {
     try {
@@ -222,17 +224,17 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
   }
 
   private async schemaIsCurrent(client: PoolClient, fingerprint: string): Promise<boolean> {
-    await client.query('SAVEPOINT schema_current');
+    await client.query(`SAVEPOINT ${SCHEMA_CURRENT_SAVEPOINT}`);
     try {
       const result = await client.query<{ current: boolean }>(SCHEMA_CURRENT_SQL, [
         fingerprint,
         APP_VERSION,
         Object.keys(LEGACY_VENDOR_ALIASES),
       ]);
-      await client.query('RELEASE SAVEPOINT schema_current');
+      await client.query(`RELEASE SAVEPOINT ${SCHEMA_CURRENT_SAVEPOINT}`);
       return result.rows[0]?.current === true;
     } catch (error) {
-      await this.recoverSavepoint(client, 'schema_current', error);
+      await this.recoverSavepoint(client, SCHEMA_CURRENT_SAVEPOINT, error);
       // Fresh and older databases can lack the fingerprint's tables or column.
       const code = (error as { code?: unknown } | null)?.code;
       if (code === '42P01' || code === '42703') return false;
@@ -273,14 +275,14 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
 
   /** Trigger permissions are optional: retain polling without publishing completion. */
   private async installNotifyTrigger(client: PoolClient): Promise<boolean> {
-    await client.query('SAVEPOINT notify_trigger');
+    await client.query(`SAVEPOINT ${NOTIFY_TRIGGER_SAVEPOINT}`);
     try {
       await client.query(WORKFLOW_EVENT_NOTIFY_SQL);
-      await client.query('RELEASE SAVEPOINT notify_trigger');
+      await client.query(`RELEASE SAVEPOINT ${NOTIFY_TRIGGER_SAVEPOINT}`);
       return true;
     } catch (e) {
       if ((e as { code?: unknown } | null)?.code !== '42501') throw e;
-      await this.recoverSavepoint(client, 'notify_trigger', e);
+      await this.recoverSavepoint(client, NOTIFY_TRIGGER_SAVEPOINT, e);
       getLog().warn(
         { err: e instanceof Error ? e : new Error(String(e)) },
         'db.postgres_notify_trigger_install_failed'
