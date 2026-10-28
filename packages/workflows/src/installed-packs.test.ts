@@ -18,6 +18,7 @@ import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from './router';
+import { findWorkflowLoadError } from './schemas/workflow';
 import { validateWorkflowResources } from './validator';
 import { loadCommandPrompt } from './load-command-prompt';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -369,6 +370,66 @@ nodes:
 });
 
 describe('installed pack boundaries', () => {
+  test.each([
+    ['header', 'thinking: high'],
+    ['nodes', 'description: Support\nnodes:\n  - id: check'],
+    [
+      'graph',
+      'description: Support\nnodes:\n  - id: check\n    bash: echo hi\n    depends_on: [missing]',
+    ],
+    ['fields', 'description: Support\nmodel: 123\nnodes:\n  - id: check\n    bash: echo hi'],
+    [
+      'contract',
+      'description: Support\noutcome_field: success\nnodes:\n  - id: check\n    bash: echo hi',
+    ],
+  ])('qualifies installed support %s validation errors', async (_phase, body) => {
+    const pack = reviewKit();
+    await install({
+      ...pack,
+      files: { ...pack.files, 'helper/helper.yaml': `name: helper\n${body}\n` },
+    });
+    await writeFile(
+      join(project, '.archon', 'workflows', 'unrelated.yaml'),
+      'name: unrelated\ndescription: d\nnodes:\n  - id: h\n    include: helper\n'
+    );
+    const { errors } = await discover();
+    expect(findWorkflowLoadError(errors, 'helper')).toBeUndefined();
+    expect(findWorkflowLoadError(errors, HELPER)).toMatchObject({
+      filename: 'acme/review-kit/helper/helper.yaml',
+      workflowName: HELPER,
+      errorType: 'validation_error',
+    });
+    expect(findWorkflowLoadError(errors, 'unrelated')?.error).toContain(
+      "include target 'helper' not found"
+    );
+  });
+
+  test('installed entrypoint errors keep manifest names and unnamed support errors keep filenames', async () => {
+    const pack = reviewKit();
+    await install({
+      ...pack,
+      files: {
+        ...pack.files,
+        'review/code-review.yaml': 'name: code-review\nthinking: high\n',
+        'helper/helper.yaml': 'description: Missing name\n',
+      },
+    });
+    const { errors } = await discover();
+    expect(findWorkflowLoadError(errors, REVIEW)).toMatchObject({
+      workflowName: REVIEW,
+      errorType: 'validation_error',
+    });
+    expect(findWorkflowLoadError(errors, 'code-review')).toBeUndefined();
+    expect(findWorkflowLoadError(errors, 'acme/review-kit:code-review')).toBeUndefined();
+    const unnamed = findWorkflowLoadError(errors, 'acme/review-kit/helper/helper');
+    expect(unnamed).toMatchObject({
+      filename: 'acme/review-kit/helper/helper.yaml',
+      errorType: 'validation_error',
+    });
+    expect(unnamed?.workflowName).toBeUndefined();
+    expect(findWorkflowLoadError(errors, 'helper')).toBeUndefined();
+  });
+
   test('an incompatible provider receipt is reported without hiding installed workflows', async () => {
     await install(reviewKit());
     const file = receiptPath(join(home, 'plugins'), 'owner/stale-provider');

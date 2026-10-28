@@ -119,7 +119,13 @@ function reportPackLoadErrors(
       const filename = `${label}/${path}`;
       return filename === error.filename || filename.startsWith(`${error.filename}/`);
     });
-    if (affected.length === 0) context.allErrors.push(error);
+    if (affected.length === 0) {
+      context.allErrors.push(
+        error.workflowName === undefined
+          ? error
+          : { ...error, workflowName: installedWorkflowName(pack, error.workflowName) }
+      );
+    }
     for (const [, entry] of affected) {
       explainedEntrypoints.add(entry);
       context.allErrors.push({ ...error, workflowName: installedWorkflowName(pack, entry) });
