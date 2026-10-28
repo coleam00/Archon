@@ -334,7 +334,9 @@ export function createAdmissionTransaction(
       (await isRunArchived(root, row.id))
     )
       throw new Error(`Run already exists: ${row.id}`);
-    await createTransactionView(runs, [], async () => null).createWorkflowRun(row.launch.run);
+    await createTransactionView(runs, [], async () => null, new Map()).createWorkflowRun(
+      row.launch.run
+    );
     row.status = 'admitted';
     row.blocker = null;
     const resource = await slot(row.resource);

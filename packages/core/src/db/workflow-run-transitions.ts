@@ -25,6 +25,7 @@ import {
   type WorkflowRun,
   type WorkflowRunOrigin,
 } from '@archon/workflows/schemas/workflow-run';
+import { observeTerminalArtifacts } from '@archon/workflows/terminal-record';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
@@ -37,7 +38,6 @@ import { getLog } from './workflow-run-shared';
 import {
   insertTerminalWorkflowEvent,
   observeRunTerminalArtifacts,
-  observeTerminalArtifacts,
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 

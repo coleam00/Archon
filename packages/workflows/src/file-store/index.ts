@@ -6,3 +6,4 @@ export {
   TERMINAL_RUN_EVENT_TYPES,
   type TransactionView,
 } from './transaction-view';
+export { isConversationResetTarget } from './transaction-reads';

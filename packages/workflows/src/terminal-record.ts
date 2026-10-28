@@ -232,7 +232,8 @@ function runArtifactsDir(run: Pick<WorkflowRun, 'id' | 'output_root'>): string |
 
 /**
  * Walk the run's artifacts directory for its terminal record. This touches the
- * filesystem, so never await it while holding a database write transaction.
+ * filesystem, so never await it while holding a database write transaction or the
+ * file-store lock.
  */
 export async function observeRunArtifacts(
   run: Pick<WorkflowRun, 'id' | 'output_root'>
@@ -241,6 +242,17 @@ export async function observeRunArtifacts(
     runArtifactsDir(run),
     resolveRunStorageRoot(run, null) ?? undefined,
     run.id
+  );
+}
+
+/** Artifact manifests walked before a terminal transaction, keyed by run id. */
+export type TerminalArtifacts = ReadonlyMap<string, ArtifactManifest>;
+
+export async function observeTerminalArtifacts(
+  runs: readonly Pick<WorkflowRun, 'id' | 'output_root'>[]
+): Promise<TerminalArtifacts> {
+  return new Map(
+    await Promise.all(runs.map(async run => [run.id, await observeRunArtifacts(run)] as const))
   );
 }
 
