@@ -22,8 +22,9 @@ export interface IWorkflowHostStore {
     createCodebase(data: CreateCodebaseInput): Promise<Codebase>;
     /**
      * Under the registration lock, check ownership and move an unregistered checkout aside.
-     * `remove` receives the moved path and runs after the lock is released; a registered
-     * checkout is left in place and `remove` is not called.
+     * `remove` receives the moved path and runs after the lock is released, also when the
+     * locked step fails after the move; a registered checkout is left in place and `remove`
+     * is not called.
      */
     removeUnregisteredCheckout(
       path: string,

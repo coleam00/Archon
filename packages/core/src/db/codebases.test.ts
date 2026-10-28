@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, sep, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -13,6 +13,8 @@ const mockQuery = createMockQuery();
 let transactionOpen = false;
 // SQLite can replay a transaction body after COMMIT; a test sets this to replay it.
 let transactionRuns = 1;
+// Rejects the transaction after its body ran, like a failed COMMIT.
+let transactionFailure: Error | undefined;
 const trackTempRoot = trackTempRoots();
 
 // Mock the connection module before importing the module under test
@@ -26,6 +28,7 @@ mock.module('./connection', () => ({
       try {
         let result = await fn(mockQuery);
         for (let run = 1; run < transactionRuns; run++) result = await fn(mockQuery);
+        if (transactionFailure) throw transactionFailure;
         return result;
       } finally {
         transactionOpen = false;
@@ -61,6 +64,7 @@ describe('codebases', () => {
   beforeEach(() => {
     mockQuery.mockClear();
     transactionRuns = 1;
+    transactionFailure = undefined;
   });
 
   const mockCodebase: Codebase = {
@@ -258,6 +262,37 @@ describe('codebases', () => {
 
     expect(remove).toHaveBeenCalledTimes(1);
     await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  test('checkout cleanup removes the detached checkout when the transaction fails after the move', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'codebase-cleanup-')));
+    const checkout = join(root, 'checkout');
+    await mkdir(checkout);
+    transactionFailure = new Error('commit failed');
+    const remove = mock(async (detached: string) => {
+      await rm(detached, { recursive: true });
+    });
+
+    await expect(removeUnregisteredCheckout(checkout, remove)).rejects.toBe(transactionFailure);
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  test('checkout cleanup keeps the transaction error when removing the detached checkout fails', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'codebase-cleanup-')));
+    const checkout = join(root, 'checkout');
+    await mkdir(checkout);
+    transactionFailure = new Error('commit failed');
+    const removeFailure = new Error('rm failed');
+
+    const failure = await removeUnregisteredCheckout(checkout, async () => {
+      throw removeFailure;
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([transactionFailure, removeFailure]);
+    expect((failure as AggregateError).cause).toBe(transactionFailure);
   });
 
   describe('getCodebase', () => {

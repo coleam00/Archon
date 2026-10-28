@@ -1541,6 +1541,31 @@ describe('cloneRepository', () => {
       );
     });
 
+    test('reports a cleanup failure after the delete without a leftover path', async () => {
+      const registrationError = new Error('registration failed');
+      const lockError = new Error('lock release failed');
+      mockCreateCodebase.mockRejectedValueOnce(registrationError);
+      mockRemoveUnregisteredCheckout.mockImplementationOnce(async (path, remove) => {
+        await remove(`${path}.removing`);
+        throw lockError;
+      });
+
+      const error = await cloneRepository('https://github.com/owner/repo').catch(
+        (error: unknown) => error
+      );
+      expect(error instanceof AggregateError && error.errors).toEqual([
+        registrationError,
+        lockError,
+      ]);
+      expect(error instanceof Error && error.message).toContain(
+        'Checkout cleanup failed: lock release failed'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { path: undefined, err: lockError },
+        'registration.checkout_cleanup_failed'
+      );
+    });
+
     test('wraps a sanitized clone failure', async () => {
       process.env.GH_TOKEN = 'super_secret_token';
       spyCloneGitRepository.mockResolvedValue({
