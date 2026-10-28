@@ -82,6 +82,9 @@
       "src/codex/app-server.test.ts"
     ],
     [
+      "src/codex/credential-recheck.test.ts"
+    ],
+    [
       "src/codex/scope.test.ts",
       "src/codex/scope.boundary.test.ts"
     ],
