@@ -18,6 +18,7 @@ import {
   runUsageWrites,
 } from '../../test-utils';
 import {
+  executionMetadata,
   startNodeExecution,
   finishNodeExecution,
   newNodeInvocation,
@@ -27,7 +28,7 @@ import { readNodeRecordEvent } from '../../../node-record-reader';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { type RunChildWorkflowFn } from '../../child-run';
-import type { WorkflowRun, WorkflowRunStatus } from '../../../schemas';
+import type { LoopNode, WorkflowRun, WorkflowRunStatus } from '../../../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../../../store';
 import { buildInstanceSnapshots, type FanOutInstanceSnapshot } from '../../../fan-out-identity';
 
@@ -62,6 +63,124 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
 
   afterEach(async () => {
     await removeTempTree(testDir);
+  });
+
+  it('counts a resumed loop configuration-failure baseline once inside an instance', async () => {
+    await writeBlock(`name: compose-blk
+description: resumed loop
+mutates_checkout: false
+nodes:
+  - id: refine
+    loop:
+      prompt: Refine.
+      until: APPROVED
+      max_iterations: 3
+      fresh_context: false
+`);
+    const runId = 'compose-loop-config-retry';
+    const [instance] = buildInstanceSnapshots(['a']);
+    const path = composeInnerStep(instance.identity, 'refine');
+    const node: LoopNode = {
+      id: `fan__${instance.identity}__refine`,
+      kind: 'loop',
+      loop: { prompt: 'Refine.', until: 'APPROVED', max_iterations: 3, fresh_context: false },
+    };
+    const start = startNodeExecution({
+      runId,
+      path,
+      node,
+      invocation: newNodeInvocation([]),
+      provider: 'claude',
+    });
+    const carried = {
+      costUsd: 0.04,
+      costPartial: true,
+      tokens: { input: 40, output: 4, cacheRead: 10, cacheWrite: 0 },
+    };
+    const execution = executionMetadata(
+      finishNodeExecution(start, { status: 'suspended', point: 'interactive_loop' }, carried)
+    );
+    const store = createMockStore();
+    await store.persistWorkflowEvent(
+      serializeNodeStateRecord(
+        finishNodeExecution(
+          start,
+          { status: 'failed', failureKind: 'config', error: 'Provider initialization failed' },
+          carried
+        )
+      )
+    );
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
+    const snapshot = await store.getDagResumeSnapshot(runId);
+    expect(snapshot.loopConfigFailureBaselines?.has(execution.invocation.id)).toBe(true);
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: '<promise>APPROVED</promise>' };
+      yield {
+        type: 'result',
+        sessionId: 'continued',
+        cost: 0.03,
+        tokens: { input: 30, output: 3, cacheRead: 5, cacheWrite: 0 },
+      };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun(runId, {
+          metadata: {
+            approval: {
+              type: 'interactive_loop',
+              nodeId: node.id,
+              iteration: 1,
+              sessionId: 'prior',
+              message: 'Review.',
+              execution,
+            },
+            loop_user_input: 'again',
+            loop_feedback_given: true,
+          },
+        }),
+        priorUsage: snapshot,
+        priorCompletedNodes: snapshot.completedNodeOutputs,
+        workflow: {
+          name: 'parent',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+            },
+          ],
+        },
+      })
+    );
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    const events = persistedEvents(store);
+    const loop = events.find(e => e.event_type === 'node_completed' && e.step_name === path);
+    expect(loop?.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.07, partial: true },
+    });
+    const terminal = events.find(
+      e => e.event_type === 'node_completed' && e.data?.type === 'compose_fan_out_instance'
+    );
+    expect(terminal?.data?.cost_usd).toBeCloseTo(0.07);
+    expect(terminal?.data?.tokens).toMatchObject({
+      input: 70,
+      output: 7,
+      cacheRead: 15,
+      cacheWrite: 0,
+    });
+    expect((await store.getDagResumeSnapshot(runId)).costUsd).toBeCloseTo(0.07);
+    expect(runUsageWrites(store).at(-1)).toMatchObject({
+      total_cost_usd: 0.07,
+      total_tokens_in: 70,
+      total_tokens_out: 7,
+      total_cache_read_tokens: 15,
+      total_cache_write_tokens: 0,
+    });
   });
 
   it('refuses unattributed historical usage inside an instance', async () => {
