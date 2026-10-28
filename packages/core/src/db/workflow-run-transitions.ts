@@ -3,6 +3,12 @@
  * run, and the terminal completed, failed and cancelled writes with their
  * durable events. Re-exported from the `./workflows` entry.
  */
+
+import {
+  initialRunMetadata,
+  mutableRunMetadata,
+  SUBRUN_METADATA_KEYS,
+} from '@archon/workflows/schemas/run-metadata';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { WORKTREE_REMOVAL_OWNER } from '@archon/isolation/types';
 import {
@@ -48,7 +54,7 @@ export async function insertWorkflowRun(
   data: WorkflowRunInsert
 ): Promise<WorkflowRun> {
   validateWorkflowWaitMetadata(data.metadata);
-  const metadataJson = serializeRunMetadata(data.metadata);
+  const metadataJson = serializeRunMetadata(initialRunMetadata(data.metadata, data.parent_run_id));
   const origin = workflowRunOriginSchema.parse(data.origin ?? {});
   if (origin.conversationId) assertPublicConversation(origin.conversationId);
   if (origin.parentConversationId) assertPublicConversation(origin.parentConversationId);
@@ -68,17 +74,19 @@ export async function insertWorkflowRun(
   }
 }
 
-/** Serializes run metadata, refusing only when it carries launch policy a resume needs. */
+/** Refuse serialization loss of launch policy or child provenance. */
 function serializeRunMetadata(metadata: WorkflowRunInsert['metadata']): string {
   try {
     return JSON.stringify(metadata ?? {});
   } catch (serializeError) {
     const err = serializeError as Error;
 
-    // Losing launch policy would silently change execution on the next resume.
+    // Losing launch policy or child provenance changes execution or checkout release safety.
     if (
       metadata &&
-      ('github_context' in metadata || RUN_AI_CONFIGURATION_METADATA_KEY in metadata)
+      ('github_context' in metadata ||
+        RUN_AI_CONFIGURATION_METADATA_KEY in metadata ||
+        SUBRUN_METADATA_KEYS.parentNodeId in metadata)
     ) {
       getLog().error(
         { err, metadataKeys: Object.keys(metadata) },
@@ -86,7 +94,7 @@ function serializeRunMetadata(metadata: WorkflowRunInsert['metadata']): string {
       );
       throw new Error(
         `Failed to serialize workflow metadata: ${err.message}. ` +
-          'Metadata contains required workflow context or AI configuration.'
+          'Metadata contains required workflow context, AI configuration or child provenance.'
       );
     }
 
@@ -312,7 +320,7 @@ export async function completeWorkflowRun(
             `UPDATE remote_agent_workflow_runs
              SET status = 'completed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge('metadata', 2)}
              WHERE id = $1 AND status = 'running'`,
-            [id, JSON.stringify(metadata)]
+            [id, JSON.stringify(mutableRunMetadata(metadata))]
           )
         : await query(
             `UPDATE remote_agent_workflow_runs

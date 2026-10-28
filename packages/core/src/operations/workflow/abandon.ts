@@ -210,8 +210,7 @@ interface WorktreeOwnerCheck {
 function isSubrun(run: WorkflowRun): boolean {
   // Parent deletion clears the foreign key, but not the spawning node's metadata.
   return (
-    run.parent_run_id !== null ||
-    typeof run.metadata[SUBRUN_METADATA_KEYS.parentNodeId] === 'string'
+    run.parent_run_id !== null || Object.hasOwn(run.metadata, SUBRUN_METADATA_KEYS.parentNodeId)
   );
 }
 

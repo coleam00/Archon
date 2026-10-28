@@ -352,7 +352,7 @@ describe('workflow run transitions', () => {
   });
 
   describe('metadata serialization', () => {
-    test.each(['github_context', 'ai_configuration'])(
+    test.each(['github_context', 'ai_configuration', 'parent_node_id'])(
       'throws when critical %s metadata fails to serialize',
       async key => {
         const circularObj: Record<string, unknown> = { [key]: 'required' };

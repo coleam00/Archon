@@ -956,14 +956,15 @@ describe('abandon owned worktrees', () => {
     });
   });
 
-  test.each([
-    ['abandon', false],
-    ['reset', false],
-    ['abandon', true],
-    ['reset', true],
-  ] as const)(
-    '%s retains a file-store child checkout after parent deletion with malformed output metadata: %s',
-    async (operation, malformedOutput) => {
+  test.each(
+    (['abandon', 'reset'] as const).flatMap(operation =>
+      (['clean', 'malformed-output', 'erase', 'running-erase', 'unstamped'] as const).map(
+        mutation => [operation, mutation] as const
+      )
+    )
+  )(
+    '%s retains a file-store child checkout after parent deletion with metadata mutation: %s',
+    async (operation, mutation) => {
       const fileStore = await createFileWorkflowStore({ root: scratchRoot() });
       const parent = await fileStore.createWorkflowRun({
         workflow_name: 'parent',
@@ -974,12 +975,23 @@ describe('abandon owned worktrees', () => {
         user_message: '',
         parent_run_id: parent.id,
         origin: { conversationId: 'conv-1' },
-        metadata: { ...owned().metadata, parent_node_id: 'nested-workflow' },
+        metadata: {
+          ...owned().metadata,
+          ...(mutation === 'unstamped' ? {} : { parent_node_id: 'nested-workflow' }),
+        },
       });
-      if (malformedOutput)
+      if (mutation === 'malformed-output')
         await fileStore.updateWorkflowRun(child.id, {
           metadata: { summary_declared_output_paths: 'invalid' },
         });
+      if (mutation === 'erase')
+        await fileStore.updateWorkflowRun(child.id, { metadata: { parent_node_id: null } });
+      if (mutation === 'running-erase') {
+        await fileStore.claimPendingWorkflowRun(child.id);
+        expect(
+          await fileStore.updateWorkflowRunMetadataIfRunning(child.id, { parent_node_id: null })
+        ).toBe(true);
+      }
       await fileStore.cancelWorkflowRun(parent.id);
       await fileStore.deleteWorkflowRun(parent.id);
       expect((await fileStore.getWorkflowRun(child.id))?.parent_run_id).toBeNull();

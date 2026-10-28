@@ -280,6 +280,10 @@ export interface IWorkflowStore
   /** Claim an engine-cancelled fan-out child for immediate in-process recovery. */
   recoverCancelledFanOutRun(id: string): Promise<WorkflowRun>;
   /**
+   * `metadata.parent_node_id` is creation-only: all later metadata writes ignore it,
+   * preserving child provenance after parent deletion. A child created without a
+   * spawning node ID carries null under that key.
+   *
    * `output_root` (#2200) is write-once: the executor sets it at run start only
    * when the persisted value is null. Re-writing it on resume would re-derive
    * the path from a possibly-renamed codebase and orphan the run's artifacts,
