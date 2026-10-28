@@ -349,6 +349,17 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
       reason: expect.stringContaining('does not satisfy its output_format'),
     });
 
+    const nullValue = await dryRunWorkflow({
+      workflow,
+      stubs: { certified: null },
+    });
+    expect(nullValue.outcome).toBe('failed');
+    expect(nullValue.trace[0]).toMatchObject({
+      nodeId: 'certified',
+      state: 'failed',
+      reason: expect.stringContaining('does not satisfy its output_format'),
+    });
+
     const notJson = await dryRunWorkflow({
       workflow,
       stubs: { certified: 'https://example.test/pull/1' },
