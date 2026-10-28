@@ -7198,6 +7198,10 @@ export interface components {
             type: 'state_update';
             /** @enum {string} */
             state: 'running' | 'requires_action';
+          }
+        | {
+            /** @enum {string} */
+            type: 'heartbeat';
           };
       runId: string;
       stepName: string;

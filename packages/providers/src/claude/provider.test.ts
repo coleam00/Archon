@@ -483,7 +483,7 @@ describe('message stream', () => {
       rate_limit_info: { requests_remaining: 0, retry_after_ms: 5000 },
     });
 
-    expect(chunks).toEqual([{ type: 'state_update', state: 'running' }]);
+    expect(chunks).toEqual([{ type: 'heartbeat' }]);
     expect(mockLogger.warn).toHaveBeenCalledWith(
       { rateLimitInfo: { requests_remaining: 0, retry_after_ms: 5000 } },
       'claude.rate_limit_event'
@@ -769,7 +769,7 @@ describe('subtasks and settling', () => {
         }
       );
 
-      expect(chunks).toEqual([{ type: 'state_update', state: 'running' }]);
+      expect(chunks).toEqual([{ type: 'heartbeat' }]);
     }
   );
 

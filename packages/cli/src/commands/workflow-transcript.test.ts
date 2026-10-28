@@ -404,6 +404,7 @@ describe('workflowLogsCommand', () => {
         status: 'failed',
         exitCode: 2,
       }),
+      event('lint', 'a2', { type: 'heartbeat' }),
       event('lint', 'a2', { type: 'state_update', state: 'running' }),
       event('lint', 'a2', { type: 'state_update', state: 'requires_action' }),
       // A newer event type, and a line missing its event: neither renders nor throws.

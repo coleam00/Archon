@@ -1,3 +1,4 @@
+import { awaitingTurnSettlement } from './settled';
 import { providerChunkSchema, subtaskTerminalStatusSchema, type ProviderChunk } from './events';
 import type { ProviderCapabilities } from './capabilities';
 import { credentialStatusSchema, type CredentialStatus } from './credential-status';
@@ -110,13 +111,14 @@ function chunkType(chunk: unknown): unknown {
 export async function checkSettled(cases: readonly ProviderTurnCase[]): Promise<string[]> {
   const violations: string[] = [];
   for (const turnCase of cases) {
-    const types: unknown[] = [];
+    const chunks: unknown[] = [];
     try {
-      for await (const chunk of turnCase.run()) types.push(chunkType(chunk));
+      for await (const chunk of turnCase.run()) chunks.push(chunk);
     } catch (error) {
       violations.push(`${turnCase.name}: threw instead of settling (${(error as Error).message})`);
       continue;
     }
+    const types = chunks.map(chunkType);
     const settledAt = types.indexOf('settled');
     const settledCount = types.filter(type => type === 'settled').length;
     if (settledCount !== 1) {
@@ -126,11 +128,18 @@ export async function checkSettled(cases: readonly ProviderTurnCase[]): Promise<
     if (settledAt !== types.length - 1) {
       violations.push(`${turnCase.name}: settled is not the last chunk`);
     }
-    if (!types.slice(0, settledAt).includes('result')) {
-      violations.push(`${turnCase.name}: settled arrives before any result`);
+    if (!hasCurrentResult(chunks.slice(0, settledAt))) {
+      violations.push(`${turnCase.name}: settled arrives before the current phase result`);
     }
   }
   return violations;
+}
+
+function hasCurrentResult(chunks: readonly unknown[]): boolean {
+  return chunks.reduce<boolean>((awaiting, chunk) => {
+    const parsed = providerChunkSchema.safeParse(chunk);
+    return parsed.success ? awaitingTurnSettlement(awaiting, parsed.data) : awaiting;
+  }, false);
 }
 
 /** Runtime evidence is sampled as the provider emits, so invented closes cannot pass. */

@@ -40,6 +40,7 @@ export const descriptor: ProviderPluginDescriptor = {
 export const chunks: ProviderChunk[] = [
   { type: 'agent_message_chunk', text: 'Whole text block 🦊\nwith newline' },
   { type: 'agent_thought_chunk', text: 'Thinking' },
+  { type: 'heartbeat' },
   { type: 'state_update', state: 'running' },
   { type: 'tool_call', toolCallId: 'one', name: 'Read' },
   {

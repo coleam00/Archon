@@ -190,7 +190,7 @@ function* streamEvent(state: StreamState, msg: unknown): Generator<MessageChunk,
       getLog().warn({ rateLimitInfo: rateLimitMsg.rate_limit_info }, 'claude.rate_limit_event');
       state.lastRateLimit = rateLimitMsg.rate_limit_info;
       // The turn is waiting, not stalled: keep the idle watchdog from firing.
-      yield { type: 'state_update', state: 'running' };
+      yield { type: 'heartbeat' };
       return 'next';
     }
     case 'result':
@@ -448,7 +448,7 @@ function* streamTaskProgress(state: StreamState, msg: TaskMessage): Generator<Me
     // The SDK emits task_progress roughly every 30s to prove the
     // subprocess is alive. Preserve that idle-watchdog signal without
     // recreating the hidden task in persistence or the Web UI.
-    yield { type: 'state_update', state: 'running' };
+    yield { type: 'heartbeat' };
     return;
   }
   state.visibleTaskIds.add(msg.task_id);

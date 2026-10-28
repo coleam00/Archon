@@ -7,6 +7,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import type { IAgentProvider, MessageChunk } from '@archon/provider-contract';
 import { connectProvider, serveProvider, streamPair } from '@archon/provider-contract/plugin';
 import { descriptor as codexDescriptor } from '@archon/providers/codex/descriptor';
+import { streamClaudeMessages } from '../../../providers/src/claude/stream';
 import type { DagNode } from '../schemas';
 import { executeDagWorkflow } from '../dag-executor';
 import {
@@ -57,12 +58,13 @@ describe('post-result turn settlement timeout', () => {
   async function run(
     kind: 'agent' | 'loop',
     sendQuery: IAgentProvider['sendQuery'],
-    structured = false
+    structured = false,
+    provider: 'codex' | 'claude' = 'codex'
   ) {
     const store = createMockStore();
     const base = {
       id: 'work',
-      provider: 'codex',
+      provider,
       idle_timeout: idleTimeout,
       retry: { max_attempts: 0 },
       ...(structured
@@ -91,7 +93,7 @@ describe('post-result turn settlement timeout', () => {
           getAgentProvider: () => ({
             sendQuery,
             checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
-            getType: () => 'codex',
+            getType: () => provider,
             getCapabilities: mockCodexCapabilities,
           }),
         },
@@ -101,6 +103,55 @@ describe('post-result turn settlement timeout', () => {
       })
     );
     return store;
+  }
+
+  for (const kind of ['agent', 'loop'] as const) {
+    it.each(['ambient', 'skip_transcript', 'snapshot'] as const)(
+      `${kind}: settles after a Claude housekeeping heartbeat (%s)`,
+      async admission => {
+        async function* sdkEvents() {
+          yield {
+            type: 'result',
+            subtype: 'success',
+            session_id: 'claude-session',
+            is_error: false,
+            result: 'Done. <promise>COMPLETE</promise>',
+          };
+          yield admission === 'snapshot'
+            ? {
+                type: 'system',
+                subtype: 'background_tasks_changed',
+                tasks: [
+                  {
+                    task_id: 'hidden',
+                    task_type: 'monitor',
+                    description: 'Housekeeping',
+                    ambient: true,
+                  },
+                ],
+              }
+            : { type: 'system', subtype: 'task_started', task_id: 'hidden', [admission]: true };
+          yield { type: 'system', subtype: 'task_progress', task_id: 'hidden' };
+          yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+        }
+        const chunks = await Array.fromAsync(
+          streamClaudeMessages(sdkEvents(), [], { kind: 'fresh' }, () => {})
+        );
+        const store = await run(
+          kind,
+          async function* () {
+            yield* chunks;
+          },
+          false,
+          'claude'
+        );
+        expect(persistedEvents(store).filter(event => event.event_type === 'node_failed')).toEqual(
+          []
+        );
+        expect(store.completeWorkflowRun).toHaveBeenCalled();
+        expect(chunks.map(chunk => chunk.type)).toEqual(['result', 'heartbeat', 'settled']);
+      }
+    );
   }
 
   for (const kind of ['agent', 'loop'] as const) {

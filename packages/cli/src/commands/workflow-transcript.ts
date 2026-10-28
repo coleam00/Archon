@@ -117,6 +117,8 @@ function formatProviderEvent(
       return formatSubtask(event);
     case 'hook':
       return formatHook(event);
+    case 'heartbeat':
+      return undefined;
     case 'state_update':
       return event.state === 'requires_action' ? '  waiting on the user' : undefined;
     default:

@@ -1,3 +1,4 @@
+import { awaitingTurnSettlement } from '@archon/provider-contract';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import type {
   IAgentProvider,
@@ -36,7 +37,6 @@ import {
   type WatchdogReset,
   type structuredOutputPass,
   providerReportedFailure,
-  awaitingTurnSettlement,
   assertResultBeforeSettlement,
 } from '../../ai-turn';
 

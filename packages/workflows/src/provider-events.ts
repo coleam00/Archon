@@ -201,6 +201,7 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
         case 'subtask':
           handleSubtask(event);
           return;
+        case 'heartbeat':
         case 'hook':
         case 'agent_thought_chunk':
         case 'compaction':

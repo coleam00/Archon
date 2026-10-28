@@ -604,6 +604,18 @@
             "type",
             "state"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "heartbeat"
+            }
+          },
+          "required": [
+            "type"
+          ]
         }
       ]
     },

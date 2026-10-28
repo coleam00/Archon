@@ -17,8 +17,10 @@ own the interface and stream rules. A provider supplies its id, capabilities, a
 Preserve the runtime's native user settings, authentication, and project guidance.
 
 A successful stream yields provider events, a `result`, then `settled` only after all
-observed work ends. Report usage once. Include the native session id when declaring
-session resume. Carry failures through the typed failure class; do not classify free
+observed work ends. A running state update, new tool call, or started subtask requires
+a fresh result before settlement. Housekeeping progress uses `heartbeat` to reset the
+idle watchdog without starting a new result phase. Report usage once. Include the
+native session id when declaring session resume. Carry failures through the typed failure class; do not classify free
 prose with keyword matching. Cancellation must stop the provider's own work and must
 not manufacture `settled`.
 
