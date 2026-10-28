@@ -136,13 +136,33 @@ compute expressions. Shorthand conditions (`$node.field`) remain single-field on
 With `output_format`, each segment must be an explicit `properties` entry. A reference
 to an undeclared segment, at any depth, fails validation when the producer's schema is
 known locally; otherwise it fails the consuming node at runtime, naming the reference
-and segment. `additionalProperties`, array `items`, `$ref`, and schema combinators do not
-supply declarations. An object with nullable type can declare child properties.
+and segment. Properties declared in any `allOf`, `anyOf`, or `oneOf` branch count,
+including nested compositions and schemas without root `properties`. Declarations are
+a union across branches: a branch-only field is authorized even when another branch
+matches the payload. Composition-only schemas are strict too: a field declared nowhere
+fails at load. `additionalProperties`, array `items`, and `$ref` do not supply
+declarations. An object with nullable type can declare child properties.
 Authorization checks the entire path before reading values, so a typo fails even under
 an absent optional parent. A declared missing or null field or parent resolves to `''`.
 The root output must still be a JSON object. For schemaless `bash:`/`script:` producers,
 every nested key must exist and intermediate values must be objects; a missing key or
 non-object intermediate fails the consuming node.
+
+For example, `$review.output.proposal.action` is declared by this node even though
+the schema has no root `properties`:
+
+```yaml
+- id: review
+  bash: |
+    echo '{"proposal":{"action":"add"}}'
+  output_format:
+    allOf:
+      - properties:
+          proposal:
+            type: object
+            properties:
+              action: { type: string }
+```
 
 A `wait:` node's contract is fixed by the engine. A time or event wait declares
 `status`, `waited_ms`, `event` and `payload`. An [attention wait](/reference/workflow-language/#attention-waits)

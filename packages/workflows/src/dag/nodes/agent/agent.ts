@@ -318,7 +318,6 @@ async function runWorkload(
 
   // Capture the producer's declared field set so downstream `$node.output.field`
   // refs can tell a declared-optional-absent field ('') from a typo (throws).
-  // Only present when output_format declares an object with `properties`.
   const declaredOutputPaths = declaredOutputPathsFromSchema(node.output_format);
 
   return {

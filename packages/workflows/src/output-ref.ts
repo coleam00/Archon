@@ -10,7 +10,7 @@
  *   1. Producer skipped or pending → THROW 'producer-not-run'.
  *   2. Producer failed → THROW 'producer-failed' (#2713). A failed producer's leftover
  *      output is never trusted, however JSON-shaped or non-empty it looks.
- *   3. Producer has `declaredOutputPaths` (an `output_format` with `properties`): every
+ *   3. Producer has `declaredOutputPaths` (explicit properties, including composed schemas): every
  *      prefix of the path must be declared, else THROW 'not-in-schema' naming the first
  *      undeclared segment.
  *   4. Read the object: `structuredOutput` when it is an object, else the output text
@@ -431,8 +431,8 @@ export function declaredFieldsFromSchema(
 /**
  * Every declared object-field path of a producer's output, stored on
  * `NodeOutput.declaredOutputPaths` when it completes. A single-field reference is a
- * depth-1 path. `undefined` means the producer has no object schema and is read
- * schemaless.
+ * depth-1 path. `undefined` means the schema has neither root properties nor root composition
+ * and is read schemaless. An empty array is a strict contract with no declared paths.
  */
 export const declaredOutputPathsSchema = z.array(z.array(z.string()).min(1));
 export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
@@ -444,27 +444,46 @@ export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
 export function declaredOutputPathsFromSchema(
   outputFormat: Record<string, unknown> | undefined
 ): DeclaredOutputPaths | undefined {
-  const props = asPlainObject(outputFormat?.properties);
-  if (props === undefined) return undefined;
+  const keywords = ['allOf', 'anyOf', 'oneOf'] as const;
+  if (
+    outputFormat === undefined ||
+    (asPlainObject(outputFormat.properties) === undefined &&
+      !keywords.some(keyword => Array.isArray(outputFormat[keyword])))
+  ) {
+    return undefined;
+  }
   const paths: DeclaredOutputPaths = [];
-  const visit = (properties: Record<string, unknown>, prefix: string[]): void => {
-    for (const [key, raw] of Object.entries(properties)) {
+  const seen = new Set<string>();
+  const visit = (schema: Record<string, unknown>, prefix: string[]): void => {
+    const type = schema.type;
+    if (
+      prefix.length > 0 &&
+      type !== undefined &&
+      type !== 'object' &&
+      !(Array.isArray(type) && type.includes('object'))
+    ) {
+      return;
+    }
+    for (const [key, raw] of Object.entries(asPlainObject(schema.properties) ?? {})) {
       const path = [...prefix, key];
-      paths.push(path);
-      const schema = asPlainObject(raw);
-      const type = schema?.type;
-      const children = asPlainObject(schema?.properties);
-      if (
-        children &&
-        (type === undefined ||
-          type === 'object' ||
-          (Array.isArray(type) && type.includes('object')))
-      ) {
-        visit(children, path);
+      const identity = JSON.stringify(path);
+      if (!seen.has(identity)) {
+        seen.add(identity);
+        paths.push(path);
       }
+      const child = asPlainObject(raw);
+      if (child !== undefined) visit(child, path);
+    }
+    const branches = keywords.flatMap(keyword => {
+      const value = schema[keyword];
+      return Array.isArray(value) ? value : [];
+    });
+    for (const raw of branches) {
+      const branch = asPlainObject(raw);
+      if (branch !== undefined) visit(branch, prefix);
     }
   };
-  visit(props, []);
+  visit(outputFormat, []);
   return paths;
 }
 

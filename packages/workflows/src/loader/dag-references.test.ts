@@ -10,6 +10,89 @@ import {
 import { describe, it, expect } from 'bun:test';
 
 describe('DAG output ref validation', () => {
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    for (const mixed of [false, true]) {
+      const schema = {
+        ...(mixed ? { properties: { direct: { type: 'number' } } } : {}),
+        [keyword]: [
+          { properties: { proposal: { anyOf: [{ properties: { action: { type: 'string' } } }] } } },
+        ],
+      };
+      const workflow = (field: string) =>
+        Bun.YAML.stringify({
+          name: 'composed-output',
+          description: 'Composed declaration references',
+          nodes: [
+            { id: 'review', bash: 'echo review', output_format: schema },
+            {
+              id: 'consume',
+              bash: `echo $review.output.${field}`,
+              when: `$review.output.${field} == 'add'`,
+              depends_on: ['review'],
+            },
+          ],
+        });
+      it(`accepts ${mixed ? 'mixed' : 'composition-only'} ${keyword} paths in templates and conditions`, () => {
+        parseWorkflowYaml(workflow('proposal.action'));
+      });
+      it(`refuses undeclared ${mixed ? 'mixed' : 'composition-only'} ${keyword} paths`, () => {
+        for (const field of ['extra', 'proposal.typo']) {
+          expectRejected(workflow(field), [`$review.output.${field}`, 'not declared']);
+        }
+      });
+    }
+    it(`checks composed ${keyword} paths in prior-iteration references`, () => {
+      const workflow = (field: string) =>
+        Bun.YAML.stringify({
+          name: 'composed-loop',
+          description: 'Prior composed declaration references',
+          nodes: [
+            {
+              id: 'refine',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 2,
+                nodes: [
+                  {
+                    id: 'work',
+                    bash: 'echo work',
+                    output_format: {
+                      [keyword]: [
+                        {
+                          properties: { proposal: { properties: { action: { type: 'string' } } } },
+                        },
+                      ],
+                    },
+                  },
+                  {
+                    id: 'guarded',
+                    bash: `echo $LOOP_PREV.work.output.${field}`,
+                    when: `$LOOP_PREV.work.output.${field} == 'add'`,
+                    depends_on: ['work'],
+                  },
+                ],
+              },
+            },
+          ],
+        });
+      parseWorkflowYaml(workflow('proposal.action'));
+      expectRejected(workflow('proposal.typo'), ['typo', 'not declared']);
+    });
+    it(`refuses undeclared fields in empty ${keyword} contracts`, () => {
+      expectRejected(
+        Bun.YAML.stringify({
+          name: 'empty-composed',
+          description: 'Empty strict contract',
+          nodes: [
+            { id: 'source', bash: 'echo source', output_format: { [keyword]: [true] } },
+            { id: 'consumer', bash: 'echo $source.output.extra', depends_on: ['source'] },
+          ],
+        }),
+        ['$source.output.extra', 'not declared']
+      );
+    });
+  }
+
   it.each([
     [
       'nested output paths in approval messages',
