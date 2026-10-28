@@ -1,9 +1,8 @@
 import { type ProviderRegistry } from '@archon/provider-contract';
-import { readFile, readdir, access, stat } from 'fs/promises';
+import { readFile, readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
-import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import type { WorkflowDefinition, WorkflowLoadError, WorkflowSource } from '../schemas';
-import { MAX_DISCOVERY_DEPTH } from '../command-validation';
+import { isWorkflowSubdirectory } from '../workflow-layout';
 import { parseWorkflow } from '../loader';
 import { isValidWorkflowFolderSegment, qualifyWorkflowResources } from '../packaged-workflow';
 import { FIXTURES_DIR } from '../fixture-layout';
@@ -117,39 +116,6 @@ export async function loadScopeDirectory(
     await loadWorkflowsFromDir(context, flatDir),
     await loadPackagedWorkflowsFromDir(context, packagedRoot, source)
   );
-}
-
-// `MAX_DISCOVERY_DEPTH` (= 1: one level of grouping, e.g.
-// `.archon/workflows/team/foo.yaml`) is imported from `command-validation`,
-// the dependency-free leaf module, so the loader here and the workflow-name
-// validator there share one source of truth and cannot drift apart. We stop at
-// one level deliberately — deeper nesting has never been part of the documented
-// convention and adds only routing ambiguity.
-
-async function isPackDirectory(dirPath: string): Promise<boolean> {
-  try {
-    await access(join(dirPath, PLUGIN_MANIFEST_FILE));
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw error;
-  }
-}
-
-async function isWorkflowSubdirectory(
-  entryPath: string,
-  entry: string,
-  depth: number
-): Promise<boolean> {
-  // A `fixtures/` directory holds fixture data, never workflows, at any depth.
-  if (entry === FIXTURES_DIR) return false;
-  // Only descend if we're still within the depth cap. Past the cap,
-  // subdirectories are ignored (same convention as the paths-package
-  // `findCommandFiles` depth cap).
-  if (depth >= MAX_DISCOVERY_DEPTH) return false;
-  // A directory holding a pack manifest is a pack, read only by the pack loader,
-  // so a copied pack loads the same tree the same way as when it was installed.
-  return !(await isPackDirectory(entryPath));
 }
 
 /**

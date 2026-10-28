@@ -3,9 +3,11 @@ import { join, basename, resolve } from 'path';
 import { getBundledWorkflowsPath } from '@archon/paths';
 import { providerRegistry } from '@archon/providers';
 import { isValidWorkflowFolderSegment } from '@archon/workflows/workflow-discovery';
+import { isWorkflowSubdirectory } from '@archon/workflows/workflow-layout';
 import { FIXTURES_DIR } from '@archon/workflows/fixture-layout';
 import { parseWorkflow, parseYaml } from '@archon/workflows/loader';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
+import { getLog } from './api-route-kit';
 
 /** A workflow definition found by name: its text, where it came from, and how it parsed. */
 export interface WorkflowFile {
@@ -27,12 +29,7 @@ function isNotFound(error: unknown): boolean {
 }
 
 async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflowFile | null> {
-  const candidates = new Set([
-    `${name}.yaml`,
-    `${name}.yml`,
-    ...(await flatWorkflowCandidates(dir)),
-  ]);
-  for (const filename of candidates) {
+  for await (const filename of flatWorkflowCandidates(dir, name)) {
     const absolutePath = join(dir, filename);
     try {
       if (!(await stat(absolutePath)).isFile()) continue;
@@ -47,14 +44,31 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
   return null;
 }
 
-async function flatWorkflowCandidates(dir: string): Promise<string[]> {
-  const files = ((await sortedEntries(dir)) ?? []).filter(file => /\.ya?ml$/.test(file));
-  for await (const group of workflowFolderSegments(dir)) {
-    for (const file of (await sortedEntries(join(dir, group))) ?? []) {
-      if (/\.ya?ml$/.test(file)) files.push(join(group, file));
+async function* flatWorkflowCandidates(dir: string, name: string): AsyncGenerator<string> {
+  yield `${name}.yaml`;
+  yield `${name}.yml`;
+  const entries = (await sortedEntries(dir)) ?? [];
+  for (const entry of entries) {
+    if (/\.ya?ml$/.test(entry)) yield entry;
+  }
+  for (const entry of entries) {
+    const entryPath = join(dir, entry);
+    if (!(await isDirectory(entryPath))) continue;
+    const files = await flatGroupFiles(entryPath, entry);
+    for (const file of files) {
+      if (/\.ya?ml$/.test(file)) yield join(entry, file);
     }
   }
-  return files;
+}
+
+async function flatGroupFiles(entryPath: string, entry: string): Promise<string[]> {
+  try {
+    if (!(await isWorkflowSubdirectory(entryPath, entry, 0))) return [];
+    return (await sortedEntries(entryPath)) ?? [];
+  } catch (err) {
+    getLog().warn({ err, entryPath }, 'workflow.group_read_failed');
+    return [];
+  }
 }
 
 function flatWorkflowAnswersToName(

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, writeFile } from 'fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, unlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -13,23 +13,27 @@ const trackTempRoot = trackTempRoots();
 const invalid = 'name: declared-review\nthinking: high\n';
 
 describe('file lookup uses declared error names', () => {
-  test.each(['file.yaml', 'triage/file.yaml', 'pack/folder/file.yaml'])(
-    '%s answers only to its known declared name',
-    async filename => {
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'workflow-file-name-')));
-      const path = join(root, filename);
-      await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, invalid);
-      const hit = await findWorkflowAt(root, 'declared-review');
-      expect(hit?.parsed.error).toMatchObject({
-        workflowName: 'declared-review',
-        errorType: 'validation_error',
-      });
-      for (const alias of ['file', 'folder', 'DECLARED-REVIEW', 'review']) {
-        expect(await findWorkflowAt(root, alias)).toBeNull();
-      }
+  test.each([
+    'file.yaml',
+    'triage/file.yaml',
+    '.hidden/file.yaml',
+    'team..triage/file.yaml',
+    ...(process.platform === 'win32' ? [] : ['team:triage/file.yaml', 'team\\triage/file.yaml']),
+    'pack/folder/file.yaml',
+  ])('%s answers only to its known declared name', async filename => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'workflow-file-name-')));
+    const path = join(root, filename);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, invalid);
+    const hit = await findWorkflowAt(root, 'declared-review');
+    expect(hit?.parsed.error).toMatchObject({
+      workflowName: 'declared-review',
+      errorType: 'validation_error',
+    });
+    for (const alias of ['file', 'folder', 'DECLARED-REVIEW', 'review']) {
+      expect(await findWorkflowAt(root, alias)).toBeNull();
     }
-  );
+  });
 
   test.each(['file.yaml', 'pack/folder/file.yaml'])(
     '%s retains filename attribution when no name is known',
@@ -62,6 +66,8 @@ test('embedded bundled errors use the declared name when known', () => {
   BUNDLED_WORKFLOWS['file'] = 'name: [invalid';
   expect(findBundledWorkflow('file')?.parsed.error?.errorType).toBe('parse_error');
 });
+
+const supportsFilePermissions = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 const valid = 'name: review\ndescription: Review\nnodes:\n  - id: run\n    bash: echo ok\n';
 
@@ -111,7 +117,7 @@ test.each(['project', 'global'] as const)(
       const root =
         source === 'global' ? join(home, 'workflows') : join(home, '.archon', 'workflows');
       await mkdir(join(root, 'triage'), { recursive: true });
-      await writeFile(join(root, 'triage', 'file.yaml'), invalid);
+
       await writeFile(join(root, 'review.yaml'), valid);
       await mkdir(join(root, 'assets.yaml'));
       await mkdir(join(root, 'pack', 'flow'), { recursive: true });
@@ -121,6 +127,82 @@ test.each(['project', 'global'] as const)(
       );
       const app = new OpenAPIHono();
       registerWorkflowDefinitionRoutes(app);
+      for (const group of [
+        '.hidden',
+        'team..triage',
+        ...(process.platform === 'win32' ? [] : ['team:triage', 'team\\triage']),
+      ]) {
+        const folder = join(root, group);
+        await mkdir(folder);
+        await writeFile(join(folder, 'file.yaml'), invalid);
+        const grouped = await app.request('/api/workflows/declared-review');
+        expect(grouped.status).toBe(500);
+        expect(await grouped.text()).toContain('thinking');
+        const savedGroup = await app.request(`/api/workflows/declared-review?source=${source}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            definition: {
+              name: 'declared-review',
+              description: 'Repaired',
+              nodes: [{ id: 'run', bash: 'echo ok' }],
+            },
+          }),
+        });
+        expect(savedGroup.status).toBe(200);
+        expect(await readFile(join(folder, 'file.yaml'), 'utf8')).toContain('Repaired');
+        await unlink(join(folder, 'file.yaml'));
+      }
+      await mkdir(join(root, 'copied-pack'));
+      await writeFile(join(root, 'copied-pack', 'archon-plugin.json'), '{}');
+      await writeFile(
+        join(root, 'copied-pack', 'example.yaml'),
+        valid.replace('review', 'ignored-example')
+      );
+      expect((await app.request('/api/workflows/ignored-example')).status).toBe(404);
+      const createdExample = await app.request(`/api/workflows/ignored-example?source=${source}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          definition: {
+            name: 'ignored-example',
+            description: 'New root',
+            nodes: [{ id: 'run', bash: 'echo ok' }],
+          },
+        }),
+      });
+      expect(createdExample.status).toBe(200);
+      expect(await readFile(join(root, 'ignored-example.yaml'), 'utf8')).toContain('New root');
+      expect(await readFile(join(root, 'copied-pack', 'example.yaml'), 'utf8')).toContain(
+        'description: Review'
+      );
+
+      if (supportsFilePermissions) {
+        const restricted = join(root, 'restricted');
+        await mkdir(restricted);
+        await chmod(restricted, 0);
+        try {
+          expect((await app.request('/api/workflows/review')).status).toBe(200);
+          const savedRoot = await app.request(`/api/workflows/review?source=${source}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              definition: {
+                name: 'review',
+                description: 'Root updated',
+                nodes: [{ id: 'run', bash: 'echo ok' }],
+              },
+            }),
+          });
+          expect(savedRoot.status).toBe(200);
+          expect(await readFile(join(root, 'review.yaml'), 'utf8')).toContain('Root updated');
+          await writeFile(join(root, 'triage', 'scanned.yaml'), valid.replace('review', 'scanned'));
+          expect((await app.request('/api/workflows/scanned')).status).toBe(200);
+        } finally {
+          await chmod(restricted, 0o700);
+        }
+      }
+      await writeFile(join(root, 'triage', 'file.yaml'), invalid);
       const broken = await app.request('/api/workflows/declared-review');
       expect(broken.status).toBe(500);
       expect(await broken.text()).toContain('thinking');
@@ -157,6 +239,30 @@ test.each(['project', 'global'] as const)(
       codebases.mockRestore();
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
+    }
+  }
+);
+
+test.skipIf(!supportsFilePermissions)(
+  'an unreadable group cannot hide a scanned exact workflow, but requested read failures propagate',
+  async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'workflow-read-errors-')));
+    const restricted = join(root, 'a-restricted');
+    await mkdir(restricted);
+    await writeFile(join(root, 'different.yaml'), valid);
+    await chmod(restricted, 0);
+    try {
+      expect((await findWorkflowAt(root, 'review'))?.filename).toBe('different.yaml');
+    } finally {
+      await chmod(restricted, 0o700);
+    }
+    const requested = join(root, 'review.yaml');
+    await writeFile(requested, valid);
+    await chmod(requested, 0);
+    try {
+      await expect(findWorkflowAt(root, 'review')).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      await chmod(requested, 0o600);
     }
   }
 );
