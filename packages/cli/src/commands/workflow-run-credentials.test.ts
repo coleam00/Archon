@@ -42,23 +42,19 @@ describe('workflow run credential launch refusal', () => {
       { detach, adopt: true },
     ])
   )('blocks before isolation, title generation and spawning (%j)', async ({ detach, adopt }) => {
-    const adapter = await import('@archon/core/workflows/store-adapter');
-    const original = adapter.createWorkflowDeps;
-    const createDeps = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
-      ...original(),
-      isPerUserProviderKeysEnabled: () => true,
-      getUserProviderCredential: async (_userId, vendor) => ({
-        kind: 'api_key',
-        getStatus: async () =>
-          adopt && vendor === 'anthropic'
-            ? { state: 'usable', source: 'archon' }
-            : {
-                state: 'unusable',
-                source: 'archon',
-                evidence: 'stored credential unreadable',
-              },
-      }),
-    }));
+    const host = createTestWorkflowHost();
+    host.deps.isPerUserProviderKeysEnabled = () => true;
+    host.deps.getUserProviderCredential = async (_userId, vendor) => ({
+      kind: 'api_key',
+      getStatus: async () =>
+        adopt && vendor === 'anthropic'
+          ? { state: 'usable', source: 'archon' }
+          : {
+              state: 'unusable',
+              source: 'archon',
+              evidence: 'stored credential unreadable',
+            },
+    });
     const isolation = await import('@archon/isolation');
     const core = await import('@archon/core');
     const codebases = await import('@archon/core/db/codebases');
@@ -96,7 +92,7 @@ describe('workflow run credential launch refusal', () => {
     const spawn = spyOn(Bun, 'spawn');
     try {
       await expect(
-        workflowRunCommand(createTestWorkflowHost(), '/test/path', 'credential-run', 'go', {
+        workflowRunCommand(host, '/test/path', 'credential-run', 'go', {
           detach,
           ...(adopt ? { adoptRunId: adoptedRunId } : {}),
         })
@@ -111,7 +107,6 @@ describe('workflow run credential launch refusal', () => {
       expect(spawn).not.toHaveBeenCalled();
     } finally {
       spawn.mockRestore();
-      createDeps.mockRestore();
     }
   });
 
