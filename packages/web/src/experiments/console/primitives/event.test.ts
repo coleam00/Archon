@@ -660,6 +660,22 @@ describe('foldNodeRuns — cost scope', () => {
       events.map(e => ({ node_id: e.nodeId ?? '', state: 'completed' as const }))
     );
 
+  test.each([
+    { cost_partial: true },
+    { spend: { costUsd: { source: 'provider', value: 0.03, partial: true } } },
+  ])('partial proof follows the latest completion and engine state (%j)', proof => {
+    const partial = toRunEvent(
+      raw({ event_type: 'node_completed', data: { cost_usd: 0.03, ...proof } })
+    );
+    const replay = toRunEvent(raw({ event_type: 'node_skipped_prior_success' }));
+    for (const state of ['pending', 'running', 'completed', 'failed', 'skipped'] as const) {
+      const [run] = foldNodeRuns([partial, replay], [{ node_id: 'node-a', state }]);
+      expect(run?.costPartial).toBe(state === 'completed');
+    }
+    const exact = completed('node-a', 0, 'own');
+    expect(foldCompleted([partial, exact])[0]).toMatchObject({ costUsd: 0, costPartial: false });
+  });
+
   test('a persisted completion preserves reported zero cost and total scope', () => {
     const runs = foldCompleted([completed('build', 0, 'total')]);
     expect(runs).toHaveLength(1);

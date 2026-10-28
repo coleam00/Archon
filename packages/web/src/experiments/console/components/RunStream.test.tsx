@@ -131,6 +131,7 @@ describe('RunStream tool rendering', () => {
     skipReason: null,
     skipExpr: null,
     costUsd: null,
+    costPartial: false,
     costScope: null,
     stopReason: null,
     numTurns: null,
@@ -502,4 +503,35 @@ describe('RunStream cleanup warnings', () => {
     for (const warning of warnings) expect(html).toContain(warning);
     expect(html).not.toContain('Waiting for first event');
   });
+});
+
+test.each([
+  { cost_partial: true },
+  { spend: { costUsd: { source: 'provider', value: 0.03, partial: true } } },
+])('RunStream labels persisted partial cost as a floor (%j)', proof => {
+  const event = toRunEvent({
+    id: 'cost',
+    workflow_run_id: 'r1',
+    event_type: 'node_completed',
+    step_index: null,
+    step_name: 'grp',
+    cost_scope: 'total',
+    data: { cost_usd: 0.03, ...proof },
+    created_at: '2026-10-02T10:00:00.000Z',
+  });
+  const html = renderToStaticMarkup(
+    <StreamContextProvider value={{ runStartedAt: event.timestamp }}>
+      <RunStream
+        messages={[]}
+        events={[event]}
+        nodes={[{ node_id: 'grp', state: 'completed' }]}
+        providerEvents={new Map()}
+        showToolCalls={false}
+        showSystem={false}
+        selectedNodeId="all"
+      />
+    </StreamContextProvider>
+  );
+  expect(html).toContain('· total at least $0.03');
+  expect(html).not.toContain('· total $0.03');
 });

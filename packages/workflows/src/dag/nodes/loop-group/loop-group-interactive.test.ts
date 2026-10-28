@@ -43,6 +43,110 @@ describe('interactive loop_group gate and resume', () => {
     await removeTempTree(testDir);
   });
 
+  it.each([
+    { feedback: false, priorCost: undefined },
+    { feedback: true, priorCost: undefined },
+    { feedback: false, priorCost: 0.02 },
+    { feedback: true, priorCost: 0.02 },
+  ])(
+    'retains captured incomplete cost without charging prior spend again (%j)',
+    async ({ feedback, priorCost }) => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'APPROVED' };
+        yield {
+          type: 'result',
+          sessionId: 'unpriced',
+          ...(priorCost !== undefined && mockSendQueryDag.mock.calls.length === 2
+            ? { cost: priorCost }
+            : {}),
+        };
+      });
+      const workflow = {
+        name: 'group-cost-resume',
+        nodes: [
+          {
+            id: 'grp',
+            kind: 'loop_group' as const,
+            loop_group: {
+              until: 'APPROVED',
+              max_iterations: 3,
+              fresh_context: true,
+              interactive: true,
+              gate_message: 'Review.',
+              nodes: [
+                {
+                  id: 'work',
+                  kind: 'agent' as const,
+                  source: { kind: 'inline' as const, prompt: 'Work.' },
+                },
+                ...(priorCost !== undefined
+                  ? [
+                      {
+                        id: 'priced',
+                        kind: 'agent' as const,
+                        depends_on: ['work'],
+                        source: { kind: 'inline' as const, prompt: 'Price.' },
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          },
+        ],
+      };
+      const first = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: first,
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun('group-cost-resume'),
+        })
+      );
+      const approval = first.store.pauseWorkflowRun.mock.calls[0]?.[1];
+      expect(approval?.execution?.spend.costUsd).toEqual(
+        priorCost === undefined
+          ? { source: 'unavailable', reason: 'incomplete' }
+          : { source: 'provider', value: priorCost, partial: true }
+      );
+      mockSendQueryDag.mockClear();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'APPROVED' };
+        yield { type: 'result', sessionId: 'priced', cost: priorCost === undefined ? 0.03 : 0.015 };
+      });
+      const second = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: second,
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            ...workflow,
+            nodes: workflow.nodes.map(n => ({
+              ...n,
+              loop_group: { ...n.loop_group, signal_completes: true },
+            })),
+          },
+          workflowRun: makeWorkflowRun('group-cost-resume', {
+            metadata: { approval, loop_feedback_given: feedback, loop_user_input: 'Approved' },
+          }),
+        })
+      );
+      expect(mockSendQueryDag.mock.calls.length).toBe(
+        feedback ? (priorCost === undefined ? 1 : 2) : 0
+      );
+      const completed = persistedEvents(second.store).find(
+        e => e.event_type === 'node_completed' && e.step_name === 'grp'
+      );
+      expect(completed?.data?.spend).toMatchObject({
+        costUsd: feedback
+          ? { source: 'provider', value: 0.03, partial: true }
+          : { source: 'unavailable', reason: 'incomplete' },
+      });
+    }
+  );
+
   it.each([0, 2])(
     'retains %i prior iterations when the pre-start status read throws',
     async prior => {
