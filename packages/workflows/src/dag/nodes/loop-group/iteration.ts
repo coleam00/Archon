@@ -248,6 +248,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
 
   const terminalSuspendNode = findLoopGroupTerminalSuspendNode(bodyNodes);
   const iterCtx: RunLayersContext = {
+    providerLimitDeadline: ctx.providerLimitDeadline,
     toolAttention: ctx.toolAttention,
     containerPause: ctx.containerPause,
     bodyGateOwner:
@@ -373,7 +374,8 @@ async function failedBody(
   const failedBodyNodes = failedBodyOutputs.map(({ id, output }) => `'${id}': ${output.error}`);
   const providerFailure = aggregateProviderFailure(
     rootFailures(run.bodyNodes, body.scopedNodeOutputs).map(({ output }) => output.providerFailure),
-    Date.now()
+    Date.now(),
+    ctx.providerLimitDeadline
   );
   const errorMsg = `Loop-group node '${node.id}' failed at iteration ${String(i)}: ${failedBodyNodes.join('; ')}`;
   getLog().warn(

@@ -21,12 +21,7 @@ import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths } from '../output-ref';
 import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../logger';
-import {
-  providerLimitResumeAt,
-  isProviderLimit,
-  rootFailures,
-  type ProviderLimitFailure,
-} from '../executor-shared';
+import { isProviderLimit, rootFailures, type ProviderLimitFailure } from '../executor-shared';
 import { safeSendMessage } from '../platform-messages';
 import type { ContainerRunContext } from '../container-context';
 import { randomUUID } from 'node:crypto';
@@ -38,6 +33,7 @@ import { type ContainerPauseReceipt, statusAfterPauseFailure } from './pause';
 /** What the terminal tally reads: the run's estate, and the outputs and usage its pass left. */
 export type RunTerminalContext = Pick<
   RunLayersContext,
+  | 'providerLimitDeadline'
   | 'deps'
   | 'platform'
   | 'conversationId'
@@ -482,7 +478,7 @@ async function usageLimitWait(
   for (const { nodeId, output } of rootFailures(ctx.workflow.nodes, ctx.nodeOutputs)) {
     const failure = output.providerFailure;
     if (!isProviderLimit(failure)) return undefined;
-    const resumeAt = providerLimitResumeAt(failure, now);
+    const resumeAt = ctx.providerLimitDeadline(failure, now);
     if (resumeAt === undefined) return skip(nodeId, 'reset_unavailable');
     if (latest === undefined || resumeAt > latest.resumeAt)
       latest = { nodeId, resumeAt, cause: failure.class };

@@ -63,6 +63,24 @@ export function providerLimitResumeAt(
 }
 
 /**
+ * Aggregates forward the original failure object. Share this resolver across one execution
+ * pass so each selected deadline survives enclosing aggregates and the final wait.
+ */
+export function createProviderLimitDeadlineResolver(): (
+  failure: ProviderLimitFailure,
+  now: number
+) => number | undefined {
+  const deadlines = new WeakMap<ProviderLimitFailure, number>();
+  return (failure, now) => {
+    const cached = deadlines.get(failure);
+    if (cached !== undefined) return cached;
+    const deadline = providerLimitResumeAt(failure, now);
+    if (deadline !== undefined) deadlines.set(failure, deadline);
+    return deadline;
+  };
+}
+
+/**
  * The failed nodes of one scope that no failure lies upstream of: none of the nodes they
  * transitively depend on failed, whatever state lies between. A failure downstream of
  * another is deferred, whatever caused it: the node may have failed only on its upstream's
@@ -93,17 +111,19 @@ export function rootFailures(
  * every one is a provider limit, so the wait never pauses a run beside an unrelated root
  * failure that each continuation would repeat. Among limits, a usage limit without a reported
  * reset wins because the run cannot wait on it; otherwise the latest
- * {@link providerLimitResumeAt} does, the same deadline the wait ranks top-level nodes by.
+ * deadline wins. The pass-owned resolver preserves that sample for enclosing aggregates
+ * and the final wait.
  */
 export function aggregateProviderFailure(
   failures: readonly (ProviderFailure | undefined)[],
-  now: number
+  now: number,
+  providerLimitDeadline: ReturnType<typeof createProviderLimitDeadlineResolver>
 ): ProviderFailure | undefined {
   if (failures.length <= 1) return failures[0];
   const limits: { failure: ProviderLimitFailure; resumeAt: number | undefined }[] = [];
   for (const failure of failures) {
     if (!isProviderLimit(failure)) return undefined;
-    limits.push({ failure, resumeAt: providerLimitResumeAt(failure, now) });
+    limits.push({ failure, resumeAt: providerLimitDeadline(failure, now) });
   }
   const unwaitable = limits.find(limit => limit.resumeAt === undefined);
   if (unwaitable !== undefined) return unwaitable.failure;

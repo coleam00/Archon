@@ -385,7 +385,13 @@ export async function executeComposeFanOutNode(
     return interruptedFanOutResult(execution, totalCostUsd, totalTokens, tokensUnknown);
   }
 
-  const joined = joinComposeOutcomes(node, fanOut.join, snapshots, outcomes);
+  const joined = joinComposeOutcomes(
+    node,
+    fanOut.join,
+    snapshots,
+    outcomes,
+    ctx.providerLimitDeadline
+  );
   if (joined.status === 'failed') {
     await notify(joined.notice);
     return failResult(

@@ -1,3 +1,4 @@
+import type { createProviderLimitDeadlineResolver } from '../executor-shared';
 import type { ContainerPauseBoundary } from './pause';
 import type { InteractionAdmission } from '../interaction-admission';
 import { newNodeInvocation, startNodeExecution } from '../node-execution';
@@ -113,6 +114,7 @@ export interface RunInputs {
 
 /** Run-level values derived exactly once at the DAG boundary, never supplied by callers. */
 export interface RunDerived {
+  providerLimitDeadline: ReturnType<typeof createProviderLimitDeadlineResolver>;
   containerPause?: ContainerPauseBoundary;
   toolAttention: ReturnType<typeof createRunToolCallAttention>;
   /**

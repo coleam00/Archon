@@ -3,6 +3,7 @@ import type { ComposeFanOutNode } from '../../../schemas';
 import { type JsonValue } from '../../../output-ref';
 import type { FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { aggregateProviderFailure } from '../../../executor-shared';
+import type { RunLayersContext } from '../../run-context';
 import type { ComposeFanOutFailure } from './compose-fan-out-expansion';
 import type { ComposeInstanceOutcome } from './compose-fan-out-instance';
 
@@ -20,7 +21,8 @@ export function joinComposeOutcomes(
   node: ComposeFanOutNode,
   join: ComposeFanOutNode['fan_out']['join'],
   snapshots: readonly FanOutInstanceSnapshot[],
-  outcomes: readonly ComposeInstanceOutcome[]
+  outcomes: readonly ComposeInstanceOutcome[],
+  providerLimitDeadline: RunLayersContext['providerLimitDeadline']
 ): ComposeFanOutJoinResult {
   const ambiguous = outcomes.find(outcome => outcome.status === 'ambiguous');
   if (ambiguous !== undefined) {
@@ -49,7 +51,8 @@ export function joinComposeOutcomes(
           (bad.error ? ` — ${bad.error}` : ''),
         providerFailure: aggregateProviderFailure(
           outcomes.filter(o => o.status !== 'completed').map(o => o.providerFailure),
-          Date.now()
+          Date.now(),
+          providerLimitDeadline
         ),
       };
     }

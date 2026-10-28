@@ -1,4 +1,4 @@
-import { expect, it } from 'bun:test';
+import { expect, it, mock } from 'bun:test';
 import { testTimeout } from '@archon/paths/test-utils';
 import {
   createMockDeps,
@@ -151,6 +151,80 @@ export function registerRateLimitTests(fixture: ReturnType<typeof setupCreditExh
     },
     testTimeout(10_000)
   );
+
+  it('preserves a mixed-reset loop group deadline through the final wait', async () => {
+    const now = Date.parse('2026-10-28T12:00:00Z');
+    const resetAt = new Date(now + 10 * 60_000).toISOString();
+    fixture.useQuery(
+      mock(async function* (prompt: string) {
+        yield {
+          type: 'result' as const,
+          isError: true,
+          failure: {
+            class: 'rate_limited' as const,
+            evidence: 'HTTP 429',
+            ...(prompt.includes('reported-reset') ? { resetAt } : {}),
+          },
+        };
+      })
+    );
+    const store = createMockStore();
+    store.createWorkflowEvent.mockImplementation(async event => {
+      if (event.event_type === 'node_failed' && event.step_name === 'refine')
+        Math.random = () => 0.1;
+    });
+    const realNow = Date.now;
+    const realRandom = Math.random;
+    Date.now = () => now;
+    Math.random = () => 0.7;
+    try {
+      await fixture.withShortRetryDelays(() =>
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: fixture.testDir,
+            workflowRun: makeWorkflowRun('mixed-reset-group'),
+            config: fixture.quotaConfig(),
+            workflow: {
+              name: 'mixed-reset-group',
+              nodes: [
+                {
+                  id: 'refine',
+                  kind: 'loop_group',
+                  loop_group: {
+                    until: 'DONE',
+                    max_iterations: 1,
+                    fresh_context: true,
+                    nodes: [
+                      {
+                        id: 'reported',
+                        kind: 'agent',
+                        source: { kind: 'inline', prompt: 'reported-reset' },
+                      },
+                      {
+                        id: 'resetless',
+                        kind: 'agent',
+                        source: { kind: 'inline', prompt: 'resetless' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          })
+        )
+      );
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+        'mixed-reset-group',
+        expect.objectContaining({ resumeAt: new Date(now + 12 * 60_000).toISOString() }),
+        { kind: 'started', stepName: 'refine' }
+      );
+    } finally {
+      Date.now = realNow;
+      Math.random = realRandom;
+    }
+  });
 
   it('does not wait for a container run, which the continuation host cannot continue', async () => {
     fixture.useQuery(fixture.quotaExhaustedQuery(new Date(Date.now() + 10 * 60_000).toISOString()));
