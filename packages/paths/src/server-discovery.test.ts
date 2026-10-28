@@ -1,10 +1,18 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   ensureStoreId,
   getServerRecordPath,
+  getServerRecordsDir,
   getStoreIdPath,
   readLiveServerRecord,
   readStoreId,
@@ -24,13 +32,13 @@ function makeHome(): string {
   return trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-discovery-')));
 }
 
-function record(home: string, pid = process.pid): ServerRecord {
+function record(home: string, pid = process.pid, startedAt = 0): ServerRecord {
   return {
     pid,
     port: 3456,
     host: '127.0.0.1',
     version: '1.2.3',
-    startedAt: new Date(0).toISOString(),
+    startedAt: new Date(startedAt).toISOString(),
     storeId: ensureStoreId(home),
   };
 }
@@ -93,5 +101,38 @@ describe('server record', () => {
     });
     removeServerRecord(424242, home);
     expect(() => statSync(getServerRecordPath(home))).toThrow();
+    expect(readdirSync(getServerRecordsDir(home))).toEqual([]);
+  });
+
+  test('stopping the newest server hands the record back to an older live one', () => {
+    const home = makeHome();
+    writeServerRecord(record(home, process.pid, 0), home);
+    writeServerRecord(record(home, 424242, 1000), home);
+    removeServerRecord(424242, home);
+    expect(readLiveServerRecord(home)).toEqual(record(home, process.pid, 0));
+    expect(JSON.parse(readFileSync(getServerRecordPath(home), 'utf8'))).toEqual(
+      record(home, process.pid, 0)
+    );
+  });
+
+  test('a newer server killed without cleanup leaves the older one discoverable', () => {
+    const home = makeHome();
+    writeServerRecord(record(home, process.pid, 0), home);
+    writeServerRecord(record(home, 424242, 1000), home);
+    const kill = process.kill.bind(process);
+    spies.push(
+      spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (pid === 424242) throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+        return kill(pid, signal);
+      })
+    );
+    expect(readLiveServerRecord(home)).toEqual(record(home, process.pid, 0));
+    expect(JSON.parse(readFileSync(getServerRecordPath(home), 'utf8'))).toMatchObject({
+      pid: 424242,
+    });
+
+    // The next server to start removes the killed server's record.
+    writeServerRecord(record(home, process.pid, 2000), home);
+    expect(existsSync(join(getServerRecordsDir(home), '424242.json'))).toBe(false);
   });
 });

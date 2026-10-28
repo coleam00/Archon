@@ -6,6 +6,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import {
   getServerRecordPath,
+  getServerRecordsDir,
   readLiveServerRecord,
   readStoreId,
   type ServerRecord,
@@ -128,6 +129,9 @@ test.skipIf(process.platform === 'win32')(
       await stop(server, 'SIGTERM');
       expect(server.child.exitCode).toBe(0);
       expect(existsSync(getServerRecordPath(home))).toBe(false);
+      expect(existsSync(join(getServerRecordsDir(home), `${String(server.record.pid)}.json`))).toBe(
+        false
+      );
     } finally {
       await stop(server, 'SIGKILL');
     }
