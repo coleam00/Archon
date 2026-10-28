@@ -18,6 +18,7 @@ import {
 } from '../when-atom';
 import {
   assertDeclaredOutputPath,
+  declaredOutputSchemasFromSchema,
   assertSupportedOutputRefs,
   outputRefText,
   CURRENT_OUTPUT_PATH_SOURCE,
@@ -104,7 +105,14 @@ function referencedOptionsShapeError(
   const producer = producerOf(ref.nodeId);
   if (producer === undefined || isIncludeDirective(producer)) return undefined;
   if (producer.output_format === undefined) return undefined;
-  const schemas = referencedFieldSchemas(producer.output_format, ref.field.split('.'));
+  const path = ref.field.split('.');
+  const schemas = (declaredOutputSchemasFromSchema(producer.output_format) ?? [])
+    .filter(
+      declaration =>
+        declaration.path.length === path.length &&
+        declaration.path.every((segment, index) => segment === path[index])
+    )
+    .map(declaration => declaration.schema);
   if (schemas.length > 0 && schemas.every(isAttentionOptionsSchema)) return undefined;
   const { properties: optionProperties = {}, required: optionRequired = [] } =
     ATTENTION_OPTION_JSON_SCHEMA;
@@ -115,31 +123,6 @@ function referencedOptionsShapeError(
     })
     .join('; ');
   return `'${options}' must be an array of objects declaring only { ${expected} } in '${ref.nodeId}'s output_format`;
-}
-
-function referencedFieldSchemas(schema: unknown, path: readonly string[], depth = 0): unknown[] {
-  if (depth === path.length) return [schema];
-  if (!isRecord(schema)) return [];
-  const type = schema.type;
-  if (
-    depth > 0 &&
-    type !== undefined &&
-    type !== 'object' &&
-    !(Array.isArray(type) && type.includes('object'))
-  ) {
-    return [];
-  }
-  const key = path[depth];
-  const properties = schema.properties;
-  const direct =
-    key !== undefined && isRecord(properties) && Object.hasOwn(properties, key)
-      ? referencedFieldSchemas(properties[key], path, depth + 1)
-      : [];
-  const branches = ['allOf', 'anyOf', 'oneOf'].flatMap(keyword => {
-    const value = schema[keyword];
-    return Array.isArray(value) ? value : [];
-  });
-  return [...direct, ...branches.flatMap(branch => referencedFieldSchemas(branch, path, depth))];
 }
 
 function isAttentionOptionsSchema(schema: unknown): boolean {

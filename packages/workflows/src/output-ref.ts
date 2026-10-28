@@ -438,12 +438,12 @@ export const declaredOutputPathsSchema = z.array(z.array(z.string()).min(1));
 export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
 
 /**
- * Project an `output_format` schema to its declared paths. A property's children are
- * paths only when it may be an object; a dotted property name stays one segment.
+ * Enumerate explicit declarations, retaining every source schema for repeated paths.
+ * Children are paths only when their parent may be an object; dotted keys stay one segment.
  */
-export function declaredOutputPathsFromSchema(
+export function declaredOutputSchemasFromSchema(
   outputFormat: Record<string, unknown> | undefined
-): DeclaredOutputPaths | undefined {
+): { path: string[]; schema: unknown }[] | undefined {
   const keywords = ['allOf', 'anyOf', 'oneOf'] as const;
   if (
     outputFormat === undefined ||
@@ -452,8 +452,7 @@ export function declaredOutputPathsFromSchema(
   ) {
     return undefined;
   }
-  const paths: DeclaredOutputPaths = [];
-  const seen = new Set<string>();
+  const declarations: { path: string[]; schema: unknown }[] = [];
   const visit = (schema: Record<string, unknown>, prefix: string[]): void => {
     const type = schema.type;
     if (
@@ -466,11 +465,7 @@ export function declaredOutputPathsFromSchema(
     }
     for (const [key, raw] of Object.entries(asPlainObject(schema.properties) ?? {})) {
       const path = [...prefix, key];
-      const identity = JSON.stringify(path);
-      if (!seen.has(identity)) {
-        seen.add(identity);
-        paths.push(path);
-      }
+      declarations.push({ path, schema: raw });
       const child = asPlainObject(raw);
       if (child !== undefined) visit(child, path);
     }
@@ -484,7 +479,17 @@ export function declaredOutputPathsFromSchema(
     }
   };
   visit(outputFormat, []);
-  return paths;
+  return declarations;
+}
+
+export function declaredOutputPathsFromSchema(
+  outputFormat: Record<string, unknown> | undefined
+): DeclaredOutputPaths | undefined {
+  const declarations = declaredOutputSchemasFromSchema(outputFormat);
+  if (declarations === undefined) return undefined;
+  const paths = new Map<string, string[]>();
+  for (const { path } of declarations) paths.set(JSON.stringify(path), path);
+  return [...paths.values()];
 }
 
 /**
