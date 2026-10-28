@@ -9,6 +9,7 @@ import {
 } from '../schemas';
 import { attentionOptionSchema } from '../schemas/wait-node';
 import { isAnnotationOnlyOutputSchema } from '../structured-output';
+import { outputSchemaAlternativesForPath } from '../output-schema-projection';
 import {
   findUnsupportedNestedWhenRef,
   assertSupportedWhenOutputRefs,
@@ -19,7 +20,6 @@ import {
 } from '../when-atom';
 import {
   assertDeclaredOutputPath,
-  outputSchemaAlternativesForPath,
   assertSupportedOutputRefs,
   outputRefText,
   CURRENT_OUTPUT_PATH_SOURCE,
@@ -107,16 +107,12 @@ function referencedOptionsShapeError(
   if (producer === undefined || isIncludeDirective(producer)) return undefined;
   if (producer.output_format === undefined) return undefined;
   const path = ref.field.split('.');
-  const alternatives = outputSchemaAlternativesForPath(producer.output_format, path);
+  const alternatives = outputSchemaAlternativesForPath(producer.output_format, path, schema =>
+    isAnnotationOnlyOutputSchema(schema) ? undefined : isAttentionOptionsSchema(schema)
+  );
   const fits =
     alternatives.length > 0 &&
-    alternatives.every(
-      schemas =>
-        schemas.some(isAttentionOptionsSchema) &&
-        schemas.every(
-          schema => isAttentionOptionsSchema(schema) || isAnnotationOnlyOutputSchema(schema)
-        )
-    );
+    alternatives.every(checks => checks.includes(true) && checks.every(Boolean));
   if (fits) return undefined;
   const { properties: optionProperties = {}, required: optionRequired = [] } =
     ATTENTION_OPTION_JSON_SCHEMA;

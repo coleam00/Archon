@@ -3,9 +3,9 @@ import { parseError, parseWorkflow } from './test-utils';
 import { describe, it, expect } from 'bun:test';
 import { evaluateCondition } from '../condition-evaluator';
 import type { ParseResult } from '../loader';
-import { validateStructuredOutput } from '../structured-output';
+import { validateStructuredOutput, isAnnotationOnlyOutputSchema } from '../structured-output';
 import { resolveAttentionOptions } from '../dag/references';
-import { outputSchemaAlternativesForPath } from '../output-ref';
+import { outputSchemaAlternativesForPath } from '../output-schema-projection';
 
 describe('scalar shared session context', () => {
   function parseSessionContext(yaml: string): ParseResult {
@@ -651,6 +651,93 @@ nodes:
           ).toContain('must be an array of objects declaring only');
         });
 
+        it(`loads ${keyword} options at ${field} despite conflicting required constants`, () => {
+          const choices = {
+            [keyword]: [
+              { properties: { kind: { const: 'a' }, options: validOptions }, required: ['kind'] },
+              { properties: { kind: { const: 'b' } }, required: ['kind'] },
+            ],
+          };
+          for (const conjuncts of [
+            [{ properties: { kind: { const: 'a' } }, required: ['kind'] }, choices],
+            [choices, { properties: { kind: { const: 'a' } }, required: ['kind'] }],
+            [{ required: ['kind'] }, choices, { properties: { kind: { const: 'a' } } }],
+          ]) {
+            const schema = atPath({ type: 'object', allOf: conjuncts });
+            const value = { kind: 'a', options: [{ id: 'continue' }] };
+            expect(validateStructuredOutput(nested ? { result: value } : value, schema)).toEqual({
+              valid: true,
+            });
+            expect(parseWithOptionsSchema(schema, field).error).toBeNull();
+          }
+          const optional = atPath({
+            type: 'object',
+            properties: { kind: { const: 'a' } },
+            [keyword]: [
+              { properties: { options: validOptions } },
+              { properties: { kind: { const: 'b' } } },
+            ],
+          });
+          const missingKind = { options: 'bad' };
+          expect(
+            validateStructuredOutput(nested ? { result: missingKind } : missingKind, optional)
+          ).toEqual({ valid: true });
+          expect(parseWithOptionsSchema(optional, field).error?.error).toContain(
+            'must be an array of objects declaring only'
+          );
+          expect(
+            parseWithOptionsSchema(
+              atPath({
+                type: 'object',
+                allOf: [
+                  { properties: { kind: { const: 'a' } }, required: ['kind'] },
+                  {
+                    properties: { kind: { const: 'b' }, options: validOptions },
+                    required: ['kind'],
+                  },
+                ],
+              }),
+              field
+            ).error?.error
+          ).toContain('must be an array of objects declaring only');
+          const viable = atPath({ type: 'object', ...choices });
+          const value = { kind: 'b', options: 'bad' };
+          expect(validateStructuredOutput(nested ? { result: value } : value, viable)).toEqual({
+            valid: true,
+          });
+          expect(parseWithOptionsSchema(viable, field).error?.error).toContain(
+            'must be an array of objects declaring only'
+          );
+        });
+
+        for (const embedded of [false, true]) {
+          it(`collapses ${keyword} ${embedded ? 'embedded' : 'standalone'} annotations at ${field}`, () => {
+            const schema = atPath({
+              type: 'object',
+              properties: { options: validOptions },
+              allOf: Array.from({ length: 22 }, (_, index) => ({
+                [keyword]: [true, false].map(flag => ({
+                  properties: {
+                    [`flag${index}`]: { const: flag },
+                    options: {
+                      ...(embedded ? validOptions : {}),
+                      description: `Choice ${index}: ${flag}`,
+                      'x-archon-note': `Annotation ${index}: ${flag}`,
+                    },
+                  },
+                  required: [`flag${index}`],
+                })),
+              })),
+            });
+            expect(
+              outputSchemaAlternativesForPath(schema, field.split('.'), value =>
+                isAnnotationOnlyOutputSchema(value) ? undefined : true
+              )
+            ).toHaveLength(1);
+            expect(parseWithOptionsSchema(schema, field).error).toBeNull();
+          });
+        }
+
         it(`collapses independent ${keyword} companions at ${field}`, () => {
           const schema = atPath({
             type: 'object',
@@ -662,7 +749,11 @@ nodes:
               })),
             })),
           });
-          expect(outputSchemaAlternativesForPath(schema, field.split('.'))).toHaveLength(1);
+          expect(
+            outputSchemaAlternativesForPath(schema, field.split('.'), value =>
+              isAnnotationOnlyOutputSchema(value) ? undefined : true
+            )
+          ).toHaveLength(1);
           expect(parseWithOptionsSchema(schema, field).error).toBeNull();
         });
       }
@@ -672,15 +763,29 @@ nodes:
       const schema = {
         properties: { options: validOptions },
         anyOf: [
-          { properties: { left: { const: true } } },
-          { properties: { left: { const: false } } },
+          {
+            properties: {
+              left: { const: true },
+              options: { ...validOptions, description: 'Left true' },
+            },
+          },
+          { properties: { left: { const: false }, options: { description: 'Left false' } } },
         ],
         oneOf: [
-          { properties: { right: { const: true } } },
-          { properties: { right: { const: false } } },
+          { properties: { right: { const: true }, options: { description: 'Right true' } } },
+          {
+            properties: {
+              right: { const: false },
+              options: { ...validOptions, description: 'Right false' },
+            },
+          },
         ],
       };
-      expect(outputSchemaAlternativesForPath(schema, ['options'])).toHaveLength(1);
+      expect(
+        outputSchemaAlternativesForPath(schema, ['options'], value =>
+          isAnnotationOnlyOutputSchema(value) ? undefined : true
+        )
+      ).toHaveLength(1);
       expect(parseWithOptionsSchema(schema).error).toBeNull();
     });
   });
