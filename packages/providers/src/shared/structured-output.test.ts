@@ -3,6 +3,7 @@ import Ajv from 'ajv';
 import Ajv2020 from 'ajv/dist/2020.js';
 import {
   findStrictSchemaIssues,
+  findPreparedStrictSchemaIssues,
   normalizeJsonSchemaForOpenAiStrict,
 } from '@archon/provider-contract';
 import {
@@ -167,6 +168,214 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
       expect(normalizeJsonSchemaForOpenAiStrict(normalized)).toEqual(normalized);
     }
   );
+
+  for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
+    test.each([undefined, true])(
+      `refuses ${operator} branch-only required fields with parent openness %j`,
+      additionalProperties => {
+        const input = {
+          type: 'object',
+          properties: { status: { type: 'string' } },
+          required: ['status'],
+          ...(additionalProperties === undefined ? {} : { additionalProperties }),
+          [operator]: [{ properties: { detail: { type: 'string' } }, required: ['detail'] }],
+        };
+        expect(ajv.compile(input)({ status: 'success', detail: 'Finished' })).toBe(true);
+        expect(findPreparedStrictSchemaIssues(input)).toEqual([
+          expect.objectContaining({
+            kind: 'unsupported-conversion',
+            message: expect.stringMatching(/detail.*complete property map/),
+          }),
+        ]);
+        const complete = {
+          ...input,
+          properties: { ...input.properties, detail: { type: 'string' } },
+          required: ['status', 'detail'],
+        };
+        expect(findPreparedStrictSchemaIssues(complete)).toEqual([]);
+        expect(
+          ajv.compile(normalizeJsonSchemaForOpenAiStrict(complete))({
+            status: 'success',
+            detail: 'Finished',
+          })
+        ).toBe(true);
+      }
+    );
+
+    test(`refuses ${operator} branch-only fields under an empty parent map`, () => {
+      const input = {
+        type: 'object',
+        properties: {},
+        required: [],
+        [operator]: [{ properties: { detail: { type: 'string' } }, required: ['detail'] }],
+      };
+      expect(ajv.compile(input)({ detail: 'Finished' })).toBe(true);
+      expect(findPreparedStrictSchemaIssues(input)).toEqual([
+        expect.objectContaining({
+          kind: 'unsupported-conversion',
+          message: expect.stringContaining('detail'),
+        }),
+      ]);
+    });
+
+    test(`refuses ${operator} nested redeclarations missing parent fields`, () => {
+      const input = {
+        type: 'object',
+        properties: {
+          payload: {
+            type: 'object',
+            properties: { status: { type: 'string' }, message: { type: 'string' } },
+            required: ['status', 'message'],
+          },
+        },
+        required: ['payload'],
+        [operator]: [{ properties: { payload: { properties: { status: { const: 'success' } } } } }],
+      };
+      expect(ajv.compile(input)({ payload: { status: 'success', message: 'Finished' } })).toBe(
+        true
+      );
+      expect(findPreparedStrictSchemaIssues(input)).toEqual([
+        expect.objectContaining({
+          kind: 'unsupported-conversion',
+          message: expect.stringMatching(/payload.*message.*complete.*branch/),
+        }),
+      ]);
+      const complete = {
+        ...input,
+        [operator]: [
+          {
+            properties: {
+              payload: {
+                ...input.properties.payload,
+                properties: {
+                  ...input.properties.payload.properties,
+                  status: { const: 'success' },
+                },
+              },
+            },
+          },
+        ],
+      };
+      expect(findPreparedStrictSchemaIssues(complete)).toEqual([]);
+      expect(
+        ajv.compile(normalizeJsonSchemaForOpenAiStrict(complete))({
+          payload: { status: 'success', message: 'Finished' },
+        })
+      ).toBe(true);
+    });
+
+    test.each(['object', 'array'])(
+      `refuses ${operator} incomplete nested maps inside %s properties`,
+      wrapper => {
+        const complete = {
+          type: 'object',
+          properties: { status: { type: 'string' }, message: { type: 'string' } },
+          required: ['status', 'message'],
+        };
+        const partial = { properties: { status: { const: 'success' } } };
+        const wrap = (schema: Record<string, unknown>) =>
+          wrapper === 'array'
+            ? { type: 'array', items: schema }
+            : { type: 'object', properties: { inner: schema }, required: ['inner'] };
+        const input = {
+          type: 'object',
+          properties: { payload: wrap(complete) },
+          required: ['payload'],
+          [operator]: [{ properties: { payload: wrap(partial) } }],
+        };
+        const value = { status: 'success', message: 'Finished' };
+        expect(
+          ajv.compile(input)({ payload: wrapper === 'array' ? [value] : { inner: value } })
+        ).toBe(true);
+        expect(findPreparedStrictSchemaIssues(input)).toEqual([
+          expect.objectContaining({
+            kind: 'unsupported-conversion',
+            message: expect.stringContaining('message'),
+          }),
+        ]);
+      }
+    );
+
+    test(`refuses ${operator} typed additionalProperties on a partial branch`, () => {
+      const input = {
+        ...conditionalSchema(operator),
+        [operator]: [
+          {
+            properties: { status: { const: 'success' } },
+            required: ['status'],
+            additionalProperties: { type: 'string' },
+          },
+        ],
+      };
+      expect(ajv.compile(input)({ status: 'success', message: 'Finished' })).toBe(true);
+      expect(findPreparedStrictSchemaIssues(input)).toEqual([
+        expect.objectContaining({
+          kind: 'unsupported-conversion',
+          message: expect.stringContaining('complete'),
+        }),
+      ]);
+      const complete = {
+        ...input,
+        [operator]: [
+          {
+            properties: { status: { const: 'success' }, message: { type: 'string' } },
+            required: ['status', 'message'],
+            additionalProperties: { type: 'string' },
+          },
+        ],
+      };
+      expect(findPreparedStrictSchemaIssues(complete)).toEqual([]);
+      expect(
+        ajv.compile(normalizeJsonSchemaForOpenAiStrict(complete))({
+          status: 'success',
+          message: 'Finished',
+        })
+      ).toBe(true);
+    });
+  }
+
+  test.each(['default', 'examples', 'x-data'])(
+    'preserves %s annotation data without interpreting resource declarations',
+    keyword => {
+      const data = {
+        properties: { payload: { $id: 'payload.json', type: 'string' } },
+        anyOf: [{ properties: { status: { const: 'success' } } }],
+      };
+      const input = {
+        ...conditionalSchema('oneOf'),
+        [keyword]: keyword === 'examples' ? [data] : data,
+      };
+      const before = structuredClone(input);
+      expect(ajv.compile(input)({ status: 'success', message: 'Finished' })).toBe(true);
+      expect(findPreparedStrictSchemaIssues(input)).toEqual([]);
+      const normalized = normalizeJsonSchemaForOpenAiStrict(input);
+      expect(normalized[keyword]).toEqual(input[keyword]);
+      expect(normalized[keyword]).not.toBe(input[keyword]);
+      expect(input).toEqual(before);
+    }
+  );
+
+  test('normalizes schemas for keyword-named properties without closing their map', () => {
+    const input = {
+      type: 'object',
+      properties: {
+        properties: {
+          type: 'object',
+          properties: { default: { type: 'string' } },
+          required: ['default'],
+        },
+        default: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] },
+      },
+      required: ['properties', 'default'],
+    };
+    expect(findPreparedStrictSchemaIssues(input)).toEqual([]);
+    const normalized = normalizeJsonSchemaForOpenAiStrict(input);
+    const validate = ajv.compile(normalized);
+    expect(validate({ properties: { default: 'ok' }, default: { value: 'ok' } })).toBe(true);
+    expect(validate({ properties: { default: 'ok', extra: true }, default: { value: 'ok' } })).toBe(
+      false
+    );
+  });
 
   for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
     for (const definitions of ['$defs', 'definitions'] as const) {
@@ -555,7 +764,7 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
         allOf: [{ properties: { x: {} } }, { properties: { y: {} } }],
       },
     };
-    expect(() => normalizeJsonSchemaForOpenAiStrict(input)).not.toThrow();
+    expect(normalizeJsonSchemaForOpenAiStrict(input).default).toEqual(input.default);
   });
 
   test.each(['if', 'then', 'else', 'not'] as const)(
@@ -648,28 +857,26 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
     }
   );
 
-  test('preserves authored branch closure and existing typed-additional-properties policy', () => {
-    for (const additionalProperties of [false, { type: 'string' }]) {
-      const input = {
-        ...conditionalSchema('oneOf'),
-        oneOf: [
-          {
-            properties: { status: { const: 'success' } },
-            required: ['status'],
-            additionalProperties,
-          },
-        ],
-      };
-      const normalized = normalizeJsonSchemaForOpenAiStrict(input);
-      expect(normalized.oneOf).toEqual([
+  test('preserves authored branch closure', () => {
+    const input = {
+      ...conditionalSchema('oneOf'),
+      oneOf: [
         {
           properties: { status: { const: 'success' } },
           required: ['status'],
           additionalProperties: false,
         },
-      ]);
-      expect(ajv.compile(normalized)({ status: 'success', message: 'Finished' })).toBe(false);
-    }
+      ],
+    };
+    const normalized = normalizeJsonSchemaForOpenAiStrict(input);
+    expect(normalized.oneOf).toEqual([
+      {
+        properties: { status: { const: 'success' } },
+        required: ['status'],
+        additionalProperties: false,
+      },
+    ]);
+    expect(ajv.compile(normalized)({ status: 'success', message: 'Finished' })).toBe(false);
   });
 
   test('keeps complete branches, narrower constraints, and oneOf exclusivity', () => {

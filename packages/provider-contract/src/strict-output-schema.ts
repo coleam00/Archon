@@ -58,7 +58,8 @@ export function findPreparedStrictSchemaIssues(
  * Explicitly closed branches retain their authored restriction. Unsupported
  * conditional keywords, composition constraints without usable inline property maps,
  * incomplete schema-valued dependencies on composition ancestry,
- * incompatible allOf property name sets, and branch completion
+ * incompatible property name sets, typed partial branches, incomplete nested
+ * redeclarations, and branch completion
  * that would duplicate a resource identifier or relocate a relative reference
  * across a resource boundary throw before Codex starts.
  *
@@ -80,7 +81,7 @@ export function normalizeJsonSchemaForOpenAiStrict(
     }
   });
   assertCompositionsCanBeClosed(schema);
-  const normalized = normalizeNode(schema) as Record<string, unknown>;
+  const normalized = normalizeNode(schema, 'output_format');
   visitJsonSchema(normalized, 'output_format', (node, path) => {
     const constraints = sameInstanceNodes(node);
     if (constraints.some(hasComposition)) {
@@ -110,7 +111,7 @@ export function normalizeJsonSchemaForOpenAiStrict(
 }
 
 interface ObjectConstraints {
-  properties: Record<string, unknown>;
+  properties?: Record<string, unknown>;
   required: string[];
   relocatedProperties: ReadonlySet<string>;
 }
@@ -119,18 +120,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function normalizeNode(node: unknown, enclosing?: ObjectConstraints): unknown {
-  if (Array.isArray(node)) {
-    return node.map(value => normalizeNode(value));
-  }
-  if (!isRecord(node)) return node;
-
+function normalizeNode(
+  node: Record<string, unknown>,
+  path: string,
+  enclosing?: ObjectConstraints
+): Record<string, unknown> {
   const properties = isRecord(node.properties) ? node.properties : undefined;
   const required = Array.isArray(node.required)
     ? node.required.filter((name): name is string => typeof name === 'string')
     : [];
+  assertBranchCanBeClosed(node, properties, enclosing, path);
   const constraints: ObjectConstraints = {
-    properties: { ...enclosing?.properties, ...properties },
+    properties:
+      properties || enclosing?.properties ? { ...enclosing?.properties, ...properties } : undefined,
     required: [...new Set([...(enclosing?.required ?? []), ...required])],
     relocatedProperties: inheritedPropertyRelocations(node, enclosing),
   };
@@ -140,7 +142,7 @@ function normalizeNode(node: unknown, enclosing?: ObjectConstraints): unknown {
     (node.additionalProperties === undefined || node.additionalProperties === true);
   if (expand) {
     assertInheritedPropertiesCanBeCopied(
-      enclosing.properties,
+      enclosing.properties ?? {},
       properties,
       constraints.relocatedProperties
     );
@@ -148,17 +150,68 @@ function normalizeNode(node: unknown, enclosing?: ObjectConstraints): unknown {
   const source = expand
     ? { ...node, properties: constraints.properties, required: constraints.required }
     : node;
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(source)) {
-    // Composition branches constrain the same instance. Property values, items
-    // and definitions must not inherit the containing object's fields.
-    result[key] =
-      isJsonSchemaCompositionKeyword(key) && Array.isArray(value)
-        ? value.map(branch => normalizeNode(branch, constraints))
-        : normalizeNode(value);
+  const result = structuredClone(source);
+  for (const child of jsonSchemaChildren(result, path)) {
+    Object.assign(
+      child.node,
+      normalizeNode(
+        child.node,
+        child.path,
+        child.relation === 'composition' ? constraints : undefined
+      )
+    );
   }
   if (isObjectSchemaNode(result)) result.additionalProperties = false;
   return result;
+}
+
+function assertBranchCanBeClosed(
+  node: Record<string, unknown>,
+  properties: Record<string, unknown> | undefined,
+  enclosing: ObjectConstraints | undefined,
+  path: string
+): void {
+  if (!enclosing || !properties) return;
+  const inherited = enclosing.properties ?? {};
+  const extra = enclosing.properties
+    ? Object.keys(properties).filter(name => !Object.hasOwn(inherited, name))
+    : [];
+  if (extra.length > 0) {
+    throw new Error(
+      `Codex output schema at ${path} declares branch-only properties ${extra.join(', ')} that enclosing strict closure forbids. Declare the complete property map on the enclosing object and in its branches instead.`
+    );
+  }
+  const missing = Object.keys(inherited).filter(name => !Object.hasOwn(properties, name));
+  if (isRecord(node.additionalProperties) && missing.length > 0) {
+    throw new Error(
+      `Codex output schema at ${path}.additionalProperties cannot close a typed partial branch missing ${missing.join(', ')}. Use a complete inline branch declaring all enclosing properties instead.`
+    );
+  }
+  for (const [name, local] of Object.entries(properties)) {
+    assertNestedPropertyMapsComplete(inherited[name], local, `${path}.properties.${name}`);
+  }
+}
+
+function assertNestedPropertyMapsComplete(parent: unknown, local: unknown, path: string): void {
+  if (!isRecord(parent) || !isRecord(local)) return;
+  for (const parentMap of sameInstancePropertyMaps(parent)) {
+    for (const localMap of sameInstancePropertyMaps(local)) {
+      const missing = Object.keys(parentMap).filter(name => !Object.hasOwn(localMap, name));
+      if (missing.length > 0) {
+        throw new Error(
+          `Codex output schema at ${path} cannot close a nested property missing enclosing fields ${missing.join(', ')}. Use a complete nested property map in the branch instead.`
+        );
+      }
+    }
+  }
+  const parentChildren = new Map(
+    jsonSchemaChildren(parent, path).map(child => [child.path, child])
+  );
+  for (const child of jsonSchemaChildren(local, path)) {
+    if (child.relation !== 'nested') continue;
+    const inherited = parentChildren.get(child.path);
+    if (inherited) assertNestedPropertyMapsComplete(inherited.node, child.node, child.path);
+  }
 }
 
 function inheritedPropertyRelocations(
