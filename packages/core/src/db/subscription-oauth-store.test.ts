@@ -58,7 +58,7 @@ for (const provider of ['anthropic', 'github-copilot']) {
     });
     expect(query).toHaveBeenCalledTimes(2);
     const params = query.mock.calls[1]?.[1];
-    const encrypted: unknown = Array.isArray(params) ? params[4] : undefined;
+    const encrypted: unknown = Array.isArray(params) ? params[0] : undefined;
     expect(typeof encrypted).toBe('string');
     const saved: unknown = JSON.parse(decryptToken(String(encrypted), key));
     expect(saved).toMatchObject({

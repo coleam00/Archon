@@ -5,7 +5,9 @@ import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 process.env.TOKEN_ENCRYPTION_KEY = 'b'.repeat(64);
 
 const db = new SqliteAdapter(':memory:');
+const connection = await import('./connection');
 mock.module('./connection', () => ({
+  ...connection,
   pool: db,
   getDatabase: () => db,
   getDialect: () => sqliteDialect,
