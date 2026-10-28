@@ -370,6 +370,36 @@ nodes:
 });
 
 describe('installed pack boundaries', () => {
+  test.each([false, true])(
+    'rejected support cannot borrow entrypoint identity, broken entry=%s',
+    async brokenEntry => {
+      const pack = reviewKit();
+      await install({
+        ...pack,
+        files: {
+          ...pack.files,
+          'helper/helper.yaml': 'name: review\nthinking: high\n',
+          'review/code-review.yaml': brokenEntry
+            ? 'name: code-review\ndescription: Review\nnodes:\n  - id: broken\n'
+            : 'name: code-review\ndescription: Review\nnodes:\n  - id: run\n    bash: echo ok\n',
+        },
+      });
+      const { errors } = await discover();
+      const supportError = findWorkflowLoadError(errors, 'acme/review-kit/helper/helper');
+      expect(supportError).toMatchObject({
+        filename: 'acme/review-kit/helper/helper.yaml',
+        errorType: 'validation_error',
+      });
+      expect(supportError?.workflowName).toBeUndefined();
+      const entryError = findWorkflowLoadError(errors, REVIEW);
+      if (brokenEntry) {
+        expect(entryError?.filename).toBe('acme/review-kit/review/code-review.yaml');
+      } else {
+        expect(entryError).toBeUndefined();
+      }
+    }
+  );
+
   test.each([
     ['header', 'thinking: high'],
     ['nodes', 'description: Support\nnodes:\n  - id: check'],

@@ -27,20 +27,35 @@ function isNotFound(error: unknown): boolean {
 }
 
 async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflowFile | null> {
-  const acceptedNames = new Set(name.includes('/') ? [name, basename(name)] : [name]);
-  for (const ext of ['yaml', 'yml']) {
-    const filename = `${name}.${ext}`;
+  const candidates = new Set([
+    `${name}.yaml`,
+    `${name}.yml`,
+    ...((await sortedEntries(dir)) ?? []).filter(file => /\.ya?ml$/.test(file)),
+  ]);
+  for (const filename of candidates) {
     const absolutePath = join(dir, filename);
     try {
       const content = await readFile(absolutePath, 'utf-8');
       const parsed = parseWorkflow(content, filename, providerRegistry);
-      if (parsed.workflow !== null && !acceptedNames.has(parsed.workflow.name)) continue;
+      if (!flatWorkflowAnswersToName(parsed, filename, name)) continue;
       return { absolutePath, filename, packaged: false, parsed, content };
     } catch (error) {
       if (!isNotFound(error)) throw error;
     }
   }
   return null;
+}
+
+function flatWorkflowAnswersToName(
+  parsed: WorkflowFile['parsed'],
+  filename: string,
+  name: string
+): boolean {
+  if (parsed.workflow === null) {
+    return (parsed.error.workflowName ?? filename.replace(/\.ya?ml$/, '')) === name;
+  }
+  const acceptedNames = name.includes('/') ? [name, basename(name)] : [name];
+  return acceptedNames.includes(parsed.workflow.name);
 }
 
 /**
@@ -114,12 +129,11 @@ async function readPackagedWorkflow(
 }
 
 /**
- * A packaged workflow answers to the name it declares. One that does not parse
- * has no declared name, so its file stem or workflow folder stands in, letting
- * GET report why the named workflow is broken.
+ * Filename and folder attribution apply only when parsing could not recover a name.
  */
 function answersToName(file: RawWorkflowFile, workflowFolder: string, name: string): boolean {
-  if (file.parsed.workflow !== null) return file.parsed.workflow.name === name;
+  const declaredName = file.parsed.workflow?.name ?? file.parsed.error?.workflowName;
+  if (declaredName !== undefined) return declaredName === name;
   const yamlStem = basename(file.absolutePath).replace(/\.ya?ml$/, '');
   return yamlStem === name || workflowFolder === name;
 }
@@ -161,7 +175,8 @@ export function findBundledWorkflow(name: string): WorkflowFile | null {
   if (direct !== undefined) {
     const filename = `${name}.yaml`;
     const parsed = parseWorkflow(direct, filename, providerRegistry);
-    if (parsed.error !== null || parsed.workflow?.name === name) {
+    const declaredName = parsed.workflow?.name ?? parsed.error?.workflowName;
+    if (declaredName === undefined || declaredName === name) {
       return { filename, parsed, content: direct };
     }
   }
@@ -171,7 +186,7 @@ export function findBundledWorkflow(name: string): WorkflowFile | null {
     if (filenameStem === name) continue;
     const filename = `${filenameStem}.yaml`;
     const parsed = parseWorkflow(content, filename, providerRegistry);
-    if (parsed.workflow?.name !== name) continue;
+    if ((parsed.workflow?.name ?? parsed.error?.workflowName) !== name) continue;
     if (match !== null) throw new Error(`Multiple bundled workflows declare the name '${name}'`);
     match = { filename, parsed, content };
   }

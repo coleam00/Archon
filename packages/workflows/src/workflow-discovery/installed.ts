@@ -1,4 +1,5 @@
 import type { WorkflowLoadError, WorkflowWithSource } from '../schemas';
+import { workflowLoadErrorName } from '../schemas/workflow';
 import { qualifyPackReferences } from '../packaged-workflow';
 import { installedWorkflowName, listInstalledPacks, type InstalledPack } from '../workflow-source';
 import type { DiscoveryContext } from './context';
@@ -120,22 +121,20 @@ function reportPackLoadErrors(
 ): { explainedEntrypoints: Set<string>; rejectedSupportNames: Map<string, string[]> } {
   const explainedEntrypoints = new Set<string>();
   const rejectedSupportNames = new Map<string, string[]>();
+  const entrypointNames = new Set(entrypointPaths.map(([, entry]) => entry));
   for (const error of errors) {
     const affected = entrypointPaths.filter(([path]) => {
       const filename = `${label}/${path}`;
       return filename === error.filename || filename.startsWith(`${error.filename}/`);
     });
     if (affected.length === 0) {
+      const reported = supportLoadError(pack, error, entrypointNames);
       if (error.workflowName !== undefined) {
         const targets = rejectedSupportNames.get(error.workflowName) ?? [];
-        targets.push(installedWorkflowName(pack, error.workflowName));
+        targets.push(workflowLoadErrorName(reported));
         rejectedSupportNames.set(error.workflowName, targets);
       }
-      context.allErrors.push(
-        error.workflowName === undefined
-          ? error
-          : { ...error, workflowName: installedWorkflowName(pack, error.workflowName) }
-      );
+      context.allErrors.push(reported);
     }
     for (const [, entry] of affected) {
       explainedEntrypoints.add(entry);
@@ -143,6 +142,17 @@ function reportPackLoadErrors(
     }
   }
   return { explainedEntrypoints, rejectedSupportNames };
+}
+
+function supportLoadError(
+  pack: InstalledPack,
+  error: WorkflowLoadError,
+  entrypointNames: ReadonlySet<string>
+): WorkflowLoadError {
+  const { workflowName, ...unnamed } = error;
+  return workflowName === undefined || entrypointNames.has(workflowName)
+    ? unnamed
+    : { ...error, workflowName: installedWorkflowName(pack, workflowName) };
 }
 
 function qualifiedPackName(loaded: LoadedInstalledPack, file: PackWorkflowFile): string {
