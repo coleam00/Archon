@@ -221,10 +221,19 @@ async function checkWorktreeOwner(
       safe: !(rootOutcome?.kind === 'stopped' && rootOutcome.cleanupWarnings?.length),
       warnings: [],
     };
+  return checkOwnerStopForRelease(ctx, row, root, rootOutcome);
+}
+
+async function checkOwnerStopForRelease(
+  ctx: OperationContext,
+  row: WorkflowRun,
+  root: WorkflowRun | undefined,
+  rootOutcome: AbandonOwnerOutcome | undefined
+): Promise<{ safe: boolean; warnings: string[] }> {
   let outcome: Awaited<ReturnType<typeof stopLiveOwner>>;
   try {
     outcome =
-      ranInStoppedRootOwner(recorded, root, rootOutcome) && rootOutcome
+      ranInStoppedRootOwner(readExecutionOwner(row.metadata), root, rootOutcome) && rootOutcome
         ? rootOutcome
         : await stopLiveOwner(ctx, row);
   } catch (err) {
