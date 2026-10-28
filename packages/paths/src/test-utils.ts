@@ -1,10 +1,10 @@
 /**
- * Filesystem and logging helpers shared by tests across packages.
+ * Filesystem, logging and environment helpers shared by tests across packages.
  *
  * This module is test-only. Nothing in `src/` imports it; it lives here because
  * `@archon/paths` is the one package every consumer of these helpers already depends on.
  */
-import { afterEach, spyOn } from 'bun:test';
+import { afterEach, beforeEach, spyOn } from 'bun:test';
 import { rm } from 'node:fs/promises';
 import pino from 'pino';
 import { rootLogger, setLogSink } from './logger';
@@ -205,4 +205,38 @@ export function skipCompiledBinaryTests(): boolean {
     );
   }
   return skip;
+}
+
+/** Environment variables the `@archon/paths` path functions read. */
+const PATH_ENV_VARS = [
+  'WORKSPACE_PATH',
+  'WORKTREE_BASE',
+  'ARCHON_HOME',
+  'ARCHON_DOCKER',
+  'HOME',
+  'WSL_DISTRO_NAME',
+] as const;
+
+/**
+ * Save the path environment variables before each test and restore them after it,
+ * deleting any that were unset. Call at the top of a describe block.
+ */
+export function usePathEnvSnapshot(): void {
+  const snapshot: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of PATH_ENV_VARS) {
+      snapshot[key] = process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of PATH_ENV_VARS) {
+      if (snapshot[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = snapshot[key];
+      }
+    }
+  });
 }

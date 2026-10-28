@@ -9,6 +9,7 @@ import {
   expectedGateForOccurrence,
   StaleGateAnswerError,
   type GateAnswerOrigin,
+  type RejectionOperationResult,
   type WorkflowOperations,
 } from '@archon/core/operations/workflow-operations';
 import {
@@ -369,12 +370,7 @@ export function registerRunGateRoutes(
       const result = await rejectWorkflow(runId, body.reason, actor, origin);
 
       if (result.cancelled) {
-        return c.json({
-          success: true,
-          message: result.maxAttemptsReached
-            ? `Workflow rejected and cancelled (max attempts reached): ${run.workflow_name}`
-            : `Workflow rejected: ${run.workflow_name}`,
-        });
+        return c.json({ success: true, message: cancelledRejectionMessage(run, result) });
       }
 
       return c.json({
@@ -424,12 +420,7 @@ export function registerRunGateRoutes(
 
       // A stale occurrence is reported before the current gate judges the decision: the
       // caller answered an earlier pause and must hear that, not "undeclared decision".
-      try {
-        assertAnswerAdmissible(run, origin);
-      } catch (staleError) {
-        if (staleError instanceof StaleGateAnswerError) return apiError(c, 409, staleError.message);
-        throw staleError;
-      }
+      assertAnswerAdmissible(run, origin);
 
       const respondRefusal = answerRefusal(run, decision);
       if (respondRefusal !== null) return apiError(c, 400, respondRefusal);
@@ -437,12 +428,7 @@ export function registerRunGateRoutes(
       const result = await respondToWorkflow(runId, decision, body.text, actor, origin);
 
       if ('cancelled' in result && result.cancelled) {
-        return c.json({
-          success: true,
-          message: result.maxAttemptsReached
-            ? `Workflow rejected and cancelled (max attempts reached): ${run.workflow_name}`
-            : `Workflow rejected: ${run.workflow_name}`,
-        });
+        return c.json({ success: true, message: cancelledRejectionMessage(run, result) });
       }
 
       return c.json({
@@ -451,7 +437,6 @@ export function registerRunGateRoutes(
       });
     } catch (error) {
       if (error instanceof RunActionForbiddenError) return apiError(c, 403, error.message);
-      // A race lost after the pre-check above: the run moved to another pause meanwhile.
       if (error instanceof StaleGateAnswerError) return apiError(c, 409, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_respond_failed');
       return apiError(c, 500, 'Failed to respond to workflow run');
@@ -496,4 +481,12 @@ export function registerRunGateRoutes(
       return apiError(c, 500, 'Failed to answer workflow run');
     }
   });
+}
+
+function cancelledRejectionMessage(run: WorkflowRun, result: RejectionOperationResult): string {
+  const message = result.maxAttemptsReached
+    ? `Workflow rejected and cancelled (max attempts reached): ${run.workflow_name}`
+    : `Workflow rejected: ${run.workflow_name}`;
+  const warnings = (result.cleanupWarnings ?? []).map(warning => ` — warning: ${warning}`);
+  return message + warnings.join('');
 }

@@ -12,7 +12,11 @@ import type { WorkflowDeps, WorkflowConfig } from '@archon/workflows/deps';
 import { WORKFLOW_EVENT_TYPES, type IWorkflowStore } from '@archon/workflows/store';
 import { RUN_GRAPH_METADATA_KEY } from '@archon/workflows/schemas/terminal-record';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { buildTerminalRecord, type TerminalRecordEvent } from '@archon/workflows/terminal-record';
+import {
+  buildTerminalRecord,
+  observeRunArtifacts,
+  type TerminalRecordEvent,
+} from '@archon/workflows/terminal-record';
 import { executeTestDagWorkflow, makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 
@@ -149,7 +153,12 @@ test('a second resume recomputes output invalidated before a rejected node start
       row => row.event_type === 'node_prior_cache_invalidated' && row.step_name === 'consumer'
     )
   ).toBe(true);
-  const failed = await buildTerminalRecord({ run: { ...run, status: 'failed' }, events: rows });
+  const artifacts = await observeRunArtifacts(run);
+  const failed = buildTerminalRecord({
+    run: { ...run, status: 'failed' },
+    events: rows,
+    artifacts,
+  });
   expect(failed.returns).toMatchObject({
     availability: 'unavailable',
     reason: 'node_not_completed',
@@ -159,9 +168,10 @@ test('a second resume recomputes output invalidated before a rejected node start
   const second = await getDagResumeSnapshot(run.id);
   expect(second.completedNodeOutputs.has('consumer')).toBe(false);
   await executeTestDagWorkflow({ ...options, priorCompletedNodes: second.completedNodeOutputs });
-  const completed = await buildTerminalRecord({
+  const completed = buildTerminalRecord({
     run: { ...run, status: 'completed' },
     events: rows,
+    artifacts,
   });
   expect(completed.returns).toEqual({
     availability: 'available',

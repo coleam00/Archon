@@ -19,7 +19,7 @@ New identities are created as members. The operator can designate admins with [`
 
 ## Prerequisites
 
-- Archon server running (see [Getting Started](/getting-started/overview/))
+- Archon server running (`archon serve`; see [Web UI](/adapters/web/))
 - A Discord account
 - "Manage Server" permission on the Discord server you want to add the bot to
 
@@ -102,6 +102,10 @@ DISCORD_REQUIRE_MENTION=false  # true (default) | false
 Only the literal value `false` disables the mention requirement. Mentions that are present are still stripped from the message.
 
 ## Usage
+
+Select a registered project by submitting `/setproject <name>` in the conversation or thread where you want to work. To register a local directory first, submit `/register-project [--folder] <name> <path>`, then select it; registration alone does not bind the conversation. Projectless questions still work. Selection applies to that conversation, not every channel.
+
+Once scoped, the assistant launches and manages runs through its native tools (Claude, Codex, Pi) or the existing CLI (Copilot/OpenCode). CLI launches are detached and headless, use CLI identity and return a run ID for inspection; they do not deliver progress or results to the originating chat. See [Deprecated providers](/getting-started/ai-assistants/#deprecated-providers).
 
 The bot responds to:
 - **Direct Messages**: Just send messages directly

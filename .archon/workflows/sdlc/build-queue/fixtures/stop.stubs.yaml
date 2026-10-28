@@ -12,17 +12,22 @@ facts:
   record: null
   brief: ""
   rounds: []
-  recorded: null
   at_cap: false
   policy_defaults: "/stub/policy"
   pull_request: null
   continues: null
   branch: "build/7-stub-fixture"
+blocked:
+  blocked: []
+  blocked_count: 0
 route:
   decision: launch
+  continues: null
+  ready_head: null
   brief: "stub: continue PR 8"
   reason: "stub: the body is a contract"
   attention: null
+checkout: { head: null, pull_request: null }
 ship__forge: { source: forge }
 ship__triage__triage:
   decision: { contract: NEEDS_CONTRACT_WORK, proposed_edits: { title: "stub: title", body: "stub: body" } }
@@ -33,6 +38,7 @@ ship__triage__triage:
   urgency: { value: none, reason: "stub: urgency" }
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
+  related: []
   summary: "stub: no acceptance stated"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 answer:
@@ -61,7 +67,6 @@ apply:
   options: [{ id: narrow, label: "stub: narrow it" }, { id: park, label: "stub: park it" }]
   class: stop
   asked: { attention: {}, brief: "stub: continue PR 8", by: stop }
-  evaluation: null
 ask: { decision: narrow, text: "stub: drop A4" }
 ruling:
   decision: continue

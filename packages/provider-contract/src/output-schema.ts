@@ -52,15 +52,7 @@ function collectStrictSchemaIssues(
     return out;
   }
   const record = schema as Record<string, unknown>;
-  const properties = record.properties;
-  if (isObjectSchemaNode(record) && !('properties' in record)) {
-    out.push({ kind: 'missing-properties', schemaPath: path });
-  }
-  if (properties !== null && typeof properties === 'object' && !Array.isArray(properties)) {
-    const required = new Set(Array.isArray(record.required) ? (record.required as string[]) : []);
-    const missing = Object.keys(properties).filter(key => !required.has(key));
-    if (missing.length > 0) out.push({ kind: 'missing-required', schemaPath: path, missing });
-  }
+  collectObjectIssues(record, path, out);
 
   const collectSchema = (key: string): void => {
     if (key in record) collectStrictSchemaIssues(record[key], `${path}.${key}`, out);
@@ -107,4 +99,20 @@ function collectStrictSchemaIssues(
     collectSchemaMap(key);
   }
   return out;
+}
+
+function collectObjectIssues(
+  record: Record<string, unknown>,
+  path: string,
+  out: StrictSchemaIssue[]
+): void {
+  const properties = record.properties;
+  if (isObjectSchemaNode(record) && !('properties' in record)) {
+    out.push({ kind: 'missing-properties', schemaPath: path });
+  }
+  if (properties !== null && typeof properties === 'object' && !Array.isArray(properties)) {
+    const required = new Set(Array.isArray(record.required) ? (record.required as string[]) : []);
+    const missing = Object.keys(properties).filter(key => !required.has(key));
+    if (missing.length > 0) out.push({ kind: 'missing-required', schemaPath: path, missing });
+  }
 }

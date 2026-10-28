@@ -1,9 +1,14 @@
+import * as chatScope from '../workflow-scope';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { getProjectStoragePaths, resolveProjectStorageKey } from '@archon/paths/archon-paths';
+import {
+  getProjectStoragePaths,
+  resolveProjectStorageKey,
+  projectKeyForCodebase,
+} from '@archon/paths/archon-paths';
 import { providerRegistry } from '@archon/providers';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
@@ -18,12 +23,14 @@ import {
   createInMemoryWorkflowStore,
 } from '../test-support/workflow-store';
 import { stateCommand } from './state';
-import { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow';
+import { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
 
 const track = trackTempRoots();
+const scopeSpy = spyOn(chatScope, 'readChatProjectScope');
 const priorEnv = { ...process.env };
 afterEach(() => {
   process.env = { ...priorEnv };
+  scopeSpy.mockReturnValue(undefined);
 });
 
 function createHost(): WorkflowHost {
@@ -177,14 +184,15 @@ test('the queue scopes by project the way archon state names it, across a rename
 
   const scratch = await list(scratchDir);
   expect(scratch.map(item => item.runId)).toEqual([unregistered]);
+  const scratchKey = await stateKey(scratchDir);
   expect(scratch[0]?.project).toEqual({
-    key: await stateKey(scratchDir),
+    key: scratchKey,
     codebaseId: null,
-    name: 'scratch',
+    name: scratchKey.slice(scratchKey.lastIndexOf('/') + 1),
   });
-  expect((await list(registeredDir, { project: '_cwd/scratch' })).map(item => item.runId)).toEqual([
-    unregistered,
-  ]);
+  expect(
+    (await list(registeredDir, { project: await stateKey(scratchDir) })).map(item => item.runId)
+  ).toEqual([unregistered]);
 
   expect((await list(registeredDir, { all: true })).map(item => item.runId).sort()).toEqual(
     [current, renamed, unregistered].sort()
@@ -346,7 +354,8 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
   };
   const alphaDir = projectDir('alpha');
   const alpha = await pausedIn(alphaDir);
-  const beta = await pausedIn(projectDir('beta'));
+  const betaDir = projectDir('beta');
+  const beta = await pausedIn(betaDir);
   const watch = (opts: Partial<Parameters<typeof workflowAttentionCommand>[3]> = {}) =>
     streamed(
       () =>
@@ -362,14 +371,24 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
     lines.flatMap(line =>
       line.type === 'attention' ? [[(line.item as AttentionQueueItem).runId, line.project]] : []
     );
-  const alphaProject = { key: '_cwd/alpha', codebaseId: null, name: 'alpha' };
-  const betaProject = { key: '_cwd/beta', codebaseId: null, name: 'beta' };
+  const alphaKey = projectKeyForCodebase(null, alphaDir);
+  const alphaProject = {
+    key: alphaKey,
+    codebaseId: null,
+    name: alphaKey.slice(alphaKey.lastIndexOf('/') + 1),
+  };
+  const betaKey = projectKeyForCodebase(null, betaDir);
+  const betaProject = {
+    key: betaKey,
+    codebaseId: null,
+    name: betaKey.slice(betaKey.lastIndexOf('/') + 1),
+  };
 
   const own = await watch();
   expect(own.code).toBe(0);
   expect(runsOf(own.lines)).toEqual([[alpha, alphaProject]]);
   expect(
-    (await watch({ project: '_cwd/beta' })).lines.filter(line => line.type === 'attention')
+    (await watch({ project: betaKey })).lines.filter(line => line.type === 'attention')
   ).toMatchObject([{ project: betaProject, item: { runId: beta } }]);
   expect(runsOf((await watch({ all: true })).lines)).toEqual(
     expect.arrayContaining([
@@ -449,6 +468,8 @@ test.each([true, false])(
         type: 'resumed',
         runId: 'healthy',
         project: null,
+        workflow: 'wf',
+        parentRunId: null,
         status: 'running',
         cursor: workflowEventCursor('fixture:2'),
       },
@@ -493,6 +514,72 @@ test.each([true, false])(
     }
   }
 );
+
+test("watch text names a child run's parent and a failure with no recorded error class", async () => {
+  const host = createHost();
+  const terminal = (runId: string, parentRunId: string | null): AttentionStreamLine => ({
+    type: 'terminal',
+    runId,
+    project: null,
+    workflow: 'w',
+    parentRunId,
+    status: 'failed',
+    outcome: null,
+    cause: { node: 'build', errorClass: null },
+    cursor: workflowEventCursor('fixture:1'),
+  });
+  const attention: AttentionStreamLine = {
+    type: 'attention',
+    cursor: workflowEventCursor('fixture:0'),
+    snapshot: true,
+    project: null,
+    workflow: 'w',
+    parentRunId: 'p1',
+    item: {
+      kind: 'unreadable',
+      runId: 'child',
+      workflow: 'w',
+      project: null,
+      parentRunId: 'p1',
+      fanOut: null,
+      revision: 1,
+      labels: {},
+      pausedAt: null,
+      context: { artifactsDir: null, transcript: null, workingPath: null, branch: null },
+      reason: 'malformed_gate',
+      detail: 'gate unreadable',
+    },
+  };
+  const watch = spyOn(host.engine, 'watchAttention').mockImplementation(async listener => {
+    await listener(attention);
+    await listener(terminal('child', 'p1'));
+    await listener(terminal('top', null));
+    return { close: async () => {} };
+  });
+  try {
+    const result = await streamedText(
+      () =>
+        workflowAttentionCommand(host, process.cwd(), undefined, {
+          all: true,
+          labels: [],
+          watch: true,
+        }),
+      text => text.includes('Run top failed')
+    );
+    expect(result.code).toBe(0);
+    expect(result.text).toContain(
+      '  child  w  (no project)  pause time not recorded\n    child of run p1\n'
+    );
+    expect(result.text).toContain(
+      'Run child failed: node build (error class not recorded). Workflow w, child of run p1.\n'
+    );
+    expect(result.text).toContain(
+      'Run top failed: node build (error class not recorded). Workflow w.\n'
+    );
+  } finally {
+    watch.mockRestore();
+  }
+});
 
 test.each([
   { phase: 'startup', json: true, type: 'degraded' },
@@ -566,3 +653,162 @@ test.each([
     }
   }
 });
+
+test.each(['beta', 'scratch'])(
+  'selected chat scope governs every run query from %s',
+  async cwdName => {
+    const { workflowStatusCommand, workflowRunsCommand } = await import('./workflow-query');
+    const root = track(mkdtempSync(join(tmpdir(), 'chat-query-scope-')));
+    process.env.ARCHON_HOME = join(root, 'home');
+    const host = createHost();
+    const projects = [];
+    for (const name of ['alpha', 'beta']) {
+      const dir = join(root, name);
+      mkdirSync(dir);
+      const project = await host.records.codebases.createCodebase({
+        name,
+        default_cwd: realpathSync(dir),
+        kind: 'folder',
+      });
+      const run = await host.deps.store.createWorkflowRun({
+        workflow_name: name,
+        user_message: '',
+        codebase_id: project.id,
+      });
+      await host.deps.store.claimPendingWorkflowRun(run.id);
+      await host.deps.store.pauseWorkflowRunForWait(
+        run.id,
+        {
+          owner: 'node',
+          nodeId: 'ask',
+          kind: 'attention',
+          waitingSince: new Date().toISOString(),
+          message: 'Continue?',
+          pauseId: `pause-${name}`,
+          form: 'approval',
+        },
+        { kind: 'started', stepName: 'ask' }
+      );
+      const failed = await host.deps.store.createWorkflowRun({
+        workflow_name: name,
+        user_message: '',
+        codebase_id: project.id,
+      });
+      await host.deps.store.claimPendingWorkflowRun(failed.id);
+      await host.deps.store.failWorkflowRun(failed.id, 'test failure');
+      projects.push({ project, run, failed });
+    }
+    const [alpha, beta] = projects;
+    const scratch = join(root, 'scratch');
+    mkdirSync(scratch);
+    scopeSpy.mockReturnValue(alpha.project.id);
+    const cwd = cwdName === 'beta' ? beta.project.default_cwd : realpathSync(scratch);
+    const status = await captured(async () => {
+      await workflowStatusCommand(host, cwd, { json: true });
+      return 0;
+    });
+    expect(status.json).toMatchObject({ runs: [{ id: alpha.run.id }], scopeFallback: false });
+    for (const open of [false, true]) {
+      const result = await captured(() => workflowRunsCommand(host, cwd, { json: true, open }));
+      expect(result.code).toBe(0);
+      const runs = (result.json as { runs: { id: string }[] }).runs.map(run => run.id).sort();
+      expect(runs).toEqual((open ? [alpha.failed.id] : [alpha.run.id, alpha.failed.id]).sort());
+    }
+    for (const project of [
+      undefined,
+      alpha.project.id,
+      alpha.project.name,
+      projectKeyForCodebase(alpha.project, alpha.project.default_cwd),
+    ]) {
+      const result = await captured(() =>
+        workflowAttentionCommand(host, cwd, undefined, {
+          json: true,
+          labels: [],
+          project,
+        })
+      );
+      expect(result).toMatchObject({ code: 0, json: { items: [{ runId: alpha.run.id }] } });
+    }
+    const counts = await captured(() =>
+      workflowAttentionCommand(host, cwd, undefined, {
+        json: true,
+        labels: [],
+        countBy: 'project',
+        project: projectKeyForCodebase(alpha.project, alpha.project.default_cwd),
+      })
+    );
+    expect(counts).toMatchObject({
+      code: 0,
+      json: { counts: { counts: [{ count: 1, project: { codebaseId: alpha.project.id } }] } },
+    });
+    const watch = await streamed(
+      () =>
+        workflowAttentionCommand(host, cwd, undefined, {
+          json: true,
+          labels: [],
+          watch: true,
+          project: projectKeyForCodebase(alpha.project, alpha.project.default_cwd),
+        }),
+      lines => lines.some(line => line.type === 'ready')
+    );
+    expect(watch.lines.filter(line => line.type === 'attention')).toMatchObject([
+      { item: { runId: alpha.run.id } },
+    ]);
+    await expect(workflowStatusCommand(host, cwd, { all: true })).rejects.toThrow('--all');
+    for (const open of [false, true]) {
+      const refused = await captured(() =>
+        workflowRunsCommand(host, cwd, {
+          json: true,
+          all: true,
+          open,
+        })
+      );
+      expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+    }
+    for (const mode of [{}, { countBy: 'project' }, { watch: true }]) {
+      for (const selection of [
+        { all: true },
+        { project: beta.project.id },
+        { project: beta.project.name },
+        { project: projectKeyForCodebase(beta.project, beta.project.default_cwd) },
+      ]) {
+        const refused = await captured(() =>
+          workflowAttentionCommand(host, cwd, undefined, {
+            json: true,
+            labels: [],
+            ...mode,
+            ...selection,
+          })
+        );
+        expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+      }
+    }
+  }
+);
+
+test.each(['', 'missing-project'])(
+  'invalid selected chat scope %j refuses every run query',
+  async scope => {
+    const { workflowStatusCommand, workflowRunsCommand } = await import('./workflow-query');
+    const host = createHost();
+    scopeSpy.mockReturnValue(scope);
+    await expect(workflowStatusCommand(host, process.cwd())).rejects.toThrow('registered project');
+    const queries = [
+      () => workflowRunsCommand(host, process.cwd(), { json: true }),
+      () => workflowRunsCommand(host, process.cwd(), { json: true, open: true }),
+      ...[{}, { countBy: 'project' }, { watch: true }].map(
+        mode => () =>
+          workflowAttentionCommand(host, process.cwd(), undefined, {
+            json: true,
+            labels: [],
+            ...mode,
+          })
+      ),
+    ];
+    for (const query of queries) {
+      const result = await captured(query);
+      expect(result).toMatchObject({ code: 1, json: { ok: false } });
+      expect((result.json as { error: string }).error).toContain('registered project');
+    }
+  }
+);

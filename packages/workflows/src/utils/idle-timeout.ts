@@ -59,50 +59,55 @@ export async function* withIdleTimeout<T>(
   shouldStop?: () => Promise<boolean>
 ): AsyncGenerator<T> {
   let nextAbandoned = false;
-  let idleMs = 0;
+
+  const nextWithWatchdog = async (
+    nextPromise: Promise<IteratorResult<T>>
+  ): Promise<IteratorResult<T> | undefined> => {
+    let idleMs = 0;
+    let result: IteratorResult<T> | undefined;
+    while (result === undefined) {
+      const tickMs = Math.max(0, Math.min(WATCHDOG_TICK_MS, timeoutMs - idleMs));
+      const tickStartedAt = Date.now();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const tick = new Promise<typeof TICK>(resolve => {
+        timer = setTimeout(() => {
+          resolve(TICK);
+        }, tickMs);
+      });
+
+      const settled = await Promise.race([nextPromise, tick]);
+      clearTimeout(timer);
+      // Wall-clock time beyond the scheduled delay was spent suspended.
+      if (isWorkLive?.()) idleMs = 0;
+      else idleMs += Math.max(0, Math.min(Date.now() - tickStartedAt, tickMs));
+
+      if (settled !== TICK) {
+        result = settled;
+      } else if (shouldStop && (await shouldStop())) {
+        nextAbandoned = true;
+        // The caller aborts the producer; do not await return behind its pending next.
+        nextPromise.catch(() => undefined);
+        return;
+      } else if (idleMs >= timeoutMs) {
+        nextAbandoned = true;
+        // Prevent unhandled rejection when the subprocess is aborted via onTimeout
+        nextPromise.catch((_err: unknown) => {
+          // Intentional: swallow rejection from aborted subprocess
+        });
+        onTimeout?.();
+        return;
+      }
+    }
+    return result;
+  };
 
   try {
     while (true) {
       const nextPromise = generator.next();
 
-      let result: IteratorResult<T> | undefined;
-      while (result === undefined) {
-        const tickMs = Math.max(0, Math.min(WATCHDOG_TICK_MS, timeoutMs - idleMs));
-        const tickStartedAt = Date.now();
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const tick = new Promise<typeof TICK>(resolve => {
-          timer = setTimeout(() => {
-            resolve(TICK);
-          }, tickMs);
-        });
+      const result = await nextWithWatchdog(nextPromise);
+      if (result === undefined || result.done) return;
 
-        const settled = await Promise.race([nextPromise, tick]);
-        clearTimeout(timer);
-        // Wall-clock time beyond the scheduled delay was spent suspended.
-        if (isWorkLive?.()) idleMs = 0;
-        else idleMs += Math.max(0, Math.min(Date.now() - tickStartedAt, tickMs));
-
-        if (settled !== TICK) {
-          result = settled;
-        } else if (shouldStop && (await shouldStop())) {
-          nextAbandoned = true;
-          // The caller aborts the producer; do not await return behind its pending next.
-          nextPromise.catch(() => undefined);
-          return;
-        } else if (idleMs >= timeoutMs) {
-          nextAbandoned = true;
-          // Prevent unhandled rejection when the subprocess is aborted via onTimeout
-          nextPromise.catch((_err: unknown) => {
-            // Intentional: swallow rejection from aborted subprocess
-          });
-          onTimeout?.();
-          return;
-        }
-      }
-
-      if (result.done) return;
-
-      idleMs = 0;
       onTimerReset?.(result.value, Date.now());
 
       // Idle time accrues only while waiting on the generator, so the time the consumer

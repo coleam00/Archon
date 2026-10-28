@@ -1,0 +1,774 @@
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
+import { loadConfig } from '@archon/core/config/config-loader';
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
+import { resolveDryRunEnvironment } from './workflow-dry-run';
+import { createCliWorkflowHost } from '../utils/workflow-host';
+import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
+import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
+import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
+import { resolveWorkflowName } from '@archon/workflows/router';
+import { workflowSourceConfigFrom } from '@archon/workflows/run-source';
+import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
+import type { WorkflowLoadError, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
+import { workflowRunStatusSchema, runAttention } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import {
+  loadWorkflows,
+  projectWorkflowDescription,
+  WORKFLOW_DESCRIPTION_TRUNCATION_MARKER,
+  type WorkflowJsonEntry,
+} from './workflow-list';
+import {
+  buildNodeSummaries,
+  fetchVerboseEvents,
+  listRunEvents,
+  withRunDetail,
+} from './workflow-node-summaries';
+import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
+import {
+  formatAge,
+  getLog,
+  inheritedWorkflowCodebase,
+  resolveRunIdArg,
+  resolveRunTranscriptPath,
+} from './workflow-shared';
+import {
+  TRANSCRIPT_POLL_INTERVAL_MS,
+  type TranscriptFormat,
+  type TranscriptReadState,
+  transcriptOutput,
+  drainTranscript,
+  finishTranscriptDecode,
+  transcriptUnavailableMessage,
+} from './workflow-transcript';
+import {
+  printStatusRun,
+  announceWaitAttached,
+  writeWaitOutcome,
+  type LeaveBehind,
+  buildLeaveBehind,
+  readParseWarningEvents,
+  printRunDetail,
+} from './workflow-inspect';
+
+export interface WorkflowListOptions {
+  json?: boolean;
+  name?: string;
+  full?: boolean;
+}
+
+export class WorkflowListLookupError extends Error {
+  readonly loadErrors: readonly WorkflowLoadError[];
+
+  constructor(message: string, loadErrors: readonly WorkflowLoadError[]) {
+    super(message);
+    this.name = 'WorkflowListLookupError';
+    this.loadErrors = loadErrors;
+  }
+}
+
+/**
+ * Run every declared dry-run fixture and report per-fixture pass/fail (#2772).
+ *
+ * Read-only by construction — the only execution path is `dryRunWorkflow`, so no
+ * run state is created and no provider is contacted. Returns the process exit code:
+ * 0 when everything passes (including the nothing-declared case), 1 when any fixture
+ * fails, a workflow cannot load, or an explicitly named target has none.
+ */
+export async function workflowTestCommand(
+  invokingCwd: string,
+  target: string | undefined,
+  options: { json?: boolean } = {}
+): Promise<number> {
+  const { resolveDiscoveryCwd } = await import('../utils/project-cwd');
+  const cwd = await resolveDiscoveryCwd(invokingCwd);
+  const { workflows, errors } = await loadWorkflows(cwd);
+  // The fixture runner freezes this repo's source before executing anything, exactly as
+  // `workflow run` does, and this config decides which directories get frozen. A malformed
+  // one would silently narrow that set, so it fails here instead; `loadConfig` returns
+  // defaults when there is simply no config file.
+  const config = await loadConfig(cwd).catch((error: unknown) => {
+    throw new Error(
+      `Cannot read the workflow source configuration in ${cwd}: ${(error as Error).message}`
+    );
+  });
+  let report: Awaited<ReturnType<typeof runFixtures>>;
+  try {
+    report = await runFixtures({
+      workflows,
+      cwd,
+      targetCwd: invokingCwd,
+      sourceConfig: workflowSourceConfigFrom(config),
+      config,
+      resolveExecConfig: async () =>
+        resolveDryRunEnvironment(await createCliWorkflowHost(), invokingCwd, config),
+      ...(target !== undefined ? { target } : {}),
+    });
+  } catch (error) {
+    if (errors.length === 0) throw error;
+    await writeFixtureFailure(error, errors, options.json);
+    return 1;
+  }
+
+  if (options.json) {
+    await writeJsonLine({
+      results: report.results.map(r => ({
+        ...r,
+        missingStubs: [...r.missingStubs],
+        toleratedMissingStubs: [...r.toleratedMissingStubs],
+        unusedStubs: [...r.unusedStubs],
+      })),
+      passed: report.passed,
+      failed: report.failed,
+      errors: workflowLoadErrorsJson(errors),
+    });
+  } else {
+    await writeStdout(`${formatFixtureReport(report)}\n${formatFixtureLoadErrors(errors)}`);
+  }
+
+  if (
+    errors.length > 0 ||
+    report.failed > 0 ||
+    (target !== undefined && report.results.length === 0)
+  ) {
+    return 1;
+  }
+  return 0;
+}
+
+function workflowLoadErrorsJson(errors: readonly WorkflowLoadError[]) {
+  return errors.map(e => ({ filename: e.filename, error: e.error, errorType: e.errorType }));
+}
+
+function formatFixtureLoadErrors(errors: readonly WorkflowLoadError[]): string {
+  if (errors.length === 0) return '';
+  return `\n${errors.length} workflow(s) failed to load:\n\n${errors
+    .map(error => `  ${error.filename}: ${error.error}\n`)
+    .join('')}`;
+}
+
+async function writeFixtureFailure(
+  error: unknown,
+  errors: readonly WorkflowLoadError[],
+  json: boolean | undefined
+): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  if (json) {
+    await writeJsonLine({ ok: false, error: message, errors: workflowLoadErrorsJson(errors) });
+  } else {
+    await writeStdout(`Error: ${message}\n${formatFixtureLoadErrors(errors)}`);
+  }
+}
+
+function selectWorkflowEntries(
+  workflowEntries: readonly WorkflowWithSource[],
+  errors: readonly WorkflowLoadError[],
+  name: string | undefined
+): readonly WorkflowWithSource[] {
+  if (name !== undefined) {
+    let workflow: WorkflowWithSource['workflow'] | undefined;
+    try {
+      workflow = resolveWorkflowName(
+        name,
+        workflowEntries.map(entry => entry.workflow)
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new WorkflowListLookupError(message, errors);
+    }
+    if (workflow === undefined) {
+      const availableWorkflows = workflowEntries
+        .map(entry => `  - ${entry.workflow.name}`)
+        .join('\n');
+      throw new WorkflowListLookupError(
+        `Workflow '${name}' not found.\n\nAvailable workflows:\n${availableWorkflows || '  (none)'}`,
+        errors
+      );
+    }
+    return workflowEntries.filter(entry => entry.workflow.name === workflow.name);
+  }
+
+  return workflowEntries;
+}
+
+function workflowJsonEntry(
+  { workflow: w, parseWarnings, declared }: WorkflowWithSource,
+  full: boolean
+): WorkflowJsonEntry {
+  const description = projectWorkflowDescription(w.description, full);
+  const entry: WorkflowJsonEntry = {
+    name: w.name,
+    description: description.description,
+    descriptionTruncated: description.truncated,
+  };
+  if (declared?.provider !== undefined) entry.provider = declared.provider;
+  if (declared?.model !== undefined) entry.model = declared.model;
+  if (declared?.effort !== undefined) entry.effort = declared.effort;
+  if (w.webSearchMode !== undefined) entry.webSearchMode = w.webSearchMode;
+  if (parseWarnings && parseWarnings.length > 0) entry.parseWarnings = [...parseWarnings];
+  return entry;
+}
+
+function printWorkflowEntry(
+  { workflow, parseWarnings, declared }: WorkflowWithSource,
+  full: boolean
+): void {
+  const description = projectWorkflowDescription(workflow.description, full);
+  console.log(`  ${workflow.name}`);
+  console.log(
+    `    ${description.description}${description.truncated ? WORKFLOW_DESCRIPTION_TRUNCATION_MARKER : ''}`
+  );
+  if (declared?.provider) {
+    console.log(`    Provider: ${declared.provider}`);
+  }
+  for (const warning of parseWarnings ?? []) {
+    console.log(`    Warning: ${warning}`);
+  }
+  console.log('');
+}
+
+/**
+ * List available workflows in the current directory
+ */
+export async function workflowListCommand(
+  cwd: string,
+  options: WorkflowListOptions = {}
+): Promise<void> {
+  const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
+  const listedEntries = selectWorkflowEntries(workflowEntries, errors, options.name);
+
+  if (options.json) {
+    const output = {
+      // `declared` rather than the expanded workflow: composition collapses these fields
+      // onto the nodes and removes them (#1764), so the listing reports what the author
+      // wrote. `webSearchMode` is the one that stays on the definition — it has no
+      // per-node form to collapse onto.
+      workflows: listedEntries.map(entry => workflowJsonEntry(entry, options.full === true)),
+      errors: workflowLoadErrorsJson(errors),
+    };
+    await writeJsonLine(output);
+    return;
+  }
+
+  console.log(`Discovering workflows in: ${cwd}`);
+
+  if (listedEntries.length === 0 && errors.length === 0) {
+    console.log('\nNo workflows found.');
+    console.log('Workflows should be in .archon/workflows/ directory.');
+    return;
+  }
+
+  if (listedEntries.length > 0) {
+    console.log(`\nFound ${listedEntries.length} workflow(s):\n`);
+
+    for (const entry of listedEntries) printWorkflowEntry(entry, options.full === true);
+  }
+
+  if (errors.length > 0) {
+    console.log(`\n${errors.length} workflow(s) failed to load:\n`);
+    for (const e of errors) {
+      console.log(`  ${e.filename}: ${e.error}`);
+    }
+    console.log('');
+  }
+}
+
+async function verboseStatusRuns(
+  host: WorkflowHost,
+  runs: DashboardWorkflowRun[],
+  rawEvents = false
+) {
+  const fetchedPerRun = await Promise.all(
+    runs.map(run => fetchVerboseEvents(host, run.id, rawEvents))
+  );
+  if (fetchedPerRun.some(result => result.failed)) {
+    throw new Error('Failed to fetch workflow events for verbose status.');
+  }
+  return runs.map((run, i) => {
+    const runEvents = fetchedPerRun[i]?.events ?? [];
+    return rawEvents
+      ? { ...run, attention: runAttention(run), events: runEvents }
+      : { ...run, attention: runAttention(run), nodes: buildNodeSummaries(runEvents) };
+  });
+}
+
+async function resolveStatusCodebase(host: WorkflowHost, cwd: string, all: boolean | undefined) {
+  try {
+    const codebase = await inheritedWorkflowCodebase(host, all);
+    if (codebase === undefined && !all) {
+      return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
+    }
+    return codebase;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_status_codebase_lookup_failed');
+    throw new Error(`Failed to resolve workflow status project: ${err.message}`, { cause: err });
+  }
+}
+
+/** Show active workflow runs for the current project, or every project with `--all`. */
+export async function workflowStatusCommand(
+  host: WorkflowHost,
+  cwd: string,
+  opts: { json?: boolean; verbose?: boolean; rawEvents?: boolean; all?: boolean } = {}
+): Promise<void> {
+  const codebase = await resolveStatusCodebase(host, cwd, opts.all);
+  let runs: DashboardWorkflowRun[];
+  try {
+    const result = await host.operations.getWorkflowStatus(
+      codebase ? { codebaseId: codebase.id } : undefined
+    );
+    runs = result.runs;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_status_failed');
+    throw new Error(`Failed to list workflow runs: ${err.message}`);
+  }
+
+  const scopeFallback = !opts.all && !codebase;
+
+  if (opts.json) {
+    if (!opts.verbose) {
+      await writeJsonLine({
+        runs: runs.map(run => ({ ...run, attention: runAttention(run) })),
+        scopeFallback,
+      });
+      return;
+    }
+
+    const runsOutput = await verboseStatusRuns(host, runs, opts.rawEvents);
+    await writeJsonLine({ runs: runsOutput, scopeFallback });
+    return;
+  }
+
+  if (scopeFallback) {
+    console.log('(not a registered project — showing all runs)');
+  }
+
+  if (runs.length === 0) {
+    console.log('No active workflows.');
+    return;
+  }
+
+  console.log(`\nActive workflows (${runs.length}):\n`);
+  for (const run of runs) {
+    await printStatusRun(host, run, opts.verbose);
+  }
+}
+
+/**
+ * Block until a run needs attention, loses its owner, or reaches the caller's deadline.
+ *
+ * The point of the verb: a host that launched a run with `--detach` waits on one
+ * command instead of polling `workflow get`. Exit codes describe the COMMAND, not the
+ * run — 0 the run said something, 3 the deadline passed with the run still live, 1 the
+ * wait itself failed. A `failed` or `cancelled` run is still exit 0 with its status on
+ * stdout; mapping run state onto the process exit code would make a legitimately
+ * cancelled run look like a broken command.
+ *
+ * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
+ */
+export async function workflowWaitCommand(
+  host: WorkflowHost,
+  runId: string,
+  json?: boolean,
+  cwd?: string,
+  timeoutSeconds?: number
+): Promise<number> {
+  let result: RunWaitResult;
+  let resolvedId: string;
+  try {
+    resolvedId = await resolveRunIdArg(host, runId, cwd);
+    result = await waitForRunAttention(host.deps.store, resolvedId, {
+      doorbell: host.doorbell,
+      // No timeout by default: a wait that ends on its own clock would answer a
+      // question only the run can answer.
+      ...(timeoutSeconds === undefined ? {} : { deadlineMs: timeoutSeconds * 1000 }),
+      onAttached: (observedStatus, ownerLiveness) =>
+        announceWaitAttached(resolvedId, observedStatus, json, ownerLiveness),
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, runId }, 'cli.workflow_wait_failed');
+    // In --json mode never throw — emit one parseable {ok:false} line (same contract
+    // as `get` and the write commands) so a parsing agent always gets JSON.
+    if (json) {
+      await writeJsonLine({ ok: false, runId, action: 'wait', error: err.message });
+      return 1;
+    }
+    throw new Error(`Failed to wait for workflow run: ${err.message}`);
+  }
+
+  await writeWaitOutcome(runId, resolvedId, result, json);
+  if (result.kind === 'not_found') return 1;
+
+  // 3 keeps "the run is still live" distinguishable from both a real answer (0) and a
+  // broken wait (1).
+  return result.kind === 'deadline' ? 3 : 0;
+}
+
+/** Print or follow one run's append-only JSONL transcript, verbatim or as text, without mutating the run. */
+export async function workflowLogsCommand(
+  host: WorkflowHost,
+  runId: string,
+  follow: boolean,
+  cwd?: string,
+  format: TranscriptFormat = 'jsonl'
+): Promise<number> {
+  let resolvedId = runId;
+  try {
+    resolvedId = await resolveRunIdArg(host, runId, cwd);
+    let run = await host.deps.store.getWorkflowRun(resolvedId);
+    if (!run) {
+      await writeStderr(`Workflow run not found: ${runId}\n`);
+      return 1;
+    }
+
+    const transcriptPath = await resolveRunTranscriptPath(host, run);
+    if (!transcriptPath) {
+      await writeStderr(`Transcript path is unavailable for workflow run ${run.id}.\n`);
+      return 1;
+    }
+
+    const state: TranscriptReadState = {
+      offset: 0,
+      decoder: new TextDecoder(),
+      output: transcriptOutput(format),
+    };
+
+    if (!follow) {
+      const exists = await drainTranscript(transcriptPath, state);
+      if (!exists || state.offset === 0) {
+        await writeStderr(`${transcriptUnavailableMessage(run, transcriptPath, false)}\n`);
+        return 1;
+      }
+      await finishTranscriptDecode(state);
+      return 0;
+    }
+
+    await writeStderr(`Following transcript: ${transcriptPath}\n`);
+    while (true) {
+      await drainTranscript(transcriptPath, state);
+      run = await host.deps.store.getWorkflowRun(resolvedId);
+      if (!run) throw new Error(`Workflow run disappeared while following it: ${resolvedId}`);
+
+      if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+        await drainTranscript(transcriptPath, state);
+        if (state.offset === 0) {
+          await writeStderr(`${transcriptUnavailableMessage(run, transcriptPath, true)}\n`);
+          return 1;
+        }
+        await finishTranscriptDecode(state);
+        return 0;
+      }
+
+      await new Promise<void>(resolvePoll => setTimeout(resolvePoll, TRANSCRIPT_POLL_INTERVAL_MS));
+    }
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, runId: resolvedId }, 'cli.workflow_logs_failed');
+    await writeStderr(`Failed to read workflow transcript: ${err.message}\n`);
+    return 1;
+  }
+}
+
+/**
+ * Show detail for a single workflow run by ID (any status).
+ *
+ * Unlike `status` (active runs only), this resolves one run regardless of
+ * status — so an agent can answer "did the review pass?" for a completed/failed
+ * run. `--verbose` adds the per-node summary; `--json` emits the raw run plus a
+ * `nodes` array when verbose (`--events` selects raw event rows instead).
+ *
+ * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
+ */
+export async function workflowGetCommand(
+  host: WorkflowHost,
+  runId: string,
+  json?: boolean,
+  verbose?: boolean,
+  cwd?: string,
+  rawEvents?: boolean
+): Promise<number> {
+  let run: WorkflowRun | null;
+  try {
+    const resolvedId = await resolveRunIdArg(host, runId, cwd);
+    run = await host.deps.store.getWorkflowRun(resolvedId);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, runId }, 'cli.workflow_get_failed');
+    // In --json mode never throw — emit one parseable {ok:false} line (same
+    // contract as the write commands) so a parsing agent always gets JSON.
+    if (json) {
+      await writeJsonLine({ ok: false, runId, error: err.message });
+      return 1;
+    }
+    throw new Error(`Failed to get workflow run: ${err.message}`);
+  }
+
+  if (!run) {
+    // Not-found exits non-zero so `get <id> && ...` and CI checks see the
+    // failure (the JSON envelope already carries ok:false for parsers).
+    if (json) {
+      await writeJsonLine({ ok: false, runId, error: 'not_found' });
+    } else {
+      console.log(`Workflow run not found: ${runId}`);
+    }
+    return 1;
+  }
+
+  // The terminal record is persisted in the event log, including for default get.
+  let events: WorkflowEventRow[];
+  let terminalRecord;
+  try {
+    events = await listRunEvents(host, run.id, rawEvents ?? false);
+    terminalRecord = getTerminalRecord(run.status, events);
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_events_failed');
+    if (json) {
+      await writeJsonLine({ ok: false, runId: run.id, error: 'workflow_events_unavailable' });
+    } else {
+      console.log(`Workflow run events unavailable: ${run.id} (see logs)`);
+    }
+    return 1;
+  }
+
+  // Leave-behind view (#2747): what did this run leave, and where. Assembled
+  // from existing data — status/outcome, adoption chain, and its artifact file
+  // list resolved through the persisted output_root (read-only by contract).
+  let leaveBehind: LeaveBehind | undefined;
+  try {
+    leaveBehind = await buildLeaveBehind(host, run);
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_leave_behind_failed');
+  }
+
+  let transcriptPath: string | null = null;
+  try {
+    transcriptPath = await resolveRunTranscriptPath(host, run);
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_transcript_failed');
+  }
+
+  if (json) {
+    return writeWorkflowGetJson(
+      run,
+      transcriptPath,
+      terminalRecord,
+      leaveBehind,
+      events,
+      verbose,
+      rawEvents
+    );
+  }
+
+  printRunDetail(run, { transcriptPath, terminalRecord, leaveBehind, events, verbose });
+  return 0;
+}
+
+async function writeWorkflowGetJson(
+  run: WorkflowRun,
+  transcriptPath: string | null,
+  terminalRecord: ReturnType<typeof getTerminalRecord>,
+  leaveBehind: LeaveBehind | undefined,
+  events: WorkflowEventRow[],
+  verbose?: boolean,
+  rawEvents?: boolean
+): Promise<number> {
+  if (!verbose) {
+    await writeJsonLine({
+      ...run,
+      transcript_path: transcriptPath,
+      terminal_record: terminalRecord,
+      ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
+    });
+    return 0;
+  }
+
+  const parseWarnings = readParseWarningEvents(events);
+  const output = rawEvents
+    ? {
+        ...run,
+        transcript_path: transcriptPath,
+        terminal_record: terminalRecord,
+        events,
+      }
+    : {
+        ...run,
+        transcript_path: transcriptPath,
+        terminal_record: terminalRecord,
+        nodes: buildNodeSummaries(events),
+        // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
+        // named field rather than leaving the caller to scan raw events.
+        ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
+      };
+  await writeJsonLine(output);
+  return 0;
+}
+
+/**
+ * List recent workflow runs for the current project (all statuses, cwd-scoped).
+ *
+ * Complements `status` (active-only): resolves the codebase from `cwd` the same
+ * way `workflow run` does, then lists that project's recent runs of every
+ * status. Outside chat, `--all` lists across all projects;
+ * `--status` filters to one status; `--limit` caps the count (default 20).
+ * `--json --verbose` adds each run's `nodes` and `attention` (see `withRunDetail`).
+ */
+export async function workflowRunsCommand(
+  host: WorkflowHost,
+  cwd: string,
+  opts: RunsOptions = {}
+): Promise<number> {
+  if (opts.open && opts.status) {
+    return refuseRuns(
+      opts,
+      new Error('--open and --status are mutually exclusive: the inbox is failed runs only.')
+    );
+  }
+  const statusFilter = parseRunsStatus(opts.status);
+  if (statusFilter instanceof Error) return refuseRuns(opts, statusFilter);
+  const codebase = await findRunsCodebase(host, cwd, opts);
+  if (codebase instanceof Error) return refuseRuns(opts, codebase);
+  // The open-work inbox contains terminal failed runs with no adopter or successor.
+  if (opts.open) return listOpenWorkRuns(host, opts, codebase);
+  return listRecentRuns(host, cwd, opts, codebase, statusFilter);
+}
+
+interface RunsOptions {
+  json?: boolean;
+  all?: boolean;
+  status?: string;
+  limit?: number;
+  open?: boolean;
+  verbose?: boolean;
+}
+type RunsCodebase = Awaited<ReturnType<typeof findCodebaseForCheckoutPath>> | undefined;
+
+/** --json never throws — emit one parseable {ok:false} line (write-command contract). */
+async function refuseRuns(
+  opts: RunsOptions,
+  error: Error,
+  jsonMessage = error.message
+): Promise<number> {
+  if (!opts.json) throw error;
+  await writeJsonLine({ ok: false, error: jsonMessage });
+  return 1;
+}
+
+function parseRunsStatus(status: string | undefined): WorkflowRunStatus | undefined | Error {
+  if (!status) return undefined;
+  const parsed = workflowRunStatusSchema.safeParse(status);
+  if (parsed.success) return parsed.data;
+  return new Error(
+    `Invalid --status '${status}'. Valid: ${workflowRunStatusSchema.options.join(', ')}.`
+  );
+}
+
+async function findRunsCodebase(
+  host: WorkflowHost,
+  cwd: string,
+  opts: RunsOptions
+): Promise<RunsCodebase | Error> {
+  try {
+    const inherited = await inheritedWorkflowCodebase(host, opts.all);
+    if (inherited !== undefined || opts.all) return inherited;
+    return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
+    return new Error(`Failed to resolve workflow runs project: ${err.message}`, { cause: err });
+  }
+}
+
+async function listOpenWorkRuns(
+  host: WorkflowHost,
+  opts: RunsOptions,
+  codebase: RunsCodebase
+): Promise<number> {
+  const runs = await host.deps.store.findOpenWorkRuns({
+    codebaseId: codebase?.id,
+    limit: opts.limit ?? 20,
+  });
+  if (opts.json) {
+    await writeJsonLine({
+      runs: opts.verbose ? await withRunDetail(host, runs) : runs,
+      total: runs.length,
+      scopeFallback: !opts.all && !codebase,
+    });
+    return 0;
+  }
+  if (runs.length === 0) {
+    console.log('No open workflow runs — nothing ended with work on the table.');
+    return 0;
+  }
+  console.log(`\nOpen work (${String(runs.length)}):\n`);
+  for (const run of runs) {
+    console.log(
+      `  ${run.id.slice(0, 8)}  ${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
+    );
+  }
+  console.log('');
+  return 0;
+}
+
+async function listRecentRuns(
+  host: WorkflowHost,
+  cwd: string,
+  opts: RunsOptions,
+  codebase: RunsCodebase,
+  statusFilter: WorkflowRunStatus | undefined
+): Promise<number> {
+  let result;
+  try {
+    // listDashboardRuns ignores undefined filters (truthy-guarded WHERE clauses),
+    // so pass codebaseId/status straight through — no conditional spread needed.
+    result = await host.deps.store.listWorkflowRuns({
+      codebaseId: codebase?.id,
+      status: statusFilter,
+      limit: opts.limit ?? 20,
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, cwd }, 'cli.workflow_runs_failed');
+    return refuseRuns(opts, new Error(`Failed to list workflow runs: ${err.message}`), err.message);
+  }
+
+  // True when project scoping was requested but fell back to the global list
+  // (unregistered cwd). The human path prints a note below;
+  // surface the same signal in --json so an agent isn't handed a global result
+  // it silently mistakes for a project-scoped one.
+  const scopeFallback = !opts.all && !codebase;
+
+  if (opts.json) {
+    // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
+    // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
+    const runs = opts.verbose ? await withRunDetail(host, result.runs) : result.runs;
+    await writeJsonLine({ ...result, runs, scopeFallback });
+    return 0;
+  }
+
+  if (scopeFallback) console.log('(not a registered project — showing all runs)');
+  if (result.runs.length === 0) {
+    console.log('No workflow runs found.');
+    return 0;
+  }
+
+  console.log(`\nRecent runs (${result.runs.length} of ${result.total}):\n`);
+  for (const run of result.runs) {
+    const activeNodes =
+      run.active_nodes.length > 0 ? ` · active node(s): ${run.active_nodes.join(', ')}` : '';
+    console.log(
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
+    );
+  }
+  console.log('');
+  return 0;
+}
+
+function authoredOutcome(run: { outcome?: string | null }): string {
+  return run.outcome ? ` · authored outcome: ${run.outcome}` : '';
+}

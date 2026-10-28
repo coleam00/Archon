@@ -15,9 +15,13 @@
  */
 import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
 import type { Pool as PgPool } from 'pg';
+import { isolationStatusReadTests } from './isolation-status-read-harness';
 import { randomUUID } from 'node:crypto';
+import { WorktreeRemovalInProgressError } from '@archon/isolation';
 
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: () => ({
     info() {},
     warn() {},
@@ -35,6 +39,7 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
   let admin: PgPool;
   let db: import('./adapters/postgres').PostgresAdapter;
   let create: typeof import('./isolation-environments').create;
+  let withWorktreeRegistration: typeof import('./isolation-environments').withWorktreeRegistration;
   let getById: typeof import('./isolation-environments').getById;
   let updateMetadata: typeof import('./isolation-environments').updateMetadata;
   let getLiveRunOwningEnv: typeof import('./isolation-environments').getLiveRunOwningEnv;
@@ -58,9 +63,14 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
       getDatabaseType: () => 'postgresql',
     }));
 
-    ({ create, getLiveRunOwningEnv, getById, updateMetadata, markWorktreeDestroyed } = await import(
-      './isolation-environments'
-    ));
+    ({
+      create,
+      getLiveRunOwningEnv,
+      getById,
+      updateMetadata,
+      markWorktreeDestroyed,
+      withWorktreeRegistration,
+    } = await import('./isolation-environments'));
   });
 
   afterAll(async () => {
@@ -86,6 +96,35 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
       branch_name: 'parity-branch' as never,
     });
   }
+
+  isolationStatusReadTests(() => db, createEnv);
+
+  test('removal holds no row lock, refuses a replacement registration and retires after removal', async () => {
+    const env = await createEnv('pg-destruction-lock');
+    await withWorktreeRegistration(env, async markDestroyed => {
+      await db.withTransaction(async query => {
+        await query("SET LOCAL lock_timeout = '20ms'");
+        await query(
+          'UPDATE remote_agent_isolation_environments SET status = status WHERE id = $1',
+          [env.id]
+        );
+      });
+      await expect(
+        create({
+          codebase_id: env.codebase_id,
+          workflow_type: env.workflow_type,
+          workflow_id: env.workflow_id,
+          working_path: '/tmp/other',
+          branch_name: 'replacement' as never,
+        })
+      ).rejects.toBeInstanceOf(WorktreeRemovalInProgressError);
+      await markDestroyed();
+    });
+    expect((await getById(env.id))?.status).toBe('destroyed');
+    const remove = mock(async () => undefined);
+    await expect(withWorktreeRegistration(env, remove)).rejects.toThrow('changed during cleanup');
+    expect(remove).not.toHaveBeenCalled();
+  });
 
   test('legacy conditional adoption rejects a metadata-only replacement and accepts the fresh snapshot', async () => {
     const created = await createEnv('pg-legacy-adoption');
@@ -239,7 +278,7 @@ describe.skipIf(!baseUrl)('isolation environments — real Postgres behavior', (
       `UPDATE remote_agent_workflow_runs SET started_at = NOW() - INTERVAL '30 days' WHERE id = $1`,
       [runId]
     );
-    const paused = { id: runId, status: 'paused' };
+    const paused = { id: runId, status: 'paused' } as const;
 
     await expect(getLiveRunOwningEnv(env.id, { kind: 'settled' })).resolves.toEqual(paused);
     await expect(getLiveRunOwningEnv(env.id, { kind: 'stale', staleDays: 7 })).resolves.toEqual(

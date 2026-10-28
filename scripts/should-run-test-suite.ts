@@ -5,8 +5,8 @@ const DOCS_DIRECTORY = 'packages/docs-web/';
 const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
 
 /**
- * Paths that read as documentation but are build inputs, so changing one must run
- * the auxiliary build and service jobs. Markdown in bundled prompts and skills is
+ * Paths that read as documentation but are build or test inputs, so changing one must run
+ * the test suite and auxiliary build and service jobs. Markdown in bundled prompts and skills is
  * executable content rather than ordinary prose.
  *
  * An entry ending in `/` matches a directory, anything else matches one file. Each is here
@@ -20,9 +20,22 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
  *   - The docs manifest is copied by the Docker dependency layer.
+ *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
+ *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
 const BUILD_INPUTS = [
   '.claude/skills/',
+  '.archon/architecture.md',
+  '.archon/workflow-language-constitution.md',
+  '.claude/commands/execute.md',
+  'packages/providers/src/codex/protocol/README.md',
+  'packages/docs-web/src/content/docs/reference/database.md',
+  'packages/docs-web/src/content/docs/reference/api.md',
+  'packages/docs-web/src/content/docs/reference/node-execution.md',
+  'packages/docs-web/src/content/docs/deployment/docker.md',
+  'packages/docs-web/src/content/docs/deployment/reverse-proxy.md',
+  'packages/docs-web/src/content/docs/getting-started/operate.md',
+  'packages/docs-web/src/content/docs/guides/workflow-triggers.md',
   'packages/docs-web/src/content/docs/reference/provider-capabilities.md',
   'packages/docs-web/package.json',
 ];
@@ -38,17 +51,11 @@ const BUILD_INPUTS = [
  * `homebrew/archon.rb` (`build:checksums`), `scripts/install.ps1` (`test:install`), the web assets that feed the Docker image, and anything under
  * `.github/workflows/` — changing the gate must run the gate. `Caddyfile.example` is read by
  * `reverse-proxy.test.ts` and `caddy-recipe.test.ts`, and git applies `.gitattributes` to every
- * file a test reads from the checkout.
+ * file a test reads from the checkout. `.env.example` is read by `caddy-recipe.test.ts`.
  *
  * An entry ending in `/` matches a directory, anything else matches one file.
  */
-const INERT_PATHS = [
-  '.gitignore',
-  'LICENSE',
-  '.env.example',
-  '.archon/config.example.yaml',
-  'assets/',
-];
+const INERT_PATHS = ['.gitignore', 'LICENSE', '.archon/config.example.yaml', 'assets/'];
 
 const isInert = (file: string): boolean =>
   INERT_PATHS.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry));
@@ -107,15 +114,7 @@ export function workspaceTestInputs(
     [...tracked, ...extraCandidates].filter(file => file.startsWith(ROOT_SCRIPTS))
   );
 
-  const named = new Set<string>();
-  for (const file of tracked) {
-    if (!file.startsWith('packages/') || file.endsWith('.md') || file.endsWith('.mdx')) continue;
-    const source = readFileSync(join(repo, file), 'utf8');
-    for (const match of source.matchAll(/scripts\/[\w./-]+/g)) {
-      const path = match[0].replace(/\.+$/, '');
-      if (candidates.has(path)) named.add(path);
-    }
-  }
+  const named = namedWorkspaceInputs(repo, tracked, candidates);
 
   const inputs = new Set<string>();
   const queue = [...named, ...WORKSPACE_RUNNER_ENTRY_POINTS];
@@ -134,6 +133,24 @@ export function workspaceTestInputs(
     }
   }
   return inputs;
+}
+
+function namedWorkspaceInputs(
+  repo: string,
+  tracked: readonly string[],
+  candidates: ReadonlySet<string>
+): Set<string> {
+  const named = new Set<string>();
+  for (const file of tracked) {
+    if (!file.startsWith('packages/') || file.endsWith('.md') || file.endsWith('.mdx')) continue;
+    const source = readFileSync(join(repo, file), 'utf8');
+    for (const match of source.matchAll(/scripts\/[\w./-]+/g)) {
+      const path = match[0].replace(/\.+$/, '');
+      if (candidates.has(path)) named.add(path);
+    }
+  }
+
+  return named;
 }
 
 /**

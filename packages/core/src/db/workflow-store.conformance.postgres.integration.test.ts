@@ -1,13 +1,18 @@
 // @archon-test-isolated
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
+import { resourceStartFixtures } from '@archon/workflows/store-conformance';
+import { executionClaim } from '@archon/workflows/store';
 import {
   describeWorkflowStoreConformance,
   CONFORMANCE_CONVERSATION_ID,
   CONFORMANCE_CODEBASE_ID,
 } from '@archon/workflows/store-conformance';
-import { makeSqlConformanceHarness } from './workflow-store.conformance-harness';
+import {
+  makeSqlConformanceHarness,
+  describeSqlStatusReadConformance,
+} from './workflow-store.conformance-harness';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
 
@@ -42,6 +47,237 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test('foreign slot membership blocks guarded starts after its request is lost', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store, db } = harness;
+      const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+      const holder = { ...start('queue', 'host', 1), resource: 'foreign' };
+      expect((await store.admitResourceStart(holder)).status).toBe('admitted');
+      await db.query('DELETE FROM remote_agent_resource_start_requests WHERE id = $1', [
+        holder.launch.run.id,
+      ]);
+      const guarded = start('queue', 'host', 1);
+      expect(await store.admitResourceStart(guarded)).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: holder.launch.run.id },
+      });
+      expect(
+        await store.admitResourceStart({ ...start('skip', 'host', 1), resource: 'skip' })
+      ).toMatchObject({
+        status: 'skipped',
+        blocker: { kind: 'run', id: holder.launch.run.id },
+      });
+      const reader = { ...start('queue', 'host', 1), resource: 'reader' };
+      reader.launch.run.metadata.admission_checkout_guard = false;
+      expect((await store.admitResourceStart(reader)).status).toBe('admitted');
+      const privateStart = { ...start('queue', 'host', 1), resource: 'private' };
+      privateStart.launch.execution.isolation = { kind: 'worktree' };
+      expect((await store.admitResourceStart(privateStart)).status).toBe('admitted');
+      expect(
+        await store.drainResourceStarts({ resource: guarded.resource, hostId: 'host' })
+      ).toEqual([]);
+      expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe('pending');
+      await db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [
+        holder.launch.run.id,
+      ]);
+      expect(
+        await store.drainResourceStarts({ resource: guarded.resource, hostId: 'host' })
+      ).toMatchObject([{ runId: guarded.launch.run.id }]);
+    } finally {
+      await harness.close();
+    }
+  });
+  test.each(['missing', 'withdrawn'] as const)(
+    'local slot membership refuses a %s request until terminal release',
+    async damage => {
+      const harness = await makeHarness();
+      try {
+        const { store, db } = harness;
+        const { start } = resourceStartFixtures(
+          CONFORMANCE_CODEBASE_ID,
+          CONFORMANCE_CONVERSATION_ID
+        );
+        const holder = start('queue', 'host', 2);
+        await store.admitResourceStart(holder);
+        const waiting = start('queue', 'host', 2, { cwd: holder.launch.execution.cwd });
+        expect(await store.admitResourceStart(waiting)).toMatchObject({ status: 'queued' });
+        if (damage === 'missing')
+          await db.query('DELETE FROM remote_agent_resource_start_requests WHERE id = $1', [
+            holder.launch.run.id,
+          ]);
+        else
+          await db.query(
+            "UPDATE remote_agent_resource_start_requests SET status = 'withdrawn' WHERE id = $1",
+            [holder.launch.run.id]
+          );
+        for (const guard of [false, true]) {
+          const incoming = start('queue', 'host', 2);
+          incoming.launch.run.metadata.admission_checkout_guard = guard;
+          await expect(store.admitResourceStart(incoming)).rejects.toThrow(
+            'no matching admitted request'
+          );
+        }
+        await expect(
+          store.drainResourceStarts({ resource: holder.resource, hostId: 'host' })
+        ).rejects.toThrow('no matching admitted request');
+        expect((await store.getWorkflowRun(holder.launch.run.id))?.status).toBe('pending');
+        await db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [
+          holder.launch.run.id,
+        ]);
+        expect(
+          await store.drainResourceStarts({ resource: holder.resource, hostId: 'host' })
+        ).toMatchObject([{ runId: waiting.launch.run.id }]);
+      } finally {
+        await harness.close();
+      }
+    }
+  );
+  for (const firstMode of ['admit', 'drain'] as const) {
+    for (const secondMode of ['admit', 'drain'] as const) {
+      test(`checkout reservations serialize across resources: ${firstMode}/${secondMode}`, async () => {
+        const harness = await makeHarness();
+        const { store, db } = harness;
+        const { start } = resourceStartFixtures(
+          CONFORMANCE_CODEBASE_ID,
+          CONFORMANCE_CONVERSATION_ID
+        );
+        const first = start('queue', 'first', 2, { cwd: '/shared' });
+        const second = { ...start('queue', 'second', 2, { cwd: '/shared' }), resource: 'other' };
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        let firstOperation: Promise<unknown> | undefined;
+        let secondOperation: Promise<unknown> | undefined;
+        let interception: ReturnType<typeof spyOn> | undefined;
+        try {
+          const holder = await store.createWorkflowRun({
+            ...first.launch.run,
+            id: randomUUID(),
+            working_path: '/shared',
+          });
+          for (const [mode, intent] of [
+            [firstMode, first],
+            [secondMode, second],
+          ] as const)
+            if (mode === 'drain')
+              expect(await store.admitResourceStart(intent)).toMatchObject({ status: 'queued' });
+          await store.cancelWorkflowRun(holder.id);
+          const transaction = db.withTransaction.bind(db);
+          let intercepted = false;
+          interception = spyOn(db, 'withTransaction').mockImplementation(callback =>
+            transaction(query =>
+              callback(async <T>(sql: string, params?: unknown[]) => {
+                const result = await query<T>(sql, params);
+                if (!intercepted && sql.includes('SELECT w.id, w.status, w.metadata')) {
+                  intercepted = true;
+                  entered.resolve();
+                  await release.promise;
+                }
+                return result;
+              })
+            )
+          );
+          const perform = (mode: 'admit' | 'drain', intent: typeof first) =>
+            mode === 'admit'
+              ? store.admitResourceStart(intent)
+              : store.drainResourceStarts({ resource: intent.resource, hostId: intent.hostId });
+          firstOperation = perform(firstMode, first);
+          await entered.promise;
+          secondOperation = perform(secondMode, second);
+          let blocked = false;
+          for (let attempt = 0; attempt < 1000 && !blocked; attempt++) {
+            const result = await db.query<{ blocked: boolean }>(
+              `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS blocked`
+            );
+            blocked = result.rows[0]?.blocked ?? false;
+          }
+          expect(blocked).toBe(true);
+          release.resolve();
+          await Promise.all([firstOperation, secondOperation]);
+          expect(await store.getResourceStartRequest(first.launch.run.id)).toMatchObject({
+            status: 'admitted',
+          });
+          expect(await store.getResourceStartRequest(second.launch.run.id)).toMatchObject({
+            status: 'queued',
+          });
+          expect(await store.getWorkflowRun(second.launch.run.id)).toBeNull();
+          await store.cancelWorkflowRun(first.launch.run.id);
+          expect(
+            await store.drainResourceStarts({ resource: second.resource, hostId: second.hostId })
+          ).toMatchObject([{ runId: second.launch.run.id }]);
+        } finally {
+          release.resolve();
+          await Promise.allSettled([firstOperation, secondOperation]);
+          interception?.mockRestore();
+          await harness.close();
+        }
+      });
+    }
+  }
+
+  describeSqlStatusReadConformance(makeHarness);
+  test.each([false, true])(
+    'source suspension excludes a resume on another connection (resumed=%s)',
+    async resumed => {
+      const harness = await makeHarness();
+      const { store, db } = harness;
+      const entered = Promise.withResolvers<void>();
+      const finish = Promise.withResolvers<void>();
+      let releasing: Promise<unknown> | undefined;
+      let resuming: Promise<unknown> | undefined;
+      try {
+        let run = await store.createWorkflowRun({ workflow_name: 'source-lock', user_message: '' });
+        await store.claimPendingWorkflowRun(run.id);
+        if (resumed) {
+          await store.pauseWorkflowRun(run.id, {
+            nodeId: 'gate',
+            type: 'approval',
+            message: 'Review',
+          });
+          run = await store.resumeWorkflowRun(run.id);
+        }
+        const order: string[] = [];
+        releasing = store.releaseRunForUnreadableSource(
+          run.id,
+          {
+            claimId: executionClaim(run.metadata),
+            nodeId: 'source',
+            error: 'EACCES',
+            retryAt: new Date().toISOString(),
+          },
+          async () => {
+            entered.resolve();
+            await finish.promise;
+            order.push('stopped');
+          }
+        );
+        await entered.promise;
+        resuming = store.resumeWorkflowRun(run.id).then(next => {
+          order.push('resumed');
+          return next;
+        });
+        // Observe the real row-lock waiter before allowing Docker to finish.
+        let blocked = false;
+        for (let attempt = 0; attempt < 1000 && !blocked; attempt++) {
+          const result = await db.query<{ blocked: boolean }>(
+            `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+           WHERE datname = current_database() AND wait_event_type = 'Lock') AS blocked`
+          );
+          blocked = result.rows[0]?.blocked ?? false;
+        }
+        expect(blocked).toBe(true);
+        expect(order).toEqual([]);
+        finish.resolve();
+        expect(await releasing).toEqual({ released: true });
+        expect(await resuming).toMatchObject({ status: 'running' });
+        expect(order).toEqual(['stopped', 'resumed']);
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([releasing, resuming]);
+        await harness.close();
+      }
+    }
+  );
   test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
     const harness = await makeHarness();
     try {
@@ -154,7 +390,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
           metadata: {},
         },
         execution: {
-          cwd: '/conformance',
+          cwd: `/conformance/${id}`,
           conversationId: id,
           isolation: { kind: 'in-place' as const },
         },

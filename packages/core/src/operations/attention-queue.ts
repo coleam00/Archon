@@ -44,7 +44,7 @@ export function projectRefForCodebase(codebase: Codebase): ProjectRef {
 
 /**
  * Resolve `--project <id|name|key>`: a registered codebase by id, then by name, then a
- * project key with no codebase row, which is how an unregistered `_cwd/<name>` project
+ * project key with no codebase row, which is how an unregistered directory's project
  * is named. A name two codebases share is refused rather than guessed.
  */
 export async function resolveAttentionProject(
@@ -71,12 +71,12 @@ export async function resolveAttentionProject(
 
 /**
  * The project a working directory belongs to, as `archon state` resolves it without
- * registering anything: its codebase, or the unregistered `_cwd/<name>` project.
+ * registering anything: its codebase, or the unregistered directory's project.
  */
 export async function attentionProjectForCwd(
   codebases: Pick<
     IWorkflowHostStore['codebases'],
-    'findCodebaseByDefaultCwd' | 'findCodebaseByPathPrefix' | 'listCodebases'
+    'findCodebaseByDefaultCwd' | 'findCodebaseByPathPrefix' | 'listCodebaseClaims'
   >,
   cwd: string
 ): Promise<ProjectRef> {

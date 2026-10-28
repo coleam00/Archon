@@ -6,6 +6,7 @@ import {
   mockListWorkflowEvents,
   mockListProviderEvents,
   mockGetConversationById,
+  mockObserveRunOwner,
   type MockWorkflowRun,
   type MockWorkflowEvent,
   NOW_DATE,
@@ -21,7 +22,8 @@ import {
   RUN_GRAPH_METADATA_KEY,
   terminalRecordSchema,
 } from '@archon/workflows/schemas/terminal-record';
-import { buildTerminalRecord } from '@archon/workflows/terminal-record';
+import { buildTerminalRecord, observeRunArtifacts } from '@archon/workflows/terminal-record';
+import { fanOutOutcome as fanOutOutcomeOf } from '@archon/workflows/schemas/fan-out-outcome';
 import {
   nodeExecutionMetadataSchema,
   type NodeCostScope,
@@ -39,6 +41,7 @@ import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import type { ProviderEventRecord } from '@archon/workflows/schemas/provider-event';
 import {
   dashboardWorkflowRunSchema as apiDashboardWorkflowRunSchema,
+  workflowRunDetailSchema,
   workflowRunSchema as apiWorkflowRunSchema,
 } from './schemas/workflow.schemas';
 import { makeDashboardRunsResult } from '../test/workflow-mock-factories';
@@ -435,7 +438,11 @@ describe('GET /api/workflows/runs/:runId', () => {
         { node_id: 'prepare', state: 'pending' },
         { node_id: 'flaky', state: 'failed', error: 'flaky failed' },
       ]);
-      const record = await buildTerminalRecord({ run: graphRun, events });
+      const record = buildTerminalRecord({
+        run: graphRun,
+        events,
+        artifacts: await observeRunArtifacts(graphRun),
+      });
       expect(run.nodes).toEqual(record.nodes);
     });
 
@@ -445,7 +452,11 @@ describe('GET /api/workflows/runs/:runId', () => {
         event('node_started', 'prepare'),
         event('node_failed', 'prepare', { error: 'prepare failed' }),
       ];
-      const record = await buildTerminalRecord({ run: graphRun, events });
+      const record = buildTerminalRecord({
+        run: graphRun,
+        events,
+        artifacts: await observeRunArtifacts(graphRun),
+      });
       const run = await getNodes(graphRun, [
         ...events,
         event('workflow_failed', null, { terminal_record: record }),
@@ -457,6 +468,36 @@ describe('GET /api/workflows/runs/:runId', () => {
         state: 'failed',
         error: 'prepare failed',
       });
+    });
+
+    test("serves a fan-out node's slot record on the node and in the terminal record", async () => {
+      const fanOutOutcome = fanOutOutcomeOf([
+        { index: 0, outcome: 'completed', child_run_id: 'child-a' },
+        { index: 1, outcome: 'failed', child_run_id: 'child-b', error: 'exit 1' },
+      ]);
+      const events = [
+        event('node_started', 'flaky'),
+        event('node_completed', 'flaky', {
+          node_output: '[]',
+          fan_out: true,
+          fan_out_outcome: fanOutOutcome,
+        }),
+      ];
+      const record = buildTerminalRecord({
+        run: graphRun,
+        events,
+        artifacts: await observeRunArtifacts(graphRun),
+      });
+      const run = await getNodes(graphRun, [
+        ...events,
+        event('workflow_failed', null, { terminal_record: record }),
+      ]);
+      expect(run.nodes).toContainEqual({
+        node_id: 'flaky',
+        state: 'completed',
+        fan_out_outcome: fanOutOutcome,
+      });
+      expect(run.terminal_record?.nodes).toEqual(run.nodes);
     });
 
     test('a run recorded before terminal records still lists its nodes', async () => {
@@ -683,6 +724,36 @@ describe('GET /api/dashboard/runs', () => {
       .parse(await response.json());
     expect(body.runs[0]?.metadata.approval?.decisions).toEqual(getApprovalDecisions({}));
     expect(approval).not.toHaveProperty('decisions');
+  });
+
+  test("serves each run's owner observation on the dashboard list and the run detail", async () => {
+    mockObserveRunOwner.mockImplementation(async (_store, run) =>
+      run.status === 'running' ? 'unreachable' : null
+    );
+    try {
+      mockListDashboardRuns.mockImplementationOnce(async () =>
+        makeDashboardRunsResult({
+          runs: [
+            makeDashboardWorkflowRun(MOCK_RUNNING_RUN),
+            makeDashboardWorkflowRun(MOCK_COMPLETED_RUN),
+          ],
+        })
+      );
+      mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
+      mockListWorkflowEvents.mockImplementationOnce(async () => []);
+      const { app } = makeApp();
+
+      const list = z
+        .object({ runs: z.array(apiDashboardWorkflowRunSchema) })
+        .parse(await (await app.request('/api/dashboard/runs')).json());
+      expect(list.runs.map(run => run.owner_observation)).toEqual(['unreachable', null]);
+      const detail = workflowRunDetailSchema.parse(
+        await (await app.request(`/api/workflows/runs/${MOCK_RUNNING_RUN.id}`)).json()
+      );
+      expect(detail.run).toMatchObject({ status: 'running', owner_observation: 'unreachable' });
+    } finally {
+      mockObserveRunOwner.mockImplementation(async () => null);
+    }
   });
 
   test('returns paginated runs with total and counts', async () => {

@@ -142,6 +142,39 @@ interface CatalogDiff {
   excused: string[];
 }
 
+function diffColumns(
+  name: string,
+  cols: Set<string>,
+  got: Set<string>,
+  { diffs, excused }: CatalogDiff
+): void {
+  for (const col of cols) {
+    if (!got.has(col)) diffs.push(`missing after upgrade [column]: ${name}.${col}`);
+  }
+  for (const col of got) {
+    if (!cols.has(col)) {
+      const colName = col.slice(0, col.indexOf(':'));
+      const qualified = `${name}.${colName}`;
+      if (EXPECTED_EXTRA_COLUMNS.has(qualified)) excused.push(`[column]: ${qualified}`);
+      else diffs.push(`extra after upgrade [column]: ${qualified}`);
+    }
+  }
+}
+
+function diffObjects(fresh: Map<string, string>, upgraded: Map<string, string>): string[] {
+  const diffs: string[] = [];
+  for (const [name, def] of fresh) {
+    const got = upgraded.get(name);
+    if (got === undefined) diffs.push(`missing after upgrade [index/trigger]: ${name} (${def})`);
+    else if (got !== def)
+      diffs.push(`changed after upgrade [index/trigger]: ${name}: fresh=${def} upgraded=${got}`);
+  }
+  for (const [name, def] of upgraded) {
+    if (!fresh.has(name)) diffs.push(`extra after upgrade [index/trigger]: ${name} (${def})`);
+  }
+  return diffs;
+}
+
 function diffCatalogs(fresh: Catalog, upgraded: Catalog): CatalogDiff {
   const diffs: string[] = [];
   const excused: string[] = [];
@@ -151,31 +184,12 @@ function diffCatalogs(fresh: Catalog, upgraded: Catalog): CatalogDiff {
       diffs.push(`missing after upgrade [table]: ${name}`);
       continue;
     }
-    for (const col of cols) {
-      if (!got.has(col)) diffs.push(`missing after upgrade [column]: ${name}.${col}`);
-    }
-    for (const col of got) {
-      if (!cols.has(col)) {
-        const colName = col.slice(0, col.indexOf(':'));
-        const qualified = `${name}.${colName}`;
-        if (EXPECTED_EXTRA_COLUMNS.has(qualified)) excused.push(`[column]: ${qualified}`);
-        else diffs.push(`extra after upgrade [column]: ${qualified}`);
-      }
-    }
+    diffColumns(name, cols, got, { diffs, excused });
   }
   for (const name of upgraded.tables.keys()) {
     if (!fresh.tables.has(name)) diffs.push(`extra after upgrade [table]: ${name}`);
   }
-  for (const [name, def] of fresh.objects) {
-    const got = upgraded.objects.get(name);
-    if (got === undefined) diffs.push(`missing after upgrade [index/trigger]: ${name} (${def})`);
-    else if (got !== def)
-      diffs.push(`changed after upgrade [index/trigger]: ${name}: fresh=${def} upgraded=${got}`);
-  }
-  for (const [name, def] of upgraded.objects) {
-    if (!fresh.objects.has(name))
-      diffs.push(`extra after upgrade [index/trigger]: ${name} (${def})`);
-  }
+  diffs.push(...diffObjects(fresh.objects, upgraded.objects));
   return { diffs, excused };
 }
 
@@ -193,6 +207,29 @@ describe('SqliteAdapter upgrades from released schema vintages', () => {
   });
 
   test('every released vintage converges on the fresh-install schema', async () => {
+    const freshObjects: Catalog = {
+      tables: new Map(),
+      objects: new Map([
+        ['missing_index', 'items|CREATE INDEX missing_index ON items (id)'],
+        ['changed_trigger', 'items|CREATE TRIGGER changed_trigger BEFORE INSERT ON items'],
+      ]),
+    };
+    const upgradedObjects: Catalog = {
+      tables: new Map(),
+      objects: new Map([
+        ['changed_trigger', 'items|CREATE TRIGGER changed_trigger AFTER INSERT ON items'],
+        ['extra_index', 'items|CREATE INDEX extra_index ON items (name)'],
+      ]),
+    };
+    expect(diffCatalogs(freshObjects, upgradedObjects)).toEqual({
+      diffs: [
+        'missing after upgrade [index/trigger]: missing_index (items|CREATE INDEX missing_index ON items (id))',
+        'changed after upgrade [index/trigger]: changed_trigger: fresh=items|CREATE TRIGGER changed_trigger BEFORE INSERT ON items upgraded=items|CREATE TRIGGER changed_trigger AFTER INSERT ON items',
+        'extra after upgrade [index/trigger]: extra_index (items|CREATE INDEX extra_index ON items (name))',
+      ],
+      excused: [],
+    });
+
     const fixtureFiles = existsSync(FIXTURES_DIR)
       ? readdirSync(FIXTURES_DIR)
           .filter(f => f.endsWith('.sql'))

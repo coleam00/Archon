@@ -2,11 +2,15 @@ import { describe, expect, it } from 'bun:test';
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
-import { NODE_CONTRACT_ENV } from '../.archon/workflows/sdlc/.shared/node-env';
+import { COMPOSED_NODE } from '../packages/workflows/src/compiled-command';
+import { buildNodeShellEnvironment } from '../packages/workflows/src/dag/references';
+import { inputEnvKey } from '../packages/workflows/src/schemas/node-bindings';
+import { getRunScratchDir } from '../packages/paths/src/run-paths';
+import { scratchDir } from '../.archon/workflows/sdlc/.shared/scratch';
 import type { Discovery } from '../.archon/workflows/sdlc/validate/scripts/run-checks';
 
 /**
@@ -31,7 +35,12 @@ function checkout(): { cwd: string; artifacts: string } {
 }
 
 function env(artifacts: string, bindings: Record<string, string>): Record<string, string> {
-  return { ...(process.env as Record<string, string>), ARTIFACTS_DIR: artifacts, ...bindings };
+  return {
+    ...(process.env as Record<string, string>),
+    ARTIFACTS_DIR: artifacts,
+    ARCHON_RUN_ENV_KEYS: JSON.stringify([...EXEC_NODE_ENVIRONMENT_NAMES, ...Object.keys(bindings)]),
+    ...bindings,
+  };
 }
 
 function run(
@@ -195,7 +204,7 @@ describe('run-checks', () => {
   );
 });
 
-function result(bindings: { comparison?: unknown; run?: unknown; classification?: unknown }): {
+function result(bindings: { run?: unknown; classification?: unknown }): {
   exitCode: number;
   output: unknown;
 } {
@@ -203,7 +212,6 @@ function result(bindings: { comparison?: unknown; run?: unknown; classification?
   const out = Bun.spawnSync([process.execPath, join(PACK, 'result.ts')], {
     cwd: f.cwd,
     env: env(f.artifacts, {
-      INPUTS_COMPARISON: JSON.stringify(bindings.comparison ?? null),
       INPUTS_RUN: JSON.stringify(bindings.run ?? null),
       INPUTS_CLASSIFICATION: JSON.stringify(bindings.classification ?? null),
     }),
@@ -214,51 +222,144 @@ function result(bindings: { comparison?: unknown; run?: unknown; classification?
   return { exitCode: out.exitCode, output: stdout === '' ? null : JSON.parse(stdout) };
 }
 
-describe("the gate's environment", () => {
-  it("names exactly the engine's exec-node contract", () => {
-    expect([...NODE_CONTRACT_ENV].sort()).toEqual([...EXEC_NODE_ENVIRONMENT_NAMES].sort());
+describe("the pack's scratch directory", () => {
+  it('is the run scratch directory the engine removes when the run ends', () => {
+    expect(scratchDir('/artifacts', '')).toBe(getRunScratchDir('/artifacts'));
   });
+
+  it('is the only scratch directory the pack commands name', async () => {
+    const engineScratch = `$ARTIFACTS_DIR/${relative('/artifacts', getRunScratchDir('/artifacts')).split(sep).join('/')}/`;
+    const sdlc = join(import.meta.dir, '..', '.archon', 'workflows', 'sdlc');
+    const named: string[] = [];
+    for await (const file of new Bun.Glob('*/commands/*.md').scan(sdlc)) {
+      const text = readFileSync(join(sdlc, file), 'utf8');
+      for (const [path] of text.matchAll(/\$\{?ARTIFACTS_DIR\}?\/\S*scratch\S*/g)) named.push(path);
+    }
+    expect(named.length).toBeGreaterThan(0);
+    expect(named.filter(path => !path.startsWith(engineScratch))).toEqual([]);
+  });
+});
+
+describe("the gate's environment", () => {
+  it.each(['', 'null', '{}', '["INPUTS_DISCOVERY", 42]', 'invalid-json'])(
+    'refuses a gate with an invalid run-key list: %s',
+    manifest => {
+      const f = checkout();
+      mkdirSync(f.artifacts, { recursive: true });
+      const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
+        cwd: f.cwd,
+        env: env(f.artifacts, {
+          ARCHON_RUN_ENV_KEYS: manifest,
+          INPUTS_DISCOVERY: JSON.stringify({
+            checks: declared([{ name: 'gate', argv: sh('touch ran') }]),
+            notes: '',
+          }),
+        }),
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).not.toBe('');
+      expect(existsSync(join(f.cwd, 'ran'))).toBe(false);
+    }
+  );
 
   it("runs the checks without the run's identity or the node's bindings", () => {
     const f = checkout();
     mkdirSync(f.artifacts, { recursive: true });
     const seen = join(f.artifacts, 'seen.json');
+    const names = ['plan', 'base-branch', 'foo_bar', 'MixedCase', 'revision2'];
+    const bindings = Object.fromEntries(names.map(name => [name, 'bound value']));
+    const discovery = JSON.stringify({
+      checks: [
+        {
+          name: 'env',
+          argv: [
+            process.execPath,
+            '-e',
+            `require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify(process.env))`,
+          ],
+          group: 'gate',
+        },
+      ],
+      notes: '',
+    });
+    const node = {
+      id: 'gate',
+      kind: 'exec' as const,
+      runtime: 'bun' as const,
+      script: 'run-checks',
+      with: { ...bindings, discovery },
+      [COMPOSED_NODE]: { origin: 'block', inputs: { composed: 'composed value' } },
+    };
+    const nodeEnv = buildNodeShellEnvironment(
+      node,
+      {
+        workflowRun: {
+          id: 'run-123',
+          user_message: '',
+          metadata: { inputs_values: { run: 'run value' } },
+        },
+        artifactsDir: f.artifacts,
+        stateDir: '',
+        baseBranch: 'dev',
+        docsDir: '',
+        nodeOutputs: new Map(),
+        loopBodyScopes: [],
+      },
+      {
+        PROJECT_SETTING: 'kept',
+        INPUTS_PROJECT_SETTING: 'kept too',
+        INPUTS_PLAN: 'project value shadowed by binding',
+        ARCHON_RUN_ENV_KEYS: '["INPUTS_PROJECT_SETTING"]',
+        INPUTS: 'project setting without the binding prefix',
+        PROJECT_INPUTS_SETTING: 'project setting containing the binding prefix',
+      },
+      {
+        artifactsDir: f.artifacts,
+        stateDir: '',
+        logDir: '',
+        workflowId: 'run-123',
+        baseBranch: 'dev',
+        userMessage: '',
+        loopUserInput: '',
+        loopPrevOutput: '',
+        rejectionReason: '',
+        typedArtifactsFile: '',
+        nodeExecution: null,
+      }
+    );
+    expect(nodeEnv.INPUTS_PLAN).toBe('bound value');
+    expect(JSON.parse(nodeEnv.ARCHON_RUN_ENV_KEYS ?? 'null').sort()).toEqual(
+      [
+        ...EXEC_NODE_ENVIRONMENT_NAMES,
+        ...[...names, 'discovery', 'run', 'composed'].map(inputEnvKey),
+      ].sort()
+    );
     const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
       cwd: f.cwd,
-      env: env(f.artifacts, {
-        WORKFLOW_ID: 'run-123',
-        PROJECT_SETTING: 'kept',
-        INPUTS_DISCOVERY: JSON.stringify({
-          checks: [
-            {
-              name: 'env',
-              argv: [
-                process.execPath,
-                '-e',
-                `require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify(process.env))`,
-              ],
-              group: 'gate',
-            },
-          ],
-          notes: '',
-        }),
-      }),
+      env: { ...process.env, INPUTS_HOST_SETTING: 'host value', ...nodeEnv },
       stdout: 'pipe',
       stderr: 'pipe',
     });
     expect(result.exitCode).toBe(0);
     const gate = JSON.parse(readFileSync(seen, 'utf8')) as Record<string, string>;
     expect(gate.PROJECT_SETTING).toBe('kept');
-    expect(gate.WORKFLOW_ID).toBeUndefined();
-    expect(gate.ARTIFACTS_DIR).toBeUndefined();
+    expect(gate.INPUTS_PROJECT_SETTING).toBe('kept too');
+    expect(gate.INPUTS_HOST_SETTING).toBe('host value');
+    expect(gate.INPUTS).toBe('project setting without the binding prefix');
+    expect(gate.PROJECT_INPUTS_SETTING).toBe('project setting containing the binding prefix');
+    for (const key of EXEC_NODE_ENVIRONMENT_NAMES) expect(gate[key]).toBeUndefined();
     expect(gate.INPUTS_DISCOVERY).toBeUndefined();
+    for (const name of [...names, 'run', 'composed'])
+      expect(gate[inputEnvKey(name)]).toBeUndefined();
   });
 });
 
 describe('validation result', () => {
   it('reports a gate the timeout stopped as incomplete, never green or red', () => {
     const { output } = result({});
-    expect(output).toMatchObject({ green: false, red_cause: 'incomplete', evidence: null });
+    expect(output).toMatchObject({ green: false, red_cause: 'incomplete' });
   });
 
   it('derives green and incomplete from the run, and takes red causes from classify', () => {
@@ -266,13 +367,11 @@ describe('validation result', () => {
       green: true,
       red_cause: '',
       summary: 'all passed',
-      evidence: null,
     });
     expect(result({ run: { status: 'incomplete', summary: 'x could not start' } }).output).toEqual({
       green: false,
       red_cause: 'incomplete',
       summary: 'x could not start',
-      evidence: null,
     });
     expect(
       result({
@@ -283,7 +382,6 @@ describe('validation result', () => {
       green: false,
       red_cause: 'inherited',
       summary: 'fails on the base too',
-      evidence: null,
     });
   });
 
@@ -291,10 +389,5 @@ describe('validation result', () => {
     const { exitCode, output } = result({ run: { status: 'red', summary: 'tests failed' } });
     expect(exitCode).not.toBe(0);
     expect(output).toBeNull();
-  });
-
-  it('passes the comparison verdict through unchanged', () => {
-    const comparison = { green: false, red_cause: 'interaction', summary: 's', evidence: null };
-    expect(result({ comparison }).output).toEqual(comparison);
   });
 });

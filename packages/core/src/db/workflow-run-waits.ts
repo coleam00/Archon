@@ -9,11 +9,13 @@ import {
   readSourceRelease,
   SOURCE_RELEASE_METADATA_KEY,
   workflowWaitContextSchema,
+  readWorkflowWaitContext,
   workflowWaitStepName,
   type WorkflowAttentionWaitContext,
   type WorkflowRun,
   type WorkflowWaitContext,
 } from '@archon/workflows/schemas/workflow-run';
+import { PAUSE_CAUSE_METADATA_KEY, pauseCauseOfWait } from '@archon/workflows/schemas/pause-cause';
 import {
   answeredAttentionWait,
   attentionLabeledEvent,
@@ -39,12 +41,13 @@ import {
 import { getLog, jsonIntExtract, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
 
 /** Replace the engine-owned wait object and remove any stale human approval. */
-function replaceWaitMetadata(paramIndex: number): string {
+function replaceWaitMetadata(paramIndex: number, causeIndex: number): string {
   const value = `$${String(paramIndex)}`;
+  const cause = `$${String(causeIndex)}`;
   const metadata = getDialect().jsonRemove('metadata', 'approval');
   return getDatabaseType() === 'postgresql'
-    ? `jsonb_set(${metadata}, '{wait}', ${value}::jsonb, true)`
-    : `json_set(${metadata}, '$.wait', json(${value}))`;
+    ? `jsonb_set(jsonb_set(${metadata}, '{wait}', ${value}::jsonb, true), '{${PAUSE_CAUSE_METADATA_KEY}}', to_jsonb(${cause}::text), true)`
+    : `json_set(${metadata}, '$.wait', json(${value}), '$.${PAUSE_CAUSE_METADATA_KEY}', ${cause})`;
 }
 
 /** Pause a running run on a persisted wait condition. */
@@ -58,9 +61,9 @@ export async function pauseWorkflowRunForWait(
     await getDatabase().withTransaction(async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
-         SET status = 'paused', metadata = ${replaceWaitMetadata(2)}
+         SET status = 'paused', metadata = ${replaceWaitMetadata(2, 3)}
          WHERE id = $1 AND status = 'running'`,
-        [id, JSON.stringify(parsedWaitContext)]
+        [id, JSON.stringify(parsedWaitContext), pauseCauseOfWait(parsedWaitContext)]
       );
       if ((result.rowCount ?? 0) === 0) {
         throw new Error(`Workflow run not found or not in running state (id: ${id})`);
@@ -259,14 +262,14 @@ export async function listWorkflowEventSignalCandidates(
       const eventData = parseJsonObject(row.event_data);
       if (!metadata || !eventData) continue;
 
-      const parsedWait = workflowWaitContextSchema.safeParse(metadata.wait);
+      const parsedWait = readWorkflowWaitContext(metadata.wait);
       const outputType = eventData.output_type;
       if (
-        !parsedWait.success ||
-        parsedWait.data.kind !== 'event' ||
-        parsedWait.data.event !== event ||
-        parsedWait.data.signaledAt !== undefined ||
-        Date.parse(parsedWait.data.resumeAt) <= now.getTime() ||
+        !parsedWait ||
+        parsedWait.kind !== 'event' ||
+        parsedWait.event !== event ||
+        parsedWait.signaledAt !== undefined ||
+        Date.parse(parsedWait.resumeAt) <= now.getTime() ||
         typeof outputType !== 'string' ||
         outputType === '' ||
         !Object.hasOwn(eventData, 'structured_output')
@@ -276,7 +279,7 @@ export async function listWorkflowEventSignalCandidates(
 
       candidates.push({
         runId: row.run_id,
-        wait: parsedWait.data,
+        wait: parsedWait,
         outputType,
         structuredOutput: eventData.structured_output,
       });
@@ -356,7 +359,7 @@ export async function answerAttentionWait(
           write
         );
       if (!answered) return { answered: false };
-      await writeWaitContext(query, id, workflowWaitContextSchema.parse(answered));
+      await writeWaitContext(query, id, answered);
       await insertWorkflowEvent(query, waitAnsweredEvent(id, answered));
       return { answered: true };
     });
@@ -404,7 +407,7 @@ async function writeWaitContext(
       : "json_set(metadata, '$.wait', json($2))";
   await query(`UPDATE remote_agent_workflow_runs SET metadata = ${writeWait} WHERE id = $1`, [
     id,
-    JSON.stringify(wait),
+    JSON.stringify(workflowWaitContextSchema.parse(wait)),
   ]);
 }
 

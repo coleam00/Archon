@@ -38,14 +38,15 @@ layout below. Existing projects keep their names and storage.
 │   ├── <owner>/<repo>/             #   a registered repo with a remote
 │   ├── _local/<basename>/          #   a no-remote local git repo
 │   ├── _folder/<slug>/             #   a folder project (runs in place; git is user/agent-owned)
-│   └── _cwd/<basename>/            #   an unregistered working directory
+│   └── @cwd/<basename>-<digest>/   #   an unregistered working directory
 │       ├── source/                 # Clone or symlink -> local path (repo kinds only)
 │       ├── worktrees/              # Git worktrees for this project (repo kinds only)
 │       ├── artifacts/              # Workflow artifacts — NEVER in git
 │       │   ├── runs/<run-id>/      #   $ARTIFACTS_DIR for one run
 │       │   │   ├── .archon/        #     engine-owned bookkeeping, never listed as artifacts
 │       │   │   │   ├── node-output-spills/  # oversized shell handoffs (*.nodeoutput)
-│       │   │   │   └── typed-artifacts/     # one listing per node invocation
+│       │   │   │   ├── scratch/             # throwaway checkouts and installs; removed when the run ends
+│       │   │   │   └── typed-artifacts/     # typed-artifact observation files
 │       │   │   └── nodes/          #     typed output sidecars (<id>.md + <id>.meta.json)
 │       │   ├── scopes/<workflow>/<scope>/   # cross-invocation artifacts (persist_session)
 │       │   └── uploads/<conv-id>/  #   Web UI file uploads (ephemeral)
@@ -63,6 +64,8 @@ layout below. Existing projects keep their names and storage.
 ├── tier-notice.json                # One-time tier-default notice state (CLI, per version)
 ├── install.json                    # Last compiled CLI path and version (discovery hint)
 ├── credential-key                  # Auto-provisioned per-user credential encryption key
+├── store-id                        # Opaque id of this home, returned by GET /api/health
+├── server.json                     # The server listening for this home (discovery record)
 ├── archon.db                       # SQLite database (when DATABASE_URL is unset)
 └── config.yaml                     # Global user configuration
 ```
@@ -71,14 +74,26 @@ layout below. Existing projects keep their names and storage.
 - `workspaces/<project>/` - Everything one project produces. The project segment is
   resolved once per run from the allocated codebase identity. Default shapes are: `owner/repo` for a repo with a
   remote, `_local/<basename>` for a no-remote local repo, `_folder/<slug>` for a folder
-  project, and `_cwd/<basename>` when a run has no registered codebase at all. Folder
-  projects and `_cwd` projects have no `source/` or `worktrees/` — they run in place.
+  project, and `@cwd/<basename>-<digest>` when a run has no registered codebase at all. Folder
+  projects and `@cwd` projects have no `source/` or `worktrees/` — they run in place.
+  The `@cwd` digest is SHA-256 of the resolved absolute directory path.
+  The `@cwd` namespace cannot be a registered repository owner and is separate from legacy
+  `_cwd/<basename>` output, which remains untouched; see [cross-run state](/reference/variables/)
+  for handling legacy state.
 - `workspaces/<project>/artifacts/` - Run output. `$ARTIFACTS_DIR` is
   `artifacts/runs/<run-id>/`. Oversized values passed to shell nodes are retained in the
   engine-owned `.archon/` child so concurrent runs never share the deferred read and
   workflow-authored root files remain untouched. That child is the engine's own bookkeeping:
   `archon workflow get` and the console run page list a run's artifacts without it. Archon
-  currently retains filesystem run artifacts until the operator removes them;
+  retains filesystem run artifacts until the operator removes them, with one exception:
+  `.archon/scratch/`, where a workflow puts throwaway checkouts and dependency installs, is
+  removed once the run is completed, failed or cancelled (including a failed run that is
+  resumed later) and its nodes have stopped. A container run's scratch is removed when its
+  container is. A run whose nodes Archon cannot confirm stopped (its owner ran on another
+  host, or its owner process is still alive) keeps its scratch until the operator removes it.
+  A CLI run stopped by a signal (Ctrl-C, SIGTERM) is marked failed without stopping its nodes
+  through Archon, so it keeps its scratch until it is abandoned or its conversation is reset.
+  Everything else in `$ARTIFACTS_DIR` is kept.
   `archon workflow cleanup` deletes old database run records, not these directories.
 - `workspaces/<project>/logs/` - One JSONL execution log per run.
 - `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
@@ -93,6 +108,15 @@ layout below. Existing projects keep their names and storage.
 - `install.json` - Discovery metadata for the last compiled Archon invoked. GUI and
   service consumers may use its absolute `binary` path when the user has not
   configured one explicitly. Source/Bun runs do not write this file.
+- `store-id` - A random id generated the first time a server starts on this home and kept
+  for the home's life. `GET /api/health` returns it as `storeId`, so a client can compare it
+  with this file to confirm the server it reached serves this home and not another one.
+- `server.json` - Written by a server once it is listening and removed when it shuts down
+  cleanly: `pid`, `port`, `host` (the bound address), `version`, `startedAt` and `storeId`.
+  A same-machine client reads it to find the server instead of guessing a port. The record is
+  advisory: treat a missing or unreadable file, or one whose `pid` is no longer running (the
+  server was killed), as no server. When several servers share one home, the file names the
+  most recent to start.
 - `config.yaml` - Non-secret user preferences
 
 Each run also records the project root it resolved in `workflow_runs.output_root`, so an
@@ -127,13 +151,18 @@ The repo directory holds **source** only. Everything a run produces lives under
 path is the *worktree*, so the "cross-run memory" was destroyed at cleanup; and Archon
 never writes a `.gitignore`, so in a user's repository the directory was fully stageable.
 
-It is replaced by [`$STATE_DIR`](/reference/variables/). If Archon finds a legacy
-directory when a run starts it logs one warning with the exact move command and **moves
-nothing**:
+It is replaced by [`$STATE_DIR`](/reference/variables/). Archon no longer checks this
+legacy directory or warns about it, and does not read or move its contents. To migrate
+state, set `STATE_DIR` in your shell to the destination used by your workflow, then run
+from the repository:
 
 ```bash
-mv <repo>/.archon/state/* ~/.archon/workspaces/<project>/state/
+mkdir -p "$STATE_DIR"
+mv .archon/state/* "$STATE_DIR"/
 ```
+
+The glob moves non-hidden entries. Inspect hidden entries and destination conflicts
+before moving them.
 
 Then replace `.archon/state/` with `$STATE_DIR/` in the workflow's prompts and scripts, and
 delete any `mkdir -p .archon/state` — the executor pre-creates `$STATE_DIR`.
@@ -146,7 +175,7 @@ In Docker containers, the Archon home is fixed at `/.archon/` (root level). This
 
 ## Path Resolution
 
-All path resolution is centralized in `packages/paths/src/archon-paths.ts` (`@archon/paths`).
+All path resolution is centralized in `@archon/paths`, one module per area in `packages/paths/src/`: `home-paths.ts` for `ARCHON_HOME` and what lives directly under it, `project-paths.ts` for project identity and storage, and `run-paths.ts` for a run's artifacts and logs.
 
 ### Core Functions
 
@@ -278,7 +307,7 @@ commands:
 
 To add a new managed directory:
 
-1. Add function to `packages/paths/src/archon-paths.ts`:
+1. Add the function to its area module, here `packages/paths/src/home-paths.ts`, and export it from `packages/paths/src/index.ts`:
 ```typescript
 export function getArchonNewPath(): string {
   return join(getArchonHome(), 'new-directory');
@@ -287,7 +316,7 @@ export function getArchonNewPath(): string {
 
 2. Update Docker setup in `Dockerfile`
 3. Update volume mounts in `docker-compose.yml`
-4. Add tests in `packages/paths/src/archon-paths.test.ts`
+4. Add tests beside it in `packages/paths/src/home-paths.test.ts`
 
 ### Adding Config Options
 

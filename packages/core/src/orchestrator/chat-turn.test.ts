@@ -38,111 +38,6 @@ import {
   operator,
 } from '../test/orchestrator-agent-harness';
 import { handleMessage } from './orchestrator-agent';
-import { filterToolIndicators } from './chat-turn';
-
-// ─── filterToolIndicators ─────────────────────────────────────────────────────
-
-describe('filterToolIndicators', () => {
-  test('returns empty string for empty array', () => {
-    expect(filterToolIndicators([])).toBe('');
-  });
-
-  test('preserves non-tool-indicator text unchanged', () => {
-    const result = filterToolIndicators(['This is a regular message.']);
-    expect(result).toBe('This is a regular message.');
-  });
-
-  test('filters 🔧 (U+1F527) tool usage indicator', () => {
-    const result = filterToolIndicators(['🔧 Running tool foo', 'The answer is 42.']);
-    expect(result).not.toContain('🔧');
-    expect(result).toContain('The answer is 42.');
-  });
-
-  test('filters 💭 (U+1F4AD) thinking indicator', () => {
-    const result = filterToolIndicators([
-      '💭 Thinking about the problem...',
-      'Here is my response.',
-    ]);
-    expect(result).not.toContain('💭');
-    expect(result).toContain('Here is my response.');
-  });
-
-  test('filters 📝 (U+1F4DD) writing indicator', () => {
-    const result = filterToolIndicators(['📝 Writing file output.txt', 'Done writing.']);
-    expect(result).not.toContain('📝');
-    expect(result).toContain('Done writing.');
-  });
-
-  test('filters ✏️ (U+270F+FE0F) editing indicator', () => {
-    const result = filterToolIndicators(['\u{270F}\u{FE0F} Editing main.ts', 'Edit complete.']);
-    expect(result).not.toContain('\u{270F}');
-    expect(result).toContain('Edit complete.');
-  });
-
-  test('filters 🗑️ (U+1F5D1+FE0F) deleting indicator', () => {
-    const result = filterToolIndicators(['\u{1F5D1}\u{FE0F} Deleting temp file', 'File removed.']);
-    expect(result).not.toContain('\u{1F5D1}');
-    expect(result).toContain('File removed.');
-  });
-
-  test('filters 📂 (U+1F4C2) folder indicator', () => {
-    const result = filterToolIndicators(['📂 Reading directory /src', 'Directory listed.']);
-    expect(result).not.toContain('📂');
-    expect(result).toContain('Directory listed.');
-  });
-
-  test('filters 🔍 (U+1F50D) search indicator', () => {
-    const result = filterToolIndicators(['🔍 Searching for pattern', 'Search complete.']);
-    expect(result).not.toContain('🔍');
-    expect(result).toContain('Search complete.');
-  });
-
-  test('preserves emoji that is not a tool indicator', () => {
-    const result = filterToolIndicators(['🎉 Deployment successful!']);
-    expect(result).toContain('🎉 Deployment successful!');
-  });
-
-  test('preserves text that contains tool emoji but does not START with it', () => {
-    // The regex requires the emoji at the START of the section
-    const result = filterToolIndicators(['Here is a 🔧 wrench emoji mid-text.']);
-    expect(result).toContain('🔧');
-  });
-
-  test('falls back to all messages when everything gets filtered out', () => {
-    expect(filterToolIndicators(['🔧 Tool call one'])).toBe('🔧 Tool call one');
-  });
-
-  test('handles multiple assistant messages joined with separator', () => {
-    const messages = [
-      'First part of the response.',
-      '🔧 Some tool usage here',
-      'Second part of the response.',
-    ];
-    const result = filterToolIndicators(messages);
-    expect(result).toContain('First part of the response.');
-    expect(result).toContain('Second part of the response.');
-    expect(result).not.toContain('🔧 Some tool usage here');
-  });
-
-  test('sections within a single message are split by double newlines', () => {
-    // A single message with embedded double-newline creates multiple sections
-    const messages = ['Normal text.\n\n🔧 Tool output.\n\nMore normal text.'];
-    const result = filterToolIndicators(messages);
-    expect(result).toContain('Normal text.');
-    expect(result).toContain('More normal text.');
-    expect(result).not.toContain('🔧');
-  });
-
-  test('trims whitespace from the final output', () => {
-    const result = filterToolIndicators(['  Regular text with leading spaces.  ']);
-    expect(result).toBe('Regular text with leading spaces.');
-  });
-
-  test('handles empty strings in message array', () => {
-    const result = filterToolIndicators(['', 'Actual content here.', '']);
-    expect(result).toContain('Actual content here.');
-  });
-});
 
 // ─── Stale session ID clearing on error_during_execution ────────────────────
 
@@ -165,6 +60,69 @@ describe('stale session ID clearing on error_during_execution', () => {
     mockListCodebases.mockReset();
     mockListCodebases.mockImplementation(() => Promise.resolve([]));
   });
+
+  for (const mode of ['stream', 'batch'] as const) {
+    for (const status of ['failed', 'cancelled'] as const) {
+      test(`${mode}: reports an unanswered ${status} tool without leaking output`, async () => {
+        mockCaptureChatTurn.mockClear();
+        mockSendQuery.mockImplementationOnce(async function* () {
+          yield { type: 'agent_message_chunk', text: 'Starting the action.' };
+          yield {
+            type: 'tool_call_update',
+            toolCallId: 'shell',
+            status,
+            output: 'private tool output',
+          };
+          yield { type: 'result', cost: 0.1, tokens: { input: 100, output: 10 } };
+          yield { type: 'result', cost: 0.2, tokens: { input: 200, output: 20 } };
+        });
+        const platform = {
+          ...makePlatform(),
+          sendResultFooter: mock<NonNullable<IPlatformAdapter['sendResultFooter']>>(() =>
+            Promise.resolve()
+          ),
+        };
+        (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'launch the workflow', { actor: operator });
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'conv-1',
+          expect.stringContaining('A tool failed or was cancelled')
+        );
+        expect(
+          JSON.stringify((platform.sendMessage as ReturnType<typeof mock>).mock.calls)
+        ).not.toContain('private tool output');
+        expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: 'failed', tokensIn: 300, tokensOut: 30 })
+        );
+        expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+        expect(mockCaptureChatTurn.mock.calls[0]?.[0]?.costUsd).toBeCloseTo(0.3);
+        const footer = platform.sendResultFooter.mock.calls[0]?.[1];
+        expect(footer?.cost).toBeCloseTo(0.3);
+        expect(footer?.tokens).toMatchObject({ input: 300, output: 30 });
+      });
+
+      test(`${mode}: assistant recovery takes precedence over a ${status} tool`, async () => {
+        mockCaptureChatTurn.mockClear();
+        mockSendQuery.mockImplementationOnce(async function* () {
+          yield { type: 'tool_call_update', toolCallId: 'shell', status };
+          yield {
+            type: 'agent_message_chunk',
+            text: 'The launch failed; please correct the workflow input.',
+          };
+        });
+        const platform = makePlatform();
+        (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'launch the workflow', { actor: operator });
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'conv-1',
+          'The launch failed; please correct the workflow input.'
+        );
+        expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: 'completed' })
+        );
+      });
+    }
+  }
 
   test('handleStreamMode: clears session ID on error_during_execution result', async () => {
     // Simulate AI returning error_during_execution with a stale session ID
@@ -191,6 +149,8 @@ describe('stale session ID clearing on error_during_execution', () => {
 
     // updateSession should be called with null to clear the stale session ID
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
+    // An error the provider did not confirm as a missing session is not retried.
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
   });
 
   test('handleBatchMode: clears session ID on error_during_execution result', async () => {
@@ -215,7 +175,114 @@ describe('stale session ID clearing on error_during_execution', () => {
     await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
+    // An error the provider did not confirm as a missing session is not retried.
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
   });
+
+  const staleRejection = {
+    type: 'result',
+    isError: true,
+    errorSubtype: 'error_during_execution',
+    failure: { class: 'unknown', evidence: 'error_during_execution: evidence' },
+    sessionId: 'stale-session-id',
+    sessionNotFound: true,
+  } as const;
+  async function staleTurn(
+    mode: 'stream' | 'batch',
+    setup?: (platform: IPlatformAdapter) => void
+  ): Promise<IPlatformAdapter> {
+    mockCaptureChatTurn.mockClear();
+    mockTransitionSession.mockResolvedValueOnce(
+      makeSession({ id: 'session-1', assistant_session_id: 'stale-session-id' })
+    );
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+    setup?.(platform);
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    return platform;
+  }
+  const resumeArgs = (): unknown[] => mockSendQuery.mock.calls.map(call => call[2]);
+  const errorReported = (): boolean =>
+    mockLogger.warn.mock.calls.some(call => call[1] === 'ai_result_error');
+
+  test.each(['stream', 'batch'] as const)(
+    '%s mode: a stale resume completes the turn on a fresh session',
+    async mode => {
+      mockSendQuery
+        .mockImplementationOnce(async function* () {
+          yield staleRejection;
+        })
+        .mockImplementationOnce(async function* () {
+          yield { type: 'agent_message_chunk', text: 'Fresh reply.' };
+          yield { type: 'result', sessionId: 'fresh-id' };
+        });
+      const platform = await staleTurn(mode);
+
+      expect(resumeArgs()).toEqual(['stale-session-id', undefined]);
+      const updates = mockUpdateSession.mock.calls.map(call => call[1]);
+      expect(updates.indexOf(null)).toBeGreaterThanOrEqual(0);
+      expect(updates.indexOf(null)).toBeLessThan(updates.indexOf('fresh-id'));
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining('could not be resumed')
+      );
+      expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'Fresh reply.');
+      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'completed' })
+      );
+      expect(errorReported()).toBe(false);
+    }
+  );
+
+  test('a failed fresh-session notice does not stop the retry', async () => {
+    mockSendQuery
+      .mockImplementationOnce(async function* () {
+        yield staleRejection;
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Fresh reply.' };
+        yield { type: 'result', sessionId: 'fresh-id' };
+      });
+    const platform = await staleTurn('stream', p => {
+      (p.sendMessage as ReturnType<typeof mock>).mockRejectedValueOnce(new Error('transport down'));
+    });
+
+    expect(resumeArgs()).toEqual(['stale-session-id', undefined]);
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'Fresh reply.');
+    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'completed' })
+    );
+  });
+
+  test.each(['stream', 'batch'] as const)(
+    '%s mode: a stale rejection after output fails without a retry',
+    async mode => {
+      mockSendQuery.mockImplementationOnce(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Partial.' };
+        yield staleRejection;
+      });
+      await staleTurn(mode);
+      expect(resumeArgs()).toEqual(['stale-session-id']);
+      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'failed' })
+      );
+    }
+  );
+
+  test.each(['stream', 'batch'] as const)(
+    '%s mode: a second stale rejection fails without another retry',
+    async mode => {
+      mockSendQuery.mockImplementation(async function* () {
+        yield staleRejection;
+      });
+      await staleTurn(mode);
+      expect(resumeArgs()).toEqual(['stale-session-id', undefined]);
+      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'failed' })
+      );
+      expect(errorReported()).toBe(true);
+    }
+  );
 
   test.each(['stream', 'batch'] as const)(
     '%s mode: a typed failure picks the advice from its class, not its words',
@@ -257,7 +324,7 @@ describe('stale session ID clearing on error_during_execution', () => {
     // success" surfaced via classifyAndFormatError.
     mockSendQuery.mockImplementationOnce(async function* () {
       yield { type: 'agent_message_chunk', text: 'classified' };
-      // Post-fix shape from claude/provider.ts: isError absent; stop_sequence maps to end_turn.
+      // Post-fix shape from claude/result.ts: isError absent; stop_sequence maps to end_turn.
       yield {
         type: 'result',
         sessionId: 'sid-ok',
@@ -319,9 +386,9 @@ describe('stale session ID clearing on error_during_execution', () => {
   });
 });
 
-// ─── Multi-chunk command accumulation regression ──────────────────────────────
+// ─── Assistant prose has no side effects ───────────────────────────────────────
 
-describe('handleMessage — multi-chunk command accumulation (regression)', () => {
+describe('assistant command examples are ordinary text', () => {
   beforeEach(() => {
     mockSendQuery.mockReset();
     mockGetOrCreateConversation.mockReset();
@@ -349,281 +416,84 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     mockRegisterRepository.mockClear();
   });
 
-  test('stream mode — register-project split across 3 chunks', async () => {
-    mockParseCommand.mockReturnValueOnce({
-      command: 'register-project',
-      args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
-    });
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield {
-        type: 'agent_message_chunk',
-        text: "I'll register the project now.\n\n/register-project ",
-      };
-      yield { type: 'agent_message_chunk', text: 'ExampleProject ' };
-      yield { type: 'agent_message_chunk', text: '"/.archon/workspaces/owner/repo/source"' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'register my project', { actor: operator });
-
-    const expectedCwd = await canonicalizeProjectPath('/.archon/workspaces/owner/repo/source');
-    expect(mockRegisterRepository).toHaveBeenCalledTimes(1);
-    expect(mockRegisterRepository).toHaveBeenCalledWith(expectedCwd, { name: 'ExampleProject' });
-    const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
-      string,
-      string,
-    ][];
-    // The confirmation echoes the path that was actually stored.
-    expect(allCalls.some(([, msg]) => msg.includes(expectedCwd))).toBe(true);
-  });
-
-  test('batch mode — register-project split across 3 chunks', async () => {
-    mockParseCommand.mockReturnValueOnce({
-      command: 'register-project',
-      args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
-    });
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield {
-        type: 'agent_message_chunk',
-        text: "I'll register the project now.\n\n/register-project ",
-      };
-      yield { type: 'agent_message_chunk', text: 'ExampleProject ' };
-      yield { type: 'agent_message_chunk', text: '"/.archon/workspaces/owner/repo/source"' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'register my project', { actor: operator });
-
-    const expectedCwd = await canonicalizeProjectPath('/.archon/workspaces/owner/repo/source');
-    expect(mockRegisterRepository).toHaveBeenCalledTimes(1);
-    expect(mockRegisterRepository).toHaveBeenCalledWith(expectedCwd, { name: 'ExampleProject' });
-    const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
-      string,
-      string,
-    ][];
-    // The confirmation echoes the path that was actually stored.
-    expect(allCalls.some(([, msg]) => msg.includes(expectedCwd))).toBe(true);
-  });
-
-  test('stream mode — invoke-workflow split across 2 chunks', async () => {
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeNamedCodebase('my-project')]));
-    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
-      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
-    );
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: 'Running the workflow now.\n\n/invoke-workflow ' };
-      yield { type: 'agent_message_chunk', text: 'assist --project my-project' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'run assist on my-project', { actor: operator });
-
-    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-  });
-
-  test('batch mode — invoke-workflow split across 2 chunks', async () => {
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeNamedCodebase('my-project')]));
-    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
-      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
-    );
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: 'Running the workflow now.\n\n/invoke-workflow ' };
-      yield { type: 'agent_message_chunk', text: 'assist --project my-project' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'run assist on my-project', { actor: operator });
-
-    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-  });
-
-  test('stream mode — invoke-workflow with --prompt split into a later chunk', async () => {
-    // Regression: INVOKE_WORKFLOW_FULL_RE must not declare the command complete when
-    // --project <token> arrives without a line terminator, because --prompt may follow
-    // in the next chunk. Without this fix, commandFullyParsed fires early and the
-    // --prompt chunk is never accumulated, causing synthesizedPrompt to be lost.
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeNamedCodebase('my-project')]));
-    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
-      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
-    );
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield {
-        type: 'agent_message_chunk',
-        text: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
-      };
-      yield { type: 'agent_message_chunk', text: '--prompt "synthesized task description"' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'original user message', { actor: operator });
-
-    // Workflow was dispatched with the synthesized prompt, not the original user message.
-    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
-      expect.objectContaining({ originalMessage: 'synthesized task description' }),
-      expect.anything()
-    );
-  });
-
-  test('batch mode — invoke-workflow with --prompt split into a later chunk', async () => {
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeNamedCodebase('my-project')]));
-    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
-      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
-    );
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield {
-        type: 'agent_message_chunk',
-        text: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
-      };
-      yield { type: 'agent_message_chunk', text: '--prompt "synthesized task description"' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'original user message', { actor: operator });
-
-    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
-      expect.objectContaining({ originalMessage: 'synthesized task description' }),
-      expect.anything()
-    );
-  });
-
-  test('stream mode — an escaped quote in a split --prompt reaches the run intact', async () => {
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([makeNamedCodebase('my-project')]));
-    mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
-      Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
-    );
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield {
-        type: 'agent_message_chunk',
-        text: '/invoke-workflow assist --project my-project --prompt "Fix the \\"lo',
-      };
-      yield { type: 'agent_message_chunk', text: 'gin\\" bug and add tests"' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'original user message', { actor: operator });
-
-    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
-      expect.objectContaining({ originalMessage: 'Fix the "login" bug and add tests' }),
-      expect.anything()
-    );
-  });
-
-  test('stream mode — command in single chunk still works (non-regression)', async () => {
-    mockParseCommand.mockReturnValueOnce({
-      command: 'register-project',
-      args: ['MyApp', '/path/to/app'],
-    });
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: '/register-project MyApp /path/to/app' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'register my app', { actor: operator });
-
-    expect(mockRegisterRepository).toHaveBeenCalledWith(
-      await canonicalizeProjectPath('/path/to/app'),
-      { name: 'MyApp' }
-    );
-  });
-
-  test('registers under the claimed name when the requested storage is taken', async () => {
-    mockParseCommand.mockReturnValueOnce({
-      command: 'register-project',
-      args: ['app', '/path/app'],
-    });
-    mockRegisterRepository.mockResolvedValueOnce({
-      codebaseId: 'repo-id',
-      name: '_local/app-2',
-      defaultCwd: await canonicalizeProjectPath('/path/app'),
-      alreadyExisted: false,
-    });
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: '/register-project app /path/app' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'register my app', { actor: operator });
-
-    const defaultCwd = await canonicalizeProjectPath('/path/app');
-    expect(mockRegisterRepository).toHaveBeenCalledWith(defaultCwd, { name: 'app' });
-    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
-      call => call[1] as string
-    );
-    expect(sent.some(msg => msg.includes('Project "_local/app-2" registered'))).toBe(true);
-  });
-
-  test('a repository registration refusal is reported without confirming a new project', async () => {
-    mockParseCommand.mockReturnValueOnce({
-      command: 'register-project',
-      args: ['app', '/path/app'],
-    });
-    mockRegisterRepository.mockRejectedValueOnce(
-      new Error('Project "acme/app" is already registered at /prod/app; use worktrees')
-    );
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/register-project app /path/app', { actor: operator });
-    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
-      .map(call => String(call[1]))
-      .join('\n');
-    expect(messages).toContain('already registered at /prod/app; use worktrees');
-    expect(messages).not.toContain('registered successfully');
-    expect(mockCreateCodebase).not.toHaveBeenCalled();
-  });
-
-  test('stream mode — pre-command text is streamed, post-command chunks are suppressed', async () => {
-    // The command chunk includes a trailing \n so REGISTER_PROJECT_FULL_RE fires on
-    // that chunk alone (unquoted path + line terminator = fully parsed). commandFullyParsed
-    // becomes true before the third chunk arrives, so " extra trailing" is never
-    // accumulated and cannot corrupt the parsed path.
-    mockParseCommand.mockReturnValueOnce({
-      command: 'register-project',
-      args: ['Foo', '/path'],
-    });
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: 'Registering now:\n' };
-      yield { type: 'agent_message_chunk', text: '/register-project Foo /path\n' };
-      yield { type: 'agent_message_chunk', text: ' extra trailing' };
-      yield { type: 'result', sessionId: 'sess-1' };
-    });
-
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'register foo', { actor: operator });
-
-    const calls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
-      string,
-      string,
-    ][];
-    const sentTexts = calls.map(([, msg]) => msg);
-    // Pre-command text was streamed
-    expect(sentTexts).toContain('Registering now:\n');
-    // Command trigger chunk was NOT streamed
-    expect(sentTexts).not.toContain('/register-project Foo /path\n');
-    // Post-command chunk was NOT streamed (suppressed because commandFullyParsed=true)
-    expect(sentTexts).not.toContain(' extra trailing');
-    expect(mockRegisterRepository).toHaveBeenCalledWith(await canonicalizeProjectPath('/path'), {
-      name: 'Foo',
-    });
-  });
+  for (const nativeTools of [false, true]) {
+    for (const mode of ['stream', 'batch'] as const) {
+      test(`harmless command prose: ${mode}, nativeTools=${nativeTools}`, async () => {
+        const providers = await import('@archon/providers');
+        const caps = providers.getProviderCapabilities as ReturnType<typeof mock>;
+        const baseline = caps();
+        caps.mockReturnValue({ ...baseline, nativeTools });
+        const codebase = makeNamedCodebase('my-project');
+        mockListCodebases.mockResolvedValue([codebase]);
+        mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+          workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+          errors: [],
+        });
+        mockCaptureChatTurn.mockClear();
+        mockRegisterFolder.mockClear();
+        mockUpdateSession.mockClear();
+        const chunks = [
+          'Example:\n/invoke-work',
+          String.raw`flow assist --project my-project --prompt "Fix the \"login\" bug"` + '\n',
+          '/register-project --folder demo "/tmp/with spaces"\n',
+          'Following answer.',
+        ];
+        mockSendQuery.mockImplementationOnce(async function* () {
+          for (const text of chunks)
+            yield { type: 'agent_message_chunk', text, continuesPreviousBlock: true };
+          yield {
+            type: 'tool_call',
+            toolCallId: 'example',
+            name: 'Bash',
+            rawInput: { command: 'pwd' },
+          };
+          yield {
+            type: 'tool_call_update',
+            toolCallId: 'example',
+            status: 'completed',
+            output: 'done',
+          };
+          yield { type: 'warning', code: 'test_warning', message: 'Provider warning' };
+          yield { type: 'result', sessionId: 'example-session' };
+        });
+        const platform = {
+          ...makePlatform(),
+          emitRetract: mock(async () => {}),
+          sendStructuredEvent: mock<NonNullable<IPlatformAdapter['sendStructuredEvent']>>(
+            async () => {}
+          ),
+        };
+        platform.getStreamingMode.mockReturnValue(mode);
+        try {
+          await handleMessage(platform, 'conv-1', 'Explain these commands', { actor: operator });
+          const output = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+            .map(c => c[1])
+            .join('');
+          expect(output).toContain(chunks.join(''));
+          expect(output).toContain('Provider warning');
+          expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+          expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+          expect(mockRegisterFolder).not.toHaveBeenCalled();
+          expect(mockRegisterRepository).not.toHaveBeenCalled();
+          expect(platform.emitRetract).not.toHaveBeenCalled();
+          if (mode === 'stream') {
+            expect(output).toContain('Bash');
+            expect(platform.sendStructuredEvent.mock.calls.map(c => c[1].type)).toEqual([
+              'tool_call',
+              'tool_call_update',
+              'result',
+            ]);
+          }
+          expect(mockUpdateSession).toHaveBeenCalledWith('session-1', 'example-session');
+          expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+            expect.objectContaining({ outcome: 'completed' })
+          );
+        } finally {
+          caps.mockReturnValue(baseline);
+        }
+      });
+    }
+  }
 });
 
 // ─── Chat turn telemetry (PR #1944 review T2) ────────────────────────────────
@@ -653,6 +523,70 @@ describe('chat turn telemetry', () => {
     });
   });
 
+  test.each([
+    [' tool output\n\nFinal answer', 'Final answer'],
+    [' tool output', '🔧 Running tool output'],
+  ])('batch keeps block identity across a warning: %j', async (tail, expected) => {
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: '🔧 Running' };
+      yield { type: 'warning', code: 'pi.extension_notify', message: 'Waiting' };
+      yield { type: 'agent_message_chunk', text: tail, continuesPreviousBlock: true };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(platform.sendMessage).toHaveBeenNthCalledWith(1, 'conv-1', '⚠️ Waiting');
+    expect(platform.sendMessage).toHaveBeenLastCalledWith('conv-1', expected);
+  });
+
+  test('batch truncation preserves a real answer in a warning-split indicator block', async () => {
+    const answers = Array.from({ length: 19 }, (_, i) => `Answer ${i + 1}`);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: '🔧 Running' };
+      yield { type: 'warning', code: 'pi.extension_notify', message: 'Waiting' };
+      yield { type: 'agent_message_chunk', text: ' tool output', continuesPreviousBlock: true };
+      yield { type: 'agent_message_chunk', text: '\n\nFinal answer', continuesPreviousBlock: true };
+      for (const text of answers) yield { type: 'agent_message_chunk', text };
+    });
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+    expect(platform.sendMessage).toHaveBeenNthCalledWith(1, 'conv-1', '⚠️ Waiting');
+    expect(platform.sendMessage).toHaveBeenLastCalledWith(
+      'conv-1',
+      ['Final answer', ...answers].join('\n\n---\n\n')
+    );
+  });
+
+  test.each([
+    [18, 1],
+    [19, 1],
+    [20, 1],
+    [21, 1],
+    [19, 25],
+  ])(
+    'batch truncation keeps indicator continuations hidden with %i later blocks and %i fragments',
+    async (count, fragments) => {
+      const answers = Array.from({ length: count }, (_, i) => `Answer ${i + 1}`);
+      mockSendQuery.mockImplementationOnce(async function* () {
+        yield { type: 'agent_message_chunk', text: '🔧 Running' };
+        yield { type: 'warning', code: 'pi.extension_notify', message: 'Waiting' };
+        for (let i = 0; i < fragments; i++) {
+          yield { type: 'agent_message_chunk', text: ' tool output', continuesPreviousBlock: true };
+        }
+        for (const text of answers) yield { type: 'agent_message_chunk', text };
+      });
+      const platform = makePlatform();
+      (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+      expect(platform.sendMessage).toHaveBeenNthCalledWith(1, 'conv-1', '⚠️ Waiting');
+      expect(platform.sendMessage).toHaveBeenLastCalledWith(
+        'conv-1',
+        answers.slice(-20).join('\n\n---\n\n')
+      );
+    }
+  );
+
   test('captures exactly one completed chat turn for a plain conversation', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ codebase_id: null }))
@@ -669,37 +603,6 @@ describe('chat turn telemetry', () => {
         durationMs: expect.any(Number),
       })
     );
-  });
-
-  test('does NOT capture a chat turn when the AI routes to /invoke-workflow', async () => {
-    // Guard for the "excluded by construction" claim: the routing turn that
-    // dispatches a workflow must count as workflow_invoked, not as a chat turn.
-    const codebase = makeNamedCodebase('my-project');
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ codebase_id: null }))
-    );
-    mockListCodebases.mockImplementation(() => Promise.resolve([codebase]));
-    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
-      Promise.resolve({
-        workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
-        errors: [],
-      })
-    );
-    mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: '/invoke-workflow assist --project my-project' };
-      yield { type: 'result', sessionId: 'session-1' };
-    });
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'run assist on my project', { actor: operator });
-
-    // Positive control: the routing path actually ran — dispatch auto-attaches
-    // the project to the conversation before isolation/execution.
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
-      codebase_id: 'id-my-project',
-    });
-    // …and the routing turn was NOT counted as a chat turn.
-    expect(mockCaptureChatTurn).not.toHaveBeenCalled();
   });
 
   test('passes provider-reported usage through to the chat turn capture', async () => {
@@ -750,6 +653,7 @@ describe('chat turn telemetry', () => {
       };
       await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
+      expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
       const footer = platform.sendResultFooter.mock.calls[0]?.[1];
       expect(footer?.cost).toBeCloseTo(0.3);
       expect(footer?.tokens).toMatchObject({ input: 300, output: 30 });
@@ -775,79 +679,74 @@ describe('chat turn telemetry', () => {
     expect(arg?.tokensOut).toBeUndefined();
   });
 
-  test('captures a failed chat turn when the AI returns an error result', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ codebase_id: null }))
-    );
-    mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'result', isError: true, errorSubtype: 'error_max_turns' };
-    });
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-
-    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-    expect(mockCaptureChatTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        platform: 'web',
-        provider: 'claude',
-        outcome: 'failed',
-        durationMs: expect.any(Number),
-      })
-    );
-  });
-
-  test('a routed turn whose workflow dispatch throws is not a failed chat turn', async () => {
-    const codebase = makeNamedCodebase('my-project');
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ codebase_id: null }))
-    );
-    mockListCodebases.mockImplementation(() => Promise.resolve([codebase]));
-    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
-      Promise.resolve({
-        workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
-        errors: [],
-      })
-    );
-    mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: '/invoke-workflow assist --project my-project' };
-      yield { type: 'result', sessionId: 'session-1' };
-    });
-    mockUpdateConversation.mockImplementationOnce(() =>
-      Promise.reject(new Error('database is locked'))
-    );
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'run assist on my project', { actor: operator });
-
-    // Positive control: dispatch reached the write that failed.
-    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
-      codebase_id: 'id-my-project',
-    });
-    expect(mockCaptureChatTurn).not.toHaveBeenCalled();
-  });
-
   for (const mode of ['stream', 'batch'] as const) {
-    test(`captures exactly one failed chat turn when the provider throws mid-turn (${mode})`, async () => {
-      mockGetOrCreateConversation.mockReturnValueOnce(
-        Promise.resolve(makeConversation({ codebase_id: null }))
-      );
-      mockSendQuery.mockImplementation(async function* () {
-        yield { type: 'agent_message_chunk', text: 'partial' };
-        throw new Error('provider subprocess exited');
-      });
-      const platform = makePlatform();
-      platform.getStreamingMode.mockImplementation(() => mode);
+    for (const exit of ['result', 'throw'] as const) {
+      test.each(['known', 'unknown', 'none'] as const)(
+        `${mode}: retains %s usage on a provider ${exit} failure`,
+        async usage => {
+          mockSendQuery.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'partial' };
+            if (usage !== 'none') {
+              yield { type: 'result', cost: 0.125, tokens: { input: 100, output: 10 } };
+            }
+            if (usage === 'unknown') yield { type: 'result', tokensUnknown: true };
+            if (exit === 'throw') throw new Error('provider subprocess exited');
+            yield { type: 'result', isError: true, errorSubtype: 'error_max_turns' };
+          });
+          const platform = makePlatform();
+          platform.getStreamingMode.mockReturnValue(mode);
+          await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
-      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
-
-      expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
-      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
-        expect.objectContaining({ platform: 'web', provider: 'claude', outcome: 'failed' })
+          expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+          expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+            expect.objectContaining({
+              platform: 'web',
+              provider: 'claude',
+              outcome: 'failed',
+              durationMs: expect.any(Number),
+              costUsd: usage === 'none' ? undefined : 0.125,
+              tokensIn: usage === 'known' ? 100 : undefined,
+              tokensOut: usage === 'known' ? 10 : undefined,
+            })
+          );
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'conv-1',
+            expect.stringContaining(
+              exit === 'throw' ? 'provider subprocess exited' : 'error_max_turns'
+            )
+          );
+        }
       );
-      // The user still hears about it from the outer handler.
-      expect(platform.sendMessage).toHaveBeenCalled();
-    });
+    }
+    test.each([false, true])(
+      `${mode}: includes error-result usage once (tokensUnknown=%s)`,
+      async tokensUnknown => {
+        mockSendQuery.mockImplementation(async function* () {
+          yield { type: 'result', cost: 0.125, tokens: { input: 100, output: 10 } };
+          yield {
+            type: 'result',
+            isError: true,
+            errorSubtype: 'error_max_turns',
+            cost: 0.25,
+            tokens: { input: 200, output: 20 },
+            ...(tokensUnknown ? { tokensUnknown: true as const } : {}),
+          };
+        });
+        const platform = makePlatform();
+        platform.getStreamingMode.mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
+
+        expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+        expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            outcome: 'failed',
+            costUsd: 0.375,
+            tokensIn: tokensUnknown ? undefined : 300,
+            tokensOut: tokensUnknown ? undefined : 30,
+          })
+        );
+      }
+    );
   }
 });
 
@@ -905,7 +804,12 @@ describe('message persistence for non-web platforms', () => {
   });
 
   test('persists user + assistant messages for non-web platform (stream mode)', async () => {
-    const platform: IPlatformAdapter = {
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'agent_message_chunk', text: 'hello ' };
+      yield { type: 'agent_message_chunk', text: 'back' };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+    const platform = {
       ...makePlatform(),
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'telegram'),
@@ -914,6 +818,10 @@ describe('message persistence for non-web platforms', () => {
 
     await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
 
+    expect(platform.sendMessage.mock.calls).toEqual([
+      ['conv-1', 'hello '],
+      ['conv-1', 'back'],
+    ]);
     expect(mockAddMessage).toHaveBeenCalledWith(
       'conv-db-id',
       'user',
@@ -921,11 +829,7 @@ describe('message persistence for non-web platforms', () => {
       undefined,
       undefined
     );
-    expect(mockAddMessage).toHaveBeenCalledWith(
-      'conv-db-id',
-      'assistant',
-      expect.stringContaining('hello back')
-    );
+    expect(mockAddMessage).toHaveBeenCalledWith('conv-db-id', 'assistant', 'hello back');
     expect(mockAddMessage).toHaveBeenCalledTimes(2);
   });
 
@@ -1033,29 +937,6 @@ describe('message persistence for non-web platforms', () => {
   });
 });
 
-for (const mode of ['stream', 'batch'] as const) {
-  test(`${mode}: explicit folder command survives chunked quoted paths`, async () => {
-    mockRegisterFolder.mockClear();
-    mockListCodebases.mockResolvedValueOnce([]);
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: '/register-project --folder ' };
-      yield { type: 'agent_message_chunk', text: 'Platform ' };
-      yield { type: 'agent_message_chunk', text: '"/path/with ' };
-      yield { type: 'agent_message_chunk', text: 'spaces"\n' };
-      yield { type: 'result', sessionId: 'folder-session' };
-    });
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
-    await handleMessage(platform, 'conv-1', 'register my directory as a folder project', {
-      actor: operator,
-    });
-    expect(mockRegisterFolder).toHaveBeenCalledWith(
-      await canonicalizeProjectPath('/path/with spaces'),
-      'Platform'
-    );
-  });
-}
-
 test('direct explicit folder command uses the folder primitive and refuses an existing repo', async () => {
   mockParseCommand.mockReset();
   mockRegisterFolder.mockClear();
@@ -1090,56 +971,50 @@ test('direct explicit folder command uses the folder primitive and refuses an ex
   expect(messages).toContain('already registered as a repo');
 });
 
-for (const mode of ['stream', 'batch'] as const) {
-  test(`${mode}: another registration command name cannot register a folder`, async () => {
-    mockRegisterFolder.mockClear();
+describe('explicit registration results', () => {
+  beforeEach(() => {
     mockCreateCodebase.mockClear();
     mockRegisterRepository.mockClear();
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: '/register-project-backup --folder Platform /\n' };
-      yield { type: 'result', sessionId: 'other-command' };
-    });
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
-    await handleMessage(platform, 'conv-1', 'save project instructions', { actor: operator });
-    expect(mockRegisterFolder).not.toHaveBeenCalled();
-    expect(mockCreateCodebase).not.toHaveBeenCalled();
+    mockListCodebases.mockResolvedValue([]);
   });
 
-  test(`${mode}: registration arguments cannot cross a line break`, async () => {
-    mockRegisterFolder.mockClear();
-    mockCreateCodebase.mockClear();
-    mockRegisterRepository.mockClear();
-    mockListCodebases.mockResolvedValueOnce([]);
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield {
-        type: 'agent_message_chunk',
-        text: '/register-project\n--folder unintended /tmp\n/register-project --folder intended /tmp/intended\n',
-      };
-      yield { type: 'result', sessionId: 'line-boundary' };
+  test('registers under the claimed name when the requested storage is taken', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['app', '/path/app'],
+    });
+    mockRegisterRepository.mockResolvedValueOnce({
+      codebaseId: 'repo-id',
+      name: '_local/app-2',
+      defaultCwd: await canonicalizeProjectPath('/path/app'),
+      alreadyExisted: false,
     });
     const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
-    await handleMessage(platform, 'conv-1', 'register my folder', { actor: operator });
-    expect(mockRegisterFolder.mock.calls).toEqual([
-      [await canonicalizeProjectPath('/tmp/intended'), 'intended'],
-    ]);
-    expect(mockCreateCodebase).not.toHaveBeenCalled();
-  });
+    await handleMessage(platform, 'conv-1', '/register-project app /path/app', { actor: operator });
 
-  test(`${mode}: explicit folder registration preserves an apostrophe in an unquoted path`, async () => {
-    mockRegisterFolder.mockClear();
-    mockListCodebases.mockResolvedValueOnce([]);
-    mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: "/register-project --folder demo /tmp/O'Brien\n" };
-      yield { type: 'result', sessionId: 'literal-path' };
-    });
-    const platform = makePlatform();
-    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
-    await handleMessage(platform, 'conv-1', 'register my folder', { actor: operator });
-    expect(mockRegisterFolder).toHaveBeenCalledWith(
-      await canonicalizeProjectPath("/tmp/O'Brien"),
-      'demo'
+    const defaultCwd = await canonicalizeProjectPath('/path/app');
+    expect(mockRegisterRepository).toHaveBeenCalledWith(defaultCwd, { name: 'app' });
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+      call => call[1] as string
     );
+    expect(sent.some(msg => msg.includes('Project "_local/app-2" registered'))).toBe(true);
   });
-}
+
+  test('a repository registration refusal is reported without confirming a new project', async () => {
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['app', '/path/app'],
+    });
+    mockRegisterRepository.mockRejectedValueOnce(
+      new Error('Project "acme/app" is already registered at /prod/app; use worktrees')
+    );
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/register-project app /path/app', { actor: operator });
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => String(call[1]))
+      .join('\n');
+    expect(messages).toContain('already registered at /prod/app; use worktrees');
+    expect(messages).not.toContain('registered successfully');
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
+});

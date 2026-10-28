@@ -10,6 +10,10 @@ Optional prior investigation report to build on (may be empty — empty means no
 
 $INPUTS.report
 
+Related work an earlier triage found, as `[{ "url", "relation" }]`: overlapping open issues, closed earlier attempts, recent merged changes on the same surface (may be `[]`). Read each one that bears on the approach before deciding it. An earlier attempt's rejection or a merged change's design is evidence the plan accounts for, not a rule:
+
+$INPUTS.related
+
 The operator's request — the message that started this run:
 
 $ARGUMENTS
@@ -26,7 +30,7 @@ When a prior report is provided, treat its claims like any inherited analysis: v
 
 Design calls are judged against the project's own guidance. For each design call, open, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point — and any other document the steering files point to that bears on the call, such as design rules for a language, API, or configuration surface, and read the section that rules on it rather than the whole file. A call those documents already rule on is settled by them, not by your preference.
 
-When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout to spike against? Add a scratch worktree under `$ARTIFACTS_DIR/spike/` and remove it when you are done. Never spike in this checkout.
+When a call turns on a fact only trying can establish — whether an API behaves as documented, whether a shape fits the existing code — spike it: write throwaway code under `$ARTIFACTS_DIR/spike/`, run it, and keep the result as evidence. Need a checkout or a dependency install to spike against? Put it under `$ARTIFACTS_DIR/.archon/scratch/plan/`, never in `spike/`, and remove a worktree with `git worktree remove` when you are done; the engine deletes that directory when the run ends. Never spike in this checkout.
 
 ## Decide, don't defer
 
@@ -34,7 +38,7 @@ Name the design decisions the work actually contains, choose, and record why —
 
 ## Calls that belong to a person
 
-Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. A project's file replaces the default whole: when it exists, do not read the default. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
+Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
 
 A call is a person's only when one of these holds, and you name which:
 
@@ -60,10 +64,11 @@ Write `$ARTIFACTS_DIR/plan.md`:
 - **Problem** — what this work solves and why it matters, from the request.
 - **Approach** — the chosen design, the alternatives rejected with reasons, and for each design call what settled it.
 - **Steps** — ordered, each independently verifiable, anchored to stable text anchors (a named function, a described test block) — never raw line numbers, which drift on every preceding edit.
+- **Contract coverage** — every acceptance item, invariant and steering constraint the work order states, each with the steps that deliver or keep it. An item no step covers is not a gap to leave: it is the blocking question above, because the plan would deliver less than the stated outcome.
 - **Validation** — which of the project's own gates prove the work, and the new tests to write: focused and behavior-proving, only where a plausible regression would cost a user something. Many changes need none. Plan no guard, check, or test for a failure no supported path reaches.
 - **Risks and rollback** — blast radius, what could go wrong, and how the change reverts.
 - **Contract additions** — each addition to a shipped surface the plan makes without a person: what it adds and why every existing value keeps its meaning. The pull request body flags each one as a contract addition.
-- **Out of scope** — what this plan deliberately does not do, so the implementer does not helpfully do it.
+- **Out of scope** — what this plan deliberately does not do, so the implementer does not helpfully do it. Only work outside the contract belongs here. A contract item you believe can't or shouldn't be done is never out of scope: stop and ask, with the reason.
 - **Open questions** — only when a call belongs to a person: each question, as declared below.
 
 Omit a section that does not apply; never write a placeholder to preserve one.

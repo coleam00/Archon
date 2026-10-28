@@ -160,16 +160,26 @@ export function recordCleanupFailure(err: Error, detail: string): void {
   (err as ErrorWithCleanupFailure).cleanupFailure = detail;
 }
 
-function failureKind(err: Error): IsolationFailureKind | undefined {
-  if (err instanceof WorktreePostCreateError) return undefined;
+/** The kind this error itself names, before its errno code or cause is consulted. */
+function namedFailureKind(err: Error): IsolationFailureKind | undefined {
   if ((err instanceof IsolationFailure || err instanceof GitFailure) && err.kind !== 'unclassified')
     return err.kind;
   if (err instanceof ConfiguredBaseBranchNotFoundError) return 'configured_branch_missing';
-  if ('code' in err) {
-    if (err.code === 'EACCES' || err.code === 'EPERM') return 'permission_denied';
-    if (err.code === 'ENOSPC') return 'no_space';
-    if (err.code === 'ETIMEDOUT') return 'timeout';
-  }
+  return undefined;
+}
+
+function errnoFailureKind(err: Error): IsolationFailureKind | undefined {
+  if (!('code' in err)) return undefined;
+  if (err.code === 'EACCES' || err.code === 'EPERM') return 'permission_denied';
+  if (err.code === 'ENOSPC') return 'no_space';
+  if (err.code === 'ETIMEDOUT') return 'timeout';
+  return undefined;
+}
+
+function failureKind(err: Error): IsolationFailureKind | undefined {
+  if (err instanceof WorktreePostCreateError) return undefined;
+  const ownKind = namedFailureKind(err) ?? errnoFailureKind(err);
+  if (ownKind) return ownKind;
   const causeKind = err.cause instanceof Error ? failureKind(err.cause) : undefined;
   return (
     causeKind ??

@@ -1188,7 +1188,12 @@ export interface paths {
         };
         cookie?: never;
       };
-      requestBody?: never;
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['SendMessageBody'];
+          'multipart/form-data': components['schemas']['SendMessageMultipartBody'];
+        };
+      };
       responses: {
         /** @description Accepted */
         200: {
@@ -1259,7 +1264,7 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List registered codebases */
+    /** List codebases with the newest representative of each resolved repository remote */
     get: {
       parameters: {
         query?: never;
@@ -1773,7 +1778,7 @@ export interface paths {
     put?: never;
     /**
      * Run a workflow via the orchestrator (JSON or multipart with file uploads)
-     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected.
+     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected. JSON requests may supply `adopt_run_id` or `supersedes_run_id`, but not both. If dispatch would continue an existing run, either declaration is refused before continuation or its fresh fallback. The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or use a conversation with no open run. An accepted fresh supersede records `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
      */
     post: {
       parameters: {
@@ -1784,7 +1789,12 @@ export interface paths {
         };
         cookie?: never;
       };
-      requestBody?: never;
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['WorkflowRunLaunchJson'];
+          'multipart/form-data': components['schemas']['WorkflowRunLaunchMultipart'];
+        };
+      };
       responses: {
         /** @description Accepted */
         200: {
@@ -2094,6 +2104,45 @@ export interface paths {
           };
           content: {
             'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/dashboard/conversations': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Active and queued conversation processing in this server process
+     * @description Background workflow runs bypass the conversation lock and are listed by /api/dashboard/runs.
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Conversations holding a processing slot or waiting for one */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ConversationProcessingResponse'];
           };
         };
       };
@@ -4844,6 +4893,14 @@ export interface components {
       accepted: boolean;
       status: string;
     };
+    SendMessageBody: {
+      message: string;
+    };
+    SendMessageMultipartBody: {
+      message: string;
+      /** @description Repeated files parts, each at most 10485760 bytes. Upload MIME type restrictions apply. */
+      files?: string[];
+    };
     CodebaseListResponse: components['schemas']['Codebase'][];
     Codebase: {
       id: string;
@@ -4924,7 +4981,7 @@ export interface components {
       name: string;
       description: string;
       provider?: string;
-      model?: string;
+      model?: string | string[];
       /** @enum {string} */
       modelReasoningEffort?:
         | 'minimal'
@@ -5012,7 +5069,7 @@ export interface components {
       when?: string;
       /** @enum {string} */
       trigger_rule?: 'all_success' | 'one_success' | 'none_failed_min_one_success' | 'all_done';
-      model?: string;
+      model?: string | string[];
       provider?: string;
       context?:
         | ('fresh' | 'shared')
@@ -5249,6 +5306,7 @@ export interface components {
       persist_session?: boolean;
       output_type?: string;
       command?: string;
+      with?: unknown;
       prompt?: string;
       bash?: string;
       timeout?: number;
@@ -5316,28 +5374,46 @@ export interface components {
             };
           };
       cancel?: string;
-      include?: string;
-      workflow?: string;
-      input?: string;
+      script?: string;
       /** @enum {string} */
-      isolation?: 'inherit' | 'worktree';
+      runtime?: 'bun' | 'uv';
+      deps?: string[];
+      include?: string;
       fan_out?: {
         items: string;
         as?: string;
         /** @default 5 */
-        max_parallel: number;
+        max_parallel: number | 'all';
         /**
          * @default all_done
          * @enum {string}
          */
         join: 'all_success' | 'all_done' | 'first_success';
       };
-      script?: string;
+      workflow?: string;
+      input?: string;
       /** @enum {string} */
-      runtime?: 'bun' | 'uv';
-      deps?: string[];
-      with?: unknown;
-    };
+      isolation?: 'inherit' | 'worktree';
+    } & (
+      | {
+          /** @enum {string} */
+          include?: never;
+        }
+      | {
+          include: string;
+          fan_out?: {
+            items: string;
+            as: string;
+            /** @default 5 */
+            max_parallel: number;
+            /**
+             * @default all_done
+             * @enum {string}
+             */
+            join: 'all_success' | 'all_done' | 'first_success';
+          };
+        }
+    );
     /** @enum {string} */
     WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
     WorkflowLoadError: {
@@ -5346,6 +5422,90 @@ export interface components {
       error: string;
       /** @enum {string} */
       errorType: 'read_error' | 'parse_error' | 'validation_error';
+    };
+    /** @description Launch a workflow. adopt_run_id and supersedes_run_id are mutually exclusive. */
+    WorkflowRunLaunchJson: {
+      conversationId: string;
+      message: string;
+      inputs?: {
+        [key: string]: string;
+      } | null;
+      tiers?: {
+        small?: string;
+        medium?: string;
+        large?: string;
+      } | null;
+      aliases?: {
+        [key: string]: string;
+      } | null;
+      config?: components['schemas']['WorkflowRunLaunchConfig'];
+      adopt_run_id?: string;
+      supersedes_run_id?: string;
+    };
+    /** @description Sparse raw run configuration. Use assistant or defaultAssistant, never both. Provider names, model presets and assistants settings are validated against the live provider registry. */
+    WorkflowRunLaunchConfig: {
+      assistant?: string;
+      assistants?: {
+        [key: string]: {
+          [key: string]: unknown;
+        };
+      };
+      aliases?: {
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        };
+      };
+      tiers?: {
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        };
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        };
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        };
+      };
+      workflows?: {
+        toolCallAttentionMs?: number;
+        autoResumeOnQuotaReset?: boolean;
+        quotaFallbackDelayMs?: number;
+        quotaMaxAttempts?: number;
+        quotaDeadlineMs?: number;
+      };
+      defaultAssistant?: string;
+      docs?: {
+        path?: string;
+      };
+      env?: {
+        [key: string]: string;
+      };
+    };
+    WorkflowRunLaunchMultipart: {
+      conversationId: string;
+      message: string;
+      /** @description JSON encoding of WorkflowRunLaunchJson.inputs. */
+      inputs?: string;
+      /** @description JSON encoding of WorkflowRunLaunchJson.tiers. */
+      tiers?: string;
+      /** @description JSON encoding of WorkflowRunLaunchJson.aliases. */
+      aliases?: string;
+      /** @description JSON encoding of WorkflowRunLaunchConfig. */
+      config?: string;
+      /** @description Repeated files parts, each at most 10485760 bytes. Upload MIME type restrictions apply. */
+      files?: string[];
     };
     RunsNeedingAttentionResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
@@ -5438,6 +5598,11 @@ export interface components {
       agents_failed: number | null;
       agents_total: number | null;
       attention: components['schemas']['RunAttention'] | (never | null);
+      /**
+       * @description What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.
+       * @enum {string|null}
+       */
+      owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
     };
     WorkflowRunMetadata: {
       tool_call_attention?: {
@@ -5492,6 +5657,7 @@ export interface components {
         completionSignaled?: boolean | null;
         signaledOutput?: string | null;
         signaledStructuredOutput?: unknown;
+        iterationOutput?: string;
         signaledTokens?: {
           input: number;
           output: number;
@@ -5991,6 +6157,10 @@ export interface components {
             [key: string]: string;
           };
           revision?: number;
+          loopQuestionReferences?: {
+            [key: string]: string;
+          };
+          reaskedFrom?: string;
         }
       | {
           /** @enum {string} */
@@ -6121,6 +6291,10 @@ export interface components {
             [key: string]: string;
           };
           revision?: number;
+          loopQuestionReferences?: {
+            [key: string]: string;
+          };
+          reaskedFrom?: string;
         };
     RunStopReason: {
       /** @enum {string} */
@@ -6149,6 +6323,7 @@ export interface components {
             codebaseId: string | null;
             name: string;
           } | null;
+          parentRunId: string | null;
           fanOut: {
             parentRunId: string;
             nodeId: string;
@@ -6186,6 +6361,7 @@ export interface components {
             codebaseId: string | null;
             name: string;
           } | null;
+          parentRunId: string | null;
           fanOut: {
             parentRunId: string;
             nodeId: string;
@@ -6217,6 +6393,7 @@ export interface components {
             codebaseId: string | null;
             name: string;
           } | null;
+          parentRunId: string | null;
           fanOut: {
             parentRunId: string;
             nodeId: string;
@@ -6248,6 +6425,7 @@ export interface components {
             codebaseId: string | null;
             name: string;
           } | null;
+          parentRunId: string | null;
           fanOut: {
             parentRunId: string;
             nodeId: string;
@@ -6313,6 +6491,7 @@ export interface components {
               codebaseId: string | null;
               name: string;
             } | null;
+            parentRunId: string | null;
             fanOut: {
               parentRunId: string;
               nodeId: string;
@@ -6350,6 +6529,7 @@ export interface components {
               codebaseId: string | null;
               name: string;
             } | null;
+            parentRunId: string | null;
             fanOut: {
               parentRunId: string;
               nodeId: string;
@@ -6381,6 +6561,7 @@ export interface components {
               codebaseId: string | null;
               name: string;
             } | null;
+            parentRunId: string | null;
             fanOut: {
               parentRunId: string;
               nodeId: string;
@@ -6412,6 +6593,7 @@ export interface components {
               codebaseId: string | null;
               name: string;
             } | null;
+            parentRunId: string | null;
             fanOut: {
               parentRunId: string;
               nodeId: string;
@@ -6469,6 +6651,22 @@ export interface components {
         pending: number;
         paused: number;
       };
+    };
+    ConversationProcessingResponse: {
+      active: number;
+      maxConcurrent: number;
+      queuedTotal: number;
+      activeConversations: {
+        conversationId: string;
+        acquiredAt: string;
+        ageMs: number;
+      }[];
+      queuedConversations: {
+        conversationId: string;
+        queuedMessages: number;
+        oldestEnqueuedAt: string;
+        oldestAgeMs: number;
+      }[];
     };
     CancelWorkflowRunResponse: {
       success: boolean;
@@ -6606,6 +6804,11 @@ export interface components {
         worker_platform_id?: string;
         parent_platform_id?: string;
         conversation_platform_id: string | null;
+        /**
+         * @description What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.
+         * @enum {string|null}
+         */
+        owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
         terminal_record: {
           run_id: string;
           /** @enum {string} */
@@ -6651,6 +6854,57 @@ export interface components {
                   kind: 'upstream_skipped';
                   origin: string;
                 };
+            fan_out_outcome?: {
+              tally: {
+                total: number;
+                completed: number;
+                failed: number;
+                not_started: number;
+                cancelled_by_engine: number;
+                cancelled_by_workflow: number;
+                cancelled_out_of_band: number;
+                cancelled_unattributed: number;
+              };
+              slots: (
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'completed';
+                    child_run_id: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'failed';
+                    child_run_id: string;
+                    error?: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome: 'not_started';
+                    error: string;
+                  }
+                | {
+                    index: number;
+                    /** @enum {string} */
+                    outcome:
+                      | 'cancelled_by_engine'
+                      | 'cancelled_by_workflow'
+                      | 'cancelled_out_of_band'
+                      | 'cancelled_unattributed';
+                    child_run_id: string;
+                    /** @enum {string} */
+                    cancel_reason?:
+                      | 'approval_rejected'
+                      | 'operator'
+                      | 'halt_node'
+                      | 'precondition_failed'
+                      | 'conversation_reset'
+                      | 'fan_out';
+                  }
+              )[];
+            };
           }[];
           returns:
             | {
@@ -6768,6 +7022,57 @@ export interface components {
                 kind: 'upstream_skipped';
                 origin: string;
               };
+          fan_out_outcome?: {
+            tally: {
+              total: number;
+              completed: number;
+              failed: number;
+              not_started: number;
+              cancelled_by_engine: number;
+              cancelled_by_workflow: number;
+              cancelled_out_of_band: number;
+              cancelled_unattributed: number;
+            };
+            slots: (
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome: 'completed';
+                  child_run_id: string;
+                }
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome: 'failed';
+                  child_run_id: string;
+                  error?: string;
+                }
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome: 'not_started';
+                  error: string;
+                }
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome:
+                    | 'cancelled_by_engine'
+                    | 'cancelled_by_workflow'
+                    | 'cancelled_out_of_band'
+                    | 'cancelled_unattributed';
+                  child_run_id: string;
+                  /** @enum {string} */
+                  cancel_reason?:
+                    | 'approval_rejected'
+                    | 'operator'
+                    | 'halt_node'
+                    | 'precondition_failed'
+                    | 'conversation_reset'
+                    | 'fan_out';
+                }
+            )[];
+          };
         }[];
       };
       events: components['schemas']['WorkflowEvent'][];
@@ -6803,6 +7108,8 @@ export interface components {
             /** @enum {string} */
             type: 'agent_message_chunk';
             text: string;
+            /** @enum {boolean} */
+            continuesPreviousBlock?: true;
           }
         | {
             /** @enum {string} */
@@ -7104,20 +7411,22 @@ export interface components {
       status: string;
       adapter: string;
       concurrency: {
+        /** @description Conversations holding a processing slot plus background workflow conversations */
         active: number;
         queuedTotal: number;
-        queuedByConversation: {
-          conversationId: string;
-          queuedMessages: number;
-        }[];
         maxConcurrent: number;
-        activeConversationIds: string[];
+        /** @description Age of the oldest conversation holding a processing slot in this process. Background workflow runs are counted in `active` but not aged here; see /api/dashboard/runs. */
+        oldestActiveAgeMs: number | null;
+        /** @description Age of the oldest waiting message */
+        oldestQueuedAgeMs: number | null;
       };
       runningWorkflows: number;
       version?: string;
       is_docker: boolean;
       is_wsl: boolean;
       wsl_distro?: string;
+      /** @description Opaque id of the Archon home this server serves. Compare it with that home's `store-id` file to confirm the server serves the home you mean. Omitted when the home has no readable store id. */
+      storeId?: string;
       activePlatforms?: string[];
       attentionDestinations?: {
         id: string;

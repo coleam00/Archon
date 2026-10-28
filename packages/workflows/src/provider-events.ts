@@ -1,7 +1,7 @@
-import type { createRunToolCallAttention } from './tool-call-attention';
+import type { createRunToolCallAttention, StreamStall } from './tool-call-attention';
 /**
  * What the engine does with each non-terminal event a provider streams. Both AI-node
- * loops in `dag-executor.ts` (the agent node and the loop node) hand every event to one
+ * loops (the agent node and the loop node, under `dag/nodes/`) hand every event to one
  * handler, so neither keeps its own per-type branches.
  *
  * Every event is recorded unchanged inside the engine envelope (see
@@ -16,7 +16,7 @@ import { createLogger } from '@archon/paths';
 
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import { getWorkflowEventEmitter } from './event-emitter';
-import { safeSendMessage, type SendMessageContext } from './executor-shared';
+import { safeSendMessage, type SendMessageContext } from './platform-messages';
 import { logProviderEvent } from './logger';
 import type { ProviderEventEnvelope } from './schemas/provider-event';
 import type { IWorkflowStore } from './store';
@@ -80,6 +80,8 @@ export interface ProviderEventHandler {
   handle(event: ProviderEvent): Promise<void>;
   /** Subtasks that started and have not ended: the work a stream cut short would lose. */
   liveSubtaskIds(): string[];
+  /** This pass's attention stall while its stalled calls are on the run row. */
+  stall(): StreamStall | undefined;
   hasOpenTools(): boolean;
   refreshAttention(): Promise<void>;
   clearAttention(): Promise<void>;
@@ -122,6 +124,58 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
     }
   };
 
+  const handleToolCall = async (
+    event: Extract<ProviderEvent, { type: 'tool_call' }>,
+    streaming: boolean
+  ): Promise<void> => {
+    if (!streaming) return;
+    await safeSendMessage(
+      platform,
+      conversationId,
+      formatToolCall(toolCallDisplayName(event), event.rawInput),
+      messageContext,
+      { category: 'tool_call_formatted' } as WorkflowMessageMetadata
+    );
+    if (platform.sendStructuredEvent) {
+      await platform.sendStructuredEvent(conversationId, event);
+    }
+  };
+
+  const handleToolCallUpdate = async (
+    event: Extract<ProviderEvent, { type: 'tool_call_update' }>,
+    streaming: boolean
+  ): Promise<void> => {
+    if (streaming && platform.sendStructuredEvent) {
+      await platform.sendStructuredEvent(conversationId, event);
+    }
+  };
+
+  const handleMcpServerStatus = async (
+    event: Extract<ProviderEvent, { type: 'mcp_server_status' }>
+  ): Promise<void> => {
+    // Only the node's declared servers surface. The provider decides whether the
+    // node can run without one: Claude and Codex fail it before the first turn.
+    if (
+      (event.status === 'failed' || event.status === 'needs_auth') &&
+      deps.configuredMcpServers.has(event.server)
+    ) {
+      await sendWarning(
+        `MCP server connection failed: ${event.server} (${event.status})${event.error ? `: ${event.error}` : ''}`,
+        { mcpServer: event.server, mcpStatus: event.status }
+      );
+    } else {
+      getLog().debug(
+        { nodeId, mcpServer: event.server, mcpStatus: event.status },
+        'dag.mcp_server_status'
+      );
+    }
+  };
+
+  const handleSubtask = (event: Extract<ProviderEvent, { type: 'subtask' }>): void => {
+    if (terminalSubtaskStatuses.has(event.status)) liveSubtasks.delete(event.taskId);
+    else liveSubtasks.add(event.taskId);
+  };
+
   return {
     async handle(event): Promise<void> {
       await deps.toolAttention.observe(event);
@@ -132,50 +186,20 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           await deps.onMessageText(event.text);
           return;
         case 'tool_call':
-          if (streaming) {
-            await safeSendMessage(
-              platform,
-              conversationId,
-              formatToolCall(toolCallDisplayName(event), event.rawInput),
-              messageContext,
-              { category: 'tool_call_formatted' } as WorkflowMessageMetadata
-            );
-            if (platform.sendStructuredEvent) {
-              await platform.sendStructuredEvent(conversationId, event);
-            }
-          }
+          await handleToolCall(event, streaming);
           return;
         case 'tool_call_update':
-          if (streaming && platform.sendStructuredEvent) {
-            await platform.sendStructuredEvent(conversationId, event);
-          }
+          await handleToolCallUpdate(event, streaming);
           return;
         case 'warning':
           // The ⚠️ is display formatting at the platform edge; nothing reads it back.
           await sendWarning(`⚠️ ${event.message}`, { code: event.code });
           return;
         case 'mcp_server_status':
-          // Servers the user's own config adds (e.g. a plugin MCP inherited from
-          // ~/.claude/) routinely fail inside the headless subprocess and are not
-          // actionable for the workflow author, so only the node's own servers surface.
-          if (
-            (event.status === 'failed' || event.status === 'needs_auth') &&
-            deps.configuredMcpServers.has(event.server)
-          ) {
-            await sendWarning(
-              `MCP server connection failed: ${event.server} (${event.status})${event.error ? `: ${event.error}` : ''}`,
-              { mcpServer: event.server, mcpStatus: event.status }
-            );
-          } else {
-            getLog().debug(
-              { nodeId, mcpServer: event.server, mcpStatus: event.status },
-              'dag.mcp_server_status'
-            );
-          }
+          await handleMcpServerStatus(event);
           return;
         case 'subtask':
-          if (terminalSubtaskStatuses.has(event.status)) liveSubtasks.delete(event.taskId);
-          else liveSubtasks.add(event.taskId);
+          handleSubtask(event);
           return;
         case 'hook':
         case 'agent_thought_chunk':
@@ -190,6 +214,7 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
       }
     },
     hasOpenTools: () => deps.toolAttention.hasOpenTools(),
+    stall: () => deps.toolAttention.stall(),
     refreshAttention: async (): Promise<void> => {
       await deps.toolAttention.refresh();
     },

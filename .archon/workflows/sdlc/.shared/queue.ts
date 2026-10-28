@@ -4,8 +4,10 @@
  *
  * An agent decides each item. A clear case acts on its own; anything unclear becomes
  * one attention item that a person can decide without opening the run. The answer is
- * one of the choices the agent declared, so the queue acts on an id, never on the
- * answer's prose. A choice's effect vocabulary belongs to the queue that declares it.
+ * one of the choices the agent declared, or `other`, which every item offers: the
+ * person's text is then the ruling, and the queue does what that choice's effect says
+ * with it. The queue acts on an id, never on the answer's prose. A choice's effect
+ * vocabulary belongs to the queue that declares it.
  */
 
 /** One answer the person can give, and what the queue does when it is chosen. */
@@ -70,6 +72,35 @@ export function checkAttention<Effect extends string>(attention: Attention<Effec
   if (!ids.includes(attention.recommendation.choice)) {
     throw new Error(`the recommended choice "${attention.recommendation.choice}" is not offered`);
   }
+}
+
+/** The choice every item offers when none of the declared ones fits. */
+export const OTHER = 'other';
+
+/**
+ * The item with `other` added: the person says in the answer's text what to do instead,
+ * and that text is written into the issue body as the ruling. `effect` is what the queue
+ * does with it, normally its continue-the-work effect.
+ */
+export function withOther<Effect extends string>(
+  attention: Attention<Effect>,
+  effect: Effect,
+  does = 'Do what the answer text says. The text is written into the issue body as the ruling, and the next round works from it.'
+): Attention<Effect> {
+  // The queue owns `other`: an agent-declared one is replaced, so its effect is always this one.
+  return {
+    ...attention,
+    choices: [
+      ...attention.choices.filter(choice => choice.id !== OTHER),
+      {
+        id: OTHER,
+        label: 'Something else',
+        does,
+        effect,
+        ruling: '',
+      },
+    ],
+  };
 }
 
 /** The declared choice an answer named; an id that was never offered refuses. */

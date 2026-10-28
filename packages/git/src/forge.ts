@@ -1,6 +1,7 @@
 // Forge detection: identify the hosting platform (GitHub, Gitea, GitLab)
 // behind a repository's remote (default `origin`), plus its REST API base URL.
 
+import { GITHUB_COM_HOST, readGitHubHost } from './github-host';
 import { getRemoteUrl } from './repo';
 import type { RepoPath } from './types';
 
@@ -55,7 +56,8 @@ function matchSelfHostedForge(envVar: string, hostname: string): string | null {
  *
  * Detection order:
  * 1. `github.com` hostname → GitHub (`https://api.github.com`)
- * 2. `GITHUB_URL` env hostname match → GitHub Enterprise (`<base>/api/v3`)
+ * 2. `GITHUB_URL` env hostname match → GitHub Enterprise (`<base>/api/v3`);
+ *    an invalid `GITHUB_URL` is ignored, like the other `*_URL` rules
  * 3. `GITEA_URL` env hostname match → Gitea (`<base>/api/v1`)
  * 4. `gitlab.com` hostname → GitLab (`https://gitlab.com/api/v4`)
  * 5. `GITLAB_URL` env hostname match → self-hosted GitLab (`<base>/api/v4`)
@@ -70,7 +72,7 @@ function matchSelfHostedForge(envVar: string, hostname: string): string | null {
 export async function detectForge(repoPath: RepoPath, remote = 'origin'): Promise<ForgeInfo> {
   const remoteUrl = await getRemoteUrl(repoPath, remote);
   if (!remoteUrl) {
-    return { type: 'github', apiBase: 'https://api.github.com' };
+    return { type: 'github', apiBase: GITHUB_COM_HOST.apiBaseUrl };
   }
 
   const hostname = extractHostname(remoteUrl);
@@ -78,13 +80,13 @@ export async function detectForge(repoPath: RepoPath, remote = 'origin'): Promis
     return { type: 'unknown', apiBase: '' };
   }
 
-  if (hostname === 'github.com') {
-    return { type: 'github', apiBase: 'https://api.github.com' };
+  if (hostname === GITHUB_COM_HOST.host) {
+    return { type: 'github', apiBase: GITHUB_COM_HOST.apiBaseUrl };
   }
 
-  const githubEnterpriseBase = matchSelfHostedForge('GITHUB_URL', hostname);
-  if (githubEnterpriseBase) {
-    return { type: 'github', apiBase: `${githubEnterpriseBase}/api/v3` };
+  const github = readGitHubHost();
+  if (github && hostname === new URL(github.webUrl).hostname) {
+    return { type: 'github', apiBase: github.apiBaseUrl };
   }
 
   const giteaBase = matchSelfHostedForge('GITEA_URL', hostname);

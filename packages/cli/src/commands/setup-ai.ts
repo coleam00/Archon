@@ -16,7 +16,9 @@ import {
   getPluginsPath,
 } from '@archon/paths';
 import { setInstallDefault } from './ai';
-import { checkProviderDiagnostics, type CheckResult } from './doctor';
+import { DEFAULT_CHAT_MODEL_OPTIONS } from './setup-model-options';
+import type { CheckResult } from './doctor-check';
+import { checkProviderDiagnostics } from './doctor-providers';
 import { providerCommand } from './provider';
 import {
   cancelSetup,
@@ -31,23 +33,6 @@ import {
   collectCodexAuth,
   collectPiConfig,
 } from './setup-provider-auth';
-
-/**
- * Curated default-chat-model suggestions for the built-in SDK providers
- * (#1999). CONVENIENCE only, not authority — mirrors CLAUDE_MODEL_OPTIONS /
- * CODEX_MODEL_OPTIONS in packages/web/src/experiments/console/lib/
- * model-options.ts (the web package can't be imported from the CLI, same
- * mirroring convention as that file's effort vocabularies). The prompt always
- * keeps a free-text escape; nothing blocks an unlisted model string.
- */
-const DEFAULT_CHAT_MODEL_OPTIONS: Record<string, { value: string; hint?: string }[]> = {
-  claude: [
-    { value: 'sonnet', hint: 'balanced (SDK default)' },
-    { value: 'opus', hint: 'most capable' },
-    { value: 'haiku', hint: 'fastest' },
-  ],
-  codex: [{ value: 'gpt-5.6-sol' }, { value: 'gpt-5.6-terra' }, { value: 'gpt-5.6-luna' }],
-};
 
 /** Sentinel select values for the default-chat-model prompt. Prefixed with
  *  `__` so they can never collide with a real model id. */
@@ -308,13 +293,7 @@ export async function collectAIConfig(
   diagnose: (id: string) => Promise<CheckResult[]> = id => checkProviderDiagnostics(id)
 ): Promise<SetupConfig['ai']> {
   const selectedProviders = await selectSetupProviders(options.providers, install);
-  for (const id of selectedProviders) {
-    for (const check of await diagnose(id)) {
-      const message = `${check.label}: ${check.message}`;
-      if (check.status === 'fail' || check.status === 'warn') log.warning(message);
-      else log.info(message);
-    }
-  }
+  await reportProviderDiagnostics(selectedProviders, diagnose);
   const hasClaude = selectedProviders.includes('claude');
   const hasCodex = selectedProviders.includes('codex');
   const hasPi = selectedProviders.includes('pi');
@@ -350,29 +329,7 @@ export async function collectAIConfig(
     piApiKeyEnvVar = piConfig.apiKeyEnvVar;
   }
 
-  let defaultAssistant: string | undefined;
-
-  if (selectedProviders.length > 1) {
-    const providerChoices = selectedProviders.map(id => {
-      const reg = getRegisteredProviders().find(p => p.id === id);
-      const displayName = reg?.displayName ?? id;
-      return {
-        value: id,
-        label: displayName,
-      };
-    });
-
-    const defaultChoice = await select({
-      message: 'Which should be the default AI assistant?',
-      options: providerChoices,
-    });
-
-    if (isCancel(defaultChoice)) cancelSetup();
-
-    defaultAssistant = defaultChoice;
-  } else if (selectedProviders.length === 1) {
-    defaultAssistant = selectedProviders[0];
-  }
+  const defaultAssistant = await selectDefaultAssistant(selectedProviders);
 
   // Optional, skippable default-chat-model step for the default assistant
   // (#1999). Pi is excluded: its model was already chosen in collectPiConfig
@@ -398,4 +355,47 @@ export async function collectAIConfig(
     ...(selectedProviders.length > 0 ? { defaultAssistantSelected: true } : {}),
     ...(defaultModel !== undefined ? { defaultModel } : {}),
   };
+}
+
+async function reportProviderDiagnostics(
+  providers: readonly string[],
+  diagnose: (id: string) => Promise<CheckResult[]>
+): Promise<void> {
+  for (const id of providers) {
+    for (const check of await diagnose(id)) {
+      const message = `${check.label}: ${check.message}`;
+      if (check.status === 'fail' || check.status === 'warn') log.warning(message);
+      else log.info(message);
+    }
+  }
+}
+
+async function selectDefaultAssistant(
+  selectedProviders: readonly string[]
+): Promise<string | undefined> {
+  let defaultAssistant: string | undefined;
+
+  if (selectedProviders.length > 1) {
+    const providerChoices = selectedProviders.map(id => {
+      const reg = getRegisteredProviders().find(p => p.id === id);
+      const displayName = reg?.displayName ?? id;
+      return {
+        value: id,
+        label: displayName,
+      };
+    });
+
+    const defaultChoice = await select({
+      message: 'Which should be the default AI assistant?',
+      options: providerChoices,
+    });
+
+    if (isCancel(defaultChoice)) cancelSetup();
+
+    defaultAssistant = defaultChoice;
+  } else if (selectedProviders.length === 1) {
+    defaultAssistant = selectedProviders[0];
+  }
+
+  return defaultAssistant;
 }

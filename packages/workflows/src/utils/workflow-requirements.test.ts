@@ -31,7 +31,7 @@ describe('assertWorkflowRequirementsMet', () => {
     expect(thrown).toBeInstanceOf(WorkflowRequirementError);
     expect((thrown as WorkflowRequirementError).requirement).toBe('github');
     // user-facing message names a connect path
-    expect((thrown as WorkflowRequirementError).message).toContain('connect github');
+    expect((thrown as WorkflowRequirementError).message).toContain('archon auth github');
   });
 });
 

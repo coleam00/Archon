@@ -48,7 +48,9 @@ mock.module('./run-live-owner', () => ({
   watchRunLiveOwner: mockWatchRunLiveOwner,
 }));
 
-const { runOwnerLossWatch, waitForRunAttention } = await import('./run-attention-watch');
+const { observeRunOwner, runOwnerLossWatch, waitForRunAttention } = await import(
+  './run-attention-watch'
+);
 const { DETACHED_RUN_STOP_HANDOFF_GRACE_MS, DETACHED_RUN_TERMINATION_MAX_MS } = await import(
   './run-stop-bounds'
 );
@@ -922,6 +924,39 @@ describe('waitForRunAttention', () => {
 });
 
 describe('runOwnerLossWatch', () => {
+  test.each([null, 'old-claim'])('checks only the requested execution claim %s', async claim => {
+    putRun('orphan', {
+      metadata: { ...localOwner, execution_claim: 'new-claim' },
+    });
+    reachableOwners = new Set();
+    const watchOwner = runOwnerLossWatch(store);
+    const signal = new AbortController().signal;
+
+    expect(await watchOwner('orphan', signal, claim)).toBeNull();
+    expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
+    expect(await watchOwner('orphan', signal, 'new-claim')).toEqual({
+      observedStatus: 'running',
+    });
+  });
+
+  test('related runs retain their own claims during an owner check', async () => {
+    putRun('parent', { metadata: { ...localOwner, execution_claim: 'parent-claim' } });
+    putRun('child', {
+      parent_run_id: 'parent',
+      metadata: { ...localOwner, execution_claim: 'child-claim' },
+    });
+    reachableOwners = new Set(['parent']);
+    const controller = new AbortController();
+    const pending = runOwnerLossWatch(store)('child', controller.signal, 'child-claim');
+    try {
+      await waitForOwner('parent');
+    } finally {
+      controller.abort();
+      await pending;
+    }
+    expect(mockWatchRunLiveOwner.mock.calls.map(([id]) => id)).toEqual(['child', 'parent']);
+  });
+
   test('reports a lost owner with its observed status, and any other end as null', async () => {
     putRun('orphan', { status: 'running' });
     putRun('asking', { status: 'paused', metadata: { ...localOwner, ...gate() } });
@@ -929,8 +964,8 @@ describe('runOwnerLossWatch', () => {
     const watchOwner = runOwnerLossWatch(store);
     const signal = new AbortController().signal;
 
-    expect(await watchOwner('orphan', signal)).toEqual({ observedStatus: 'running' });
-    expect(await watchOwner('asking', signal)).toBeNull();
+    expect(await watchOwner('orphan', signal, null)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('asking', signal, null)).toBeNull();
     expect(rows.get('orphan')?.status).toBe('running');
   });
 
@@ -952,8 +987,76 @@ describe('runOwnerLossWatch', () => {
     const watchOwner = runOwnerLossWatch(store);
     const signal = new AbortController().signal;
 
-    expect(await watchOwner('stalled', signal)).toEqual({ observedStatus: 'running' });
-    expect(await watchOwner('malformed', signal)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('stalled', signal, null)).toEqual({ observedStatus: 'running' });
+    expect(await watchOwner('malformed', signal, null)).toEqual({ observedStatus: 'running' });
     expect(rows.get('stalled')?.metadata).toMatchObject({ tool_call_attention: [stalled] });
+  });
+});
+
+describe('observeRunOwner', () => {
+  const stalledCall = {
+    streamId: 'stream',
+    nodeId: 'implement',
+    provider: 'codex',
+    toolCallId: 'tool',
+    name: 'bash',
+    startedAt: '2026-10-01T00:00:00.000Z',
+    lastProgressAt: '2026-10-01T00:00:00.000Z',
+    raisedAt: '2026-10-01T00:30:00.000Z',
+    thresholdMs: 1800000,
+  };
+
+  test('an answering owner is reachable, and the probe lets go of it', async () => {
+    const run = putRun('live');
+
+    expect(await observeRunOwner(store, run)).toBe('reachable');
+    expect(ownerUnsubscribes).toHaveLength(1);
+    expect(ownerUnsubscribes[0]).toHaveBeenCalledTimes(1);
+  });
+
+  test('a local owner absent on two reads is unreachable, and the row is untouched', async () => {
+    const run = putRun('orphan', { last_activity_at: new Date() });
+    reachableOwners = new Set();
+
+    expect(await observeRunOwner(store, run)).toBe('unreachable');
+    expect(mockGetWorkflowRun).toHaveBeenCalledWith('orphan');
+    expect(rows.get('orphan')?.status).toBe('running');
+  });
+
+  test('a run that died mid tool call is still asked for its owner', async () => {
+    const run = putRun('stalled', {
+      metadata: { ...localOwner, tool_call_attention: [stalledCall] },
+    });
+    reachableOwners = new Set();
+
+    expect(await observeRunOwner(store, run)).toBe('unreachable');
+  });
+
+  test('an owner this host cannot observe is unknown, never unreachable', async () => {
+    reachableOwners = new Set();
+
+    expect(await observeRunOwner(store, putRun('foreign', { metadata: foreignOwner }))).toBe(
+      'unknown'
+    );
+    expect(await observeRunOwner(store, putRun('unrecorded', { metadata: {} }))).toBe('unknown');
+  });
+
+  test('an endpoint that does not answer in time is unknown', async () => {
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unproven' }));
+
+    expect(await observeRunOwner(store, putRun('slow'))).toBe('unknown');
+  });
+
+  test('a run that finished between reads makes no ownership claim', async () => {
+    const running = putRun('racing');
+    rows.set('racing', { ...running, status: 'completed', completed_at: new Date() });
+    reachableOwners = new Set();
+
+    expect(await observeRunOwner(store, running)).toBeNull();
+  });
+
+  test.each(['paused', 'completed'] as const)('a %s row is not probed', async status => {
+    expect(await observeRunOwner(store, putRun('settled', { status }))).toBeNull();
+    expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
   });
 });

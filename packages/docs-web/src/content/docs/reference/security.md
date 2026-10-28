@@ -57,9 +57,11 @@ Because `bypassPermissions` grants full file and shell access, only run Archon i
 
 Archon's core and webhook clone handlers and worktree provider add clone destinations and worktree paths to the running user's global Git `safe.directory` configuration before checkout hooks or validation run Git in them. Git consults that list only for a repository owned by another user, so on POSIX Archon skips the grant for a path not created yet when the running user (other than root) owns its nearest existing parent. Repeated setup removes duplicate exact entries from the global config files; a required config-write failure stops setup.
 
+Registering an existing local repository (Settings → Projects or `/register-project`) adds that exact path to the same list only when Git refuses it solely because another user owns it, as with a Docker bind mount. A path Git already accepts, or refuses for another reason (missing, unreadable, not a repository), gets no grant. Git matches the repository's top level, so register the repository root: a subdirectory of a repository owned by another user stays refused.
+
 If Git evaluates the same file more than once, for example through an include or symlinked XDG and home config files, its effective config can still list that single physical grant multiple times. Archon preserves those includes and symlinks.
 
-These grants persist if cloning or worktree setup fails, adoption is rejected, or the checkout is later removed. Archon does not revoke them automatically: another concurrent setup may rely on the same grant. Git will continue to trust a later checkout placed at that path. Operators own removal of grants they no longer need from the same user's global Git config.
+These grants persist if cloning, registration or worktree setup fails, adoption is rejected, or the checkout is later removed. Archon does not revoke them automatically: another concurrent setup may rely on the same grant. Git will continue to trust a later checkout placed at that path. Operators own removal of grants they no longer need from the same user's global Git config.
 
 ## Tool Restrictions
 
@@ -104,7 +106,7 @@ Archon uses structured logging (Pino) with explicit rules about what is and is n
 
 ## Anonymous Telemetry
 
-Separate from local logging, Archon sends a small set of **anonymous** usage events to PostHog (`archon_started`, `archon_active` daily server heartbeat, `chat_turn_handled` — platform, provider, model, duration, and usage totals; never message content, `workflow_invoked`, `workflow_completed`/`workflow_failed`/`workflow_cancelled`, `workflow_approval_resolved` — binary approve/reject only, `codebase_registered` — a pure count, no name/path/URL) so maintainers can see active installs, which workflows run, and run outcomes. Events are keyed by a random install UUID — never user identity.
+Separate from local logging, Archon sends a small set of **anonymous** usage events to PostHog (`archon_started`, `archon_active` daily server heartbeat, `chat_turn_handled` — platform, provider, model, duration, and usage totals; never message content, `workflow_no_match` — agent-reported no-fit count and transport only, `workflow_invoked`, `workflow_completed`/`workflow_failed`/`workflow_cancelled`, `workflow_approval_resolved` — binary approve/reject only, `codebase_registered` — a pure count, no name/path/URL) so maintainers can see active installs, which workflows run, and run outcomes. Events are keyed by a random install UUID — never user identity.
 
 Only categorical data is sent: bundled workflow name (user-authored workflows report `"custom"`), platform, provider/model id, node shape (counts per node type, graph depth, fan-out, command-reference count, a prompt-size bucket) and feature-adoption flags, the name of the bundled workflow a custom workflow was copied from (never the copy's own name), run outcome/duration, aggregate usage totals (token counts, cost USD, loop iterations — numbers only), a fixed-enum failure class recorded where a node failed (never the error text itself), a `run_ref` hash of the install and run ids (never the run id), deployment shape (which adapters/db/auth modes are enabled — booleans and enums, never configuration values), and machine context (OS, arch, version, runtime, install channel, build commit). **Never sent:** code, prompts, chat message content, conversation ids, file paths, IP (dropped at ingest), geolocation, error text, or custom workflow names. See the [Telemetry table in the configuration reference](/reference/configuration/) for the full field list and opt-out options (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, CI auto-disable, or `POSTHOG_API_KEY=off`).
 
@@ -153,15 +155,16 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 ## Secrets Handling
 
 **Environment files:**
-- All secrets (API keys, tokens, webhook secrets) belong in archon-owned `.env` files (`~/.archon/.env` or `<cwd>/.archon/.env`), never in source control.
-- Never put archon secrets in `<cwd>/.env` — that file is stripped at boot (see below) and `archon setup` never writes to it. Put them in `~/.archon/.env` (home scope) or `<cwd>/.archon/.env` (project scope).
+- Keep secrets (API keys, tokens, webhook secrets) in Archon-owned `.env` files (`~/.archon/.env` or `<cwd>/.archon/.env`), never in source control. A server running from source also supports the Archon checkout's root `.env`, as used by the developer setup.
+- Do not put Archon secrets in a target repository's `<cwd>/.env`: its keys are stripped at boot and its values are not loaded. When CWD is Archon's own source checkout, the source server deliberately reloads that checkout's root `.env` after stripping. The CLI and compiled server do not reload it. `archon setup` writes only to `~/.archon/.env` (home scope) or `<cwd>/.archon/.env` (project scope).
 - Archon's `.gitignore` excludes `.env` files. `<cwd>/.archon/.env` should also be gitignored (project-local secrets).
 
 **Subprocess env isolation:**
-- At startup, `stripCwdEnv()` removes **all** keys named in the CWD project env files (`.env`, `.env.local`, `.env.development`, `.env.production`), whatever their value or source, including shell exports and direnv, plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`.
+- At startup, `stripCwdEnv()` removes **all** keys named in the CWD project env files (`.env`, `.env.local`, `.env.development`, `.env.production`), whatever their value or source, including shell exports and direnv. Selected chat scope comes from the explicit `--chat-project-id` CLI argument, independent of env loading. It also strips nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`.
+- A source-checkout server then loads `<archon-checkout>/.env`, resolved from the server source location rather than CWD, without `override`: values remaining in the process environment win. This is Archon's own configuration, not a separate target repository's `.env`. The CLI and compiled server skip this step.
 - Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope) with `override: true`. Repository env normally overrides user env. The CLI's `loadCliEnv` wrapper preserves the user-scope `GH_CONFIG_DIR` (including its absence), preventing repository env from redirecting the stored gh login. Inside a workflow, the CLI preserves inherited GitHub identity values over both env files, including empty values that disable host credentials. The standalone server follows the general load order, so repository env can override its `GH_CONFIG_DIR`. See [forge plugin configuration](/reference/forge/#plugin-configuration). The repo scope cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`; Archon refuses to start if it does, so a repository cannot choose which Archon home or plugin executables are used.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
-- The CWD project env files listed above are untrusted sources. They belong to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
+- A separate target repository's CWD env files are untrusted sources. They belong to the target project, not to Archon. The source server's checkout-root exception does not load a separate target repository's `.env`. See [`.env` file locations](/reference/configuration/#env-file-locations) for the complete load order.
 
 **Per-user provider credentials:**
 - In per-user GitHub mode, conversation titles use the requesting user's credential for the title model. If that credential is absent or unusable, title generation is skipped. Delivered per-user credentials take precedence over installation and project authentication settings; requests without a per-user delivery keep native provider precedence.
@@ -177,9 +180,9 @@ Archon prevents target repo `.env` from leaking into subprocesses through struct
 3. **Bun script nodes:** `bun --no-env-file` prevents script node subprocesses from loading target repo `.env`.
 4. **Bash nodes:** Not affected — bash does not auto-load `.env` files.
 
-This strict deletion prevents a project `ANTHROPIC_API_KEY` from overriding Claude subscription authentication and billing the API instead. It also prevents project keys, including shell or direnv values with the same names, from overriding Archon's defaults or environment.
+This strict deletion prevents a project `ANTHROPIC_API_KEY` from overriding Claude subscription authentication and billing the API instead. It also prevents project keys, including shell or direnv values with the same names, from overriding Archon's defaults or environment. Chat project scope uses `--chat-project-id`, so env files cannot supply or override it.
 
-Put install credentials such as `GH_TOKEN` in `~/.archon/.env`. Archon's own env sources (`~/.archon/.env` and `<cwd>/.archon/.env`) load after the strip and pass through to subprocesses normally. The strip removes project key names at boot; it does not forbid explicitly supplying those names through Archon's later trusted env layers.
+Put install credentials such as `GH_TOKEN` in `~/.archon/.env`. Archon's own env sources (`~/.archon/.env`, `<cwd>/.archon/.env`, and the Archon checkout's root `.env` for a source server) load after the strip and pass through to subprocesses normally. The source server loads its checkout file first, without override; the two `.archon/.env` files then override it. The CLI and compiled server load only the `.archon/.env` files. The strip removes project key names at boot; it does not forbid explicitly supplying those names through Archon's later trusted env layers.
 
 **If you need env vars available during workflow execution**, use managed env injection:
 - `.archon/config.yaml` `env:` section (per-repo, checked into version control)
@@ -189,8 +192,8 @@ Put install credentials such as `GH_TOKEN` in `~/.archon/.env`. Archon's own env
 - API routes use `WEB_UI_ORIGIN` to restrict CORS. The default is `*` (allow all), which is appropriate for local single-developer use. Set a specific origin when exposing the server publicly.
 
 **Docker deployments:**
-- `CLAUDE_USE_GLOBAL_AUTH=true` does not work in Docker (no local `claude` CLI). Provide `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY` explicitly.
-- For Caddy Basic Auth, follow the [Docker authentication recipe](/deployment/docker/#authentication-optional-basic-auth). Its single-quoted multiline `.env` value preserves literal `$` characters in the hash.
+- `CLAUDE_USE_GLOBAL_AUTH=true` only satisfies the server's startup check. A fresh container has no `claude /login` session, so set `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY`.
+- For Caddy Basic Auth, follow the [Docker authentication recipe](/deployment/docker/#caddy-basic-auth). Its single-quoted multiline `.env` value preserves literal `$` characters in the hash.
 
 ## Who can act on a run
 

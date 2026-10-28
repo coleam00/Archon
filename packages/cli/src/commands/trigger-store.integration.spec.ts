@@ -1,15 +1,16 @@
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
-import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { loadConfig } from '@archon/core/config/config-loader';
 import * as connection from '@archon/core/db/connection';
-import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
+import { SqliteAdapter, sqliteDialect } from '@archon/core/db/adapters/sqlite';
+import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { PostgresAdapter } from '@archon/core/db/adapters/postgres';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
 import {
@@ -33,6 +34,7 @@ import {
 } from '../test-support/workflow-store';
 import { registerFolder } from '@archon/core/handlers/clone';
 import { triggerCommand } from './trigger';
+import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
 
 const tempRoots = trackTempRoots();
 
@@ -191,14 +193,175 @@ test('admission preserves FIFO, skips overlap, deduplicates receipts and fences 
   expect(await store.claimStartBindingPreparation(owner)).toBe(true);
   const prepared = launch(codebase.id);
   expect(await store.completeStartBindingPreparation({ ...owner, launch: prepared })).toEqual({
-    status: 'admitted',
+    status: 'queued',
     requestId: prepared.run.id,
-    runId: prepared.run.id,
+    blocker: { kind: 'run', id: second.run.id },
   });
   expect((await store.getStartReceipt(owner.receiptId))?.bindings[0]).toMatchObject({
     status: 'complete',
     intent: binding,
+    requestStatus: 'queued',
+  });
+  expect(await store.getWorkflowRun(prepared.run.id)).toBeNull();
+  expect(await store.drainResourceStarts({ hostId: 'host', resource: 'two' })).toEqual([]);
+  await store.claimPendingWorkflowRun(second.run.id);
+  await store.completeWorkflowRun(second.run.id, { duration_ms: 1 });
+  expect(await store.drainResourceStarts({ hostId: 'host', resource: 'two' })).toEqual([
+    {
+      status: 'admitted',
+      requestId: prepared.run.id,
+      runId: prepared.run.id,
+    },
+  ]);
+  expect((await store.getStartReceipt(owner.receiptId))?.bindings[0]).toMatchObject({
+    status: 'complete',
+    intent: binding,
     requestStatus: 'admitted',
+  });
+});
+
+test('trigger withdraw removes queued recorded source and preserves admitted source', async () => {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-withdraw-')));
+  const host = hostForTest();
+  const store = host.deps.store;
+  const codebase = await host.records.codebases.createCodebase({
+    name: 'portable',
+    default_cwd: root,
+  });
+  const requests: PreparedWorkflowLaunch[] = [];
+  for (const name of ['admitted', 'queued']) {
+    const sourceRoot = join(root, name);
+    await mkdir(sourceRoot);
+    await writeFile(join(sourceRoot, 'workflow.yaml'), 'frozen source');
+    const prepared = launch(codebase.id);
+    prepared.run.metadata = {
+      workflow_source: {
+        version: 1,
+        root: sourceRoot,
+        origin: root,
+        captured_at: new Date().toISOString(),
+        digest: 'frozen',
+        file_count: 1,
+        byte_count: 13,
+      },
+    };
+    expect(
+      await store.admitResourceStart({
+        resource: 'one',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: prepared,
+      })
+    ).toMatchObject({ status: name });
+    requests.push(prepared);
+  }
+  const [admitted, queued] = requests;
+  await expect(triggerCommand(host, 'withdraw', [admitted.run.id], {})).rejects.toThrow(
+    'Only untouched queued requests can be withdrawn.'
+  );
+  expect((await store.getResourceStartRequest(admitted.run.id))?.status).toBe('admitted');
+  expect(await readFile(join(root, 'admitted', 'workflow.yaml'), 'utf8')).toBe('frozen source');
+
+  await triggerCommand(host, 'withdraw', [queued.run.id], {});
+  expect((await store.getResourceStartRequest(queued.run.id))?.status).toBe('withdrawn');
+  await expect(stat(join(root, 'queued'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+test('trigger withdraw succeeds when the queued request has an unsupported blocker status', async () => {
+  const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-withdraw-status-')));
+  const db = new SqliteAdapter(join(root, 'store.db'));
+  const spies = [
+    spyOn(connection, 'getDatabase').mockReturnValue(db),
+    spyOn(connection, 'getDialect').mockReturnValue(sqliteDialect),
+    spyOn(connection, 'getDatabaseType').mockReturnValue('sqlite'),
+  ];
+  try {
+    const original = hostForTest();
+    const store = createWorkflowStore();
+    const host = { ...original, deps: { ...original.deps, store } };
+    const codebaseId = randomUUID();
+    await db.query(
+      "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, 'test', $2)",
+      [codebaseId, root]
+    );
+    const owner = launch(codebaseId);
+    const queued = launch(codebaseId);
+    for (const prepared of [owner, queued]) {
+      await store.admitResourceStart({
+        resource: 'one',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: prepared,
+      });
+    }
+    await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+      'unexpected',
+      owner.run.id,
+    ]);
+    await expect(store.getResourceStartRequest(queued.run.id)).rejects.toThrow(
+      `Unsupported workflow run status for run ${owner.run.id}: "unexpected"`
+    );
+
+    await triggerCommand(host, 'withdraw', [queued.run.id], {});
+
+    expect(
+      (
+        await db.query('SELECT status FROM remote_agent_resource_start_requests WHERE id = $1', [
+          queued.run.id,
+        ])
+      ).rows
+    ).toEqual([{ status: 'withdrawn' }]);
+    expect(
+      (
+        await db.query('SELECT status FROM remote_agent_workflow_runs WHERE id = $1', [
+          owner.run.id,
+        ])
+      ).rows
+    ).toEqual([{ status: 'unexpected' }]);
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+    await db.close();
+  }
+});
+
+test('trigger preparation recovery requires confirmation before releasing the recorded owner', async () => {
+  const host = hostForTest();
+  const store = host.deps.store;
+  const binding: ResourceStartBindingIntent = {
+    bindingId: 'binding',
+    bindingRevision: 'frozen',
+    hostId: 'host',
+    runAsUserId: randomUUID(),
+    resource: 'one',
+    capacity: 1,
+    overlap: 'queue',
+    launch: {
+      cwd: '/portable',
+      workflowName: 'portable',
+      inputs: {},
+      isolation: { kind: 'in-place' },
+    },
+  };
+  const receipt = acceptance(binding, 'recovery');
+  await store.acceptStartReceipt(receipt);
+  const owner = { receiptId: receipt.receipt.id, bindingId: binding.bindingId, ownerId: 'owner' };
+  expect(await store.claimStartBindingPreparation(owner)).toBe(true);
+  const claimed = await store.getStartReceipt(owner.receiptId);
+  const args = [owner.receiptId, owner.bindingId];
+  await expect(
+    triggerCommand(host, 'recover-preparation', args, { owner: owner.ownerId })
+  ).rejects.toThrow('--yes');
+  expect(await store.getStartReceipt(owner.receiptId)).toEqual(claimed);
+  const nextOwner = { ...owner, ownerId: 'next-owner' };
+  expect(await store.claimStartBindingPreparation(nextOwner)).toBe(false);
+
+  await triggerCommand(host, 'recover-preparation', args, { owner: owner.ownerId, yes: true });
+  expect(await store.claimStartBindingPreparation(nextOwner)).toBe(true);
+  expect((await store.getStartReceipt(owner.receiptId))?.bindings[0]).toMatchObject({
+    status: 'preparing',
+    ownerId: nextOwner.ownerId,
   });
 });
 
@@ -501,7 +664,8 @@ test('preparation passes event-mapped inputs to a workflow that declares them', 
 });
 
 /** A registered project, a user, and a timer config that fires `portable` on host `host`. */
-async function fireFixture(): Promise<{
+async function fireFixture(fileStore = false): Promise<{
+  stateRoot: string;
   host: WorkflowHost;
   project: string;
   userId: string;
@@ -517,7 +681,8 @@ async function fireFixture(): Promise<{
   process.env.ARCHON_HOME = join(root, 'home');
   registerBuiltinProviders();
   setPlatformPolicies([]);
-  const host = hostForTest();
+  const stateRoot = join(root, 'state');
+  const host = fileStore ? await createFileWorkflowHost(stateRoot) : hostForTest();
   await registerFolder(host.records.codebases, project, 'portable');
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
   if (!user) throw new Error('Expected test identity');
@@ -546,6 +711,7 @@ async function fireFixture(): Promise<{
     })
   );
   return {
+    stateRoot,
     host,
     project,
     userId: user.id,
@@ -659,6 +825,188 @@ test("fire does not blame its receipt for another binding's preparation failure"
   } finally {
     stderr.mockRestore();
     stdout.mockRestore();
+    restore();
+  }
+});
+
+test.each([true, false])(
+  'fire reports damaged older queued work without failing its receipt (attributed: %s)',
+  async attributed => {
+    const { host, project, configPath, stateRoot, restore } = await fireFixture(true);
+    const store = host.deps.store;
+    const codebase = await host.records.codebases.findCodebaseByDefaultCwd(project);
+    if (!codebase) throw new Error('Expected registered project');
+    const holder = launch(codebase.id);
+    holder.execution.cwd = project;
+    await store.admitResourceStart({
+      resource: 'portable',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue',
+      launch: holder,
+    });
+    const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+      _chunk: unknown,
+      callback?: () => void
+    ) => {
+      callback?.();
+      return true;
+    }) as typeof process.stdout.write);
+    try {
+      await triggerCommand(host, 'fire', [], { config: configPath }, noDispatch);
+      const [older] = await store.listStartReceipts(10);
+      if (!older) throw new Error('Expected older receipt');
+      const [request] = await store.listQueuedResourceStartsForHost('host');
+      if (!request || 'error' in request) throw new Error('Expected queued request');
+      expect(request.status).toBe('queued');
+      const documentPath = (kind: string, id: string) =>
+        join(stateRoot, 'resource', kind, `${createHash('sha256').update(id).digest('hex')}.json`);
+      const path = documentPath('requests', request.id);
+      const row = JSON.parse(await readFile(path, 'utf8'));
+      row.launch = {};
+      await writeFile(path, JSON.stringify(row));
+      if (!attributed) await unlink(documentPath('receipts', older.id));
+      const [inspection] = await store.listQueuedResourceStartsForHost('host');
+      if (!inspection || !('error' in inspection)) throw new Error('Expected inspection failure');
+      expect(inspection.receiptId).toBe(attributed ? older.id : undefined);
+      await store.claimPendingWorkflowRun(holder.run.id);
+      await store.completeWorkflowRun(holder.run.id, { duration_ms: 1 });
+      const config = JSON.parse(await readFile(configPath, 'utf8'));
+      config.binding.resource = 'independent';
+      await writeFile(configPath, JSON.stringify(config));
+      stdout.mockClear();
+      const started: string[] = [];
+      await triggerCommand(host, 'fire', [], { config: configPath }, async requestId => {
+        started.push(requestId);
+      });
+      expect(started).toHaveLength(1);
+      expect(await store.getWorkflowRun(started[0]!)).toMatchObject({ status: 'pending' });
+      const output = stdout.mock.calls
+        .map(call => String(call[0]))
+        .find(chunk => chunk.startsWith('{\n'));
+      if (!output) throw new Error('Expected printed receipt');
+      const printed: { id: string; bindings: { requestStatus: string }[] } = JSON.parse(output);
+      expect(printed.id).not.toBe(older.id);
+      expect(printed.bindings[0].requestStatus).toBe('admitted');
+      expect(stderr.mock.calls.map(call => String(call[0])).join('')).toContain(
+        `Queued request '${request.id}' is invalid`
+      );
+      await expect(triggerCommand(host, 'drain', [], { host: 'host' }, noDispatch)).rejects.toThrow(
+        'resource start operation'
+      );
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+      restore();
+    }
+  }
+);
+
+test('a damaged receipt does not stop preparing a healthy binding on the same host', async () => {
+  const { host, project, userId, stateRoot, restore } = await fireFixture(true);
+  const store = host.deps.store;
+  const binding = (bindingId: string): ResourceStartBindingIntent => ({
+    bindingId,
+    bindingRevision: null,
+    hostId: 'host',
+    runAsUserId: userId,
+    resource: bindingId,
+    capacity: 1,
+    overlap: 'queue',
+    launch: { cwd: project, workflowName: 'portable', inputs: {}, isolation: { kind: 'in-place' } },
+  });
+  const damaged = acceptance(binding('damaged'), 'damaged');
+  const healthy = acceptance(binding('healthy'), 'healthy');
+  try {
+    await store.acceptStartReceipt(damaged);
+    await store.acceptStartReceipt(healthy);
+    const document = `resource/receipts/${createHash('sha256').update(damaged.receipt.id).digest('hex')}.json`;
+    await writeFile(join(stateRoot, document), '{');
+
+    const started: string[] = [];
+    for (let pass = 0; pass < 2; pass++) {
+      const failure = await drainResourceStartHost({
+        ...host,
+        hostId: 'host',
+        startAdmitted: async requestId => {
+          started.push(requestId);
+        },
+      }).catch((error: unknown) => error);
+      if (!(failure instanceof ResourceStartDrainError)) throw new Error('Expected drain failure');
+      expect(failure.failures).toHaveLength(1);
+      expect(failure.failures[0]?.receiptId).toBeUndefined();
+      expect(String(failure.failures[0]?.error)).toContain(document);
+      expect(started).toHaveLength(1);
+    }
+    expect((await store.getResourceStartRequest(started[0]!))?.launch.run.metadata).toMatchObject({
+      resource_start: { receiptId: healthy.receipt.id, bindingId: 'healthy' },
+    });
+  } finally {
+    restore();
+  }
+});
+
+test('keyed replays fail for every receipt queued on a resource whose drain fails', async () => {
+  const { host, project, configPath, stateRoot, restore } = await fireFixture(true);
+  const store = host.deps.store;
+  const codebase = await host.records.codebases.findCodebaseByDefaultCwd(project);
+  if (!codebase) throw new Error('Expected registered project');
+  const holder = launch(codebase.id);
+  holder.execution.cwd = project;
+  await store.admitResourceStart({
+    resource: 'portable',
+    capacity: 1,
+    hostId: 'host',
+    overlap: 'queue',
+    launch: holder,
+  });
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    _chunk: unknown,
+    callback?: () => void
+  ) => {
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  const stderr = spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    const deliveries = ['first', 'second'];
+    for (const deliveryId of deliveries)
+      await triggerCommand(host, 'fire', [], { config: configPath, deliveryId }, noDispatch);
+    const queued = await store.listQueuedResourceStartsForHost('host');
+    expect(queued).toHaveLength(2);
+    const receipts = await store.listStartReceipts(10);
+    const path = join(
+      stateRoot,
+      'resource',
+      'slots',
+      `${createHash('sha256').update('portable').digest('hex')}.json`
+    );
+    const row = JSON.parse(await readFile(path, 'utf8'));
+    row.capacity = 0;
+    const damaged = JSON.stringify(row);
+    await writeFile(path, damaged);
+    stdout.mockClear();
+    for (const deliveryId of deliveries)
+      await expect(
+        triggerCommand(host, 'fire', [], { config: configPath, deliveryId }, noDispatch)
+      ).rejects.toThrow("Resource 'portable' drain failed");
+    const failure = await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: noDispatch,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ResourceStartDrainError);
+    if (!(failure instanceof ResourceStartDrainError)) throw new Error('Expected drain failure');
+    expect(new Set(failure.failures.map(item => item.receiptId))).toEqual(
+      new Set(receipts.map(receipt => receipt.id))
+    );
+    expect(stdout).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
+    expect(await readFile(path, 'utf8')).toBe(damaged);
+  } finally {
+    stdout.mockRestore();
+    stderr.mockRestore();
     restore();
   }
 });

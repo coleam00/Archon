@@ -13,7 +13,8 @@ through the source this run selected, `$INPUTS.source`:
   `$ARCHON_CLI_COMMAND`, run as `<argv...> forge <op> --json …`, with `<ref>` =
   `{"repo":{"host":…,"path":…},"number":…}`. Read with `pr.view` and
   `--data '{"selector":{"kind":"number","ref":<ref>}}'`; write with `pr.edit-body`
-  and `--data-file`, so the description never reaches a command line. A failed
+  and `--data-file`, so the description never reaches a command line. Read an issue
+  with `workitem.view` and `--data '{"ref":<issue ref>}'`. A failed
   operation is the answer: report it, and never repeat it through `gh`.
 - **`gh`:** the GitHub CLI, every command naming `--repo <host>/<owner>/<repo>`.
 
@@ -27,21 +28,29 @@ through the source this run selected, `$INPUTS.source`:
    functions and guards, described mechanics, file lists, "unchanged" claims.
    Change only what the diff falsifies. Keep the structure, the tone and every
    claim that is still true. Do not rewrite from scratch, add sections other than
-   step 4's, or narrate the correction history.
+   step 4's, or narrate the correction history. Text between
+   `<!-- archon-delivery-description -->` and `<!-- /archon-delivery-description -->`
+   is content the rounds published: keep both markers, and correct claims inside
+   them like any other.
 3. When `$ARTIFACTS_DIR/implementation.md` records a failing check the implementer
    judged `inherited` or `environment`, the description must say so near the top:
    the check and why it is not this change's. Keep an existing disclosure that is
    still true.
-4. Link the issue the description references by the latest review's contract
-   coverage. What it left open, as a JSON list (empty text when no review judged
-   coverage): `$INPUTS.contract_left`. On an empty list (`[]`), and only then,
-   the reference becomes `Closes #N`, replacing a `Refs #N`. Anything else gets a non-closing reference (`Refs #N`)
-   in place of any closing keyword (`Closes`, `Fixes`, `Resolves` and their
-   variants), and a short "Left open" section listing each item, or saying no
-   review judged coverage. An item left open as an operator check names the check
-   the operator runs. Keep at most one "Left open" section, current, and
-   remove it on an empty list. Change no other reference, and add none when the
-   description links no issue.
+4. Link the issue the description references. Read that issue's body
+   (`workitem.view`, or `gh issue view <N> --repo <host>/<owner>/<repo> --json body`),
+   including its dated "Current scope" sections, where the latest supersedes
+   earlier ones where they differ. What the latest review left open, as a JSON
+   list (empty text when no review judged coverage): `$INPUTS.contract_left`.
+   The reference becomes `Closes #N`, replacing a `Refs #N`, only when that list
+   is empty (`[]`) and no dated ruling says the issue stays open or the pull
+   request references it without closing it. Otherwise it gets a non-closing
+   reference (`Refs #N`) in place of any closing keyword (`Closes`, `Fixes`,
+   `Resolves` and their variants), and a short "Left open" section listing each
+   item left open, saying no review judged coverage, or naming the ruling that
+   keeps the issue open. An item left open as an operator check names the check
+   the operator runs. Keep at most one "Left open" section, current, and remove
+   it on `Closes`. Change no other reference, and add none when the description
+   links no issue.
 5. When something changed, apply the complete description. On `forge`, write
    the request `{"ref":<ref>,"body":<description>}` to
    `$ARTIFACTS_DIR/pr-body-final.json` and pass it with `--data-file`. On `gh`,

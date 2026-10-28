@@ -28,6 +28,7 @@ import {
   runModelBindingsMetadataSchema,
   TIER_NAMES,
   type ModelAliasPreset,
+  type WorkflowModelRef,
   type RawAliasEntry,
   type RawAliasesConfig,
   type RawTiersConfig,
@@ -40,6 +41,7 @@ import {
 export { TIER_NAMES };
 export type {
   ModelAliasPreset,
+  WorkflowModelRef,
   RawAliasEntry,
   RawAliasesConfig,
   RawTiersConfig,
@@ -242,28 +244,37 @@ function toModelAliasPreset(entry: RawAliasEntry): ModelAliasPreset {
   };
 }
 
-export interface BuildAiProfileOptions {
-  /** Tier overrides from ~/.archon/config.yaml */
-  globalTiers?: RawTiersConfig;
-  /** Tier overrides from .archon/config.yaml (repo) — override globalTiers on key collision */
-  repoTiers?: RawTiersConfig;
-  /** Aliases from ~/.archon/config.yaml */
-  globalAliases?: RawAliasesConfig;
-  /** Aliases from .archon/config.yaml (repo) — override globalAliases on key collision */
-  repoAliases?: RawAliasesConfig;
-  /** Per-user tier overrides (DB) — highest precedence, override repoTiers on key collision */
-  userTiers?: RawTiersConfig;
-  /** Per-user aliases (DB) — highest precedence, override repoAliases on key collision */
-  userAliases?: RawAliasesConfig;
-  /** One invocation's tier rebindings — highest precedence, sparse by key. */
-  runTiers?: RawTiersConfig;
-  /** One invocation's alias rebindings — highest precedence, sparse by key. */
-  runAliases?: RawAliasesConfig;
-}
+const TIER_LAYERS = [
+  /** Tier overrides from ~/.archon/config.yaml. */
+  'globalTiers',
+  /** Repository overrides from .archon/config.yaml, above global tiers. */
+  'repoTiers',
+  /** Per-user overrides from the database, above repository tiers. */
+  'userTiers',
+  /** One invocation's sparse rebindings, above user tiers. */
+  'runTiers',
+] as const;
+
+const ALIAS_LAYERS = [
+  /** Aliases from ~/.archon/config.yaml. */
+  'globalAliases',
+  /** Repository aliases from .archon/config.yaml, above global aliases. */
+  'repoAliases',
+  /** Per-user aliases from the database, above repository aliases. */
+  'userAliases',
+  /** One invocation's sparse rebindings, above user aliases. */
+  'runAliases',
+] as const;
+
+export type BuildAiProfileOptions = {
+  [Layer in (typeof TIER_LAYERS)[number]]?: RawTiersConfig;
+} & {
+  [Layer in (typeof ALIAS_LAYERS)[number]]?: RawAliasesConfig;
+};
 
 /**
  * Build a ResolvedAiProfile by layering tier defaults → global tiers → repo tiers
- * → per-user tiers → global aliases → repo aliases → per-user aliases.
+ * → per-user tiers → run tiers → global aliases → repo aliases → per-user aliases → run aliases.
  * Throws if any alias name collides with a reserved tier name, or if an alias
  * entry has an empty provider or model string, or if an alias key lacks the `@` prefix.
  */
@@ -271,8 +282,22 @@ export function buildAiProfile(
   defaultProvider: string | undefined,
   options: BuildAiProfileOptions = {}
 ): ResolvedAiProfile {
-  const aliases: Record<string, ModelAliasPreset> = {};
+  const aliases = defaultTierAliases(defaultProvider);
+  applyTierLayers(
+    aliases,
+    TIER_LAYERS.map(key => options[key])
+  );
+  applyAliasLayers(
+    aliases,
+    ALIAS_LAYERS.map(key => options[key])
+  );
 
+  // Profiles are persisted in JSON run metadata, where `undefined` is invalid.
+  return { ...(defaultProvider !== undefined ? { defaultProvider } : {}), aliases };
+}
+
+function defaultTierAliases(defaultProvider: string | undefined): Record<string, ModelAliasPreset> {
+  const aliases: Record<string, ModelAliasPreset> = {};
   const tierEntries = defaultProvider === undefined ? undefined : TIER_DEFAULTS[defaultProvider];
   if (tierEntries && defaultProvider !== undefined) {
     for (const tier of TIER_NAMES) {
@@ -287,12 +312,14 @@ export function buildAiProfile(
     }
   }
 
-  for (const layer of [
-    options.globalTiers,
-    options.repoTiers,
-    options.userTiers,
-    options.runTiers,
-  ]) {
+  return aliases;
+}
+
+function applyTierLayers(
+  aliases: Record<string, ModelAliasPreset>,
+  layers: readonly (RawTiersConfig | undefined)[]
+): void {
+  for (const layer of layers) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertValidTierName(name);
@@ -300,13 +327,13 @@ export function buildAiProfile(
       aliases[name] = toModelAliasPreset(entry);
     }
   }
+}
 
-  for (const layer of [
-    options.globalAliases,
-    options.repoAliases,
-    options.userAliases,
-    options.runAliases,
-  ]) {
+function applyAliasLayers(
+  aliases: Record<string, ModelAliasPreset>,
+  layers: readonly (RawAliasesConfig | undefined)[]
+): void {
+  for (const layer of layers) {
     if (!layer) continue;
     for (const [name, entry] of Object.entries(layer)) {
       assertNotReserved(name);
@@ -315,9 +342,6 @@ export function buildAiProfile(
       aliases[name] = toModelAliasPreset(entry);
     }
   }
-
-  // Profiles are persisted in JSON run metadata, where `undefined` is invalid.
-  return { ...(defaultProvider !== undefined ? { defaultProvider } : {}), aliases };
 }
 
 function presetForOverrideTarget(profile: ResolvedAiProfile, name: string): ModelAliasPreset {
@@ -325,7 +349,11 @@ function presetForOverrideTarget(profile: ResolvedAiProfile, name: string): Mode
   assertNotReserved(name);
   assertCustomAliasPrefix(name);
   const preset = profile.aliases[name];
-  if (!preset) throw new Error(`Cannot rebind unknown alias '${name}'.`);
+  if (!preset) {
+    throw new Error(
+      `Alias '${name}' is not configured, so a bare model id has no provider to keep. Use <provider>/<model>, a tier, or another @alias.`
+    );
+  }
   return preset;
 }
 
@@ -418,8 +446,12 @@ export function resolveRunModelOverrides(
   }
 
   const aliases: RawAliasesConfig = {};
+  // An alias nobody configured can still be bound for one run: a workflow's model
+  // preference list may name it (#3266). Only a bare model id needs an existing binding,
+  // for its provider, and resolveRunOverrideSpec asks for one then.
   for (const [name, spec] of Object.entries(overrides.aliases ?? {})) {
-    presetForOverrideTarget(profile, name);
+    assertNotReserved(name);
+    assertCustomAliasPrefix(name);
     aliases[name] = resolveRunOverrideSpec(providers, profile, name, spec);
   }
 
@@ -517,6 +549,25 @@ export function createRunModelBindingsMetadata(
   };
 }
 
+function invalidModelBindingsMetadata(path: readonly PropertyKey[]): Error {
+  const bindingName = typeof path[2] === 'string' ? path[2] : 'unknown';
+  if (path.includes('thinking')) {
+    return new Error(
+      `Model binding '${bindingName}' uses removed 'thinking:'; use 'effort:' instead.`
+    );
+  }
+  if (path.includes('effort')) {
+    return new Error(`Model binding '${bindingName}' has an invalid effort.`);
+  }
+  if (path[0] === 'overrides' && (path[1] === 'tiers' || path[1] === 'aliases')) {
+    return new Error(`Workflow run has invalid model_bindings ${path[1]} metadata.`);
+  }
+  if (path[0] === 'effective') {
+    return new Error('Workflow run has invalid effective model bindings.');
+  }
+  return new Error('Workflow run has invalid model_bindings metadata.');
+}
+
 /** Read metadata written by this module; malformed external JSON fails explicitly. */
 export function readRunModelBindingsMetadata(
   providers: ProviderRegistry,
@@ -526,23 +577,7 @@ export function readRunModelBindingsMetadata(
   if (value === undefined) return undefined;
   const parsed = runModelBindingsMetadataSchema.safeParse(value);
   if (!parsed.success) {
-    const path = parsed.error.issues[0]?.path ?? [];
-    const bindingName = typeof path[2] === 'string' ? path[2] : 'unknown';
-    if (path.includes('thinking')) {
-      throw new Error(
-        `Model binding '${bindingName}' uses removed 'thinking:'; use 'effort:' instead.`
-      );
-    }
-    if (path.includes('effort')) {
-      throw new Error(`Model binding '${bindingName}' has an invalid effort.`);
-    }
-    if (path[0] === 'overrides' && (path[1] === 'tiers' || path[1] === 'aliases')) {
-      throw new Error(`Workflow run has invalid model_bindings ${path[1]} metadata.`);
-    }
-    if (path[0] === 'effective') {
-      throw new Error('Workflow run has invalid effective model bindings.');
-    }
-    throw new Error('Workflow run has invalid model_bindings metadata.');
+    throw invalidModelBindingsMetadata(parsed.error.issues[0]?.path ?? []);
   }
 
   const tiers = Object.fromEntries(
@@ -627,6 +662,47 @@ export function resolveModelSpec(profile: ResolvedAiProfile, ref: string): Resol
   }
 
   return { literal: ref };
+}
+
+/**
+ * The one ref a `model:` value selects. A string is itself. A preference list selects its
+ * first `@alias` that `profile` defines, else its final entry (a tier or model id, which
+ * the schema guarantees). Without a profile there is no config to consult, so a list
+ * selects its final entry.
+ */
+export function selectModelRef(ref: WorkflowModelRef, profile?: ResolvedAiProfile): string;
+export function selectModelRef(
+  ref: WorkflowModelRef | undefined,
+  profile?: ResolvedAiProfile
+): string | undefined;
+export function selectModelRef(
+  ref: WorkflowModelRef | undefined,
+  profile?: ResolvedAiProfile
+): string | undefined {
+  if (ref === undefined || typeof ref === 'string') return ref;
+  const fallback = ref[ref.length - 1] as string;
+  if (!profile) return fallback;
+  return (
+    ref.find(entry => entry.startsWith('@') && profile.aliases[entry] !== undefined) ?? fallback
+  );
+}
+
+/** True for a single `@alias` ref, which fails on an install that does not define it. */
+export function isAliasRef(ref: WorkflowModelRef | undefined): boolean {
+  return typeof ref === 'string' && ref.startsWith('@');
+}
+
+/**
+ * Resolve a `model:` value the way validation must: the ref it selects against `profile`,
+ * and for a preference list also its final entry, which an install that defines none of
+ * the list's aliases uses. Throws as resolveModelSpec does; returns the selected ref's spec.
+ */
+export function resolveModelRef(
+  profile: ResolvedAiProfile,
+  ref: WorkflowModelRef
+): ResolvedModelSpec {
+  if (typeof ref !== 'string') resolveModelSpec(profile, selectModelRef(ref));
+  return resolveModelSpec(profile, selectModelRef(ref, profile));
 }
 
 /** Type guard — narrows ResolvedModelSpec to its `{ literal }` variant. */

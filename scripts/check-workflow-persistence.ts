@@ -10,6 +10,18 @@ const REPO_ROOT = resolve(import.meta.dir, '..');
  */
 export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/core/src/operations/workflow-operations.ts',
+  'packages/core/src/operations/workflow/abandon.ts',
+  'packages/core/src/operations/workflow/answer.ts',
+  'packages/core/src/operations/workflow/answer-admission.ts',
+  'packages/core/src/operations/workflow/approve.ts',
+  'packages/core/src/operations/workflow/cancel.ts',
+  'packages/core/src/operations/workflow/context.ts',
+  'packages/core/src/operations/workflow/gate-publishing.ts',
+  'packages/core/src/operations/workflow/label.ts',
+  'packages/core/src/operations/workflow/reject.ts',
+  'packages/core/src/operations/workflow/respond.ts',
+  'packages/core/src/operations/workflow/run-actions.ts',
+  'packages/core/src/operations/workflow/teardown.ts',
   'packages/core/src/operations/workflow-adoption.ts',
   'packages/core/src/services/run-attention-watch.ts',
   'packages/core/src/services/codebase-checkout-resolver.ts',
@@ -24,6 +36,21 @@ export const WORKFLOW_PERSISTENCE_CONSUMERS = [
   'packages/cli/src/commands/workflow-list.ts',
   'packages/cli/src/commands/workflow-node-summaries.ts',
   'packages/cli/src/commands/workflow-continuations.ts',
+  'packages/cli/src/commands/workflow-run-output.ts',
+  'packages/cli/src/commands/workflow-transcript.ts',
+  'packages/cli/src/commands/workflow-inspect.ts',
+  'packages/cli/src/commands/workflow-attention.ts',
+  'packages/cli/src/commands/workflow-detach.ts',
+  'packages/cli/src/commands/workflow-isolation.ts',
+  'packages/cli/src/commands/workflow-run-preflight.ts',
+  'packages/cli/src/commands/workflow-dry-run.ts',
+  'packages/cli/src/commands/workflow-wait-continuation.ts',
+  'packages/cli/src/commands/workflow-run-owned.ts',
+  'packages/cli/src/commands/workflow-run-admission.ts',
+  'packages/cli/src/commands/workflow-run-launch.ts',
+  'packages/cli/src/commands/workflow-run-execution.ts',
+  'packages/cli/src/commands/workflow-query.ts',
+  'packages/cli/src/commands/workflow-control.ts',
   'packages/cli/src/commands/trigger.ts',
   'packages/cli/src/adapters/cli-adapter.ts',
   'packages/cli/src/utils/owned-run-termination.ts',
@@ -144,16 +171,21 @@ export function findPersistenceImports(root: string, consumers: readonly string[
           if (symbol && reachesPersistence(symbol)) report(node, specifier.text);
         }
       };
+      const checkImport = (
+        clause: ts.ImportClause | undefined,
+        specifier: ts.StringLiteral
+      ): void => {
+        if (clause?.isTypeOnly) return;
+        const bindings = clause?.namedBindings;
+        const named = bindings && ts.isNamedImports(bindings) ? bindings.elements : [];
+        const names: ts.Node[] = named.filter(item => !item.isTypeOnly).map(item => item.name);
+        if (clause?.name) names.push(clause.name);
+        if (bindings && ts.isNamespaceImport(bindings)) names.push(bindings.name);
+        return checkModule(specifier, names.length + named.length ? names : undefined);
+      };
       const visit = (node: ts.Node): void => {
         if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-          const clause = node.importClause;
-          if (clause?.isTypeOnly) return;
-          const bindings = clause?.namedBindings;
-          const named = bindings && ts.isNamedImports(bindings) ? bindings.elements : [];
-          const names: ts.Node[] = named.filter(item => !item.isTypeOnly).map(item => item.name);
-          if (clause?.name) names.push(clause.name);
-          if (bindings && ts.isNamespaceImport(bindings)) names.push(bindings.name);
-          return checkModule(node.moduleSpecifier, names.length + named.length ? names : undefined);
+          return checkImport(node.importClause, node.moduleSpecifier);
         }
         if (
           ts.isExportDeclaration(node) &&

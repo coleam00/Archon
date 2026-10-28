@@ -161,82 +161,9 @@ async function collectGitHubPatConfig(): Promise<GitHubConfig> {
 
   if (isCancel(token)) cancelSetup();
 
-  // Probe `gh` CLI auth — workflows that shell out to `gh` (e.g. `gh issue
-  // create`, `gh pr edit`) need this even if the PAT is set, because they call
-  // the local `gh` binary, not the API directly.
-  const ghSpin = spinner();
-  ghSpin.start('Checking gh CLI authentication...');
-  let ghAuthOk = false;
-  let ghAuthError: string | undefined;
-  try {
-    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
-    ghAuthOk = true;
-    ghSpin.stop('gh CLI is authenticated');
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    ghAuthError =
-      e.code === 'ENOENT'
-        ? 'gh not found in PATH — install it first (https://cli.github.com)'
-        : (e.message ?? 'unknown error');
-    ghSpin.stop('gh CLI check failed');
-  }
-
-  if (!ghAuthOk) {
-    log.warning(
-      `gh auth check failed: ${ghAuthError}\n` +
-        (ghAuthError?.includes('not found') ? '' : 'Run: gh auth login')
-    );
-    // gh auth login is an interactive OAuth flow — only offer it from a TTY.
-    if (process.stdout.isTTY) {
-      const runGhLogin = await confirm({
-        message: 'Run `gh auth login` now?',
-        initialValue: true,
-      });
-      if (!isCancel(runGhLogin) && runGhLogin) {
-        // spawnSync with inherited stdio so the OAuth prompt reaches the terminal.
-        const ghLoginResult = spawnSync('gh', ['auth', 'login'], { stdio: 'inherit' });
-        if (ghLoginResult.error) {
-          log.warning(
-            `Could not run gh auth login: ${ghLoginResult.error.message}. ` +
-              'Install the gh CLI from https://cli.github.com/ and run it manually.'
-          );
-        } else if (ghLoginResult.status !== 0) {
-          // gh exited non-zero (user cancelled, OAuth callback failed, etc.).
-          // .error is only set on spawn failure, so without this the wizard
-          // would proceed as if auth succeeded.
-          log.warning(
-            `gh auth login exited with code ${ghLoginResult.status ?? 'null'}. ` +
-              'Authentication may not have completed — re-run `gh auth login` manually if needed.'
-          );
-        }
-      }
-    }
-  }
-
+  await ensureGhCliAuth();
   const allowedUsers = await collectGitHubAllowedUsers();
-
-  const customMention = await confirm({
-    message: 'Do you want to set a custom @mention name? (Default: archon)',
-  });
-
-  if (isCancel(customMention)) cancelSetup();
-
-  let botMention: string | undefined;
-  if (customMention) {
-    const mention = await text({
-      message: 'Enter the @mention name (without @):',
-      placeholder: 'archon',
-      validate: value => {
-        if (!value) return 'Mention name is required';
-        if (value.includes('@')) return 'Do not include @ symbol';
-        return undefined;
-      },
-    });
-
-    if (isCancel(mention)) cancelSetup();
-
-    botMention = mention;
-  }
+  const botMention = await collectBotMention();
 
   // Auto-generate webhook secret
   const webhookSecret = generateWebhookSecret();
@@ -251,11 +178,130 @@ async function collectGitHubPatConfig(): Promise<GitHubConfig> {
   };
 }
 
+/**
+ * Probe `gh` CLI auth — workflows that shell out to `gh` (e.g. `gh issue
+ * create`, `gh pr edit`) need this even if the PAT is set, because they call
+ * the local `gh` binary, not the API directly.
+ */
+async function ensureGhCliAuth(): Promise<void> {
+  const ghAuthError = await probeGhCliAuth();
+  if (ghAuthError === undefined) return;
+  log.warning(
+    `gh auth check failed: ${ghAuthError}\n` +
+      (ghAuthError.includes('not found') ? '' : 'Run: gh auth login')
+  );
+  // gh auth login is an interactive OAuth flow — only offer it from a TTY.
+  if (process.stdout.isTTY) await offerGhAuthLogin();
+}
+
+/** Returns why `gh auth status` failed, or undefined when gh is authenticated. */
+async function probeGhCliAuth(): Promise<string | undefined> {
+  const ghSpin = spinner();
+  ghSpin.start('Checking gh CLI authentication...');
+  try {
+    await execFileAsync('gh', ['auth', 'status'], { timeout: 10_000 });
+    ghSpin.stop('gh CLI is authenticated');
+    return undefined;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    ghSpin.stop('gh CLI check failed');
+    return e.code === 'ENOENT'
+      ? 'gh not found in PATH — install it first (https://cli.github.com)'
+      : (e.message ?? 'unknown error');
+  }
+}
+
+async function offerGhAuthLogin(): Promise<void> {
+  const runGhLogin = await confirm({
+    message: 'Run `gh auth login` now?',
+    initialValue: true,
+  });
+  if (isCancel(runGhLogin) || !runGhLogin) return;
+  // spawnSync with inherited stdio so the OAuth prompt reaches the terminal.
+  const ghLoginResult = spawnSync('gh', ['auth', 'login'], { stdio: 'inherit' });
+  if (ghLoginResult.error) {
+    log.warning(
+      `Could not run gh auth login: ${ghLoginResult.error.message}. ` +
+        'Install the gh CLI from https://cli.github.com/ and run it manually.'
+    );
+  } else if (ghLoginResult.status !== 0) {
+    // gh exited non-zero (user cancelled, OAuth callback failed, etc.).
+    // .error is only set on spawn failure, so without this the wizard
+    // would proceed as if auth succeeded.
+    log.warning(
+      `gh auth login exited with code ${ghLoginResult.status ?? 'null'}. ` +
+        'Authentication may not have completed — re-run `gh auth login` manually if needed.'
+    );
+  }
+}
+
+async function collectBotMention(): Promise<string | undefined> {
+  const customMention = await confirm({
+    message: 'Do you want to set a custom @mention name? (Default: archon)',
+  });
+
+  if (isCancel(customMention)) cancelSetup();
+  if (!customMention) return undefined;
+
+  const mention = await text({
+    message: 'Enter the @mention name (without @):',
+    placeholder: 'archon',
+    validate: value => {
+      if (!value) return 'Mention name is required';
+      if (value.includes('@')) return 'Do not include @ symbol';
+      return undefined;
+    },
+  });
+
+  if (isCancel(mention)) cancelSetup();
+  return mention;
+}
+
 /** What `reconcileGitHubAuth` found in the env files, read again by the write step. */
 export interface GitHubAuthReconciliation {
   replaceGitHubAuth: boolean;
   otherGitHubEnv: DotenvParseOutput;
   saved: DotenvParseOutput;
+}
+
+function assertOtherScopeGitHubAuth(
+  githubMode: ReturnType<typeof selectGitHubAuthMode>['kind'],
+  otherEnvPath: string,
+  targetEnvPath: string,
+  otherGitHubEnv: DotenvParseOutput
+): void {
+  if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
+    const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
+    if (conflictingKeys.some(key => otherGitHubEnv[key])) {
+      cancel(
+        `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
+      );
+      exitSetup(1);
+    }
+  }
+}
+
+async function confirmGitHubAuthReplacement(
+  github: GitHubConfig,
+  saved: DotenvParseOutput
+): Promise<boolean> {
+  const oppositeKeys = github.mode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
+  const replacePartialApp =
+    github.mode === 'app' &&
+    !hasCompleteAppCredential(saved) &&
+    GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(saved[key]));
+  if (oppositeKeys.some(key => Boolean(saved[key])) || replacePartialApp) {
+    const approved = await confirm({
+      message: `Replace existing GitHub authentication with ${github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
+      initialValue: false,
+    });
+    if (isCancel(approved) || !approved) {
+      cancel('Setup cancelled. Existing configuration was not changed.');
+      exitSetup(0);
+    }
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -287,31 +333,9 @@ export async function reconcileGitHubAuth(
   }
   if (config.platforms.github) {
     const githubMode = config.github?.mode ?? selectGitHubAuthMode(saved).kind;
-    if (otherEnvPath !== targetEnvPath && existsSync(otherEnvPath)) {
-      const other = otherGitHubEnv;
-      const conflictingKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
-      if (conflictingKeys.some(key => other[key])) {
-        cancel(
-          `Conflicting GitHub authentication in ${otherEnvPath}. Remove the other mode's credentials there before running setup again. No env files were changed.`
-        );
-        exitSetup(1);
-      }
-    }
-    const oppositeKeys = githubMode === 'app' ? GITHUB_PAT_KEYS : GITHUB_APP_CREDENTIAL_KEYS;
-    const replacePartialApp =
-      config.github?.mode === 'app' &&
-      !hasCompleteAppCredential(saved) &&
-      GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(saved[key]));
-    if (config.github && (oppositeKeys.some(key => Boolean(saved[key])) || replacePartialApp)) {
-      const approved = await confirm({
-        message: `Replace existing GitHub authentication with ${config.github.mode === 'app' ? 'GitHub App' : 'personal access token'} mode? A backup will be saved.`,
-        initialValue: false,
-      });
-      if (isCancel(approved) || !approved) {
-        cancel('Setup cancelled. Existing configuration was not changed.');
-        exitSetup(0);
-      }
-      replaceGitHubAuth = true;
+    assertOtherScopeGitHubAuth(githubMode, otherEnvPath, targetEnvPath, otherGitHubEnv);
+    if (config.github) {
+      replaceGitHubAuth = await confirmGitHubAuthReplacement(config.github, saved);
     }
   }
   return { replaceGitHubAuth, otherGitHubEnv, saved };
@@ -366,15 +390,22 @@ export function assertEffectiveGitHubAuth(
         GITHUB_APP_CREDENTIAL_KEYS.some(key => Boolean(layer[key]))
       ))
   ) {
-    if (mode.kind !== 'app') {
-      throw new Error(
-        mode.kind === 'conflict'
-          ? mode.message
-          : 'Effective GitHub configuration does not activate App mode. Check App ID, private key, and webhook secret in the environment and both Archon env files.'
-      );
-    }
-    if (!loadGitHubAppConfig(effective)) {
-      throw new Error('Effective GitHub App configuration could not be loaded.');
-    }
+    assertEffectiveGitHubAppAuth(mode, effective);
+  }
+}
+
+function assertEffectiveGitHubAppAuth(
+  mode: ReturnType<typeof selectGitHubAuthMode>,
+  effective: NodeJS.ProcessEnv
+): void {
+  if (mode.kind !== 'app') {
+    throw new Error(
+      mode.kind === 'conflict'
+        ? mode.message
+        : 'Effective GitHub configuration does not activate App mode. Check App ID, private key, and webhook secret in the environment and both Archon env files.'
+    );
+  }
+  if (!loadGitHubAppConfig(effective)) {
+    throw new Error('Effective GitHub App configuration could not be loaded.');
   }
 }

@@ -1,10 +1,11 @@
 {
   "name": "@archon/server",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
     "dev": "bun --watch src/index.ts",
+    "provision:docker": "bun ../../scripts/provision-docker-plugins.ts",
     "start": "bun src/index.ts",
     "test": "bun run ../../scripts/package-tests.ts",
     "type-check": "bun x tsc --noEmit",
@@ -95,6 +96,9 @@
       "src/services/serve-cancel.integration.test.ts"
     ],
     [
+      "src/services/server-discovery.integration.test.ts"
+    ],
+    [
       "src/adapters/web/transport.test.ts"
     ],
     [
@@ -122,7 +126,7 @@
       "src/resolve-user-id.test.ts"
     ],
     [
-      "src/index.slack-resume.test.ts"
+      "src/index.boot.test.ts"
     ],
     [
       "src/boot/claude-auth-posture.test.ts",

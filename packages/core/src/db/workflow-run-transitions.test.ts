@@ -14,6 +14,8 @@ mock.module('./connection', () => ({
     query: mockQuery,
   },
   getDatabase: () => ({
+    // The pre-transaction artifact read finds no run, so no artifacts are walked.
+    query: () => Promise.resolve(createQueryResult([])),
     withTransaction: <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => fn(mockQuery),
   }),
   getDialect: () => mockPostgresDialect,
@@ -492,8 +494,8 @@ describe('workflow run transitions', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
       // Must not re-cancel / re-stamp completed_at on an already-finished run.
-      expect(query).toContain("status NOT IN ('completed', 'cancelled')");
-      expect(params).toEqual(['workflow-run-123']);
+      expect(query).toContain('status NOT IN ($2, $3)');
+      expect(params).toEqual(['workflow-run-123', 'completed', 'cancelled']);
       const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       expect(eventParams.slice(1, 5)).toEqual([
@@ -506,6 +508,24 @@ describe('workflow run transitions', () => {
         reason: 'operator requested',
         terminal_record: expect.any(Object),
       });
+    });
+
+    test('persists cancellation warnings without truncation', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockTerminalSnapshot('cancelled');
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      const warnings = [`${'Held output. '.repeat(30)}Use lsof on the checkout.`];
+      await cancelWorkflowRun('workflow-run-123', {
+        cancel_reason: 'operator',
+        reason: warnings.join('\n'),
+        warnings,
+      });
+      const params = mockQuery.mock.calls[3]?.[1];
+      if (!Array.isArray(params)) throw new Error('Missing cancellation event');
+      const data: Record<string, unknown> = JSON.parse(String(params[5]));
+      expect(data.reason).toBe(warnings[0]);
+      expect(params[2]).toBe('workflow_cancelled');
+      expect(data.warnings).toEqual(warnings);
     });
 
     test('reports { cancelled: false } when the run is already terminal (no throw)', async () => {
@@ -539,10 +559,12 @@ describe('workflow run transitions', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'cancelled'");
       expect(query).toContain('metadata =');
-      expect(query).toContain("status NOT IN ('completed', 'cancelled')");
+      expect(query).toContain('status NOT IN ($3, $4)');
       expect(params).toEqual([
         'workflow-run-123',
         JSON.stringify({ cancelled_reason: 'fan_out_orphan' }),
+        'completed',
+        'cancelled',
       ]);
       const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');

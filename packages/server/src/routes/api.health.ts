@@ -1,6 +1,4 @@
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import type { ConversationLockManager, SchemaVersionInfo } from '@archon/core';
 import { getSchemaVersion } from '@archon/core';
 import {
@@ -9,45 +7,33 @@ import {
   getWSLDistroName,
   checkForUpdate,
   BUNDLED_IS_BINARY,
-  BUNDLED_VERSION,
 } from '@archon/paths';
+import { readStoreId } from '@archon/paths/server-discovery';
 import * as workflowDb from '@archon/core/db/workflows';
 import { PUSH_DESTINATION_STATES, type AttentionRouter } from '../services/attention-router';
+import { appVersion } from '../app-version';
 import { getLog, openApiRouteRegistrar } from './api-route-kit';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 
-// Read app version: use build-time constant in binary, package.json in dev
-let appVersion = 'unknown';
-if (BUNDLED_IS_BINARY) {
-  appVersion = BUNDLED_VERSION;
-} else {
-  try {
-    const pkgContent = readFileSync(join(import.meta.dir, '../../../../package.json'), 'utf-8');
-    const pkg = JSON.parse(pkgContent) as { version?: string };
-    appVersion = pkg.version ?? 'unknown';
-  } catch (err) {
-    getLog().debug(
-      { err, path: join(import.meta.dir, '../../../../package.json') },
-      'api.version_read_failed'
-    );
-  }
-}
-
 /**
- * Conversation concurrency as `GET /api/health` reports it: the lock manager's
- * stats, with `active` widened to include background workflow conversations.
- * `satisfies` ties the declared fields to `getStats()`, so a rename there fails
- * the type-check instead of reaching the console as a missing field.
+ * Public aggregate view of conversation processing. Health is outside the auth
+ * gate, so it carries counts and ages but never a conversation id; the
+ * per-conversation facts are on the gated `GET /api/dashboard/conversations`.
  */
 const healthConcurrencySchema = z.object({
-  active: z.number(),
+  active: z
+    .number()
+    .describe('Conversations holding a processing slot plus background workflow conversations'),
   queuedTotal: z.number(),
-  queuedByConversation: z.array(
-    z.object({ conversationId: z.string(), queuedMessages: z.number() })
-  ),
   maxConcurrent: z.number(),
-  activeConversationIds: z.array(z.string()),
-}) satisfies z.ZodType<ReturnType<ConversationLockManager['getStats']>>;
+  oldestActiveAgeMs: z
+    .number()
+    .nullable()
+    .describe(
+      'Age of the oldest conversation holding a processing slot in this process. Background workflow runs are counted in `active` but not aged here; see /api/dashboard/runs.'
+    ),
+  oldestQueuedAgeMs: z.number().nullable().describe('Age of the oldest waiting message'),
+});
 
 const getHealthRoute = createRoute({
   method: 'get',
@@ -68,6 +54,12 @@ const getHealthRoute = createRoute({
               is_docker: z.boolean(),
               is_wsl: z.boolean(),
               wsl_distro: z.string().optional(),
+              storeId: z
+                .string()
+                .optional()
+                .describe(
+                  "Opaque id of the Archon home this server serves. Compare it with that home's `store-id` file to confirm the server serves the home you mean. Omitted when the home has no readable store id."
+                ),
               activePlatforms: z.array(z.string()).optional(),
               attentionDestinations: z
                 .array(z.object({ id: z.string(), state: z.enum(PUSH_DESTINATION_STATES) }))
@@ -108,6 +100,10 @@ const getUpdateCheckRoute = createRoute({
   },
 });
 
+function oldestAge(ages: number[]): number | null {
+  return ages.length === 0 ? null : Math.max(...ages);
+}
+
 export function registerHealthRoutes(
   app: OpenAPIHono,
   {
@@ -127,13 +123,12 @@ export function registerHealthRoutes(
     const stats = lockManager.getStats();
     const runningWorkflowRows = await workflowDb.getRunningWorkflows();
 
-    // Merge lock-based and DB-based active tracking.
-    // Background workflows bypass the lock manager, so we combine both sources.
-    const lockActiveSet = new Set(stats.activeConversationIds);
-    const backgroundConversationIds = runningWorkflowRows
-      .map(r => r.conversation_id)
-      .filter((id): id is string => id !== null && !lockActiveSet.has(id));
-    const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
+    // Background workflows bypass the lock manager, so `active` counts the union
+    // of both sources. The ids only feed the count and never reach the response.
+    const activeIds = new Set(stats.activeConversations.map(c => c.conversationId));
+    for (const row of runningWorkflowRows) {
+      if (row.conversation_id !== null) activeIds.add(row.conversation_id);
+    }
     const wslDistro = getWSLDistroName();
 
     // Health is public (PUBLIC_API_GATE_PREFIXES) and must stay answerable when the
@@ -156,10 +151,19 @@ export function registerHealthRoutes(
       getLog().warn({ err }, 'api.schema_version_read_failed');
     }
 
+    let storeId: string | null = null;
+    try {
+      storeId = readStoreId();
+    } catch (err) {
+      getLog().warn({ err }, 'api.store_id_read_failed');
+    }
+
     const concurrency: z.infer<typeof healthConcurrencySchema> = {
-      ...stats,
-      active: allActiveIds.length,
-      activeConversationIds: allActiveIds,
+      active: activeIds.size,
+      queuedTotal: stats.queuedTotal,
+      maxConcurrent: stats.maxConcurrent,
+      oldestActiveAgeMs: oldestAge(stats.activeConversations.map(c => c.ageMs)),
+      oldestQueuedAgeMs: oldestAge(stats.queuedConversations.map(c => c.oldestAgeMs)),
     };
     return c.json({
       status: 'ok',
@@ -170,6 +174,7 @@ export function registerHealthRoutes(
       is_docker: isDocker(),
       is_wsl: isWSL(),
       ...(wslDistro ? { wsl_distro: wslDistro } : {}),
+      ...(storeId ? { storeId } : {}),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
       ...(attention ? { attentionDestinations: attention.router.health() } : {}),
       ...(schema ? { schema } : {}),

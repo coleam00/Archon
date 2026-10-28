@@ -4,7 +4,7 @@
  *
  * Two consumers share it on purpose:
  *   - `condition-evaluator.ts` EVALUATES atoms at run time;
- *   - `loader.ts` VALIDATES them at load time (#2566), which needs the same
+ *   - `loader/dag-references.ts` VALIDATES them at load time (#2566), which needs the same
  *     decomposition to tell a whole-output `$node.output` from a field access
  *     `$node.output.field` — a distinction the loader's coarse `WHEN_REF_SOURCE`
  *     ref sweep cannot make, because it captures only the first path segment.
@@ -29,9 +29,9 @@ import {
 } from './output-ref';
 
 /**
- * The reserved scope name for workflow inputs. `loader.ts` imports this rather than
- * re-typing the literal in its two ref scans. It is NOT the only spelling in the tree —
- * `include-expander.ts` and `executor-shared.ts` still hardcode the word, and
+ * The reserved scope name for workflow inputs. The loader's ref scans (`loader/dag-references.ts`,
+ * `loader/dag-structure.ts`) import this rather than re-typing the literal. It is NOT the only spelling in the tree —
+ * `include/command-prompts.ts` and `output-ref.ts` still hardcode the word, and
  * `dagNodeSchema` (which enforces the reservation) cannot import it back without a cycle.
  *
  * `INPUTS` can never be a node id: `dagNodeSchema.superRefine` rejects it outright
@@ -213,26 +213,26 @@ export function parseWhenAtom(expr: string): WhenAtom | null {
   return parseWhenAtomInternal(expr, false);
 }
 
+function parseLoopPrevWhenAtom(expr: string): WhenAtom | null {
+  const match = LOOP_PREV_WHEN_ATOM_PATTERN.exec(expr.trim());
+  if (!match) return null;
+  const [, nodeId, field, operator, quotedValue, unquotedValue] = match;
+  const expected = quotedValue !== undefined ? quotedValue : unquotedValue;
+  if (
+    nodeId === undefined ||
+    operator === undefined ||
+    !isWhenOperator(operator) ||
+    expected === undefined ||
+    !isComparableLiteral(operator, expected)
+  )
+    return null;
+  return { ref: { kind: 'loop_prev', nodeId, field }, operator, expected };
+}
+
 function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom | null {
   if (allowLoopPrev) {
-    const loopPrevMatch = LOOP_PREV_WHEN_ATOM_PATTERN.exec(expr.trim());
-    if (loopPrevMatch) {
-      const [, nodeId, field, operator, quotedValue, unquotedValue] = loopPrevMatch;
-      const expected = quotedValue !== undefined ? quotedValue : unquotedValue;
-      if (
-        nodeId !== undefined &&
-        operator !== undefined &&
-        isWhenOperator(operator) &&
-        expected !== undefined &&
-        isComparableLiteral(operator, expected)
-      ) {
-        return {
-          ref: { kind: 'loop_prev', nodeId, field },
-          operator,
-          expected,
-        };
-      }
-    }
+    const loopPrev = parseLoopPrevWhenAtom(expr);
+    if (loopPrev !== null) return loopPrev;
   }
   const match = WHEN_ATOM_PATTERN.exec(expr.trim());
   if (!match) return null;

@@ -1,5 +1,5 @@
 // @archon-test-isolated
-/** Covers chat-context.ts through `handleMessage`; shared mocks live in `../test/orchestrator-agent-harness`. */
+/** Shared mocks for discovery and chat integration live in `../test/orchestrator-agent-harness`. */
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import {
@@ -25,6 +25,8 @@ import {
   operator,
 } from '../test/orchestrator-agent-harness';
 import { handleMessage } from './orchestrator-agent';
+import { discoverAllWorkflows } from './chat-context';
+import { buildOrchestratorSystemAppend } from './prompt-builder';
 
 // ─── discoverAllWorkflows — remote sync ───────────────────────────────────────
 
@@ -263,7 +265,9 @@ describe('discoverAllWorkflows — remote sync', () => {
       'codebase_env_vars_load_failed'
     );
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-    expect(requestOptions.env).toEqual({ FILE_SECRET: 'file-value' });
+    expect(requestOptions.env).toEqual({
+      FILE_SECRET: 'file-value',
+    });
   });
 
   test.each(['stub-plugin', 'claude'])(
@@ -291,7 +295,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     }
   );
 
-  test('appends the run-management section (and no native tool) for a project-scoped non-native-tool provider', async () => {
+  test('selects CLI guidance without native tools for a scoped non-native-tool provider', async () => {
     const providers = await import('@archon/providers');
     const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
     capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, nativeTools: false });
@@ -307,7 +311,12 @@ describe('discoverAllWorkflows — remote sync', () => {
       await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
       const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-      expect(requestOptions.appendSystemPrompt).toContain('## Managing Workflow Runs');
+      expect(buildOrchestratorSystemAppend).toHaveBeenLastCalledWith(
+        expect.objectContaining({ codebase_id: 'codebase-1' }),
+        [codebase],
+        expect.any(Array),
+        'cli'
+      );
       // Providers without native tools get NO in-process tool — bash CLI only.
       expect(requestOptions.nativeTools).toBeUndefined();
     } finally {
@@ -315,7 +324,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     }
   });
 
-  test('omits the run-management section and injects the native tool for a project-scoped native-tool provider', async () => {
+  test('selects native guidance and injects native tools for a scoped native-tool provider', async () => {
     const providers = await import('@archon/providers');
     const capsMock = providers.getProviderCapabilities as ReturnType<typeof mock>;
     capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, nativeTools: true });
@@ -331,8 +340,12 @@ describe('discoverAllWorkflows — remote sync', () => {
       await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
       const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
-      // The in-process tool replaces the CLI pointer, which would be redundant.
-      expect(requestOptions.appendSystemPrompt).not.toContain('## Managing Workflow Runs');
+      expect(buildOrchestratorSystemAppend).toHaveBeenLastCalledWith(
+        expect.objectContaining({ codebase_id: 'codebase-1' }),
+        [codebase],
+        expect.any(Array),
+        'tools'
+      );
       // Native-tool provider gets the manage_run tool instead.
       expect(Array.isArray(requestOptions.nativeTools)).toBe(true);
     } finally {
@@ -361,30 +374,31 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
     );
   });
 
-  test('repo-specific workflows override global workflows by name', async () => {
+  test('repo-specific workflows override global workflows by name without changing their order', async () => {
     const conversation = makeConversation({ codebase_id: 'codebase-1' });
-    const codebase = makeCodebaseForSync();
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
-
-    // First call: global discovery returns 'assist' workflow
+    mockGetCodebase.mockResolvedValueOnce(makeCodebaseForSync());
+    const globalOnly = makeTestWorkflowWithSource({ name: 'global-only' });
+    const globalAssist = makeTestWorkflowWithSource({
+      name: 'assist',
+      description: 'Global assist',
+    });
+    const repoAssist = makeTestWorkflowWithSource(
+      { name: 'assist', description: 'Repo assist' },
+      'project'
+    );
+    const repoOnly = makeTestWorkflowWithSource({ name: 'repo-only' }, 'project');
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Global assist' })],
+      workflows: [globalAssist, globalOnly],
       errors: [],
     });
-    // Second call: repo discovery returns 'assist' with different description (override)
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'assist', description: 'Repo assist' }, 'project'),
-      ],
+      workflows: [repoAssist, repoOnly],
       errors: [],
     });
 
-    const platform = makePlatform();
-    // Send a non-command message so it triggers discoverAllWorkflows via the orchestrator flow
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
+    const result = await discoverAllWorkflows(conversation);
 
-    // discoverWorkflowsWithConfig should have been called twice (global + repo)
+    expect(result.workflows).toEqual([repoAssist, globalOnly, repoOnly]);
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledTimes(2);
   });
 

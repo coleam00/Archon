@@ -13,6 +13,8 @@ mock.module('./connection', () => ({
     query: mockQuery,
   },
   getDatabase: () => ({
+    // The pre-transaction artifact read finds no run, so no artifacts are walked.
+    query: () => Promise.resolve(createQueryResult([])),
     withTransaction: <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => fn(mockQuery),
   }),
   getDialect: () => mockPostgresDialect,
@@ -68,12 +70,12 @@ describe('workflow run gates', () => {
       // this suite runs the Postgres dialect, so it pins that branch of
       // writeApprovalMetadata (#2673). Top-level run metadata still merges.
       expect(query).toContain(
-        "metadata = jsonb_set((metadata - 'wait') || $2::jsonb, '{approval}', $3::jsonb, true)"
+        "metadata = jsonb_set((metadata || $2::jsonb) - 'wait', '{approval}', $3::jsonb, true)"
       );
 
-      // $2 is run-level metadata (empty here); $3 is the complete gate context,
-      // bound separately so the replace can target it.
-      expect(JSON.parse(params[1] as string)).toEqual({});
+      // $2 is run-level metadata (only the pause cause here); $3 is the complete gate
+      // context, bound separately so the replace can target it.
+      expect(JSON.parse(params[1] as string)).toEqual({ pause_cause: 'gate' });
       // Exactly what the caller passed — no explicit-null reset list. Every field
       // this gate leaves unset is absent, which is what makes a prior gate's value
       // unable to survive at any depth.
@@ -126,7 +128,10 @@ describe('workflow run gates', () => {
       const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       // Same atomic UPDATE, so there is no window where the run is paused
       // without the marker (M3) — it merges at the top level, beside `approval`.
-      expect(JSON.parse(params[1] as string)).toEqual({ pending_writeback: true });
+      expect(JSON.parse(params[1] as string)).toEqual({
+        pending_writeback: true,
+        pause_cause: 'gate',
+      });
       expect((JSON.parse(params[2] as string) as { nodeId: string }).nodeId).toBe('__writeback__');
     });
 

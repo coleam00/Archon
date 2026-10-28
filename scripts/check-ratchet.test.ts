@@ -116,6 +116,11 @@ describe('checkRatchet', () => {
     git(repo, 'commit', '-q', '-m', message);
   };
 
+  /** Ceilings of zero make every increase count, so the comparison itself is what these tests see. */
+  const NO_CEILING = { complexity: 0, lines: 0 };
+  /** Admits the new files a move creates, and still holds a raised function above it. */
+  const MOVE_CEILING = { complexity: 2, lines: 10 };
+
   const SIMPLE = 'export function run(x: number) {\n  if (x) return 1;\n  return 0;\n}\n';
   const COMPLEX =
     'export function run(x: number) {\n  if (x) {\n    if (x > 1) return 2;\n  }\n  return 0;\n}\n';
@@ -141,7 +146,7 @@ describe('checkRatchet', () => {
     const repo = repoOnBranch();
     write(repo, 'src/a.ts', COMPLEX);
     commitAll(repo, 'complicate');
-    const result = checkRatchet(repo, 'main');
+    const result = checkRatchet(repo, 'main', NO_CEILING);
     expect(result.failures).toEqual([
       'src/a.ts: `run` cognitive complexity 1 -> 3',
       'src/a.ts: 4 -> 6 lines',
@@ -157,7 +162,7 @@ describe('checkRatchet', () => {
     commitAll(repo, 'siblings');
     git(repo, 'branch', '-f', 'main');
     write(repo, 'src/a.ts', siblings('x => (x ? 1 : 0)'));
-    expect(checkRatchet(repo, 'main').failures).toEqual([
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([
       'src/a.ts: `f > xs.forEach()` cognitive complexity 0 -> 1',
     ]);
   });
@@ -166,9 +171,49 @@ describe('checkRatchet', () => {
     const repo = repoOnBranch();
     write(repo, 'src/a.ts', COMPLEX);
     commitAll(repo, 'complicate\n\nRatchet-Allow: src/a.ts:run\nRatchet-Allow: src/a.ts');
-    const result = checkRatchet(repo, 'main');
+    const result = checkRatchet(repo, 'main', NO_CEILING);
     expect(result.failures).toEqual([]);
     expect(result.allowed).toHaveLength(2);
+  });
+
+  test('refuses entries the mock-module baseline gains unless a trailer allows them', () => {
+    const repo = repoOnBranch();
+    const baseline = (names: string[]): string =>
+      JSON.stringify({ factories: { 'src/a.test.ts': ['./db'] }, exports: { 'src/db.ts': names } });
+    write(repo, 'scripts/mock-module-baseline.json', baseline(['a']));
+    commitAll(repo, 'baseline');
+    git(repo, 'branch', '-f', 'main');
+    write(repo, 'scripts/mock-module-baseline.json', baseline(['a', 'b']));
+    commitAll(repo, 'grow');
+    const result = checkRatchet(repo, 'main', NO_CEILING);
+    expect(result.failures).toEqual([
+      'scripts/mock-module-baseline.json: gains export src/db.ts b',
+    ]);
+    expect(result.remedies).toEqual(['Ratchet-Allow: scripts/mock-module-baseline.json']);
+
+    git(
+      repo,
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'waive\n\nRatchet-Allow: scripts/mock-module-baseline.json'
+    );
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([]);
+  });
+
+  test('refuses a grandfathered factory the mock-module baseline gains', () => {
+    const repo = repoOnBranch();
+    const baseline = (factories: Record<string, string[]>): string =>
+      JSON.stringify({ factories, exports: { 'src/db.ts': ['a'] } });
+    write(repo, 'scripts/mock-module-baseline.json', baseline({ a: ['./db'] }));
+    commitAll(repo, 'baseline');
+    git(repo, 'branch', '-f', 'main');
+    write(repo, 'scripts/mock-module-baseline.json', baseline({ a: ['./db'], b: ['./db'] }));
+    commitAll(repo, 'grow');
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([
+      "scripts/mock-module-baseline.json: gains factory b './db'",
+    ]);
   });
 
   test('ignores a trailer the base already contains', () => {
@@ -186,7 +231,7 @@ describe('checkRatchet', () => {
     git(repo, 'merge', '-q', '--ff-only', 'main');
     write(repo, 'src/a.ts', COMPLEX);
     commitAll(repo, 'complicate');
-    expect(checkRatchet(repo, 'main').failures).toContain(
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toContain(
       'src/a.ts: `run` cognitive complexity 1 -> 3'
     );
   });
@@ -196,10 +241,10 @@ describe('checkRatchet', () => {
     write(repo, 'src/a.ts', '');
     write(repo, 'src/b.ts', SIMPLE);
     commitAll(repo, 'move');
-    expect(checkRatchet(repo, 'main').failures).toEqual([]);
+    expect(checkRatchet(repo, 'main', MOVE_CEILING).failures).toEqual([]);
 
     write(repo, 'src/b.ts', COMPLEX);
-    expect(checkRatchet(repo, 'main').failures).toEqual([
+    expect(checkRatchet(repo, 'main', MOVE_CEILING).failures).toEqual([
       'src/b.ts: `run` cognitive complexity 1 -> 3 (base: src/a.ts)',
     ]);
   });
@@ -215,10 +260,10 @@ describe('checkRatchet', () => {
     write(repo, 'src/a.ts', '');
     write(repo, 'src/b.ts', f('x => (x ? 1 : 0)', 'x => x'));
     commitAll(repo, 'move');
-    expect(checkRatchet(repo, 'main').failures).toEqual([]);
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([]);
 
     write(repo, 'src/b.ts', f('x => (x ? 1 : 0)', 'x => (x ? 1 : 0)'));
-    expect(checkRatchet(repo, 'main').failures).toEqual([
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([
       'src/b.ts: `f > xs.forEach()` cognitive complexity 0 -> 1 (base: src/a.ts)',
     ]);
   });
@@ -235,7 +280,7 @@ describe('checkRatchet', () => {
     write(repo, 'src/a.ts', '');
     write(repo, 'src/b.ts', f(nested, 'x => (x ? 1 : 0)'));
     commitAll(repo, 'move and raise the own callback');
-    expect(checkRatchet(repo, 'main').failures).toEqual([
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([
       'src/b.ts: `f > xs.forEach()` cognitive complexity 0 -> 1',
     ]);
   });
@@ -245,7 +290,9 @@ describe('checkRatchet', () => {
     renameSync(join(repo, 'src/a.ts'), join(repo, 'src/renamed.ts'));
     write(repo, 'src/renamed.ts', `${SIMPLE}// one more line\n`);
     commitAll(repo, 'rename and grow');
-    expect(checkRatchet(repo, 'main').failures).toEqual(['src/renamed.ts: 4 -> 5 lines']);
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([
+      'src/renamed.ts: 4 -> 5 lines',
+    ]);
   });
 
   test('does not treat a renamed file as a source of moved functions', () => {
@@ -253,14 +300,17 @@ describe('checkRatchet', () => {
     renameSync(join(repo, 'src/a.ts'), join(repo, 'src/renamed.ts'));
     write(repo, 'src/c.ts', COMPLEX);
     commitAll(repo, 'rename and add a same-named function');
-    expect(checkRatchet(repo, 'main').failures).toEqual([]);
+    // Scored as new (from 0), not as a raise of the renamed file's `run` (from 1).
+    expect(checkRatchet(repo, 'main', MOVE_CEILING).failures).toEqual([
+      'src/c.ts: `run` cognitive complexity 0 -> 3',
+    ]);
   });
 
   test('scores neither untouched files nor files outside the base Biome scope', () => {
     const repo = repoOnBranch();
     write(repo, 'gen/out.ts', COMPLEX);
     commitAll(repo, 'regenerate');
-    expect(checkRatchet(repo, 'main').failures).toEqual([]);
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toEqual([]);
   });
 
   test('reads the scope from the base, so a change cannot exclude its own file', () => {
@@ -268,11 +318,44 @@ describe('checkRatchet', () => {
     write(repo, 'biome.jsonc', '{ "files": { "includes": ["**", "!gen", "!src"] } }\n');
     write(repo, 'src/a.ts', COMPLEX);
     commitAll(repo, 'complicate and exclude');
-    expect(checkRatchet(repo, 'main').failures).toHaveLength(2);
+    expect(checkRatchet(repo, 'main', NO_CEILING).failures).toHaveLength(2);
+  });
+
+  test('lets code grow below the ceiling and holds what is above it', () => {
+    const repo = repoOnBranch();
+    const ceilings = { complexity: 2, lines: 5 };
+    write(repo, 'src/a.ts', COMPLEX);
+    commitAll(repo, 'grow below the ceiling');
+    // `run` goes 1 -> 3 and the file 4 -> 6 lines: both cross a ceiling, so both are refused.
+    expect(checkRatchet(repo, 'main', ceilings).failures).toEqual([
+      'src/a.ts: `run` cognitive complexity 1 -> 3',
+      'src/a.ts: 4 -> 6 lines',
+    ]);
+    expect(checkRatchet(repo, 'main', { complexity: 3, lines: 6 }).failures).toEqual([]);
+  });
+
+  test('refuses a new function that lands above the ceiling', () => {
+    const repo = repoOnBranch();
+    write(repo, 'src/new.ts', COMPLEX);
+    commitAll(repo, 'add');
+    expect(checkRatchet(repo, 'main', { complexity: 2, lines: 100 }).failures).toEqual([
+      'src/new.ts: `run` cognitive complexity 0 -> 3',
+    ]);
+  });
+
+  test('puts no line ceiling on test files', () => {
+    const repo = repoOnBranch();
+    write(repo, 'src/a.test.ts', SIMPLE);
+    commitAll(repo, 'add a test');
+    git(repo, 'branch', '-f', 'main');
+    write(repo, 'src/a.test.ts', `${SIMPLE}${'// more coverage\n'.repeat(20)}`);
+    write(repo, 'src/__tests__/b.ts', SIMPLE.repeat(5));
+    commitAll(repo, 'grow the tests');
+    expect(checkRatchet(repo, 'main', { complexity: 100, lines: 5 }).failures).toEqual([]);
   });
 
   test('names the fetch when the base ref is missing', () => {
     const repo = repoOnBranch();
-    expect(() => checkRatchet(repo, 'origin/dev')).toThrow('git fetch origin dev');
+    expect(() => checkRatchet(repo, 'origin/dev', NO_CEILING)).toThrow('git fetch origin dev');
   });
 });

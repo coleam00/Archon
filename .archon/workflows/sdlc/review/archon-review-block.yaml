@@ -18,7 +18,7 @@ description: |
   continuation reviewer carries the prior findings forward.
 
   When the checkout matches the PR head, the final synthesized report is posted
-  to it as one canonical comment, edited in place on re-review. A head mismatch
+  to it as one canonical comment, edited in place on re-review (on `gh`, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one; the next upsert then refuses: inspect both and delete one). A head mismatch
   stops before review and returns the exact rerun command. For a same-repository
   PR, advance any clean existing worktree to its head, then use its head branch.
   For a fork PR, fetch its head first, then use a fresh review branch with
@@ -28,7 +28,7 @@ description: |
   stage and owns what follows its ending. It never pauses for a person: run
   archon-review, which adds that pause, by hand.
 
-model: medium
+model: ['@reviewer', medium]
 
 inputs:
   scope:
@@ -73,7 +73,7 @@ outcome_field: ready
 nodes:
   # The directory of the pack's default policy documents in this run's captured
   # source, the same in a source checkout and a binary install. Synthesis names the
-  # policy file it needs and chooses between the project's own and the default.
+  # policy file it needs and reads the default, then the project's own on top.
   - id: policy
     script: policy
     runtime: bun
@@ -142,10 +142,17 @@ nodes:
           required: [delivers, parts]
       required: [continuation, light, head, cursor, risks, execution, seams, code, tests, errors, docs, part]
 
+  # Every review node writes under review/, and a fresh run's artifacts directory
+  # has none. Agents told to create it have skipped that step, so the declared
+  # scope.md pointer failed and took the whole delivery run down with it.
+  - id: review-dir
+    bash: mkdir -p "$ARTIFACTS_DIR/review"
+
   - id: scope
     command: review-scope
     context: fresh
     mutates_checkout: false
+    depends_on: [review-dir]
     output_format:
       type: object
       properties:
@@ -206,6 +213,7 @@ nodes:
   # light round, which skips the route node, never reads it.
   - id: seams
     output_type: review-lens
+    model: ['@review-seams', '@reviewer', medium]
     command: review-seams
     context: fresh
     mutates_checkout: false
@@ -216,7 +224,7 @@ nodes:
 
   - id: code
     output_type: review-lens
-    model: large
+    model: ['@review-code', '@reviewer', large]
     command: review-code
     context: fresh
     mutates_checkout: false
@@ -226,6 +234,7 @@ nodes:
 
   - id: tests
     output_type: review-lens
+    model: ['@review-tests', '@reviewer', medium]
     command: review-tests
     context: fresh
     mutates_checkout: false
@@ -235,6 +244,7 @@ nodes:
 
   - id: errors
     output_type: review-lens
+    model: ['@review-errors', '@reviewer', medium]
     command: review-errors
     context: fresh
     mutates_checkout: false
@@ -244,6 +254,7 @@ nodes:
 
   - id: docs
     output_type: review-lens
+    model: ['@review-docs', '@reviewer', medium]
     command: review-docs
     context: fresh
     mutates_checkout: false
@@ -294,7 +305,7 @@ nodes:
           type: boolean
         action:
           type: string
-          enum: [none, correct, replan, needs_human]
+          enum: [none, correct, replan, ask]
         findings_summary:
           type: string
         # The report the verdict rests on, as a certified artifact pointer: the
@@ -330,7 +341,9 @@ nodes:
 
   # The reviewer judges and writes the report; this node owns the one public
   # write, so every round edits the same marked comment instead of appending
-  # another, through whichever forge source the run selected. The verdict passes
+  # another, through whichever forge source the run selected (on `gh`, a landed
+  # write that returned a retryable response (5xx, or a rate limit) or no response can leave a second one, and the next
+  # upsert refuses). The verdict passes
   # through unchanged: publication is not what makes a review true.
   - id: publish
     script: publish-review
@@ -366,7 +379,7 @@ nodes:
       const verdict = JSON.parse(process.env.INPUTS_VERDICT);
       const report = JSON.parse(process.env.INPUTS_SCOPE_REPORT);
       console.log(JSON.stringify(JSON.parse(process.env.INPUTS_HEAD_MATCHES) ? verdict : {
-        ready: false, action: "needs_human",
+        ready: false, action: "ask",
         findings_summary: require("node:fs").readFileSync(require("node:path").join(process.env.ARTIFACTS_DIR, report.path), "utf8"),
         report, discoveries: [], contract_left: ["PR head mismatch prevented contract review."]
       }));

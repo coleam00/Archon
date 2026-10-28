@@ -3,7 +3,15 @@
  * compare-and-swap writes that resolve or cancel its gate. Re-exported from the
  * `./workflows` entry.
  */
-import type { ApprovalContext, ExpectedApprovalGate } from '@archon/workflows/schemas/workflow-run';
+import {
+  validateWorkflowWaitMetadata,
+  type ApprovalContext,
+  type ExpectedApprovalGate,
+} from '@archon/workflows/schemas/workflow-run';
+import {
+  PAUSE_CAUSE_METADATA_KEY,
+  pauseCauseOfApproval,
+} from '@archon/workflows/schemas/pause-cause';
 import {
   WorkflowRunPauseConflictError,
   type GatePauseEventInput,
@@ -13,7 +21,10 @@ import {
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
 import { getLog } from './workflow-run-shared';
-import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
+import {
+  insertTerminalWorkflowEvent,
+  observeRunTerminalArtifacts,
+} from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 
 /**
@@ -61,10 +72,14 @@ function expectedGateParams(expected: ExpectedApprovalGate | undefined): (string
 function writeApprovalMetadata(mergeParamIndex: number, approvalParamIndex: number): string {
   const merge = `$${String(mergeParamIndex)}`;
   const approval = `$${String(approvalParamIndex)}`;
-  const withoutWait = getDialect().jsonRemove('metadata', 'wait');
+  const merged =
+    getDatabaseType() === 'postgresql'
+      ? `(metadata || ${merge}::jsonb)`
+      : `json_patch(metadata, ${merge})`;
+  const withoutWait = getDialect().jsonRemove(merged, 'wait');
   return getDatabaseType() === 'postgresql'
-    ? `jsonb_set((${withoutWait}) || ${merge}::jsonb, '{approval}', ${approval}::jsonb, true)`
-    : `json_set(json_patch(${withoutWait}, ${merge}), '$.approval', json(${approval}))`;
+    ? `jsonb_set(${withoutWait}, '{approval}', ${approval}::jsonb, true)`
+    : `json_set(${withoutWait}, '$.approval', json(${approval}))`;
 }
 
 /**
@@ -101,6 +116,7 @@ export async function resolveApprovalGate(
   events: GateResolutionEvent[],
   expectedGate?: ExpectedApprovalGate
 ): Promise<{ resolved: boolean }> {
+  validateWorkflowWaitMetadata(metadata);
   const dialect = getDialect();
   try {
     return await getDatabase().withTransaction(async query => {
@@ -160,6 +176,7 @@ export async function resolveAndCancelApprovalGate(
   const dialect = getDialect();
   let outcome: { resolved: boolean };
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     outcome = await getDatabase().withTransaction(async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
@@ -173,15 +190,17 @@ export async function resolveAndCancelApprovalGate(
         for (const event of events) {
           await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
         }
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_cancelled',
-          step_name: cancellation.step_name,
-          data: {
-            cancel_reason: 'approval_rejected',
-            ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
+        const { step_name, ...data } = cancellation;
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_cancelled',
+            step_name,
+            data: { ...data, cancel_reason: 'approval_rejected' },
           },
-        });
+          artifacts
+        );
       }
       return { resolved };
     });
@@ -225,7 +244,10 @@ export async function pauseWorkflowRun(
           id,
           // Caller-supplied run-level metadata (e.g. `pending_writeback`) rides the SAME
           // atomic write so there is no window where the run is paused without it (M3).
-          JSON.stringify(extraMetadata ?? {}),
+          JSON.stringify({
+            ...extraMetadata,
+            [PAUSE_CAUSE_METADATA_KEY]: pauseCauseOfApproval(approvalContext),
+          }),
           // The complete gate context. JSON.stringify drops undefined, and the write
           // replaces rather than merges, so an optional field the caller left unset is
           // simply absent — no explicit-null reset list to keep in sync.

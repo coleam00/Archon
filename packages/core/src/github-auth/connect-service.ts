@@ -1,6 +1,6 @@
 /**
  * Orchestrates the "connect GitHub" device flow for an existing Archon user.
- * Shared by the Web REST endpoints, the Slack slash command, and the CLI.
+ * Shared by the Web REST endpoints and the CLI.
  *
  * Steps: start device flow → surface the code to the caller (onCode) → poll
  * until authorized → fetch the GitHub profile → bind the GitHub identity to the
@@ -61,7 +61,7 @@ export async function connectGithubForUser(
 /**
  * Persist a freshly-authorized device-flow token for a user: fetch the GitHub
  * profile, bind the identity (conflict-guarded), store the encrypted tokens, and
- * cache display_name/email. Shared by the blocking connect path (CLI/Slack) and
+ * cache display_name/email. Shared by the blocking connect path (CLI) and
  * the non-blocking web poll endpoint, which obtains the token itself via
  * pollDeviceFlowOnce. Throws GithubIdentityConflictError if the GitHub account
  * already belongs to a different Archon user.

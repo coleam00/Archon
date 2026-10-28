@@ -20,6 +20,7 @@ import {
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
+import { deprecatedChatProviderNotice, deprecatedNotice } from './community/deprecation';
 import type { ProviderRegistration, IAgentProvider } from './types';
 import { EFFORT_LADDER, UnknownProviderError } from '@archon/provider-contract';
 
@@ -515,6 +516,27 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(deprecated).toEqual(['copilot', 'opencode']);
+    });
+
+    test('deprecated providers say no maintainer owns them, without a removal date', () => {
+      registerCommunityProviders();
+      expect(deprecatedNotice('Copilot')).toBe(
+        'Copilot is deprecated: no Archon maintainer owns it. It keeps working, but fixes are ' +
+          'not guaranteed. For a version you control, build your own plugin: ' +
+          'https://archon.diy/guides/publishing-plugins/'
+      );
+      expect(getRegistration('copilot').deprecationNotice).toBe(
+        deprecatedChatProviderNotice('Copilot')
+      );
+      expect(getRegistration('opencode').deprecationNotice).toBe(
+        deprecatedChatProviderNotice('OpenCode')
+      );
+      for (const provider of ['copilot', 'opencode']) {
+        const notice = getRegistration(provider).deprecationNotice;
+        expect(notice).toContain('headless');
+        expect(notice).toContain('CLI identity');
+        expect(notice).toContain('do not deliver progress or results');
+      }
     });
 
     test('is idempotent', () => {

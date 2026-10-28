@@ -1,5 +1,6 @@
-import { isIncludeDirective } from './schemas/dag-node';
-import type { DagNode, IncludeDirective, LoopGroupNodeConfig } from './schemas/dag-node';
+import { isIncludeDirective } from './schemas/node-guards';
+import type { DagNode, LoopGroupNodeConfig } from './schemas/dag-node';
+import type { IncludeDirective } from './schemas/include-node';
 import type { GraphPlan, ResolvedWorkflow, WorkflowDefinition } from './schemas/workflow';
 
 function requireResolvedNodes(nodes: readonly (DagNode | IncludeDirective)[]): DagNode[] {
@@ -16,7 +17,7 @@ function requireResolvedNodes(nodes: readonly (DagNode | IncludeDirective)[]): D
   return resolved;
 }
 
-function planResolvedNodes(nodes: readonly DagNode[]): GraphPlan {
+export function indexDependencies(nodes: readonly (DagNode | IncludeDirective)[]) {
   const inDegree = new Map<string, number>();
   const dependents = new Map<string, string[]>();
 
@@ -28,6 +29,11 @@ function planResolvedNodes(nodes: readonly DagNode[]): GraphPlan {
       dependents.set(dependency, existing);
     }
   }
+  return { inDegree, dependents };
+}
+
+function planResolvedNodes(nodes: readonly DagNode[]): GraphPlan {
+  const { inDegree, dependents } = indexDependencies(nodes);
 
   const layers: DagNode[][] = [];
   let ready = [...nodes].filter(node => (inDegree.get(node.id) ?? 0) === 0);

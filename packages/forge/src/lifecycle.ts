@@ -219,6 +219,73 @@ export const reviewItemSchema = z.object({
   body: z.string(),
 });
 export const prReviewsSchema = z.object({ ref: prRefSchema, items: z.array(reviewItemSchema) });
+/** Every review thread on a pull request, read in full: a partial list could hide an open one. */
+export const prThreadsRequestSchema = requestBase.extend({
+  op: z.literal('pr.threads'),
+  ref: prRefSchema,
+});
+export const reviewThreadCommentSchema = z.object({
+  id: text,
+  author: sourceActorSchema.nullable(),
+  body: z.string(),
+  url: z.url(),
+});
+export const reviewThreadSchema = z.object({
+  id: text,
+  resolved: z.boolean(),
+  outdated: z.boolean(),
+  path: z.string().nullable(),
+  line: z.number().int().nullable(),
+  comments: z.array(reviewThreadCommentSchema),
+});
+export type ForgeReviewThread = z.infer<typeof reviewThreadSchema>;
+export const prThreadsSchema = z.object({ ref: prRefSchema, threads: z.array(reviewThreadSchema) });
+/** Every conversation comment on an issue or pull request, oldest first, read in full. */
+export const workItemCommentsRequestSchema = requestBase.extend({
+  op: z.literal('workitem.comments'),
+  subject: forgeSubjectRefSchema,
+});
+export const workItemCommentSchema = z.object({
+  id: text,
+  author: sourceActorSchema.nullable(),
+  url: z.url(),
+  body: z.string(),
+});
+/** How far a pull request's head is behind its repository's default branch, and whether it merges. */
+export const prMergeStateRequestSchema = requestBase.extend({
+  op: z.literal('pr.merge-state'),
+  ref: prRefSchema,
+});
+export const prMergeStateSchema = z.object({
+  ref: prRefSchema,
+  head_revision: gitObjectIdSchema,
+  default_branch: text,
+  default_revision: gitObjectIdSchema,
+  /** Commits of the default branch at `default_revision` that the head at `head_revision` lacks. */
+  behind: z.number().int().nonnegative(),
+  mergeable: z.enum(['clean', 'conflict', 'unknown']),
+  /** The commit the pull request landed as; null until it is merged. */
+  merge_commit: gitObjectIdSchema.nullable(),
+});
+/** A reply on one review thread of the pull request `ref`. */
+export const prThreadReplyRequestSchema = requestBase.extend({
+  op: z.literal('pr.thread.reply'),
+  ref: prRefSchema,
+  thread: text,
+  body: text,
+});
+/** Resolve one review thread of the pull request `ref`. */
+export const prThreadResolveRequestSchema = requestBase.extend({
+  op: z.literal('pr.thread.resolve'),
+  ref: prRefSchema,
+  thread: text,
+});
+/** Replace an issue's body. */
+export const workItemEditBodyRequestSchema = requestBase.extend({
+  op: z.literal('workitem.edit-body'),
+  ref: workItemRefSchema,
+  body: z.string(),
+});
 export const landedSchema = z.object({
   commit: gitObjectIdSchema.nullable(),
   tree: gitObjectIdSchema.nullable(),
@@ -240,7 +307,10 @@ export const lifecycleReadRequestSchemas = [
   prViewRequestSchema,
   repoLabelsListRequestSchema,
   prReviewsRequestSchema,
+  prThreadsRequestSchema,
   workItemListRequestSchema,
+  workItemCommentsRequestSchema,
+  prMergeStateRequestSchema,
 ] as const;
 export const mutationRequestSchemas = [
   prMergeRequestSchema,
@@ -257,6 +327,9 @@ export const mutationRequestSchemas = [
   workItemLabelAddRequestSchema,
   workItemLabelRemoveRequestSchema,
   repoLabelEnsureRequestSchema,
+  prThreadReplyRequestSchema,
+  prThreadResolveRequestSchema,
+  workItemEditBodyRequestSchema,
 ] as const;
 export const mutationRequestSchema = z.discriminatedUnion('op', mutationRequestSchemas);
 export type ForgeMutationRequest = z.infer<typeof mutationRequestSchema>;
@@ -282,6 +355,10 @@ export const workItemListSchema = z.object({
   repo: repoRefSchema,
   label: text,
   items: z.array(subjectRecordSchema),
+});
+export const workItemCommentsSchema = z.object({
+  workitem: subjectRecordSchema,
+  comments: z.array(workItemCommentSchema),
 });
 export const commentRecordSchema = z.object({
   ref: prRefSchema,
@@ -338,10 +415,13 @@ const appliedSchema = z.object({
 
 export const lifecycleReadResultSchemas = [
   z.object({ op: prReviewsRequestSchema.shape.op, value: prReviewsSchema }),
+  z.object({ op: prThreadsRequestSchema.shape.op, value: prThreadsSchema }),
   z.object({ op: workItemViewRequestSchema.shape.op, value: workItemViewSchema }),
   z.object({ op: prViewRequestSchema.shape.op, value: prViewSchema.nullable() }),
   z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
   z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
+  z.object({ op: workItemCommentsRequestSchema.shape.op, value: workItemCommentsSchema }),
+  z.object({ op: prMergeStateRequestSchema.shape.op, value: prMergeStateSchema }),
 ] as const;
 export const mutationResultSchemas = [
   z.object({
@@ -420,6 +500,18 @@ export const mutationResultSchemas = [
   z.object({
     op: workItemCloseRequestSchema.shape.op,
     value: appliedSchema.extend({ workitem: workItemRecordSchema, reason: closeReasonSchema }),
+  }),
+  z.object({
+    op: prThreadReplyRequestSchema.shape.op,
+    value: appliedSchema.extend({ thread: text, comment: commentRecordSchema }),
+  }),
+  z.object({
+    op: prThreadResolveRequestSchema.shape.op,
+    value: appliedSchema.extend({ thread: text, resolved: z.literal(true) }),
+  }),
+  z.object({
+    op: workItemEditBodyRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: workItemRecordSchema, bodyDigest: text }),
   }),
 ] as const;
 

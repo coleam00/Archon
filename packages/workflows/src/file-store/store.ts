@@ -1,5 +1,6 @@
-import { createFileAdmissionStore, createAdmissionTransaction } from './admission';
-import { resumeRefusal } from '../resource-start-store';
+import { createFileAdmissionStore } from './admission';
+import { createAdmissionTransaction } from './admission-transaction';
+import { type ReusableCheckout, resumeRefusal } from '../resource-start-store';
 import {
   NODE_LIFECYCLE_EVENT_TYPES,
   WorkflowResourceBusyError,
@@ -24,6 +25,8 @@ import { workflowRunNodeSessionSchema } from '../schemas/workflow-run-node-sessi
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
 import { reportRunTerminalTelemetry } from '../run-terminal-telemetry';
 import { getWorkflowEventEmitter } from '../event-emitter';
+import { observeTerminalArtifacts, type TerminalArtifacts } from '../terminal-record';
+import { isConversationResetTarget } from './transaction-reads';
 import {
   createTransactionView,
   TERMINAL_RUN_EVENT_TYPES,
@@ -47,6 +50,8 @@ export interface FileWorkflowStoreOptions {
   root: string;
   getCodebase?: IWorkflowStore['getCodebase'];
   getCodebaseEnvVars?: IWorkflowStore['getCodebaseEnvVars'];
+  /** Called under the commit lock; must not enter store recovery or call this store. */
+  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>;
   isCheckoutReleased?: (run: WorkflowRun, workingPath?: string) => Promise<boolean>;
 }
 export async function createFileWorkflowStore(
@@ -71,7 +76,12 @@ export async function createFileWorkflowStore(
       ids === 'all' ? await listRuns(root) : await Promise.all(ids.map(id => readRun(root, id)));
     const runs = new Map(rows.flatMap(run => (run ? [[run.id, run] as const] : [])));
     return call(
-      createTransactionView(runs, events ? await eventsFor([...runs.keys()]) : [], getCodebase)
+      createTransactionView(
+        runs,
+        events ? await eventsFor([...runs.keys()]) : [],
+        getCodebase,
+        new Map()
+      )
     );
   }
   function byRun(events: readonly WorkflowEventRow[]): Map<string, WorkflowEventRow[]> {
@@ -87,6 +97,8 @@ export async function createFileWorkflowStore(
    * Run `call` against the locked runs and commit what it changed. Writes over every run
    * hold the store lock for the whole call, so the diff indexes events by run once, and
    * `events: false` skips reading the logs when the operation never looks at them.
+   * The lock covers store reads and writes only: a terminal write passes the `artifacts`
+   * it walked beforehand.
    */
   async function write<T>(
     ids: readonly string[] | 'all',
@@ -94,7 +106,10 @@ export async function createFileWorkflowStore(
       view: TransactionView,
       admission: ReturnType<typeof createAdmissionTransaction>
     ) => Promise<T>,
-    { events: loadEvents = true }: { events?: boolean } = {}
+    {
+      events: loadEvents = true,
+      artifacts = new Map(),
+    }: { events?: boolean; artifacts?: TerminalArtifacts } = {}
   ): Promise<T> {
     const reports: { run: WorkflowRun; events: WorkflowEventRow[] }[] = [];
     const result = await commit(root, ids, async runs => {
@@ -102,8 +117,11 @@ export async function createFileWorkflowStore(
       const events = loadEvents ? await eventsFor([...runs.keys()]) : [];
       const prior = byRun(events);
       const priorIds = new Set(events.map(event => event.id));
-      const admission = createAdmissionTransaction(root);
-      const result = await call(createTransactionView(runs, events, getCodebase), admission);
+      const admission = createAdmissionTransaction(root, options.listReusableCheckouts);
+      const result = await call(
+        createTransactionView(runs, events, getCodebase, artifacts),
+        admission
+      );
       const next = byRun(events);
       const nextIds = new Set(events.map(event => event.id));
       const changes = [];
@@ -144,6 +162,14 @@ export async function createFileWorkflowStore(
     }
     return result;
   }
+  /** Walk the runs' artifacts before a terminal write takes the lock. */
+  async function observed(
+    runs: readonly (WorkflowRun | null)[]
+  ): Promise<{ artifacts: TerminalArtifacts }> {
+    return { artifacts: await observeTerminalArtifacts(runs.filter(run => run !== null)) };
+  }
+  const observedRun = async (id: string): Promise<{ artifacts: TerminalArtifacts }> =>
+    observed([await readRun(root, id)]);
   function sessionPath(scope: { workflow_name: string; scope_key: string }): string {
     return `node-sessions/${createHash('sha256')
       .update(JSON.stringify([scope.workflow_name, scope.scope_key]))
@@ -199,17 +225,20 @@ export async function createFileWorkflowStore(
         return view.claimPendingWorkflowRun(id, path);
       }),
     updateWorkflowRun: (id, updates) => write([id], view => view.updateWorkflowRun(id, updates)),
+    updateWorkflowRunMetadataIfRunning: (id, metadata) =>
+      write([id], view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),
     updateWorkflowActivity: id => write([id], view => view.updateWorkflowActivity(id)),
     recordWorkflowRunCheckoutBaseline: (id, baseline) =>
       write([id], view => view.recordWorkflowRunCheckoutBaseline(id, baseline)),
     resumeWorkflowRun: async (id, cursor) => {
-      // A paused run's first refusal commits its capacity wait, so it is thrown after the write.
+      // Repeated waiting refusals must also commit restored historical admission membership.
       const outcome = await write([id], async (view, admission) => {
         const run = view.resumableRun(id, cursor);
         const blocker = await admission.resume(run);
         if (!blocker) return await view.resumeWorkflowRun(id, cursor);
         const busy = new WorkflowResourceBusyError(id, blocker, resumeRefusal(run, cursor));
-        if (busy.refusal !== 'waiting' || !view.recordCapacityWait(id)) throw busy;
+        if (busy.refusal !== 'waiting') throw busy;
+        view.recordCapacityWait(id);
         return busy;
       });
       if (outcome instanceof WorkflowResourceBusyError) throw outcome;
@@ -228,22 +257,36 @@ export async function createFileWorkflowStore(
       write([id], view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
       write([id], view => view.pauseWorkflowRunForWait(id, wait, pause)),
-    releaseRunForUnreadableSource: (id, release) =>
-      write([id], view => view.releaseRunForUnreadableSource(id, release)),
+    releaseRunForUnreadableSource: (id, release, beforePublish) =>
+      write([id], view => view.releaseRunForUnreadableSource(id, release, beforePublish)),
     clearWorkflowWaitContext: (id, wait, completion) =>
       write([id], view => view.clearWorkflowWaitContext(id, wait, completion)),
     resolveApprovalGate: (id, metadata, events, expected) =>
       write([id], view => view.resolveApprovalGate(id, metadata, events, expected)),
-    resolveAndCancelApprovalGate: (id, events, cancellation, expected) =>
-      write([id], view => view.resolveAndCancelApprovalGate(id, events, cancellation, expected)),
-    completeWorkflowRun: (id, completion, metadata) =>
-      write([id], view => view.completeWorkflowRun(id, completion, metadata)),
-    failWorkflowRun: (id, error, options) =>
-      write([id], view => view.failWorkflowRun(id, error, options)),
-    cancelWorkflowRun: (id, event) => write([id], view => view.cancelWorkflowRun(id, event)),
-    cancelFanOutRun: (id, reason) => write([id], view => view.cancelFanOutRun(id, reason)),
-    cancelResumableRunsForConversation: (id, assertMayCancel) =>
-      write('all', view => view.cancelResumableRunsForConversation(id, assertMayCancel)),
+    resolveAndCancelApprovalGate: async (id, events, cancellation, expected) =>
+      write(
+        [id],
+        view => view.resolveAndCancelApprovalGate(id, events, cancellation, expected),
+        await observedRun(id)
+      ),
+    completeWorkflowRun: async (id, completion, metadata) =>
+      write(
+        [id],
+        view => view.completeWorkflowRun(id, completion, metadata),
+        await observedRun(id)
+      ),
+    failWorkflowRun: async (id, error, options) =>
+      write([id], view => view.failWorkflowRun(id, error, options), await observedRun(id)),
+    cancelWorkflowRun: async (id, event) =>
+      write([id], view => view.cancelWorkflowRun(id, event), await observedRun(id)),
+    cancelFanOutRun: async (id, reason) =>
+      write([id], view => view.cancelFanOutRun(id, reason), await observedRun(id)),
+    cancelResumableRunsForConversation: async (id, assertMayCancel) =>
+      write(
+        'all',
+        view => view.cancelResumableRunsForConversation(id, assertMayCancel),
+        await observed((await listRuns(root)).filter(run => isConversationResetTarget(run, id)))
+      ),
     claimWriteback: id => write([id], view => view.claimWriteback(id)),
     releaseWritebackClaim: async id => {
       try {
@@ -435,7 +478,7 @@ export async function createFileWorkflowStore(
           changes: { documents: { [path]: [...rows.filter(row => row !== prior), next] } },
         };
       }),
-    ...createFileAdmissionStore(root),
+    ...createFileAdmissionStore(root, options.listReusableCheckouts),
     ...createFileStateDocumentStore(root),
   };
   return store;

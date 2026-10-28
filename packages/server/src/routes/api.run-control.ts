@@ -1,3 +1,4 @@
+import type { Context } from 'hono';
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as workflowDb from '@archon/core/db/workflows';
@@ -207,12 +208,12 @@ export function registerRunControlRoutes(
         return c.json({
           success: true,
           message: result.cancelled
-            ? `Cancelled workflow: ${run.workflow_name}`
+            ? `Cancelled workflow: ${run.workflow_name}${cancelCleanupWarnings(result.cleanupWarnings)}`
             : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
         });
       }
       let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${run.workflow_name}`;
-      for (const warning of result.cleanupWarnings ?? []) message += ` — warning: ${warning}`;
+      message += cancelCleanupWarnings(result.cleanupWarnings);
       if (result.cascadeFailures > 0) {
         message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }
@@ -252,28 +253,7 @@ export function registerRunControlRoutes(
       if (!run.parent_conversation_id) {
         // No parent conversation to dispatch a chat message through at all —
         // every CLI-launched run (#2008). Execute directly instead of 400ing.
-        const headless = await resumeWorkflowRunFromServer(
-          createSqlWorkflowHost(),
-          run,
-          actor.kind === 'user' ? actor.userId : undefined
-        );
-        if (headless.kind === 'waiting_for_capacity' || headless.kind === 'resource_busy')
-          return apiError(c, 409, headless.message);
-        if (headless.kind === 'not_resumed') {
-          return apiError(
-            c,
-            400,
-            `This run was created outside the web UI. Use \`archon workflow resume ${runId}\` from the CLI to resume it.`
-          );
-        }
-        getLog().info(
-          { runId, workflowName: run.workflow_name },
-          'api.workflow_run_resume_headless_dispatched'
-        );
-        return c.json({
-          success: true,
-          message: `Resuming workflow: ${run.workflow_name}`,
-        });
+        return await resumeHeadlessRun(c, runId, run, actor);
       }
       const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
       if (!parentConv?.platform_conversation_id || parentConv.platform_type !== 'web') {
@@ -448,5 +428,39 @@ export function registerRunCleanupRoutes(
       );
       return apiError(c, 500, 'Failed to reset workflow node sessions');
     }
+  });
+}
+
+function cancelCleanupWarnings(warnings: readonly string[] = []): string {
+  return warnings.map(warning => ` — warning: ${warning}`).join('');
+}
+
+async function resumeHeadlessRun(
+  c: Context,
+  runId: string,
+  run: Parameters<typeof resumeWorkflowRunFromServer>[1],
+  actor: Awaited<ReturnType<typeof resolveRunActor>>
+): Promise<Response> {
+  const headless = await resumeWorkflowRunFromServer(
+    createSqlWorkflowHost(),
+    run,
+    actor.kind === 'user' ? actor.userId : undefined
+  );
+  if (headless.kind === 'waiting_for_capacity' || headless.kind === 'resource_busy')
+    return apiError(c, 409, headless.message);
+  if (headless.kind === 'not_resumed') {
+    return apiError(
+      c,
+      400,
+      `This run was created outside the web UI. Use \`archon workflow resume ${runId}\` from the CLI to resume it.`
+    );
+  }
+  getLog().info(
+    { runId, workflowName: run.workflow_name },
+    'api.workflow_run_resume_headless_dispatched'
+  );
+  return c.json({
+    success: true,
+    message: `Resuming workflow: ${run.workflow_name}`,
   });
 }

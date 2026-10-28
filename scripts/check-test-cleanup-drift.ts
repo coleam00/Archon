@@ -32,39 +32,48 @@ interface FsBindings {
   promiseNamespaces: Set<string>;
 }
 
-function fsBindings(sourceFile: ts.SourceFile): FsBindings {
-  const functions = new Map<string, string>();
-  const namespaces = new Set<string>();
-  const promiseNamespaces = new Set<string>();
+function bindFsNames(
+  elements: ts.NamedImports['elements'],
+  isPromiseModule: boolean,
+  { functions, promiseNamespaces }: FsBindings
+): void {
+  for (const element of elements) {
+    const importedName = element.propertyName?.text ?? element.name.text;
+    if (importedName === 'promises' && !isPromiseModule) {
+      promiseNamespaces.add(element.name.text);
+    } else if (RM_NAMES.has(importedName) && (!isPromiseModule || importedName === 'rm')) {
+      functions.set(element.name.text, importedName);
+    }
+  }
+}
 
+function bindFsImport(importClause: ts.ImportClause, module: string, result: FsBindings): void {
+  const isPromiseModule = module === 'fs/promises' || module === 'node:fs/promises';
+  const namespaces = isPromiseModule ? result.promiseNamespaces : result.namespaces;
+  if (importClause.name !== undefined) namespaces.add(importClause.name.text);
+  const bindings = importClause.namedBindings;
+  if (bindings === undefined) return;
+  if (ts.isNamespaceImport(bindings)) {
+    namespaces.add(bindings.name.text);
+  } else {
+    bindFsNames(bindings.elements, isPromiseModule, result);
+  }
+}
+
+function fsBindings(sourceFile: ts.SourceFile): FsBindings {
+  const result: FsBindings = {
+    functions: new Map(),
+    namespaces: new Set(),
+    promiseNamespaces: new Set(),
+  };
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
       continue;
     const module = statement.moduleSpecifier.text;
     if (!FS_MODULES.has(module) || statement.importClause === undefined) continue;
-
-    const { importClause } = statement;
-    const isPromiseModule = module === 'fs/promises' || module === 'node:fs/promises';
-    if (importClause.name !== undefined) {
-      (isPromiseModule ? promiseNamespaces : namespaces).add(importClause.name.text);
-    }
-    const bindings = importClause.namedBindings;
-    if (bindings === undefined) continue;
-    if (ts.isNamespaceImport(bindings)) {
-      (isPromiseModule ? promiseNamespaces : namespaces).add(bindings.name.text);
-      continue;
-    }
-    for (const element of bindings.elements) {
-      const importedName = element.propertyName?.text ?? element.name.text;
-      if (importedName === 'promises' && !isPromiseModule) {
-        promiseNamespaces.add(element.name.text);
-      } else if (RM_NAMES.has(importedName) && (!isPromiseModule || importedName === 'rm')) {
-        functions.set(element.name.text, importedName);
-      }
-    }
+    bindFsImport(statement.importClause, module, result);
   }
-
-  return { functions, namespaces, promiseNamespaces };
+  return result;
 }
 
 function rmCallName(call: ts.CallExpression, bindings: FsBindings): string | undefined {
@@ -176,7 +185,7 @@ function isHookCall(call: ts.CallExpression, hooks: Set<string>, namespaces: Set
   );
 }
 
-function cleanupBindings(sourceFile: ts.SourceFile): CleanupBindings {
+function hookBindings(sourceFile: ts.SourceFile): Pick<CleanupBindings, 'hooks' | 'namespaces'> {
   const hooks = new Set(HOOK_NAMES);
   const namespaces = new Set<string>();
 
@@ -202,6 +211,11 @@ function cleanupBindings(sourceFile: ts.SourceFile): CleanupBindings {
     }
   }
 
+  return { hooks, namespaces };
+}
+
+function cleanupBindings(sourceFile: ts.SourceFile): CleanupBindings {
+  const { hooks, namespaces } = hookBindings(sourceFile);
   const functions = sameFileFunctions(sourceFile);
   const reachable = new Set<string>();
   const pending: string[] = [];
@@ -412,35 +426,25 @@ export function buildLedger(entries: readonly (readonly [string, number])[]): Ma
  * hole it was recording.
  */
 export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger([
-  ['packages/cli/src/commands/doctor.test.ts', 2],
   ['packages/cli/src/commands/telemetry.test.ts', 2],
   ['packages/cli/src/commands/validate.test.ts', 1],
   ['packages/core/src/config/run-config.test.ts', 1],
   ['packages/core/src/credentials/config.test.ts', 1],
   ['packages/core/src/github-auth/auth.test.ts', 3],
   ['packages/core/src/utils/token-crypto.test.ts', 2],
-  ['packages/git/src/git.test.ts', 2],
-  ['packages/paths/src/archon-paths.test.ts', 7],
   ['packages/paths/src/env-integration.test.ts', 2],
   ['packages/paths/src/env-loader.test.ts', 1],
   ['packages/paths/src/strip-cwd-env.test.ts', 3],
-  ['packages/paths/src/telemetry.test.ts', 5],
+  ['packages/paths/src/telemetry.test.ts', 2],
   ['packages/paths/src/tier-notice.test.ts', 1],
-  ['packages/providers/src/claude/provider.test.ts', 1],
   ['packages/providers/src/community/opencode/provider.test.ts', 1],
   ['packages/providers/src/community/pi/model-store.integration.test.ts', 1],
   ['packages/providers/src/community/pi/options-translator.test.ts', 1],
-  ['packages/providers/src/community/pi/provider.test.ts', 6],
   ['packages/providers/src/community/pi/resource-loader.test.ts', 1],
   ['packages/server/src/routes/api.workflows.test.ts', 29],
-  ['packages/workflows/src/dry-run.test.ts', 1],
-  ['packages/workflows/src/executor-preamble.test.ts', 1],
-  ['packages/workflows/src/executor.test.ts', 2],
   ['packages/workflows/src/load-command-prompt.test.ts', 3],
   ['packages/workflows/src/logger.test.ts', 1],
   ['packages/workflows/src/script-node-deps.test.ts', 1],
-  ['packages/workflows/src/state-migration.test.ts', 2],
-  ['packages/workflows/src/subrun.test.ts', 5],
   ['packages/workflows/src/validator.test.ts', 5],
   ['packages/workflows/src/workflow-discovery-command-scan.test.ts', 1],
   ['packages/workflows/src/workflow-source.test.ts', 1],
@@ -489,6 +493,14 @@ export function checkRepository(root = REPO_ROOT, baseline = LEGACY_RECURSIVE_CL
     }
   }
 
+  return [...failures, ...checkCleanupLedger(cleanup, baseline)];
+}
+
+function checkCleanupLedger(
+  cleanup: ReadonlyMap<string, DriftViolation[]>,
+  baseline: ReadonlyMap<string, number>
+): string[] {
+  const failures: string[] = [];
   for (const file of new Set([...cleanup.keys(), ...baseline.keys()])) {
     const found = cleanup.get(file) ?? [];
     const recorded = baseline.get(file) ?? 0;

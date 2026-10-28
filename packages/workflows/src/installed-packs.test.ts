@@ -19,10 +19,10 @@ import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from './router';
 import { validateWorkflowResources } from './validator';
-import { loadCommandPrompt } from './executor-shared';
+import { loadCommandPrompt } from './load-command-prompt';
 import { discoverScriptsForCwd } from './script-discovery';
-import { resolveContinuationWorkflow } from './executor';
-import { resolveFanOutChildDefinition } from './dag-executor';
+import { resolveContinuationWorkflow } from './run-source';
+import { resolveFanOutChildDefinition } from './dag/nodes/compose-fan-out/compose-fan-out';
 import {
   captureWorkflowSource,
   capturedSourceRoots,

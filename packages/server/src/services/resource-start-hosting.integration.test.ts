@@ -1,4 +1,4 @@
-import { resolveProjectPaths } from '@archon/workflows/executor';
+import { resolveProjectPaths } from '@archon/workflows/run-paths';
 import { listWorkflowEvents } from '@archon/core/db/workflow-events';
 import { randomUUID } from 'node:crypto';
 import { getOrCreateConversation } from '@archon/core/db/conversations';
@@ -7,14 +7,14 @@ import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { execFileSync } from 'node:child_process';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers/in-process';
 import { saveUserProviderKey } from '@archon/core/db/user-provider-key-store';
-import { getWorkflowRun } from '@archon/core/db/workflows';
+import { getWorkflowRun, pauseWorkflowRun, resumeWorkflowRun } from '@archon/core/db/workflows';
 import { execFileAsync } from '@archon/git';
 /**
  * The server hosting resource starts against a real SQLite database, a real workflow
  * checkout and a real source-plugin module. Only the engine is recorded: it claims the
  * pending run exactly as the executor does, so the claim fence stays the real one.
  */
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, realpath, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -111,13 +111,16 @@ async function fixture(
     kind: 'in-place',
   },
   initGit = true,
-  launchCwd?: string
+  launchCwd?: string,
+  mutatesCheckout?: boolean
 ): Promise<Fixture> {
   const project = join(root, 'project');
   await mkdir(join(project, '.archon', 'workflows'), { recursive: true });
   await writeFile(
     join(project, '.archon', 'workflows', 'hosted.yaml'),
-    'name: hosted\ndescription: Server-hosted start.\nnodes:\n  - id: one\n    bash: echo one\n'
+    'name: hosted\ndescription: Server-hosted start.\n' +
+      (mutatesCheckout === undefined ? '' : `mutates_checkout: ${String(mutatesCheckout)}\n`) +
+      'nodes:\n  - id: one\n    bash: echo one\n'
   );
   if (initGit) expect(await Bun.spawn(['git', 'init', '-q'], { cwd: project }).exited).toBe(0);
   if (isolation.kind === 'worktree') {
@@ -555,6 +558,100 @@ describe('server resource-start host', () => {
     }, 30000);
   }
 
+  for (const mutatesCheckout of [undefined, true]) {
+    test(`scheduler drains a guarded trigger after a manual holder ends (declaration ${String(mutatesCheckout)})`, async () => {
+      const { deliver, engine, host } = await fixture(
+        false,
+        { kind: 'in-place' },
+        false,
+        undefined,
+        mutatesCheckout
+      );
+      const workflowHost = createSqlWorkflowHost();
+      const project = await realpath(join(root, 'project'));
+      const codebase = await registerFolder(project);
+      const manual = await workflowHost.deps.store.createWorkflowRun({
+        workflow_name: 'manual',
+        codebase_id: codebase.codebaseId,
+        user_message: '',
+      });
+      await workflowHost.deps.store.claimPendingWorkflowRun(manual.id, project);
+      expect((await deliver('foreign', 'queue')).status).toBe(200);
+      await host.requestDrain();
+      const queued = await bindingOf('foreign');
+      expect(queued.disposition).toMatchObject({
+        status: 'queued',
+        blocker: { kind: 'run', id: manual.id },
+      });
+      const request = await workflowHost.deps.store.getResourceStartRequest(
+        queued.disposition!.requestId
+      );
+      expect(request?.launch.run.metadata.admission_checkout_guard).toBe(true);
+      expect(engine.submitted).toHaveLength(0);
+      const nativeSetInterval = globalThis.setInterval;
+      let tick = (): void => {
+        throw new Error('scheduler did not register its tick');
+      };
+      const timer = spyOn(globalThis, 'setInterval').mockImplementation((callback: () => void) => {
+        tick = callback;
+        return nativeSetInterval(callback, 60_000);
+      });
+      try {
+        startWorkflowContinuationScheduler(workflowHost, undefined, () => void host.requestDrain());
+        await host.requestDrain();
+        expect(engine.submitted).toHaveLength(0);
+        expect(await workflowHost.deps.store.getResourceStartRequest(manual.id)).toBeNull();
+        await workflowHost.deps.store.completeWorkflowRun(manual.id, { duration_ms: 1 });
+        tick();
+        await until(() => (engine.claimed.includes(request!.id) ? true : undefined));
+        expect((await bindingOf('foreign')).disposition).toMatchObject({ status: 'admitted' });
+      } finally {
+        stopWorkflowContinuationScheduler();
+        timer.mockRestore();
+      }
+    });
+  }
+  test('queued read-only declaration remains authoritative after workflow edits beside a foreign holder', async () => {
+    const { deliver, engine, host } = await fixture(
+      false,
+      { kind: 'in-place' },
+      false,
+      undefined,
+      false
+    );
+    const workflowHost = createSqlWorkflowHost();
+    const project = await realpath(join(root, 'project'));
+    const codebase = await registerFolder(project);
+    const manual = await workflowHost.deps.store.createWorkflowRun({
+      workflow_name: 'manual',
+      codebase_id: codebase.codebaseId,
+      user_message: '',
+    });
+    await workflowHost.deps.store.claimPendingWorkflowRun(manual.id, project);
+    await deliver('first-readonly', 'queue');
+    await host.requestDrain();
+    await until(() => (engine.claimed.length === 1 ? true : undefined));
+    await deliver('queued-readonly', 'queue');
+    await host.requestDrain();
+    const queued = await bindingOf('queued-readonly');
+    expect(queued.disposition?.status).toBe('queued');
+    const request = await workflowHost.deps.store.getResourceStartRequest(
+      queued.disposition!.requestId
+    );
+    expect(request?.launch.run.metadata.admission_checkout_guard).toBe(false);
+    await writeFile(
+      join(project, '.archon/workflows/hosted.yaml'),
+      'name: hosted\ndescription: Now mutates.\nmutates_checkout: true\nnodes:\n  - id: one\n    bash: echo changed\n'
+    );
+    await workflowHost.deps.store.completeWorkflowRun(engine.claimed[0]!, { duration_ms: 1 });
+    await host.requestDrain();
+    await until(() => (engine.claimed.length === 2 ? true : undefined));
+    expect(engine.submitted[1]?.options?.preCreatedRun?.metadata.admission_checkout_guard).toBe(
+      false
+    );
+    expect((await workflowHost.deps.store.getWorkflowRun(manual.id))?.status).toBe('running');
+  });
+
   test('a queued receipt retains its prepared AI policy when config changes before admission', async () => {
     const { deliver, engine, host } = await fixture();
     const configPath = join(root, 'project', '.archon', 'config.yaml');
@@ -703,6 +800,40 @@ describe('server resource-start host', () => {
 
     await Promise.allSettled([start(), start()]);
     expect(engine.claimed).toEqual([requestId]);
+  });
+
+  test('the resource-start signal guard keeps its admitted execution claim', async () => {
+    const { deliver, engine } = await fixture(false);
+    expect((await deliver('guard', 'queue')).status).toBe(200);
+    const requestId = await admitWithoutStarting();
+    let getExecutionClaim: () => string | null | undefined = () => {
+      throw new Error('guard not installed');
+    };
+    let released = false;
+    const submit = engine.submit.bind(engine);
+    engine.submit = async input => {
+      expect(getExecutionClaim()).toBeUndefined();
+      input.options?.onExecutionClaimed?.('original-claim');
+      expect(getExecutionClaim()).toBe('original-claim');
+      const result = await submit(input);
+      await pauseWorkflowRun(requestId, { nodeId: 'review', type: 'approval', message: '' });
+      await resumeWorkflowRun(requestId);
+      expect(getExecutionClaim()).toBe('original-claim');
+      return result;
+    };
+    await startAdmittedResourceStart({
+      requestId,
+      hostId: HOST_ID,
+      host: { ...createSqlWorkflowHost(), engine },
+      createPlatform: () => new HeadlessPlatform(),
+      guardOwnedRun: owned => {
+        getExecutionClaim = owned.getExecutionClaim;
+        return () => {
+          released = true;
+        };
+      },
+    });
+    expect(released).toBe(true);
   });
 
   test('a worktree creation failure reports the classified isolation message, not raw git output', async () => {

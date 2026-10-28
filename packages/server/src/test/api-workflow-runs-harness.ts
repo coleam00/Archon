@@ -5,7 +5,8 @@
  * ARCHON_HOME through the setters, since an imported binding cannot be assigned.
  */
 import { mock, beforeAll } from 'bun:test';
-import { join, sep } from 'path';
+import { join, relative, sep } from 'path';
+import * as realStorage from '@archon/paths/archon-paths';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { User } from '@archon/core';
 import { providerRegistry } from '@archon/providers';
@@ -207,15 +208,6 @@ mock.module('@archon/core', () => ({
   }),
 }));
 
-/**
- * Deterministic stand-ins for the shared identity→paths helpers (#2200),
- * mirroring the real branch order and layout under the mocked ARCHON_HOME.
- */
-type FakeStorageKey =
-  | { kind: 'repo'; owner: string; repo: string }
-  | { kind: 'folder'; slug: string }
-  | { kind: 'cwd'; cwd: string };
-
 function parseOwnerRepoFake(name: string): { owner: string; repo: string } | null {
   const parts = name.split('/');
   if (parts.length !== 2) return null;
@@ -226,30 +218,7 @@ function parseOwnerRepoFake(name: string): { owner: string; repo: string } | nul
   return { owner, repo };
 }
 
-function basenameFake(p: string): string {
-  return p.split('/').filter(Boolean).pop() ?? '';
-}
-
-function resolveProjectStorageKeyFake(
-  codebase: { kind?: string | null; name: string; default_cwd: string } | null | undefined,
-  cwd: string
-): FakeStorageKey {
-  if (codebase) {
-    if (codebase.kind === 'folder') {
-      const slug =
-        codebase.name
-          .toLowerCase()
-          .replace(/[^a-z0-9._-]+/g, '-')
-          .replace(/^-+|-+$/g, '') || 'folder';
-      return { kind: 'folder', slug };
-    }
-    const parsed = parseOwnerRepoFake(codebase.name);
-    if (parsed) return { kind: 'repo', ...parsed };
-    const base = basenameFake(codebase.default_cwd);
-    if (base && base !== '.' && base !== '..') return { kind: 'repo', owner: '_local', repo: base };
-  }
-  return { kind: 'cwd', cwd };
-}
+const resolveProjectStorageKeyFake = realStorage.resolveProjectStorageKey;
 
 /**
  * Mutable so the filesystem-touching artifact tests can point ARCHON_HOME at a
@@ -265,10 +234,11 @@ export function wsRoot(): string {
   return join(mockArchonHome, 'workspaces');
 }
 
-function storageRootFake(key: FakeStorageKey): string {
-  if (key.kind === 'repo') return join(wsRoot(), key.owner, key.repo);
-  if (key.kind === 'folder') return join(wsRoot(), '_folder', key.slug);
-  return join(wsRoot(), '_cwd', basenameFake(key.cwd) || '_');
+function storageRootFake(key: realStorage.ProjectStorageKey): string {
+  return join(
+    wsRoot(),
+    relative(realStorage.getArchonWorkspacesPath(), realStorage.getProjectStoragePaths(key).root)
+  );
 }
 
 function storagePathsForRootFake(root: string): {
@@ -333,7 +303,7 @@ mock.module('@archon/paths', () => ({
       : null;
   },
   getStoragePathsForRoot: storagePathsForRootFake,
-  getRunArtifactsDirForKey: (key: FakeStorageKey, runId: string): string =>
+  getRunArtifactsDirForKey: (key: realStorage.ProjectStorageKey, runId: string): string =>
     join(storageRootFake(key), 'artifacts', 'runs', runId),
 }));
 
@@ -465,9 +435,15 @@ export const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () =
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
 export { RealDetachedRunOwnerUnavailableError };
 export const mockReclaimContainerEnv = mock(async () => {});
-mock.module('@archon/core/services/cleanup-service', () => ({
+mock.module('@archon/core/services/cleanup/run-worktree', () => ({
   reclaimRunWorktree: async () => ({ warnings: [] }),
+  assessCompletedRunWorktree: mock(),
+  releaseCompletedRunWorktree: mock(),
+}));
+mock.module('@archon/core/services/cleanup/containers', () => ({
   reclaimContainerEnv: mockReclaimContainerEnv,
+  listContainerEnvironments: mock(),
+  reapContainerEnvironments: mock(),
 }));
 // Abandon asks the run's live-owner endpoint first (#2325). Default: nothing answers.
 export const mockRequestDetachedRunStop = mock<
@@ -478,23 +454,39 @@ mock.module('@archon/core/services/run-owner-stop', () => ({
   DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
 }));
 
+// Capture the real module before mock.module replaces it; the dashboard routes probe
+// owner endpoints, which tests answer here instead of through /tmp sockets.
+import * as runAttentionWatchModule from '@archon/core/services/run-attention-watch';
+const realRunAttentionWatch = { ...runAttentionWatchModule };
+export const mockObserveRunOwner = mock<typeof runAttentionWatchModule.observeRunOwner>(
+  async () => null
+);
+mock.module('@archon/core/services/run-attention-watch', () => ({
+  ...realRunAttentionWatch,
+  observeRunOwner: mockObserveRunOwner,
+}));
+
 mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
   resolveRunWorkflow: mockResolveRunWorkflow,
 }));
 
 export const mockHydrateResumableRun = mock<
-  typeof import('@archon/workflows/executor')['hydrateResumableRun']
+  typeof import('@archon/workflows/run-resume')['hydrateResumableRun']
 >(async (_deps, run) => ({
   preCreatedRun: { ...run, status: 'running' },
   priorCompletedNodes: new Map(),
+  priorFailedNodes: new Map(),
+  resumeCause: run.status === 'paused' ? 'continue_after_wait' : 'retry_failed',
   priorUsage: { costUsd: 0 },
   priorNodeSessions: [],
 }));
 export const mockExecuteWorkflow = mock<
   typeof import('@archon/workflows/executor')['executeWorkflow']
 >(async () => ({ success: true, workflowRunId: 'run-1' }));
-mock.module('@archon/workflows/executor', () => ({
+mock.module('@archon/workflows/run-resume', () => ({
   hydrateResumableRun: mockHydrateResumableRun,
+}));
+mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
 }));
 

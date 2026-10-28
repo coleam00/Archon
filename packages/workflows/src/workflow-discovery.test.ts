@@ -122,8 +122,6 @@ describe('workflow discovery', () => {
     await mkdir(testDir, { recursive: true });
     process.env.ARCHON_HOME = join(testDir, 'home');
     delete process.env.ARCHON_DOCKER;
-    const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
-    resetLegacyHomeWarningForTests();
   });
 
   afterEach(async () => {
@@ -804,11 +802,6 @@ nodes:
       await mkdir(homeDir, { recursive: true });
       process.env.ARCHON_HOME = homeDir;
       delete process.env.ARCHON_DOCKER;
-      // The deprecation warning uses a module-scoped flag; reset between tests
-      // so each case is independent.
-      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
-      resetLegacyHomeWarningForTests();
-      mockLogger.warn.mockClear();
     });
 
     afterEach(async () => {
@@ -844,6 +837,19 @@ nodes:
       const names = result.workflows.map(w => w.workflow.name);
       expect(names).toContain('home-workflow');
       expect(names).toContain('repo-workflow');
+    });
+
+    it('ignores workflows in the retired nested home directory', async () => {
+      await writeWorkflowFile(
+        homeDir,
+        'retired-home.yaml',
+        'name: retired-home\ndescription: Only in the retired home path\nnodes:\n  - id: check\n    prompt: Check the change\n'
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toEqual([]);
     });
 
     it("classifies home-scoped workflows as source: 'global'", async () => {
@@ -907,93 +913,6 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       const entry = result.workflows.find(w => w.workflow.name === 'too-deep');
       expect(entry).toBeUndefined();
-    });
-  });
-
-  describe('legacy ~/.archon/.archon/workflows/ deprecation warning', () => {
-    let homeDir: string;
-    const originalArchonHome = process.env.ARCHON_HOME;
-    const originalArchonDocker = process.env.ARCHON_DOCKER;
-
-    beforeEach(async () => {
-      homeDir = join(tmpdir(), `legacy-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-      await mkdir(homeDir, { recursive: true });
-      process.env.ARCHON_HOME = homeDir;
-      delete process.env.ARCHON_DOCKER;
-      const { resetLegacyHomeWarningForTests } = await import('./workflow-discovery');
-      resetLegacyHomeWarningForTests();
-      mockLogger.warn.mockClear();
-    });
-
-    afterEach(async () => {
-      await removeTempTree(homeDir);
-      if (originalArchonHome === undefined) {
-        delete process.env.ARCHON_HOME;
-      } else {
-        process.env.ARCHON_HOME = originalArchonHome;
-      }
-      if (originalArchonDocker === undefined) {
-        delete process.env.ARCHON_DOCKER;
-      } else {
-        process.env.ARCHON_DOCKER = originalArchonDocker;
-      }
-    });
-
-    it('emits a WARN with the migration command when the legacy path exists', async () => {
-      const legacyDir = join(homeDir, '.archon', 'workflows');
-      await mkdir(legacyDir, { recursive: true });
-      await writeFile(
-        join(legacyDir, 'stranded.yaml'),
-        'name: stranded\ndescription: At the old path\nnodes:\n  - id: n\n    command: c\n'
-      );
-
-      await discoverWorkflows(testDir, { loadDefaults: false });
-
-      const warnCalls = mockLogger.warn.mock.calls;
-      const legacyWarn = warnCalls.find(call => call[1] === 'workflow.legacy_home_path_detected');
-      expect(legacyWarn).toBeDefined();
-      expect(legacyWarn?.[0]).toMatchObject({
-        legacyPath: legacyDir,
-        newPath: join(homeDir, 'workflows'),
-        moveCommand: expect.stringContaining('mv'),
-      });
-    });
-
-    it('does NOT load workflows from the legacy path (clean cut)', async () => {
-      const legacyDir = join(homeDir, '.archon', 'workflows');
-      await mkdir(legacyDir, { recursive: true });
-      await writeFile(
-        join(legacyDir, 'stranded.yaml'),
-        'name: stranded\ndescription: At the old path\nnodes:\n  - id: n\n    command: c\n'
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const stranded = result.workflows.find(w => w.workflow.name === 'stranded');
-      expect(stranded).toBeUndefined();
-    });
-
-    it('warns exactly once per process, even across multiple discovery calls', async () => {
-      const legacyDir = join(homeDir, '.archon', 'workflows');
-      await mkdir(legacyDir, { recursive: true });
-
-      await discoverWorkflows(testDir, { loadDefaults: false });
-      await discoverWorkflows(testDir, { loadDefaults: false });
-      await discoverWorkflows(testDir, { loadDefaults: false });
-
-      const warnCalls = mockLogger.warn.mock.calls.filter(
-        call => call[1] === 'workflow.legacy_home_path_detected'
-      );
-      expect(warnCalls).toHaveLength(1);
-    });
-
-    it('does not emit the warning when the legacy path is absent', async () => {
-      // No legacy directory created — warning should not fire.
-      await discoverWorkflows(testDir, { loadDefaults: false });
-
-      const warnCalls = mockLogger.warn.mock.calls.filter(
-        call => call[1] === 'workflow.legacy_home_path_detected'
-      );
-      expect(warnCalls).toHaveLength(0);
     });
   });
 
@@ -1099,10 +1018,7 @@ nodes:
     });
 
     it('surfaces home-scoped workflows without any option — discovery reads ~/.archon/workflows/ internally', async () => {
-      const { discoverWorkflowsWithConfig, resetLegacyHomeWarningForTests } = await import(
-        './workflow-discovery'
-      );
-      resetLegacyHomeWarningForTests();
+      const { discoverWorkflowsWithConfig } = await import('./workflow-discovery');
 
       const homeDir = join(
         tmpdir(),
@@ -1345,7 +1261,7 @@ nodes:
           'nodes:',
           '  - id: work',
           '    prompt: do it',
-          '    interactive: true', // dropped, warned — on THIS file
+          '    contxt: fresh', // dropped, warned — on THIS file
         ].join('\n')
       );
       await writeWorkflowFile(
@@ -1365,7 +1281,7 @@ nodes:
 
       const block = byName.get('block');
       expect((block?.parseWarnings ?? []).length).toBe(1);
-      expect(block?.parseWarnings?.[0]).toContain("unknown key 'interactive'");
+      expect(block?.parseWarnings?.[0]).toContain("unknown key 'contxt'");
 
       // The includer inlines the block's NODES but not its warnings.
       const parent = byName.get('parent');
@@ -1405,7 +1321,7 @@ nodes:
         'nodes:',
         '  - id: a',
         '    prompt: hi',
-        '    interactive: true',
+        '    contxt: fresh',
       ].join('\n');
 
     /** Write root/sub `foo.yaml`, discover, and return the single survivor. */
@@ -1432,7 +1348,7 @@ nodes:
         expect(warnings).toEqual([]); // the clean file won — it declares no unknown key
       } else {
         expect(warnings.length).toBe(1);
-        expect(warnings[0]).toContain("unknown key 'interactive'");
+        expect(warnings[0]).toContain("unknown key 'contxt'");
       }
     });
 
@@ -1440,7 +1356,7 @@ nodes:
       const { name, warnings } = await discoverColliding(DIRTY('foo-root'), CLEAN('foo-sub'));
       if (name === 'foo-root') {
         expect(warnings.length).toBe(1);
-        expect(warnings[0]).toContain("unknown key 'interactive'");
+        expect(warnings[0]).toContain("unknown key 'contxt'");
       } else {
         expect(warnings).toEqual([]);
       }

@@ -3,6 +3,7 @@ import type { BlockButtonAction, ButtonAction } from '@slack/bolt';
 import type { ChatContext, ChatRunActionResponse, RunActionResult } from '@archon/chat-contract';
 import { SlackAdapter } from './adapter';
 import { SlackPlugin } from './plugin';
+import { descriptor } from './descriptor';
 import { resolutionNote } from './workflow-bridge';
 import { StubSlack } from './test/slack';
 
@@ -246,6 +247,21 @@ test('cancel renders stopped-owner cleanup and cascade facts', async () => {
   expect(notes).toContain('2 sub-run');
   expect(notes).toContain('parent');
 });
+test('cancel renders cooperative cleanup warnings', async () => {
+  await started();
+  runAction.mockResolvedValue({
+    status: 'done',
+    result: {
+      kind: 'cooperative',
+      cancelled: true,
+      cleanupWarnings: ['Possible untracked background work. Inspect checkout processes.'],
+    },
+  });
+  await click('cancel:run');
+  expect(JSON.stringify(slack.posts)).toContain(
+    'Possible untracked background work. Inspect checkout processes.'
+  );
+});
 test('cancel after terminal uses clicked message as the fallback target', async () => {
   await started();
   await plugin.onRunEvent({ type: 'terminal', runId: 'run', status: 'completed' });
@@ -345,6 +361,15 @@ test('gate notes retain resume and rejection distinctions', () => {
     },
     {
       kind: 'rejected',
+      cancelled: true,
+      maxAttemptsReached: false,
+      writeBack: false,
+      newMode: false,
+      resumed: false,
+      cleanupWarnings: ['Container reclaim failed.'],
+    },
+    {
+      kind: 'rejected',
       cancelled: false,
       maxAttemptsReached: false,
       writeBack: true,
@@ -369,6 +394,7 @@ test('gate notes retain resume and rejection distinctions', () => {
     expect.stringContaining('resume was not accepted'),
     expect.stringContaining('waiting for capacity'),
     'cancelled — max reject attempts reached',
+    'cancelled — warning: Container reclaim failed.',
     'recorded — workflow resumed to discard the container changes',
     'recorded — workflow resumed',
   ]);
@@ -590,4 +616,22 @@ test('child card and refused approve preserve host-rendered Slack guidance', asy
   );
   expect(note && 'text' in note ? note.text : undefined).not.toContain('Could not record');
   expect(slack.updates).toHaveLength(updates);
+});
+
+test('cancel cascade guidance follows the descriptor prefix', async () => {
+  const original = descriptor.workflowCommand.prefix;
+  descriptor.workflowCommand.prefix = '/test-workflow ';
+  try {
+    await started();
+    runAction.mockResolvedValue({
+      status: 'done',
+      result: { kind: 'stopped', pid: 123, cascadeFailures: 2, blockedParentRunId: null },
+    });
+    await click('cancel:run');
+    expect(slack.posts.at(-1)).toMatchObject({
+      text: "Stopped the run's live owner process (pid 123), then cancelled the run.\n:warning: 2 sub-run(s) could not be cancelled and may still be running — check `/test-workflow status`.",
+    });
+  } finally {
+    descriptor.workflowCommand.prefix = original;
+  }
 });

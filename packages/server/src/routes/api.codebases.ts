@@ -1,4 +1,5 @@
-import { type OpenAPIHono, createRoute } from '@hono/zod-openapi';
+import type { Context } from 'hono';
+import { type OpenAPIHono, createRoute, type z } from '@hono/zod-openapi';
 import { rm, stat } from 'fs/promises';
 import { normalize } from 'path';
 import {
@@ -14,9 +15,11 @@ import {
   ActiveWorktreeEnvironmentsError,
   WorktreeRegistrationChangedError,
 } from '@archon/core/db/codebase-delete-error';
+import { assertAbsoluteDefaultCwd } from '@archon/core/db/codebase-path';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as envVarDb from '@archon/core/db/env-vars';
 import * as isolationEnvDb from '@archon/core/db/isolation-environments';
+import { remoteIdentity } from '@archon/core/services/project-registration-identity';
 import { detectProjectKind, ProjectKindDetectionError } from '@archon/core/services/project-kind';
 import {
   ConfiguredBaseBranchNotFoundError,
@@ -54,7 +57,7 @@ const listCodebasesRoute = createRoute({
   method: 'get',
   path: '/api/codebases',
   tags: ['Codebases'],
-  summary: 'List registered codebases',
+  summary: 'List codebases with the newest representative of each resolved repository remote',
   responses: {
     200: {
       content: { 'application/json': { schema: codebaseListResponseSchema } },
@@ -234,6 +237,28 @@ const getCodebaseEnvironmentsRoute = createRoute({
   },
 });
 
+async function registerRequestedProject(
+  body: z.infer<typeof addCodebaseBodySchema>,
+  registration: Pick<CloneOptions, 'githubAppAuth'>
+): ReturnType<typeof cloneRepository> {
+  if ('url' in body) {
+    return cloneRepository(body.url, {
+      ...registration,
+      baseBranch: body.base_branch ?? undefined,
+    });
+  }
+  if (body.folder === true) {
+    return registerFolder(body.path, undefined, {
+      baseBranch: body.base_branch ?? undefined,
+    });
+  }
+  const localPath = await canonicalizeProjectPath(body.path);
+  const kind = await detectProjectKind(localPath);
+  return kind === 'repo'
+    ? registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
+    : registerFolder(localPath, undefined, { baseBranch: body.base_branch ?? undefined });
+}
+
 export function registerCodebaseRoutes(
   app: OpenAPIHono,
   registration: Pick<CloneOptions, 'githubAppAuth'>
@@ -243,18 +268,28 @@ export function registerCodebaseRoutes(
   // GET /api/codebases - List codebases
   registerOpenApiRoute(listCodebasesRoute, async c => {
     try {
-      const codebases = await codebaseDb.listCodebases();
+      const codebases = await codebaseDb.listCodebaseClaims();
 
-      // Deduplicate by repository_url (keep most recently updated)
-      const normalizeUrl = (url: string): string => url.replace(/\.git$/, '');
       const seen = new Map<string, (typeof codebases)[number]>();
       const deduped: (typeof codebases)[number][] = [];
       for (const cb of codebases) {
-        if (!cb.repository_url) {
+        let key: string;
+        try {
+          assertAbsoluteDefaultCwd(cb.default_cwd, cb.name);
+          if (cb.kind === 'folder' || !cb.repository_url) {
+            deduped.push(cb);
+            continue;
+          }
+          key = await remoteIdentity(cb.repository_url, cb.default_cwd);
+        } catch (error) {
+          getLog().warn(
+            { err: error, codebaseId: cb.id, codebaseName: cb.name },
+            'list_codebases_remote_identity_unavailable'
+          );
+          // Unknown identity cannot establish equality and must not hide a project.
           deduped.push(cb);
           continue;
         }
-        const key = normalizeUrl(cb.repository_url);
         const existing = seen.get(key);
         if (!existing || cb.updated_at > existing.updated_at) {
           seen.set(key, cb);
@@ -300,26 +335,7 @@ export function registerCodebaseRoutes(
     const body = getValidatedBody(c, addCodebaseBodySchema);
 
     try {
-      let result;
-      if ('url' in body) {
-        result = await cloneRepository(body.url, {
-          ...registration,
-          baseBranch: body.base_branch ?? undefined,
-        });
-      } else if (body.folder === true) {
-        result = await registerFolder(body.path, undefined, {
-          baseBranch: body.base_branch ?? undefined,
-        });
-      } else {
-        const localPath = await canonicalizeProjectPath(body.path);
-        const kind = await detectProjectKind(localPath);
-        result =
-          kind === 'repo'
-            ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
-            : await registerFolder(localPath, undefined, {
-                baseBranch: body.base_branch ?? undefined,
-              });
-      }
+      const result = await registerRequestedProject(body, registration);
 
       // Fetch the full codebase record for a consistent response
       const codebase = await codebaseDb.getCodebase(result.codebaseId);
@@ -384,23 +400,25 @@ export function registerCodebaseRoutes(
       }
       for (const env of environments.filter(env => env.provider === 'worktree')) {
         try {
-          const exists = await stat(env.working_path).then(
-            () => true,
-            (error: NodeJS.ErrnoException) => {
-              if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
-              throw error;
-            }
-          );
-          if (exists) {
-            await removeWorktree(
-              toRepoPath(codebase.default_cwd),
-              toWorktreePath(env.working_path)
+          await isolationEnvDb.withWorktreeRegistration(env, async markDestroyed => {
+            const exists = await stat(env.working_path).then(
+              () => true,
+              (error: NodeJS.ErrnoException) => {
+                if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return false;
+                throw error;
+              }
             );
-          }
-          if (await isWorktreeRegistered(toRepoPath(codebase.default_cwd), env.working_path)) {
-            throw new Error('Checkout is still registered with Git');
-          }
-          await isolationEnvDb.markWorktreeDestroyed(env);
+            if (exists) {
+              await removeWorktree(
+                toRepoPath(codebase.default_cwd),
+                toWorktreePath(env.working_path)
+              );
+            }
+            if (await isWorktreeRegistered(toRepoPath(codebase.default_cwd), env.working_path)) {
+              throw new Error('Checkout is still registered with Git');
+            }
+            await markDestroyed();
+          });
           getLog().info({ path: env.working_path }, 'worktree_removed');
         } catch (wtErr) {
           if (wtErr instanceof WorktreeRegistrationChangedError) {
@@ -417,23 +435,8 @@ export function registerCodebaseRoutes(
 
       await codebaseDb.deleteCodebase(id, { requireWorktreeCleanup: true });
 
-      // Remove workspace directory from disk — only for Archon-managed repos
-      const normalizedCwd = normalize(codebase.default_cwd);
-      if (isInsideArchonWorkspaces(normalizedCwd)) {
-        try {
-          await rm(normalizedCwd, { recursive: true, force: true });
-          getLog().info({ path: normalizedCwd }, 'workspace_removed');
-        } catch (rmErr) {
-          getLog().warn({ err: rmErr, path: codebase.default_cwd }, 'workspace_remove_failed');
-          return apiError(
-            c,
-            500,
-            `Project registration deleted, but workspace removal failed at ${normalizedCwd}. Remove this directory manually after resolving the filesystem error.`
-          );
-        }
-      } else {
-        getLog().info({ path: codebase.default_cwd }, 'external_repo_skip_deletion');
-      }
+      const removalError = await removeManagedWorkspace(c, codebase.default_cwd);
+      if (removalError) return removalError;
 
       return c.json({ success: true });
     } catch (error) {
@@ -512,4 +515,25 @@ export function registerCodebaseEnvironmentRoute(app: OpenAPIHono): void {
       return apiError(c, 500, 'Failed to list environments');
     }
   });
+}
+
+async function removeManagedWorkspace(c: Context, cwd: string): Promise<Response | undefined> {
+  // Remove workspace directory from disk — only for Archon-managed repos
+  const normalizedCwd = normalize(cwd);
+  if (isInsideArchonWorkspaces(normalizedCwd)) {
+    try {
+      await rm(normalizedCwd, { recursive: true, force: true });
+      getLog().info({ path: normalizedCwd }, 'workspace_removed');
+    } catch (rmErr) {
+      getLog().warn({ err: rmErr, path: cwd }, 'workspace_remove_failed');
+      return apiError(
+        c,
+        500,
+        `Project registration deleted, but workspace removal failed at ${normalizedCwd}. Remove this directory manually after resolving the filesystem error.`
+      );
+    }
+  } else {
+    getLog().info({ path: cwd }, 'external_repo_skip_deletion');
+  }
+  return undefined;
 }

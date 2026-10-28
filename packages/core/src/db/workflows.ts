@@ -19,6 +19,7 @@ export {
   getRunByIsolationEnvId,
   findWorkflowRunsByIdPrefix,
   getWorkflowRunStatus,
+  WorkflowStatusReadError,
   getActiveWorkflowRun,
   getPausedWorkflowRun,
   STALE_PENDING_AGE_MS,
@@ -77,6 +78,7 @@ export {
 } from './workflow-run-transitions';
 export {
   updateWorkflowRun,
+  updateWorkflowRunMetadataIfRunning,
   updateWorkflowActivity,
   recordWorkflowRunCheckoutBaseline,
   setToolCallAttention,

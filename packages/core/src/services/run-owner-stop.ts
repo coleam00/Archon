@@ -1,10 +1,13 @@
+import { confirmProcessGroupsGone } from '@archon/paths/plugin-process';
+import type { RunOwnerPreparedStop } from './run-owner-preparation';
 import {
   requestRunLiveOwnerStop,
   RunLiveOwnerStopUnavailableError,
+  type RunLiveOwnerStopLease,
   type RunLiveOwnerStopRefusal,
 } from './run-live-owner';
 import { TERMINATION_CONFIRM_MS, TERMINATION_GRACE_MS } from './run-stop-bounds';
-import { terminateWindowsProcessTree } from './windows-process-tree';
+import { openWindowsRunJob, type WindowsRunJob } from './windows-run-job';
 
 /*
  * The one path that stops a detached run owner: prove the exact-run owner through its
@@ -14,10 +17,14 @@ import { terminateWindowsProcessTree } from './windows-process-tree';
 
 const POLL_INTERVAL_MS = 50;
 
+export interface DetachedRunStopReport {
+  warnings: string[];
+}
+
 export interface DetachedRunStopTarget {
   /** The detached owner's PID, as the owner itself reported it. */
   readonly pid: number;
-  stop(): Promise<void>;
+  stop(): Promise<DetachedRunStopReport>;
   release(): void;
 }
 
@@ -39,7 +46,7 @@ export class DetachedRunOwnerUnavailableError extends Error {
 
 /** Ask the live exact-run owner for an opaque termination lease. */
 export async function requestDetachedRunStop(runId: string): Promise<DetachedRunStopTarget> {
-  let lease: Awaited<ReturnType<typeof requestRunLiveOwnerStop>>;
+  let lease: RunLiveOwnerStopLease;
   try {
     lease = await requestRunLiveOwnerStop(runId);
   } catch (error) {
@@ -55,11 +62,19 @@ export async function requestDetachedRunStop(runId: string): Promise<DetachedRun
 
   return {
     pid: lease.pid,
-    stop: async (): Promise<void> => {
+    stop: async (): Promise<DetachedRunStopReport> => {
+      let windowsJob: WindowsRunJob | undefined;
       try {
-        await lease.commit();
-        await terminateDetachedProcessTree(lease.pid, () => lease.isLive());
+        // Opened before committing, so a refused stop announces no handoff. The open
+        // handle keeps the job reachable even if the owner exits before the kill.
+        if (process.platform === 'win32') windowsJob = openOwnerWindowsJob(lease);
+        const prepared = await lease.commit();
+        if (prepared && process.platform !== 'win32')
+          return await stopPreparedOwner(lease, prepared);
+        await terminateDetachedProcessTree(lease.pid, () => lease.isLive(), windowsJob);
+        return { warnings: [] };
       } finally {
+        windowsJob?.close();
         lease.release();
       }
     },
@@ -67,6 +82,16 @@ export async function requestDetachedRunStop(runId: string): Promise<DetachedRun
       lease.release();
     },
   };
+}
+
+function openOwnerWindowsJob(lease: RunLiveOwnerStopLease): WindowsRunJob {
+  // An owner from an Archon version without job objects: nothing can confirm its tree gone.
+  if (lease.windowsJob === undefined) {
+    throw new Error(
+      `Could not confirm detached workflow process tree ${String(lease.pid)} exited: its owner reported no job object`
+    );
+  }
+  return openWindowsRunJob(lease.windowsJob, lease.pid);
 }
 
 function processExists(pid: number): boolean {
@@ -96,25 +121,20 @@ async function waitUntilGone(exists: () => boolean, timeoutMs: number): Promise<
   return true;
 }
 
-/** Terminate the process tree while its exact-run owner holds the IPC lease open. */
-async function terminateDetachedProcessTree(
-  pid: number,
-  ownsLiveLease: () => boolean
-): Promise<void> {
+function assertTerminableOwner(pid: number, ownsLiveLease: () => boolean): void {
   if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) {
     throw new Error(`Refusing to terminate invalid detached owner PID ${String(pid)}`);
   }
   if (!ownsLiveLease()) {
     throw new Error(`Detached workflow owner ${String(pid)} released its termination lease`);
   }
+}
 
-  if (process.platform === 'win32') {
-    await terminateWindowsProcessTree(pid, ownsLiveLease);
-    return;
-  }
-
+/** Signal the owner's process group. False when the group is already gone. */
+function signalOwnerGroup(pid: number, signal: NodeJS.Signals): boolean {
   try {
-    process.kill(-pid, 'SIGTERM');
+    process.kill(-pid, signal);
+    return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
     if (processExists(pid)) {
@@ -122,22 +142,44 @@ async function terminateDetachedProcessTree(
         `Detached workflow owner ${String(pid)} is alive but does not own process group ${String(pid)}`
       );
     }
+    return false;
+  }
+}
+
+/** Terminate the process tree while its exact-run owner holds the IPC lease open. */
+async function terminateDetachedProcessTree(
+  pid: number,
+  ownsLiveLease: () => boolean,
+  windowsJob: WindowsRunJob | undefined
+): Promise<void> {
+  assertTerminableOwner(pid, ownsLiveLease);
+  if (windowsJob) {
+    await windowsJob.terminate();
     return;
   }
+
+  if (!signalOwnerGroup(pid, 'SIGTERM')) return;
   if (await waitUntilGone(() => processGroupExists(pid), TERMINATION_GRACE_MS)) return;
-
-  try {
-    process.kill(-pid, 'SIGKILL');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-    if (processExists(pid)) {
-      throw new Error(
-        `Detached workflow owner ${String(pid)} is alive but does not own process group ${String(pid)}`
-      );
-    }
-    return;
-  }
+  if (!signalOwnerGroup(pid, 'SIGKILL')) return;
   if (!(await waitUntilGone(() => processGroupExists(pid), TERMINATION_CONFIRM_MS))) {
     throw new Error(`Detached workflow process group ${String(pid)} is still running`);
   }
+}
+
+async function stopPreparedOwner(
+  lease: RunLiveOwnerStopLease,
+  prepared: RunOwnerPreparedStop
+): Promise<DetachedRunStopReport> {
+  if (lease.pid === process.pid || !lease.isLive())
+    throw new Error('Detached owner has no live termination lease');
+  process.kill(-lease.pid, 'SIGKILL');
+  const live = prepared.groups.filter(group => !group.leaderReaped);
+  await confirmProcessGroupsGone(
+    [lease.pid, ...live.map(group => group.pgid)],
+    TERMINATION_CONFIRM_MS
+  );
+  const failed = live.find(group => group.signalError && group.signalError !== 'ESRCH');
+  if (failed)
+    throw new Error(`Could not signal node group ${String(failed.pgid)} (${failed.signalError})`);
+  return { warnings: prepared.warnings };
 }

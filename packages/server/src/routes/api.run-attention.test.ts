@@ -122,6 +122,43 @@ describe('the attention queue over HTTP', () => {
     }
   });
 
+  test('lists and reads each fan-out question by its child identity', async () => {
+    const children = [0, 1].map(index => ({
+      ...attentionRun(`child-${index}`, {}),
+      parent_run_id: 'questions-parent',
+      metadata: {
+        parent_node_id: 'answers',
+        child_index: index,
+        wait: waitFor(`child-${index}`, {}),
+      },
+    }));
+    mockListAttentionQueueRows.mockImplementation(async () =>
+      children.map(makeDashboardWorkflowRun)
+    );
+    mockGetWorkflowRun.mockImplementation(async id => children.find(run => run.id === id) ?? null);
+    try {
+      const { app } = makeApp();
+      const list = await app.request('/api/runs/attention');
+      expect(list.status).toBe(200);
+      const { items } = runsNeedingAttentionResponseSchema.parse(await list.json());
+      expect(items.map(item => ({ runId: item.runId, fanOut: item.fanOut }))).toEqual(
+        children.map((run, index) => ({
+          runId: run.id,
+          fanOut: { parentRunId: 'questions-parent', nodeId: 'answers', index },
+        }))
+      );
+      for (const item of items) {
+        expect(item.kind).toBe('attention');
+        const read = await app.request(`/api/runs/${item.runId}/attention`);
+        expect(read.status).toBe(200);
+        expect(await read.json()).toEqual({ item });
+      }
+    } finally {
+      mockListAttentionQueueRows.mockReset();
+      mockGetWorkflowRun.mockReset();
+    }
+  });
+
   test('reads one item, and refuses a stale label write with 409', async () => {
     mockGetWorkflowRun.mockImplementation(async id => (id === other.id ? other : null));
     try {

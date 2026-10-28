@@ -12,7 +12,7 @@ description: |
   stage and owns what follows its ending. It never pauses for a person: run
   archon-triage, which adds that pause, by hand.
 
-model: medium
+model: ['@triage', medium]
 
 inputs:
   target:
@@ -34,7 +34,7 @@ outcome_field: ready
 nodes:
   # The directory of the pack's default policy documents in this run's captured
   # source, the same in a source checkout and a binary install. The prompt names the
-  # policy file it needs and chooses between the project's own and the default.
+  # policy file it needs and reads the default, then the project's own on top.
   - id: policy
     script: policy
     runtime: bun
@@ -196,6 +196,18 @@ nodes:
           type: array
           items:
             type: string
+        # Work the next node should know about: overlapping open issues, closed
+        # earlier attempts, recent merged changes on the same surface. Each URL is one
+        # the agent opened; duplicates and blockers live in the decision instead.
+        related: &related_field
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              url: { type: string, pattern: '\S' }
+              relation: { type: string, pattern: '\S' }
+            required: [url, relation]
         summary:
           type: string
         report:
@@ -208,7 +220,7 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [triage.md] }
           required: [type, run_id, path]
-      required: [decision, type, size, complexity, importance, urgency, item, area_labels, summary, report]
+      required: [decision, type, size, complexity, importance, urgency, item, area_labels, related, summary, report]
 
   # The prompt judges; this boundary flattens the decision into the fields every
   # caller reads, checks what a schema cannot (blockers are qualified URLs) and
@@ -231,6 +243,7 @@ nodes:
       urgency: { from: "$triage.output.urgency" }
       item: { from: "$triage.output.item" }
       area_labels: { from: "$triage.output.area_labels" }
+      related: { from: "$triage.output.related" }
       summary: "$triage.output.summary"
       report: { from: "$triage.output.report" }
       publish: "$INPUTS.publish"
@@ -273,6 +286,7 @@ nodes:
           type: array
           items:
             type: string
+        related: *related_field
         # What made a NO_ACTION item closable; null on every other verdict.
         closure:
           anyOf:
@@ -306,5 +320,6 @@ nodes:
         - blocked_reason
         - blocked_by
         - closure
+        - related
         - summary
         - report

@@ -9,7 +9,7 @@ sidebar:
   order: 11
 ---
 
-Many platforms are not a single repository — they're a **root directory holding N service repos** (`auth-service/`, `billing-service/`, …), with or without git at the root itself. Archon models this as a [folder project](/getting-started/concepts/#folder-projects): Archon applies no git machinery to the project, whether or not the root is a git repository. Register the root once, and every workflow and chat runs **in place** at that root by default, so the agent sees all contained repos at once. Opt into overlay-isolated, approval-gated container execution with `--container` (see the [Container isolation guide](/guides/container-isolation/)).
+Many platforms are not a single repository — they're a **root directory holding N service repos** (`auth-service/`, `billing-service/`, …), with or without git at the root itself. Archon models this as a **folder project**: a directory for which Archon applies no git machinery (no managed worktree, branch or pull request), whether or not it is a git repository. Folder projects also fit a single repository you want to run in place, or a business-operations folder with no git at all. They get identity, per-project env vars, run history and artifact storage like repo projects. Register the root once, and every workflow and chat runs **in place** at that root by default, so the agent sees all contained repos at once. Opt into overlay-isolated, approval-gated container execution with `--container` (see the [Container isolation guide](/guides/container-isolation/)).
 
 ## Register the root
 
@@ -53,4 +53,3 @@ The two models compose: keep the root registered as a folder project for cross-s
 - **Archon-managed branching/PRs spanning child repos** — the agent coordinates git across services itself; Archon does not create a composed multi-repo worktree (a future isolation backend may).
 - **A repo you want isolated per run** — register *that repo* directly (repo project), not the parent folder.
 
-See [Core Concepts → Folder Projects](/getting-started/concepts/#folder-projects) for the underlying model.

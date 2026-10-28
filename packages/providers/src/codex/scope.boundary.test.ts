@@ -11,19 +11,25 @@
  *
  * The stub provider requires OpenAI auth and the ChatGPT backend points at the same stub,
  * so the recorded request also carries the credential each auth path logged Codex in with
- * and nothing leaves localhost.
+ * and no model request or credential leaves localhost. Codex's own curated-plugin sync
+ * still fetches from GitHub; see `CODEX_SCRATCH_DIR`.
  *
  * The temp home is the fixture under test; the provider never sets CODEX_HOME itself.
- * The binary is required: a missing one fails here rather than skipping.
+ * `beforeAll` builds it once as a template, and each test runs on its own copy, so what
+ * one test writes there never reaches the next. A test that ends with a run still in
+ * flight, as a timed-out one does, gets that run's timeline printed and the run stopped
+ * before the next test starts. The binary is required: a missing one fails here rather
+ * than skipping.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { spawn } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import type { MessageChunk, SendQueryOptions } from '../types';
-import { AppServerConnection } from './app-server';
+import { AppServerConnection, settlesWithin, type Spawner } from './app-server';
 import { resolveBundledCodexBinary } from './binary-resolver';
 import { CODEX_CREDENTIAL_ENV } from './credential-env';
 import { CodexProvider } from './provider';
@@ -44,7 +50,22 @@ createInterface({ input: process.stdin }).on('line', line => {
 /** Appends `<argv[2]>` to the log at `<argv[3]>`: the plugin hooks' command. */
 const HOOK_SCRIPT = `require('node:fs').appendFileSync(process.argv[3], process.argv[2] + '\\n');`;
 
+const TEMPLATE_DIR = 'template-home';
+/**
+ * Codex's scratch directory in a home. Every app-server start syncs the curated plugins
+ * there with `git`, and that `git` outlives the app-server: once stdin closes the server
+ * exits and `git` is reparented to PID 1 and keeps writing for seconds. A copy that reads
+ * it races that write, so the template's copies leave it out. No case reads it; the
+ * installed plugins live in `plugins/cache`.
+ */
+const CODEX_SCRATCH_DIR = '.tmp';
+
 let root: string;
+/** The home `beforeAll` builds, with the plugins installed and trusted. */
+let template: string;
+/** The trust key Codex gave the user's own hook in the template. */
+let userHookKey: string;
+/** This test's copy of the template. */
 let home: string;
 let repo: string;
 let hookLog: string;
@@ -56,7 +77,7 @@ interface ModelRequest {
   accountId: string | null;
 }
 let modelRequests: ModelRequest[] = [];
-let modelReply: (() => Response) | undefined;
+let modelReply: (() => Response | Promise<Response>) | undefined;
 /** The request an unscoped turn sends: the control a scoped request is compared against. */
 let unscopedRequest: string;
 
@@ -126,10 +147,14 @@ async function installPlugins(marketplaceFile: string): Promise<void> {
       data: { hooks: { key: string; currentHash: string; pluginId: string | null }[] }[];
     };
     // Both plugin hooks and the user's own hook.
-    const trust = listed.data
-      .flatMap(entry => entry.hooks)
-      .map(hook => `[hooks.state.${toml(hook.key)}]\ntrusted_hash = ${toml(hook.currentHash)}\n`);
-    expect(trust).toHaveLength(3);
+    const hooks = listed.data.flatMap(entry => entry.hooks);
+    expect(hooks).toHaveLength(3);
+    const userHook = hooks.find(hook => hook.pluginId === null);
+    if (!userHook) throw new Error('the user hook is not listed');
+    userHookKey = userHook.key;
+    const trust = hooks.map(
+      hook => `[hooks.state.${toml(hook.key)}]\ntrusted_hash = ${toml(hook.currentHash)}\n`
+    );
     appendFileSync(join(home, 'config.toml'), `\n${trust.join('\n')}`);
   } finally {
     await connection.shutdown(3000);
@@ -138,7 +163,8 @@ async function installPlugins(marketplaceFile: string): Promise<void> {
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'codex-scope-boundary-'));
-  home = join(root, 'home');
+  template = join(root, TEMPLATE_DIR);
+  home = template;
   repo = join(root, 'repo');
   hookLog = join(root, 'hooks.log');
   const unquotable = [bun, root].filter(path => /\s/.test(path));
@@ -187,6 +213,7 @@ beforeAll(async () => {
           authorization: request.headers.get('authorization'),
           accountId: request.headers.get('chatgpt-account-id'),
         });
+        mark(`model request ${String(modelRequests.length)}`);
         if (modelReply) return modelReply();
       }
       return Response.json(
@@ -224,7 +251,7 @@ beforeAll(async () => {
   await installPlugins(marketplaceFile);
   // The first unscoped turn on a fresh home pays a one-time cost: on windows-latest it
   // took 6 to 18 s, against 2 to 4 s for each later one. Taking it here, under the setup
-  // budget, keeps it off whichever case would otherwise run first.
+  // budget and on the template, means every case copies a home that has run a turn.
   await runRequest({});
   unscopedRequest = modelRequests[0]?.body ?? '';
 }, testTimeout(60_000));
@@ -235,21 +262,101 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  home = await mkdtemp(join(root, 'home-'));
+  await cp(template, home, {
+    recursive: true,
+    filter: source => relative(template, source) !== CODEX_SCRATCH_DIR,
+  });
+  const configPath = join(home, 'config.toml');
+  await writeFile(configPath, trustCopiedUserHook(await readFile(configPath, 'utf8'), home));
   modelRequests = [];
   modelReply = undefined;
+  testStart = performance.now();
+  timeline = [];
+  appServers = [];
   await rm(hookLog, { force: true });
 });
 
-/** Runs `body` with `lines` appended to the fixture's config.toml, then restores it. */
-async function withUserConfig<T>(lines: string, body: () => Promise<T>): Promise<T> {
+afterEach(async () => {
+  const leftRunning = [...inFlight];
+  if (leftRunning.length > 0) {
+    console.error(inFlightReport(leftRunning.length));
+    for (const run of leftRunning) run.abort.abort();
+    await Promise.all(leftRunning.map(run => run.settled));
+  }
+  await removeTempTree(home);
+}, testTimeout(20_000));
+
+/**
+ * Codex keys the user hook's trust by the path of the hooks.json that holds it, so a copy
+ * of the template trusts its own. The copy sits beside the template, so its key is the
+ * template's with the directory name swapped, in whatever path form Codex wrote.
+ */
+function trustCopiedUserHook(config: string, copy: string): string {
+  const at = userHookKey.lastIndexOf(TEMPLATE_DIR);
+  if (at < 0 || !config.includes(toml(userHookKey))) {
+    throw new Error(`Cannot find the template's user hook trust key ${userHookKey}`);
+  }
+  const copyKey = `${userHookKey.slice(0, at)}${basename(copy)}${userHookKey.slice(at + TEMPLATE_DIR.length)}`;
+  return config.replace(toml(userHookKey), toml(copyKey));
+}
+
+/** A run `runRequest` started that has not finished. */
+interface InFlightRun {
+  abort: AbortController;
+  settled: Promise<unknown>;
+}
+const inFlight = new Set<InFlightRun>();
+
+/** This test's events, each stamped with the milliseconds since it started. */
+let timeline: string[] = [];
+let testStart = 0;
+function mark(event: string): void {
+  timeline.push(`+${String(Math.round(performance.now() - testStart))}ms ${event}`);
+}
+
+/** The app-server processes this test started, with the tail of each one's stderr. */
+let appServers: { pid: number | undefined; stderr: string }[] = [];
+
+/** Starts app-server as the provider would, recording its start, exit and stderr. */
+const recordingSpawner: Spawner = (command, args, options) => {
+  const child = spawn(command, args, options);
+  const server = { pid: child.pid, stderr: '' };
+  appServers.push(server);
+  mark(`app-server ${String(child.pid)} started`);
+  child.stderr.on('data', (chunk: Buffer | string) => {
+    server.stderr = (server.stderr + String(chunk)).slice(-2000);
+  });
+  child.once('close', (code, signal) => {
+    mark(`app-server ${String(child.pid)} exited (${String(signal ?? code)})`);
+  });
+  return child;
+};
+
+/** What a test that ended with runs in flight had reached: its timeline and Codex's stderr. */
+function inFlightReport(count: number): string {
+  const stderr = appServers.map(
+    ({ pid, stderr: tail }) => `app-server ${String(pid)} stderr:\n${tail.trim() || '(empty)'}`
+  );
+  return [
+    `${String(count)} Codex run(s) still in flight when the test ended; stopping them.`,
+    'Timeline:',
+    ...timeline,
+    ...stderr,
+  ].join('\n');
+}
+
+/** Adds `lines` to this test's config.toml. Top-level keys go first, because the file ends inside a table. */
+async function addUserConfig(
+  lines: string,
+  placement: 'append' | 'prepend' = 'append'
+): Promise<void> {
   const configPath = join(home, 'config.toml');
   const original = await readFile(configPath, 'utf8');
-  await writeFile(configPath, `${original}\n${lines}\n`);
-  try {
-    return await body();
-  } finally {
-    await writeFile(configPath, original);
-  }
+  await writeFile(
+    configPath,
+    placement === 'append' ? `${original}\n${lines}\n` : `${lines}\n${original}`
+  );
 }
 
 const PROMPT = 'Use $alpha:alpha-skill and $beta:beta-skill.';
@@ -266,13 +373,34 @@ async function runNode(
   );
 }
 
+let runCount = 0;
+
 async function runRequest(
   options: SendQueryOptions,
   resumeSessionId?: string
 ): Promise<MessageChunk[]> {
+  const abort = new AbortController();
+  const chunks = collectChunks(`run ${String(++runCount)}`, abort.signal, options, resumeSessionId);
+  const run = { abort, settled: chunks.catch(() => undefined) };
+  inFlight.add(run);
+  try {
+    return await chunks;
+  } finally {
+    inFlight.delete(run);
+  }
+}
+
+async function collectChunks(
+  label: string,
+  abortSignal: AbortSignal,
+  options: SendQueryOptions,
+  resumeSessionId: string | undefined
+): Promise<MessageChunk[]> {
   const chunks: MessageChunk[] = [];
   const { env, ...rest } = options;
-  for await (const chunk of new CodexProvider().sendQuery(PROMPT, repo, resumeSessionId, {
+  mark(`${label} started`);
+  const provider = new CodexProvider(recordingSpawner);
+  for await (const chunk of provider.sendQuery(PROMPT, repo, resumeSessionId, {
     // Empty Archon-supplied credentials keep an operator's own from logging the stub in.
     env: {
       CODEX_HOME: home,
@@ -281,8 +409,10 @@ async function runRequest(
       [CODEX_CREDENTIAL_ENV.chatgptAccountId]: '',
       ...env,
     },
+    abortSignal,
     ...rest,
   })) {
+    mark(`${label} ${chunk.type}`);
     chunks.push(chunk);
   }
   return chunks;
@@ -586,9 +716,8 @@ describe('Codex capability scope on the real binary', () => {
   test(
     'a named plugin loads even when the user turned plugins off globally',
     async () => {
-      await withUserConfig('[features]\nplugins = false', () =>
-        runNode({ plugins: ['alpha@fixture'] })
-      );
+      await addUserConfig('[features]\nplugins = false');
+      await runNode({ plugins: ['alpha@fixture'] });
       expect(await seen()).toEqual(ALPHA_ONLY);
     },
     testTimeout(20_000)
@@ -615,7 +744,7 @@ describe('Codex capability scope on the real binary', () => {
   );
 
   test(
-    'a declared server that fails to start is reported as failed',
+    'a declared server that fails to start fails the node before a model request',
     async () => {
       await writeFile(
         join(repo, 'broken-mcp.json'),
@@ -629,6 +758,65 @@ describe('Codex capability scope on the real binary', () => {
           status: 'failed',
         })
       );
+      expect(modelRequests).toHaveLength(0);
+      expect(resultOf(chunks).failure).toEqual({
+        class: 'misconfigured',
+        evidence: expect.stringContaining('broken_srv'),
+      });
+    },
+    testTimeout(20_000)
+  );
+
+  test(
+    'a model listed as tool-free for structured output gets its tools first, then a tool-free schema request with the evidence',
+    async () => {
+      const [work, final] = await runToolFreeStructuredNode();
+      expect(work.tools.length).toBeGreaterThan(0);
+      expect(final.tools).toEqual([]);
+    },
+    testTimeout(20_000)
+  );
+
+  test.each([
+    {
+      toolMode: 'code_mode_only',
+      added: ['exec', 'wait', 'request_user_input_async', 'clock.sleep'],
+    },
+    { toolMode: 'direct', added: ['request_user_input_async', 'clock.sleep', 'apply_patch'] },
+  ])(
+    'the tool-free schema request drops the tools a $toolMode catalog entry adds, and the tool turn keeps them',
+    async ({ toolMode, added }) => {
+      await addUserCatalog({ ...CATALOG_TOOLS, tool_mode: toolMode });
+      const [work, final] = await runToolFreeStructuredNode();
+      expect(work.tools).toEqual(expect.arrayContaining(added));
+      expect(final.tools).toEqual([]);
+    },
+    testTimeout(20_000)
+  );
+
+  test(
+    'a catalog entry with multi-agent v2 keeps exactly its collaboration tools on the schema request',
+    async () => {
+      await addUserCatalog({ ...CATALOG_TOOLS, multi_agent_version: 'v2' });
+      const [work, final] = await runToolFreeStructuredNode();
+      expect(work.tools).toEqual(expect.arrayContaining(['exec', 'wait', ...COLLABORATION]));
+      expect(final.tools).toEqual(COLLABORATION);
+    },
+    testTimeout(20_000)
+  );
+
+  // The final turn's process does not load the user's catalog entry, so it must still
+  // compact by that entry's context window, not by Codex's fallback window.
+  test.each([
+    { contextWindow: 10_000, inputTokens: 9_000, requests: 3 },
+    { contextWindow: 1_000_000, inputTokens: 300_000, requests: 2 },
+  ])(
+    'the schema turn compacts by the tool turn’s context window: $inputTokens of $contextWindow tokens sends $requests requests',
+    async ({ contextWindow, inputTokens, requests }) => {
+      await addUserCatalog({ ...CATALOG_TOOLS, context_window: contextWindow });
+      const result = await runSplitCall(inputTokens);
+      expect(result.structuredOutput).toEqual(ANSWER);
+      expect(modelRequests).toHaveLength(requests);
     },
     testTimeout(20_000)
   );
@@ -644,6 +832,147 @@ describe('Codex capability scope on the real binary', () => {
     testTimeout(20_000)
   );
 });
+
+/** The tools a model request carries, top-level and in `additional_tools` input items. */
+function requestTools(body: string): string[] {
+  interface Tool {
+    type: string;
+    name?: string;
+    tools?: Tool[];
+  }
+  const request = JSON.parse(body) as {
+    tools?: Tool[];
+    input?: { type: string; tools?: Tool[] }[];
+  };
+  const listed = [
+    ...(request.tools ?? []),
+    ...(request.input ?? []).flatMap(item =>
+      item.type === 'additional_tools' ? (item.tools ?? []) : []
+    ),
+  ];
+  return listed.flatMap(tool =>
+    tool.tools
+      ? tool.tools.map(inner => `${tool.name ?? tool.type}.${inner.name ?? inner.type}`)
+      : [tool.name ?? tool.type]
+  );
+}
+
+/** A model request's tools and output format, and whether it carries the tool turn's evidence. */
+interface SplitRequest {
+  tools: string[];
+  format: unknown;
+  evidence: boolean;
+}
+
+const ANSWER = { summary: 'done' };
+
+/**
+ * Runs an `output_format` node on a model listed in `toolFreeStructuredOutputModels`: the
+ * stub answers the tool turn with a marker and every later request with the JSON answer,
+ * each reporting `inputTokens` used.
+ */
+async function runSplitCall(
+  inputTokens: number
+): Promise<Extract<MessageChunk, { type: 'result' }>> {
+  let responses = 0;
+  modelReply = () => {
+    const index = responses++;
+    const text = index === 0 ? 'REVIEW-FINDING-MARKER' : JSON.stringify(ANSWER);
+    const item = {
+      type: 'message',
+      id: `msg_${String(index)}`,
+      role: 'assistant',
+      content: [{ type: 'output_text', text, annotations: [] }],
+    };
+    const events = [
+      { type: 'response.output_item.done', output_index: 0, item },
+      {
+        type: 'response.completed',
+        response: {
+          id: `resp_${String(index)}`,
+          status: 'completed',
+          output: [item],
+          usage: {
+            input_tokens: inputTokens,
+            output_tokens: 5,
+            total_tokens: inputTokens + 5,
+          },
+        },
+      },
+    ];
+    return new Response(
+      events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+      { headers: { 'content-type': 'text/event-stream' } }
+    );
+  };
+  return resultOf(
+    await runRequest({
+      assistantConfig: { model: 'stub-model', toolFreeStructuredOutputModels: ['stub-model'] },
+      nodeConfig: {
+        nodeId: 'review',
+        output_format: {
+          type: 'object',
+          properties: { summary: { type: 'string' } },
+          required: ['summary'],
+        },
+      },
+    })
+  );
+}
+
+/** `runSplitCall` with little context used. Asserts the call's shape and returns its two model requests. */
+async function runToolFreeStructuredNode(): Promise<SplitRequest[]> {
+  const result = await runSplitCall(10);
+  expect(result.failure).toBeUndefined();
+  expect(result.structuredOutput).toEqual(ANSWER);
+  const requests = modelRequests.map(({ body }) => ({
+    tools: requestTools(body),
+    format: (JSON.parse(body) as { text?: { format?: unknown } }).text?.format,
+    evidence: body.includes('REVIEW-FINDING-MARKER'),
+  }));
+  expect(requests).toHaveLength(2);
+  expect(requests[0].format).toBeUndefined();
+  expect(requests[1].format).toMatchObject({ type: 'json_schema' });
+  expect(requests[1].evidence).toBe(true);
+  return requests;
+}
+
+/**
+ * A user catalog entry for the stub model whose direct tool settings add tools: code mode's
+ * `exec` and `wait`, the async input tool and `clock`, and `apply_patch` outside code mode.
+ */
+const CATALOG_TOOLS = {
+  slug: 'stub-model',
+  display_name: 'stub-model',
+  supported_reasoning_levels: [],
+  shell_type: 'unified_exec',
+  visibility: 'list',
+  supported_in_api: true,
+  priority: 0,
+  support_verbosity: false,
+  truncation_policy: { mode: 'tokens', limit: 10000 },
+  base_instructions: '',
+  tool_mode: 'code_mode_only',
+  experimental_supported_tools: ['send_user_message_async', 'clock'],
+  apply_patch_tool_type: 'freeform',
+};
+
+/** The tools a `multi_agent_version: v2` catalog entry adds, which persist with the thread. */
+const COLLABORATION = [
+  'collaboration.followup_task',
+  'collaboration.interrupt_agent',
+  'collaboration.list_agents',
+  'collaboration.send_message',
+  'collaboration.spawn_agent',
+  'collaboration.wait_agent',
+];
+
+/** Points this test's `model_catalog_json` at a one-entry catalog. */
+async function addUserCatalog(entry: object): Promise<void> {
+  const catalogPath = join(home, 'user-catalog.json');
+  await writeFile(catalogPath, JSON.stringify({ models: [entry] }));
+  await addUserConfig(`model_catalog_json = ${toml(catalogPath)}`, 'prepend');
+}
 
 async function sha256(path: string): Promise<string> {
   return new Bun.CryptoHasher('sha256').update(await readFile(path)).digest('hex');
@@ -700,4 +1029,32 @@ describe('Codex auth paths keep the user’s own home on the real binary', () =>
     },
     testTimeout(40_000)
   );
+});
+
+describe('a test that ends with a run in flight', () => {
+  let left: Promise<string> | undefined;
+
+  test('edits its config and leaves its turn waiting on the model', async () => {
+    await addUserCatalog(CATALOG_TOOLS);
+    const asked = Promise.withResolvers<undefined>();
+    modelReply = () => {
+      asked.resolve(undefined);
+      return new Promise<Response>(() => undefined);
+    };
+    left = runRequest({}).then(
+      () => 'finished',
+      (error: unknown) => String(error)
+    );
+    await asked.promise;
+  });
+
+  test('leaves the next test the template config and no run still talking to the stub', async () => {
+    expect(await settlesWithin(left ?? Promise.resolve(), 0)).toBe(true);
+    expect(await left).toContain('Query aborted');
+    const [fresh, original] = await Promise.all(
+      [home, template].map(dir => readFile(join(dir, 'config.toml'), 'utf8'))
+    );
+    expect(fresh).toBe(trustCopiedUserHook(original, home));
+    expect(modelRequests).toEqual([]);
+  });
 });

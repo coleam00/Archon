@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveBashPath } from '@archon/git';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { resolveWorkflowGithubEnvironment } from '@archon/workflows/executor';
+import { resolveWorkflowGithubEnvironment } from '@archon/workflows/run-credential-env';
 import { runSubprocess } from '@archon/workflows/subprocess';
 import { installGitHubCliShim } from './gh-shim-install';
 

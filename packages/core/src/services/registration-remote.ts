@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { existsSync, type Stats } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
+import { isAbsolute, join, resolve } from 'node:path';
 import { execFileAsync, getDefaultRemote, isWorktreePath, toRepoPath } from '@archon/git';
 import { createLogger, getProjectSourcePath, parseOwnerRepo } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
@@ -47,6 +47,28 @@ export async function effectiveRegistrationUrl(
   return stdout.trim() ? resolveRegistrationUrl(stdout.trim(), path) : null;
 }
 
+async function expandRegistrationUrl(
+  path: string,
+  remoteUrl: string,
+  names: readonly string[]
+): Promise<string> {
+  // A command-local remote preserves rewrite spelling without letting Git
+  // interpret a relative URL as an existing remote's name.
+  let expansionRemote = 'archon-ownership';
+  while (names.includes(expansionRemote)) expansionRemote += '-';
+  const { stdout } = await execFileAsync('git', [
+    '-C',
+    path,
+    '-c',
+    `remote.${expansionRemote}.url=${remoteUrl.trim()}`,
+    'ls-remote',
+    '--get-url',
+    '--',
+    expansionRemote,
+  ]);
+  return stdout.trim();
+}
+
 /**
  * A saved checkout belongs to a repository when any of its remotes points there.
  * Registration stores the URL of the remote worktree.remote selects at that
@@ -66,15 +88,25 @@ export async function assertCheckoutRemote(
       const { stdout } = await execFileAsync('git', ['-C', path, 'rev-parse', '--show-prefix']);
       if (stdout.trim()) throw new Error(`${path} is not the root of a Git checkout.`);
     }
-    const expected = await remoteIdentity(remoteUrl);
+    const expected = await remoteIdentity(remoteUrl, path);
     const { stdout } = await execFileAsync('git', ['-C', path, 'remote']);
-    for (const name of stdout.split(/\r?\n/).map(name => name.trim())) {
+    const names = stdout.split(/\r?\n/).map(name => name.trim());
+    const observed = new Set<string>();
+    for (const name of names) {
       if (!name) continue;
       const url = (
         await execFileAsync('git', ['-C', path, 'remote', 'get-url', name])
       ).stdout.trim();
-      if (url && (await remoteIdentity(resolveRegistrationUrl(url, path), path)) === expected)
-        return;
+      if (!url) continue;
+      const identity = await remoteIdentity(resolveRegistrationUrl(url, path), path);
+      if (identity === expected) return;
+      observed.add(identity);
+    }
+    if (observed.size) {
+      // Registrations save either requested or already-expanded URLs, so direct
+      // matches take precedence over applying another rewrite.
+      const expanded = await expandRegistrationUrl(path, remoteUrl, names);
+      if (expanded && observed.has(await remoteIdentity(expanded, path))) return;
     }
     throw new Error('No checkout remote matches the registered repository.');
   } catch (error) {
@@ -87,26 +119,49 @@ export async function assertCheckoutRemote(
 }
 
 /**
- * Verify a project's saved checkout with {@link assertCheckoutRemote}. A missing
- * path has nothing to verify, nor has the empty managed source/ that project
- * setup creates before the first clone (or a failed clone leaves behind). A
- * non-empty managed source must be its own clone.
+ * Verify a project's saved checkout with {@link assertCheckoutRemote}. A path
+ * confirmed missing has nothing to verify, nor has the empty managed source/
+ * that project setup creates before the first clone (or a failed clone leaves
+ * behind). A non-empty managed source must be its own clone. A path that cannot
+ * be inspected has unknown ownership and is refused.
  */
 export async function assertSavedCheckoutRemote(
   path: string,
   remoteUrl: string,
   managedSource: string | null
 ): Promise<void> {
-  if (!existsSync(path)) return;
-  if (path === managedSource && (await readdir(path)).length === 0) return;
-  await assertCheckoutRemote(path, remoteUrl, path === managedSource);
+  const isManagedSource = managedSource !== null && resolve(path) === resolve(managedSource);
+  const checkout = isManagedSource ? resolve(path) : path;
+  let target: Stats | null;
+  try {
+    target = await inspectPath(checkout);
+  } catch (error) {
+    throw new ProjectRegistrationError(
+      `Cannot verify checkout ownership at ${path}. Restore its original checkout or use /update-project to set its path explicitly.`,
+      { cause: error }
+    );
+  }
+  if (!target) return;
+  if (isManagedSource && (await readdir(checkout)).length === 0) return;
+  await assertCheckoutRemote(checkout, remoteUrl, isManagedSource);
+}
+
+/** Null only when the path is confirmed absent; any other inspection failure throws. */
+async function inspectPath(path: string): Promise<Stats | null> {
+  try {
+    return await stat(path);
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 /**
  * The checkout forge events use for a saved project. A saved path that is a
  * worktree, or a worktrees/ path whose checkout is gone, is stale: the
  * project's managed source replaces it once that source proves ownership.
- * Callers persist a returned path that differs from the saved one.
+ * Managed spellings are normalized. Callers persist a returned path that
+ * differs from the saved one.
  */
 export async function resolveSavedCheckout(
   project: Pick<Codebase, 'name' | 'default_cwd'>,
@@ -116,6 +171,10 @@ export async function resolveSavedCheckout(
   const identity = parseOwnerRepo(project.name);
   const managedSource = identity && getProjectSourcePath(identity.owner, identity.repo);
   const saved = project.default_cwd;
+  if (managedSource !== null && resolve(saved) === resolve(managedSource)) {
+    await assertSavedCheckoutRemote(saved, remoteUrl, managedSource);
+    return resolve(saved);
+  }
   const stale =
     (await isWorktreePath(saved)) ||
     (/[\\/]worktrees[\\/]/.test(saved) && !existsSync(join(saved, '.git')));

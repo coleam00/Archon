@@ -15,7 +15,7 @@ import type {
 } from '@archon/provider-contract';
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
-import type { AttentionOption } from './schemas/dag-node';
+import type { AttentionOption } from './schemas/wait-node';
 import { legacyOccurrenceStep, type RunAttention, type WorkflowRun } from './schemas/workflow-run';
 import type { WorktreeDisposition } from './schemas/terminal-record';
 import type {
@@ -59,7 +59,7 @@ export type {
 export type WorkflowTokenUsage = TokenUsage;
 
 // ---------------------------------------------------------------------------
-// Platform-specific types (NOT mirrors — unique to workflow engine)
+// Platform message metadata
 // ---------------------------------------------------------------------------
 
 export interface WorkflowMessageMetadata {
@@ -310,7 +310,7 @@ export interface WorkflowDeps {
    * the shared process-global keys.
    */
   isPerUserProviderKeysEnabled?: () => boolean;
-  /** Where stored per-user credentials live; `files` has none, so preflight refuses them. */
+  /** Where stored per-user credentials live; `files` uses only native provider authentication. */
   credentialStore?: WorkflowStoreKind;
   /** The user's stored credential for `vendor`, or `undefined` when none is stored. */
   getUserProviderCredential?: (

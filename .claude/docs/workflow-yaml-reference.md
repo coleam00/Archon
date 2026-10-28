@@ -236,7 +236,7 @@ when: "$classify.output.complexity != 'trivial'"
 | `$USER_MESSAGE` | Alias for `$ARGUMENTS` |
 | `$WORKFLOW_ID` | Workflow run UUID |
 | `$ARTIFACTS_DIR` | Absolute path to run artifacts directory |
-| `$BASE_BRANCH` | Base branch from config or auto-detected |
+| `$BASE_BRANCH` | The run's resolved or recorded base branch. See the [Variable Reference](https://archon.diy/reference/variables/#workflow-variables) for resolution and child inheritance rules |
 | `$CONTEXT` / `$EXTERNAL_CONTEXT` / `$ISSUE_CONTEXT` | GitHub issue/PR context (empty string if none) |
 | `$PLAN` | Previous plan from session metadata |
 | `$IMPLEMENTATION_SUMMARY` | Previous execution summary |
@@ -254,7 +254,7 @@ when: "$classify.output.complexity != 'trivial'"
 | `$nodeId.output` | Full output string from completed node |
 | `$nodeId.output.field` | JSON field value from structured output |
 
-For bash node scripts, substituted values are shell-quoted for safety.
+In `bash:` and `until_bash:`, small output references are single-quoted inline; large outputs use an unquoted file-read substitution. Assign each reference to a variable, then quote that variable when using it. See the [assignment-then-quote examples](../../packages/docs-web/src/content/docs/reference/variables.md#shell-quoting-in-bash-vs-script).
 
 ---
 

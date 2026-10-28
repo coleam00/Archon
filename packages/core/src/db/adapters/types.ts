@@ -26,7 +26,6 @@ export interface IDatabase {
    * Execute a callback within a database transaction.
    * All queries using the provided function are atomic -
    * they either all commit or all roll back on error.
-   *
    * @param fn - Callback receiving a transaction-scoped query function
    * @returns The callback's return value
    */

@@ -27,6 +27,7 @@ import {
   type Connection,
   type EdgeChange,
   type NodeChange,
+  type NodePositionChange,
   type ReactFlowInstance,
 } from '@xyflow/react';
 import { VARIANTS, VARIANT_REGISTRY, isVariantId } from '../variants';
@@ -89,6 +90,15 @@ function rectOf(node: BuilderFlowNode, position: XYPosition): Rect {
   };
 }
 
+type PositionedNodeChange = NodePositionChange & { position: XYPosition };
+
+function snapNodeMove(change: PositionedNodeChange, nodes: BuilderFlowNode[]) {
+  const node = nodes.find(n => n.id === change.id);
+  if (node === undefined) return undefined;
+  const others = nodes.filter(n => n.id !== change.id).map(n => rectOf(n, n.position));
+  return computeGuides(rectOf(node, change.position), others, GUIDE_THRESHOLD);
+}
+
 function CanvasInner({
   nodes,
   edges,
@@ -122,18 +132,17 @@ function CanvasInner({
       // Selection: xyflow emits `select` changes here (controlled mode never
       // updates its store directly), so this is the only place node clicks and
       // marquee selection are observable. Forward them before the early return.
-      const selects: { id: string; selected: boolean }[] = [];
-      for (const c of changes) {
-        if (c.type === 'select') selects.push({ id: c.id, selected: c.selected });
-      }
+      const selects = changes.flatMap(c =>
+        c.type === 'select' ? [{ id: c.id, selected: c.selected }] : []
+      );
       if (selects.length > 0) onSelectDelta(selects, []);
 
       const positionChanges = changes.filter(
-        c => c.type === 'position' && c.position !== undefined
+        (c): c is PositionedNodeChange => c.type === 'position' && c.position !== undefined
       );
       if (positionChanges.length === 0) return;
 
-      const dragging = positionChanges.some(c => c.type === 'position' && c.dragging === true);
+      const dragging = positionChanges.some(c => c.dragging === true);
       const moves: { id: string; position: XYPosition }[] = [];
 
       if (positionChanges.length === 1) {
@@ -143,11 +152,8 @@ function CanvasInner({
         // mode that raw position would otherwise overwrite the snapped one).
         // Guides are a drag-time affordance, so only show them while dragging.
         const change = positionChanges[0];
-        if (change.type !== 'position' || change.position === undefined) return;
-        const node = nodes.find(n => n.id === change.id);
-        if (node === undefined) return;
-        const others = nodes.filter(n => n.id !== change.id).map(n => rectOf(n, n.position));
-        const result = computeGuides(rectOf(node, change.position), others, GUIDE_THRESHOLD);
+        const result = snapNodeMove(change, nodes);
+        if (result === undefined) return;
         setGuides(
           dragging
             ? { vertical: result.vertical, horizontal: result.horizontal }
@@ -159,9 +165,7 @@ function CanvasInner({
           setGuides({ vertical: [], horizontal: [] });
         }
         for (const change of positionChanges) {
-          if (change.type === 'position' && change.position !== undefined) {
-            moves.push({ id: change.id, position: change.position });
-          }
+          moves.push({ id: change.id, position: change.position });
         }
       }
 

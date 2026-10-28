@@ -72,6 +72,16 @@ export interface GhFake {
   /** Drop the write instead of applying it, so the read-back disagrees. */
   readonly writeLost?: boolean;
   /**
+   * The HTTP failures the first comment writes answer with, one per write, before
+   * writes succeed again. A `landed` failure applies the write and still fails, as a
+   * gateway timeout can after the forge has accepted the request.
+   */
+  readonly commentWriteFaults?: readonly GhHttpFault[];
+  /** Which comment listings, counted from 0, fail with no HTTP response, as a dropped connection does. */
+  readonly commentListDrops?: readonly number[];
+  /** Which comment listings, counted from 0, lag behind and show no comments. */
+  readonly commentListLags?: readonly number[];
+  /**
    * Existing tracker issues; `issue create` appends to them. `gh api` reads them
    * too, beside the one issue `issue` describes.
    */
@@ -82,6 +92,13 @@ export interface GhFake {
   readonly authFail?: string | Readonly<Record<string, string>>;
   /** stderr for a refused repository read, keyed by host/path. */
   readonly repoReadFail?: Readonly<Record<string, string>>;
+}
+
+/** One failed HTTP response, as `gh api --include` reports it. */
+export interface GhHttpFault {
+  readonly status: number;
+  readonly headers?: Readonly<Record<string, string>>;
+  readonly landed?: boolean;
 }
 
 /** The issue facts `gh api .../issues/<n>` reports. */
@@ -152,7 +169,7 @@ export interface ScriptRun {
   readonly comments: readonly { readonly issue: number; readonly body: string }[];
   /** Every issue state change the fake gh received. */
   readonly closes: readonly { readonly number: number; readonly state: string; readonly state_reason: string }[];
-  /** Every issue body the fake gh was asked to write, in order. */
+  /** Every issue or pull request body the fake gh was asked to write, in order. */
   readonly bodies: readonly string[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
@@ -176,15 +193,20 @@ const subject = { number: 7, title: 'An issue', body: 'An issue body', author: '
 const issues = (fake.issues ?? []).map(row => ({ ...row }));
 let exists = fake.noOpenPr !== true;
 let nextId = 900;
+const faults = [...(fake.commentWriteFaults ?? [])];
+const listDrops = new Set(fake.commentListDrops ?? []);
+const listLags = new Set(fake.commentListLags ?? []);
+let listings = 0;
 const labels = new Set(fake.repositoryLabels ?? ['operator', 'archon-blocked', 'area']);
 let issueLabels = [...(fake.issueLabels ?? ['operator', 'archon-blocked'])];
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] !== 'gh') return original(argv, settings);
   const text = argv.slice(1).join(' ');
   appendFileSync(${JSON.stringify(ghLog)}, text + '\\n');
-  // gh appends an update notice to stderr on successful calls too.
-  const result = (exitCode, stdout = '', stderr = 'gh: A new release of gh is available') =>
-    ({ exitCode, stdout: Buffer.from(stdout), stderr: Buffer.from(stderr) });
+  // gh appends an update notice to stderr on successful calls too. \`gh api --include\`
+  // prints the response's status line and headers before its body, failed or not.
+  const result = (exitCode, stdout = '', stderr = 'gh: A new release of gh is available', status = exitCode === 0 ? 200 : 422, headers = {}) =>
+    ({ exitCode, stdout: Buffer.from(argv.includes('--include') ? ['HTTP/2.0 ' + String(status), ...Object.entries(headers).map(([name, value]) => name + ': ' + value), '', stdout].join('\\r\\n') : stdout), stderr: Buffer.from(stderr) });
   const selector = argv[argv.indexOf('--repo') + 1] ?? 'github.com/owner/repo';
   const host = selector.split('/')[0];
   const path = selector.split('/').slice(1).join('/');
@@ -263,7 +285,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (text.startsWith('pr edit')) {
     if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-    if (!fake.writeLost) pr.body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
+    const body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
+    appendFileSync(${JSON.stringify(ghLog)} + '.bodies', JSON.stringify(body) + '\\n');
+    if (!fake.writeLost) pr.body = body;
     return result(0, '');
   }
   if (text.startsWith('pr list')) {
@@ -349,11 +373,16 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const commentsOn = parts.at(-1) === 'comments' && parts.at(-3) === 'issues' ? Number(parts.at(-2)) : pr.number;
     const onIssue = commentsOn === pr.number ? undefined : commentsOn;
     if (method === 'GET') {
+      const listing = listings++;
+      if (listDrops.has(listing)) return { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('connection reset') };
       const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');
-      const rows = page === 1 ? comments.filter(row => row.issue === onIssue).map(row => ({ id: row.id, body: row.body, html_url: commentUrl(row), ...(row.author === undefined ? {} : { user: { login: row.author } }) })) : [];
+      const rows = page === 1 && !listLags.has(listing) ? comments.filter(row => row.issue === onIssue).map(row => ({ id: row.id, body: row.body, html_url: commentUrl(row), ...(row.author === undefined ? {} : { user: { login: row.author } }) })) : [];
       return result(0, JSON.stringify(rows));
     }
     if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
+    const fault = faults.shift();
+    const failed = () => result(1, JSON.stringify({ message: 'failed' }), 'gh: failed (HTTP ' + String(fault.status) + ')', fault.status, fault.headers);
+    if (fault !== undefined && fault.landed !== true) return failed();
     const body = input().body;
     const id = method === 'PATCH' ? Number(endpoint.split('/').pop()) : nextId++;
     let row = comments.find(entry => entry.id === id);
@@ -362,7 +391,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       else { row = { id, body, ...(onIssue === undefined ? {} : { issue: onIssue }) }; comments.push(row); }
     }
     appendFileSync(${JSON.stringify(ghLog)} + '.comments', JSON.stringify({ issue: row?.issue ?? onIssue ?? pr.number, body }) + '\\n');
-    return result(0, JSON.stringify({ id, body, html_url: commentUrl(row ?? { id, issue: onIssue }) }));
+    if (fault !== undefined) return failed();
+    return result(0, JSON.stringify({ id, body, html_url: commentUrl(row ?? { id, issue: onIssue }) }), undefined, method === 'POST' ? 201 : 200);
   }
   return result(95, '', 'unexpected gh call');
 } });
@@ -432,7 +462,7 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
   writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
 
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('INPUTS_'))),
     INPUTS_PR: JSON.stringify(forgePrRecord()),
     INPUTS_EXPECTED: '[]',
     ARTIFACTS_DIR: artifacts,
@@ -485,7 +515,8 @@ else {
     env.ARCHON_CLI_COMMAND = JSON.stringify([process.execPath, cli]);
   }
 
-  const result = spawnSync(process.execPath, ['--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
+  // Parent env files must not reintroduce workflow inputs omitted by the fixture.
+  const result = spawnSync(process.execPath, ['--no-env-file', '--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
     cwd: options.cwd ?? root,
     env,
     encoding: 'utf8',

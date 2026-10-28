@@ -5,7 +5,7 @@
  * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
-import { PR_URL, packScriptRunner } from './deliver-checks-harness';
+import { PR, PR_URL, forgePrRecord, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -77,14 +77,14 @@ describe("ship's terminal outcome", () => {
     expect(result.summary).toContain('the probe could not authenticate');
   });
 
-  it('relays every open question when planning stops on a person’s call', () => {
+  it('relays every open question when planning stops on a call it cannot make', () => {
     const result = outcome({
       INPUTS_ROUTE: 'plan',
       INPUTS_CONTRACT: 'READY',
       INPUTS_PLAN_SUMMARY: 'needs a product call',
       INPUTS_OPEN_QUESTIONS: JSON.stringify(['keep the field?', 'which default?']),
     });
-    expect(result).toMatchObject({ delivered: false, reason: 'needs_human', pr_url: '' });
+    expect(result).toMatchObject({ delivered: false, reason: 'ask', pr_url: '' });
     expect(result.summary).toContain('needs a product call\n- keep the field?\n- which default?');
   });
 
@@ -154,11 +154,11 @@ describe("upkeep's terminal outcome", () => {
 });
 
 describe("deliver's terminal outcome", () => {
-  interface Outcome { ready: boolean; reason: string; pr_url: string; ci_rerun: string; threads_checked: boolean; summary: string }
+  interface Outcome { ready: boolean; reason: string; pr_url: string; summary: string }
   const outcome = (rounds: object, source = 'gh'): Outcome => {
     const run = runPackScript('deliver/scripts/outcome', {
       inputs: {
-        INPUTS_ROUNDS: JSON.stringify({ threads_checked: true, ...rounds }),
+        INPUTS_ROUNDS: JSON.stringify(rounds),
         INPUTS_SOURCE: source,
         TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       },
@@ -170,20 +170,19 @@ describe("deliver's terminal outcome", () => {
 
   it("reports the last round's ending with its pull request", () => {
     expect(
-      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, ci_rerun: 'green', contract_left: [], summary: 'Round 1: delivered. all passed' })
+      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, contract_left: [], summary: 'Round 1: delivered. all passed' })
     ).toMatchObject({ ready: true, reason: 'delivered', pr_url: PR_URL });
-    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', ci_rerun: 'none', contract_left: null, summary: 'Round 1: implement_blocked. x' });
+    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', contract_left: null, summary: 'Round 1: implement_blocked. x' });
     expect(blocked).toMatchObject({ ready: false, reason: 'implement_blocked', pr_url: '' });
       });
 
-  it('records that review threads were not checked on the forge source', () => {
+  it('says review threads were not checked on the forge source', () => {
     const forge = outcome(
-      { ready: true, reason: 'delivered', pr_url: PR_URL, ci_rerun: 'none', contract_left: [], threads_checked: false, summary: 'Round 1: delivered. all passed' },
+      { ready: true, reason: 'delivered', pr_url: PR_URL, contract_left: [], summary: 'Round 1: delivered. all passed' },
       'forge'
     );
-    expect(forge.threads_checked).toBe(false);
     expect(forge.summary).toContain('Review threads');
-    const noPr = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', ci_rerun: 'none', contract_left: null, threads_checked: false, summary: 'x' }, 'forge');
+    const noPr = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', contract_left: null, summary: 'x' }, 'forge');
     expect(noPr.summary).not.toContain('Review threads');
   });
 
@@ -192,7 +191,7 @@ describe("deliver's terminal outcome", () => {
       ready: true,
       reason: 'delivered',
       pr_url: PR_URL,
-      ci_rerun: 'none',
+     
       contract_left: ['acceptance: the console shows it (deferred)'],
       summary: 'Round 1: delivered. all passed',
     });
@@ -201,22 +200,103 @@ describe("deliver's terminal outcome", () => {
 });
 
 describe("deliver's report after a node failure", () => {
-  const failedReport = (listing: object, artifacts: Record<string, string> = {}): { reason: string; pr_url: string; threads_checked: boolean } =>
+  const failedReport = (listing: object, artifacts: Record<string, string> = {}): { reason: string; pr_url: string } =>
     JSON.parse(
       runPackScript('deliver/scripts/report', {
         inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
         artifacts: { 'listing.json': JSON.stringify({ runId: 'run', errors: [], ...listing }), ...artifacts },
       }).stdout
-    ) as { reason: string; pr_url: string; threads_checked: boolean };
+    ) as { reason: string; pr_url: string };
 
-  it('names the pull request a round published before the failure, so the next run continues it, and checked no threads', () => {
+  it('names the pull request a round published before the failure, so the next run continues it', () => {
     const published = failedReport(
       { artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] } },
       { 'nodes/publish.json': JSON.stringify({ number: 42, url: PR_URL }) }
     );
-    expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL, threads_checked: false });
+    expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL });
     expect(failedReport({ artifactsByType: {} })).toMatchObject({ reason: 'failed', pr_url: '' });
   });
+  it('selects the latest publication across typed output and the creation record', () => {
+    for (const recoveryIsLatest of [true, false]) {
+      const run = runPackScript('deliver/scripts/report', {
+        inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+        artifacts: {
+          'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] }, errors: [] }),
+          'nodes/publish.json': JSON.stringify({ url: PR_URL }),
+          'pr-create-started': JSON.stringify({ pr: forgePrRecord({ number: 43, url: 'https://ghe.example.com/example/repo/pull/43' }) }),
+        },
+        preload: `import { utimesSync } from 'node:fs';
+          utimesSync('{ARTIFACTS}/nodes/publish.json', 100, ${recoveryIsLatest ? 100 : 300});
+          utimesSync('{ARTIFACTS}/pr-create-started', 200, 200);`,
+      });
+      expect(run.code).toBe(0);
+      expect(JSON.parse(run.stdout)).toMatchObject({
+        reason: 'failed', pr_url: recoveryIsLatest ? 'https://ghe.example.com/example/repo/pull/43' : PR_URL,
+      });
+    }
+  });
+
+  it('keeps the timestamp with the readable typed publication when a later artifact is missing', () => {
+    const run = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+      artifacts: {
+        'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }, { path: 'nodes/missing.json' }] }, errors: [] }),
+        'nodes/publish.json': JSON.stringify({ url: PR_URL }),
+        'pr-create-started': JSON.stringify({ pr: forgePrRecord({ number: 43, url: 'https://ghe.example.com/example/repo/pull/43' }) }),
+      },
+      preload: `import { utimesSync } from 'node:fs';
+        utimesSync('{ARTIFACTS}/nodes/publish.json', 300, 300);
+        utimesSync('{ARTIFACTS}/pr-create-started', 200, 200);`,
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout).pr_url).toBe(PR_URL);
+  });
+
+  it('does not certify a URL without a complete PR record', () => {
+    const result = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null' },
+      artifacts: { 'pr-create-started': JSON.stringify({ pr: { url: PR_URL } }) },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      reason: 'pr_create_unresolved',
+      pr_url: '', summary: expect.stringContaining('invalid pull-request record'),
+    });
+  });
+
+  it.each([true, false])('orders an unresolved claim against typed output (claim latest: %s)', claimIsLatest => {
+    const run = runPackScript('deliver/scripts/report', {
+      inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+      artifacts: {
+        'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] }, errors: [] }),
+        'nodes/publish.json': JSON.stringify({ url: PR_URL }),
+        'pr-create-started': JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }),
+      },
+      preload: `import { utimesSync } from 'node:fs';
+        utimesSync('{ARTIFACTS}/nodes/publish.json', 100, ${claimIsLatest ? 100 : 300});
+        utimesSync('{ARTIFACTS}/pr-create-started', 200, 200);`,
+    });
+    expect(run.code).toBe(0);
+    expect(JSON.parse(run.stdout)).toMatchObject({
+      ready: false, reason: claimIsLatest ? 'pr_create_unresolved' : 'failed', pr_url: claimIsLatest ? '' : PR_URL,
+    });
+  });
+
+  for (const script of ['deliver/scripts/report', 'ship/scripts/report']) {
+    it.each(['unverified', 'unreadable', 'directory'])(
+      'distinguishes an unresolved %s create from no PR', kind => {
+        const run = runPackScript(script, {
+          inputs: { INPUTS_OUTCOME: 'null' },
+          artifacts: kind === 'directory' ? {} : {
+            'pr-create-started': kind === 'unverified' ? JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) : 'invalid JSON',
+          },
+          preload: kind === 'directory' ? `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');` : undefined,
+        });
+        expect(run.code).toBe(0);
+        expect(JSON.parse(run.stdout)).toMatchObject({ reason: 'pr_create_unresolved', pr_url: '', summary: expect.stringContaining('pr-create-started') });
+      }
+    );
+  }
 });
 
 describe("ship's continued pull request", () => {
@@ -228,6 +308,13 @@ describe("ship's continued pull request", () => {
     expect(JSON.parse(continues('', '42').stdout)).toEqual({ pull_request: 42 });
     expect(JSON.parse(continues('42', '42').stdout)).toEqual({ pull_request: 42 });
     expect(JSON.parse(continues('null', 'null').stdout)).toEqual({ pull_request: null });
+    expect(JSON.parse(continues('none', 'null').stdout)).toEqual({ pull_request: null });
+  });
+
+  it('refuses when the caller decided none but triage routed the run to continue one', () => {
+    const result = continues('none', '42');
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('the caller decided the run continues no pull request, but triage routed it to continue 42');
   });
 
   it('refuses when the caller and triage name different pull requests', () => {
@@ -238,7 +325,7 @@ describe("ship's continued pull request", () => {
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; ci_rerun: string; contract_left: string[] | null; threads_checked: boolean; summary: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; contract_left: string[] | null; summary: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -256,11 +343,10 @@ describe("deliver's round", () => {
           INPUTS_REVIEW_CONTRACT_LEFT: '[]',
           INPUTS_PREVIOUS_CONTRACT_LEFT: '',
           INPUTS_CI: 'green',
-          INPUTS_CI_RERUN: 'none',
           INPUTS_CI_SUMMARY: 'all passed',
           INPUTS_THREADS_OPEN: '0',
           INPUTS_THREADS_SUMMARY: 'no thread open',
-          INPUTS_SETTLE_NEEDS_HUMAN: 'null',
+          INPUTS_SETTLE_ASK: 'null',
           INPUTS_SETTLE_SUMMARY: 'null',
           ...inputs,
         },
@@ -297,24 +383,24 @@ describe("deliver's round", () => {
       done: true,
       reason: 'replan',
     });
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'needs_human', INPUTS_CI: 'null' })).toMatchObject({
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'ask', INPUTS_CI: 'null' })).toMatchObject({
       done: true,
       ready: false,
-      reason: 'needs_human',
+      reason: 'ask',
     });
   });
 
-  it('does not end ready while a review thread is open, and stops for a person on one no round can settle', () => {
+  it('does not end ready while a review thread is open, and asks on one no round can settle', () => {
     const open = round({ INPUTS_THREADS_OPEN: '2', INPUTS_THREADS_SUMMARY: '2 review threads are unresolved' });
-    expect(open).toMatchObject({ done: false, ready: false, reason: 'threads_open', threads_checked: true });
+    expect(open).toMatchObject({ done: false, ready: false, reason: 'threads_open' });
     expect(round({ INPUTS_PREVIOUS: '3', INPUTS_THREADS_OPEN: '1' })).toMatchObject({ done: true, ready: false, reason: 'round_cap' });
-    const human = round({
+    const asked = round({
       INPUTS_THREADS_OPEN: '1',
-      INPUTS_SETTLE_NEEDS_HUMAN: 'true',
+      INPUTS_SETTLE_ASK: 'true',
       INPUTS_SETTLE_SUMMARY: 'a person decides the API name',
     });
-    expect(human).toMatchObject({ done: true, ready: false, reason: 'needs_human' });
-    expect(human.summary).toContain('a person decides the API name');
+    expect(asked).toMatchObject({ done: true, ready: false, reason: 'ask' });
+    expect(asked.summary).toContain('a person decides the API name');
     // A CI red decides the round before the threads do.
     expect(round({ INPUTS_THREADS_OPEN: '1', INPUTS_CI: 'other' })).toMatchObject({ reason: 'ci_other' });
   });

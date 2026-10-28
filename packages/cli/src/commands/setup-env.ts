@@ -22,6 +22,7 @@ import {
   getRepoArchonEnvPath as pathsGetRepoArchonEnvPath,
 } from '@archon/paths';
 import type { SetupConfig } from './setup-shared';
+import { SETUP_PLATFORMS } from './setup-platform-selection';
 import { PI_BACKENDS } from './setup-provider-auth';
 
 export const GITHUB_APP_KEYS = [
@@ -42,11 +43,7 @@ interface ExistingConfig {
   hasClaude: boolean;
   hasCodex: boolean;
   hasPi: boolean;
-  platforms: {
-    github: boolean;
-    telegram: boolean;
-    slack: boolean;
-  };
+  platforms: SetupConfig['platforms'];
 }
 
 /**
@@ -116,23 +113,7 @@ export function generateEnvContent(config: SetupConfig): string {
   // AI Assistants
   lines.push('# AI Assistants');
 
-  if (config.ai.claude) {
-    if (config.ai.claudeAuthType === 'global') {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'true']);
-    } else if (config.ai.claudeAuthType === 'apiKey' && config.ai.claudeApiKey) {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
-      lines.push(['CLAUDE_API_KEY', config.ai.claudeApiKey]);
-    } else if (config.ai.claudeAuthType === 'oauthToken' && config.ai.claudeOauthToken) {
-      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
-      lines.push(['CLAUDE_CODE_OAUTH_TOKEN', config.ai.claudeOauthToken]);
-    }
-    if (config.ai.claudeBinaryPath) {
-      lines.push(['CLAUDE_BIN_PATH', config.ai.claudeBinaryPath]);
-    }
-  } else {
-    lines.push('# Claude not configured');
-  }
-  lines.push('');
+  appendClaudeEnv(lines, config.ai);
 
   if (config.ai.codex && config.ai.codexTokens) {
     lines.push('# Codex Authentication');
@@ -163,55 +144,59 @@ export function generateEnvContent(config: SetupConfig): string {
     lines.push(['DEFAULT_AI_ASSISTANT', config.ai.defaultAssistant]);
   lines.push('');
 
-  // GitHub
-  if (config.platforms.github && config.github) {
-    lines.push('# GitHub');
-    if (config.github.mode === 'pat') {
-      for (const key of GITHUB_PAT_KEYS) lines.push([key, config.github.token]);
-    } else {
-      const app = config.github;
-      lines.push(
-        ['GITHUB_APP_ID', app.appId],
-        [
-          app.privateKey.source === 'path'
-            ? 'GITHUB_APP_PRIVATE_KEY_PATH'
-            : 'GITHUB_APP_PRIVATE_KEY',
-          app.privateKey.value,
-        ]
-      );
-      if (app.slug) lines.push(['GITHUB_APP_SLUG', app.slug]);
-    }
-    lines.push(['WEBHOOK_SECRET', config.github.webhookSecret]);
-    if (config.github.allowedUsers) {
-      lines.push(['GITHUB_ALLOWED_USERS', config.github.allowedUsers]);
-    }
-    if (config.github.botMention) {
-      lines.push(['GITHUB_BOT_MENTION', config.github.botMention]);
-    }
-    lines.push('');
-  }
+  const platformWriters = {
+    github: () => {
+      if (!config.github) return;
+      lines.push('# GitHub');
+      if (config.github.mode === 'pat') {
+        for (const key of GITHUB_PAT_KEYS) lines.push([key, config.github.token]);
+      } else {
+        const app = config.github;
+        lines.push(
+          ['GITHUB_APP_ID', app.appId],
+          [
+            app.privateKey.source === 'path'
+              ? 'GITHUB_APP_PRIVATE_KEY_PATH'
+              : 'GITHUB_APP_PRIVATE_KEY',
+            app.privateKey.value,
+          ]
+        );
+        if (app.slug) lines.push(['GITHUB_APP_SLUG', app.slug]);
+      }
+      lines.push(['WEBHOOK_SECRET', config.github.webhookSecret]);
+      if (config.github.allowedUsers) {
+        lines.push(['GITHUB_ALLOWED_USERS', config.github.allowedUsers]);
+      }
+      if (config.github.botMention) {
+        lines.push(['GITHUB_BOT_MENTION', config.github.botMention]);
+      }
+      lines.push('');
+    },
+    telegram: () => {
+      if (!config.telegram) return;
+      lines.push('# Telegram');
+      lines.push(['TELEGRAM_BOT_TOKEN', config.telegram.botToken]);
+      if (config.telegram.allowedUserIds) {
+        lines.push(['TELEGRAM_ALLOWED_USER_IDS', config.telegram.allowedUserIds]);
+      }
+      lines.push(['TELEGRAM_STREAMING_MODE', 'stream']);
+      lines.push('');
+    },
+    slack: () => {
+      if (!config.slack) return;
+      lines.push('# Slack');
+      lines.push(['SLACK_BOT_TOKEN', config.slack.botToken]);
+      lines.push(['SLACK_APP_TOKEN', config.slack.appToken]);
+      if (config.slack.allowedUserIds) {
+        lines.push(['SLACK_ALLOWED_USER_IDS', config.slack.allowedUserIds]);
+      }
+      lines.push(['SLACK_STREAMING_MODE', 'batch']);
+      lines.push('');
+    },
+  } satisfies Record<keyof SetupConfig['platforms'], () => void>;
 
-  // Telegram
-  if (config.platforms.telegram && config.telegram) {
-    lines.push('# Telegram');
-    lines.push(['TELEGRAM_BOT_TOKEN', config.telegram.botToken]);
-    if (config.telegram.allowedUserIds) {
-      lines.push(['TELEGRAM_ALLOWED_USER_IDS', config.telegram.allowedUserIds]);
-    }
-    lines.push(['TELEGRAM_STREAMING_MODE', 'stream']);
-    lines.push('');
-  }
-
-  // Slack
-  if (config.platforms.slack && config.slack) {
-    lines.push('# Slack');
-    lines.push(['SLACK_BOT_TOKEN', config.slack.botToken]);
-    lines.push(['SLACK_APP_TOKEN', config.slack.appToken]);
-    if (config.slack.allowedUserIds) {
-      lines.push(['SLACK_ALLOWED_USER_IDS', config.slack.allowedUserIds]);
-    }
-    lines.push(['SLACK_STREAMING_MODE', 'batch']);
-    lines.push('');
+  for (const { value } of SETUP_PLATFORMS) {
+    if (config.platforms[value]) platformWriters[value]();
   }
 
   // Bot Display Name
@@ -235,6 +220,26 @@ export function generateEnvContent(config: SetupConfig): string {
   lines.push(['MAX_CONCURRENT_CONVERSATIONS', '10']);
 
   return serializeEnvDocument(lines);
+}
+
+function appendClaudeEnv(lines: EnvLine[], ai: SetupConfig['ai']): void {
+  if (ai.claude) {
+    if (ai.claudeAuthType === 'global') {
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'true']);
+    } else if (ai.claudeAuthType === 'apiKey' && ai.claudeApiKey) {
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_API_KEY', ai.claudeApiKey]);
+    } else if (ai.claudeAuthType === 'oauthToken' && ai.claudeOauthToken) {
+      lines.push(['CLAUDE_USE_GLOBAL_AUTH', 'false']);
+      lines.push(['CLAUDE_CODE_OAUTH_TOKEN', ai.claudeOauthToken]);
+    }
+    if (ai.claudeBinaryPath) {
+      lines.push(['CLAUDE_BIN_PATH', ai.claudeBinaryPath]);
+    }
+  } else {
+    lines.push('# Claude not configured');
+  }
+  lines.push('');
 }
 
 /**
@@ -269,23 +274,7 @@ function serializeEnvDocument(document: EnvLine[]): string {
     }
     const [key, value] = entry;
     entries[key] = value;
-    const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-    const candidates: string[] = [];
-    // Prefer quoted forms for leading quotes, which can consume later entries.
-    if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
-    for (const [quote, contents] of [
-      ['"', encodedLineBreaks],
-      ["'", value],
-      ['`', value],
-    ]) {
-      if (!contents.replaceAll(`\\${quote}`, '').includes(quote)) {
-        candidates.push(`${key}=${quote}${contents}${quote}`);
-      }
-    }
-    candidates.push(`${key}=${value}`);
-    const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
-    if (line === undefined)
-      throw new Error(`Cannot serialize env key ${key} without changing its value`);
+    const line = serializeEnvEntry(key, value);
     // An unmatched opening quote can close in a later entry, even in a comment.
     // Put values requiring this bare representation after the rest of the document.
     if (/^["'`]/.test(value) && line === `${key}=${value}`) trailing.push(line);
@@ -301,6 +290,27 @@ function serializeEnvDocument(document: EnvLine[]): string {
     throw new Error('Cannot serialize env without changing its values');
   }
   return content;
+}
+
+function serializeEnvEntry(key: string, value: string): string {
+  const encodedLineBreaks = value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+  const candidates: string[] = [];
+  // Prefer quoted forms for leading quotes, which can consume later entries.
+  if (!/^["'`]/.test(value)) candidates.push(`${key}=${value}`);
+  for (const [quote, contents] of [
+    ['"', encodedLineBreaks],
+    ["'", value],
+    ['`', value],
+  ]) {
+    if (!contents.replaceAll(`\\${quote}`, '').includes(quote)) {
+      candidates.push(`${key}=${quote}${contents}${quote}`);
+    }
+  }
+  candidates.push(`${key}=${value}`);
+  const line = candidates.find(candidate => parseDotenv(candidate)[key] === value);
+  if (line === undefined)
+    throw new Error(`Cannot serialize env key ${key} without changing its value`);
+  return line;
 }
 
 /**
@@ -319,10 +329,20 @@ interface WriteScopedEnvResult {
   forced: boolean;
 }
 
-export function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth: boolean) {
-  const preservedKeys: string[] = [];
-  const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
-  const proposed = parseDotenv(content);
+function removeEmptyAppAuth(existing: Record<string, string>): void {
+  for (const key of GITHUB_APP_KEYS) {
+    if (existing[key] !== undefined && !existing[key].trim()) delete existing[key];
+  }
+  for (const key of GITHUB_PAT_KEYS) {
+    if (!existing[key]) delete existing[key];
+  }
+}
+
+function prepareExistingGitHubAuth(
+  existing: Record<string, string>,
+  proposed: Record<string, string>,
+  replaceGitHubAuth: boolean
+): void {
   if (replaceGitHubAuth) {
     for (const key of [...GITHUB_PAT_KEYS, ...GITHUB_APP_KEYS]) delete existing[key];
     // An App's webhook secret is the one typed from the App's settings, so it must win.
@@ -332,23 +352,32 @@ export function mergeScopedEnv(content: string, existingRaw: string, replaceGitH
     proposed.GITHUB_APP_ID ||
     (!proposed.GITHUB_TOKEN && hasCompleteAppCredential(existing))
   ) {
-    for (const key of GITHUB_APP_KEYS) {
-      if (existing[key] !== undefined && !existing[key].trim()) delete existing[key];
-    }
-    for (const key of GITHUB_PAT_KEYS) {
-      if (!existing[key]) delete existing[key];
-    }
+    removeEmptyAppAuth(existing);
   } else if (proposed.GITHUB_TOKEN) {
     for (const key of GITHUB_APP_CREDENTIAL_KEYS) {
       if (!existing[key]) delete existing[key];
     }
   }
+}
+
+function preservePrivateKeySource(
+  existing: Record<string, string>,
+  proposed: Record<string, string>,
+  preservedKeys: string[]
+): void {
   const existingPrivateKey = GITHUB_APP_PRIVATE_KEY_KEYS.find(key => existing[key]?.trim());
   if (existingPrivateKey && GITHUB_APP_PRIVATE_KEY_KEYS.some(key => key in proposed)) {
     // Inline PEM outranks a path at runtime; adding a new source would replace the credential.
     preservedKeys.push(existingPrivateKey);
     for (const key of GITHUB_APP_PRIVATE_KEY_KEYS) delete proposed[key];
   }
+}
+
+function mergeEnvValues(
+  existing: Record<string, string>,
+  proposed: Record<string, string>,
+  preservedKeys: string[]
+): Record<string, string> {
   const merged: Record<string, string> = { ...existing };
   for (const [key, value] of Object.entries(proposed)) {
     const prior = existing[key];
@@ -362,6 +391,16 @@ export function mergeScopedEnv(content: string, existingRaw: string, replaceGitH
       preservedKeys.push(key);
     }
   }
+  return merged;
+}
+
+export function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth: boolean) {
+  const preservedKeys: string[] = [];
+  const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
+  const proposed = parseDotenv(content);
+  prepareExistingGitHubAuth(existing, proposed, replaceGitHubAuth);
+  preservePrivateKeySource(existing, proposed, preservedKeys);
+  const merged = mergeEnvValues(existing, proposed, preservedKeys);
   return { content: serializeEnv(merged), preservedKeys };
 }
 

@@ -10,7 +10,7 @@ import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-work
 import {
   WorkflowSourceIntegrityError,
   WorkflowSourceUnavailableError,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
 import { resumeWorkflowContinuation } from '@archon/core/workflows/continuation-host';
 import { wakeDueWorkflowContinuations } from '@archon/core/workflows/continuation-resume';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
@@ -41,7 +41,7 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
   message: 'unused',
 }));
 const mockHydrateResumableRun = mock<
-  typeof import('@archon/workflows/executor')['hydrateResumableRun']
+  typeof import('@archon/workflows/run-resume')['hydrateResumableRun']
 >(async () => null);
 const mockExecuteWorkflow = mock<typeof import('@archon/workflows/executor')['executeWorkflow']>(
   async () => ({
@@ -58,7 +58,11 @@ const mockStartRunLiveOwner = mock<
   typeof import('@archon/core/services/run-live-owner')['startRunLiveOwner']
 >(async runId => {
   runLiveOwnerCalls.push(`start:${runId}`);
-  return { close: mockCloseRunLiveOwner, isStopRequested: () => false };
+  return {
+    close: mockCloseRunLiveOwner,
+    isStopRequested: () => false,
+    registerTerminationPreparation: () => () => undefined,
+  };
 });
 const mockStoreFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(async () => ({
   failed: true,
@@ -92,11 +96,15 @@ mock.module('@archon/paths', () => ({
   }),
   getArchonWorkspacesPath: () => '/tmp/workspaces',
 }));
-mock.module('@archon/workflows/executor', () => ({
+mock.module('@archon/workflows/run-source', () => ({
   WorkflowSourceUnavailableError,
-  executeWorkflow: mockExecuteWorkflow,
-  hydrateResumableRun: mockHydrateResumableRun,
   resolveContinuationWorkflow: mock(async () => undefined),
+}));
+mock.module('@archon/workflows/executor', () => ({
+  executeWorkflow: mockExecuteWorkflow,
+}));
+mock.module('@archon/workflows/run-resume', () => ({
+  hydrateResumableRun: mockHydrateResumableRun,
 }));
 
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
@@ -205,6 +213,8 @@ describe('workflow continuation scanner', () => {
       mockHydrateResumableRun.mockResolvedValueOnce({
         preCreatedRun: { ...paused, status: 'running' },
         priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait',
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -239,11 +249,8 @@ describe('workflow continuation scanner', () => {
     }
   );
 
-  // #2910: the headless scanner is the unattended path — nothing revisits a row it
-  // leaves at 'running' (listDueWorkflowContinuations selects paused/failed only).
-  // Both sides of the branch are asserted through the real engine wrapper: an
-  // ordinary rejection gets the engine's compensating write, while a rejected
-  // terminal write must not get a second one.
+  // The unattended scanner must fail a claimed run after an ordinary rejection.
+  // A rejected terminal write must escape without a second write (#2910).
   describe('rejected execution', () => {
     const startHeadlessResume = async (rejection: unknown): Promise<void> => {
       const paused = run('wait-headless', 'paused', {});
@@ -255,6 +262,8 @@ describe('workflow continuation scanner', () => {
       mockHydrateResumableRun.mockResolvedValueOnce({
         preCreatedRun: { ...paused, status: 'running' },
         priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait',
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -294,6 +303,8 @@ describe('workflow continuation scanner', () => {
       mockHydrateResumableRun.mockResolvedValueOnce({
         preCreatedRun: { ...paused, status: 'running' },
         priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait',
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       });
@@ -454,6 +465,8 @@ describe('workflow continuation scanner', () => {
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...paused, status: 'running' },
       priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'continue_after_wait',
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
@@ -500,6 +513,8 @@ describe('workflow continuation scanner', () => {
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...refreshed, status: 'running' },
       priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'continue_after_wait',
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
@@ -671,6 +686,8 @@ describe('workflow continuation scanner', () => {
       return {
         preCreatedRun: { ...paused, status: 'running' },
         priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait' as const,
         priorUsage: { costUsd: 0 },
         priorNodeSessions: [],
       };
@@ -748,6 +765,63 @@ describe('workflow continuation scanner', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
+  test.each(['running', 'completed', 'failed', 'cancelled'] as const)(
+    'resumed background handoff observed as %s reports only failures to its origin',
+    async observedStatus => {
+      const paused = run('wait-web', 'paused', {});
+      mockResumeWorkflow.mockResolvedValueOnce(paused);
+      mockResolveRunWorkflow.mockResolvedValueOnce({
+        ok: true,
+        workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
+      });
+      mockHydrateResumableRun.mockResolvedValueOnce({
+        preCreatedRun: { ...paused, status: 'running' },
+        priorCompletedNodes: new Map(),
+        priorFailedNodes: new Map(),
+        resumeCause: 'continue_after_wait',
+        priorUsage: { costUsd: 0 },
+        priorNodeSessions: [],
+      });
+      const failed = observedStatus === 'failed' || observedStatus === 'cancelled';
+      mockExecuteWorkflow.mockResolvedValueOnce(
+        failed
+          ? {
+              success: false,
+              handedOff: true,
+              workflowRunId: paused.id,
+              observedStatus,
+              error: `Workflow ${observedStatus} after execution ownership changed`,
+            }
+          : { success: true, handedOff: true, workflowRunId: paused.id, observedStatus }
+      );
+      const platform = {
+        sendMessage: mock(async () => undefined),
+        getStreamingMode: () => 'batch' as const,
+        getPlatformType: () => 'web',
+      } satisfies IWorkflowPlatform;
+      expect(
+        await resumeWorkflowRunFromServer(host, paused, undefined, {
+          kind: 'platform',
+          destination: { platform, conversationId: 'worker', resultConversationId: 'origin' },
+        })
+      ).toEqual({ kind: 'resumed' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (failed) {
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'origin',
+          `Workflow **deliver** failed: Workflow ${observedStatus} after execution ownership changed`,
+          {
+            category: 'workflow_result',
+            segment: 'new',
+            workflowResult: { workflowName: 'deliver', runId: paused.id },
+          }
+        );
+        expect(platform.sendMessage).toHaveBeenCalledTimes(1);
+      } else expect(platform.sendMessage).not.toHaveBeenCalled();
+      expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   test('surfaces a resumed background-web result when owner cleanup fails', async () => {
     const paused = run('wait-web', 'paused', {});
     const cleanupError = new Error('owner cleanup failed');
@@ -759,6 +833,8 @@ describe('workflow continuation scanner', () => {
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...paused, status: 'running' },
       priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'continue_after_wait',
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });
@@ -842,6 +918,8 @@ describe('workflow continuation scanner', () => {
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...paused, status: 'running' },
       priorCompletedNodes: new Map(),
+      priorFailedNodes: new Map(),
+      resumeCause: 'continue_after_wait',
       priorUsage: { costUsd: 0 },
       priorNodeSessions: [],
     });

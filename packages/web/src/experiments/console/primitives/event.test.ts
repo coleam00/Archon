@@ -36,6 +36,20 @@ describe('toRunEvent — base mapping', () => {
     }
   );
 
+  test.each(['workflow_cleanup_warning', 'workflow_cancelled'])(
+    '%s warnings are visible text and preserve every inspection instruction',
+    event_type => {
+      const warnings = [
+        'Output is still held outside the process group; it was not signalled. Use lsof on the checkout.',
+        `Retain the checkout and inspect it before retrying abandonment. ${'More detail. '.repeat(30)}`,
+      ];
+      expect(toRunEvent(raw({ event_type, data: { warnings } }))).toMatchObject({
+        kind: 'text',
+        content: `⚠️ Workflow cleanup warnings:\n${warnings.map(w => `- ${w}`).join('\n')}`,
+      });
+    }
+  );
+
   test('maps id, runId, timestamp, nodeId from the row', () => {
     const e = toRunEvent(raw({ event_type: 'node_started', step_name: 'plan' }));
     expect(e.id).toBe('e1');
@@ -298,6 +312,27 @@ describe('toRunEvent — deprecation notice (#2781)', () => {
     expect(e.kind).toBe('text');
     if (e.kind !== 'text') throw new Error('unreachable');
     expect(e.content).toBe('⚠️ This workflow is deprecated.');
+  });
+});
+
+describe('toRunEvent — inconclusive credential check (#5185)', () => {
+  test('renders the provider, vendor and evidence as visible text', () => {
+    const e = toRunEvent(
+      raw({
+        event_type: 'credential_check_inconclusive',
+        data: {
+          provider: 'codex',
+          vendor: 'openai',
+          source: 'native',
+          evidence: 'workspace routing discovery failed',
+        },
+      })
+    );
+    expect(e.kind).toBe('text');
+    if (e.kind !== 'text') throw new Error('unreachable');
+    expect(e.content).toBe(
+      "⚠️ Could not verify the credential for provider 'codex' (vendor 'openai'): workspace routing discovery failed. The run started; a bad credential fails its first AI node."
+    );
   });
 });
 
@@ -625,6 +660,12 @@ describe('foldNodeRuns — cost scope', () => {
       events.map(e => ({ node_id: e.nodeId ?? '', state: 'completed' as const }))
     );
 
+  test('a persisted completion preserves reported zero cost and total scope', () => {
+    const runs = foldCompleted([completed('build', 0, 'total')]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ costUsd: 0, costScope: 'total' });
+  });
+
   test('a composed fan-out: only own-scope costs count, and they sum to the run total', () => {
     // A two-item compose_fan_out at $0.02 per call (#3657): the server serves the leaves
     // as own spend, the instance terminals and the wrapper as totals restating them.
@@ -725,4 +766,16 @@ test('an undelivered pause notice is a system row, not a failure', () => {
     label: 'Pause notice not delivered; the run is still waiting',
     detail: 'slack',
   });
+});
+
+describe('cleanup warning payload validation', () => {
+  test.each([{}, { warnings: 'lost' }, { warnings: [] }, { warnings: ['valid', 123] }])(
+    'reports malformed cleanup warning data %j',
+    data => {
+      expect(toRunEvent(raw({ event_type: 'workflow_cleanup_warning', data }))).toMatchObject({
+        kind: 'text',
+        content: expect.stringContaining('Invalid workflow_cleanup_warning payload'),
+      });
+    }
+  );
 });

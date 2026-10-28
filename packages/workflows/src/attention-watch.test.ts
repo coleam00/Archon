@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, mock, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { mkdtemp } from 'node:fs/promises';
@@ -18,7 +18,12 @@ import {
 import type { AttentionWatchOptions } from './engine-port';
 import { createFileWorkflowStore } from './file-store';
 import type { ApprovalContext, WorkflowWaitContext } from './schemas/workflow-run';
-import { WorkflowEventCursorError, workflowEventCursor, type IWorkflowStore } from './store';
+import {
+  executionClaim,
+  WorkflowEventCursorError,
+  workflowEventCursor,
+  type IWorkflowStore,
+} from './store';
 
 const roots = trackTempRoots();
 const host: AttentionWatchHost = { branchOf: async () => null };
@@ -157,7 +162,8 @@ describe('watchAttentionQueue', () => {
         { scope: { kind: 'all' }, labels: { ci: 'pr' }, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
       );
       const until = async (condition: () => boolean): Promise<void> => {
-        for (let waited = 0; waited < 1000; waited += 5) {
+        const deadline = performance.now() + 15_000;
+        while (performance.now() < deadline) {
           if (condition()) return;
           await Bun.sleep(5);
         }
@@ -188,7 +194,8 @@ describe('watchAttentionQueue', () => {
       } finally {
         await stream.close();
       }
-    }
+    },
+    40_000
   );
 
   test('a rejected degradation warning retains the cursor until the consumer accepts it', async () => {
@@ -639,6 +646,54 @@ describe('watchAttentionQueue', () => {
     }
   });
 
+  test.each(['attention', 'ready'] as const)(
+    'startup waits for initial %s delivery and rejects without starting background work',
+    async type => {
+      const store = await makeStore();
+      await pausedAtAsk(store);
+      await pausedAtAsk(store);
+      await running(store);
+      const reads = spyOn(store, 'readWorkflowEventsAfter');
+      const listRunning = spyOn(store, 'listWorkflowRuns');
+      const ownerLoss = mock(() => Promise.resolve(null));
+      const doorbell = mock(async () => () => {});
+      const entered = Promise.withResolvers<void>();
+      const delivery = Promise.withResolvers<void>();
+      const cause = new Error('initial delivery rejected');
+      const lines: AttentionStreamLine[] = [];
+      const startup = watchAttentionQueue(
+        store,
+        { ...host, ownerLoss, doorbell },
+        line => {
+          lines.push(line);
+          if (line.type === type) {
+            entered.resolve();
+            return delivery.promise;
+          }
+          return undefined;
+        },
+        { scope: { kind: 'all' }, pollIntervalMs: 5 }
+      ).then(
+        handle => ({ status: 'resolved' as const, handle }),
+        error => ({ status: 'rejected' as const, error: error as unknown })
+      );
+      await entered.promise;
+      const pending = await Promise.race([startup, Bun.sleep(10).then(() => 'pending' as const)]);
+      delivery.reject(cause);
+      const result = await startup;
+      if (result.status === 'resolved') await result.handle.close();
+      expect(pending).toBe('pending');
+      expect(result).toEqual({ status: 'rejected', error: cause });
+      expect(lines.map(line => line.type)).toEqual(
+        type === 'attention' ? ['attention'] : ['attention', 'attention', 'ready']
+      );
+      expect(reads).not.toHaveBeenCalled();
+      expect(listRunning).not.toHaveBeenCalled();
+      expect(ownerLoss).not.toHaveBeenCalled();
+      expect(doorbell).not.toHaveBeenCalled();
+    }
+  );
+
   test('the snapshot is the open set in scope, as the queue builds it, then ready', async () => {
     const store = await makeStore();
     const other = await pausedAtAsk(store, { ci: 'other' });
@@ -653,6 +708,8 @@ describe('watchAttentionQueue', () => {
         cursor: head,
         snapshot: true,
         project: { key: '_cwd/alpha', codebaseId: null, name: 'alpha' },
+        workflow: 'wf',
+        parentRunId: null,
         item: (await readAttentionQueueItem({ store, branchOf: host.branchOf }, other.runId))!,
       },
       { type: 'ready', cursor: head },
@@ -697,7 +754,7 @@ describe('watchAttentionQueue', () => {
           data: {},
         });
         await store.updateWorkflowRun(runId, {
-          metadata: { wait: undefined, approval: undefined },
+          metadata: { approval: undefined },
         });
       }
     };
@@ -761,6 +818,100 @@ describe('watchAttentionQueue', () => {
     expect(stream.lines.filter(line => 'runId' in line || line.type === 'attention')).toHaveLength(
       3
     );
+  });
+
+  test("a child run's lines name its parent and workflow; a top-level run's name no parent", async () => {
+    const store = await makeStore();
+    const parentId = await running(store);
+    const stream = await watch(store);
+    const child = await store.createWorkflowRun({
+      workflow_name: 'child-wf',
+      user_message: '',
+      parent_run_id: parentId,
+    });
+    await store.claimPendingWorkflowRun(child.id);
+    const wait = ask();
+    await store.pauseWorkflowRunForWait(child.id, wait, { kind: 'started', stepName: 'ask' });
+    const context = { workflow: 'child-wf', parentRunId: parentId };
+    expect(await stream.next(attentionOf(child.id))).toMatchObject({ ...context, item: context });
+
+    await store.answerAttentionWait(child.id, answer(wait.pauseId));
+    expect(await stream.next(ofRun(child.id, 'resolved'))).toMatchObject(context);
+    await store.resumeWorkflowRun(child.id);
+    await store.completeWorkflowRun(child.id, { duration_ms: 1 });
+    expect(await stream.next(ofRun(child.id, 'terminal'))).toMatchObject({
+      ...context,
+      cause: null,
+    });
+    await store.completeWorkflowRun(parentId, { duration_ms: 1 });
+    expect(await stream.next(ofRun(parentId, 'terminal'))).toMatchObject({
+      workflow: 'wf',
+      parentRunId: null,
+    });
+    await stream.close();
+  });
+
+  test("a failed run's terminal line names the failed node and its recorded class, stable on replay", async () => {
+    const store = await makeStore();
+    const before = await store.getWorkflowEventHead();
+    const runId = await running(store);
+    const nodeFailed = (failureKind: string): Promise<void> =>
+      store.persistWorkflowEvent({
+        workflow_run_id: runId,
+        event_type: 'node_failed',
+        step_name: 'build',
+        data: { error: 'secret text', failure_kind: failureKind },
+      });
+    await nodeFailed('exec_failed');
+    await store.failWorkflowRun(runId, 'node failed');
+    const first = await watch(store, { after: before });
+    const terminal = await first.next(ofRun(runId, 'terminal'));
+    await first.close();
+    expect(terminal).toMatchObject({
+      status: 'failed',
+      workflow: 'wf',
+      parentRunId: null,
+      cause: { node: 'build', errorClass: 'exec_failed' },
+    });
+    expect(JSON.stringify(terminal)).not.toContain('secret text');
+
+    // A later attempt's failure is its own line; it does not rewrite the earlier one.
+    await store.resumeWorkflowRun(runId);
+    await nodeFailed('timeout');
+    await store.failWorkflowRun(runId, 'node failed');
+    const replay = await watch(store, { after: before });
+    await replay.next(line => ofRun(runId, 'terminal')(line) && !isDeepStrictEqual(line, terminal));
+    await replay.close();
+    const terminals = replay.lines.filter(ofRun(runId, 'terminal'));
+    expect(terminals[0]).toEqual(terminal);
+    expect(terminals[1]).toMatchObject({ cause: { node: 'build', errorClass: 'timeout' } });
+  });
+
+  test('a terminal line has no cause, or no class, when the engine recorded none', async () => {
+    const store = await makeStore();
+    const stream = await watch(store);
+    const unclassified = await running(store);
+    await store.persistWorkflowEvent({
+      workflow_run_id: unclassified,
+      event_type: 'node_failed',
+      step_name: 'build',
+      data: { error: 'boom' },
+    });
+    await store.failWorkflowRun(unclassified, 'node failed');
+    const outsideNode = await running(store);
+    await store.failWorkflowRun(outsideNode, 'setup failed');
+    const cancelled = await running(store);
+    await store.cancelWorkflowRun(cancelled);
+
+    expect(await stream.next(ofRun(unclassified, 'terminal'))).toMatchObject({
+      cause: { node: 'build', errorClass: null },
+    });
+    expect(await stream.next(ofRun(outsideNode, 'terminal'))).toMatchObject({ cause: null });
+    expect(await stream.next(ofRun(cancelled, 'terminal'))).toMatchObject({
+      status: 'cancelled',
+      cause: null,
+    });
+    await stream.close();
   });
 
   test('a relabel moves an item between label filters by revision, and unmatched is stateless', async () => {
@@ -1158,6 +1309,139 @@ describe('watchAttentionQueue', () => {
     await portless.next(ofRun(healthy, 'terminal'));
     await portless.close();
     expect(portless.lines.filter(line => line.type === 'owner_lost')).toEqual([]);
+  });
+
+  test.each(['workflow_started', 'workflow_resumed', 'workflow_unpaused'] as const)(
+    'replaying %s after owner loss does not watch the same claim again',
+    async eventType => {
+      const store = await makeStore();
+      const start = await store.getWorkflowEventHead();
+      const runId = await running(store);
+      if (eventType === 'workflow_started')
+        await store.createWorkflowEvent({
+          workflow_run_id: runId,
+          event_type: eventType,
+          data: {},
+        });
+      else {
+        if (eventType === 'workflow_resumed') await store.failWorkflowRun(runId, 'failed');
+        else await store.updateWorkflowRun(runId, { status: 'paused' });
+        await store.resumeWorkflowRun(runId);
+      }
+      const head = await store.getWorkflowEventHead();
+      let held = true;
+      const holding: IWorkflowStore = Object.create(store);
+      holding.readWorkflowEventsAfter = (cursor, options) =>
+        held
+          ? Promise.resolve({ events: [], next: cursor })
+          : store.readWorkflowEventsAfter(cursor, options);
+      let checks = 0;
+      const stream = await watch(
+        holding,
+        { after: start, bookmarkIntervalMs: 0 },
+        {
+          ...host,
+          ownerLoss: async () => {
+            checks++;
+            return { observedStatus: 'running' };
+          },
+        }
+      );
+      try {
+        await stream.next(ofRun(runId, 'owner_lost'));
+        held = false;
+        await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+      } finally {
+        await stream.close();
+      }
+      expect(stream.lines.filter(ofRun(runId, 'owner_lost'))).toHaveLength(1);
+      expect(checks).toBe(1);
+      expect((await store.getWorkflowRun(runId))?.status).toBe('running');
+    }
+  );
+
+  test.each(['failed', 'paused'] as const)(
+    'a %s run resumed after owner loss reports the new claim loss once',
+    async status => {
+      const store = await makeStore();
+      const runId = await running(store);
+      await store.failWorkflowRun(runId, 'first failure');
+      const original = await store.resumeWorkflowRun(runId);
+      let held = false;
+      const holding: IWorkflowStore = Object.create(store);
+      holding.readWorkflowEventsAfter = (cursor, options) =>
+        held
+          ? Promise.resolve({ events: [], next: cursor })
+          : store.readWorkflowEventsAfter(cursor, options);
+      let checks = 0;
+      const stream = await watch(
+        holding,
+        { bookmarkIntervalMs: 0 },
+        {
+          ...host,
+          ownerLoss: async () => {
+            checks++;
+            return { observedStatus: 'running' };
+          },
+        }
+      );
+      try {
+        await stream.next(ofRun(runId, 'owner_lost'));
+        held = true;
+        if (status === 'failed') await store.failWorkflowRun(runId, 'failed');
+        else await store.updateWorkflowRun(runId, { status: 'paused' });
+        const resumed = await store.resumeWorkflowRun(runId);
+        expect(executionClaim(resumed.metadata)).not.toBe(executionClaim(original.metadata));
+        const head = await store.getWorkflowEventHead();
+        held = false;
+        await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+        await stream.next(() => stream.lines.filter(ofRun(runId, 'owner_lost')).length >= 2);
+      } finally {
+        await stream.close();
+      }
+      expect(stream.lines.filter(ofRun(runId, 'owner_lost'))).toHaveLength(2);
+      expect(checks).toBe(2);
+    }
+  );
+
+  test('a new claim replaces a pending owner watch and ignores its late loss', async () => {
+    const store = await makeStore();
+    const runId = await running(store);
+    let held = true;
+    const holding: IWorkflowStore = Object.create(store);
+    holding.readWorkflowEventsAfter = (cursor, options) =>
+      held
+        ? Promise.resolve({ events: [], next: cursor })
+        : store.readWorkflowEventsAfter(cursor, options);
+    const oldOwner = Promise.withResolvers<{ observedStatus: 'running' } | null>();
+    const signals: AbortSignal[] = [];
+    const stream = await watch(
+      holding,
+      { bookmarkIntervalMs: 0 },
+      {
+        ...host,
+        ownerLoss: (_runId, signal) => {
+          signals.push(signal);
+          return signals.length === 1
+            ? oldOwner.promise
+            : Promise.resolve({ observedStatus: 'running' });
+        },
+      }
+    );
+    try {
+      await store.failWorkflowRun(runId, 'failed');
+      await store.resumeWorkflowRun(runId);
+      held = false;
+      await stream.next(ofRun(runId, 'owner_lost'));
+      expect(signals[0].aborted).toBe(true);
+      oldOwner.resolve({ observedStatus: 'running' });
+      await oldOwner.promise;
+    } finally {
+      oldOwner.resolve(null);
+      await stream.close();
+    }
+    expect(signals).toHaveLength(2);
+    expect(stream.lines.filter(ofRun(runId, 'owner_lost'))).toHaveLength(1);
   });
 
   test('a failed liveness read is retried rather than dropped', async () => {

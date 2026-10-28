@@ -1,15 +1,16 @@
 import { describe, it, expect } from 'bun:test';
+import { RUN_PROJECT_CONFLICT_FLAGS } from './dispatch-guards';
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { forgeRequestSchema } from '@archon/forge/operations';
-import { renderHelp } from './help';
+import { formatSpecLine, helpEntries, renderHelp, renderHelpFor } from './help';
 import { cliArgOptions } from './args';
 import { attachmentCommands } from './attachment-commands';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 
 /**
- * The `Options:` block returned by the production help renderer.
+ * The `Options:` block that `archon <argv...> --help` prints.
  *
  * Scoped-flag assertions target this slice rather than the whole render. A flag
  * name or wording that also appears in the entry's `spec` or Commands-block
@@ -20,7 +21,7 @@ const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
  * suppresses the section and fails the marker assertion below.
  */
 function scopedHelpOptions(argv: string[]): string {
-  const output = renderHelp(argv[0], argv[1]);
+  const output = renderHelpFor(argv);
   const marker = '\nOptions:\n';
   const start = output.indexOf(marker);
   expect(start, `no Options block in 'archon ${argv.join(' ')} --help'`).toBeGreaterThanOrEqual(0);
@@ -29,9 +30,23 @@ function scopedHelpOptions(argv: string[]): string {
   return end === -1 ? body : body.slice(0, end);
 }
 
+it('renders every scopedFlags entry in its own scoped --help Options block', () => {
+  const owners = helpEntries.filter(entry => entry.scopedFlags);
+  expect(owners.length).toBeGreaterThan(0);
+  for (const { command, subcommand, scopedFlags = [] } of owners) {
+    const argv = [command, ...(subcommand?.split(' ') ?? [])];
+    const options = scopedHelpOptions(argv);
+    for (const flag of scopedFlags) {
+      expect(options, `archon ${argv.join(' ')} --help`).toContain(
+        formatSpecLine(flag.spec, flag.description)
+      );
+    }
+  }
+});
+
 it('keeps run source and isolation flags consistent with the parser', () => {
   const options = scopedHelpOptions(['workflow', 'run']).split('\n');
-  for (const name of ['workflow-source', 'no-worktree', 'folder', 'container']) {
+  for (const name of ['project', 'workflow-source', 'no-worktree', 'folder', 'container']) {
     const parserOption = cliArgOptions[name];
     expect(parserOption).toBeDefined();
     const lines = options.filter(line => line.trimStart().startsWith(`--${name} `));
@@ -47,6 +62,13 @@ it('keeps run source and isolation flags consistent with the parser', () => {
 
 describe('CLI help output', () => {
   const help = renderHelp();
+
+  it('lists session reset and event emission globally and in workflow help', () => {
+    for (const output of [help, renderHelp('workflow')]) {
+      expect(output).toContain('workflow reset-sessions <workflow-name>');
+      expect(output).toContain('workflow event emit');
+    }
+  });
 
   it('lists the workflow resume command', () => {
     expect(help).toContain(
@@ -152,8 +174,6 @@ describe('CLI help output', () => {
     expect(scoped).not.toContain('--dry-run');
   });
 
-  // Scoped-only commands must retain their Commands lines even though they
-  // do not appear in the global index.
   for (const sub of ['approve', 'reject', 'cleanup', 'reset-sessions', 'event']) {
     it(`renders a non-empty Commands block for workflow ${sub} --help`, () => {
       const scoped = renderHelp('workflow', sub);
@@ -163,30 +183,13 @@ describe('CLI help output', () => {
     });
   }
 
-  it('renders --detach and --comment in workflow approve --help without leaking other subcommands', () => {
+  it('renders --detach in workflow approve --help without leaking other subcommands', () => {
     const scoped = renderHelp('workflow', 'approve');
     expect(scoped).toContain('--detach');
-    expect(scoped).toContain('--comment');
     // --reason belongs to reject, not approve.
     expect(scoped).not.toContain('--reason');
     // --follow belongs to logs, not approve.
     expect(scoped).not.toContain('--follow');
-  });
-
-  it('renders --run-id/--type/--data in workflow event emit --help', () => {
-    const scoped = renderHelp('workflow', 'event');
-    expect(scoped).toContain('--run-id <id>');
-    expect(scoped).toContain('--type <event-type>');
-    expect(scoped).toContain('--data <json>');
-  });
-
-  it('documents converting a pull request back to draft with structured input', () => {
-    const scoped = renderHelp('forge', 'pr.draft');
-    expect(scoped).toContain('forge pr.draft');
-    expect(scoped).toContain('Convert a pull request to draft and verify the result');
-    const options = scopedHelpOptions(['forge', 'pr.draft']);
-    expect(options).toContain('--data <json>');
-    expect(options).toContain('--data-file <path>');
   });
 
   for (const request of forgeRequestSchema.options) {
@@ -197,12 +200,6 @@ describe('CLI help output', () => {
     });
   }
 
-  // Frozen pre-refactor template literal (557788e0d:packages/cli/src/cli.ts:140-260).
-  // The byte-identical guarantee on global help is a load-bearing contract: shell
-  // completions and downstream scripts pin the exact text. Embedding the frozen
-  // string here means any future drift — a dropped Commands entry, a reordered
-  // Options block, a column-width change in formatSpecLine — fails this test
-  // instead of silently shipping.
   const EXPECTED_GLOBAL_HELP = `
 Archon CLI - Run AI workflows from the command line
 
@@ -215,10 +212,11 @@ Commands:
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
   user <list|role|link>      List users, link identities and manage roles as the operator
+  project list               List registered projects (id, kind, name, key, path)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
-  setup                      Interactive setup wizard for credentials and config
+  setup [--scope <home|project>] Interactive setup wizard for credentials and config
   workflow list [name] [--full] [--json]
                              List compact workflow descriptions
                              Use <name> --full for one exact description
@@ -226,6 +224,7 @@ Commands:
   workflow status            Show running/paused workflows for this project
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
+  workflow artifacts <run-id> [path] List a run's artifact files, or print one
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs attention
   workflow attention [<run-id>] List, count or stream the attention queue, or read the item one run stands for
@@ -237,11 +236,15 @@ Commands:
   workflow signal <full-run-id> Signal and wake an event wait; use --occurrence for an exact match
   workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
   workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
+  workflow end-turn <run-id> Record a request to end stalled tools or reported work
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
                              ('approve'/'reject' are sugar for the dedicated commands)
   workflow answer <run-id> --occurrence <id>
                              Answer a paused attention wait in its declared form
+  workflow reset-sessions <workflow-name>
+                             Delete persisted sessions for a workflow (omits --scope only with --yes; [--node <id>] [--json])
+  workflow event emit        Emit a workflow event into a run
   workflow test [<name>|<folder>|<path>]
                              Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a
                              workflow, a workflow folder or pack (by name or directory
@@ -252,7 +255,7 @@ Commands:
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into the base branch
-  complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
+  complete <branch> [...]    Remove worktree and local branch; retain remote branch
   serve                      Start the web UI server (binary installs download server and UI on first run)
   skill add [path]           Add archon-cli into .claude/skills and .agents/skills
   provider add <id...>       Add maintained providers matching this Archon release (connects your agent CLI or SDK)
@@ -279,13 +282,18 @@ Commands:
   ai default <p> [<model>]   Set the default assistant (+ chat model) [--scope user|install]
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
+  telemetry no-match         Record an agent decision that no workflow fits
   validate workflows [name]  Validate workflow definitions and their references
   validate commands [name]   Validate command files
   version, --version, -V     Show version info (also -v when used alone)
   help                       Show this help message
 
 Options:
+  --chat-project-id <id>     Confine chat workflow commands to a registered project ID
   --cwd <path>               Override working directory (default: current directory)
+  --project <id|name>        Bind to a registered repository (see project list). Source/config come from --cwd;
+                             isolated execution uses the registered checkout. Use --no-worktree to execute in --cwd.
+                             Cannot combine with ${RUN_PROJECT_CONFLICT_FLAGS.map(flag => `--${flag}`).join(', ')}.
   --branch, -b <name>        Create worktree for branch (or reuse existing)
   --from, --from-branch <name> Create new branch from specific start point
   --base-branch <name>       Initial repository registration only; omit to follow the remote default. Use --base for a run override.
@@ -298,6 +306,7 @@ Options:
   --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
+  --config-from-run <run-id> Start a fresh run with the run config another run was started with
   --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
   --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
   --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
@@ -311,7 +320,7 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume)
+  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
@@ -344,6 +353,8 @@ Examples:
   archon workflow run investigate --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
+  archon workflow artifacts <run-id> plan.md
+  archon project list --json
   archon workflow logs <run-id> --follow
   archon workflow logs <run-id> --follow --format text
   archon workflow wait <run-id> --json
@@ -380,6 +391,7 @@ Examples:
       ['workflow', 'run'],
       ['isolation', 'cleanup'],
       ['workflow', 'logs'],
+      ['workflow', 'attention', 'label'],
     ]) {
       const viaHelp = spawnSync(process.execPath, [CLI_ENTRY, 'help', ...argv], {
         encoding: 'utf8',
@@ -392,29 +404,12 @@ Examples:
       expect(viaHelp.status).toBe(0);
       expect(viaFlag.status).toBe(0);
       expect(viaHelp.stdout).toBe(viaFlag.stdout);
-      expect(viaFlag.stdout).toBe(`${renderHelp(argv[0], argv[1])}\n`);
+      expect(viaFlag.stdout).toBe(`${renderHelpFor(argv)}\n`);
     }
   });
 
-  it('renders --merged and --include-closed in isolation cleanup --help', () => {
-    const options = scopedHelpOptions(['isolation', 'cleanup']);
-    expect(options).toContain('--merged');
-    expect(options).toContain('--include-closed');
-  });
-
-  it('renders --reason in workflow reject --help', () => {
-    expect(scopedHelpOptions(['workflow', 'reject'])).toContain('--reason');
-  });
-
-  it('renders --scope, --node, and --yes in workflow reset-sessions --help', () => {
-    const options = scopedHelpOptions(['workflow', 'reset-sessions']);
-    expect(options).toContain('--scope');
-    expect(options).toContain('--node');
-    expect(options).toContain('--yes');
-  });
-
-  it('renders --full in workflow list --help', () => {
-    expect(scopedHelpOptions(['workflow', 'list'])).toContain('--full');
+  it('does not promise a prompt in workflow reset-sessions --help', () => {
+    expect(scopedHelpOptions(['workflow', 'reset-sessions'])).not.toContain('prompt');
   });
 });
 
@@ -423,19 +418,6 @@ it('workflow run help distinguishes initial registration from the dispatch overr
   expect(text).toContain('--base-branch <name>');
   expect(text).toContain('Initial repository registration only');
   expect(text).toContain('--base <branch>');
-});
-
-it('forge work-item and repository-label help exposes file requests', () => {
-  for (const operation of [
-    'workitem.create',
-    'workitem.labels.set',
-    'repo.labels.list',
-    'repo.label.ensure',
-  ]) {
-    const text = renderHelp('forge', operation);
-    expect(text).toContain(operation);
-    expect(text).toContain('--data-file <path>');
-  }
 });
 
 it('provider and plugin add help exposes the supported commands and plugin example', () => {

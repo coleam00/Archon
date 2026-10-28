@@ -3,14 +3,11 @@
  * fan-out child recovery and paused-run slot release. Re-exported from the
  * `./workflows` entry.
  */
-import type { ScheduledWorkflowResume, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { resumeTransition } from '@archon/workflows/resume-transition';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   CAPACITY_WAIT_METADATA_KEY,
-  RUN_STOP_REASON_METADATA_KEY,
-  SOURCE_RELEASE_METADATA_KEY,
   TOOL_CALL_ATTENTION_METADATA_KEY,
-  isScheduledWorkflowResume,
-  pausedUsageLimitWait,
   readCapacityWait,
   workflowRunStatusSchema,
 } from '@archon/workflows/schemas/workflow-run';
@@ -22,7 +19,6 @@ import {
   WorkflowResourceBusyError,
   pauseCursorMatches,
   resumeCursorMatches,
-  workflowUnpausedEvent,
   type PauseCursor,
   type WorkflowResumeCursor,
 } from '@archon/workflows/store';
@@ -33,6 +29,7 @@ import {
   lockResourceSlot,
   removeResourceSlotHolder,
   resourceStartOccupancy,
+  type TransactionQuery,
 } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
@@ -56,23 +53,6 @@ const ORPHAN_RESUME_STALE_DAYS = 1;
 function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): string {
   const staleOrphan = `last_activity_at IS NULL OR last_activity_at < ${dialect.nowMinusDays(dayParamIndex)}`;
   return `(status IN ('failed', 'paused') OR (status = 'running' AND (${staleOrphan})))`;
-}
-
-/**
- * Extract a non-empty `metadata.error` string from a raw column value, or null
- * when there is nothing worth preserving. SQLite stores metadata as JSON TEXT
- * and Postgres returns a parsed object (same split normalizeWorkflowRun handles),
- * so both shapes are accepted; absent / null / non-string / empty / unparseable
- * all collapse to null.
- */
-function readMetadataError(raw: unknown): string | null {
-  const error = normalizeMetadata(raw).error;
-  return typeof error === 'string' && error !== '' ? error : null;
-}
-
-function readScheduledResume(raw: unknown): ScheduledWorkflowResume | null {
-  const scheduled = normalizeMetadata(raw).scheduled_resume;
-  return isScheduledWorkflowResume(scheduled) ? scheduled : null;
 }
 
 export async function findResumableRun(
@@ -152,177 +132,174 @@ export async function findResumableRunByParentConversation(
   }
 }
 
+type PriorRunRow = Pick<WorkflowRunRow, 'status' | 'metadata'> & {
+  resource_key?: string | null;
+};
+
+/** Pin the run row (and its admitted resource request, if any) for the resume transaction. */
+async function lockPriorRun(query: TransactionQuery, id: string): Promise<PriorRunRow | undefined> {
+  // Acquire the SQLite writer lock before taking a snapshot. Without this,
+  // another process can commit between the SELECT and our first UPDATE and
+  // make the deferred transaction fail its read-to-write upgrade.
+  if (getDatabaseType() === 'sqlite') {
+    await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
+  }
+  const priorRows = await query<PriorRunRow>(
+    `SELECT w.status, w.metadata, q.resource_key
+       FROM remote_agent_workflow_runs w
+       LEFT JOIN remote_agent_resource_start_requests q
+         ON q.id = w.id AND q.status = 'admitted'
+      WHERE w.id = $1${getDialect().rowLock('w')}`,
+    [id]
+  );
+  return priorRows.rows[0];
+}
+
+function priorMatchesCursor(prior: PriorRunRow, cursor: WorkflowResumeCursor | undefined): boolean {
+  return (
+    cursor === undefined ||
+    resumeCursorMatches(
+      {
+        status: workflowRunStatusSchema.parse(prior.status),
+        metadata: normalizeMetadata(prior.metadata),
+      },
+      cursor
+    )
+  );
+}
+
+/**
+ * Take a slot on the run's admitted resource before it resumes, or return the refusal when the
+ * resource is busy. A run with no admitted resource, or a stale 'running' orphan, takes no slot.
+ */
+async function claimResourceSlot(
+  query: TransactionQuery,
+  id: string,
+  prior: PriorRunRow,
+  cursor: WorkflowResumeCursor | undefined
+): Promise<WorkflowResourceBusyError | undefined> {
+  const resourceKey = prior.resource_key ?? undefined;
+  const status = prior.status;
+  if (resourceKey === undefined || (status !== 'failed' && status !== 'paused')) return undefined;
+  const { capacity } = await lockResourceSlot(query, resourceKey);
+  const metadata = normalizeMetadata(prior.metadata);
+  const occupancy = await resourceStartOccupancy(query, resourceKey, capacity);
+  const blocker = resourceResumeBlocker(occupancy, { id, status, metadata });
+  if (!blocker) {
+    await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
+    return undefined;
+  }
+  const busy = new WorkflowResourceBusyError(
+    id,
+    blocker,
+    resumeRefusal({ status, metadata }, cursor)
+  );
+  // Committed with the refusal, so the paused run keeps its place as a waiter.
+  if (busy.refusal === 'waiting' && readCapacityWait(metadata) === undefined)
+    await query(
+      `UPDATE remote_agent_workflow_runs SET metadata = ${getDialect().jsonMerge('metadata', 2)}
+        WHERE id = $1`,
+      [id, JSON.stringify({ [CAPACITY_WAIT_METADATA_KEY]: { since: new Date().toISOString() } })]
+    );
+  return busy;
+}
+
+/**
+ * Refresh started_at to NOW so the resumed row competes fairly with
+ * currently-active rows in getActiveWorkflowRunByPath's older-wins
+ * tiebreaker. Without this, a resumed row carries its original
+ * (potentially hours-old) started_at and would sort ahead of any
+ * currently-running holder, slipping past the path lock and causing
+ * two active workflows on the same working_path.
+ *
+ * We accept losing the original creation time here — `started_at` for
+ * an active row semantically means "when did this active phase start."
+ * The original creation time can be recovered from workflow_events
+ * history if needed for analytics.
+ *
+ * Compare-and-swap guard: flip to 'running' only if the row is STILL
+ * resumable (resumableStatusClause — shared with findResumableRun so the two
+ * predicates can't drift). The exclusion mechanism is the atomic row-level
+ * UPDATE: because it also refreshes last_activity_at, a second concurrent
+ * resumer finds the row already 'running' with fresh activity, no longer
+ * matches the clause, and gets rowCount 0. Without it two callers (web
+ * Resume + a chat re-dispatch, or the lock-less CLI path) could both flip
+ * the same run to 'running' and double-claim the worktree. The day param is
+ * bound at $2 (ORPHAN_RESUME_STALE_DAYS), matching findResumableRun's bind.
+ *
+ * The CAS also clears `metadata.error` and `metadata.stop_reason` so a run that
+ * fails, is resumed, and then completes doesn't keep rendering its old failure
+ * (#2329) or claiming an operator interrupted it (#3479). Because
+ * legacy runs may carry their only failure record in metadata (#2348), the error being
+ * cleared is first preserved as a `workflow_resumed` event, in the SAME
+ * transaction as the clear, so the audit trail can never lose it. The stop reason
+ * needs no such preservation: `failWorkflowRun` wrote the same category onto the
+ * terminal `workflow_failed` event, which a resume never touches. The read,
+ * the CAS and the event INSERT are one transaction (mirroring
+ * resolveApprovalGate, #2146): the row is pinned by dialect.rowLock() so the
+ * value read is the value cleared, and the event is written ONLY by the
+ * caller whose CAS matched — a losing concurrent resumer writes nothing.
+ * Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
+ * rejects RETURNING on UPDATE and points at exactly this pattern.
+ */
+async function casResumeRun(
+  query: TransactionQuery,
+  id: string,
+  prior: PriorRunRow
+): Promise<WorkflowRun | undefined> {
+  const dialect = getDialect();
+  const { metadataPatch, events } = resumeTransition({
+    id,
+    status: workflowRunStatusSchema.parse(prior.status),
+    metadata: normalizeMetadata(prior.metadata),
+  });
+
+  const result = await query(
+    `UPDATE remote_agent_workflow_runs
+     SET status = 'running',
+         completed_at = NULL,
+         started_at = ${dialect.now()},
+         last_activity_at = ${dialect.now()},
+         metadata = ${dialect.jsonMerge('metadata', 3)}
+     WHERE id = $1
+       AND ${resumableStatusClause(dialect, 2)}
+       AND (
+         NOT EXISTS (
+           SELECT 1 FROM remote_agent_resource_start_requests q
+            WHERE q.id = $1 AND q.status = 'admitted'
+         )
+         OR status IN ('failed', 'paused')
+       )`,
+    [id, ORPHAN_RESUME_STALE_DAYS, JSON.stringify(metadataPatch)]
+  );
+
+  if (result.rowCount === 0) return undefined;
+  for (const event of events) await insertWorkflowEvent(query, event);
+  const selected = await query<WorkflowRunRow>(
+    'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
+    [id]
+  );
+  const row = selected.rows[0];
+  if (!row) throw new Error(`Workflow run vanished after update (id: ${id})`);
+  return normalizeWorkflowRun(row);
+}
+
 export async function resumeWorkflowRun(
   id: string,
   cursor?: WorkflowResumeCursor
 ): Promise<WorkflowRun> {
-  const dialect = getDialect();
-
-  // Split into UPDATE + SELECT to support both PostgreSQL and SQLite
-  // (SQLite does not support RETURNING on UPDATE statements)
-  // Each phase has its own try/catch to avoid string-sniffing own errors in a shared catch.
-  let updateResult: { rowCount: number } | { busy: WorkflowResourceBusyError };
+  let updateResult:
+    | { rowCount: 0 }
+    | { busy: WorkflowResourceBusyError }
+    | { admitted: WorkflowRun };
   try {
-    // Refresh started_at to NOW so the resumed row competes fairly with
-    // currently-active rows in getActiveWorkflowRunByPath's older-wins
-    // tiebreaker. Without this, a resumed row carries its original
-    // (potentially hours-old) started_at and would sort ahead of any
-    // currently-running holder, slipping past the path lock and causing
-    // two active workflows on the same working_path.
-    //
-    // We accept losing the original creation time here — `started_at` for
-    // an active row semantically means "when did this active phase start."
-    // The original creation time can be recovered from workflow_events
-    // history if needed for analytics.
-    // Compare-and-swap guard: flip to 'running' only if the row is STILL
-    // resumable (resumableStatusClause — shared with findResumableRun so the two
-    // predicates can't drift). The exclusion mechanism is the atomic row-level
-    // UPDATE: because it also refreshes last_activity_at, a second concurrent
-    // resumer finds the row already 'running' with fresh activity, no longer
-    // matches the clause, and gets rowCount 0. Without it two callers (web
-    // Resume + a chat re-dispatch, or the lock-less CLI path) could both flip
-    // the same run to 'running' and double-claim the worktree. The day param is
-    // bound at $2 (ORPHAN_RESUME_STALE_DAYS), matching findResumableRun's bind.
-    //
-    // The CAS also clears `metadata.error` and `metadata.stop_reason` so a run that
-    // fails, is resumed, and then completes doesn't keep rendering its old failure
-    // (#2329) or claiming an operator interrupted it (#3479). Because
-    // legacy runs may carry their only failure record in metadata (#2348), the error being
-    // cleared is first preserved as a `workflow_resumed` event, in the SAME
-    // transaction as the clear, so the audit trail can never lose it. The stop reason
-    // needs no such preservation: `failWorkflowRun` wrote the same category onto the
-    // terminal `workflow_failed` event, which a resume never touches. The read,
-    // the CAS and the event INSERT are one transaction (mirroring
-    // resolveApprovalGate, #2146): the row is pinned by dialect.rowLock() so the
-    // value read is the value cleared, and the event is written ONLY by the
-    // caller whose CAS matched — a losing concurrent resumer writes nothing.
-    // Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
-    // rejects RETURNING on UPDATE and points at exactly this pattern.
     updateResult = await getDatabase().withTransaction(async query => {
-      // Acquire the SQLite writer lock before taking a snapshot. Without this,
-      // another process can commit between the SELECT and our first UPDATE and
-      // make the deferred transaction fail its read-to-write upgrade.
-      if (getDatabaseType() === 'sqlite') {
-        await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
-      }
-      const priorRows = await query<{
-        status: string;
-        metadata: unknown;
-        resource_key?: string | null;
-      }>(
-        `SELECT w.status, w.metadata, q.resource_key
-           FROM remote_agent_workflow_runs w
-           LEFT JOIN remote_agent_resource_start_requests q
-             ON q.id = w.id AND q.status = 'admitted'
-          WHERE w.id = $1${getDialect().rowLock('w')}`,
-        [id]
-      );
-      const prior = priorRows.rows[0];
-      if (
-        cursor !== undefined &&
-        (prior === undefined ||
-          !resumeCursorMatches(
-            {
-              status: workflowRunStatusSchema.parse(prior.status),
-              metadata: normalizeMetadata(prior.metadata),
-            },
-            cursor
-          ))
-      )
-        return { rowCount: 0 };
-      const resourceKey = prior?.resource_key ?? undefined;
-      const status = prior?.status;
-      if (resourceKey !== undefined && (status === 'failed' || status === 'paused')) {
-        const { capacity } = await lockResourceSlot(query, resourceKey);
-        const metadata = normalizeMetadata(prior?.metadata);
-        const blocker = resourceResumeBlocker(
-          await resourceStartOccupancy(query, resourceKey, capacity),
-          { id, status, metadata }
-        );
-        if (blocker) {
-          const busy = new WorkflowResourceBusyError(
-            id,
-            blocker,
-            resumeRefusal({ status, metadata }, cursor)
-          );
-          // Committed with the refusal, so the paused run keeps its place as a waiter.
-          if (busy.refusal === 'waiting' && readCapacityWait(metadata) === undefined)
-            await query(
-              `UPDATE remote_agent_workflow_runs SET metadata = ${dialect.jsonMerge('metadata', 2)}
-                WHERE id = $1`,
-              [
-                id,
-                JSON.stringify({
-                  [CAPACITY_WAIT_METADATA_KEY]: { since: new Date().toISOString() },
-                }),
-              ]
-            );
-          return { busy };
-        }
-        await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
-      }
-      const clearedError = readMetadataError(prior?.metadata);
-      const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
-      const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
-      // A usage-limit wait ends when its run is claimed; the nodes that hit the limit run again.
-      const usageLimitWait =
-        prior?.status === 'paused' &&
-        pausedUsageLimitWait({ status: 'paused', metadata: normalizeMetadata(prior.metadata) }) !==
-          undefined;
-      const metadataPatch = {
-        ...(usageLimitWait ? { wait: null } : {}),
-        [TOOL_CALL_ATTENTION_METADATA_KEY]: null,
-        error: null,
-        [RUN_STOP_REASON_METADATA_KEY]: null,
-        continuation_retry_at: null,
-        [CAPACITY_WAIT_METADATA_KEY]: null,
-        [SOURCE_RELEASE_METADATA_KEY]: null,
-        [EXECUTION_CLAIM_METADATA_KEY]: crypto.randomUUID(),
-        ...(scheduled !== null && triggeredAt !== null
-          ? { scheduled_resume: { ...scheduled, triggeredAt } }
-          : {}),
-      };
-
-      const result = await query(
-        `UPDATE remote_agent_workflow_runs
-         SET status = 'running',
-             completed_at = NULL,
-             started_at = ${dialect.now()},
-             last_activity_at = ${dialect.now()},
-             metadata = ${dialect.jsonMerge('metadata', 3)}
-         WHERE id = $1
-           AND ${resumableStatusClause(dialect, 2)}
-           AND (
-             NOT EXISTS (
-               SELECT 1 FROM remote_agent_resource_start_requests q
-                WHERE q.id = $1 AND q.status = 'admitted'
-             )
-             OR status IN ('failed', 'paused')
-           )`,
-        [id, ORPHAN_RESUME_STALE_DAYS, JSON.stringify(metadataPatch)]
-      );
-
-      const rowCount = result.rowCount;
-      if (rowCount > 0 && (prior?.status === 'failed' || clearedError !== null)) {
-        // Same `{ error }` payload shape workflow_failed uses, so every consumer
-        // that already reads an error off a workflow_* event keeps working.
-        await insertWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_resumed',
-          data: clearedError === null ? {} : { error: clearedError },
-        });
-      }
-      if (rowCount > 0 && prior?.status === 'paused') {
-        await insertWorkflowEvent(query, workflowUnpausedEvent(id));
-      }
-      if (rowCount > 0 && scheduled !== null && triggeredAt !== null) {
-        await insertWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'quota_resume_triggered',
-          data: { attempt: scheduled.attempt, resume_at: scheduled.resumeAt },
-        });
-      }
-      return { rowCount };
+      const prior = await lockPriorRun(query, id);
+      if (!prior || !priorMatchesCursor(prior, cursor)) return { rowCount: 0 };
+      const busy = await claimResourceSlot(query, id, prior, cursor);
+      if (busy) return { busy };
+      const admitted = await casResumeRun(query, id, prior);
+      return admitted ? { admitted } : { rowCount: 0 };
     });
   } catch (error) {
     const err = error as Error;
@@ -331,7 +308,7 @@ export async function resumeWorkflowRun(
   }
   if ('busy' in updateResult) throw updateResult.busy;
 
-  if (updateResult.rowCount === 0) {
+  if ('rowCount' in updateResult) {
     // CAS miss: the row is no longer resumable — deleted, terminal, or already
     // activated by another caller. Refuse rather than double-claim the worktree.
     // Probe the current status for an actionable error (informational only; the
@@ -357,24 +334,7 @@ export async function resumeWorkflowRun(
     throw new WorkflowNotResumableError(id, currentStatus);
   }
 
-  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRunRow>>>;
-  try {
-    selectResult = await pool.query<WorkflowRunRow>(
-      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
-      [id]
-    );
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_select_failed');
-    throw new Error(`Failed to read workflow run after update: ${err.message}`);
-  }
-
-  const row = selectResult.rows[0];
-  if (!row) {
-    getLog().error({ workflowRunId: id }, 'db.workflow_run_resume_vanished');
-    throw new Error(`Workflow run vanished after update (id: ${id})`);
-  }
-  return normalizeWorkflowRun(row);
+  return updateResult.admitted;
 }
 
 export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun> {

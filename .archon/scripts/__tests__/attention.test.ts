@@ -12,7 +12,7 @@ import { PR, PR_URL, packScriptRunner, type ScriptRun } from './deliver-checks-h
 
 const { runPackScript } = packScriptRunner();
 
-const OUTCOME = { ready: false, reason: 'round_cap', pr_url: PR_URL, ci_rerun: 'none', summary: 'Not ready' };
+const OUTCOME = { ready: false, reason: 'round_cap', pr_url: PR_URL, summary: 'Not ready' };
 const LATER = { ...OUTCOME, ready: true, reason: 'delivered', summary: 'Ready' };
 
 type Choices = NonNullable<StageDecision['attention']>['choices'];
@@ -147,6 +147,7 @@ describe('answer', () => {
 
   it.each([
     ['a stage that reports reason failed', null, { ...OUTCOME, reason: 'failed' }],
+    ['a stage whose PR create ended unresolved', null, { ...OUTCOME, ready: false, reason: 'pr_create_unresolved', pr_url: '' }],
     ['a stage that left no outcome', null, null],
     ['a rerun whose stage failed', 'rerun', { ...LATER, ready: false, reason: 'failed' }],
   ])('does not judge %s, so nothing is asked', (_name, choice, outcome) => {

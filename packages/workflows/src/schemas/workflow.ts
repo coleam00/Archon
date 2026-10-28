@@ -3,7 +3,9 @@
  * workflow loading and execution (non-schema hand-written discriminated unions).
  */
 import { z } from 'zod';
+import { WORKFLOW_SOURCES } from '@archon/paths/workflow-source';
 import type { deadlineWaitCursor } from '../store';
+import type { WorkflowRunStatus } from './workflow-run';
 import {
   dagNodeSchema,
   effortLevelSchema,
@@ -14,6 +16,7 @@ import {
 import type { DagNode, NestedKeySpec } from './dag-node';
 import { jsonValueSchema } from '../output-ref';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
+import { modelRefSchema, type WorkflowModelRef } from './model-binding';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -200,7 +203,7 @@ export const workflowBaseSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   provider: z.string().trim().min(1).optional(),
-  model: z.string().optional(),
+  model: modelRefSchema.optional(),
   modelReasoningEffort: modelReasoningEffortSchema.optional(),
   webSearchMode: webSearchModeSchema.optional(),
   effort: effortLevelSchema.optional(),
@@ -381,7 +384,7 @@ export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = ne
 /**
  * Result of loading a command prompt - discriminated union for specific error handling
  *
- * On success, `content` is non-empty (enforced at load time in executor-shared.ts, not by the type).
+ * On success, `content` is non-empty (enforced at load time in load-command-prompt.ts, not by the type).
  */
 export type LoadCommandResult =
   | { success: true; content: string }
@@ -397,7 +400,8 @@ export type LoadCommandResult =
 // ---------------------------------------------------------------------------
 
 /**
- * Result of workflow execution - allows callers to detect success/failure
+ * A handoff reports the observed run state without granting this caller authority to
+ * finalize it or clean up its container. A successful handoff is not workflow completion.
  */
 export type WorkflowExecutionResult =
   | { success: true; workflowRunId: string; summary?: string }
@@ -407,6 +411,19 @@ export type WorkflowExecutionResult =
       paused: true;
       workflowRunId: string;
       waitCursor?: ReturnType<typeof deadlineWaitCursor>;
+    }
+  | {
+      success: true;
+      handedOff: true;
+      workflowRunId: string;
+      observedStatus: Exclude<WorkflowRunStatus, 'failed' | 'cancelled'> | null;
+    }
+  | {
+      success: false;
+      handedOff: true;
+      workflowRunId: string;
+      observedStatus: Extract<WorkflowRunStatus, 'failed' | 'cancelled'>;
+      error: string;
     };
 
 // ---------------------------------------------------------------------------
@@ -424,7 +441,7 @@ export type WorkflowExecutionResult =
  * Precedence for same-named files: `bundled` < `global` < `project`. Installed
  * workflows take no part in it: their qualified names cannot collide with a file.
  */
-export const workflowSourceSchema = z.enum(['project', 'bundled', 'global', 'installed']);
+export const workflowSourceSchema = z.enum(WORKFLOW_SOURCES);
 
 export type WorkflowSource = z.infer<typeof workflowSourceSchema>;
 
@@ -440,7 +457,7 @@ export type WorkflowSource = z.infer<typeof workflowSourceSchema>;
  */
 export interface DeclaredWorkflowConfig {
   readonly provider?: string;
-  readonly model?: string;
+  readonly model?: WorkflowModelRef;
   readonly effort?: EffortLevel;
 }
 

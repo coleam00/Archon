@@ -16,14 +16,14 @@
  * - INPUTS_INV_VERDICT / INPUTS_INV_SUMMARY: the investigation's verdict and
  *   summary, or "null" when it did not run.
  * - INPUTS_PLAN_SUMMARY / INPUTS_OPEN_QUESTIONS: the planner's summary and the calls it
- *   left to a person, or "null" when it did not run.
+ *   left to be asked, or "null" when it did not run.
  * - INPUTS_DELIVERED / INPUTS_DELIVERY / INPUTS_DELIVERY_REASON / INPUTS_PR_URL:
  *   deliver's `ready`, `summary`, `reason` and `pr_url`, or "null" when the deliver
  *   branch was skipped.
  *
- * A failed delivery arrives as deliver's `ready: false, reason: failed` report and is
- * relayed like any other not-ready delivery. A failure before delivery skips this
- * node; the workflow's `report` node answers then.
+ * A failed delivery arrives as deliver's `ready: false` report, reason `failed` or
+ * `pr_create_unresolved`, and is relayed like any other not-ready delivery. A failure
+ * before delivery skips this node; the workflow's `report` node answers then.
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
@@ -51,7 +51,7 @@ const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
 const delivery = text(process.env.INPUTS_DELIVERY);
 
 /** Why no delivery ran. */
-type Stop = 'no_action' | 'blocked' | 'needs_contract' | 'refuted' | 'not_rooted' | 'needs_human';
+type Stop = 'no_action' | 'blocked' | 'needs_contract' | 'refuted' | 'not_rooted' | 'ask';
 
 /**
  * The planner's open questions as a list. Each carries the direction line that would
@@ -90,8 +90,8 @@ function stopped(): { readonly reason: Stop; readonly text: string; readonly rep
     };
   }
   return {
-    reason: 'needs_human',
-    text: `Not done: planning stopped on calls only a person can make. ${planSummary ?? ''}\n${questions() || '- The planner named no question; read the plan.'}`,
+    reason: 'ask',
+    text: `Not done: planning stopped on calls it cannot make itself. ${planSummary ?? ''}\n${questions() || '- The planner named no question; read the plan.'}`,
     report: 'plan.md',
   };
 }

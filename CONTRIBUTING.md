@@ -7,7 +7,7 @@ Thank you for your interest in contributing to Archon!
 1. Fork the repository
 2. Clone your fork
 3. Install dependencies: `bun install`
-4. Copy `.env.example` to `.env` and configure
+4. Copy `.env.example` to `.env` in the Archon checkout and configure it for the source server. This file loads after CWD env stripping, without overriding remaining process values, and before `~/.archon/.env` and `<cwd>/.archon/.env`. See [environment file locations](packages/docs-web/src/content/docs/reference/configuration.md#env-file-locations) for precedence and the distinction from a target repository's `.env`.
 5. Start development: `bun run dev`
 
 ## Development Workflow
@@ -28,8 +28,10 @@ you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
-`generated-files`, `type-check`, `lint`, `ratchet`, `format`, `installer` (POSIX only),
-`package-tests`, `cli-tests`, and `script-tests`.
+`generated-files`, `merge-sweep-contract`, `type-check`, `lint`, `mock-modules`, `ratchet`,
+`format`, `installer` (POSIX only), `package-tests`, `cli-tests`, `core-tests`, and
+`script-tests`. `mock-modules` fails when a `mock.module()` factory leaves out an export of
+the module it mocks; see "`mock.module()` merges over the real module" in the DX quirks guide.
 The generated group checks the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
@@ -41,10 +43,13 @@ Git still normalizes text through the existing `.gitattributes`. `.archon/**` re
 excluded from formatting while its TypeScript scripts remain linted. Markdown and HTML
 are hand-formatted. After resolving conflicts in an in-flight PR, run `bun run format`.
 
-The ratchet (`bun run check:ratchet`) refuses a change that raises the cognitive complexity
-of a function in a file it touches, or makes a touched source file longer, compared with the
-merge base with `origin/dev` (fetch it locally). It scores the TS/JS files Biome lints. To
-land an increase on purpose, add a trailer to one of the change's commits:
+The ratchet (`bun run check:ratchet`) lets code grow up to a ceiling and holds what is above
+it, compared with the merge base with `origin/dev` (fetch it locally). A touched function is
+refused when it ends above cognitive complexity 15 and scores higher than at the merge base. A
+touched source file is refused when it ends above 800 lines and has more lines than at the
+merge base. Test files have no line ceiling. It scores the TS/JS files
+Biome lints. To land an increase above a ceiling on purpose, add a trailer to one of the
+change's commits:
 `Ratchet-Allow: <path>` for a file's length, `Ratchet-Allow: <path>:<function>` for a function,
 using the names the failure prints.
 
@@ -73,7 +78,11 @@ CI runs formatting and every default check on ready pull requests, except that a
 touching only prose or files no check reads skips the test, service and binary jobs.
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
 count as prose unless `BUILD_INPUTS` or `isPackPrompt` names them (pack `commands/` and
-`.shared/`, `.claude/skills/`, the generated provider-capability page, the docs manifest), and `INERT_PATHS`
+`.shared/` documents). `BUILD_INPUTS` is the authoritative list of other exceptions, including
+Markdown read by tests, bundled skills, generated docs, and the docs manifest. A conformance test
+requires every tracked Markdown path with a directory named in a test file to run the suite,
+even when the mention is only in a comment. Bare filenames such as `README.md` are excluded.
+`INERT_PATHS`
 lists the non-prose files no check reads. On a pull request, `workspaceTestInputs` in the same
 file decides whether the `cli` and `packages` legs of the `test` job run: a change limited to
 root `scripts/` files that no package test or CI entry point reads skips them, the
@@ -82,8 +91,9 @@ said so. A push to `dev` or `main` skips those jobs only when
 a pull request run already passed every job on the same tree, and otherwise runs them, so a
 prose change's test-visible effects are checked on `dev`.
 
-CI does not run the tests under `.archon/scripts/` (the SDLC pack's script tests) or the
-workflow fixtures on pull requests or pushes. Run them with `bun run test --plan pack` and
+CI runs the merge-sweep conformance test through `merge-sweep-contract`. The remaining
+tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
+do not run on pull requests or pushes. Run them with `bun run test --plan pack` and
 `bun run validate --only workflow-fixtures` when you change `.archon/workflows/` or
 `.archon/scripts/`; a single test file runs with
 `bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI, dispatch the
@@ -138,7 +148,7 @@ pack through pull requests that deliver an accepted issue.
 The `Publish` workflow checks provenance and SBOM attestations on the pushed image
 digest. Keep `provenance: mode=max` and `sbom: true` enabled.
 Build arguments are published in the attestation; secrets must use `secrets:`, whose values are excluded.
-See [Verifying image attestations](packages/docs-web/src/content/docs/deployment/docker.md#verifying-image-attestations)
+See [Verify image attestations](packages/docs-web/src/content/docs/deployment/docker.md#verify-image-attestations)
 for the consumer inspection commands.
 
 ### Commit messages
@@ -175,8 +185,10 @@ Never add AI attribution, generated-by text, robot emoji, or
    Bot-authored dependency pull requests (`renovate[bot]`) are exempt because
    Renovate generates the body.
 5. Link the issue the pull request addresses with `Closes #<number>`,
-   `Fixes #<number>`, or `Resolves #<number>` in the description. Pull requests
-   without a linked issue will be closed.
+   `Fixes #<number>`, or `Resolves #<number>` in the description. When the
+   issue's dated "Current scope" ruling keeps it open after this pull request,
+   link it with `Refs #<number>` instead. Pull requests without a linked issue
+   will be closed.
 
 Treat repository rules as syntax constraints, not as the writing-quality
 standard. Write in plain, natural language. Use the repository's exact terms

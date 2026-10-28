@@ -17,7 +17,7 @@ import {
 } from '@archon/provider-contract/plugin';
 import { ProviderPluginExitedError } from './process-provider';
 import { processProviderRegistration } from './process-registration';
-import { descriptor, chunks } from './fixtures/process-provider-data';
+import { descriptor, chunks, invalidMessages } from './fixtures/process-provider-data';
 
 const processLog = paths.createLogger('core.provider-process');
 const providerLog = paths.createLogger(`provider.${descriptor.id}`);
@@ -564,6 +564,60 @@ test('Claude resume and fork retain per-query cost and model across fresh proces
   }
 });
 
+test.each([
+  ['invalid-message', 'json', 'malformed JSON', 'unknown'],
+  [
+    'invalid-message',
+    'payload',
+    'invalid payload (chunk.name: invalid_type, expected string)',
+    '_archon/chunk',
+  ],
+  // On Windows the line never reaches the host once the fixture plugin exits (CI saw EOF
+  // without it), so the post-exit case runs only where the inheriting process keeps stdout open.
+  ...(process.platform === 'win32'
+    ? []
+    : ([['invalid-message-after-exit', 'json', 'malformed JSON', 'unknown']] as const)),
+] as const)(
+  '%s: an invalid %s plugin message surfaces content-free evidence in the error and log',
+  async (mode, variant, detail, message) => {
+    const error = spyOn(processLog, 'error').mockImplementation(() => {});
+    try {
+      let failure: unknown;
+      try {
+        await collect(provider(mode, variant).sendQuery('turn', tmpdir()));
+      } catch (caught) {
+        failure = caught;
+      }
+      if (!(failure instanceof Error)) throw new Error('expected the turn to fail');
+      const bytes = new TextEncoder().encode(invalidMessages[variant]).byteLength;
+      expect(failure.message).toMatch(
+        /^Provider plugin process-fixture protocol failed at line \d+ \(invalid_message\): /
+      );
+      expect(failure.message).toContain(
+        `${detail} [message ${message}, ${String(bytes)} bytes, plugin version ${descriptor.version}]`
+      );
+      expect(error.mock.calls).toEqual([
+        [
+          {
+            provider: descriptor.id,
+            line: expect.any(Number),
+            reason: 'invalid_message',
+            detail,
+            messageBytes: bytes,
+            message,
+            pluginVersion: descriptor.version,
+          },
+          'provider.plugin.protocol_failed',
+        ],
+      ]);
+      expect(failure.message).not.toContain('private-line-secret');
+      expect(JSON.stringify(error.mock.calls)).not.toContain('private-line-secret');
+    } finally {
+      error.mockRestore();
+    }
+  }
+);
+
 test('provider logs dispatch at the plugin severity', async () => {
   const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
   const error = spyOn(providerLog, 'error').mockImplementation(() => {});
@@ -577,7 +631,29 @@ test('provider logs dispatch at the plugin severity', async () => {
   }
 });
 
-test('provider log records without a contract failure class are dropped', async () => {
+test('provider lifecycle events reach the host log as closed values', async () => {
+  const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
+  const error = spyOn(providerLog, 'error').mockImplementation(() => {});
+  try {
+    await collect(provider('logs-untrusted', 'warn').sendQuery('process_still_exiting', tmpdir()));
+    await collect(provider('logs-untrusted', 'error').sendQuery('process_abnormal_exit', tmpdir()));
+    expect(warn.mock.calls).toEqual([
+      [{ lifecycle: 'process_still_exiting', waitedMs: 60_000 }, 'provider.plugin.log'],
+    ]);
+    expect(error.mock.calls).toEqual([
+      [{ lifecycle: 'process_abnormal_exit', waitedMs: 60_000 }, 'provider.plugin.log'],
+    ]);
+    const logged = JSON.stringify([...warn.mock.calls, ...error.mock.calls]);
+    expect(logged).not.toContain('credential-secret');
+    expect(logged).not.toContain('provider.forged');
+    expect(logged).not.toContain('forgedCount');
+  } finally {
+    warn.mockRestore();
+    error.mockRestore();
+  }
+});
+
+test('provider log records without a contract failure class or lifecycle event are dropped', async () => {
   const warn = spyOn(providerLog, 'warn').mockImplementation(() => {});
   try {
     await collect(provider('logs-untrusted', 'warn').sendQuery('credentialsecret', tmpdir()));
@@ -585,5 +661,21 @@ test('provider log records without a contract failure class are dropped', async 
     expect(warn.mock.calls).toEqual([]);
   } finally {
     warn.mockRestore();
+  }
+});
+
+test('container credential checks deliver only the execution credential bag to the provider', async () => {
+  process.env.PROCESS_HOST_CANARY = 'host-value';
+  try {
+    expect(
+      await provider('container-check').checkCredential({
+        env: { TEST_CREDENTIAL: 'container-value', PATH: 'container-path' },
+        execContext: { kind: 'container', containerId: 'runner' },
+        cwd: '/runner',
+        signal: AbortSignal.timeout(5000),
+      })
+    ).toEqual({ state: 'usable', source: 'native' });
+  } finally {
+    delete process.env.PROCESS_HOST_CANARY;
   }
 });

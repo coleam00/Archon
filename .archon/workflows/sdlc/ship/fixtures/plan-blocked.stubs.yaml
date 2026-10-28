@@ -11,6 +11,7 @@ triage__triage:
   urgency: { value: none, reason: "stub: urgency" }
   item: { repo: { host: "", path: "" }, number: 0 }
   area_labels: []
+  related: []
   summary: "stub: material product shape remains undecided"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 intel: "stub: no usage-data source is connected; the open call turns on how often operators edit the field"

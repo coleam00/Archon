@@ -1,3 +1,4 @@
+import { inMemoryEventRows } from '../test-utils';
 import { afterEach, expect, mock, spyOn, type Mock } from 'bun:test';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -39,6 +40,7 @@ import { CONTAINER_MARKER_PROBE } from '../checkout-observation';
 
 export const mockLogFn = mock((_data: unknown, _message?: string): void => undefined);
 export const mockLogger = {
+  level: 'info',
   info: mockLogFn,
   warn: mockLogFn,
   error: mockLogFn,
@@ -60,9 +62,11 @@ export function setMockArtifactHome(home: string): void {
 export function setMockWorkflowHome(home: string): void {
   mockWorkflowHome = home;
 }
-// Captured before the module mock below replaces the re-export.
-const { isPathInside } = await import('@archon/paths/archon-paths');
+// Captured before the module mock below replaces it.
+const actualPaths = await import('@archon/paths');
+const { isPathInside } = actualPaths;
 mock.module('@archon/paths', () => ({
+  ...actualPaths,
   createLogger: mock(() => mockLogger),
   getCommandFolderSearchPaths: (folder?: string) => {
     const paths = ['.archon/commands'];
@@ -72,11 +76,9 @@ mock.module('@archon/paths', () => ({
   getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
   getBundledWorkflowsPath: () => '/nonexistent/defaults/workflows',
   getHomeWorkflowsPath: () => mockWorkflowHome,
-  getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
   getArchonHome: () => '/nonexistent/home',
   // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
   // containment rules are exercised rather than stubbed away.
-  isPathInside,
   isInsideArchonHome: (candidate: string): boolean =>
     isPathInside(mockArtifactHome, candidate, { includeRoot: true, lexical: true }),
   getRunArtifactsDirForRoot: (root: string, runId: string): string =>
@@ -233,7 +235,8 @@ export function createMockStore(): MockWorkflowStore {
       throw new Error('Unexpected deferWorkflowContinuation');
     }),
     releaseRunForUnreadableSource: mock<IWorkflowStore['releaseRunForUnreadableSource']>(
-      async () => {
+      async (_id, _release, beforePublish) => {
+        await beforePublish?.();
         getWorkflowRunStatus.mockImplementation(async () => 'paused');
         return { released: true };
       }
@@ -276,9 +279,11 @@ export function createMockStore(): MockWorkflowStore {
     deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
-    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
-      throw new Error('Not used by this test');
-    }),
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId =>
+      inMemoryEventRows(createWorkflowEvent.mock.calls.map(([event]) => event)).filter(
+        event => event.workflow_run_id === runId
+      )
+    ),
     listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
@@ -305,6 +310,9 @@ export function createMockStore(): MockWorkflowStore {
     resumeWorkflowRun: mock<IWorkflowStore['resumeWorkflowRun']>(async _id => mockWorkflowRun()),
     recoverCancelledFanOutRun: mock<IWorkflowStore['recoverCancelledFanOutRun']>(async _id =>
       mockWorkflowRun()
+    ),
+    updateWorkflowRunMetadataIfRunning: mock<IWorkflowStore['updateWorkflowRunMetadataIfRunning']>(
+      async () => true
     ),
     updateWorkflowRun: mock<IWorkflowStore['updateWorkflowRun']>(
       async (_id, _updates) => undefined
@@ -352,6 +360,7 @@ export function createMockStore(): MockWorkflowStore {
       Promise.resolve({
         completedNodeOutputs: new Map<string, { output: string }>(),
         fanOutSnapshots: new Map(),
+        failedNodes: new Map(),
         unresolvedNodeStarts: new Set(),
         budget: { workUnits: 0, spendUsd: 0 },
         tokens: { input: 0, output: 0 },

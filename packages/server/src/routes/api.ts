@@ -15,6 +15,7 @@ import { registerAuthRoutes } from './api.auth';
 import { registerCodebaseEnvironmentRoute, registerCodebaseRoutes } from './api.codebases';
 import { registerConfigRoutes } from './api.config';
 import { registerConversationRoutes } from './api.conversations';
+import { registerConversationProcessingRoute } from './api.conversation-processing';
 import { registerHealthRoutes } from './api.health';
 import { registerMessageRoutes } from './api.messages';
 import { registerProviderKeyRoutes } from './api.provider-keys';
@@ -98,6 +99,7 @@ export function registerApiRoutes(
   registerWorkflowRunLaunchRoute(app, { webAdapter, dispatchToOrchestrator });
   registerRunAttentionRoutes(app, operations);
   registerDashboardRunsRoute(app);
+  registerConversationProcessingRoute(app, { lockManager });
   registerRunControlRoutes(app, { operations, dispatchToOrchestrator });
   registerRunGateRoutes(app, operations);
   registerRunCleanupRoutes(app, operations);

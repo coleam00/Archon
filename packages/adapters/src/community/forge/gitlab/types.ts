@@ -106,3 +106,9 @@ export interface GitLabMergeRequestEvent {
 // --- Discriminated union ---
 
 export type GitLabWebhookEvent = GitLabNoteEvent | GitLabIssueEvent | GitLabMergeRequestEvent;
+
+/** The GitLab instance the adapter's REST calls go to and the token they carry. */
+export interface GitLabClient {
+  gitlabUrl: string;
+  token: string;
+}

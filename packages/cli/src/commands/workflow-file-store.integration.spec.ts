@@ -1,11 +1,19 @@
+import { spawn } from 'node:child_process';
+import * as processTools from '@archon/paths/plugin-process';
+import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
+import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import {
   resourceStartDispositionSchema,
   type ResourceStartDisposition,
 } from '@archon/workflows/schemas/resource-start';
 import { z } from '@hono/zod-openapi';
-import { answeredPauseContinuation, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  answeredPauseContinuation,
+  runAttention,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
-import { expect, test, setSystemTime } from 'bun:test';
+import { afterEach, beforeEach, expect, test, setSystemTime, spyOn } from 'bun:test';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { readdir } from 'node:fs/promises';
 import {
@@ -15,14 +23,57 @@ import {
   realpathSync,
   writeFileSync,
   readFileSync,
+  unlinkSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { tmpdir, hostname } from 'node:os';
-import { trackTempRoots } from '@archon/paths/test-utils';
-const roots = trackTempRoots();
+import { CliTestScope } from '../test-support/cli-test-scope';
+import { getLogLevel, setLogLevel } from '@archon/paths';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
+import {
+  clearPlatformPolicies,
+  getRegisteredPlatformPolicies,
+  setPlatformPolicies,
+} from '@archon/core/platforms/registry';
+import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
+import { triggerCommand } from './trigger';
+import * as workflowCommands from './workflow';
+import {
+  runWorkflowAnswer,
+  runWorkflowRespond,
+  runWorkflowApprove,
+  runWorkflowReject,
+} from '../routes/workflow';
+import { workflowContinuationCommand } from './workflow-continuations';
+const scopes: CliTestScope[] = [];
+let originalEnv: NodeJS.ProcessEnv;
+let originalLogLevel: ReturnType<typeof getLogLevel>;
+beforeEach(() => {
+  originalEnv = { ...process.env };
+  originalLogLevel = getLogLevel();
+});
+afterEach(closeFixtures);
+async function closeFixtures(): Promise<void> {
+  const errors: unknown[] = [];
+  try {
+    for (const scope of scopes.splice(0)) {
+      try {
+        await scope.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  } finally {
+    process.env = originalEnv;
+    setLogLevel(originalLogLevel);
+    clearPlatformPolicies();
+  }
+  if (errors.length > 0) throw new AggregateError(errors, 'CLI fixture cleanup failed');
+}
 const repo = join(import.meta.dir, '../../../..');
 interface Fixture {
+  scope: CliTestScope;
   root: string;
   project: string;
   home: string;
@@ -30,8 +81,13 @@ interface Fixture {
   trap: string;
   env: NodeJS.ProcessEnv;
 }
-function fixture(config = 'store: files\n'): Fixture {
-  const root = roots(mkdtempSync(join(tmpdir(), 'cli-file-store-')));
+function fixture(
+  config = 'store: files\n',
+  nativeStatus?: 'usable' | 'not_connected' | 'real'
+): Fixture {
+  const root = mkdtempSync(join(tmpdir(), 'cli-file-store-'));
+  const scope = new CliTestScope(root);
+  scopes.push(scope);
   const project = join(root, 'project'),
     home = join(root, 'home'),
     entry = join(root, 'entry.ts'),
@@ -65,9 +121,25 @@ nodes:
     entry,
     `import {mock} from 'bun:test';
 import {appendFileSync} from 'node:fs';
+const childProcess = await import('node:child_process');
+const spawn = childProcess.spawn;
+// Detached owners and bash nodes lead separate process groups; teardown needs both.
+mock.module('node:child_process', () => ({...childProcess, spawn: (...args) => {
+  const child = spawn(...args);
+  if (args[2]?.detached && child.pid) appendFileSync(${JSON.stringify(scope.detachedPids)}, child.pid + String.fromCharCode(10));
+  return child;
+}}));
 const fail=() => {appendFileSync(${JSON.stringify(trap)},'open\\n');throw new Error('SQL open trap');};
 const connection=await import(${src('packages/core/src/db/connection.ts')});
 mock.module(${src('packages/core/src/db/connection.ts')},()=>({...connection,getDatabase:fail,getDialect:fail,pool:{query:fail,connect:fail}}));
+${
+  nativeStatus
+    ? `const {ClaudeProvider}=await import(${src('packages/providers/src/claude/provider.ts')});
+${nativeStatus === 'real' ? '' : `ClaudeProvider.prototype.checkCredential=async()=>({state:${JSON.stringify(nativeStatus)},source:'native'});`}
+const {registerBuiltinProviders}=await import(${src('packages/providers/src/in-process.ts')});
+mock.module(${src('packages/core/src/providers/register-host-providers.ts')},()=>({registerHostProviders:async()=>registerBuiltinProviders()}));`
+    : ''
+}
 await import(${src('packages/cli/src/cli.ts')});`
   );
   const env = {
@@ -85,29 +157,631 @@ await import(${src('packages/cli/src/cli.ts')});`
     WORKFLOW_ID: '',
     ARCHON_NODE_EXECUTION: '',
   };
-  return { root, project, home, entry, trap, env };
+  return { scope, root, project, home, entry, trap, env };
 }
 async function cli(
   f: ReturnType<typeof fixture>,
   args: string[],
   env = f.env,
-  input = ''
+  input = '',
+  launchCwd = f.project
 ): Promise<{ output: string; error: string; code: number }> {
-  const child = Bun.spawn([process.execPath, f.entry, ...args], {
-    cwd: f.project,
-    env,
-    stdin: 'pipe',
-    stdout: 'pipe',
-    stderr: 'pipe',
+  return f.scope.run([process.execPath, f.entry, ...args], launchCwd, env, input);
+}
+async function commandResult(command: () => Promise<number | void>) {
+  let output = '';
+  const log = spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+    output += `${args.join(' ')}\n`;
   });
-  child.stdin.write(input);
-  child.stdin.end();
-  const [output, error, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
+  const stdout = spyOn(process.stdout, 'write').mockImplementation((...args: unknown[]) => {
+    output += String(args[0]);
+    const callback = args.find(arg => typeof arg === 'function');
+    if (typeof callback === 'function') callback();
+    return true;
+  });
+  try {
+    const code = (await command()) ?? 0;
+    return { code, output, error: '' };
+  } catch (error) {
+    return { code: 1, output, error: String(error) };
+  } finally {
+    log.mockRestore();
+    stdout.mockRestore();
+  }
+}
+test('a timed-out CLI child settles before its fixture is removed', async () => {
+  const f = fixture();
+  const childRoot = join(f.root, 'timed-out');
+  mkdirSync(childRoot);
+  const pidFile = join(f.root, 'child.pid');
+  const proof = join(f.root, 'closed');
+  const continued = join(f.root, 'continued');
+  const spec = join(f.root, 'timeout.test.ts');
+  writeFileSync(
+    spec,
+    `
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
+import * as cleanup from ${JSON.stringify(join(repo, 'packages/paths/src/test-utils.ts'))};
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
+const scope = new CliTestScope(${JSON.stringify(childRoot)});
+afterEach(async () => {
+  expect(existsSync(scope.root)).toBe(true);
+  const pid = Number(readFileSync(${JSON.stringify(pidFile)}, 'utf8'));
+  const removeTempTree = cleanup.removeTempTree;
+  const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
+    expect(() => process.kill(pid, 0)).toThrow();
+    await removeTempTree(root);
+  });
+  try {
+    await scope.close();
+  } finally {
+    removal.mockRestore();
+  }
+  expect(existsSync(scope.root)).toBe(false);
+  expect(() => process.kill(pid, 0)).toThrow();
+  await expect(scope.run([process.execPath, '-e', ''], scope.root, process.env)).rejects.toThrow('scope is closed');
+  writeFileSync(${JSON.stringify(proof)}, 'closed');
+});
+let running: ReturnType<CliTestScope['run']>;
+beforeEach(async () => {
+  running = scope.run([process.execPath, '-e', ${JSON.stringify(`const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(`${pidFile}.tmp`)}, String(process.pid)); fs.renameSync(${JSON.stringify(`${pidFile}.tmp`)}, ${JSON.stringify(pidFile)}); setTimeout(() => process.exit(0), 1500);`)}], scope.root, process.env);
+  while (!existsSync(${JSON.stringify(pidFile)})) await Bun.sleep(10);
+});
+test('forced timeout', async () => {
+  await running;
+  writeFileSync(${JSON.stringify(continued)}, 'continued after timeout');
+}, 1000);
+`
+  );
+  const result = await f.scope.run([process.execPath, 'test', spec], repo, f.env);
+  expect(result.code).toBe(1);
+  expect(result.output + result.error).toContain('timed out');
+  expect(readFileSync(proof, 'utf8')).toBe('closed');
+  expect(existsSync(continued)).toBe(false);
+  expect(existsSync(childRoot)).toBe(false);
+});
+test('failed fixture closes still clean other scopes and restore shared state', async () => {
+  const first = fixture();
+  const second = fixture();
+  const third = fixture();
+  writeFileSync(first.scope.detachedPids, '0');
+  writeFileSync(third.scope.detachedPids, '0');
+  process.env = { ...first.env };
+  setLogLevel(originalLogLevel === 'error' ? 'silent' : 'error');
+  setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+  try {
+    const error = await closeFixtures().catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) throw error;
+    expect(error.errors).toHaveLength(2);
+    for (const failure of error.errors) {
+      expect(failure).toMatchObject({ message: 'Invalid detached test PID' });
+    }
+    expect(existsSync(first.root)).toBe(true);
+    expect(existsSync(second.root)).toBe(false);
+    expect(existsSync(third.root)).toBe(true);
+    expect(process.env).toEqual(originalEnv);
+    expect(getLogLevel()).toBe(originalLogLevel);
+    expect(getRegisteredPlatformPolicies).toThrow('Platform policies are not configured');
+  } finally {
+    unlinkSync(first.scope.detachedPids);
+    unlinkSync(third.scope.detachedPids);
+    await first.scope.close();
+    await second.scope.close();
+    await third.scope.close();
+  }
+});
+test('invalid detached process records preserve the fixture', async () => {
+  const f = fixture();
+  writeFileSync(f.scope.detachedPids, '0');
+  await expect(f.scope.close()).rejects.toThrow('Invalid detached test PID');
+  expect(existsSync(f.root)).toBe(true);
+  unlinkSync(f.scope.detachedPids);
+});
+test('a refused detached group signal requires proof that the group is gone', async () => {
+  const f = fixture();
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+  await new Promise<void>((resolve, reject) => {
+    child.once('spawn', resolve);
+    child.once('error', reject);
+  });
+  if (!child.pid) throw new Error('Missing detached child PID');
+  writeFileSync(f.scope.detachedPids, String(child.pid));
+  const refusedSignal = spyOn(processTools, 'terminateTree').mockRejectedValue(
+    Object.assign(new Error('Signal refused'), { code: 'EPERM' })
+  );
+  try {
+    await expect(f.scope.close()).rejects.toThrow(
+      process.platform === 'win32' ? 'Signal refused' : 'Process groups still running'
+    );
+    expect(existsSync(f.root)).toBe(true);
+    child.kill('SIGKILL');
+    await exited;
+    if (process.platform === 'win32') refusedSignal.mockRestore();
+    await f.scope.close();
+    expect(existsSync(f.root)).toBe(false);
+  } finally {
+    refusedSignal.mockRestore();
+    child.kill('SIGKILL');
+    await exited;
+  }
+});
+for (const launch of ['workflow', 'fire', 'drain'] as const) {
+  test(`a timed-out ${launch} launcher stops its detached execution before removal`, async () => {
+    setLogLevel('error');
+    const outer = fixture();
+    const f = fixture();
+    const executable = "'" + process.execPath.replaceAll("'", "'\\''") + "'";
+    writeFileSync(
+      join(f.project, '.archon/workflows/hold.yaml'),
+      `name: hold
+description: hold for teardown proof
+worktree:
+  enabled: false
+nodes:
+  - id: hold
+    bash: exec ${executable} hold.ts
+`
+    );
+    let args = ['workflow', 'run', 'hold', '--folder', '--no-worktree', '--detach'];
+    if (launch !== 'workflow') {
+      process.env = { ...f.env };
+      registerBuiltinProviders();
+      setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+      const host = await createFileWorkflowHost(join(f.home, 'store'));
+      await host.records.codebases.createCodebase({
+        name: 'timeout-test',
+        default_cwd: realpathSync(f.project),
+        kind: 'folder',
+      });
+      const user = await host.records.users.findOrCreateUserByPlatformIdentity(
+        'cli',
+        'file-operator'
+      );
+      if (!user) throw new Error('Missing test user');
+      const config = join(f.root, 'trigger.json');
+      writeFileSync(
+        config,
+        JSON.stringify({
+          version: 1,
+          sourceInstanceId: 'timeout-test',
+          schedule: { intervalSeconds: 60, runAtLoad: false },
+          binding: {
+            bindingId: 'timeout-test',
+            bindingRevision: null,
+            hostId: 'timeout-test',
+            runAsUserId: user.id,
+            resource: 'timeout-test',
+            capacity: 1,
+            overlap: 'queue',
+            launch: {
+              cwd: f.project,
+              workflowName: 'hold',
+              inputs: {},
+              isolation: { kind: 'in-place' },
+            },
+          },
+        })
+      );
+      args = ['trigger', 'fire', '--config', config];
+      if (launch === 'drain') {
+        const blocker = randomUUID();
+        await host.deps.store.admitResourceStart({
+          resource: 'timeout-test',
+          capacity: 1,
+          hostId: 'timeout-test',
+          overlap: 'queue',
+          launch: {
+            version: 2,
+            run: {
+              id: blocker,
+              workflow_name: 'holder',
+              codebase_id: 'holder',
+              user_message: '',
+              metadata: {},
+            },
+            execution: {
+              cwd: join(f.root, 'holder'),
+              conversationId: blocker,
+              isolation: { kind: 'in-place' },
+            },
+          },
+        });
+        await host.deps.store.claimPendingWorkflowRun(blocker);
+        const queued = await commandResult(() => triggerCommand(host, 'fire', [], { config }));
+        expect(queued.code).toBe(0);
+        expect(JSON.parse(queued.output).bindings[0].disposition.status).toBe('queued');
+        await host.deps.store.completeWorkflowRun(blocker, { duration_ms: 1 });
+        args = ['trigger', 'drain', '--host', 'timeout-test'];
+      }
+    }
+    const proof = join(outer.root, 'closed');
+    const bodyStarted = join(outer.root, 'body-started');
+    const spec = join(outer.root, 'detached-timeout.test.ts');
+    writeFileSync(
+      spec,
+      `
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
+import * as cleanup from ${JSON.stringify(join(repo, 'packages/paths/src/test-utils.ts'))};
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { CliTestScope } from ${JSON.stringify(join(import.meta.dir, '../test-support/cli-test-scope.ts'))};
+const scope = new CliTestScope(${JSON.stringify(f.root)});
+const logs = ${JSON.stringify(join(f.home, 'logs'))};
+let ready = false;
+// The node records itself with the owners, then signals here, so teardown stops it by its own PID.
+// TCP may split the PID across data callbacks, so the signal is complete at its newline. It does not
+// wait for the node's half-close: a Windows setup once stalled with the node running and the
+// listener never seeing that end.
+const started = Promise.withResolvers<number>();
+let signal = '';
+// What the listener saw, so a setup timeout names the step that never happened.
+const events: string[] = [];
+const listener = Bun.listen({
+  hostname: '127.0.0.1',
+  port: 0,
+  socket: {
+    open: () => {
+      events.push('open');
+    },
+    data: (_socket, data) => {
+      events.push('data ' + JSON.stringify(data.toString()));
+      signal += data.toString();
+      if (signal.includes(String.fromCharCode(10))) started.resolve(Number(signal));
+    },
+    end: () => {
+      events.push('end');
+    },
+    close: (_socket, error) => {
+      events.push('close' + (error ? ' ' + String(error) : ''));
+    },
+    error: (_socket, error) => {
+      events.push('error ' + String(error));
+    },
+  },
+});
+function pids(records: string): number[] {
+  return records.split(String.fromCharCode(10)).filter(Boolean).map(Number);
+}
+function recorded(): number[] {
+  return existsSync(scope.detachedPids) ? pids(readFileSync(scope.detachedPids, 'utf8')) : [];
+}
+// The diagnostic must not throw, or teardown would leave the detached processes running.
+function read(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (error) {
+    return 'unreadable: ' + ((error as NodeJS.ErrnoException).code ?? String(error));
+  }
+}
+function liveness(pid: number): string {
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code ?? String(error);
+  }
+}
+function runLogs(): string[] {
+  let names: string[];
+  try {
+    names = existsSync(logs) ? readdirSync(logs) : [];
+  } catch (error) {
+    return [logs + ' unreadable: ' + ((error as NodeJS.ErrnoException).code ?? String(error))];
+  }
+  if (!names.length) return ['no run log in ' + logs];
+  return names.map(name => '--- ' + name + ' ---' + String.fromCharCode(10) + read(join(logs, name)));
+}
+function setupState(): string {
+  const records = existsSync(scope.detachedPids) ? read(scope.detachedPids) : undefined;
+  return [
+    'Detached timeout setup did not finish. State before teardown:',
+    'recorded PIDs file: ' + (records === undefined ? 'missing' : JSON.stringify(records)),
+    ...pids(records ?? '').map(pid => 'PID ' + pid + ': ' + liveness(pid)),
+    'listener events: ' + (events.length ? events.join(', ') : 'none, the node never connected'),
+    ...runLogs(),
+  ].join(String.fromCharCode(10));
+}
+beforeEach(async () => {
+  // Exercise setup that exceeds the forced body timeout.
+  await Bun.sleep(100);
+  writeFileSync(${JSON.stringify(join(f.project, 'hold.ts'))}, [
+    "import { appendFileSync } from 'node:fs';",
+    'appendFileSync(' + JSON.stringify(scope.detachedPids) + ', process.pid + String.fromCharCode(10));',
+    "await Bun.connect({ hostname: '127.0.0.1', port: " + listener.port + ", socket: { open: socket => { socket.write(process.pid + String.fromCharCode(10)); }, data: () => {} } });",
+    'setInterval(() => {}, 1000);',
+  ].join(String.fromCharCode(10)));
+  const result = await scope.run(${JSON.stringify([process.execPath, f.entry, ...args])}, ${JSON.stringify(f.project)}, { ...process.env, ARCHON_HOME: ${JSON.stringify(f.home)}, LOG_LEVEL: 'info' });
+  expect(result, result.output + result.error).toMatchObject({ code: 0 });
+  const node = await started.promise;
+  expect(recorded()).toContain(node);
+  for (const pid of recorded()) process.kill(pid, 0);
+  ready = true;
+}, 10000);
+afterEach(async () => {
+  if (!ready) console.error(setupState());
+  listener.stop(true);
+  const removeTempTree = cleanup.removeTempTree;
+  const removal = spyOn(cleanup, 'removeTempTree').mockImplementation(async root => {
+    expect(existsSync(root)).toBe(true);
+    for (const pid of recorded()) expect(() => process.kill(pid, 0)).toThrow();
+    await removeTempTree(root);
+  });
+  try {
+    await scope.close();
+  } finally {
+    removal.mockRestore();
+  }
+  expect(existsSync(scope.root)).toBe(false);
+  writeFileSync(${JSON.stringify(proof)}, 'closed');
+}, 10000);
+test('forced detached timeout', async () => {
+  writeFileSync(${JSON.stringify(bodyStarted)}, 'started');
+  await Bun.sleep(60000);
+}, 50);
+`
+    );
+    const result = await outer.scope.run([process.execPath, 'test', spec], repo, f.env);
+    expect(result.code).toBe(1);
+    expect(result.output + result.error).toContain('timed out');
+    expect(existsSync(bodyStarted), result.output + result.error).toBe(true);
+    expect(existsSync(proof), result.output + result.error).toBe(true);
+    expect(readFileSync(proof, 'utf8')).toBe('closed');
+    expect(existsSync(f.root)).toBe(false);
+  }, 15000);
+}
+/** A Claude environment with no login, so only project settings can supply one. */
+function withoutClaudeLogin(f: Fixture, claudeConfig: string): NodeJS.ProcessEnv {
+  return {
+    ...f.env,
+    CLAUDE_CONFIG_DIR: claudeConfig,
+    ANTHROPIC_API_KEY: '',
+    CLAUDE_API_KEY: '',
+    CLAUDE_CODE_OAUTH_TOKEN: '',
+    ANTHROPIC_AUTH_TOKEN: '',
+    CLAUDE_CODE_USE_BEDROCK: '0',
+    CLAUDE_CODE_USE_VERTEX: '0',
+    CLAUDE_CODE_USE_FOUNDRY: '0',
+    CLAUDE_CODE_USE_MANTLE: '0',
+    CLAUDE_CODE_USE_ANTHROPIC_AWS: '0',
+    CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD: '0',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+  };
+}
+/** The file store's runs; a detached launch is awaited until its run settles. */
+async function listRuns(f: Fixture, awaitSettled: boolean): Promise<WorkflowRun[]> {
+  const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+  let { runs } = await store.listWorkflowRuns();
+  const deadline = Date.now() + 15000;
+  while (
+    awaitSettled &&
+    Date.now() < deadline &&
+    !runs.some(run => ['failed', 'paused'].includes(run.status))
+  ) {
+    await Bun.sleep(25);
+    ({ runs } = await store.listWorkflowRuns());
+  }
+  return runs;
+}
+function isolatedCheckout(project: string): string {
+  const paths = Bun.spawnSync(['git', 'worktree', 'list', '--porcelain', '-z'], { cwd: project });
+  const worktree = paths.stdout
+    .toString()
+    .split('\0')
+    .filter(field => field.startsWith('worktree '))
+    .map(field => field.slice('worktree '.length))
+    .find(path => realpathSync(path) !== realpathSync(project));
+  if (!worktree) throw new Error('Missing isolated checkout');
+  return worktree;
+}
+test('a CLI user can launch a Claude workflow with files and native authentication', async () => {
+  const f = fixture('store: files\ndefaultAssistant: claude\n', 'usable');
+  writeFileSync(
+    join(f.project, '.archon/workflows/native.yaml'),
+    `name: native
+description: native credential preflight
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    approval:
+      message: Ready to call Claude?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    prompt: Say hello
+`
+  );
+  const started = await cli(f, ['workflow', 'run', 'native', '--folder', '--no-worktree']);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  const listed = await cli(f, ['workflow', 'runs', '--json']);
+  expect(listed.code).toBe(0);
+  expect(JSON.parse(listed.output).runs).toMatchObject([
+    { workflow_name: 'native', status: 'paused', user_id: expect.any(String) },
   ]);
-  return { output, error, code };
+  expect(existsSync(f.trap)).toBe(false);
+  expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+}, 30000);
+for (const nodeOverride of [false, true]) {
+  test(`Claude native CLI preflight uses --cwd and node settings (override=${nodeOverride})`, async () => {
+    const f = fixture(
+      `store: files\ndefaultAssistant: claude\nassistants:\n  claude:\n    settingSources: ${nodeOverride ? '[]' : '[project]'}\n`,
+      'real'
+    );
+    mkdirSync(join(f.project, '.claude'));
+    writeFileSync(
+      join(f.project, '.claude/settings.json'),
+      JSON.stringify({ apiKeyHelper: 'printf project-key' })
+    );
+    const claudeConfig = join(f.root, 'claude-config');
+    mkdirSync(claudeConfig);
+    writeFileSync(
+      join(f.project, '.archon/workflows/native.yaml'),
+      `name: native
+description: scoped native credentials
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: review
+    approval:
+      message: Ready?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    ${nodeOverride ? 'settingSources: [project]' : ''}
+    prompt: Say hello
+`
+    );
+    const env = withoutClaudeLogin(f, claudeConfig);
+    const started = await cli(
+      f,
+      ['workflow', 'run', 'native', '--cwd', f.project, '--folder', '--no-worktree'],
+      env,
+      '',
+      f.root
+    );
+    expect(started, started.output + started.error).toMatchObject({ code: 0 });
+    const listed = await cli(f, ['workflow', 'runs', '--json']);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.output).runs).toMatchObject([
+      { workflow_name: 'native', status: 'paused' },
+    ]);
+    expect(existsSync(f.trap)).toBe(false);
+  }, 30000);
+}
+for (const detached of [false, true]) {
+  for (const launchOnly of [true, false]) {
+    test(`isolated Claude CLI checks the launch checkout, then the worktree (launchOnly=${launchOnly}, detached=${detached})`, async () => {
+      const f = fixture(
+        'store: files\ndefaultAssistant: claude\nassistants:\n  claude:\n    settingSources: [project]\n',
+        'real'
+      );
+      const git = (...args: string[]): void => {
+        const result = Bun.spawnSync(['git', ...args], {
+          cwd: f.project,
+          stdout: 'pipe',
+          stderr: 'pipe',
+        });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+      };
+      git('init', '-b', 'main');
+      git('remote', 'add', 'origin', f.project);
+      git('config', 'user.email', 'fixture@example.invalid');
+      git('config', 'user.name', 'Fixture');
+      writeFileSync(join(f.project, '.gitignore'), launchOnly ? '.claude/\n' : '');
+      mkdirSync(join(f.project, '.claude'));
+      const settings = join(f.project, '.claude/settings.json');
+      writeFileSync(settings, JSON.stringify({ apiKeyHelper: 'printf worktree-key' }));
+      writeFileSync(
+        join(f.project, '.archon/workflows/native.yaml'),
+        `name: native
+description: isolated credentials
+provider: claude
+nodes:
+  - id: before
+    bash: echo executed > before-count
+  - id: review
+    depends_on: [before]
+    approval:
+      message: Ready?
+      decisions:
+        - id: approve
+        - id: reject
+  - id: ai
+    depends_on: [review]
+    prompt: Say hello
+`
+      );
+      git('add', '.gitignore', '.archon');
+      if (!launchOnly) git('add', '.claude');
+      git('commit', '-m', 'Fixture');
+      if (!launchOnly) unlinkSync(settings);
+      const claudeConfig = join(f.root, 'claude-config');
+      mkdirSync(claudeConfig);
+      const env = withoutClaudeLogin(f, claudeConfig);
+      const started = await cli(
+        f,
+        [
+          'workflow',
+          'run',
+          'native',
+          '--branch',
+          'credential-test',
+          '--base',
+          'main',
+          ...(detached ? ['--detach'] : []),
+        ],
+        env
+      );
+      if (!launchOnly) {
+        // The login is committed but missing from the launch checkout, so the host check
+        // before isolation refuses: no run row, no worktree.
+        expect(started, started.output + started.error).toMatchObject({ code: 1 });
+        expect(started.error).toContain('no usable login');
+        expect(await listRuns(f, false)).toEqual([]);
+        expect(() => isolatedCheckout(f.project)).toThrow('Missing isolated checkout');
+        expect(existsSync(f.trap)).toBe(false);
+        return;
+      }
+      // The launch checkout's login is gitignored, so the worktree has none: the check in
+      // the worktree refuses before any node runs.
+      expect(started, started.output + started.error).toMatchObject({ code: detached ? 0 : 1 });
+      if (!detached) expect(started.error).toContain('no usable login');
+      expect(await listRuns(f, detached)).toMatchObject([
+        { workflow_name: 'native', status: 'failed' },
+      ]);
+      expect(existsSync(join(f.project, 'before-count'))).toBe(false);
+      expect(existsSync(join(isolatedCheckout(f.project), 'before-count'))).toBe(false);
+      expect(existsSync(f.trap)).toBe(false);
+    }, 30000);
+  }
+}
+for (const flags of [[], ['--detach']] as const) {
+  test(`file-store CLI refuses missing native login before launch (${flags.join(' ') || 'foreground'})`, async () => {
+    const f = fixture('store: files\ndefaultAssistant: claude\n', 'not_connected');
+    writeFileSync(
+      join(f.project, '.archon/workflows/native.yaml'),
+      `name: native
+description: refuse before launch
+provider: claude
+worktree:
+  enabled: false
+nodes:
+  - id: before
+    bash: echo executed > before-count
+  - id: ai
+    depends_on: [before]
+    prompt: Say hello
+`
+    );
+    const refused = await cli(f, [
+      'workflow',
+      'run',
+      'native',
+      '--folder',
+      '--no-worktree',
+      ...flags,
+    ]);
+    expect(refused.code).toBe(1);
+    expect(refused.output + refused.error).toContain('no usable login');
+    expect(existsSync(join(f.project, 'before-count'))).toBe(false);
+    const listed = await cli(f, ['workflow', 'runs', '--json']);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.output).runs).toEqual([]);
+    expect(existsSync(f.trap)).toBe(false);
+    expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
+  }, 30000);
 }
 test('pause, approve in another process, and resume without any SQL connection', async () => {
   const f = fixture();
@@ -248,17 +922,7 @@ mock.module(${JSON.stringify(join(repo, 'packages/core/src/db/connection.ts'))},
 const {startServer}=await import(${JSON.stringify(join(repo, 'packages/server/src/index.ts'))});
 try {await startServer();process.exit(1);}catch(error){console.log(error.name+': '+error.message);process.exit(0);}`
   );
-  const child = Bun.spawn([process.execPath, entry], {
-    cwd: f.project,
-    env: f.env,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  const [output, error, code] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
+  const { output, error, code } = await f.scope.run([process.execPath, entry], f.project, f.env);
   expect(code).toBe(0);
   expect(error).not.toContain('SQL open trap');
   expect(output).toContain('FileStoreUnsupportedError');
@@ -605,7 +1269,7 @@ nodes:
     });
   }, 30000);
 
-  test(`${action} accepts an answer at capacity and refuses stale answers in both modes`, async () => {
+  test(`${action} accepts an answer at capacity and refuses stale answers in supported modes`, async () => {
     const f = fixture();
     f.env.LOG_LEVEL = 'error';
     writeFileSync(
@@ -628,21 +1292,21 @@ nodes:
     bash: echo finished >> result.txt
 `
     );
-    writeFileSync(
-      join(f.project, '.archon/workflows/register.yaml'),
-      'name: register\ndescription: register project\nnodes:\n  - id: ready\n    bash: echo ready\n'
+    setLogLevel('error');
+    registerBuiltinProviders();
+    setPlatformPolicies([{ id: 'cli', workspaceRetention: 'age-based' }]);
+    process.env = { ...f.env };
+    const host = await createFileWorkflowHost(join(f.home, 'store'));
+    await host.records.codebases.createCodebase({
+      name: 'capacity-test',
+      default_cwd: realpathSync(f.project),
+      kind: 'folder',
+    });
+    const user = await host.records.users.findOrCreateUserByPlatformIdentity(
+      'cli',
+      'file-operator'
     );
-    const registered = await cli(f, [
-      'workflow',
-      'run',
-      'register',
-      '--folder',
-      '--no-worktree',
-      '--quiet',
-    ]);
-    expect(registered, registered.output + registered.error).toMatchObject({ code: 0 });
-    const identity = await cli(f, ['trigger', 'whoami']);
-    expect(identity, identity.output + identity.error).toMatchObject({ code: 0 });
+    if (!user) throw new Error('Missing test user');
     const config = join(f.root, 'trigger.json');
     writeFileSync(
       config,
@@ -654,7 +1318,7 @@ nodes:
           bindingId: 'answer-test',
           bindingRevision: null,
           hostId: 'answer-test',
-          runAsUserId: JSON.parse(identity.output).runAsUserId,
+          runAsUserId: user.id,
           resource: 'answer-test',
           capacity: 1,
           overlap: 'queue',
@@ -667,23 +1331,16 @@ nodes:
         },
       })
     );
-    const fired = await cli(f, ['trigger', 'fire', '--config', config]);
+    const fired = await commandResult(() => triggerCommand(host, 'fire', [], { config }));
     expect(fired, fired.output + fired.error).toMatchObject({ code: 0 });
-    const disposition = resourceStartDispositionSchema.parse(
-      JSON.parse(fired.output).bindings[0].disposition
-    );
-    if (disposition.status !== 'admitted') throw new Error('Run not admitted');
-    const id = disposition.runId;
-    const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
-    const deadline = Date.now() + 15_000;
-    let run = await store.getWorkflowRun(id);
-    while (run?.status !== 'paused' && Date.now() < deadline) {
-      expect(run?.status, JSON.stringify(run)).not.toBeOneOf(['failed', 'cancelled']);
-      await Bun.sleep(25);
-      run = await store.getWorkflowRun(id);
-    }
-    expect(run?.status).toBe('paused');
-    const attention = run && runAttention(run);
+    const store = host.deps.store;
+    const {
+      runs: [run],
+    } = await store.listWorkflowRuns();
+    if (!run) throw new Error('Missing resource run');
+    const id = run.id;
+    expect(run.status).toBe('paused');
+    const attention = runAttention(run);
     if (attention?.kind !== 'attention') throw new Error('Run not awaiting answer');
     const args = (occurrence: string): string[] => [
       'workflow',
@@ -693,17 +1350,47 @@ nodes:
       '--occurrence',
       occurrence,
     ];
+    const answer = (occurrence: string, flags: string[] = []) =>
+      commandResult(() => {
+        const json = flags.includes('--json');
+        const detach = flags.includes('--detach');
+        const route = {
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', action, id, ...(action === 'respond' ? ['retry'] : [])],
+          values: { occurrence, json, detach, choose: ['approve'] },
+          command: 'workflow',
+          subcommand: action,
+          cwd: f.project,
+          effectiveCwd: f.project,
+          json,
+          detachedRunConfig: undefined,
+          inheritedEnv: f.env,
+          forgeTrustedEnv: f.env,
+        };
+        const routes = {
+          answer: runWorkflowAnswer,
+          respond: runWorkflowRespond,
+          approve: runWorkflowApprove,
+          reject: runWorkflowReject,
+        };
+        return routes[action](route);
+      });
+    const unchangedRun = await store.getWorkflowRun(id);
+    const unchangedEvents = await store.listWorkflowEvents(id);
     for (const flags of [
       [],
       ['--json'],
       ...(action === 'answer' ? [] : [['--detach'], ['--detach', '--json']]),
     ]) {
-      const refused = await cli(f, [...args('stale'), ...flags]);
+      const refused = await answer('stale', flags);
       expect(refused, refused.output + refused.error).toMatchObject({ code: 1 });
       if (flags.includes('--json')) expect(JSON.parse(refused.output)).toMatchObject({ ok: false });
       expect(refused.output + refused.error).toContain(
         `awaiting occurrence '${attention.occurrence}'`
       );
+      expect(await store.getWorkflowRun(id)).toEqual(unchangedRun);
+      expect(await store.listWorkflowEvents(id)).toEqual(unchangedEvents);
     }
     const blocker = randomUUID();
     expect(
@@ -730,7 +1417,10 @@ nodes:
       })
     ).toMatchObject({ status: 'admitted' });
     await store.claimPendingWorkflowRun(blocker);
-    const answered = await cli(f, args(attention.occurrence));
+    const answered =
+      action === 'answer'
+        ? await cli(f, args(attention.occurrence))
+        : await answer(attention.occurrence);
     expect(answered, answered.output + answered.error).toMatchObject({ code: 0 });
     expect(answered.output).toContain('answer was recorded');
     expect(answered.output).toContain('waiting for capacity');
@@ -745,7 +1435,10 @@ nodes:
     expect(waiting?.metadata.capacity_wait).toMatchObject({ since: expect.any(String) });
     expect(waiting && answeredPauseContinuation(waiting)).toBeDefined();
     await store.completeWorkflowRun(blocker, { duration_ms: 1 });
-    const woken = await cli(f, ['workflow', 'wake', '--json']);
+    const woken =
+      action === 'answer'
+        ? await cli(f, ['workflow', 'wake', '--json'])
+        : await commandResult(() => workflowContinuationCommand(host, 'wake', [], { json: true }));
     expect(woken, woken.output + woken.error).toMatchObject({ code: 0 });
     expect(JSON.parse(woken.output)).toMatchObject({
       outcomes: [{ runId: id, kind: 'accepted', status: 'completed' }],
@@ -756,3 +1449,68 @@ nodes:
     ).toHaveLength(1);
   }, 30_000);
 }
+
+test('independent questions survive separate CLI processes and apply second first', async () => {
+  const f = fixture();
+  for (const [name, yaml] of Object.entries(multiAttentionWorkflows))
+    writeFileSync(join(f.project, '.archon/workflows', `${name}.yaml`), yaml);
+  const started = await cli(f, ['workflow', 'run', 'questions', '--folder', '--no-worktree']);
+  expect(started, started.output + started.error).toMatchObject({ code: 0 });
+  const queue = async () => {
+    const result = await cli(f, ['workflow', 'attention', '--json']);
+    expect(result, result.error).toMatchObject({ code: 0 });
+    return attentionQueueItemSchema.array().parse(JSON.parse(result.output).items);
+  };
+  const items = (await queue()).sort((a, b) => a.fanOut!.index - b.fanOut!.index);
+  expect(items).toHaveLength(2);
+  const [first, second] = items;
+  for (const item of items) {
+    const read = await cli(f, ['workflow', 'attention', item.runId, '--json']);
+    expect(read, read.error).toMatchObject({ code: 0 });
+    expect(JSON.parse(read.output).item).toEqual(item);
+  }
+  const answer = async (item: typeof first, choose: string) => {
+    if (item.kind !== 'attention') throw new Error('Expected attention');
+    const answered = await cli(f, [
+      'workflow',
+      'answer',
+      item.runId,
+      '--occurrence',
+      item.occurrence,
+      '--choose',
+      choose,
+    ]);
+    expect(answered, answered.output + answered.error).toMatchObject({ code: 0 });
+  };
+  await answer(second, 'defer');
+  expect(await queue()).toEqual([first]);
+  const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
+  const parentId = first.fanOut!.parentRunId;
+  expect((await store.getWorkflowRun(parentId))?.status).toBe('paused');
+  expect((await store.getWorkflowRun(second.runId))?.status).toBe('completed');
+  expect(
+    (await store.listWorkflowEvents(first.runId)).filter(e => e.step_name === 'apply')
+  ).toEqual([]);
+  await answer(first, 'accept');
+  expect(await queue()).toEqual([]);
+  expect((await store.getWorkflowRun(parentId))?.status).toBe('completed');
+  expect((await store.findChildRuns(parentId)).map(r => r.id).sort()).toEqual(
+    items.map(i => i.runId).sort()
+  );
+  expect(
+    (await store.listWorkflowEvents(parentId)).find(
+      e => e.event_type === 'node_completed' && e.step_name === 'answers'
+    )?.data.structured_output
+  ).toEqual([
+    { key: 'first', decision: 'accept' },
+    { key: 'second', decision: 'defer' },
+  ]);
+  for (const item of items) {
+    const events = await store.listWorkflowEvents(item.runId);
+    expect(events.filter(e => e.event_type === 'wait_answered')).toHaveLength(1);
+    expect(
+      events.filter(e => e.event_type === 'node_completed' && e.step_name === 'apply')
+    ).toHaveLength(1);
+  }
+  expect(existsSync(f.trap)).toBe(false);
+}, 30_000);

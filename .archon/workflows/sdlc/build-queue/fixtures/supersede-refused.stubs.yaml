@@ -1,0 +1,48 @@
+# Dry-run fixture, a superseded pull request that ship's triage routes back to: route
+# declares the round fresh because a dated ruling supersedes open pull request 1, yet
+# ship's triage routes `continue` onto 1. Checkout tells ship `none`, so ship's real
+# `continues` script refuses before delivery spends, rather than binding delivery to
+# the superseded pull request.
+facts:
+  path: route
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  url: "https://github.com/example/repo/issues/7"
+  record: null
+  brief: ""
+  rounds: []
+  at_cap: false
+  policy_defaults: "/stub/policy"
+  pull_request: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-old", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+  continues: 1
+  branch: "build/7-stub-fixture"
+blocked:
+  blocked: []
+  blocked_count: 0
+route:
+  decision: launch
+  continues: null
+  ready_head: null
+  brief: "stub-brief: replan https://github.com/example/repo/issues/7 from dev; the dated ruling supersedes https://github.com/example/repo/pull/1"
+  reason: "stub: a dated ruling supersedes the open pull request"
+  attention: null
+checkout: { head: null, pull_request: none }
+ship__forge: { source: forge }
+ship__triage__triage:
+  decision: { contract: READY, route: continue, pull_request: 1 }
+  type: { value: feature, reason: "stub: replanned scope" }
+  size: { value: s, reason: "stub: size" }
+  complexity: { value: low, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  related: []
+  summary: "stub: the open pull request carries the outcome"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: failed
+  # answer fails with it: its `ending` binding refuses a failed ship.
+  fail-node: [ship__continues, answer]
+  reached: [facts, route, checkout]
+exec-code: true

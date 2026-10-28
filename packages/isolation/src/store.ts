@@ -38,15 +38,26 @@ export interface IIsolationStore {
   /** With an observation, restore only that retired worktree without replacing an active workflow. */
   updateStatus(
     id: string,
-    status: 'active' | 'destroyed',
+    status: IsolationEnvironmentRow['status'],
     observed?: IsolationEnvironmentRow
   ): Promise<void>;
   /**
    * Retire only the observed worktree registration, atomically. Succeeds if that
    * registration is already destroyed; throws WorktreeRegistrationChangedError
-   * if it was replaced. An upsert keeps the row id, so a write by id is unsafe.
+   * if it was replaced. A store that does not serialize this with a running removal
+   * refuses it with that error's WorktreeRemovalInProgressError subclass instead of
+   * waiting. An upsert keeps the row id, so a write by id is unsafe.
    */
   markWorktreeDestroyed(observed: IsolationEnvironmentRow): Promise<void>;
+  /**
+   * Run `remove` for the observed active registration and retire it only if `remove`
+   * resolved after calling `markDestroyed`; otherwise it stays active. No replacement
+   * registration is published while `remove` runs.
+   */
+  withWorktreeRegistration<T>(
+    observed: IsolationEnvironmentRow,
+    remove: (markDestroyed: () => Promise<void>) => Promise<T>
+  ): Promise<T>;
   countActiveByCodebase(codebaseId: string): Promise<number>;
 }
 

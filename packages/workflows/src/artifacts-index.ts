@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
+import { readArtifactFile, writeArtifactFile } from './artifact-writes';
 import { join, sep } from 'node:path';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import {
@@ -21,7 +22,7 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Subdirectory under the artifacts dir holding per-node typed outputs + metadata. */
 const NODES_SUBDIR = 'nodes';
 /**
- * Engine-private subdirectory for per-invocation typed-artifact listings. Kept out
+ * Engine-private subdirectory for typed-artifact observation files. Kept out
  * of `nodes/` so the reader never sees its own output, and inside the run's artifact
  * dir so containers that mount that dir read the same bytes at the same path.
  */
@@ -76,17 +77,12 @@ function sameArtifactOwner(left: ArtifactOwner, right: ArtifactOwner): boolean {
 
 /**
  * Read the owner recorded in an existing `.meta.json`, or `undefined` if the
- * file is missing or corrupt. Used only by the collision guard in
- * `writeNodeArtifact`. Real filesystem failures remain visible to the caller.
+ * file is missing, corrupt, or a link under the container scope. Used only by the
+ * collision guard in `writeNodeArtifact`. Real filesystem failures remain visible.
  */
 async function readArtifactOwner(metaPath: string): Promise<ArtifactOwner | undefined> {
-  let rawMetadata: string;
-  try {
-    rawMetadata = await readFile(metaPath, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw err;
-  }
+  const rawMetadata = await readArtifactFile(metaPath);
+  if (rawMetadata === undefined) return undefined;
 
   try {
     const parsed = nodeArtifactOwnerSchema.safeParse(JSON.parse(rawMetadata));
@@ -119,7 +115,6 @@ export async function writeNodeArtifact(
   // durable constructor before creating either sidecar.
   const parsedParams = nodeArtifactWriteParamsSchema.parse(params);
   const nodesDir = join(artifactsDir, NODES_SUBDIR);
-  await mkdir(nodesDir, { recursive: true });
   const owner: ArtifactOwner = {
     nodeId: parsedParams.nodeId,
     ...(parsedParams.loopGroupPath !== undefined
@@ -141,7 +136,7 @@ export async function writeNodeArtifact(
   }
 
   const relPath = join(NODES_SUBDIR, `${stem}.md`);
-  await writeFile(join(artifactsDir, relPath), outputText, 'utf8');
+  await writeArtifactFile(join(artifactsDir, relPath), outputText);
   const meta: NodeArtifact = {
     nodeId: parsedParams.nodeId,
     outputType: parsedParams.outputType,
@@ -153,7 +148,7 @@ export async function writeNodeArtifact(
     producedAt: parsedParams.producedAt,
     size: Buffer.byteLength(outputText, 'utf8'),
   };
-  await writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+  await writeArtifactFile(metaPath, JSON.stringify(meta, null, 2));
   return meta;
 }
 
@@ -199,87 +194,20 @@ export async function readNodeArtifacts(
     return empty;
   }
 
-  // Containment is checked against the run dir's real path, so a symlinked `nodes/`
-  // or a sidecar pointing outside the run can never hand a consumer an outside file.
-  let realRoot: string;
-  try {
-    realRoot = await realpath(artifactsDir);
-  } catch (err) {
-    errors.push(withCode({ path: '', kind: 'unreadable_directory' }, err as NodeJS.ErrnoException));
-    return empty;
-  }
-  // The directory itself is not a file, so it cannot go through
-  // `classifyContainedFile` (which insists on a regular file). A `nodes/` symlink
-  // that points outside the run is rejected here; one that stays inside is fine,
-  // and every file opened below is re-checked on its own resolved path.
-  let realNodes: string;
-  try {
-    realNodes = await realpath(nodesDir);
-  } catch (err) {
-    errors.push(
-      withCode({ path: NODES_SUBDIR, kind: 'unreadable_directory' }, err as NodeJS.ErrnoException)
-    );
-    return empty;
-  }
-  if (!isPathInside(realRoot, realNodes)) {
-    errors.push({ path: NODES_SUBDIR, kind: 'unsafe_path' });
-    return empty;
-  }
+  const realRoot = await resolveArtifactRoot(artifactsDir, nodesDir, errors);
+  if (realRoot === undefined) return empty;
 
   for (const file of files) {
     if (!file.endsWith('.meta.json')) continue;
-    const metaRel = portable(join(NODES_SUBDIR, file));
-    const full = join(nodesDir, file);
-
-    const metaCheck = await classifyContainedFile(artifactsDir, realRoot, full);
-    if (metaCheck.status === 'unsafe') {
-      errors.push({ path: metaRel, kind: 'unsafe_path' });
-      continue;
-    }
-    if (metaCheck.status === 'missing' || metaCheck.status === 'unreadable') {
-      errors.push({ path: metaRel, kind: 'unreadable_metadata', code: metaCheck.code });
-      continue;
-    }
-
-    let rawMetadata: string;
-    try {
-      rawMetadata = await readFile(full, 'utf8');
-    } catch (err) {
-      errors.push(
-        withCode({ path: metaRel, kind: 'unreadable_metadata' }, err as NodeJS.ErrnoException)
-      );
-      continue;
-    }
-
-    const parsed = parseArtifact(rawMetadata);
-    if (parsed === undefined) {
-      errors.push({ path: metaRel, kind: 'invalid_metadata' });
-      continue;
-    }
-    if (readScope.scope === 'current-run' && parsed.runId !== readScope.runId) {
-      errors.push({ path: metaRel, kind: 'foreign_run' });
-      continue;
-    }
-
-    // An escaped content pointer is rejected outright: the metadata is not a
-    // trustworthy description of a file this run owns. A content file that is
-    // merely missing or unreadable keeps its valid metadata and adds a diagnostic,
-    // so the reader can still name what the artifact was.
-    const contentCheck = await classifyContainedFile(
+    const parsed = await readArtifactEntry(
       artifactsDir,
       realRoot,
-      join(artifactsDir, parsed.path)
+      nodesDir,
+      file,
+      readScope,
+      errors
     );
-    if (contentCheck.status === 'unsafe') {
-      errors.push({ path: metaRel, kind: 'unsafe_path' });
-      continue;
-    }
-    if (contentCheck.status === 'missing') {
-      errors.push({ path: metaRel, kind: 'missing_content', code: contentCheck.code });
-    } else if (contentCheck.status === 'unreadable') {
-      errors.push({ path: metaRel, kind: 'unreadable_content', code: contentCheck.code });
-    }
-
+    if (parsed === undefined) continue;
     const existing = artifactsByType.get(parsed.outputType);
     if (existing !== undefined) existing.push(parsed);
     else artifactsByType.set(parsed.outputType, [parsed]);
@@ -295,6 +223,104 @@ export async function readNodeArtifacts(
     });
   }
   return { artifactsByType: Object.fromEntries(artifactsByType), errors };
+}
+
+async function resolveArtifactRoot(
+  artifactsDir: string,
+  nodesDir: string,
+  errors: NodeArtifactReadError[]
+): Promise<string | undefined> {
+  // Containment is checked against the run dir's real path, so a symlinked `nodes/`
+  // or a sidecar pointing outside the run can never hand a consumer an outside file.
+  let realRoot: string;
+  try {
+    realRoot = await realpath(artifactsDir);
+  } catch (err) {
+    errors.push(withCode({ path: '', kind: 'unreadable_directory' }, err as NodeJS.ErrnoException));
+    return undefined;
+  }
+  // The directory itself is not a file, so it cannot go through
+  // `classifyContainedFile` (which insists on a regular file). A `nodes/` symlink
+  // that points outside the run is rejected here; one that stays inside is fine,
+  // and every file opened below is re-checked on its own resolved path.
+  let realNodes: string;
+  try {
+    realNodes = await realpath(nodesDir);
+  } catch (err) {
+    errors.push(
+      withCode({ path: NODES_SUBDIR, kind: 'unreadable_directory' }, err as NodeJS.ErrnoException)
+    );
+    return undefined;
+  }
+  if (!isPathInside(realRoot, realNodes)) {
+    errors.push({ path: NODES_SUBDIR, kind: 'unsafe_path' });
+    return undefined;
+  }
+
+  return realRoot;
+}
+
+async function readArtifactEntry(
+  artifactsDir: string,
+  realRoot: string,
+  nodesDir: string,
+  file: string,
+  readScope: NodeArtifactReadScope,
+  errors: NodeArtifactReadError[]
+): Promise<NodeArtifact | undefined> {
+  const metaRel = portable(join(NODES_SUBDIR, file));
+  const full = join(nodesDir, file);
+
+  const metaCheck = await classifyContainedFile(artifactsDir, realRoot, full);
+  if (metaCheck.status === 'unsafe') {
+    errors.push({ path: metaRel, kind: 'unsafe_path' });
+    return undefined;
+  }
+  if (metaCheck.status === 'missing' || metaCheck.status === 'unreadable') {
+    errors.push({ path: metaRel, kind: 'unreadable_metadata', code: metaCheck.code });
+    return undefined;
+  }
+
+  let rawMetadata: string;
+  try {
+    rawMetadata = await readFile(full, 'utf8');
+  } catch (err) {
+    errors.push(
+      withCode({ path: metaRel, kind: 'unreadable_metadata' }, err as NodeJS.ErrnoException)
+    );
+    return undefined;
+  }
+
+  const parsed = parseArtifact(rawMetadata);
+  if (parsed === undefined) {
+    errors.push({ path: metaRel, kind: 'invalid_metadata' });
+    return undefined;
+  }
+  if (readScope.scope === 'current-run' && parsed.runId !== readScope.runId) {
+    errors.push({ path: metaRel, kind: 'foreign_run' });
+    return undefined;
+  }
+
+  // An escaped content pointer is rejected outright: the metadata is not a
+  // trustworthy description of a file this run owns. A content file that is
+  // merely missing or unreadable keeps its valid metadata and adds a diagnostic,
+  // so the reader can still name what the artifact was.
+  const contentCheck = await classifyContainedFile(
+    artifactsDir,
+    realRoot,
+    join(artifactsDir, parsed.path)
+  );
+  if (contentCheck.status === 'unsafe') {
+    errors.push({ path: metaRel, kind: 'unsafe_path' });
+    return undefined;
+  }
+  if (contentCheck.status === 'missing') {
+    errors.push({ path: metaRel, kind: 'missing_content', code: contentCheck.code });
+  } else if (contentCheck.status === 'unreadable') {
+    errors.push({ path: metaRel, kind: 'unreadable_content', code: contentCheck.code });
+  }
+
+  return parsed;
 }
 
 function parseArtifact(rawMetadata: string): NodeArtifact | undefined {
@@ -355,13 +381,13 @@ async function classifyContainedFile(
 }
 
 /**
- * Write a per-invocation listing of the current run's readable typed artifacts.
+ * Write an observation of the current run's readable typed artifacts.
  *
- * Each call writes a unique file: a consumer invocation observes the artifacts
- * published before it, and a later invocation must not overwrite an earlier one's
- * observation. Returns the absolute path to hand to the invocation. A write failure
- * propagates — an invocation that cannot see its listing is a provisioning error,
- * never an empty listing.
+ * Each call writes a unique file so later observations cannot overwrite earlier
+ * ones. Agent attempts receive an observation before they start; until_bash checks
+ * receive a separate observation after iteration work. Returns the absolute path
+ * for the consumer. A write failure propagates as a provisioning error, never an
+ * empty listing.
  */
 export async function writeNodeArtifactsListing(
   artifactsDir: string,
@@ -370,8 +396,7 @@ export async function writeNodeArtifactsListing(
   const result = await readNodeArtifacts(artifactsDir, { scope: 'current-run', runId });
   const listing: NodeArtifactsListing = { runId, ...result };
   const listingDir = join(artifactsDir, LISTINGS_SUBDIR);
-  await mkdir(listingDir, { recursive: true });
   const listingPath = join(listingDir, `${randomUUID()}.json`);
-  await writeFile(listingPath, JSON.stringify(listing, null, 2), 'utf8');
+  await writeArtifactFile(listingPath, JSON.stringify(listing, null, 2));
   return listingPath;
 }

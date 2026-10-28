@@ -7,7 +7,7 @@ import {
   prepareWorkflowSource,
   recordSelectedWorkflow,
   preparedWorkflowSourceRecord,
-} from '@archon/workflows/executor';
+} from '@archon/workflows/run-source';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { createWorkflowDeps } from '../store-adapter';
 import { startAdmittedResourceStart } from '../resource-start-host';
@@ -21,7 +21,7 @@ import { saveUserGithubToken } from '../../db/user-github-token-store';
 import { admitResourceStart } from '../../db/resource-starts';
 import { getDatabase, closeDatabase } from '../../db/connection';
 import { loadConfig } from '../../config/config-loader';
-import { dispatchBackgroundWorkflow } from '../../orchestrator/orchestrator';
+import { dispatchBackgroundWorkflow } from '../../orchestrator/dispatch/background';
 import { setPlatformPolicies } from '../../platforms/registry';
 import type { IPlatformAdapter } from '../../types';
 

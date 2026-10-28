@@ -99,8 +99,10 @@ through `_archon/tool_call`. Calls after settlement or cancellation are rejected
 sink with `{ level, msg, bindings }` to send metadata through `_archon/log`.
 The host logs `provider.plugin.log` at the supplied severity through `provider.<id>`,
 using its own descriptor id. Set `bindings.failureClass` to one of the contract's failure
-classes on any record the operator should see; the host forwards that value and nothing
-else, and drops a record without a valid class. `msg`, plugin module identity, and all
+classes, or `bindings.lifecycle` to one of its lifecycle events
+(`providerLifecycleEventSchema`), on any record the operator should see. With a lifecycle
+event, a non-negative integer `bindings.waitedMs` is forwarded too. The host forwards
+those values and nothing else, and drops a record with neither enum value. `msg`, plugin module identity, and all
 other bindings remain withheld. Never put credentials, tokens, or message text in log
 records. Keep stdout exclusively for RPC; configure other logging to stderr before
 it writes. Stderr remains withheld.
@@ -116,7 +118,7 @@ Remove provider plugins before downgrading to a release without provider-plugin 
 Slack is the maintained in-repository example in
 [`packages/chat-slack`](https://github.com/coleam00/Archon/tree/dev/packages/chat-slack).
 It uses `@archon/chat-contract` and Slack Bolt, without engine types or database access.
-Install it from an Archon release that publishes the Slack asset:
+Outside Docker, install it from an Archon release that publishes the Slack asset:
 
 ```sh
 archon plugin add coleam00/Archon/plugins/chat-slack
@@ -133,8 +135,10 @@ The host reads `SLACK_ALLOWED_USER_IDS` and `SLACK_STREAMING_MODE` from the desc
 It authorizes inbound traffic and run actions, resolves Archon users, and pushes typed
 run events. The plugin renders progress, decisions, reactions and cost footers.
 `/archon connect github` points to the Web UI or `archon auth github`; it does not run a
-GitHub device flow. Installing the Slack receipt replaces the bundled Slack transport
-and bridge on restart. Removing it restores the bundled adapter for this transition.
+GitHub device flow. The server has no bundled Slack adapter: without this plugin Slack is
+off, and outside Docker a set `SLACK_BOT_TOKEN` makes startup log the install command.
+Docker images provision their shipped Slack release offline when `SLACK_BOT_TOKEN` is
+configured; upgrading needs no manual plugin installation.
 
 The plugin declares `attentionNotices`. A route's `destination` is a channel id the bot
 has joined, or `channel:thread_ts` to post inside an existing thread. Each notice offers
@@ -229,9 +233,12 @@ Restart the server after installing, updating, or removing a chat plugin. The se
 starts one supervised process per usable chat receipt and verifies its live descriptor
 against the receipt. A receipt that is unreadable or does not own its executable starts
 no process and registers no platform policy; the server logs its path. Run
-`archon plugin update <id>` or `archon plugin remove <id>`, then restart. A matching installed platform supersedes its bundled adapter;
-for Slack, this also skips the bundled workflow bridge. The server logs that replacement.
-Without a matching receipt, bundled adapters continue to work as before.
+`archon plugin update <id>` or `archon plugin remove <id>`, then restart. A matching installed
+platform supersedes its bundled adapter, and the server logs that replacement. Without a
+matching receipt, bundled adapters continue to work as before. Slack has no bundled adapter:
+without the `chat-slack` plugin, Slack stays off. In Docker, configured Slack bot tokens
+reinstall the image-provided plugin on restart. To keep Slack removed, clear its tokens
+from every effective configuration source as well as removing the plugin.
 
 The host enforces the descriptor's allowlist for messages and run actions before creating
 an Archon identity. Run actions require the run's starter or an admin. Run events go only

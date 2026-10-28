@@ -5,6 +5,8 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { createLogger } from '@archon/paths';
+import { GH_DOTCOM_TOKEN_KEYS, ghTokenKeysForHost } from '@archon/paths/github-token-env';
+import { resolveGitHubTokenFromEnv } from '../github-auth/config';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -16,6 +18,19 @@ function getLog(): ReturnType<typeof createLogger> {
 const execFileAsync = promisify(execFile);
 
 /**
+ * gh reads an Enterprise Server host's token from its Enterprise keys, not from
+ * GH_TOKEN/GITHUB_TOKEN. Hand it the same PAT, unless the operator set one.
+ */
+function ghEnv(hostname: string): NodeJS.ProcessEnv | undefined {
+  const keys = ghTokenKeysForHost(hostname);
+  const token = resolveGitHubTokenFromEnv();
+  if (keys === GH_DOTCOM_TOKEN_KEYS || !token || keys.some(key => process.env[key])) {
+    return undefined;
+  }
+  return { ...process.env, GH_ENTERPRISE_TOKEN: token };
+}
+
+/**
  * Get issue numbers that will be closed when a PR is merged
  * Uses "closingIssuesReferences" from GraphQL API
  *
@@ -24,7 +39,8 @@ const execFileAsync = promisify(execFile);
 export async function getLinkedIssueNumbers(
   owner: string,
   repo: string,
-  prNumber: number
+  prNumber: number,
+  hostname: string
 ): Promise<number[]> {
   const query = `
     query ($owner: String!, $repo: String!, $pr: Int!) {
@@ -44,6 +60,8 @@ export async function getLinkedIssueNumbers(
       [
         'api',
         'graphql',
+        '--hostname',
+        hostname,
         '-F',
         `owner=${owner}`,
         '-F',
@@ -55,7 +73,7 @@ export async function getLinkedIssueNumbers(
         '--jq',
         '.data.repository.pullRequest.closingIssuesReferences.nodes[].number',
       ],
-      { timeout: 10000 }
+      { timeout: 10000, env: ghEnv(hostname) }
     );
 
     // Parse output: each line is an issue number

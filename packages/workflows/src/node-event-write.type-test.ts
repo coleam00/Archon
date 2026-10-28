@@ -1,9 +1,17 @@
 import type { NodeStateRecord } from './schemas/node-execution';
 import type { persistNodeEvent, recordNodeState } from './node-event-write';
+import type { SerializedNodeEvent } from './node-record-serialization';
 import type { IWorkflowStore, DurableWorkflowEventType, NodeStateEventType } from './store';
 
 type AssertNever<Value extends never> = Value;
 type AssertTrue<Value extends true> = Value;
+
+export type SerializedNodeEventsCoverReaderAdmission = AssertNever<
+  Exclude<NodeStateEventType, SerializedNodeEvent['event_type']>
+>;
+export type ReaderAdmitsEverySerializedNodeEvent = AssertNever<
+  Exclude<SerializedNodeEvent['event_type'], NodeStateEventType>
+>;
 
 export type DurableNodeEventsCannotBeBestEffort = AssertNever<
   Extract<

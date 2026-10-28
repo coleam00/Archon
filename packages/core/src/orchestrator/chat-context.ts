@@ -93,43 +93,7 @@ export async function discoverAllWorkflows(conversation: Conversation): Promise<
     }
   }
   if (codebase) {
-    // Sync canonical source with remote before the AI reads codebase state.
-    // This path must remain non-destructive: users and agents can write to source/.
-    // Non-fatal: if fetch fails (network, no remote), proceed with local state.
-    // Folder projects leave git synchronization to the user and agent.
-    if (codebase.kind === 'folder') {
-      getLog().debug(
-        { codebaseId: codebase.id, path: codebase.default_cwd },
-        'workspace.sync_skipped_folder_project'
-      );
-    } else {
-      try {
-        // Resolve the git remote: explicit repo config wins, otherwise
-        // auto-detect ('origin' if present, else the sole remote).
-        const repoPath = toRepoPath(codebase.default_cwd);
-        const repoConf = await loadRepoConfig(codebase.default_cwd);
-        remote =
-          repoConf.worktree?.remote?.trim() || (await getDefaultRemote(repoPath)) || undefined;
-        syncResult = await syncWorkspace(
-          repoPath,
-          codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
-          { remote }
-        );
-        getLog().debug(
-          {
-            codebaseId: codebase.id,
-            repoPath: codebase.default_cwd,
-            remote,
-            ...syncResult,
-          },
-          'workspace.sync_completed'
-        );
-      } catch (err) {
-        const error = err as Error;
-        syncError = error.message;
-        getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
-      }
-    }
+    ({ syncResult, syncError, remote } = await syncCodebaseBeforeDiscovery(codebase));
     const workflowCwd = conversation.cwd ?? codebase.default_cwd;
     // Outside the discovery catch: a config that fails to load fails the turn,
     // as it does for a run start, instead of listing no repository workflows.
@@ -158,6 +122,51 @@ export async function discoverAllWorkflows(conversation: Conversation): Promise<
   }
 
   return { workflows, errors: allErrors, syncResult, syncError, config, codebase, remote };
+}
+
+async function syncCodebaseBeforeDiscovery(
+  codebase: Codebase
+): Promise<Pick<DiscoverResult, 'syncResult' | 'syncError' | 'remote'>> {
+  let syncResult: WorkspaceSyncResult | undefined;
+  let syncError: string | undefined;
+  let remote: string | undefined;
+  // Sync canonical source with remote before the AI reads codebase state.
+  // This path must remain non-destructive: users and agents can write to source/.
+  // Non-fatal: if fetch fails (network, no remote), proceed with local state.
+  // Folder projects leave git synchronization to the user and agent.
+  if (codebase.kind === 'folder') {
+    getLog().debug(
+      { codebaseId: codebase.id, path: codebase.default_cwd },
+      'workspace.sync_skipped_folder_project'
+    );
+  } else {
+    try {
+      // Resolve the git remote: explicit repo config wins, otherwise
+      // auto-detect ('origin' if present, else the sole remote).
+      const repoPath = toRepoPath(codebase.default_cwd);
+      const repoConf = await loadRepoConfig(codebase.default_cwd);
+      remote = repoConf.worktree?.remote?.trim() || (await getDefaultRemote(repoPath)) || undefined;
+      syncResult = await syncWorkspace(
+        repoPath,
+        codebase.default_branch ? toBranchName(codebase.default_branch) : undefined,
+        { remote }
+      );
+      getLog().debug(
+        {
+          codebaseId: codebase.id,
+          repoPath: codebase.default_cwd,
+          remote,
+          ...syncResult,
+        },
+        'workspace.sync_completed'
+      );
+    } catch (err) {
+      const error = err as Error;
+      syncError = error.message;
+      getLog().warn({ err: error, codebaseId: codebase.id }, 'workspace.sync_failed');
+    }
+  }
+  return { syncResult, syncError, remote };
 }
 
 /**
@@ -247,7 +256,10 @@ export async function loadPausedGateContext(
   conversation: Conversation,
   conversationId: string
 ): Promise<string | undefined> {
-  const pausedGateRun = await workflowDb.getPausedWorkflowRun(conversation.id);
+  const pausedGateRun = await workflowDb.getPausedWorkflowRun(
+    conversation.id,
+    conversation.codebase_id ?? undefined
+  );
   const pausedGateContext = pausedGateRun
     ? formatPausedGateSection({
         run: pausedGateRun,

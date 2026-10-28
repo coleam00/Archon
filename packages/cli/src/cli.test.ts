@@ -559,6 +559,25 @@ describe('workflow answer flag rejection and command discovery', () => {
     expect(result.status).toBe(1);
   });
 
+  it('routes end-turn to its run lookup', () => {
+    const result = invoke(['end-turn', 'missing-run', '--json']);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      action: 'end_turn',
+      error: 'not_found',
+    });
+  });
+
+  it('requires a run ID for end-turn', () => {
+    const result = invoke(['end-turn', '--json']);
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: 'Usage: archon workflow end-turn <run-id>',
+    });
+  });
+
   it('advertises every workflow dispatch route and no others', () => {
     const result = invoke(['unknown-command']);
     expect(result.status).toBe(1);
@@ -617,6 +636,85 @@ describe('workflow answer flag rejection and command discovery', () => {
 });
 
 describe('workflow run config argument', () => {
+  for (const args of [
+    ['help'],
+    ['forge', 'pr.view'],
+    ['workflow', 'wake'],
+    ['workflow', 'wake', 'schedule'],
+    ['workflow', 'signal', 'run-1'],
+  ]) {
+    for (const flag of ['config', 'config-from-run']) {
+      it.each([false, true])(
+        `refuses --${flag} on ${args.join(' ')} before initialization (json: %s)`,
+        async json => {
+          const root = mkdtempSync(join(tmpdir(), 'archon-config-refusal-'));
+          const preload = join(root, 'preload.ts');
+          writeFileSync(
+            preload,
+            `import { mock } from 'bun:test';
+mock.module(${JSON.stringify(join(import.meta.dir, 'routes/route-loader.ts'))}, () => ({
+  usesDatabaseStore: async () => { throw new Error('unexpected store initialization'); },
+  registerProviders: async () => { throw new Error('unexpected provider initialization'); },
+  loadRoute: async () => { throw new Error('unexpected command initialization'); },
+  markDatabaseRouteLoaded: () => {},
+  closeDb: async () => {},
+}));
+mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, () => ({
+  createCliWorkflowHost: async () => { throw new Error('unexpected host initialization'); },
+}));
+`
+          );
+          try {
+            const result = spawnSync(
+              process.execPath,
+              [
+                '--preload',
+                preload,
+                CLI_ENTRY,
+                ...args,
+                `--${flag}`,
+                'unused-config',
+                ...(json ? ['--json'] : []),
+              ],
+              {
+                cwd: root,
+                env: {
+                  ...process.env,
+                  ARCHON_HOME: root,
+                  ARCHON_TELEMETRY_DISABLED: '1',
+                  DATABASE_URL: '',
+                },
+                encoding: 'utf8',
+              }
+            );
+            const message =
+              flag === 'config'
+                ? 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+                : 'Error: --config-from-run can only be used with workflow run.';
+            expect(result.status, result.stderr).toBe(1);
+            if (json) {
+              expect(JSON.parse(result.stdout)).toEqual({ ok: false, error: message });
+              expect(result.stderr).toBe('');
+            } else {
+              expect(result.stdout).toBe('');
+              expect(result.stderr).toBe(`${message}\n`);
+            }
+          } finally {
+            await removeTempTree(root);
+          }
+        }
+      );
+    }
+  }
+
+  it('accepts config flags on their owning commands', () => {
+    expect(rejectConfigOutsideRun('workflow', 'run', 'config.yaml')).toBeUndefined();
+    expect(rejectConfigOutsideRun('workflow', 'run', undefined, 'run-1')).toBeUndefined();
+    for (const subcommand of ['fire', 'schedule']) {
+      expect(rejectConfigOutsideRun('trigger', subcommand, 'config.yaml')).toBeUndefined();
+    }
+  });
+
   it('parses one local path', () => {
     const parsed = parseArgs({
       args: ['workflow', 'run', 'x', '--config', './config.minimax.yaml'],
@@ -632,6 +730,22 @@ describe('workflow run config argument', () => {
     const message = rejectConfigOnContinue(true, './does-not-exist.yaml');
     expect(message).toBeDefined();
     expect(message).toContain('--config cannot be used when continuing');
+  });
+
+  it('names --config-from-run when it is the flag passed on run --resume', () => {
+    expect(rejectConfigOnContinue(true, undefined, 'paused-run')).toBe(
+      'Error: --config-from-run cannot be used when continuing an existing workflow run. ' +
+        'The run keeps the config it started with.'
+    );
+  });
+
+  it('refuses --config-from-run on the trigger commands that take --config', () => {
+    for (const subcommand of ['fire', 'schedule']) {
+      expect(rejectConfigOutsideRun('trigger', subcommand, undefined, 'paused-run')).toBe(
+        'Error: --config-from-run can only be used with workflow run.'
+      );
+    }
+    expect(rejectConfigOutsideRun('workflow', 'run', undefined, 'paused-run')).toBeUndefined();
   });
 
   it('rejects --config outside workflow run before dispatch', () => {
@@ -1833,7 +1947,7 @@ describe('main catch --json error envelope', () => {
     //
     // `--dry-run` is not part of the contract; it is how this test avoids
     // paying for one. A real run freezes the workflow source BEFORE resolving
-    // the name (workflow.ts: prepareWorkflowSource precedes
+    // the name (workflow-run-admission.ts: selectRunWorkflow captures the source before
     // resolveWorkflowName, deliberately — discovery must read the frozen
     // bytes, #2660/#2747), so without the flag this single spawn copies and
     // digests every project, global, and bundled workflow file the run can
@@ -1941,8 +2055,8 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(envelope()).toMatchObject({ ok: false });
   });
 
-  it('emits { ok: false } on stdout when chat is invoked with no message', () => {
-    const { status, envelope } = spawnJsonError(['chat', '--json']);
+  it.each(['', 'hello'])('refuses unsupported chat JSON output with message %j', message => {
+    const { status, envelope } = spawnJsonError(['chat', message, '--json']);
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
@@ -1979,6 +2093,118 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
   });
+});
+
+describe('workflow run flag conflicts', () => {
+  const missingSource = join(tmpdir(), 'archon-missing-workflow-source');
+  const cases: [string, string[], string][] = [
+    [
+      'branch with no-worktree',
+      ['--branch', 'b', '--no-worktree'],
+      'Error: --branch and --no-worktree are mutually exclusive.\n' +
+        '  --branch creates an isolated worktree (safe).\n' +
+        '  --no-worktree runs directly in your repo (no isolation).\n' +
+        'Use one or the other.',
+    ],
+    [
+      'from with no-worktree',
+      ['--no-worktree', '--from', 'main'],
+      'Error: --from/--from-branch has no effect with --no-worktree.\n' +
+        'Remove --from or drop --no-worktree.',
+    ],
+    [
+      'base with no-worktree',
+      ['--no-worktree', '--base', 'main'],
+      'Error: --base has no effect with --no-worktree.\nRemove --base or drop --no-worktree.',
+    ],
+    [
+      'resume with branch',
+      ['--resume', '--branch', 'b'],
+      'Error: --resume and --branch are mutually exclusive.\n' +
+        '  --resume reuses the existing worktree from the failed run.\n' +
+        '  Remove --branch when using --resume.',
+    ],
+    [
+      'workflow-source with resume',
+      ['--workflow-source', tmpdir(), '--resume'],
+      'Error: --workflow-source and --resume are mutually exclusive.\n' +
+        '  A resumed run executes the source it captured when it started.\n' +
+        '  Drop --workflow-source, or start a fresh run to pick up new source.',
+    ],
+    [
+      'workflow-source with container',
+      ['--workflow-source', tmpdir(), '--container'],
+      'Error: --workflow-source and --container are mutually exclusive.\n' +
+        '  A container run reads source from the project it mounts.\n' +
+        '  Run without --container to execute source from another directory.',
+    ],
+    [
+      'workflow-source that is not a directory',
+      ['--workflow-source', missingSource],
+      `Error: --workflow-source is not a directory: ${missingSource}\n` +
+        '  Point it at the checkout holding .archon/workflows/.',
+    ],
+    [
+      'the first conflict when several apply',
+      ['--branch', 'b', '--no-worktree', '--from', 'main'],
+      'Error: --branch and --no-worktree are mutually exclusive.\n' +
+        '  --branch creates an isolated worktree (safe).\n' +
+        '  --no-worktree runs directly in your repo (no isolation).\n' +
+        'Use one or the other.',
+    ],
+  ];
+
+  for (const [name, flags, error] of cases) {
+    it(`refuses ${name}`, () => {
+      const { status, envelope } = spawnJsonError([
+        'workflow',
+        'run',
+        'x',
+        ...flags,
+        '--json',
+        '--cwd',
+        listRepo,
+      ]);
+
+      expect({ status, envelope: envelope() }).toEqual({
+        status: 1,
+        envelope: { ok: false, error },
+      });
+    });
+  }
+});
+
+describe('workflow argument refusals', () => {
+  const cases: [string, string[], string][] = [
+    [
+      'extra reset-sessions positionals',
+      ['reset-sessions', 'wf', 'planner'],
+      'unexpected positional argument(s): planner',
+    ],
+    [
+      'a non-positive wait timeout',
+      ['wait', 'some-run-id', '--timeout', '0'],
+      '--timeout must be a positive number',
+    ],
+    ['a non-positive runs limit', ['runs', '--limit', '0'], '--limit must be a positive integer'],
+  ];
+
+  for (const [name, args, error] of cases) {
+    it(`refuses ${name}`, () => {
+      const { status, envelope } = spawnJsonError([
+        'workflow',
+        ...args,
+        '--json',
+        '--cwd',
+        listRepo,
+      ]);
+
+      expect({ status, envelope: envelope() }).toMatchObject({
+        status: 1,
+        envelope: { ok: false, error: expect.stringContaining(error) },
+      });
+    });
+  }
 });
 
 describe('workflow test --json error envelope', () => {
@@ -2146,6 +2372,105 @@ it('CLI cleanup retains historical Telegram workspaces with no adapter credentia
     } finally {
       verify.close();
     }
+  } finally {
+    await removeTempTree(root);
+  }
+});
+
+it('CLI complete ignores an unrelated legacy codebase path', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-cli-complete-legacy-'));
+  const repo = join(root, 'repo');
+  try {
+    expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0);
+    const db = new SqliteAdapter(join(root, 'archon.db'));
+    try {
+      for (const [id, cwd] of [
+        ['target', await canonicalizeProjectPath(repo)],
+        ['legacy', './old-repo'],
+      ]) {
+        await db.query(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $1, $2)',
+          [id, cwd]
+        );
+        await db.query(
+          `INSERT INTO remote_agent_isolation_environments
+           (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, created_by_platform)
+           VALUES ($1, $1, 'task', $1, 'worktree', $2, $1, 'cli')`,
+          [id, join(root, id)]
+        );
+      }
+    } finally {
+      await db.close();
+    }
+    const result = spawnSync(process.execPath, [CLI_ENTRY, 'complete', 'target', '--force'], {
+      cwd: repo,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ARCHON_HOME: root,
+        ARCHON_TELEMETRY_DISABLED: '1',
+        DATABASE_URL: '',
+      },
+    });
+    expect({ stdout: result.stdout, stderr: result.stderr, status: result.status }).toMatchObject({
+      stdout: expect.stringContaining('Complete: 1 completed, 0 failed, 0 not found'),
+      status: 0,
+    });
+    const verify = new Database(join(root, 'archon.db'), { readonly: true });
+    try {
+      expect(
+        verify.query('SELECT id, status FROM remote_agent_isolation_environments ORDER BY id').all()
+      ).toEqual([
+        { id: 'legacy', status: 'active' },
+        { id: 'target', status: 'destroyed' },
+      ]);
+    } finally {
+      verify.close();
+    }
+  } finally {
+    await removeTempTree(root);
+  }
+});
+
+it('CLI complete returns failure after reporting an ambiguous branch', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-cli-complete-'));
+  try {
+    const db = new SqliteAdapter(join(root, 'archon.db'));
+    try {
+      for (const id of ['first', 'second']) {
+        await db.query(
+          'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $1, $2)',
+          [id, root]
+        );
+        await db.query(
+          `INSERT INTO remote_agent_isolation_environments
+           (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name)
+           VALUES ($1, $1, 'task', $1, 'worktree', $2, 'shared')`,
+          [id, join(root, id)]
+        );
+      }
+    } finally {
+      await db.close();
+    }
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'complete', 'shared', 'absent', '--force'],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: root,
+          ARCHON_TELEMETRY_DISABLED: '1',
+          DATABASE_URL: '',
+        },
+      }
+    );
+    expect({ stdout: result.stdout, stderr: result.stderr }).toMatchObject({
+      stdout: expect.stringContaining('Complete: 0 completed, 1 failed, 1 not found'),
+    });
+    expect(result.stderr).toContain('multiple active environments');
+    expect(result.status).toBe(1);
   } finally {
     await removeTempTree(root);
   }

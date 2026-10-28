@@ -148,15 +148,7 @@ async function resolveAccessToken(userId: string): Promise<string | null> {
   const needsRefresh = expiresAtMs !== null && Date.now() + REFRESH_BUFFER_MS >= expiresAtMs;
 
   if (!needsRefresh) {
-    try {
-      return decryptToken(row.access_token_encrypted, key);
-    } catch (err) {
-      // Wrong key (post key-rotation), tampered/bitrotted ciphertext. Honor the
-      // documented null contract instead of throwing an opaque crypto error at
-      // callers (the requires:[github] gate treats null as "unconnected").
-      getLog().error({ err: err as Error, userId }, 'user_github_token.decrypt_failed');
-      return null;
-    }
+    return decryptStoredToken(userId, row.access_token_encrypted, key);
   }
 
   if (!row.refresh_token_encrypted) {
@@ -183,19 +175,45 @@ async function resolveAccessToken(userId: string): Promise<string | null> {
     getLog().warn({ err: err as Error, userId }, 'user_github_token.refresh_failed');
     // A concurrent process (or prior call) may have already refreshed — re-read
     // once and use the fresh token if it's now valid.
-    const fresh = await getUserGithubTokenRecord(userId);
-    const freshExpiry = fresh ? toEpochMs(fresh.access_token_expires_at) : null;
-    if (fresh && freshExpiry !== null && Date.now() + REFRESH_BUFFER_MS < freshExpiry) {
-      try {
-        return decryptToken(fresh.access_token_encrypted, key);
-      } catch (decryptErr) {
-        getLog().error({ err: decryptErr as Error, userId }, 'user_github_token.decrypt_failed');
-        return null;
-      }
-    }
-    return null;
+    return rereadRefreshedAccessToken(userId, key);
   }
 
+  await persistRefreshedToken(userId, row, refreshed, refreshToken);
+  return refreshed.access_token;
+}
+
+function decryptStoredToken(
+  userId: string,
+  encrypted: string,
+  key: ReturnType<typeof getEncryptionKey>
+): string | null {
+  try {
+    return decryptToken(encrypted, key);
+  } catch (err) {
+    // Wrong keys or damaged ciphertext mean unconnected to the requires:[github] gate.
+    getLog().error({ err: err as Error, userId }, 'user_github_token.decrypt_failed');
+    return null;
+  }
+}
+
+async function rereadRefreshedAccessToken(
+  userId: string,
+  key: ReturnType<typeof getEncryptionKey>
+): Promise<string | null> {
+  const fresh = await getUserGithubTokenRecord(userId);
+  const freshExpiry = fresh ? toEpochMs(fresh.access_token_expires_at) : null;
+  if (fresh && freshExpiry !== null && Date.now() + REFRESH_BUFFER_MS < freshExpiry) {
+    return decryptStoredToken(userId, fresh.access_token_encrypted, key);
+  }
+  return null;
+}
+
+async function persistRefreshedToken(
+  userId: string,
+  row: UserGithubTokenRow,
+  refreshed: DeviceAccessToken,
+  refreshToken: string
+): Promise<void> {
   const now = Date.now();
   try {
     await saveUserGithubToken({
@@ -218,5 +236,4 @@ async function resolveAccessToken(userId: string): Promise<string | null> {
     // state is visible, but still return the valid token for the current call.
     getLog().error({ err: err as Error, userId }, 'user_github_token.persist_failed');
   }
-  return refreshed.access_token;
 }

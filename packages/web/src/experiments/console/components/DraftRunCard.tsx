@@ -310,6 +310,77 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     }
   };
 
+  const renderDraftActions = (): ReactElement => (
+    <>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              fileInputRef.current?.click();
+            }}
+            disabled={submitting || files.length >= MAX_FILES}
+            className="flex items-center gap-1 rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40"
+            title={
+              files.length >= MAX_FILES
+                ? `Max ${MAX_FILES.toString()} files attached`
+                : 'Attach files · drop or paste also work'
+            }
+            aria-label="Attach files"
+          >
+            <span aria-hidden className="text-[12px]">
+              📎
+            </span>
+          </button>
+          <span className="flex items-center gap-3.5 font-mono text-[11px] text-text-tertiary">
+            <span>
+              <span className="rounded border border-border px-1.5 py-px text-text-secondary">
+                ↵
+              </span>{' '}
+              start
+            </span>
+            <span>
+              <span className="rounded border border-border px-1.5 py-px text-text-secondary">
+                ⇧↵
+              </span>{' '}
+              newline
+            </span>
+            <span>
+              <span className="rounded border border-border px-1.5 py-px text-text-secondary">
+                esc
+              </span>{' '}
+              cancel
+            </span>
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={() => void submit()}
+          disabled={submitting || workflowName.length === 0 || missingRequired.length > 0}
+          title={
+            missingRequired.length > 0 ? `Fill in ${missingRequired.join(', ')} first` : undefined
+          }
+          className="brand-bar flex items-center gap-1.5 rounded-[9px] px-[15px] py-[9px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
+        >
+          {submitting ? 'Starting…' : 'Start run'}
+          <span aria-hidden className="text-[10px] leading-none opacity-80">
+            ▶
+          </span>
+        </button>
+      </div>
+
+      {/* Say WHY the button is disabled — a dead control with no reason is the
+              failure mode this replaces. */}
+      {error === null && missingRequired.length > 0 ? (
+        <p className="mt-1 font-mono text-[11px] text-text-tertiary">
+          needs {missingRequired.join(', ')}
+        </p>
+      ) : null}
+
+      {error !== null ? <p className="mt-1 font-mono text-[11px] text-error">{error}</p> : null}
+    </>
+  );
+
   if (mode === 'collapsed') {
     return (
       <button
@@ -581,74 +652,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             }}
           />
 
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  fileInputRef.current?.click();
-                }}
-                disabled={submitting || files.length >= MAX_FILES}
-                className="flex items-center gap-1 rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40"
-                title={
-                  files.length >= MAX_FILES
-                    ? `Max ${MAX_FILES.toString()} files attached`
-                    : 'Attach files · drop or paste also work'
-                }
-                aria-label="Attach files"
-              >
-                <span aria-hidden className="text-[12px]">
-                  📎
-                </span>
-              </button>
-              <span className="flex items-center gap-3.5 font-mono text-[11px] text-text-tertiary">
-                <span>
-                  <span className="rounded border border-border px-1.5 py-px text-text-secondary">
-                    ↵
-                  </span>{' '}
-                  start
-                </span>
-                <span>
-                  <span className="rounded border border-border px-1.5 py-px text-text-secondary">
-                    ⇧↵
-                  </span>{' '}
-                  newline
-                </span>
-                <span>
-                  <span className="rounded border border-border px-1.5 py-px text-text-secondary">
-                    esc
-                  </span>{' '}
-                  cancel
-                </span>
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => void submit()}
-              disabled={submitting || workflowName.length === 0 || missingRequired.length > 0}
-              title={
-                missingRequired.length > 0
-                  ? `Fill in ${missingRequired.join(', ')} first`
-                  : undefined
-              }
-              className="brand-bar flex items-center gap-1.5 rounded-[9px] px-[15px] py-[9px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
-            >
-              {submitting ? 'Starting…' : 'Start run'}
-              <span aria-hidden className="text-[10px] leading-none opacity-80">
-                ▶
-              </span>
-            </button>
-          </div>
-
-          {/* Say WHY the button is disabled — a dead control with no reason is the
-              failure mode this replaces. */}
-          {error === null && missingRequired.length > 0 ? (
-            <p className="mt-1 font-mono text-[11px] text-text-tertiary">
-              needs {missingRequired.join(', ')}
-            </p>
-          ) : null}
-
-          {error !== null ? <p className="mt-1 font-mono text-[11px] text-error">{error}</p> : null}
+          {renderDraftActions()}
         </div>
       </div>
     </article>

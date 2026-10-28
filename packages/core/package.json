@@ -1,6 +1,6 @@
 {
   "name": "@archon/core",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -19,7 +19,6 @@
     "./workflows": "./src/workflows/index.ts",
     "./workflows/*": "./src/workflows/*.ts",
     "./isolation-store": "./src/db/isolation-environments.ts",
-    "./orchestrator": "./src/orchestrator/orchestrator.ts",
     "./handlers": "./src/handlers/command-handler.ts",
     "./config": "./src/config/index.ts",
     "./config/run-config-handoff": "./src/config/run-config-handoff.ts",

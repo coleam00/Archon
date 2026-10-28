@@ -1,10 +1,16 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import ts from 'typescript';
+import { BASELINE_PATH, baselineEntries, parseBaseline } from './check-mock-modules';
 
 /**
- * A change may not make a touched function more complex, or a touched file longer, than it was
- * at the merge base. Both sides come from git: the merge base of `baseRef` and HEAD, against the
+ * Code may grow freely up to a ceiling; above it, a change may not make it worse. A touched
+ * function may not end above `COMPLEXITY_CEILING` with a higher score than at the merge base, and
+ * a touched source file may not end above `LINE_CEILING` with more lines than at the merge base.
+ * Test files have no line ceiling, because tests grow with the behavior they cover; their
+ * functions are scored like any other. The ceilings sit near the 99th percentile of function
+ * scores and the 95th percentile of source-file lengths in this repository, so they hold the
+ * large files and tangled functions, not ordinary growth. Both sides come from git: the merge base of `baseRef` and HEAD, against the
  * working tree. Nothing is committed as a baseline, so no edit in the change can move the
  * reference point. The file set is the TS/JS sources Biome lints, read from the merge base's
  * `biome.jsonc`, so a change cannot exclude its own file either. Untouched files are not scored.
@@ -20,7 +26,7 @@ import ts from 'typescript';
  *
  * A unit's identity is its naming path inside the file (`outer > inner`), so a function that
  * moves between touched files keeps it and is compared with its old score. A function with no
- * base counterpart is new and is not refused: the gate is the delta, not a threshold.
+ * base counterpart is new: it is refused only when it lands above the ceiling.
  * Units that share an identity, such as two `xs.forEach(...)` callbacks in one function, cannot
  * be paired one to one, so they compare as lists sorted highest first: no unit may score above
  * the base unit in its position. A sibling added among them can be refused, and waived as usual.
@@ -32,9 +38,17 @@ import ts from 'typescript';
  * `Ratchet-Allow: <path>` for a file's line count, `Ratchet-Allow: <path>:<identity>` for a
  * function. A trailer lives only in the commits after the merge base, so it waives this change
  * and nothing after it.
+ *
+ * The `mock.module()` baseline (`scripts/mock-module-baseline.json`, owned by
+ * `check-mock-modules.ts`) is committed, so its own check cannot tell a grandfathered site from
+ * one a change just added with `--write`. Here every entry it gains against the merge base is
+ * refused, waived for the whole file by `Ratchet-Allow: scripts/mock-module-baseline.json`.
  */
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
+export const COMPLEXITY_CEILING = 15;
+export const LINE_CEILING = 800;
+const TEST_FILE = /(?:\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)__tests__\/)/;
 const SOURCE_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
 const LOGICAL_OPERATORS = new Set([
   ts.SyntaxKind.AmpersandAmpersandToken,
@@ -145,18 +159,7 @@ function score(unit: FunctionUnit): number {
   const visit = (node: ts.Node, nesting: number): void => {
     if (isFunctionUnit(node)) return;
     if (ts.isIfStatement(node)) {
-      const isElseIf = ts.isIfStatement(node.parent) && node.parent.elseStatement === node;
-      total += isElseIf ? 1 : 1 + nesting;
-      visit(node.expression, nesting);
-      visit(node.thenStatement, nesting + 1);
-      const otherwise = node.elseStatement;
-      if (otherwise === undefined) return;
-      if (ts.isIfStatement(otherwise)) {
-        visit(otherwise, nesting);
-      } else {
-        total += 1;
-        visit(otherwise, nesting + 1);
-      }
+      visitIf(node, nesting);
       return;
     }
     if (isNestingStructure(node)) {
@@ -172,6 +175,20 @@ function score(unit: FunctionUnit): number {
       if (!continuesRun) total += 1;
     }
     node.forEachChild(child => visit(child, nesting));
+  };
+  const visitIf = (node: ts.IfStatement, nesting: number): void => {
+    const isElseIf = ts.isIfStatement(node.parent) && node.parent.elseStatement === node;
+    total += isElseIf ? 1 : 1 + nesting;
+    visit(node.expression, nesting);
+    visit(node.thenStatement, nesting + 1);
+    const otherwise = node.elseStatement;
+    if (otherwise === undefined) return;
+    if (ts.isIfStatement(otherwise)) {
+      visit(otherwise, nesting);
+    } else {
+      total += 1;
+      visit(otherwise, nesting + 1);
+    }
   };
   unit.forEachChild(child => visit(child, 0));
   return total;
@@ -293,6 +310,18 @@ function scored(path: string, content: string | null): Scores | null {
     : { lines: lineCount(content), units: cognitiveUnits(path, content) };
 }
 
+/** A source file that ends above the line ceiling longer than it was; null otherwise. */
+function lineGrowth(
+  path: string,
+  base: Scores | null,
+  head: Scores,
+  ceiling: number
+): string | null {
+  const before = base?.lines ?? 0;
+  if (TEST_FILE.test(path) || head.lines <= ceiling || head.lines <= before) return null;
+  return `${path}: ${before} -> ${head.lines} lines`;
+}
+
 export interface RatchetResult {
   failures: string[];
   allowed: string[];
@@ -300,20 +329,31 @@ export interface RatchetResult {
   remedies: string[];
 }
 
-export function checkRatchet(repo: string, baseRef: string): RatchetResult {
-  let mergeBase: string;
+/** The ceilings below which code may grow; a test passes its own to exercise the comparison. */
+export interface Ceilings {
+  complexity: number;
+  lines: number;
+}
+
+function findMergeBase(repo: string, baseRef: string): string {
   try {
-    mergeBase = git(['merge-base', baseRef, 'HEAD'], repo).trim();
+    return git(['merge-base', baseRef, 'HEAD'], repo).trim();
   } catch (error) {
     const branch = baseRef.replace(/^origin\//, '');
     throw new Error(
       `Cannot find the merge base with ${baseRef}. Fetch it first: git fetch origin ${branch}\n${(error as Error).message}`
     );
   }
-  const inScope = biomeScope(git(['show', `${mergeBase}:biome.jsonc`], repo));
+}
 
+function scoreTouchedFiles(
+  repo: string,
+  mergeBase: string,
+  touched: ReadonlyMap<string, string | null>,
+  inScope: (path: string) => boolean
+): ScoredFile[] {
   const files: ScoredFile[] = [];
-  for (const [headPath, basePath] of touchedPaths(mergeBase, repo)) {
+  for (const [headPath, basePath] of touched) {
     const base =
       basePath !== null && inScope(basePath)
         ? scored(basePath, git(['show', `${mergeBase}:${basePath}`], repo))
@@ -322,8 +362,14 @@ export function checkRatchet(repo: string, baseRef: string): RatchetResult {
     if (base !== null || head !== null) files.push({ path: headPath, base, head });
   }
 
+  return files;
+}
+
+type MovedUnits = Map<string, { file: string; scores: number[] }>;
+
+function findMovedUnits(files: readonly ScoredFile[]): MovedUnits {
   // Base units whose identity left their file: the candidates a moved function is compared with.
-  const moved = new Map<string, { file: string; scores: number[] }>();
+  const moved: MovedUnits = new Map();
   for (const file of files) {
     for (const [identity, before] of file.base?.units ?? []) {
       if (file.head?.units.has(identity)) continue;
@@ -333,6 +379,51 @@ export function checkRatchet(repo: string, baseRef: string): RatchetResult {
       }
     }
   }
+
+  return moved;
+}
+
+function complexityGrowth(
+  { path, base, head }: ScoredFile,
+  moved: MovedUnits,
+  ceiling: number
+): { finding: string; key: string }[] {
+  const findings: { finding: string; key: string }[] = [];
+  if (head === null) return findings;
+  for (const [identity, afterScores] of head.units) {
+    const sameFile = base?.units.get(identity) ?? [];
+    // Head units beyond the file's own base count may have moved in, so the moved base scores
+    // join the comparison; with no surplus they stay out and cannot excuse a raise.
+    const origin = afterScores.length > sameFile.length ? moved.get(identity) : undefined;
+    const before = [
+      ...sameFile.map(score => ({ score, file: path })),
+      ...(origin?.scores.map(score => ({ score, file: origin.file })) ?? []),
+    ].sort((a, b) => b.score - a.score);
+    // A unit with no base counterpart in its position starts from 0.
+    const position = afterScores.findIndex(
+      (after, index) => after > ceiling && after > (before[index]?.score ?? 0)
+    );
+    if (position === -1) continue;
+    const { score, file } = before[position] ?? { score: 0, file: path };
+    const from = file === path ? '' : ` (base: ${file})`;
+    findings.push({
+      finding: `${path}: \`${identity}\` cognitive complexity ${score} -> ${afterScores[position]}${from}`,
+      key: `${path}:${identity}`,
+    });
+  }
+  return findings;
+}
+
+export function checkRatchet(
+  repo: string,
+  baseRef: string,
+  ceilings: Ceilings = { complexity: COMPLEXITY_CEILING, lines: LINE_CEILING }
+): RatchetResult {
+  const mergeBase = findMergeBase(repo, baseRef);
+  const inScope = biomeScope(git(['show', `${mergeBase}:biome.jsonc`], repo));
+  const touched = touchedPaths(mergeBase, repo);
+  const files = scoreTouchedFiles(repo, mergeBase, touched, inScope);
+  const moved = findMovedUnits(files);
 
   const allow = allowances(mergeBase, repo);
   const result: RatchetResult = { failures: [], allowed: [], remedies: [] };
@@ -347,31 +438,37 @@ export function checkRatchet(repo: string, baseRef: string): RatchetResult {
 
   for (const { path, base, head } of files) {
     if (head === null) continue;
-    for (const [identity, afterScores] of head.units) {
-      const sameFile = base?.units.get(identity) ?? [];
-      // Head units beyond the file's own base count may have moved in, so the moved base scores
-      // join the comparison; with no surplus they stay out and cannot excuse a raise.
-      const origin = afterScores.length > sameFile.length ? moved.get(identity) : undefined;
-      const before = [
-        ...sameFile.map(score => ({ score, file: path })),
-        ...(origin?.scores.map(score => ({ score, file: origin.file })) ?? []),
-      ].sort((a, b) => b.score - a.score);
-      const position = afterScores.findIndex(
-        (after, index) => index < before.length && after > before[index].score
-      );
-      if (position === -1) continue;
-      const { score, file } = before[position];
-      const from = file === path ? '' : ` (base: ${file})`;
-      report(
-        `${path}: \`${identity}\` cognitive complexity ${score} -> ${afterScores[position]}${from}`,
-        `${path}:${identity}`
-      );
+    for (const { finding, key } of complexityGrowth(
+      { path, base, head },
+      moved,
+      ceilings.complexity
+    )) {
+      report(finding, key);
     }
-    if (base !== null && head.lines > base.lines) {
-      report(`${path}: ${base.lines} -> ${head.lines} lines`, path);
-    }
+    const grown = lineGrowth(path, base, head, ceilings.lines);
+    if (grown !== null) report(grown, path);
   }
+  mockBaselineGrowth(mergeBase, touched, repo).forEach(entry =>
+    report(`${BASELINE_PATH}: gains ${entry}`, BASELINE_PATH)
+  );
   return result;
+}
+
+/** Entries the mock.module() baseline has at HEAD and not at the merge base. */
+function mockBaselineGrowth(
+  mergeBase: string,
+  touched: ReadonlyMap<string, string | null>,
+  repo: string
+): string[] {
+  const basePath = touched.get(BASELINE_PATH);
+  if (basePath === undefined) return [];
+  const headText = headContent(BASELINE_PATH, repo);
+  const before =
+    basePath === null
+      ? new Set<string>()
+      : baselineEntries(parseBaseline(git(['show', `${mergeBase}:${basePath}`], repo)));
+  const after = headText === null ? new Set<string>() : baselineEntries(parseBaseline(headText));
+  return [...after].filter(entry => !before.has(entry));
 }
 
 if (import.meta.main) {
@@ -383,7 +480,7 @@ if (import.meta.main) {
       [
         'Complexity ratchet failed:',
         ...failures.map(failure => `  ${failure}`),
-        'Bring each back to its base value or lower. To land an increase on purpose, add a commit trailer for it:',
+        `Above the ceiling (complexity ${COMPLEXITY_CEILING}, ${LINE_CEILING} lines), bring each back to its base value or to the ceiling. To land an increase on purpose, add a commit trailer for it:`,
         ...remedies.map(remedy => `  ${remedy}`),
       ].join('\n')
     );

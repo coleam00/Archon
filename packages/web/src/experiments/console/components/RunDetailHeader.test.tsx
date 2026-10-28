@@ -60,3 +60,35 @@ test('the detail header displays live tool attention', () => {
   expect(html).toContain('bun test [REDACTED]');
   expect(html).toContain('no progress');
 });
+
+test('the detail header names an unreachable owner and stops the live dot', () => {
+  const run = toRun({
+    ...detailFixture.run,
+    status: 'running',
+    terminal_record: null,
+    owner_observation: 'unreachable',
+  });
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <RunDetailHeader run={run} projectName="Archon" projectId={undefined} />
+    </MemoryRouter>
+  );
+  expect(html).toContain('Running · owner not answering');
+  expect(html).toContain('abandon it to release the record');
+  expect(html).toContain('since launch');
+  expect(html).not.toContain('animate-ping');
+});
+
+test.each([0, undefined])('the detail header distinguishes reported cost %s', cost => {
+  const run = toRun({ ...detailFixture.run, metadata: { total_cost_usd: cost } });
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <RunDetailHeader run={run} projectName="Archon" projectId={undefined} />
+    </MemoryRouter>
+  );
+  if (cost === 0) {
+    expect(html).toContain('$0.0000');
+  } else {
+    expect(html).not.toContain('$');
+  }
+});

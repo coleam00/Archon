@@ -25,6 +25,7 @@ import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import { runMessageConversationId } from '../primitives/run';
+import { isRunLive } from '../lib/run-status';
 import { foldNodeRuns } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
@@ -107,42 +108,87 @@ function writeNodeFilter(v: string): void {
   }
 }
 
-export function RunDetailPage(): ReactElement {
-  const { runId } = useParams<{ projectId: string; runId: string }>();
-  const navigate = useNavigate();
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const [showToolCalls, setShowToolCalls] = useState<boolean>(() =>
-    readToggle(TOGGLE_KEYS.toolCalls, true)
+// Approve/Reject keymap bindings fire the matching button's click event
+// rather than lifting ApprovalPanel's internal state — keeps the panel
+// self-contained and avoids prop drilling for a paused-only shortcut.
+function clickEnabledButton(selector: string): void {
+  const el = document.querySelector<HTMLButtonElement>(selector);
+  if (el !== null && !el.disabled) el.click();
+}
+
+function clickApprove(): void {
+  clickEnabledButton('[data-keymap-approve]');
+}
+
+function clickReject(): void {
+  clickEnabledButton('[data-keymap-reject]');
+}
+
+interface RunDetailKeymap {
+  isPaused: boolean;
+  goBack: () => void;
+  setViewPersist: (next: DetailView) => void;
+  toggleToolCalls: () => void;
+  toggleSystem: () => void;
+}
+
+function useRunDetailKeymap({
+  isPaused,
+  goBack,
+  setViewPersist,
+  toggleToolCalls,
+  toggleSystem,
+}: RunDetailKeymap): void {
+  const bindings = useMemo<readonly Binding[]>(
+    () => [
+      {
+        keys: ['1'],
+        label: 'Log tab',
+        run: (): void => {
+          setViewPersist('log');
+        },
+      },
+      {
+        keys: ['2'],
+        label: 'Graph tab',
+        run: (): void => {
+          setViewPersist('graph');
+        },
+      },
+      {
+        keys: ['3'],
+        label: 'Artifacts tab',
+        run: (): void => {
+          setViewPersist('artifacts');
+        },
+      },
+      { keys: ['t'], label: 'Toggle tool calls', run: toggleToolCalls },
+      { keys: ['s'], label: 'Toggle system', run: toggleSystem },
+      {
+        keys: ['a'],
+        label: 'Approve',
+        when: (): boolean => isPaused,
+        run: clickApprove,
+      },
+      {
+        keys: ['r'],
+        label: 'Reject',
+        when: (): boolean => isPaused,
+        run: clickReject,
+      },
+      { keys: ['Escape'], label: 'Back to runs', run: goBack },
+      { keys: ['h'], label: 'Back to runs', run: goBack },
+    ],
+    [isPaused, goBack, setViewPersist, toggleToolCalls, toggleSystem]
   );
-  const [showSystem, setShowSystem] = useState<boolean>(() =>
-    readToggle(TOGGLE_KEYS.system, false)
-  );
-  const [view, setView] = useState<DetailView>(() => readView());
-  const [selectedNodeId, setSelectedNodeId] = useState<string>(() => readNodeFilter());
+  useKeymap({ bindings });
+}
 
-  // Hoisted above any early returns so the hook order stays stable.
-  const scrollToNode = useCallback((nodeId: string): boolean => {
-    const scroller = scrollRef.current;
-    const target = document.getElementById(`node-transition-${nodeId}`);
-    if (scroller === null || target === null) return false;
-
-    const scrollerRect = scroller.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const centeredTop =
-      scroller.scrollTop +
-      targetRect.top +
-      targetRect.height / 2 -
-      (scrollerRect.top + scroller.clientHeight / 2);
-    const destination = Math.min(
-      scroller.scrollHeight - scroller.clientHeight,
-      Math.max(0, centeredTop)
-    );
-    const willMove = Math.abs(destination - scroller.scrollTop) > 1;
-
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    return willMove;
-  }, []);
-
+/**
+ * The run, its project, conversation messages and artifact list, kept fresh by
+ * SSE plus a heartbeat refetch while the run is live.
+ */
+function useRunDetailData(runId: string | undefined) {
   // `Project | null` / `RunDetailView | null` rather than the `as unknown as T`
   // casts the original sentinel used — keeps the null path honest for
   // downstream readers (they can guard explicitly instead of meeting a
@@ -202,13 +248,134 @@ export function RunDetailPage(): ReactElement {
   }, [runId, status, conversationPlatformId]);
 
   // Surface the artifact count on the tab even when the user hasn't visited
-  // the panel yet. Cheap call — the server walks one directory. Must live
-  // above any early return so the hook order stays stable across renders.
+  // the panel yet. Cheap call — the server walks one directory.
   const { data: artifactFiles } = useEntity<ArtifactFile[]>(
     runId !== undefined ? K.artifacts(runId) : 'noop:no-run-id',
     () =>
       runId !== undefined ? skill.listRunArtifacts(runId) : Promise.resolve([] as ArtifactFile[])
   );
+
+  return { detail, detailError, projectId, project, projectError, messages, artifactFiles };
+}
+
+function JumpToBottom({
+  visible,
+  onClick,
+}: {
+  visible: boolean;
+  onClick: () => void;
+}): ReactElement | null {
+  if (!visible) return null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Jump to bottom"
+      className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+    >
+      <span aria-hidden>↓</span>
+      Jump to bottom
+    </button>
+  );
+}
+
+/** The approval gate answered in place at the bottom of a paused run's log. */
+function ApprovalGate({ run }: { run: RunDetailView['run'] }): ReactElement | null {
+  if (run.status !== 'paused' || run.approval === null || run.approval === undefined) return null;
+  return (
+    <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-warning" />
+        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
+          Waiting for approval
+        </span>
+      </div>
+      <ApprovalContext run={run} />
+      <div className="mt-2">
+        <ApprovalPanel run={run} />
+      </div>
+    </div>
+  );
+}
+
+interface RunGraphViewProps {
+  run: RunDetailView['run'];
+  nodes: RunDetailView['nodes'];
+  projectId: string | undefined;
+  project: Project | null | undefined;
+  projectError: Error | undefined;
+  onNodeSelect: (nodeId: string) => void;
+}
+
+/** The graph needs the project's checkout to read the workflow; until then, say why it is missing. */
+function RunGraphView({
+  run,
+  nodes,
+  projectId,
+  project,
+  projectError,
+  onNodeSelect,
+}: RunGraphViewProps): ReactElement {
+  if (project !== undefined && project !== null) {
+    return (
+      <RunGraphPanel
+        workflowName={run.workflow}
+        projectCwd={project.path}
+        nodes={nodes}
+        live={isRunLive(run)}
+        onNodeSelect={onNodeSelect}
+      />
+    );
+  }
+  return (
+    <div className="p-6 text-[12px] text-text-tertiary">
+      {projectId === undefined
+        ? 'This run has no project. Its logs and artifacts are available in the other views.'
+        : projectError
+          ? `Could not load project: ${projectError.message}`
+          : 'Loading project…'}
+    </div>
+  );
+}
+
+export function RunDetailPage(): ReactElement {
+  const { runId } = useParams<{ projectId: string; runId: string }>();
+  const navigate = useNavigate();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [showToolCalls, setShowToolCalls] = useState<boolean>(() =>
+    readToggle(TOGGLE_KEYS.toolCalls, true)
+  );
+  const [showSystem, setShowSystem] = useState<boolean>(() =>
+    readToggle(TOGGLE_KEYS.system, false)
+  );
+  const [view, setView] = useState<DetailView>(() => readView());
+  const [selectedNodeId, setSelectedNodeId] = useState<string>(() => readNodeFilter());
+
+  // Hoisted above any early returns so the hook order stays stable.
+  const scrollToNode = useCallback((nodeId: string): boolean => {
+    const scroller = scrollRef.current;
+    const target = document.getElementById(`node-transition-${nodeId}`);
+    if (scroller === null || target === null) return false;
+
+    const scrollerRect = scroller.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const centeredTop =
+      scroller.scrollTop +
+      targetRect.top +
+      targetRect.height / 2 -
+      (scrollerRect.top + scroller.clientHeight / 2);
+    const destination = Math.min(
+      scroller.scrollHeight - scroller.clientHeight,
+      Math.max(0, centeredTop)
+    );
+    const willMove = Math.abs(destination - scroller.scrollTop) > 1;
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return willMove;
+  }, []);
+
+  const { detail, detailError, projectId, project, projectError, messages, artifactFiles } =
+    useRunDetailData(runId);
 
   // Distinct nodes drive the node-filter dropdown — derived from the same fold
   // the stream renders, so the options match the dividers exactly.
@@ -337,60 +504,13 @@ export function RunDetailPage(): ReactElement {
       return next;
     });
   }, []);
-  // Approve/Reject keymap bindings fire the matching button's click event
-  // rather than lifting ApprovalPanel's internal state — keeps the panel
-  // self-contained and avoids prop drilling for a paused-only shortcut.
-  const clickApprove = useCallback((): void => {
-    const el = document.querySelector<HTMLButtonElement>('[data-keymap-approve]');
-    if (el !== null && !el.disabled) el.click();
-  }, []);
-  const clickReject = useCallback((): void => {
-    const el = document.querySelector<HTMLButtonElement>('[data-keymap-reject]');
-    if (el !== null && !el.disabled) el.click();
-  }, []);
-  const bindings = useMemo<readonly Binding[]>(
-    () => [
-      {
-        keys: ['1'],
-        label: 'Log tab',
-        run: (): void => {
-          setViewPersist('log');
-        },
-      },
-      {
-        keys: ['2'],
-        label: 'Graph tab',
-        run: (): void => {
-          setViewPersist('graph');
-        },
-      },
-      {
-        keys: ['3'],
-        label: 'Artifacts tab',
-        run: (): void => {
-          setViewPersist('artifacts');
-        },
-      },
-      { keys: ['t'], label: 'Toggle tool calls', run: toggleToolCalls },
-      { keys: ['s'], label: 'Toggle system', run: toggleSystem },
-      {
-        keys: ['a'],
-        label: 'Approve',
-        when: (): boolean => isPaused,
-        run: clickApprove,
-      },
-      {
-        keys: ['r'],
-        label: 'Reject',
-        when: (): boolean => isPaused,
-        run: clickReject,
-      },
-      { keys: ['Escape'], label: 'Back to runs', run: goBack },
-      { keys: ['h'], label: 'Back to runs', run: goBack },
-    ],
-    [isPaused, goBack, setViewPersist, toggleToolCalls, toggleSystem, clickApprove, clickReject]
-  );
-  useKeymap({ bindings });
+  useRunDetailKeymap({
+    isPaused,
+    goBack,
+    setViewPersist,
+    toggleToolCalls,
+    toggleSystem,
+  });
 
   if (runId === undefined) {
     return (
@@ -424,10 +544,7 @@ export function RunDetailPage(): ReactElement {
   const toolbar = (
     <StreamToolbar
       view={view}
-      onChangeView={next => {
-        setView(next);
-        writeView(next);
-      }}
+      onChangeView={setViewPersist}
       showToolCalls={showToolCalls}
       onToggleToolCalls={next => {
         setShowToolCalls(next);
@@ -488,63 +605,26 @@ export function RunDetailPage(): ReactElement {
 
                     <RunFinishedLine run={run} />
 
-                    {run.status === 'paused' &&
-                    run.approval !== null &&
-                    run.approval !== undefined ? (
-                      <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
-                        <div className="mb-2 flex items-center gap-2">
-                          <span
-                            aria-hidden
-                            className="h-2 w-2 animate-pulse rounded-full bg-warning"
-                          />
-                          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
-                            Waiting for approval
-                          </span>
-                        </div>
-                        <ApprovalContext run={run} />
-                        <div className="mt-2">
-                          <ApprovalPanel run={run} />
-                        </div>
-                      </div>
-                    ) : null}
+                    <ApprovalGate run={run} />
                   </div>
                 </div>
               </div>
-              {!atBottom ? (
-                <button
-                  type="button"
-                  onClick={scrollToBottom}
-                  aria-label="Jump to bottom"
-                  className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
-                >
-                  <span aria-hidden>↓</span>
-                  Jump to bottom
-                </button>
-              ) : null}
+              <JumpToBottom visible={!atBottom} onClick={scrollToBottom} />
             </div>
           ) : view === 'graph' ? (
             <>
               <div className="px-6">{toolbar}</div>
-              {project !== undefined && project !== null ? (
-                <RunGraphPanel
-                  workflowName={run.workflow}
-                  projectCwd={project.path}
-                  nodes={nodes}
-                  onNodeSelect={(nodeId): void => {
-                    pendingNodeIdRef.current = nodeId;
-                    setView('log');
-                    writeView('log');
-                  }}
-                />
-              ) : (
-                <div className="p-6 text-[12px] text-text-tertiary">
-                  {projectId === undefined
-                    ? 'This run has no project. Its logs and artifacts are available in the other views.'
-                    : projectError
-                      ? `Could not load project: ${projectError.message}`
-                      : 'Loading project…'}
-                </div>
-              )}
+              <RunGraphView
+                run={run}
+                nodes={nodes}
+                projectId={projectId}
+                project={project}
+                projectError={projectError}
+                onNodeSelect={(nodeId): void => {
+                  pendingNodeIdRef.current = nodeId;
+                  setViewPersist('log');
+                }}
+              />
             </>
           ) : (
             <>

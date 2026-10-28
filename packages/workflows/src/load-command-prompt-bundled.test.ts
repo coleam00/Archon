@@ -8,7 +8,7 @@ mock.module('./defaults/bundled-defaults', () => ({
   isBinaryBuild: () => true,
 }));
 
-import { loadCommandPrompt } from './executor-shared';
+import { loadCommandPrompt } from './load-command-prompt';
 import type { WorkflowDeps } from './deps';
 
 describe('loadCommandPrompt — bundled packaged commands', () => {

@@ -308,13 +308,23 @@ export function ChatPage(): ReactElement {
         </div>
       ) : null}
 
-      {error !== null || loadError !== undefined ? (
-        <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
-          {error ?? `Failed to load chat: ${loadError?.message ?? 'unknown error'}`}
-        </div>
-      ) : null}
+      <ChatError error={error} loadError={loadError} />
 
       <ChatComposer onSend={onSend} disabled={busy} />
     </section>
   );
+}
+
+function ChatError({
+  error,
+  loadError,
+}: {
+  error: string | null;
+  loadError: Error | undefined;
+}): ReactElement | null {
+  return error !== null || loadError !== undefined ? (
+    <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
+      {error ?? `Failed to load chat: ${loadError?.message ?? 'unknown error'}`}
+    </div>
+  ) : null;
 }

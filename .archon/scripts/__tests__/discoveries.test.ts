@@ -4,14 +4,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFil
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
-import {
-  AGENT_OUTCOMES,
-  type AgentDecision,
-  checkDecisions,
-  type DecisionRecord,
-  parseDecisionRecord,
-  renderDecisions,
-} from '../../workflows/sdlc/.shared/discoveries';
+import { AGENT_OUTCOMES, type AgentDecision, checkDecisions, parseRunDocument } from '../../workflows/sdlc/.shared/discoveries';
 import { latestVerdictOf, relayedDiscoveries } from '../../workflows/sdlc/.shared/report';
 import { type GhIssue, gitCheckout, hostCli, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
@@ -94,25 +87,9 @@ describe("a run's discoveries", () => {
   });
 });
 
-// --- the decision record and the pre-write check -----------------------------------
+// --- the run document and the pre-write check ---------------------------------------
 
 const ISSUE = { repo: REPO, number: 7 };
-const FILED = { kind: 'filed', issue: ISSUE, body: 'b' } as const;
-const PENDING = { kind: 'filed', issue: null, body: 'b' } as const;
-
-function stored(key: string, decision: DecisionRecord['decision']): DecisionRecord {
-  return {
-    version: 1,
-    key,
-    title: 'a defect',
-    decision,
-    reason: 'r',
-    verified_at: 'sha',
-    at: '2026-10-15T00:00:00Z',
-    refs: [`${RUN}:review#0`],
-    question: null,
-  };
-}
 
 function decideSchema(): Record<string, unknown> {
   const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'discoveries/archon-discoveries.yaml'), 'utf8')) as {
@@ -121,56 +98,31 @@ function decideSchema(): Record<string, unknown> {
   return workflow.nodes.find(node => node.id === 'decide')?.output_format ?? {};
 }
 
-describe('the decision record', () => {
-  test('round-trips through its parser and renders one section per key', () => {
-    const value = stored('known-defect', { kind: 'tracked', issue: ISSUE, comment: null });
-    expect(parseDecisionRecord('discoveries/decisions/known-defect', JSON.parse(JSON.stringify(value)))).toEqual(value);
-    expect(renderDecisions([value])).toContain('## known-defect');
-  });
-
-  test('a malformed decision refuses, naming the document, rather than reading as undecided', () => {
-    const name = 'discoveries/decisions/known-defect';
-    for (const decision of [{ kind: 'filed', issue: ISSUE }, { kind: 'tracked', issue: null }, { kind: 'reported' }]) {
-      expect(() => parseDecisionRecord(name, { ...stored('known-defect', { kind: 'dropped' }), decision })).toThrow(name);
+describe("a drained run's document", () => {
+  test('round-trips through its parser, and one that does not parse refuses, naming the document', () => {
+    const name = `discoveries/runs/${RUN}`;
+    const value = {
+      version: 1 as const,
+      claim: null,
+      decided: [`${RUN}:review#0`],
+      questions: [{ keys: ['k-one'], refs: [`${RUN}:review#1`], text: 'q', recommendation: 'r', answer: { text: 'a', at: 'now' } }],
+    };
+    expect(parseRunDocument(name, JSON.parse(JSON.stringify(value)))).toEqual(value);
+    expect(parseRunDocument(name, { version: 1, claim: null })).toEqual({ version: 1, claim: null });
+    for (const bad of [{ version: 2, claim: null }, { version: 1, claim: null, decided: 'x' }, { version: 1, claim: null, questions: [{ text: 'q' }] }]) {
+      expect(() => parseRunDocument(name, bad)).toThrow(name);
     }
-    expect(() => parseDecisionRecord('discoveries/decisions/other', stored('known-defect', { kind: 'dropped' }))).toThrow('key');
-    // A hand-seeded ref without its run refuses here, by name, not later in rendering.
-    expect(() => parseDecisionRecord(name, { ...stored('known-defect', { kind: 'dropped' }), refs: ['manual'] })).toThrow(
-      `${name} is not a decision record: a ref is not of the form <run-id>:<ref>`
-    );
   });
 
-  test('every queued ref is decided exactly once, and a key with an issue is never filed again', () => {
+  test('every queued ref is decided exactly once', () => {
     const drop = (key: string, refs: string[]): AgentDecision => ({ outcome: 'drop', key, refs, title: 't', reason: 'r' });
     const queued = ['run:review#0', 'run:review#1'];
-    expect(checkDecisions(queued, [drop('first-key', queued)], new Map())).toEqual([]);
-    expect(checkDecisions(queued, [drop('first-key', ['run:review#0'])], new Map())).toEqual(['run:review#1 has no decision']);
-    expect(checkDecisions(queued, [drop('first-key', queued), drop('second-key', ['run:review#1', 'run:other#0'])], new Map())).toEqual([
+    expect(checkDecisions(queued, [drop('first-key', queued)])).toEqual([]);
+    expect(checkDecisions(queued, [drop('first-key', ['run:review#0'])])).toEqual(['run:review#1 has no decision']);
+    expect(checkDecisions(queued, [drop('first-key', queued), drop('second-key', ['run:review#1', 'run:other#0'])])).toEqual([
       'run:review#1 is decided under both first-key and second-key',
       'run:other#0 (key second-key) is not a queued ref',
     ]);
-    const file: AgentDecision = { outcome: 'file', key: 'first-key', refs: queued, title: 't', body: 'b', reason: 'r' };
-    for (const issued of [stored('first-key', FILED), stored('first-key', { kind: 'tracked', issue: ISSUE, comment: null })]) {
-      expect(checkDecisions(queued, [file], new Map([['first-key', issued]]))).toEqual([
-        'key first-key already has an issue; it is never filed again',
-      ]);
-    }
-    // A dropped key may be filed when new evidence reopens it; an unfinished filing is only ever filed.
-    expect(checkDecisions(queued, [file], new Map([['first-key', stored('first-key', { kind: 'dropped' })]]))).toEqual([]);
-    const pending = new Map([['first-key', stored('first-key', PENDING)]]);
-    expect(checkDecisions(queued, [file], pending)).toEqual([]);
-    expect(checkDecisions(queued, [drop('first-key', queued)], pending)).toEqual([
-      'key first-key has an unfinished filing; it can only be filed',
-    ]);
-    const unposted = new Map([['first-key', stored('first-key', { kind: 'tracked', issue: ISSUE, comment: 'evidence' })]]);
-    const elsewhere: AgentDecision = { outcome: 'track', key: 'first-key', refs: queued, title: 't', issue: { ...ISSUE, number: 8 }, comment: null, reason: 'r' };
-    const otherRepo: AgentDecision = { ...elsewhere, issue: { repo: { host: REPO.host, path: 'example/other' }, number: 7 } };
-    for (const decision of [drop('first-key', queued), elsewhere, otherRepo]) {
-      expect(checkDecisions(queued, [decision], unposted)).toEqual([
-        'key first-key has an unposted evidence comment; it can only be tracked on the same issue',
-      ]);
-    }
-    expect(checkDecisions(queued, [{ ...elsewhere, issue: ISSUE }], unposted)).toEqual([]);
   });
 
   test("the decide node's output schema names exactly the agent's outcomes", () => {
@@ -215,7 +167,6 @@ function listing(at: Install, ids: string[]): string {
 interface Pass {
   readonly runId: string;
   readonly runs: string[];
-  readonly mode?: 'live' | 'eval';
   readonly statuses?: Record<string, string>;
   readonly issues?: GhIssue[];
   readonly subject?: { state: 'open' | 'closed' };
@@ -236,7 +187,6 @@ function script(at: Install, name: Script, pass: Pass, inputs: Record<string, st
       RUN_LISTING: listing(at, pass.runs),
       INPUTS_REPO_HOST: REPO.host,
       INPUTS_REPO_PATH: REPO.path,
-      INPUTS_MODE: pass.mode ?? 'live',
       INPUTS_SINCE: '',
       INPUTS_UNTIL: '',
       INPUTS_LIMIT: '20',
@@ -288,8 +238,8 @@ function state(at: Install, name: string): unknown {
   return cli(at, ['state', 'get', name]).value.value ?? null;
 }
 
-function seed(at: Install, value: DecisionRecord): void {
-  expect(cli(at, ['state', 'put', `discoveries/decisions/${value.key}`, '--if-revision', '0'], JSON.stringify(value)).status).toBe(0);
+function seed(at: Install, name: string, value: unknown): void {
+  expect(cli(at, ['state', 'put', name, '--if-revision', '0'], JSON.stringify(value)).status).toBe(0);
 }
 
 function documents(at: Install, prefix = 'discoveries/'): unknown[] {
@@ -301,8 +251,22 @@ const fileIt = (key: string) => (refs: string[]): AgentDecision[] => [
 ];
 
 describe('the discoveries scripts', () => {
-  test('a live pass files the issue with its marker, records each decision, and a second pass finds nothing to do', () => {
+  test('a live pass files the issue with its marker, records the decided refs on the run, and a second pass finds nothing to do', () => {
     const at = install();
+    const writer = track(mkdtempSync(join(tmpdir(), 'archon-discoveries-writer-')));
+    const git = (cwd: string, ...args: string[]): string => {
+      const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+      if (result.status !== 0) throw new Error(result.stderr);
+      return result.stdout.trim();
+    };
+    git(writer, 'clone', '-q', git(at.checkout, 'remote', 'get-url', 'upstream'), '.');
+    git(writer, 'config', 'user.email', 'test@example.com');
+    git(writer, 'config', 'user.name', 'Test');
+    git(writer, 'commit', '-q', '--allow-empty', '-m', 'remote advanced');
+    git(writer, 'push', '-q', 'origin', 'dev');
+    const fresh = git(writer, 'rev-parse', 'HEAD');
+    expect(git(at.checkout, 'rev-parse', 'HEAD')).not.toBe(fresh);
+    expect(git(at.checkout, 'rev-parse', 'refs/remotes/upstream/dev')).not.toBe(fresh);
     runArtifacts(at.outputRoot, RUN, { verdict: [record('new'), record('covered'), record('fixed')] });
     const { facts, outcome } = decide(at, { runId: 'pass-1', runs: [RUN] }, refs => [
       { outcome: 'file', key: 'new-defect', refs: [refs[0] as string], title: 'A new defect', body: 'The brief.', reason: 'real' },
@@ -310,137 +274,76 @@ describe('the discoveries scripts', () => {
       { outcome: 'drop', key: 'fixed-defect', refs: [refs[2] as string], title: 'Fixed', reason: 'fixed at the base' },
     ]);
     expect(queued(facts)).toEqual([`${RUN}:review#0`, `${RUN}:review#1`, `${RUN}:review#2`]);
+    expect(ok(facts).base).toEqual({ branch: 'dev', sha: fresh });
+    const queue = JSON.parse(readFileSync(join(facts.artifacts, 'drain/queue.json'), 'utf8'));
+    expect(queue.base).toEqual({ branch: 'dev', sha: fresh });
     const applied = ok(outcome);
     expect(outcome.createdIssues).toEqual([
       expect.objectContaining({ title: 'A new defect', body: expect.stringMatching(/^<!-- archon-discovery new-defect -->\nThe brief\./) }),
     ]);
+    expect(outcome.createdIssues[0]?.body).toContain(`verified at ${fresh} by the archon-discoveries workflow`);
     expect(outcome.comments).toEqual([{ issue: 7, body: '<!-- archon-discovery covered-defect -->\nA new reproduction.' }]);
     expect(applied.dropped).toEqual([{ key: 'fixed-defect', reason: 'fixed at the base' }]);
-    expect(state(at, 'discoveries/decisions/new-defect')).toMatchObject({
-      decision: { kind: 'filed', issue: { number: 100 } },
-      refs: [`${RUN}:review#0`],
+    expect(state(at, `discoveries/runs/${RUN}`)).toEqual({
+      version: 1,
+      claim: null,
+      decided: [`${RUN}:review#0`, `${RUN}:review#1`, `${RUN}:review#2`],
+      questions: [],
     });
-    expect(state(at, 'discoveries/decisions/covered-defect')).toMatchObject({ decision: { kind: 'tracked', issue: { number: 7 } } });
-    expect(state(at, `discoveries/runs/${RUN}`)).toEqual({ version: 1, claim: null });
-
-    const again = script(at, 'facts', { runId: 'pass-2', runs: [RUN] });
-    expect(ok(again)).toMatchObject({ path: 'idle' });
-    expect(readFileSync(join(again.artifacts, 'drain/discovery-decisions.md'), 'utf8')).toContain('## new-defect');
+    expect(ok(script(at, 'facts', { runId: 'pass-2', runs: [RUN] }))).toMatchObject({ path: 'idle' });
   }, 60_000);
 
-  test('a filing interrupted after its create is finished from the marker, and nothing is filed twice', () => {
+  test('filing a key whose issue already exists recovers it by its marker, so nothing is filed twice', () => {
     const at = install();
-    runArtifacts(at.outputRoot, RUN, { verdict: [record('new'), record('other')] });
-    const marker = '<!-- archon-discovery new-defect -->';
-    // An earlier pass wrote the record and created the issue, then stopped.
-    seed(at, { ...stored('new-defect', { ...PENDING, body: `${marker}\nThe brief.` }), refs: [`${RUN}:review#0`] });
-    const existing: GhIssue = { number: 50, title: 'A defect', body: `${marker}\nThe brief.`, state: 'OPEN' };
-    const { facts, outcome } = decide(at, { runId: 'pass-2', runs: [RUN], issues: [existing] }, refs => [
-      { outcome: 'drop', key: 'other-key', refs, title: 'Other', reason: 'fixed' },
-    ]);
-    // A pending filing already settles its ref; only the other record is queued.
-    expect(queued(facts)).toEqual([`${RUN}:review#1`]);
-    expect(ok(outcome).written).toEqual([
-      { key: 'new-defect', outcome: 'file', url: 'https://ghe.example.com/example/repo/issues/50' },
-    ]);
+    runArtifacts(at.outputRoot, RUN, { verdict: [record('new')] });
+    const existing: GhIssue = { number: 50, title: 'A defect', body: '<!-- archon-discovery new-defect -->\nThe brief.', state: 'OPEN' };
+    const { outcome } = decide(at, { runId: 'pass-2', runs: [RUN], issues: [existing] }, fileIt('new-defect'));
+    expect(ok(outcome).written).toEqual([{ key: 'new-defect', outcome: 'file', url: 'https://ghe.example.com/example/repo/issues/50' }]);
     expect(outcome.createdIssues).toEqual([]);
-    expect(state(at, 'discoveries/decisions/new-defect')).toMatchObject({ decision: { kind: 'filed', issue: { number: 50 } } });
   }, 60_000);
 
-  test('an idle pass finishes the filing and the evidence comment an earlier pass left owed', () => {
+  test('a run drained before runs kept their own memory counts as decided', () => {
     const at = install();
-    runArtifacts(at.outputRoot, RUN, { verdict: [record('new'), record('covered')] });
-    const marker = '<!-- archon-discovery new-defect -->';
-    // An earlier pass wrote both records, then stopped before either public write.
-    seed(at, { ...stored('new-defect', { ...PENDING, body: `${marker}\nThe brief.` }), refs: [`${RUN}:review#0`] });
-    seed(at, { ...stored('covered-defect', { kind: 'tracked', issue: ISSUE, comment: 'A new reproduction.' }), refs: [`${RUN}:review#1`] });
-    const facts = script(at, 'facts', { runId: 'pass-2', runs: [RUN] });
-    expect(ok(facts)).toMatchObject({ path: 'idle' });
-    const outcome = script(
-      at,
-      'outcome',
-      { runId: 'pass-2', runs: [RUN] },
-      { INPUTS_PATH: 'idle', INPUTS_DECISIONS: 'null', INPUTS_SUMMARY: 'null' },
-      { 'drain/queue.json': readFileSync(join(facts.artifacts, 'drain/queue.json'), 'utf8') }
-    );
-    expect(ok(outcome).written).toEqual([
-      { key: 'covered-defect', outcome: 'track', url: expect.stringContaining('/issues/7#issuecomment-') },
-      { key: 'new-defect', outcome: 'file', url: 'https://ghe.example.com/example/repo/issues/100' },
-    ]);
-    expect(outcome.createdIssues).toEqual([expect.objectContaining({ body: `${marker}\nThe brief.` })]);
-    expect(outcome.comments).toEqual([{ issue: 7, body: '<!-- archon-discovery covered-defect -->\nA new reproduction.' }]);
-    expect(state(at, 'discoveries/decisions/new-defect')).toMatchObject({ decision: { issue: { number: 100 } } });
-    expect(state(at, 'discoveries/decisions/covered-defect')).toMatchObject({ decision: { comment: null } });
+    runArtifacts(at.outputRoot, RUN, { verdict: [record('old')] });
+    seed(at, `discoveries/runs/${RUN}`, { version: 1, claim: null });
+    expect(ok(script(at, 'facts', { runId: 'pass-1', runs: [RUN] }))).toMatchObject({ path: 'idle' });
   }, 60_000);
 
-  test('facts and outcome each read the whole decision set in one state call, not one per document', () => {
+  test('facts reads every run document in one state call, not one per run', () => {
     const at = install();
-    const keys = Array.from({ length: 6 }, (_, index) => `old-defect-${String(index)}`);
-    for (const key of keys) seed(at, { ...stored(key, { kind: 'dropped' }), refs: [`${RUN}:review#0`] });
-    seed(at, stored('owed-defect', { ...PENDING, body: '<!-- archon-discovery owed-defect -->\nThe brief.' }));
+    const ids = Array.from({ length: 4 }, (_, index) => `aaaaaaaa-0000-4000-8000-00000000001${String(index)}`);
+    for (const id of ids) {
+      runArtifacts(at.outputRoot, id, { verdict: [record('one')] });
+      seed(at, `discoveries/runs/${id}`, { version: 1, claim: null, decided: [`${id}:review#0`] });
+    }
     const log = join(track(mkdtempSync(join(tmpdir(), 'archon-discoveries-calls-'))), 'calls.jsonl');
-    const decisionReads = (): string[][] => {
-      const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
-      writeFileSync(log, '');
-      return calls.filter(argv => argv[0] === 'state' && argv.some(arg => arg.startsWith('discoveries/decisions/')) && argv[1] !== 'patch');
-    };
-    const pass = { runId: 'pass-2', runs: [] };
-    const facts = script(at, 'facts', pass, { ARCHON_CALL_LOG: log });
+    const facts = script(at, 'facts', { runId: 'pass-2', runs: ids }, { ARCHON_CALL_LOG: log });
     expect(ok(facts)).toMatchObject({ path: 'idle' });
-    expect(decisionReads()).toEqual([['state', 'list', '--prefix', 'discoveries/decisions/', '--values']]);
-    expect(readFileSync(join(facts.artifacts, 'drain/discovery-decisions.md'), 'utf8')).toContain('## old-defect-5');
-    const outcome = script(
-      at,
-      'outcome',
-      pass,
-      { INPUTS_PATH: 'idle', INPUTS_DECISIONS: 'null', INPUTS_SUMMARY: 'null', ARCHON_CALL_LOG: log },
-      { 'drain/queue.json': readFileSync(join(facts.artifacts, 'drain/queue.json'), 'utf8') }
-    );
-    expect(ok(outcome).written).toEqual([
-      { key: 'owed-defect', outcome: 'file', url: 'https://ghe.example.com/example/repo/issues/100' },
-    ]);
-    expect(decisionReads()).toEqual([['state', 'list', '--prefix', 'discoveries/decisions/', '--values']]);
+    const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
+    expect(calls.filter(argv => argv[0] === 'state')).toEqual([['state', 'list', '--prefix', 'discoveries/runs/', '--values']]);
   }, 60_000);
 
-  test('a rediscovery tracked with no new evidence keeps an owed evidence comment, and posts it', () => {
-    const at = install();
-    runArtifacts(at.outputRoot, RUN, { verdict: [record('covered'), record('covered again')] });
-    seed(at, { ...stored('covered-defect', { kind: 'tracked', issue: ISSUE, comment: 'A new reproduction.' }), refs: [`${RUN}:review#0`] });
-    const { outcome } = decide(at, { runId: 'pass-2', runs: [RUN] }, refs => [
-      { outcome: 'track', key: 'covered-defect', refs, title: 'Covered', issue: ISSUE, comment: null, reason: 'rediscovered' },
-    ]);
-    ok(outcome);
-    expect(outcome.comments).toEqual([{ issue: 7, body: '<!-- archon-discovery covered-defect -->\nA new reproduction.' }]);
-    expect(state(at, 'discoveries/decisions/covered-defect')).toMatchObject({
-      decision: { comment: null },
-      refs: [`${RUN}:review#0`, `${RUN}:review#1`],
-    });
-  }, 60_000);
-
-  test('a refused pass writes nothing: a second issue for a key, a closed tracking issue, a missing ref', () => {
+  test('a refused pass writes nothing: a closed tracking issue, a missing ref', () => {
     const at = install();
     runArtifacts(at.outputRoot, RUN, { verdict: [record('one'), record('two')] });
-    seed(at, { ...stored('filed-defect', FILED), refs: ['bbbbbbbb-0000-4000-8000-000000000009:review#0'] });
     const cases: [Pass, (refs: string[]) => AgentDecision[], string][] = [
-      [{ runId: 'pass-1', runs: [RUN] }, fileIt('filed-defect'), 'already has an issue'],
       [
-        { runId: 'pass-2', runs: [RUN], subject: { state: 'closed' }, statuses: { 'pass-1': 'failed' } },
+        { runId: 'pass-1', runs: [RUN], subject: { state: 'closed' } },
         refs => [{ outcome: 'track', key: 'new-key', refs, title: 't', issue: ISSUE, comment: null, reason: 'r' }],
         'which is not open',
       ],
       [
-        { runId: 'pass-3', runs: [RUN], statuses: { 'pass-2': 'failed' } },
+        { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'failed' } },
         refs => [{ outcome: 'drop', key: 'new-key', refs: refs.slice(1), title: 't', reason: 'r' }],
         'has no decision',
       ],
     ];
-    const before = JSON.stringify(documents(at, 'discoveries/decisions/'));
     for (const [pass, decisions, why] of cases) {
       const { outcome } = decide(at, pass, decisions);
       expect(outcome.code).toBe(1);
       expect(outcome.stderr).toContain(why);
       expect([outcome.createdIssues, outcome.comments]).toEqual([[], []]);
-      expect(JSON.stringify(documents(at, 'discoveries/decisions/'))).toBe(before);
+      expect(state(at, `discoveries/runs/${RUN}`)).not.toHaveProperty('decided');
     }
   }, 120_000);
 
@@ -465,48 +368,32 @@ describe('the discoveries scripts', () => {
     expect(state(at, `discoveries/runs/${ids[1]}`)).toBeNull();
   }, 60_000);
 
-  test('an asked record keeps its run claimed by the asking run, and the answer is stored on the record', () => {
+  test('an asked record keeps its run claimed by the asking run, and the answer reaches the next pass', () => {
     const at = install();
     runArtifacts(at.outputRoot, RUN, { verdict: [record('unclear'), record('clear')] });
-    const { outcome } = decide(at, { runId: 'pass-1', runs: [RUN] }, refs => [
+    const { facts, outcome } = decide(at, { runId: 'pass-1', runs: [RUN] }, refs => [
       { outcome: 'ask', key: 'unclear-scope', refs: [refs[0] as string], title: 'Unclear', question: 'In scope?', recommendation: 'Drop it.' },
       { outcome: 'drop', key: 'clear-drop', refs: [refs[1] as string], title: 'Clear', reason: 'fixed' },
     ]);
     expect(ok(outcome)).toMatchObject({ asked: ['unclear-scope'], question: expect.stringContaining('1. unclear-scope: In scope?') });
-    expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ claim: { run_id: 'pass-1' } });
+    expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ claim: { run_id: 'pass-1' }, decided: [`${RUN}:review#1`] });
     // While the asking run waits, no pass takes the run and asks again.
     expect(ok(script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'paused' } }))).toMatchObject({ path: 'idle' });
 
-    ok(script(at, 'answer', { runId: 'pass-1', runs: [] }, { INPUTS_KEYS: '["unclear-scope"]', INPUTS_TEXT: 'Out of scope.' }));
-    expect(state(at, 'discoveries/decisions/unclear-scope')).toMatchObject({
-      decision: { kind: 'asked' },
-      question: { text: 'In scope?', answer: { text: 'Out of scope.' } },
+    const queue = { 'drain/queue.json': readFileSync(join(facts.artifacts, 'drain/queue.json'), 'utf8') };
+    ok(script(at, 'answer', { runId: 'pass-1', runs: [] }, { INPUTS_KEYS: '["unclear-scope"]', INPUTS_TEXT: 'Out of scope.' }, queue));
+    expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({
+      questions: [{ keys: ['unclear-scope'], text: 'In scope?', answer: { text: 'Out of scope.' } }],
     });
-    // Once the asking run ended, the next pass decides only the asked record, with the answer in memory.
+    // Once the asking run ended, the next pass decides only the asked record, with the answer beside it.
     const next = script(at, 'facts', { runId: 'pass-3', runs: [RUN], statuses: { 'pass-1': 'completed' } });
     expect(queued(next)).toEqual([`${RUN}:review#0`]);
-    expect(readFileSync(join(next.artifacts, 'drain/discovery-decisions.md'), 'utf8')).toContain('Out of scope.');
-  }, 60_000);
-
-  test('eval writes no state document, issue or comment, decides settled records again, and returns every decision', () => {
-    const at = install();
-    runArtifacts(at.outputRoot, RUN, { verdict: [record('one')] });
-    ok(decide(at, { runId: 'pass-1', runs: [RUN] }, fileIt('new-defect')).outcome);
-    const before = documents(at);
-    const { facts, outcome } = decide(at, { runId: 'eval-1', runs: [RUN], mode: 'eval' }, fileIt('new-defect'));
-    expect(queued(facts)).toEqual([`${RUN}:review#0`]);
-    const evaluated = ok(outcome);
-    expect(evaluated.evaluation).toEqual({
-      decisions: [expect.objectContaining({ outcome: 'file', key: 'new-defect' })],
-      problems: ['key new-defect already has an issue; it is never filed again'],
-    });
-    expect([outcome.createdIssues, outcome.comments]).toEqual([[], []]);
-    expect(documents(at)).toEqual(before);
+    expect(readFileSync(join(next.artifacts, 'drain/queue.json'), 'utf8')).toContain('Out of scope.');
   }, 60_000);
 
   test('an input outside its vocabulary refuses before anything is read', () => {
     const at = install();
-    const refused: Record<string, string>[] = [{ INPUTS_MODE: 'dry' }, { INPUTS_SINCE: 'yesterday' }, { INPUTS_LIMIT: '0' }];
+    const refused: Record<string, string>[] = [{ INPUTS_SINCE: 'yesterday' }, { INPUTS_LIMIT: '0' }];
     for (const inputs of refused) {
       const result = script(at, 'facts', { runId: 'pass-1', runs: [] }, inputs);
       expect(result.code).toBe(1);

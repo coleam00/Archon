@@ -4,7 +4,12 @@ import { ifDefined } from './if-defined';
 
 /** Default loop config for a freshly-created loop node. */
 export function defaultLoopData(): LoopNodeData {
-  return { prompt: '', until: 'COMPLETE', max_iterations: 10, fresh_context: false };
+  return {
+    prompt: 'Replace this prompt with the work to repeat. Until configured, take no actions.',
+    until_bash: 'exit 1 # TODO: replace with a completion check (exit 0 = done)',
+    max_iterations: 10,
+    fresh_context: false,
+  };
 }
 
 /**

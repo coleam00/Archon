@@ -1,11 +1,17 @@
 import { afterEach, expect, test, mock } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { listCodebaseRegistrations } from '@archon/core/db/codebases';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { z } from '@hono/zod-openapi';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { workflowRunCommand } from './workflow';
+import {
+  terminalWorkflowRunStatusSchema,
+  workflowSourceMetadataSchema,
+} from '@archon/workflows/schemas/workflow-run';
+import { workflowRunCommand } from './workflow-run-owned';
+import { resolveRunCodebase } from './workflow-isolation';
 import type { WorkflowRunOptions } from './workflow-shared';
 import { captureWorkflowCommand } from '../test-support/command';
 import { findRepoRoot } from '@archon/git';
@@ -70,6 +76,18 @@ interface RunRow {
   codebase_id: string;
   working_path: string;
   status: string;
+}
+
+async function waitForTerminalRun(db: Database, runId: string): Promise<void> {
+  const runs = db.query<Pick<RunRow, 'status'>, [string]>(
+    'SELECT status FROM remote_agent_workflow_runs WHERE id = ?'
+  );
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (terminalWorkflowRunStatusSchema.safeParse(runs.get(runId)?.status).success) return;
+    await Bun.sleep(100);
+  }
+  throw new Error(`Detached run ${runId} did not reach terminal state`);
 }
 
 test('nested repo registers independently and its worktree retains the child owner', async () => {
@@ -162,6 +180,85 @@ test('nested repo registers independently and its worktree retains the child own
     db.close();
   }
 }, 120_000);
+
+test.each(['primary', 'external linked worktree'])(
+  'healthy %s subdirectory resolves beside an unrelated legacy registration',
+  async checkout => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-unrelated-legacy-'));
+    roots.push(root);
+    const home = join(root, 'home');
+    const repo = join(root, 'healthy');
+    initRepo(repo, join(root, 'remote.git'), 'probe.txt');
+    const initial = await captureWorkflowCommand(home, host =>
+      workflowRunCommand(host, repo, 'probe', 'initial', { noWorktree: true })
+    );
+    expect(initial.status, initial.output).toBe(0);
+    let checkoutPath = repo;
+    if (checkout === 'external linked worktree') {
+      git(repo, ['init', '--separate-git-dir', join(root, 'metadata')]);
+      checkoutPath = join(root, 'linked');
+      git(repo, ['worktree', 'add', '-qb', 'linked', checkoutPath]);
+      mkdirSync(join(checkoutPath, 'subdir'));
+    }
+    const db = new Database(join(home, 'archon.db'));
+    try {
+      const project = db
+        .query<CodebaseRow, []>('SELECT id, default_cwd FROM remote_agent_codebases')
+        .get();
+      if (!project) throw new Error('Missing healthy registration');
+      const legacyId = crypto.randomUUID();
+      db.run(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd)
+       VALUES (?, 'legacy', 'projects/legacy')`,
+        [legacyId]
+      );
+      const cwd = join(checkoutPath, 'subdir');
+      const resolved = await captureWorkflowCommand(home, async host => {
+        expect((await resolveRunCodebase(host, cwd, {})).codebase?.id).toBe(project.id);
+        await expect(resolveRunCodebase(host, cwd, { codebaseId: legacyId })).rejects.toThrow(
+          '/register-project "legacy" <absolute-path>'
+        );
+        expect(await listCodebaseRegistrations()).toContainEqual({
+          id: legacyId,
+          name: 'legacy',
+          kind: 'repo',
+          stored_default_cwd: 'projects/legacy',
+        });
+      });
+      expect(resolved.status, resolved.output).toBe(0);
+      const launched = spawnSync(
+        process.execPath,
+        [join(import.meta.dir, '..', 'cli.ts'), 'workflow', 'run', 'probe', '--no-worktree'],
+        {
+          cwd,
+          encoding: 'utf8',
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            ARCHON_HOME: home,
+            DATABASE_URL: '',
+            ARCHON_TELEMETRY_DISABLED: '1',
+          },
+        }
+      );
+      if (launched.error) throw launched.error;
+      expect(launched.status, launched.stdout + launched.stderr).toBe(0);
+      const runs = db
+        .query<RunRow, []>(
+          'SELECT codebase_id, working_path, status FROM remote_agent_workflow_runs'
+        )
+        .all();
+      expect(runs).toHaveLength(2);
+      for (const run of runs) {
+        expect(run).toMatchObject({ codebase_id: project.id, status: 'completed' });
+      }
+      expect(db.query('SELECT id FROM remote_agent_codebases').all()).toHaveLength(2);
+    } finally {
+      db.close();
+    }
+  },
+  60_000
+);
 
 test('legacy relative registration fails with recovery guidance', () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-legacy-cwd-'));
@@ -481,3 +578,154 @@ test('list and fixture testing discover only a registered inner folder from its 
     expect(result.stdout).not.toContain('outer-only');
   }
 }, 30_000);
+
+test('explicit project binds a separate clone while preserving launch source and execution context', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-explicit-project-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const registered = join(root, 'registered');
+  const clone = join(root, 'clone');
+  initRepo(registered, join(root, 'remote.git'), 'content.txt');
+  const initial = await captureWorkflowCommand(home, host =>
+    workflowRunCommand(host, registered, 'probe', 'register', { noWorktree: true })
+  );
+  expect(initial.status, initial.output).toBe(0);
+  git(root, ['clone', '-q', join(root, 'remote.git'), clone]);
+  mkdirSync(join(clone, 'subdir'));
+  writeFileSync(join(clone, 'content.txt'), 'clone-content\n');
+  writeFileSync(join(registered, '.archon', 'config.yaml'), 'assistant: claude\n');
+  writeFileSync(join(clone, '.archon', 'config.yaml'), 'assistant: codex\n');
+  const probe = (marker: string): string =>
+    `name: binding\ndescription: Binding probe\nnodes:\n  - id: probe\n    bash: |\n      { echo ${marker}; cat content.txt; echo "$BINDING_ENV"; echo "$ARTIFACTS_DIR"; } > "$ARTIFACTS_DIR/proof.txt"\n      echo kept > kept.txt\n`;
+  writeFileSync(
+    join(registered, '.archon', 'workflows', 'binding.yaml'),
+    probe('registered-source')
+  );
+  writeFileSync(join(clone, '.archon', 'workflows', 'binding.yaml'), probe('clone-source'));
+  const db = new Database(join(home, 'archon.db'));
+  try {
+    const projects = db.query<CodebaseRow & { name: string }, []>(
+      'SELECT id, name, default_cwd FROM remote_agent_codebases'
+    );
+    const project = projects.get();
+    if (!project) throw new Error('Missing project');
+    db.run('UPDATE remote_agent_codebases SET name = ? WHERE id = ?', ['acme/app', project.id]);
+    project.name = 'acme/app';
+    db.run(
+      'INSERT INTO remote_agent_codebase_env_vars (id, codebase_id, key, value) VALUES (?, ?, ?, ?)',
+      [crypto.randomUUID(), project.id, 'BINDING_ENV', 'registered-env']
+    );
+    db.run('INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)', [
+      'legacy-id',
+      'legacy/project',
+      'projects/legacy',
+    ]);
+    const run = (flags: string[]): SpawnSyncReturns<string> =>
+      spawnSync(
+        process.execPath,
+        [
+          join(import.meta.dir, '..', 'cli.ts'),
+          'workflow',
+          'run',
+          'binding',
+          '--cwd',
+          join(clone, 'subdir'),
+          ...flags,
+        ],
+        {
+          cwd: root,
+          encoding: 'utf8',
+          timeout: 30_000,
+          env: {
+            ...process.env,
+            ARCHON_HOME: home,
+            DATABASE_URL: '',
+            ARCHON_TELEMETRY_DISABLED: '1',
+          },
+        }
+      );
+    const runs = db.query<RunRow & { id: string; metadata: string; output_root: string }, []>(
+      'SELECT id, codebase_id, working_path, status, metadata, output_root FROM remote_agent_workflow_runs ORDER BY rowid'
+    );
+    for (const { selector, flags, source } of [
+      { selector: project.name, flags: ['--no-worktree'], source: 'clone-source' },
+      {
+        selector: project.name,
+        flags: ['--no-worktree', '--detach', '--json'],
+        source: 'clone-source',
+      },
+      {
+        selector: project.id,
+        flags: ['--no-worktree', '--detach', '--json'],
+        source: 'clone-source',
+      },
+      {
+        selector: project.id,
+        flags: ['--branch', 'binding-probe', '--from', 'main'],
+        source: 'clone-source',
+      },
+      {
+        selector: project.id,
+        flags: ['--no-worktree', '--workflow-source', registered],
+        source: 'registered-source',
+      },
+    ]) {
+      const launched = run(['--project', selector, ...flags]);
+      expect(launched.status, launched.stdout + launched.stderr).toBe(0);
+      if (flags.includes('--detach')) {
+        const receipt = z.object({ runId: z.string() }).parse(JSON.parse(launched.stdout));
+        await waitForTerminalRun(db, receipt.runId);
+        expect(runs.all().at(-1)?.id).toBe(receipt.runId);
+      }
+      const row = runs.all().at(-1);
+      if (!row) throw new Error('Missing run');
+      expect(row).toMatchObject({ codebase_id: project.id, status: 'completed' });
+      const metadata = z
+        .object({
+          workflow_source: workflowSourceMetadataSchema,
+          ai_configuration: z.object({ assistant: z.string() }),
+        })
+        .parse(JSON.parse(row.metadata));
+      expect(metadata.ai_configuration.assistant).toBe('codex');
+      const captured = metadata.workflow_source;
+      expect(await canonicalizeProjectPath(captured.origin)).toBe(
+        await canonicalizeProjectPath(source === 'clone-source' ? clone : registered)
+      );
+      expect(
+        readFileSync(join(captured.root, 'project', '.archon', 'workflows', 'binding.yaml'), 'utf8')
+      ).toBe(probe(source));
+      expect(row.output_root).toBe(join(home, 'workspaces', 'acme', 'app'));
+      expect(existsSync(join(row.output_root, 'logs', `${row.id}.jsonl`))).toBe(true);
+      const inPlace = flags.includes('--no-worktree');
+      if (inPlace)
+        expect(await canonicalizeProjectPath(row.working_path)).toBe(
+          await canonicalizeProjectPath(clone)
+        );
+      else
+        expect(
+          git(row.working_path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+        ).toBe(git(registered, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
+      const artifacts = join(home, 'workspaces', 'acme', 'app', 'artifacts', 'runs', row.id);
+      expect(readFileSync(join(artifacts, 'proof.txt'), 'utf8')).toBe(
+        `${source}\n${inPlace ? 'clone-content' : 'committed'}\nregistered-env\n${artifacts}\n`
+      );
+    }
+    const count = runs.all().length;
+    for (const selector of ['legacy-id', 'legacy/project']) {
+      const refused = run(['--project', selector, '--no-worktree']);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+      expect(refused.stderr).toContain('stored default_cwd that is not absolute');
+    }
+    for (const flags of [['--project', 'unknown/repo', '--no-worktree'], ['--no-worktree']]) {
+      const refused = run(flags);
+      expect(refused.status, refused.stdout + refused.stderr).toBe(1);
+    }
+    expect(runs.all()).toHaveLength(count);
+    expect(projects.all()).toEqual([
+      project,
+      { id: 'legacy-id', name: 'legacy/project', default_cwd: 'projects/legacy' },
+    ]);
+  } finally {
+    db.close();
+  }
+}, 120_000);

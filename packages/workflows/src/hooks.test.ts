@@ -1,8 +1,9 @@
 // @archon-test-isolated
 import { providerRegistry } from '@archon/providers';
 import { describe, test, expect } from 'bun:test';
-import { buildSDKHooksFromYAML } from '@archon/providers/claude/provider';
+import { buildSDKHooksFromYAML } from '@archon/providers/claude';
 import type { WorkflowNodeHooks, DagNode } from './schemas';
+import { dagNodeSchema } from './schemas';
 import { parseWorkflow } from './loader';
 
 describe('buildSDKHooksFromYAML', () => {
@@ -68,6 +69,30 @@ describe('buildSDKHooksFromYAML', () => {
 });
 
 describe('parseWorkflow with hooks', () => {
+  test.each([0, 1, 2])('rejects unknown hook events at loop-group depth %i', depth => {
+    const knownHooks: WorkflowNodeHooks = { PreToolUse: [{ response: { decision: 'block' } }] };
+    const wrap = (hooks: object): object => {
+      let node: object = { id: 'gen', prompt: 'Generate code', hooks };
+      for (let i = 0; i < depth; i++) {
+        node = {
+          id: `group-${i}`,
+          loop_group: { until: 'DONE', max_iterations: 2, nodes: [node] },
+        };
+      }
+      return node;
+    };
+
+    expect(dagNodeSchema.safeParse(wrap(knownHooks)).success).toBe(true);
+    const result = dagNodeSchema.safeParse(
+      wrap({ ...knownHooks, FakeEvent: [{ response: { decision: 'block' } }] })
+    );
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.some(issue => issue.path.at(-1) === 'hooks')).toBe(true);
+      expect(result.error.message).toContain('FakeEvent');
+    }
+  });
+
   test('full YAML with hooks field on a node parses correctly', () => {
     const yaml = `
 name: test-hooks

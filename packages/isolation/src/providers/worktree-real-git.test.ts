@@ -1,9 +1,10 @@
 /**
  * Worktree creation against a real git repository.
  *
- * `worktree.test.ts` replaces `node:fs/promises` and `@archon/paths` for its whole
- * process, so this file gets its own `testGroups` entry. Real Git is needed to
- * prove failed-add ownership, cleanup, and preservation of hidden changes.
+ * The unit suites' `worktree-test-fixture.ts` replaces `node:fs/promises` and
+ * `@archon/paths` for its whole process, so this file gets its own `testGroups`
+ * entry. Real Git is needed to prove failed-add ownership, cleanup, and
+ * preservation of hidden changes.
  */
 import {
   describe,
@@ -233,7 +234,23 @@ describe('WorktreeProvider against real git', () => {
     await git(templateRepo, 'config', 'commit.gpgsign', 'false');
     await writeFile(join(templateRepo, 'README.md'), '# fixture\n');
     await git(templateRepo, 'add', 'README.md');
-    await git(templateRepo, 'commit', '-qm', 'initial commit');
+    // Detached maintenance can delete its lock file while a test copies this template.
+    const { stderr: commitTrace } = await execFileAsync(
+      'git',
+      ['-c', 'maintenance.auto=false', 'commit', '-qm', 'initial commit'],
+      {
+        cwd: templateRepo,
+        env: {
+          ...process.env,
+          GIT_TRACE: '1',
+          GIT_CONFIG_COUNT: '1',
+          GIT_CONFIG_KEY_0: 'maintenance.auto',
+          GIT_CONFIG_VALUE_0: 'true',
+        },
+      }
+    );
+    expect(commitTrace).toContain('initial commit');
+    expect(commitTrace).not.toContain('maintenance run --auto');
     await git(templateRepo, 'branch', TASK_BRANCH);
   });
 
@@ -382,6 +399,9 @@ describe('WorktreeProvider against real git', () => {
           },
           updateStatus: async () => {
             throw new Error('refused adoption must not change status');
+          },
+          withWorktreeRegistration: async () => {
+            throw new Error('Unexpected worktree removal');
           },
           markWorktreeDestroyed: async () => {
             throw new Error('refused adoption must not retire a row');

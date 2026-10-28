@@ -309,31 +309,15 @@ export function AddProjectDialog({
           </label>
         ) : null}
 
-        {currentInspection?.kind === 'repo' ? (
-          <label className="mt-4 block text-[13px] text-text-secondary">
-            Base branch
-            <input
-              aria-label="Base branch"
-              value={branch}
-              onChange={e => {
-                setBranch(e.target.value);
-              }}
-              disabled={submitting}
-              className="mt-2 block w-full rounded border bg-surface px-3 py-2 font-mono text-text-primary"
-            />
-            <span className="mt-1 block text-[12px] text-text-tertiary">
-              {currentInspection.defaultBranch
-                ? 'Keep this value to follow the remote default, or choose another branch.'
-                : 'Remote default unavailable. Leave empty to resolve it when a run starts.'}
-            </span>
-          </label>
-        ) : null}
-        {!explicitFolder && value.trim() && !currentInspection && !inspectionError ? (
-          <p className="mt-3 text-[12px] text-text-tertiary">Checking remote default…</p>
-        ) : null}
-        {!explicitFolder && inspectionError ? (
-          <p className="mt-3 text-[12px] text-error">{inspectionError}</p>
-        ) : null}
+        {renderBranchInspection({
+          currentInspection,
+          branch,
+          setBranch,
+          submitting,
+          explicitFolder,
+          value,
+          inspectionError,
+        })}
 
         {error !== null ? (
           <p className="mt-3 rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-[11px] text-error">
@@ -369,5 +353,53 @@ export function AddProjectDialog({
         </div>
       </form>
     </div>
+  );
+}
+
+function renderBranchInspection({
+  currentInspection,
+  branch,
+  setBranch,
+  submitting,
+  explicitFolder,
+  value,
+  inspectionError,
+}: {
+  currentInspection: BaseBranchInspection | null;
+  branch: string;
+  setBranch: (branch: string) => void;
+  submitting: boolean;
+  explicitFolder: boolean;
+  value: string;
+  inspectionError: string | null;
+}): ReactElement {
+  return (
+    <>
+      {currentInspection?.kind === 'repo' ? (
+        <label className="mt-4 block text-[13px] text-text-secondary">
+          Base branch
+          <input
+            aria-label="Base branch"
+            value={branch}
+            onChange={e => {
+              setBranch(e.target.value);
+            }}
+            disabled={submitting}
+            className="mt-2 block w-full rounded border bg-surface px-3 py-2 font-mono text-text-primary"
+          />
+          <span className="mt-1 block text-[12px] text-text-tertiary">
+            {currentInspection.defaultBranch
+              ? 'Keep this value to follow the remote default, or choose another branch.'
+              : 'Remote default unavailable. Leave empty to resolve it when a run starts.'}
+          </span>
+        </label>
+      ) : null}
+      {!explicitFolder && value.trim() && !currentInspection && !inspectionError ? (
+        <p className="mt-3 text-[12px] text-text-tertiary">Checking remote default…</p>
+      ) : null}
+      {!explicitFolder && inspectionError ? (
+        <p className="mt-3 text-[12px] text-error">{inspectionError}</p>
+      ) : null}
+    </>
   );
 }

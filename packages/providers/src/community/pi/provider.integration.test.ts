@@ -4,8 +4,8 @@
  * its own provider. Each registerProvider() starts a background refresh that
  * re-reads modelsPath, so the per-call file must live for the whole session.
  *
- * Runs in its own `bun test` process (package.json testGroups): provider.test.ts
- * mocks the Pi SDK process-wide.
+ * Runs in its own `bun test` process (package.json testGroups): the provider unit tests
+ * mock the Pi SDK process-wide through provider-test-fixture.ts.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { removeTempTree } from '@archon/paths/test-utils';
-import { SessionManager } from '@earendil-works/pi-coding-agent';
+import { SessionManager, createAgentSession } from '@earendil-works/pi-coding-agent';
 
 import type { MessageChunk } from '../../types';
 import { PiProvider } from './provider';
@@ -276,6 +276,111 @@ test('persisted Pi resume and fork report only the current prompt usage', async 
       expect(result.cost).toBeCloseTo(0.00024, 10);
     }
     expect(contexts).toEqual([2, 4, 6]);
+  } finally {
+    void stub.stop(true);
+    writeFileSync(modelsPath, savedModels);
+  }
+});
+
+test('a Pi session’s per-prompt usage sums to the SDK’s own session stats', async () => {
+  let requests = 0;
+  let toolCallSent = false;
+  const stub = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const body = (await request.json()) as { tools?: unknown[] };
+      requests++;
+      const usage = {
+        id: 'usage',
+        object: 'chat.completion.chunk',
+        created: 0,
+        model: 'spend',
+        choices: [],
+        usage: {
+          prompt_tokens: 100 * requests,
+          completion_tokens: 10 * requests,
+          total_tokens: 110 * requests,
+        },
+      };
+      // The first prompt makes one tool call, so it spans two assistant messages.
+      if (!toolCallSent && (body.tools?.length ?? 0) > 0) {
+        toolCallSent = true;
+        const toolCall = {
+          role: 'assistant',
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'read', arguments: JSON.stringify({ path: 'hello.txt' }) },
+            },
+          ],
+        };
+        return sse([...completion(toolCall, 'tool_calls'), usage]);
+      }
+      return sse([...completion({ role: 'assistant', content: 'done' }, 'stop'), usage]);
+    },
+  });
+  const modelsPath = join(agentDir, 'models.json');
+  const savedModels = readFileSync(modelsPath, 'utf8');
+  writeFileSync(
+    modelsPath,
+    JSON.stringify({
+      providers: {
+        spend: {
+          baseUrl: `http://127.0.0.1:${stub.port}/v1`,
+          api: 'openai-completions',
+          apiKey: 'stub',
+          models: [
+            {
+              id: 'spend',
+              name: 'spend',
+              reasoning: false,
+              input: ['text'],
+              contextWindow: 10000,
+              maxTokens: 100,
+              cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      },
+    })
+  );
+  try {
+    async function turn(resume?: string) {
+      for await (const chunk of new PiProvider().sendQuery('reply done', repoDir, resume, {
+        model: 'spend/spend',
+        nodeConfig: { allowed_tools: ['read'] },
+      })) {
+        if (chunk.type === 'result') return chunk;
+      }
+      throw new Error('missing Pi result');
+    }
+    const first = await turn();
+    if (first.sessionId === undefined) throw new Error('missing Pi session id');
+    const chain = [first, await turn(first.sessionId), await turn(first.sessionId)];
+    expect(requests).toBe(4);
+    for (const result of chain) expect(result.failure).toBeUndefined();
+
+    const file = SessionManager.findById(repoDir, first.sessionId);
+    if (!file) throw new Error('missing Pi session file');
+    const { session } = await createAgentSession({
+      cwd: repoDir,
+      agentDir,
+      sessionManager: SessionManager.open(file),
+    });
+    try {
+      const stats = session.getSessionStats();
+      const sum = (pick: (result: (typeof chain)[number]) => number | undefined) =>
+        chain.reduce((total, result) => total + (pick(result) ?? Number.NaN), 0);
+      expect(sum(result => result.cost)).toBeCloseTo(stats.cost, 12);
+      expect(sum(result => result.tokens?.input)).toBe(
+        stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite
+      );
+      expect(sum(result => result.tokens?.output)).toBe(stats.tokens.output);
+    } finally {
+      session.dispose();
+    }
   } finally {
     void stub.stop(true);
     writeFileSync(modelsPath, savedModels);

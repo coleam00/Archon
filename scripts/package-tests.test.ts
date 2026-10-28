@@ -13,12 +13,12 @@ function fixture(manifest: object = {}): string {
   writeFileSync(join(root, 'package.json'), JSON.stringify(manifest));
   return root;
 }
-async function run(root: string, args: string[] = []): Promise<number> {
+async function run(root: string, args: string[] = [], part = ''): Promise<number> {
   const child = Bun.spawn([process.execPath, 'run', runner, ...args], {
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_TEST_PART: part },
   });
   const [status] = await Promise.all([
     child.exited,
@@ -149,4 +149,27 @@ test(
     expect(await run(root)).not.toBe(0);
   },
   testTimeout(5000)
+);
+
+test(
+  'ARCHON_TEST_PART runs disjoint parts that together run every group',
+  async () => {
+    const root = fixture();
+    for (const name of ['a', 'b', 'c']) {
+      testFile(root, name, `test('${name}', () => appendFileSync('ran', '${name}\\n'));`, true);
+    }
+    const ran = (): string[] =>
+      existsSync(join(root, 'ran'))
+        ? readFileSync(join(root, 'ran'), 'utf8').trim().split('\n')
+        : [];
+    expect(await run(root, [], '1/2')).toBe(0);
+    const first = ran();
+    expect(await run(root, [], '2/2')).toBe(0);
+    const second = ran().slice(first.length);
+    expect(first.length).toBeGreaterThan(0);
+    expect(second.length).toBeGreaterThan(0);
+    expect([...first, ...second].sort()).toEqual(['a', 'b', 'c']);
+    expect(await run(root, [], '3/2')).not.toBe(0);
+  },
+  testTimeout(10000)
 );

@@ -8,12 +8,14 @@ facts:
   record: null
   brief: ""
   rounds: []
-  recorded: null
   at_cap: false
   policy_defaults: "/stub/policy"
   pull_request: null
   continues: null
   branch: ""
+blocked:
+  blocked: []
+  blocked_count: 0
 apply:
   decision: idle
   summary: "stub: No item waits for the build queue."
@@ -21,7 +23,6 @@ apply:
   options: []
   class: ""
   asked: null
-  evaluation: null
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed

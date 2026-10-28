@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import { Link } from 'react-router';
 import type { NodeRun } from '../primitives/event';
 import { formatElapsed, formatRelativeToBaseline, formatClock } from '../lib/format';
 import { useStreamContext } from '../lib/stream-context';
@@ -23,8 +24,65 @@ interface NodeDividerProps {
   skipReason?: string | null;
   /** Only set for `skipped` — the evaluated gating expression. */
   skipExpr?: string | null;
+  /** A fan-out node's slot record; unfinished child work qualifies a completed node. */
+  fanOutOutcome?: NodeRun['fanOutOutcome'];
   /** When true, surface skip reason / stop reason inline. */
   showDetail?: boolean;
+}
+
+type FanOutOutcome = NonNullable<NodeRun['fanOutOutcome']>;
+type FanOutSlotOutcome = FanOutOutcome['slots'][number]['outcome'];
+
+const FAN_OUT_SLOT_LABEL: Record<FanOutSlotOutcome, string> = {
+  completed: 'completed',
+  failed: 'failed',
+  not_started: 'not started',
+  cancelled_by_engine: 'cancelled by the engine',
+  cancelled_by_workflow: 'cancelled by its own workflow',
+  cancelled_out_of_band: 'cancelled out of band',
+  cancelled_unattributed: 'cancelled, cause not recorded',
+};
+
+const FAN_OUT_SLOT_DISPLAY_LIMIT = 10;
+
+/** Unfinished child work under a fan-out node; the "more" count comes from the stored tally. */
+function FanOutQualifier({ outcome }: { outcome: NodeRun['fanOutOutcome'] }): ReactElement | null {
+  if (outcome === undefined) return null;
+  const { tally } = outcome;
+  const unfinished = tally.total - tally.completed;
+  if (unfinished === 0) return null;
+  const counts = (Object.keys(FAN_OUT_SLOT_LABEL) as FanOutSlotOutcome[])
+    .filter(key => key !== 'completed' && tally[key] > 0)
+    .map(key => `${String(tally[key])} ${FAN_OUT_SLOT_LABEL[key]}`);
+  const shown = outcome.slots
+    .filter(slot => slot.outcome !== 'completed')
+    .slice(0, FAN_OUT_SLOT_DISPLAY_LIMIT);
+  const more = unfinished - shown.length;
+  return (
+    <details className="ml-[68px] font-mono text-[11px] text-warning">
+      <summary className="cursor-pointer">
+        {`${String(unfinished)} of ${String(tally.total)} children did not complete (${counts.join(', ')})`}
+      </summary>
+      <ul className="mt-1 flex flex-col gap-0.5 text-text-secondary">
+        {shown.map(slot => (
+          <li key={slot.index}>
+            {`item ${String(slot.index)}: ${FAN_OUT_SLOT_LABEL[slot.outcome]}`}
+            {'cancel_reason' in slot && slot.cancel_reason ? ` (${slot.cancel_reason})` : ''}
+            {'child_run_id' in slot ? (
+              <>
+                {' — '}
+                <Link className="underline" to={`/console/r/${slot.child_run_id}`}>
+                  {`run ${slot.child_run_id.slice(0, 8)}`}
+                </Link>
+              </>
+            ) : null}
+            {'error' in slot && slot.error ? ` — ${slot.error}` : ''}
+          </li>
+        ))}
+        {more > 0 ? <li>{`and ${String(more)} more`}</li> : null}
+      </ul>
+    </details>
+  );
 }
 
 const tokenCount = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
@@ -44,6 +102,19 @@ const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
   failed: 'text-error',
   skipped: 'text-text-tertiary',
 };
+
+// Per-node spend, surfaced inline next to the status. Sub-cent costs keep
+// more precision so cheap nodes don't all read "$0.00". A scope total restates
+// spend other nodes already show, so it is labelled rather than read as this
+// node's own.
+function formatNodeCost(
+  costUsd: NodeDividerProps['costUsd'],
+  costScope: NodeDividerProps['costScope']
+): string {
+  return typeof costUsd === 'number' && Number.isFinite(costUsd) && costUsd >= 0
+    ? ` · ${costScope === 'total' ? 'total ' : ''}$${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
+    : '';
+}
 
 /**
  * Thin divider heading one DAG node — exactly one per node.
@@ -66,6 +137,7 @@ export function NodeDivider({
   stopReason,
   skipReason,
   skipExpr,
+  fanOutOutcome,
   showDetail = false,
 }: NodeDividerProps): ReactElement {
   const { runStartedAt } = useStreamContext();
@@ -75,14 +147,7 @@ export function NodeDivider({
     durationMs !== null && durationMs > 0
       ? ` · ${formatElapsed(Math.floor(durationMs / 1000))}`
       : '';
-  // Per-node spend, surfaced inline next to the status. Sub-cent costs keep
-  // more precision so cheap nodes don't all read "$0.00". A scope total restates
-  // spend other nodes already show, so it is labelled rather than read as this
-  // node's own.
-  const cost =
-    costUsd !== null && costUsd !== undefined && costUsd > 0
-      ? ` · ${costScope === 'total' ? 'total ' : ''}$${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
-      : '';
+  const cost = formatNodeCost(costUsd, costScope);
   const turns =
     numTurns !== null && numTurns !== undefined && numTurns > 0 ? ` · ${numTurns}t` : '';
 
@@ -157,6 +222,7 @@ export function NodeDivider({
           ) : null}
         </div>
       ) : null}
+      <FanOutQualifier outcome={fanOutOutcome} />
     </div>
   );
 }

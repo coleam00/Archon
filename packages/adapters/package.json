@@ -1,6 +1,6 @@
 {
   "name": "@archon/adapters",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -28,7 +28,6 @@
     "@archon/workflows": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "@octokit/rest": "^22.0.0",
-    "@slack/bolt": "^4.6.0",
     "discord.js": "^14.27.0",
     "grammy": "^1.36.0",
     "telegramify-markdown": "^1.3.3",
@@ -45,18 +44,18 @@
       "src/forge/github/project-assistant.integration.test.ts"
     ],
     [
-      "src/chat/slack/adapter.test.ts",
-      "src/chat/slack/auth.test.ts",
-      "src/chat/slack/blocks.test.ts",
       "src/chat/telegram/",
       "src/community/chat/",
+      "src/community/forge/gitea/comment-delivery.test.ts",
+      "src/community/forge/gitea/webhook-intake.test.ts",
       "src/community/forge/gitlab/auth.test.ts",
+      "src/community/forge/gitlab/comment-delivery.test.ts",
+      "src/community/forge/gitlab/webhook-intake.test.ts",
       "src/forge/github/auth.test.ts",
+      "src/forge/github/comment-delivery.test.ts",
+      "src/forge/github/webhook-intake.test.ts",
       "src/test/no-archon-home-writes.test.ts",
       "src/utils/"
-    ],
-    [
-      "src/chat/slack/workflow-bridge.test.ts"
     ],
     [
       "src/forge/github/adapter.test.ts"
@@ -68,10 +67,25 @@
       "src/forge/github/context.test.ts"
     ],
     [
+      "src/forge/github/registration.test.ts"
+    ],
+    [
+      "src/forge/github/repository-readiness.test.ts"
+    ],
+    [
       "src/community/forge/gitea/adapter.test.ts"
     ],
     [
+      "src/community/forge/gitea/registration.test.ts"
+    ],
+    [
+      "src/community/forge/gitea/repository-readiness.test.ts"
+    ],
+    [
       "src/community/forge/gitlab/adapter.test.ts"
+    ],
+    [
+      "src/community/forge/gitlab/registration.test.ts"
     ],
     [
       "src/community/forge/gitlab/clone-security.integration.test.ts"
@@ -87,10 +101,13 @@
     ],
     [
       "src/forge/github/lifecycle.test.ts",
-      "src/forge/github/workitems.test.ts"
+      "src/forge/github/merge-facts.test.ts",
+      "src/forge/github/workitems.test.ts",
+      "src/forge/github/review-threads.test.ts"
     ],
     [
-      "src/platform-policies.test.ts"
+      "src/platform-policies.test.ts",
+      "src/retired-adapters.test.ts"
     ],
     [
       "src/sources/standard-webhooks/"

@@ -211,6 +211,36 @@ describe('workflow run lists', () => {
       });
     });
 
+    test('binds the parent set once in both listing and counts, retaining other filters', async () => {
+      const parentRunIds = ['00000000-0000-4000-8000-000000000001'];
+      await listDashboardRuns({ parentRunIds, status: 'running', limit: 0 });
+      const [listSql, listParams] = mockQuery.mock.calls[0]!;
+      const [countSql, countParams] = mockQuery.mock.calls[1]!;
+      expect(listSql).toContain(
+        'r.parent_run_id IN (SELECT value::uuid FROM json_array_elements_text($2::json) AS parents(value))'
+      );
+      expect(countSql).toContain(
+        'r.parent_run_id IN (SELECT value::uuid FROM json_array_elements_text($1::json) AS parents(value))'
+      );
+      expect(listSql).toContain('r.status IN ($1)');
+      expect(countSql).not.toContain('r.status IN');
+      expect(listParams).toEqual(['running', JSON.stringify(parentRunIds), 0, 0]);
+      expect(countParams).toEqual([JSON.stringify(parentRunIds)]);
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
+    test('excludes selected leaf statuses in both rows and counts', async () => {
+      await listDashboardRuns({ excludeLeafStatuses: ['completed', 'cancelled'], limit: 0 });
+      for (const [sql, params] of mockQuery.mock.calls) {
+        expect(sql).toContain('r.status NOT IN ($1, $2)');
+        expect(sql).toContain(
+          'EXISTS (SELECT 1 FROM remote_agent_workflow_runs child WHERE child.parent_run_id = r.id)'
+        );
+        expect(params).toEqual(expect.arrayContaining(['completed', 'cancelled']));
+      }
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+    });
+
     test('filters by multiple statuses and totals their counts', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([])).mockResolvedValueOnce(
         createQueryResult([

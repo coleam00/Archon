@@ -26,11 +26,10 @@
  * KNOWN LIMITS — do not read this file as proof that no adapter test touches
  * the network:
  *
- * 1. It only traps `globalThis.fetch`. `@slack/web-api` (axios) and
- *    `@discordjs/rest` (undici) issue zero `fetch` calls under bun, so Slack
- *    and Discord tests are NOT covered. Auditing those needs `node:http`/
- *    `https`/`net`/`dns` hooks (that sweep was run once against all packages
- *    and came back clean; it is not wired in here).
+ * 1. It only traps `globalThis.fetch`. `@discordjs/rest` (undici) issues
+ *    zero `fetch` calls under bun, so Discord tests are NOT covered. Auditing
+ *    them needs `node:http`/`https`/`net`/`dns` hooks (that sweep was run once
+ *    against all packages and came back clean; it is not wired in here).
  * 2. It is INACTIVE when `bun test` is run from the repo root — the
  *    single-file form CLAUDE.md documents. Bun reads `bunfig.toml` only from
  *    cwd, so `bun test packages/adapters/...` from the root loads the ROOT

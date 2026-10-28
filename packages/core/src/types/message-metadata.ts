@@ -9,12 +9,6 @@
  * Returns `undefined` when the projection would have no keys so callers can
  * pass it straight to `addMessage` and preserve the historical "omit when
  * empty" behaviour pinned by existing CLI and headless tests.
- *
- * Accepts any object so the structurally-identical `WorkflowMessageMetadata`
- * (defined in `@archon/workflows/deps` to keep workflows free of any
- * `@archon/core` dependency) flows through one projection alongside
- * `MessageMetadata` itself. The input is field-agnostic — runtime walks
- * `Object.entries` rather than enumerating fields.
  */
 export function toPersistedMessageMetadata(
   metadata: object | undefined

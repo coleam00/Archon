@@ -8,19 +8,39 @@
  */
 
 import { type QualifiedPr, sameRepo } from './forge.ts';
+import { note } from './io.ts';
+import { PR_CREATE_UNRESOLVED } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
-import type { Pickup, Stage, TriageFacts, WorkItem } from './workitem.ts';
+import { stateDocuments, statePut } from './state.ts';
+import {
+  claimable,
+  claimItem,
+  type HistoryEntry,
+  newest,
+  type Pickup,
+  parseWorkItem,
+  read,
+  releaseIfTerminal,
+  type Stage,
+  type TriageFacts,
+  type WorkItem,
+  workItemName,
+} from './workitem.ts';
 
-/** What a build choice does when a person picks it; archon-build-queue.yaml declares the same enum. */
-export const BUILD_EFFECTS = ['continue', 'park'] as const;
+/**
+ * What a build choice does when a person picks it; archon-build-queue.yaml declares the
+ * same enum. `continue` launches the next round from the brief. `ready` hands the pull
+ * request to the merge queue as it stands, such as after a maintainer finished it by
+ * hand. `park` stops work until a re-triage.
+ */
+export const BUILD_EFFECTS = ['continue', 'ready', 'park'] as const;
 export type BuildEffect = (typeof BUILD_EFFECTS)[number];
 export type BuildAttention = Attention<BuildEffect>;
 
 /** The decision each agent can declare; archon-build-queue.yaml declares the same enums. */
-export const ROUTE_DECISIONS = ['launch', 'ask'] as const;
+export const ROUTE_DECISIONS = ['launch', 'ask', 'ready'] as const;
 export const ANSWER_DECISIONS = ['done', 'continue', 'ask'] as const;
-export const GIVE_UP_DECISIONS = ['continue', 'ask'] as const;
-export const BUILD_PATHS = ['idle', 'closed', 'route', 'answer'] as const;
+export const BUILD_PATHS = ['idle', 'closed', 'route'] as const;
 export type BuildPath = (typeof BUILD_PATHS)[number];
 /** What apply reports the run decided; archon-build-queue.yaml declares the same enum. */
 export const APPLY_DECISIONS = ['idle', 'parked', 'ready', 'continue', 'asked', 'launch'] as const;
@@ -49,9 +69,10 @@ export interface BuildRound {
 }
 
 /**
- * `next`: the item waits for its next launch, from `brief`. `asking`: a run is paused
- * on the item's attention item. `ready`: its pull request is reviewed and ready.
- * `parked`: the queue stopped working it, until a re-triage.
+ * Who owns the item, as the build queue last recorded it. `next`: the build queue, for
+ * its next launch from `brief`. `asking`: the build queue, paused on the item's
+ * attention item. `ready`: handed to the merge queue, which owns its pull request from
+ * here. `parked`: no queue, until a re-triage.
  */
 export type BuildStatus = 'next' | 'asking' | 'ready' | 'parked';
 
@@ -87,7 +108,69 @@ export function buildWaits(doc: WorkItem): boolean {
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
 
 /**
- * The rounds that count toward the give-up decision: those since the item's scope last
+ * Claim the named item for the build queue, releasing a terminal claim on it first as
+ * `claimNext` does. Refuses with the facts an operator acts on when it cannot.
+ */
+export function claimNamed(number: number, at: string, runId: string): WorkItem {
+  const issue = `issue ${String(number)}`;
+  const found = read(workItemName(number));
+  if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
+  const item = releaseIfTerminal(found, at, runId, BUILD_PICKUP);
+  const won = claimable(item, BUILD_PICKUP) ? claimItem(item, at, runId, BUILD_PICKUP) : null;
+  if (won !== null) return won;
+  const now = read(item.name) ?? item;
+  if (now.doc.claim !== null) throw new Error(`${issue} is claimed by run ${now.doc.claim.run_id}`);
+  // Both conditional writes can lose to concurrent writes that leave the item waiting.
+  if (buildWaits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
+  const status = now.doc.facts.build?.status ?? 'none';
+  throw new Error(`${issue} does not wait for the build queue: stage ${now.doc.stage}, build status ${status}`);
+}
+
+/** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
+export interface BlockedItem {
+  readonly number: number;
+  readonly summary: string;
+}
+
+// A scheduled queue would otherwise judge the same blocked items on every run.
+const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
+const REVISITED = 'revisited';
+
+/** The unclaimed blocked items the queue has not revisited in the last few hours. */
+export function dueBlocked(at: string): BlockedItem[] {
+  const due = new Date(Date.parse(at) - REVISIT_EVERY_MS).toISOString();
+  const items: BlockedItem[] = [];
+  for (const stored of stateDocuments('work/')) {
+    if (stored.value === null) continue;
+    let doc: WorkItem;
+    try {
+      doc = parseWorkItem(stored.value);
+    } catch (error) {
+      note(`revisit skips ${stored.name}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    const last = doc.history.filter(entry => entry.outcome === REVISITED).at(-1)?.at ?? '';
+    if (doc.stage !== 'blocked' || doc.claim !== null || last >= due) continue;
+    const triaged = doc.history.filter(entry => entry.outcome === 'blocked').at(-1);
+    items.push({ number: doc.subject.number, summary: triaged?.summary ?? '' });
+  }
+  return items;
+}
+
+/** Record that the queue revisited the item, re-reading on a conflict; false if it never landed. */
+export function recordRevisit(subject: QualifiedPr, runId: string, summary: string): boolean {
+  const entry: HistoryEntry = { at: new Date().toISOString(), stage: 'build', run_id: runId, outcome: REVISITED, summary };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const stored = read(workItemName(subject.number));
+    if (stored === undefined) return false;
+    const doc = { ...stored.doc, history: newest([...stored.doc.history, entry]) };
+    if (statePut(stored.name, doc, stored.revision) === 'ok') return true;
+  }
+  return false;
+}
+
+/**
+ * The rounds that count toward the round cap: those since the item's scope last
  * changed, by a re-triage or a person's answer.
  */
 export function countedRounds(doc: WorkItem): number {
@@ -109,10 +192,20 @@ export function itemPullRequest(
   triage: TriageFacts | undefined,
   repo: QualifiedPr['repo']
 ): QualifiedPr | null {
-  const url = rounds.filter(round => round.pr_url !== '').at(-1)?.pr_url;
-  if (url === undefined) {
-    return triage?.pull_request == null ? null : { repo, number: triage.pull_request };
+  const triaged = triage?.pull_request == null ? null : { repo, number: triage.pull_request };
+  const unresolved = rounds.map(round => round.reason).lastIndexOf(PR_CREATE_UNRESOLVED);
+  const settled = rounds.slice(unresolved + 1).some(round => round.pr_url !== '');
+  if (unresolved >= 0 && !settled) {
+    const round = rounds[unresolved];
+    // Only a re-triage after the unresolved round has looked for the PR it may have opened.
+    if (triage !== undefined && triage.at > (round?.at ?? '')) return triaged;
+    throw new Error(`round ${round?.run_id} has an unresolved PR create; reconcile its artifacts and re-triage the item, naming the PR if one exists`);
   }
+  const url = rounds.filter(round => round.pr_url !== '').at(-1)?.pr_url;
+  return url === undefined ? triaged : { repo, number: roundPrNumber(url, repo) };
+}
+
+function roundPrNumber(url: string, repo: QualifiedPr['repo']): number {
   const parsed = URL.canParse(url) ? new URL(url) : null;
   const match = parsed === null ? null : /^\/(.+)\/pull\/([1-9][0-9]*)$/.exec(parsed.pathname);
   if (
@@ -122,8 +215,11 @@ export function itemPullRequest(
   ) {
     throw new Error(`round pr_url ${url} is not a pull request of ${repo.host}/${repo.path}`);
   }
-  return { repo, number: Number(match[2]) };
+  return Number(match[2]);
 }
+
+/** Every round's branch starts with this, so a pull request from such a branch is the build queue's. */
+export const BUILD_BRANCH_PREFIX = 'build/';
 
 /**
  * The branch a round with no pull request to continue opens one from. The run-id
@@ -137,7 +233,7 @@ export function buildBranch(number: number, title: string, runId: string): strin
     .replace(/^-+|-+$/g, '')
     .slice(0, 40)
     .replace(/-+$/, '');
-  return ['build/' + String(number), slug, runId.slice(0, 8)].filter(part => part !== '').join('-');
+  return [BUILD_BRANCH_PREFIX + String(number), slug, runId.slice(0, 8)].filter(part => part !== '').join('-');
 }
 
 export interface BuildChange {

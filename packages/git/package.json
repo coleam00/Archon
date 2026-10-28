@@ -1,6 +1,6 @@
 {
   "name": "@archon/git",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -20,14 +20,53 @@
   },
   "testGroups": [
     [
+      "src/exec-stdin.test.ts"
+    ],
+    [
       "src/exec.test.ts",
       "src/forge.test.ts",
-      "src/git.test.ts",
+      "src/github-host.test.ts",
       "src/refresh-worktree-index.test.ts",
       "src/worktree-path.test.ts"
     ],
     [
       "src/merge-signals.test.ts"
+    ],
+    [
+      "src/worktree-identity.test.ts"
+    ],
+    [
+      "src/worktree-layout.test.ts"
+    ],
+    [
+      "src/worktree-operations.test.ts"
+    ],
+    [
+      "src/branch.test.ts"
+    ],
+    [
+      "src/checkout.integration.test.ts"
+    ],
+    [
+      "src/git-failures.integration.test.ts"
+    ],
+    [
+      "src/workspace-sync.test.ts"
+    ],
+    [
+      "src/clone-repository.test.ts"
+    ],
+    [
+      "src/repository.test.ts"
+    ],
+    [
+      "src/safe-directory.test.ts"
+    ],
+    [
+      "src/types.test.ts"
+    ],
+    [
+      "src/branch-history.test.ts"
     ]
   ]
 }

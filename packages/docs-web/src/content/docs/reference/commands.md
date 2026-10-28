@@ -1,6 +1,6 @@
 ---
 title: Commands Reference
-description: All slash commands available in Archon adapters including Web UI, Telegram, Slack, Discord, and GitHub.
+description: Archon orchestrator commands and how to submit them, including through a bot mention in Slack threads.
 category: reference
 area: handlers
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-All slash commands available in Archon. Type `/help` in any platform adapter (Web UI, Telegram, Slack, Discord, GitHub) to see this list.
+All orchestrator commands available in Archon. Type `/help` in your conversation to see this list. On Slack, post an @mention carrying the command in the target thread, for example `@your-bot /help` or `@your-bot /setproject <name>`. Raw orchestrator slash commands are not registered with Slack; `/archon <message>` starts a new thread.
 
 ---
 
@@ -37,7 +37,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/workflow get <id>` | Show one run, whatever its status |
 | `/workflow cancel [id]` | Cancel a running workflow (default: this conversation's). Refuses when no owner answers; check the recorded host and pid, verify the owner has stopped, then use `/workflow abandon <id>` |
 | `/workflow resume <id>` | Resume a failed or paused run (re-runs, skipping completed nodes) |
-| `/workflow abandon <id>` | Discard a run (running, paused, or failed) and remove the worktree it created, keeping the branch. Run it again on a cancelled run to retry a failed removal |
+| `/workflow abandon <id>` | Discard a run (running, paused, or failed) and attempt removal of the worktree it created, keeping the branch. Owner warnings retain the checkout: inspect it (`lsof` when output is still held), resolve the warning, then run abandon again on the cancelled run to retry removal |
 | `/workflow approve <id> [comment]` | Answer `approve` to a paused run: an attention wait, or a deprecated approval gate (deprecated interactive-loop gates: no comment on a signal-bearing gate = accept & complete; a comment runs another iteration) |
 | `/workflow reject <id> [reason]` | Answer `reject` to a paused run (attention wait or deprecated approval gate). Rejecting an attention wait continues the run with `decision: reject` |
 | `/workflow run <name> [args]` | Run a workflow directly |
@@ -50,7 +50,7 @@ These commands are handled deterministically by the orchestrator — they always
 | Command | Description |
 |---------|-------------|
 | `/status` | Show conversation state |
-| `/reset` | Start fresh: clears the AI session, releases the execution binding (working-directory override + isolation env), and abandons this conversation's **resumable** run trees (`paused`/`failed`) so the next message does not continue one, removing the worktrees those runs created (their branches are kept). Runs that are actively executing (`pending`/`running`) are never touched -- they may belong to another process entirely. Each cleanup effect still runs if another fails; an incomplete reset tells you to retry and does not promise a fresh next message. The project attachment (`codebase_id`) is preserved; use `/detach-project "<current-project-name>"` to detach it after resolving blockers |
+| `/reset` | Start fresh: clears the AI session, releases the execution binding (working-directory override + isolation env), and abandons this conversation's **resumable** run trees (`paused`/`failed`) so the next message does not continue one, attempting to remove the worktrees those runs created (their branches are kept). Owner warnings retain affected checkouts: inspect them (`lsof` when output is still held), resolve the warning, then use `/workflow abandon <id>` on each cancelled run to retry removal. Runs that are actively executing (`pending`/`running`) are never touched -- they may belong to another process entirely. Each cleanup effect still runs if another fails; an incomplete reset tells you to retry and does not promise a fresh next message. The project attachment (`codebase_id`) is preserved; use `/detach-project "<current-project-name>"` to detach it after resolving blockers |
 | `/help` | Show all commands |
 
 ---

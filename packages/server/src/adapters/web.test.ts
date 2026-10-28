@@ -23,14 +23,23 @@ mock.module('@archon/paths', () => ({
 import { RESERVED_CHAT_PLATFORMS } from '@archon/chat-contract/descriptor';
 import { WebAdapter } from './web';
 import { SSETransport, type SSEWriter } from './web/transport';
-import type { MessagePersistence } from './web/persistence';
+import { MessagePersistence } from './web/persistence';
 import type { WorkflowEventBridge } from './web/workflow-bridge';
+
+const mockAddMessage = mock<
+  (...args: Parameters<typeof import('@archon/core/db/messages')['addMessage']>) => Promise<void>
+>(async () => {});
+mock.module('@archon/core/db/messages', () => ({
+  addMessage: mockAddMessage,
+  listMessages: mock(async () => []),
+  getRecentWorkflowResultMessages: mock(async () => []),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeAdapter(): {
+function makeAdapter(persistence?: MessagePersistence): {
   adapter: WebAdapter;
   emitted: string[];
   appendToolResultCalls: unknown[][];
@@ -62,7 +71,7 @@ function makeAdapter(): {
     bridgeWorkerEvents: mock(() => () => {}),
   } as unknown as WorkflowEventBridge;
 
-  const adapter = new WebAdapter(mockTransport, mockPersistence, mockBridge);
+  const adapter = new WebAdapter(mockTransport, persistence ?? mockPersistence, mockBridge);
   return { adapter, emitted, appendToolResultCalls, bridge: mockBridge };
 }
 
@@ -71,12 +80,99 @@ function makeAdapter(): {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
+  mockAddMessage.mockClear();
   mockLogger.warn.mockClear();
   mockLogger.error.mockClear();
 });
 
 test('WebAdapter supports durable conversation project detachment', () => {
   expect(makeAdapter().adapter.capabilities.canDetachProject).toBe(true);
+});
+
+test('structured events retain their wire bytes and emission order', async () => {
+  const { adapter, emitted } = makeAdapter();
+  const clock = spyOn(Date, 'now').mockReturnValue(1000);
+  try {
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'tool_call',
+      toolCallId: 'call',
+      name: 'Bash',
+    });
+    await adapter.sendStructuredEvent('conv-1', { type: 'system_status', content: 'Working' });
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'workflow_dispatch',
+      workerConversationId: 'worker',
+      workflowName: 'build',
+    });
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'tool_call_update',
+      toolCallId: 'call',
+      status: 'failed',
+      exitCode: 1,
+      output: 'error',
+    });
+    await adapter.sendStructuredEvent('conv-1', { type: 'result', sessionId: 'private' });
+    expect(emitted).toEqual([
+      '{"type":"tool_call","toolCallId":"call","name":"Bash","input":{},"timestamp":1000}',
+      '{"type":"system_status","content":"Working","timestamp":1000}',
+      '{"type":"workflow_dispatch","workerConversationId":"worker","workflowName":"build","timestamp":1000}',
+      '{"type":"tool_result","toolCallId":"call","name":"Bash","output":"error","status":"failed","exitCode":1,"duration":0,"timestamp":1000}',
+    ]);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test('structured tool calls and results survive the persistence flush', async () => {
+  const persistence = new MessagePersistence(async () => {});
+  const { adapter } = makeAdapter(persistence);
+  adapter.setConversationDbId('conv-1', 'db-1');
+  await adapter.sendStructuredEvent('conv-1', {
+    type: 'tool_call',
+    toolCallId: 'a',
+    name: 'Bash',
+    rawInput: { command: 'echo a' },
+  });
+  await adapter.sendStructuredEvent('conv-1', {
+    type: 'tool_call',
+    toolCallId: 'b',
+    name: 'Bash',
+    rawInput: { command: 'echo b' },
+  });
+  await adapter.sendStructuredEvent('conv-1', {
+    type: 'tool_call_update',
+    toolCallId: 'b',
+    status: 'failed',
+    exitCode: 1,
+    output: 'out-b',
+  });
+  await adapter.sendStructuredEvent('conv-1', {
+    type: 'tool_call_update',
+    toolCallId: 'a',
+    status: 'completed',
+    output: 'out-a',
+  });
+  await persistence.flush('conv-1');
+  expect(mockAddMessage).toHaveBeenCalledTimes(1);
+  expect(mockAddMessage).toHaveBeenCalledWith('db-1', 'assistant', '', {
+    toolCalls: [
+      {
+        name: 'Bash',
+        input: { command: 'echo a' },
+        output: 'out-a',
+        status: 'completed',
+        duration: expect.any(Number),
+      },
+      {
+        name: 'Bash',
+        input: { command: 'echo b' },
+        output: 'out-b',
+        status: 'failed',
+        exitCode: 1,
+        duration: expect.any(Number),
+      },
+    ],
+  });
 });
 
 describe('WebAdapter.sendStructuredEvent — provider results', () => {

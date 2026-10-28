@@ -12,5 +12,5 @@ classify:
   summary: "stub: the api lint failure is in code this change added; the web gate passed"
 fixture:
   expect: completed
-  reached: [mode, discover, run, classify, result]
+  reached: [discover, run, classify, result]
 exec-code: true

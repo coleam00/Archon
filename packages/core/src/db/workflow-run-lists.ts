@@ -81,6 +81,24 @@ function buildDashboardWhereClauses(
     values.push(options.codebaseId);
     whereClauses.push(`r.codebase_id = $${String(values.length)}`);
   }
+  if (options?.parentRunIds !== undefined) {
+    values.push(JSON.stringify(options.parentRunIds));
+    const parameter = `$${String(values.length)}`;
+    const parents =
+      getDatabaseType() === 'postgresql'
+        ? `SELECT value::uuid FROM json_array_elements_text(${parameter}::json) AS parents(value)`
+        : `SELECT value FROM json_each(${parameter})`;
+    whereClauses.push(`r.parent_run_id IN (${parents})`);
+  }
+  if (options?.excludeLeafStatuses?.length) {
+    const placeholders = options.excludeLeafStatuses.map(status => {
+      values.push(status);
+      return `$${String(values.length)}`;
+    });
+    whereClauses.push(
+      `(r.status NOT IN (${placeholders.join(', ')}) OR EXISTS (SELECT 1 FROM remote_agent_workflow_runs child WHERE child.parent_run_id = r.id))`
+    );
+  }
   if (options?.search) {
     const pattern = `%${options.search}%`;
     values.push(pattern, pattern);
@@ -163,7 +181,7 @@ export async function listDashboardRuns(
                 (SELECT ${jsonIntExtract('e.data', 'totalAgents')}
                  FROM remote_agent_workflow_events e
                  WHERE e.workflow_run_id = r.id AND e.event_type = 'parallel_agent_started'
-                 ORDER BY e.created_at DESC LIMIT 1) AS agents_total
+                 ORDER BY COALESCE(e.event_order, 0) DESC, e.created_at DESC, e.id DESC LIMIT 1) AS agents_total
          FROM remote_agent_workflow_runs r
          LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
          LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id

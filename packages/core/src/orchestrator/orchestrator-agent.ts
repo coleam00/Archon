@@ -25,7 +25,12 @@ import { toError } from '../utils/error';
 import { quoteCommandArg } from '../utils/command-args';
 import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
-import { buildInvokeWorkflowTool, buildRegisterProjectTool, type ChatLaunch } from './chat-tools';
+import {
+  buildInvokeWorkflowTool,
+  buildRegisterProjectTool,
+  buildReportWorkflowNoMatchTool,
+  type ChatLaunch,
+} from './chat-tools';
 import { ensureArchonWorkspacesPath } from '@archon/paths';
 import type { ResolvedWorkflow, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import { loadConfig } from '../config/config-loader';
@@ -77,15 +82,8 @@ export async function handleMessage(
   message: string,
   context: HandleMessageContext
 ): Promise<void> {
-  const {
-    issueContext,
-    threadContext,
-    parentConversationId,
-    isolationHints,
-    attachedFiles,
-    actor,
-    workflowName,
-  } = context;
+  const { issueContext, threadContext, parentConversationId, attachedFiles, actor, workflowName } =
+    context;
   const userId = actor.kind === 'user' ? actor.userId : undefined;
   // Anchor "is this a slash command" at the true start of the message —
   // leading whitespace (e.g. from a platform that doesn't pre-trim after
@@ -217,22 +215,7 @@ export async function handleMessage(
       workflowContext,
       pausedGateContext
     );
-    const scopedCodebase =
-      conversation.codebase_id !== null
-        ? codebases.find(c => c.id === conversation.codebase_id)
-        : undefined;
-    let cwd: string;
-    if (scopedCodebase !== undefined) {
-      cwd = conversation.cwd ?? scopedCodebase.default_cwd;
-    } else {
-      if (conversation.codebase_id !== null) {
-        getLog().warn(
-          { codebaseId: conversation.codebase_id },
-          'orchestrator.scoped_codebase_not_found'
-        );
-      }
-      cwd = await ensureArchonWorkspacesPath();
-    }
+    const cwd = await resolveChatCwd(conversation, codebases);
 
     // 4. Update activity and get/create session
     await db.touchConversation(conversation.id);
@@ -270,130 +253,32 @@ export async function handleMessage(
       requestOptions
     );
 
-    const mode = platform.getStreamingMode();
-    // The one line that ties a chat turn to both conversation ids, so grepping the
-    // URL id finds the provider and model of every turn. `model` is read from the
-    // options handed to the provider, never re-resolved, so it cannot disagree.
-    getLog().info(
+    const turn = await runChatTurn(
       {
-        conversationId: conversation.id,
-        platformConversationId: conversationId,
-        provider: providerKey,
-        model: requestOptions.model,
-      },
-      'orchestrator.chat_dispatch_started'
-    );
-    // `finally`, not straight-line code: the gate resolution is committed to the
-    // DB the moment the tool call returns, so once the agent has resolved a gate
-    // the continuation must run even if the rest of the turn throws — a provider
-    // subprocess crash after a successful tool call would otherwise leave the run
-    // resolved and parked with only a generic error to show for it. The outer
-    // catch cannot cover this: it does not know about the resolution.
-    // continueResolvedGateRun never throws, so this cannot mask the real error.
-    const turn: ChatTurn = {
-      startedAt: Date.now(),
-      reported: false,
-      failed: false,
-      routed: false,
-    };
-    const turnInput: ChatTurnInput = {
-      turn,
-      commandScan: !caps.nativeTools,
-      platform,
-      conversationId,
-      originalMessage: message,
-      codebases,
-      workflows: workflowsWithSource,
-      aiClient,
-      fullPrompt,
-      cwd,
-      session,
-      isolationHints,
-      conversation,
-      actor,
-      issueContext,
-      requestOptions,
-    };
-    try {
-      if (mode === 'stream') {
-        await handleStreamMode(turnInput);
-      } else {
-        await handleBatchMode(turnInput);
-      }
-    } catch (error) {
-      // A provider that throws mid-turn never reaches the handler's own report. Count
-      // the turn as failed here, once, then let the outer catch tell the user.
-      if (!turn.reported && !turn.routed) {
-        reportChatTurn(turn, {
-          platform: platform.getPlatformType(),
-          provider: aiClient.getType(),
-          model: requestOptions?.model,
-          durationMs: Date.now() - turn.startedAt,
-          outcome: 'failed',
-        });
-      }
-      throw error;
-    } finally {
-      if (gateResolution.resolved !== null) {
-        await continueResolvedGateRun(
-          platform,
-          conversationId,
-          conversation,
-          discoveredCodebase ?? null,
-          gateResolution.resolved.run,
-          gateResolution.resolved.action,
-          actor,
-          isolationHints
-        );
-      }
-    }
-
-    // After the gate continuation: a launch has committed nothing yet, so unlike a resolved
-    // gate it is dropped when the turn throws or ends in an error result, and the user sees
-    // the error instead. The command scan launches nothing in either case.
-    if (pendingLaunch.launch !== null && turn.failed) {
-      getLog().info(
-        { conversationId, workflowName: pendingLaunch.launch.entry.workflow.name },
-        'orchestrator.invoke_workflow_dropped_failed_turn'
-      );
-    } else if (pendingLaunch.launch !== null) {
-      const { entry, codebase, prompt } = pendingLaunch.launch;
-      getLog().info(
-        { conversationId, workflowName: entry.workflow.name, codebaseId: codebase.id },
-        'orchestrator.invoke_workflow_dispatching'
-      );
-      await dispatchOrchestratorWorkflow(
         platform,
         conversationId,
+        aiClient,
+        fullPrompt,
+        cwd,
+        session,
         conversation,
-        codebase,
-        {
-          kind: 'start',
-          definition: entry.workflow,
-          args: prompt,
-          parseWarnings: entry.parseWarnings,
-        },
-        actor,
-        isolationHints,
-        entry.source
-      );
-    }
+        requestOptions,
+      },
+      gateResolution,
+      discoveredCodebase ?? null,
+      context,
+      providerKey
+    );
 
-    // Direct-chat turns may have written to source/. If there is local-only state
-    // (uncommitted edits, unpushed commits), surface a one-line reminder so the
-    // user can push or commit + push before the next worktree creation or
-    // re-clone reclaims that work. No-op when no codebase is attached.
-    // Use the codebase already fetched by discoverAllWorkflows — no second DB call.
-    if (discoveredCodebase) {
-      try {
-        await reportUnpushedWorkInSource(conversationId, discoveredCodebase, platform);
-      } catch (err) {
-        getLog().warn(
-          { err: err as Error, conversationId, codebaseId: conversation.codebase_id },
-          'orchestrator.post_message_reminder_failed'
-        );
-      }
-    }
+    await dispatchPendingLaunch(
+      platform,
+      conversationId,
+      conversation,
+      pendingLaunch.launch,
+      turn.failed,
+      context
+    );
+    await reportSourceWork(platform, conversationId, conversation, discoveredCodebase);
 
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
   } catch (error) {
@@ -406,6 +291,168 @@ export async function handleMessage(
       getLog().error({ err: toError(sendError), conversationId }, 'error_notification_failed');
     }
   }
+}
+
+async function dispatchPendingLaunch(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  launch: ChatLaunch | null,
+  failed: boolean,
+  context: HandleMessageContext
+): Promise<void> {
+  // After the gate continuation: a launch has committed nothing yet, so unlike a resolved
+  // gate it is dropped when the turn throws or ends in an error result, and the user sees
+  // the error instead.
+  if (launch !== null && failed) {
+    getLog().info(
+      { conversationId, workflowName: launch.entry.workflow.name },
+      'orchestrator.invoke_workflow_dropped_failed_turn'
+    );
+  } else if (launch !== null) {
+    const { entry, codebase, prompt, inputs } = launch;
+    getLog().info(
+      {
+        conversationId,
+        workflowName: entry.workflow.name,
+        codebaseId: codebase.id,
+        inputNames: Object.keys(inputs),
+      },
+      'orchestrator.invoke_workflow_dispatching'
+    );
+    await dispatchOrchestratorWorkflow(
+      platform,
+      conversationId,
+      conversation,
+      codebase,
+      {
+        kind: 'start',
+        definition: entry.workflow,
+        args: prompt,
+        parseWarnings: entry.parseWarnings,
+      },
+      context.actor,
+      context.isolationHints,
+      entry.source,
+      { inputs }
+    );
+  }
+}
+
+async function reportSourceWork(
+  platform: IPlatformAdapter,
+  conversationId: string,
+  conversation: Conversation,
+  codebase: Codebase | null | undefined
+): Promise<void> {
+  // Direct-chat turns may have written to source/. If there is local-only state
+  // (uncommitted edits, unpushed commits), surface a one-line reminder so the
+  // user can push or commit + push before the next worktree creation or
+  // re-clone reclaims that work. No-op when no codebase is attached.
+  // Use the codebase already fetched by discoverAllWorkflows — no second DB call.
+  if (codebase) {
+    try {
+      await reportUnpushedWorkInSource(conversationId, codebase, platform);
+    } catch (err) {
+      getLog().warn(
+        { err: err as Error, conversationId, codebaseId: conversation.codebase_id },
+        'orchestrator.post_message_reminder_failed'
+      );
+    }
+  }
+}
+
+async function runChatTurn(
+  input: Omit<ChatTurnInput, 'turn'>,
+  gateResolution: { resolved: ResolvedGate | null },
+  codebase: Codebase | null,
+  context: HandleMessageContext,
+  providerKey: string
+): Promise<ChatTurn> {
+  const { platform, conversationId, conversation, aiClient, requestOptions } = input;
+  const mode = platform.getStreamingMode();
+  // The one line that ties a chat turn to both conversation ids, so grepping the
+  // URL id finds the provider and model of every turn. `model` is read from the
+  // options handed to the provider, never re-resolved, so it cannot disagree.
+  getLog().info(
+    {
+      conversationId: conversation.id,
+      platformConversationId: conversationId,
+      provider: providerKey,
+      model: requestOptions.model,
+    },
+    'orchestrator.chat_dispatch_started'
+  );
+  // `finally`, not straight-line code: the gate resolution is committed to the
+  // DB the moment the tool call returns, so once the agent has resolved a gate
+  // the continuation must run even if the rest of the turn throws — a provider
+  // subprocess crash after a successful tool call would otherwise leave the run
+  // resolved and parked with only a generic error to show for it. The outer
+  // catch cannot cover this: it does not know about the resolution.
+  // continueResolvedGateRun never throws, so this cannot mask the real error.
+  const turn: ChatTurn = {
+    startedAt: Date.now(),
+    reported: false,
+    failed: false,
+  };
+  const turnInput = { ...input, turn };
+  try {
+    if (mode === 'stream') {
+      await handleStreamMode(turnInput);
+    } else {
+      await handleBatchMode(turnInput);
+    }
+  } catch (error) {
+    // A provider that throws mid-turn never reaches the handler's own report. Count
+    // the turn as failed here, once, then let the outer catch tell the user.
+    if (!turn.reported) {
+      reportChatTurn(turn, {
+        platform: platform.getPlatformType(),
+        provider: aiClient.getType(),
+        model: requestOptions?.model,
+        durationMs: Date.now() - turn.startedAt,
+        outcome: 'failed',
+      });
+    }
+    throw error;
+  } finally {
+    if (gateResolution.resolved !== null) {
+      await continueResolvedGateRun(
+        platform,
+        conversationId,
+        conversation,
+        codebase,
+        gateResolution.resolved.run,
+        gateResolution.resolved.action,
+        context.actor,
+        context.isolationHints
+      );
+    }
+  }
+  return turn;
+}
+
+async function resolveChatCwd(
+  conversation: Conversation,
+  codebases: readonly Codebase[]
+): Promise<string> {
+  const scopedCodebase =
+    conversation.codebase_id !== null
+      ? codebases.find(c => c.id === conversation.codebase_id)
+      : undefined;
+  let cwd: string;
+  if (scopedCodebase !== undefined) {
+    cwd = conversation.cwd ?? scopedCodebase.default_cwd;
+  } else {
+    if (conversation.codebase_id !== null) {
+      getLog().warn(
+        { codebaseId: conversation.codebase_id },
+        'orchestrator.scoped_codebase_not_found'
+      );
+    }
+    cwd = await ensureArchonWorkspacesPath();
+  }
+  return cwd;
 }
 
 /**
@@ -451,62 +498,55 @@ async function handleDeterministicCommand(
     );
     return true;
   }
-  if (parsed) {
-    const { command } = parsed;
-    const deterministicCommands = [
-      'help',
-      'status',
-      'reset',
-      'workflow',
-      'register-project',
-      'update-project',
-      'remove-project',
-      'setproject',
-      'commands',
-      'init',
-      'worktree',
-    ];
+  if (!parsed) return false;
+  const { command } = parsed;
+  const deterministicCommands = [
+    'help',
+    'status',
+    'reset',
+    'workflow',
+    'register-project',
+    'update-project',
+    'remove-project',
+    'setproject',
+    'commands',
+    'init',
+    'worktree',
+  ];
 
-    if (deterministicCommands.includes(command)) {
-      if (command === 'register-project') {
-        getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await handleRegisterProject(message);
-        await platform.sendMessage(conversationId, result);
-        return true;
-      }
-
-      if (command === 'update-project') {
-        getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await handleUpdateProject(message);
-        await platform.sendMessage(conversationId, result);
-        return true;
-      }
-
-      if (command === 'remove-project') {
-        getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await handleRemoveProject(message);
-        await platform.sendMessage(conversationId, result);
-        return true;
-      }
-
-      if (command === 'setproject') {
-        getLog().debug({ command, conversationId }, 'deterministic_command');
-        // Pass the full Conversation — handleSetProject updates by the DB
-        // primary key (conversation.id, not the platform conversation id)
-        // and needs the prior cwd/isolation state for the detach note.
-        const result = await handleSetProject(message, conversation);
-        await platform.sendMessage(conversationId, result);
-        return true;
-      }
-
-      getLog().debug({ command, conversationId }, 'deterministic_command');
-      await deliverCommandResult(
-        await commandHandler.handleCommand(conversation, message, actor, platform)
-      );
-      return true;
-    }
+  if (!deterministicCommands.includes(command)) return false;
+  getLog().debug({ command, conversationId }, 'deterministic_command');
+  if (command === 'register-project') {
+    const result = await handleRegisterProject(message);
+    await platform.sendMessage(conversationId, result);
+    return true;
   }
-  return false;
+
+  if (command === 'update-project') {
+    const result = await handleUpdateProject(message);
+    await platform.sendMessage(conversationId, result);
+    return true;
+  }
+
+  if (command === 'remove-project') {
+    const result = await handleRemoveProject(message);
+    await platform.sendMessage(conversationId, result);
+    return true;
+  }
+
+  if (command === 'setproject') {
+    // Pass the full Conversation — handleSetProject updates by the DB
+    // primary key (conversation.id, not the platform conversation id)
+    // and needs the prior cwd/isolation state for the detach note.
+    const result = await handleSetProject(message, conversation);
+    await platform.sendMessage(conversationId, result);
+    return true;
+  }
+
+  await deliverCommandResult(
+    await commandHandler.handleCommand(conversation, message, actor, platform)
+  );
+  return true;
 }
 
 // A conversation's `cwd` override can outlive the directory it names. Every
@@ -543,7 +583,7 @@ async function refuseMissingCwdOverride(
       // because `/worktree remove` hard-returns "This conversation is not using
       // a worktree." when `isolation_env_id` is null (command-handler.ts:428).
       // That state is reachable, not hypothetical: the `stale_cleaned` branch in
-      // validateAndResolveIsolation (orchestrator.ts:204) clears
+      // validateAndResolveIsolation (dispatch/isolation-resolver.ts) clears
       // `isolation_env_id` and leaves `cwd` set, so a workflow run can strand a
       // conversation exactly here and the next chat turn would be told to run a
       // command that dead-ends. `/setproject` clears the cwd override and works
@@ -665,6 +705,7 @@ function attachNativeTools(
         },
       }),
       buildRegisterProjectTool({ registerProject }),
+      buildReportWorkflowNoMatchTool(),
     ];
     if (conversation.codebase_id !== null) {
       tools.push(

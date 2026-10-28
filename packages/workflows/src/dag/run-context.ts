@@ -1,3 +1,5 @@
+import type { ContainerPauseBoundary } from './pause';
+import type { InteractionAdmission } from '../interaction-admission';
 import { newNodeInvocation, startNodeExecution } from '../node-execution';
 import { observeCheckout } from '../checkout-observation';
 import { buildAiNodeEnvironment } from '../exec-environment';
@@ -19,11 +21,12 @@ import type {
   WorkflowNodeSession,
   WorkflowRun,
 } from '../schemas';
-import type { DagResumeSnapshot, PersistedNodeOutput } from '../store';
+import { isNodeContextResume, type NodeContext } from '../schemas';
+import type { DagResumeSnapshot, PersistedNodeOutput, PriorFailedNode } from '../store';
 import type { RunBudgetLedger } from '../run-budget';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from '../model-validation';
 import type { ExecutionContext, ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
-import type { LoopBodyScope } from './references';
+import type { LoopBodyScope } from './loop-scope';
 import type { RunChildWorkflowFn } from './child-run';
 
 /** Workflow-level provider options. The provider options have node-level
@@ -110,6 +113,7 @@ export interface RunInputs {
 
 /** Run-level values derived exactly once at the DAG boundary, never supplied by callers. */
 export interface RunDerived {
+  containerPause?: ContainerPauseBoundary;
   toolAttention: ReturnType<typeof createRunToolCallAttention>;
   /**
    * The roots nodes READ executable source from — command files and named scripts.
@@ -155,7 +159,7 @@ export interface RunDerived {
  * group's `nodes` / a per-iteration scoped `nodeOutputs` (reset each iteration) and a
  * `stepNamePrefix` of `'{groupId}.'` that namespaces the persisted `step_name` of EVERY
  * body event — runLayers' own control events (skip/trigger_rule/when) AND the lifecycle
- * events emitted inside executeNodeInternal / executeBashNode / executeScriptNode /
+ * events emitted inside executeAgentNode / executeBashNode / executeScriptNode /
  * executeLoopNode / executeApprovalNode. Body lifecycle rows additionally carry `iteration`
  * in `data`. The in-process emitter payloads stay raw (unprefixed) — see #2090.
  */
@@ -175,11 +179,16 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   guardedLayerSnapshots?: Set<string>;
   bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
+  /** Each workflow path dispatches once per segment; prior events are the fixed accounting baseline. */
+  reportedChildUsage?: DagResumeSnapshot['reportedChildUsage'];
+  unattributedChildUsagePaths?: DagResumeSnapshot['unattributedChildUsagePaths'];
   /** The run budget's live ledger; set only when the workflow declares `budget:`. */
   runBudget?: RunBudgetLedger;
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
   layers: GraphPlan['layers'];
+  /** A settled enclosing body failure prevents later interactions, including nested ones. */
+  interactionAdmission?: InteractionAdmission;
   /** Shared node-output map (caller owns; runLayers writes node results here). */
   nodeOutputs: Map<string, NodeOutput>;
   /** Prior body outputs available to a loop-group iteration's `when:` conditions. */
@@ -200,6 +209,11 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   claimedWorkPausePolicy?: ClaimedWorkPausePolicy;
   /** Resume cache: node ids that completed in a prior run (top-level only; undefined for body). */
   priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+  /**
+   * Failures a run continued after a pause had already moved past (top-level only):
+   * those nodes replay their failure instead of running again. Undefined on a retry.
+   */
+  replayedFailures?: ReadonlyMap<string, PriorFailedNode>;
   nodeSessionHandles?: Map<string, SequentialSessionCursor>;
   namedResumeSourceIds?: ReadonlySet<string>;
   bodySessionCursors?: Map<string, SessionCursor>;
@@ -297,4 +311,38 @@ export function aiNodeEnvironment(
     execution,
     ctx.execContext.kind === 'host' ? process.env.ARCHON_CLI_COMMAND : undefined
   );
+}
+
+/**
+ * The checkpoint through which a node another node names in `context: { resume }` records
+ * its provider session as soon as the provider reports it. Undefined for every other node.
+ */
+export function sessionCheckpoint(
+  ctx: RunLayersContext,
+  node: DagNode,
+  provider: string
+): SessionCheckpoint | undefined {
+  if (ctx.nodeSessionHandles === undefined || ctx.namedResumeSourceIds?.has(node.id) !== true) {
+    return undefined;
+  }
+  return async (sessionId: string): Promise<void> => {
+    await ctx.deps.store.upsertWorkflowRunNodeSession({
+      workflow_run_id: ctx.workflowRun.id,
+      node_id: ctx.stepNamePrefix + node.id,
+      provider,
+      provider_session_id: sessionId,
+    });
+  };
+}
+
+/**
+ * A loop_group body node that resumes a source outside its own body owns a private
+ * session cursor continued across iterations. A same-body source is forked afresh in
+ * every iteration, so its consumer never owns a cursor.
+ */
+export function ownsBodySessionCursor(
+  node: { context?: NodeContext },
+  bodyNodeIds: ReadonlySet<string>
+): boolean {
+  return isNodeContextResume(node.context) && !bodyNodeIds.has(node.context.resume);
 }

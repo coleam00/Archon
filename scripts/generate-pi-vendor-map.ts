@@ -167,11 +167,7 @@ function assertSpecialCases(source: string): void {
   }
 }
 
-async function main(): Promise<void> {
-  const envApiKeysSource = await readFile(join(PI_AI_DIST, 'env-api-keys.js'), 'utf-8');
-  assertSpecialCases(envApiKeysSource);
-  const envMap = parseEnvMap(envApiKeysSource);
-
+async function loadCatalogIds(): Promise<string[]> {
   const modelsModule = (await import(join(PI_AI_DIST, 'models.generated.js'))) as Record<
     string,
     unknown
@@ -188,6 +184,16 @@ async function main(): Promise<void> {
   if (catalogIds.length === 0) {
     throw new Error('pi-ai models.generated.js exported no providers — upstream shape changed.');
   }
+
+  return catalogIds;
+}
+
+async function main(): Promise<void> {
+  const envApiKeysSource = await readFile(join(PI_AI_DIST, 'env-api-keys.js'), 'utf-8');
+  assertSpecialCases(envApiKeysSource);
+  const envMap = parseEnvMap(envApiKeysSource);
+
+  const catalogIds = await loadCatalogIds();
 
   // Full env-var map: envMap + the special-case branches.
   const envVars: Record<string, string> = { ...SPECIAL_ENV_VENDORS };

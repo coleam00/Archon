@@ -22,19 +22,15 @@
  *
  * Each sample that passes its hard checks is judged as soon as it finishes, by a
  * separate run of the judge workflow, so a revised rubric re-judges with `judge`
- * instead of re-running reviews. `run` and `judge` then write the batch's page and
- * `marks.yaml`, where the operator calibrates and overrides the judge. `render`
- * rebuilds those outputs from saved judgements without calling a provider.
+ * instead of re-running reviews. `run` and `judge` then write the batch's page;
+ * `render` rebuilds it from saved judgements without calling a provider.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
   ArchonRefused,
-  type DefectMark,
-  type FindingMark,
-  MARKS,
   SAMPLES_FILE,
   TIERS,
   type ResolvedVersion,
@@ -52,7 +48,7 @@ import {
   resolveVersion,
   spendOf,
   waitRun,
-} from '../../.shared/bench.ts';
+} from './runs.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import {
   FINDINGS_FILE,
@@ -894,7 +890,7 @@ function latestJudgements(outDir: string, judge: Judge): Map<string, Record<stri
 }
 
 /** One judged sample, read back with its item and findings. */
-interface BatchSample {
+export interface BatchSample {
   readonly line: SampleLine;
   readonly item: ItemRecord | null;
   readonly findings: readonly Finding[];
@@ -926,7 +922,7 @@ function batchSamples(outDir: string, caseId: string, judge: Judge): BatchSample
 }
 
 /** Findings no judged defect accounts for: on a clean sample, the false-positive candidates. */
-function unaccounted(sample: BatchSample): Finding[] {
+export function unaccounted(sample: BatchSample): Finding[] {
   if (sample.judgement?.valid !== true) return [];
   const accounted = new Set(sample.judgement.defects.map(defect => defect.finding));
   return sample.findings.filter(finding => !accounted.has(finding.id));
@@ -984,7 +980,7 @@ export function renderPage(caseId: string, judge: Judge, samples: readonly Batch
       ''
     );
   }
-  out.push(`# Review-lens batch \`${caseId}\``, '', `Judge \`${judge.spec}\` (rubric \`${judge.prompt_sha}\`). Mark each entry in \`marks.yaml\` beside this page.`);
+  out.push(`# Review-lens batch \`${caseId}\``, '', `Judge \`${judge.spec}\` (rubric \`${judge.prompt_sha}\`).`);
   const variants = [...new Set(samples.map(sample => sample.line.variant))].sort((a, b) =>
     a === CLEAN ? 1 : b === CLEAN ? -1 : a.localeCompare(b)
   );
@@ -1024,104 +1020,12 @@ export function renderPage(caseId: string, judge: Judge, samples: readonly Batch
   return `${out.join('\n')}\n`;
 }
 
-interface DefectEntry {
-  readonly judged_by: Judge;
-  readonly run_id: string;
-  readonly version: string;
-  readonly variant: string;
-  readonly sample: number;
-  readonly defect: string;
-  readonly judge: { readonly caught_by: readonly string[]; readonly finding: string | null };
-  readonly mark: DefectMark | null;
-  readonly note: string | null;
-}
-
-interface FindingEntry {
-  readonly judged_by: Judge;
-  readonly run_id: string;
-  readonly version: string;
-  readonly variant: string;
-  readonly sample: number;
-  readonly finding: string;
-  readonly sources: readonly string[];
-  readonly claim: string;
-  readonly mark: FindingMark | null;
-  readonly note: string | null;
-}
-
-/** Every entry the batch's valid judgements call for, each unmarked. */
-export function markEntries(samples: readonly BatchSample[], judgedBy: Judge): (DefectEntry | FindingEntry)[] {
-  return samples.flatMap(sample => {
-    if (sample.judgement?.valid !== true) return [];
-    const { run_id, label: version, variant, sample: number } = sample.line;
-    const at = { run_id, version, variant, sample: number, judged_by: judgedBy };
-    const defects = sample.judgement.defects.map(
-      (defect): DefectEntry => ({ ...at, defect: defect.id, judge: { caught_by: defect.caught_by, finding: defect.finding }, mark: null, note: null })
-    );
-    const findings = variant === CLEAN ? unaccounted(sample) : [];
-    return [
-      ...defects,
-      ...findings.map((finding): FindingEntry => ({ ...at, finding: finding.id, sources: finding.sources, claim: finding.claim, mark: null, note: null })),
-    ];
-  });
-}
-
-const MARKS_HEADER = `# One entry per judged defect and, on clean samples, per finding no defect accounts for.
-# judged_by identifies the model and rubric being marked; older identities and verdicts are retained separately.
-# A defect's mark is ${MARKS.defect.join(', ')} (the judge's verdict); add caught_by with
-# the lenses that did catch it when the judge was wrong. A finding's mark is
-# ${MARKS.finding.join(' or ')}. The bench rewrites this file but keeps every entry with a mark or note.
-`;
-
-function entryKey(entry: Record<string, unknown>): string {
-  const judge = isObject(entry.judge) ? entry.judge : null;
-  const caughtBy = textList(judge?.caught_by) ? [...new Set(judge.caught_by)].sort() : judge?.caught_by;
-  return JSON.stringify([
-    isObject(entry.judged_by) ? [entry.judged_by.spec, entry.judged_by.prompt_sha] : null,
-    entry.run_id,
-    entry.defect === undefined ? ['finding', entry.finding] : ['defect', entry.defect, judge === null ? null : [caughtBy, judge.finding]],
-  ]);
-}
-
-/**
- * Merge freshly generated entries into the operator's `marks.yaml`. An entry the
- * operator marked or annotated is kept as written, even when a later judgement
- * changed or no longer calls for it; every other entry is regenerated.
- */
-export function mergeMarks(file: string, generated: readonly (DefectEntry | FindingEntry)[]): unknown[] {
-  const existing: unknown = existsSync(file) ? Bun.YAML.parse(readFileSync(file, 'utf8')) : [];
-  if (existing !== null && !Array.isArray(existing)) throw new Error(`${file} is not a list of marks; fix it before the bench rewrites it`);
-  const kept = new Map<string, Record<string, unknown>[]>();
-  for (const entry of existing ?? []) {
-    if (!isObject(entry)) throw new Error(`${file} holds an entry that is not a mapping; fix it before the bench rewrites it`);
-    if ((entry.mark ?? null) !== null || (entry.note ?? null) !== null || entry.caught_by !== undefined) {
-      const key = entryKey(entry);
-      const entries = kept.get(key);
-      if (entries === undefined) kept.set(key, [entry]);
-      else entries.push(entry);
-    }
-  }
-  const merged = generated.flatMap<unknown>(entry => kept.get(entryKey({ ...entry })) ?? [entry]);
-  const fresh = new Set(generated.map(entry => entryKey({ ...entry })));
-  for (const [key, entries] of kept) if (!fresh.has(key)) merged.push(...entries);
-  return merged;
-}
-
-/** Write `batches/<case>/page.md` and `marks.yaml` from every recorded sample and judgement. */
+/** Write `batches/<case>/page.md` from every recorded sample and judgement. */
 export function writeBatch(outDir: string, caseId: string, judge: Judge): void {
   const dir = join(outDir, 'batches', caseId);
   mkdirSync(dir, { recursive: true });
   const samples = batchSamples(outDir, caseId, judge);
-  const marks = join(dir, 'marks.yaml');
-  const merged = mergeMarks(marks, markEntries(samples, judge));
   writeFileSync(join(dir, 'page.md'), renderPage(caseId, judge, samples));
-  const staging = `${marks}.${process.pid}.tmp`;
-  try {
-    writeFileSync(staging, `${MARKS_HEADER}${merged.length === 0 ? '[]\n' : Bun.YAML.stringify(merged, null, 2)}`);
-    renameSync(staging, marks);
-  } finally {
-    rmSync(staging, { force: true });
-  }
   console.log(`batch ${caseId}: ${join(dir, 'page.md')}`);
   if (samples.some(sample => !sample.line.passed || sample.judgement?.valid !== true)) {
     throw new Error(`batch ${caseId} is incomplete: failed hard checks, invalid or missing judgements; see its page`);

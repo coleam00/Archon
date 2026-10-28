@@ -4,8 +4,10 @@
  * durable events. Re-exported from the `./workflows` entry.
  */
 import type { IWorkflowStore } from '@archon/workflows/store';
+import { WORKTREE_REMOVAL_OWNER } from '@archon/isolation/types';
 import {
   sourceReleaseMetadata,
+  DETACHED_LAUNCH_METADATA_KEY,
   EXECUTION_CLAIM_METADATA_KEY,
   sourceReleasedEvent,
   type FanOutCancelReason,
@@ -13,13 +15,17 @@ import {
   type WorkflowCancellationEventDetails,
 } from '@archon/workflows/store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
-import type { RunExitReason, RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
+import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
 import {
+  CANCELLATION_NOOP_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
   TERMINAL_WORKFLOW_STATUSES,
   workflowRunOriginSchema,
+  validateWorkflowWaitMetadata,
   type WorkflowRun,
+  type WorkflowRunOrigin,
 } from '@archon/workflows/schemas/workflow-run';
+import { observeTerminalArtifacts } from '@archon/workflows/terminal-record';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
@@ -29,7 +35,10 @@ import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getWorkflowRunStatus } from './workflow-run-reads';
 import { getLog } from './workflow-run-shared';
-import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
+import {
+  insertTerminalWorkflowEvent,
+  observeRunTerminalArtifacts,
+} from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
@@ -38,36 +47,8 @@ export async function insertWorkflowRun(
   query: TransactionQuery,
   data: WorkflowRunInsert
 ): Promise<WorkflowRun> {
-  // Serialize metadata with validation to catch circular references early
-  let metadataJson: string;
-  try {
-    metadataJson = JSON.stringify(data.metadata ?? {});
-  } catch (serializeError) {
-    const err = serializeError as Error;
-
-    // Losing launch policy would silently change execution on the next resume.
-    if (
-      data.metadata &&
-      ('github_context' in data.metadata || RUN_AI_CONFIGURATION_METADATA_KEY in data.metadata)
-    ) {
-      getLog().error(
-        { err, metadataKeys: Object.keys(data.metadata) },
-        'db.workflow_run_metadata_serialize_failed'
-      );
-      throw new Error(
-        `Failed to serialize workflow metadata: ${err.message}. ` +
-          'Metadata contains required workflow context or AI configuration.'
-      );
-    }
-
-    // Non-critical metadata: fall back to empty object and log warning
-    getLog().warn(
-      { err, metadataKeys: data.metadata ? Object.keys(data.metadata) : [] },
-      'db.workflow_run_metadata_serialize_fallback'
-    );
-    metadataJson = '{}';
-  }
-
+  validateWorkflowWaitMetadata(data.metadata);
+  const metadataJson = serializeRunMetadata(data.metadata);
   const origin = workflowRunOriginSchema.parse(data.origin ?? {});
   if (origin.conversationId) assertPublicConversation(origin.conversationId);
   if (origin.parentConversationId) assertPublicConversation(origin.parentConversationId);
@@ -80,41 +61,83 @@ export async function insertWorkflowRun(
       ...(origin.conversationId ? [origin.conversationId] : []),
       ...(origin.parentConversationId ? [origin.parentConversationId] : []),
     ]);
-    const result = await query<WorkflowRunRow>(
-      data.id === undefined
-        ? `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING *, CAST(origin AS TEXT) AS origin`
-        : `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       RETURNING *, CAST(origin AS TEXT) AS origin`,
-      [
-        data.workflow_name,
-        physicalConversationId,
-        data.codebase_id ?? null,
-        data.user_message,
-        metadataJson,
-        data.working_path ?? null,
-        origin.parentConversationId ?? null,
-        origin.userId ?? null,
-        data.parent_run_id ?? null,
-        data.adopted_from_run_id ?? null,
-        JSON.stringify(origin),
-        ...(data.id === undefined ? [] : [data.id]),
-      ]
-    );
-    const row = result.rows[0];
-    if (!row) {
-      throw new Error(
-        `Failed to create workflow run: INSERT returned no rows (workflow: ${data.workflow_name})`
-      );
-    }
+    const row = await insertRunRow(query, data, metadataJson, physicalConversationId, origin);
     return normalizeWorkflowRun(row);
   } catch (error) {
     throw new Error(`Failed to create workflow run: ${(error as Error).message}`);
   }
+}
+
+/** Serializes run metadata, refusing only when it carries launch policy a resume needs. */
+function serializeRunMetadata(metadata: WorkflowRunInsert['metadata']): string {
+  try {
+    return JSON.stringify(metadata ?? {});
+  } catch (serializeError) {
+    const err = serializeError as Error;
+
+    // Losing launch policy would silently change execution on the next resume.
+    if (
+      metadata &&
+      ('github_context' in metadata || RUN_AI_CONFIGURATION_METADATA_KEY in metadata)
+    ) {
+      getLog().error(
+        { err, metadataKeys: Object.keys(metadata) },
+        'db.workflow_run_metadata_serialize_failed'
+      );
+      throw new Error(
+        `Failed to serialize workflow metadata: ${err.message}. ` +
+          'Metadata contains required workflow context or AI configuration.'
+      );
+    }
+
+    // Non-critical metadata: fall back to empty object and log warning
+    getLog().warn(
+      { err, metadataKeys: metadata ? Object.keys(metadata) : [] },
+      'db.workflow_run_metadata_serialize_fallback'
+    );
+    return '{}';
+  }
+}
+
+async function insertRunRow(
+  query: TransactionQuery,
+  data: WorkflowRunInsert,
+  metadataJson: string,
+  physicalConversationId: string,
+  origin: WorkflowRunOrigin
+): Promise<WorkflowRunRow> {
+  const result = await query<WorkflowRunRow>(
+    data.id === undefined
+      ? `INSERT INTO remote_agent_workflow_runs
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *, CAST(origin AS TEXT) AS origin`
+      : `INSERT INTO remote_agent_workflow_runs
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *, CAST(origin AS TEXT) AS origin`,
+    [
+      data.workflow_name,
+      physicalConversationId,
+      data.codebase_id ?? null,
+      data.user_message,
+      metadataJson,
+      data.working_path ?? null,
+      origin.parentConversationId ?? null,
+      origin.userId ?? null,
+      data.parent_run_id ?? null,
+      data.adopted_from_run_id ?? null,
+      JSON.stringify(origin),
+      ...(data.id === undefined ? [] : [data.id]),
+    ]
+  );
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error(
+      `Failed to create workflow run: INSERT returned no rows (workflow: ${data.workflow_name})`
+    );
+  }
+  return row;
 }
 
 export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
@@ -128,10 +151,11 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
 }
 
 /**
- * A run whose checkout belongs only to destroyed worktree records cannot start.
- * Abandonment marks the record destroyed before its final claimant check, so a run
- * that reused the record too late to be seen fails here instead of starting in a
- * checkout that is being removed.
+ * A run whose checkout belongs only to destroyed worktree records, or to any record
+ * being removed, cannot start. Cleanup's removal claim commits before its final
+ * claimant check, so a run that reused the checkout too late to be seen, even through
+ * another registration of the same path, fails here instead of starting in a checkout
+ * that is being removed.
  *
  * `workingPath` is stamped by the claim itself on a row created without one
  * (`run --detach`), so the check and the claimant lookup see the checkout the
@@ -154,6 +178,7 @@ export async function claimPendingWorkflowRun(
                AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
              GROUP BY e.working_path
             HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
+                OR SUM(CASE WHEN e.status = 'active' AND ${getDialect().jsonText('e.metadata', WORKTREE_REMOVAL_OWNER)} IS NOT NULL THEN 1 ELSE 0 END) > 0
           )
           AND (
             NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
@@ -211,6 +236,13 @@ export async function cancelResumableRunsForConversation(
   let cancelledRuns: WorkflowRun[];
   let authorizationRefused = false;
   try {
+    const candidates = await getDatabase().query<Pick<WorkflowRun, 'id' | 'output_root'>>(
+      `SELECT id, output_root FROM remote_agent_workflow_runs
+       WHERE (conversation_id = $1 OR parent_conversation_id = $2)
+         AND status IN ('paused', 'failed')`,
+      [conversationId, conversationId]
+    );
+    const artifacts = await observeTerminalArtifacts(candidates.rows);
     cancelledRuns = await getDatabase().withTransaction(async query => {
       const snapshot = await query<WorkflowRunRow>(
         `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
@@ -242,11 +274,15 @@ export async function cancelResumableRunsForConversation(
         );
       }
       for (const run of resumable) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: run.id,
-          event_type: 'workflow_cancelled',
-          data: { cancel_reason: 'conversation_reset' },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: run.id,
+            event_type: 'workflow_cancelled',
+            data: { cancel_reason: 'conversation_reset' },
+          },
+          artifacts
+        );
       }
       return resumable.map(run => normalizeWorkflowRun(run));
     });
@@ -265,9 +301,11 @@ export async function completeWorkflowRun(
   completion: { duration_ms: number },
   metadata?: Record<string, unknown>
 ): Promise<void> {
+  validateWorkflowWaitMetadata(metadata);
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = metadata
         ? await query(
@@ -283,11 +321,15 @@ export async function completeWorkflowRun(
             [id]
           );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_completed',
-          data: completion,
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_completed',
+            data: completion,
+          },
+          artifacts
+        );
       }
       return update;
     });
@@ -320,9 +362,9 @@ export async function completeWorkflowRun(
 export async function failWorkflowRun(
   id: string,
   error: string,
-  options: { exitReason?: RunExitReason; signal?: RunStopSignal } = {}
+  options: NonNullable<Parameters<IWorkflowStore['failWorkflowRun']>[2]> = {}
 ): Promise<{ failed: boolean }> {
-  const { exitReason, signal } = options;
+  const { exitReason, signal, pendingLaunchToken, expectedExecutionClaim } = options;
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
@@ -331,18 +373,33 @@ export async function failWorkflowRun(
   // it, and a run can reach 'running' again carrying a stale stop reason (resume, or a
   // fan-out cancel recovery) — under json_patch alone that would leave a previous signal
   // attached to a new reason, the #2673 defect through the same mechanism.
+  // A failed run is not paused at anything, so its last pause cause goes too.
   const metadataWithoutPriorFailure = dialect.jsonRemove(
     'metadata',
     'scheduled_resume',
-    RUN_STOP_REASON_METADATA_KEY
+    RUN_STOP_REASON_METADATA_KEY,
+    PAUSE_CAUSE_METADATA_KEY
   );
+  const claimPredicate =
+    expectedExecutionClaim === undefined
+      ? ''
+      : ` AND status = 'running' AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${
+          expectedExecutionClaim === null
+            ? 'IS NULL'
+            : `= $${pendingLaunchToken !== undefined ? 4 : 3}`
+        }`;
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge(metadataWithoutPriorFailure, 2)}
-         WHERE id = $1 AND status IN ('running', 'pending')`,
+         WHERE id = $1 AND ${
+           pendingLaunchToken !== undefined
+             ? `status = 'pending' AND ${dialect.jsonText('metadata', DETACHED_LAUNCH_METADATA_KEY)} = $3`
+             : "status IN ('running', 'pending')"
+         }${claimPredicate}`,
         [
           id,
           JSON.stringify({
@@ -356,14 +413,20 @@ export async function failWorkflowRun(
                 }
               : {}),
           }),
+          ...(pendingLaunchToken !== undefined ? [pendingLaunchToken] : []),
+          ...(typeof expectedExecutionClaim === 'string' ? [expectedExecutionClaim] : []),
         ]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_failed',
-          data: { error, ...(exitReason !== undefined ? { exit_reason: exitReason } : {}) },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_failed',
+            data: { error, ...(exitReason !== undefined ? { exit_reason: exitReason } : {}) },
+          },
+          artifacts
+        );
       }
       return update;
     });
@@ -373,6 +436,8 @@ export async function failWorkflowRun(
     throw new Error(`Failed to fail workflow run: ${err.message}`);
   }
   if (result.rowCount === 0) {
+    if (pendingLaunchToken !== undefined || expectedExecutionClaim !== undefined)
+      return { failed: false };
     const status = await getWorkflowRunStatus(id);
     if (TERMINAL_WORKFLOW_STATUSES.some(terminal => terminal === status)) return { failed: false };
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');
@@ -389,30 +454,26 @@ export async function cancelWorkflowRun(
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
-    // Guard against re-stamping an already-finished run. Cancelling a run that
-    // is 'completed' or 'cancelled' must be a no-op, not a re-write of
-    // completed_at / a resurrection of terminal state. 'failed' is intentionally
-    // still cancellable (it remains a resumable state, so the user must be able
-    // to discard it), and a 'running' run stays cancellable — that is
-    // cooperative cancellation, which the executor honors via its between-layer
-    // status check (dag-executor).
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled', completed_at = ${dialect.now()}
-         WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
-        [id]
+         WHERE id = $1 AND status NOT IN (${CANCELLATION_NOOP_WORKFLOW_STATUSES.map((_, index) => `$${index + 2}`).join(', ')})`,
+        [id, ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_cancelled',
-          step_name: event?.step_name,
-          data: {
-            ...(event?.reason === undefined ? {} : { reason: event.reason }),
-            ...(event?.cancel_reason === undefined ? {} : { cancel_reason: event.cancel_reason }),
+        const { step_name, ...data } = event ?? {};
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_cancelled',
+            step_name,
+            data,
           },
-        });
+          artifacts
+        );
       }
       return update;
     });
@@ -440,21 +501,26 @@ export async function cancelFanOutRun(
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled',
              completed_at = ${dialect.now()},
              metadata = ${dialect.jsonMerge('metadata', 2)}
-         WHERE id = $1 AND status NOT IN ('completed', 'cancelled')`,
-        [id, JSON.stringify({ cancelled_reason: reason })]
+         WHERE id = $1 AND status NOT IN (${CANCELLATION_NOOP_WORKFLOW_STATUSES.map((_, index) => `$${index + 3}`).join(', ')})`,
+        [id, JSON.stringify({ cancelled_reason: reason }), ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_cancelled',
-          data: { reason, cancel_reason: 'fan_out' },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_cancelled',
+            data: { reason, cancel_reason: 'fan_out' },
+          },
+          artifacts
+        );
       }
       return update;
     });
@@ -475,7 +541,8 @@ export async function cancelFanOutRun(
 /** Release a running run whose source this host could not read (see `IWorkflowStore`). */
 export async function releaseRunForUnreadableSource(
   id: string,
-  release: SourceReleaseWrite
+  release: SourceReleaseWrite,
+  beforePublish?: () => Promise<void>
 ): Promise<{ released: boolean }> {
   const dialect = getDialect();
   try {
@@ -493,6 +560,7 @@ export async function releaseRunForUnreadableSource(
         ]
       );
       if ((result.rowCount ?? 0) === 0) return { released: false };
+      await beforePublish?.();
       await insertWorkflowEvent(query, sourceReleasedEvent(id, release));
       return { released: true };
     });

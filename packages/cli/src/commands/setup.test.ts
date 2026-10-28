@@ -5,13 +5,52 @@ import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:te
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { bootstrapProjectConfig, setupCommand } from './setup';
+import { bootstrapProjectConfig, configureDocsPath, setupCommand } from './setup';
 import { collectAIConfig } from './setup-ai';
 import * as setupAi from './setup-ai';
 import * as providerAuth from './setup-provider-auth';
 import * as doctorModule from './doctor';
 import * as prompts from '@clack/prompts';
+import * as platformRegistry from '@archon/core/platforms/registry';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { loadRepoConfig } from '@archon/core/config/config-loader';
+import { collectPlatforms } from './setup-platforms';
+
+describe('setup platform selection', () => {
+  it.each(
+    [
+      [],
+      ['github'],
+      ['telegram'],
+      ['slack'],
+      ['github', 'telegram'],
+      ['github', 'slack'],
+      ['telegram', 'slack'],
+      ['github', 'telegram', 'slack'],
+    ].map(selected => ({ selected }))
+  )('collects the selected platforms: %j', async ({ selected }) => {
+    const selection = spyOn(prompts, 'multiselect').mockResolvedValue(selected);
+    try {
+      expect(await collectPlatforms()).toEqual({
+        github: selected.includes('github'),
+        telegram: selected.includes('telegram'),
+        slack: selected.includes('slack'),
+      });
+      expect(selection).toHaveBeenCalledWith({
+        message:
+          'Which chat adapters do you want to connect? (all optional — Archon works as CLI + skill without any)\n(↑↓ navigate, space select, enter confirm)',
+        options: [
+          { value: 'github', label: 'GitHub', hint: 'Respond to issues/PRs via webhooks' },
+          { value: 'telegram', label: 'Telegram', hint: 'Chat bot via BotFather' },
+          { value: 'slack', label: 'Slack', hint: 'Workspace app with Socket Mode' },
+        ],
+        required: false,
+      });
+    } finally {
+      selection.mockRestore();
+    }
+  });
+});
 
 // Test directory for file operations
 const TEST_DIR = join(tmpdir(), 'archon-setup-test-' + Date.now());
@@ -24,6 +63,140 @@ describe('setup command', () => {
 
   afterEach(async () => {
     await removeTempTree(TEST_DIR);
+  });
+
+  describe('configureDocsPath', () => {
+    beforeEach(() => {
+      spyOn(prompts, 'confirm').mockResolvedValue(true);
+      spyOn(prompts, 'text').mockResolvedValue('docs/');
+      spyOn(prompts, 'note').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => {
+      mock.restore();
+    });
+
+    it('writes the docs path after bootstrap while preserving the template', async () => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      const template = readFileSync(path, 'utf-8');
+
+      await configureDocsPath(TEST_DIR);
+
+      const written = readFileSync(path, 'utf-8');
+      expect(written.startsWith(template)).toBe(true);
+      expect(written).toContain('#   docs:');
+      expect(Bun.YAML.parse(written)).toEqual({ docs: { path: 'docs/' } });
+      expect(prompts.note).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'docs:\n  path: existing/\n',
+      '"docs": null\n',
+      'docs: null\ndocs: null\n',
+      '{docs: {path: existing/}}\n',
+      'docs:\n  path: existing/\n...\n',
+      'key: &key docs\n*key : {path: existing/}\n',
+      '? [docs]\n: {path: existing/}\n',
+      'defaults: &defaults {docs: {path: existing/}}\n<<: *defaults\n',
+      '%YAML 1.1\n---\ndefaults: &defaults {docs: {path: existing/}}\n<<: *defaults\n',
+      'defaults: &defaults {docs: {path: existing/}}\n<<: [*defaults]\n',
+      '<<: {docs: {path: existing/}}\n',
+      '!!str docs: {path: existing/}\n',
+      '? >-\n  docs\n: {path: existing/}\n',
+      'defaults: &defaults {docs: {path: inherited/}}\n<<: *defaults\ndocs: {path: existing/}\n',
+    ])('preserves an active docs key and asks for a manual edit: %s', async docs => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      const existing = readFileSync(path, 'utf-8') + docs;
+      writeFileSync(path, existing);
+
+      await configureDocsPath(TEST_DIR);
+
+      expect(readFileSync(path, 'utf-8')).toBe(existing);
+      expect(prompts.note).toHaveBeenCalledWith(
+        `A "docs:" key already exists in ${path}.\nEdit it manually to set path: docs/`,
+        'Docs path not written'
+      );
+    });
+
+    it('preserves other settings and comments containing docs:', async () => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      const existing = '# docs: example\nassistants:\n  claude:\n    model: opus\n';
+      writeFileSync(path, existing);
+
+      await configureDocsPath(TEST_DIR);
+
+      const written = readFileSync(path, 'utf-8');
+      expect(written.startsWith(existing)).toBe(true);
+      expect(Bun.YAML.parse(written)).toEqual({
+        assistants: { claude: { model: 'opus' } },
+        docs: { path: 'docs/' },
+      });
+    });
+
+    it.each(['docs\\team', 'docs\\guide', 'docs/"quoted"', 'docs/line\nbreak'])(
+      'round-trips the selected path through the repository loader: %s',
+      async docsPath => {
+        bootstrapProjectConfig(TEST_DIR);
+        spyOn(prompts, 'text').mockResolvedValue(docsPath);
+
+        await configureDocsPath(TEST_DIR);
+
+        expect((await loadRepoConfig(TEST_DIR)).docs?.path).toBe(docsPath);
+      }
+    );
+
+    it.each([
+      '# docs: example\n{assistants: {claude: {model: opus}}}\n',
+      '# docs: example\n{assistants: {claude: {model: opus}},} # trailing comment\n',
+      '# docs: example\nassistants:\n  claude:\n    model: opus\n...\n# after document\n',
+      '# docs: example\nassistants:\n  claude:\n    model: opus\n',
+      'assistants: {}\nassistants: {claude: {model: opus}}\n',
+      'key: &key other\n*key : value\n',
+      '? [other]\n: value\n',
+      '? {other: key}\n: value\n',
+      '# docs: example\n',
+      '',
+      '%YAML 1.1\n---\nassistants:\n  claude:\n    model: opus\n',
+      '%YAML 1.1\n---\n{assistants: {claude: {model: opus}}}\n',
+      '%YAML 1.1\n---\nassistants: {claude: {model: opus}}\n',
+      '%YAML 1.1\n---\nassistants:\n  claude:\n    model: opus\n...\n',
+      '%YAML 1.2\n---\nassistants: {claude: {model: opus}}\n',
+      '!!map {assistants: {claude: {model: opus}}}\n',
+      '---\n',
+      '---\n# empty\n',
+      '---\n# empty\n...\n# after document\n',
+      'null # empty\n',
+      '~ # empty\n',
+      '!!null null # empty\n',
+      '%YAML 1.1\n---\n# empty\n',
+      '%YAML 1.2\n---\n# empty\n',
+    ])('adds docs within the existing YAML document: %j', async existing => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      writeFileSync(path, existing);
+      const before = await loadRepoConfig(TEST_DIR);
+
+      await configureDocsPath(TEST_DIR);
+
+      expect(await loadRepoConfig(TEST_DIR)).toEqual({ ...before, docs: { path: 'docs/' } });
+      const written = readFileSync(path, 'utf-8');
+      for (const line of existing.split('\n')) {
+        const comment = line.indexOf('#');
+        if (comment !== -1) expect(written).toContain(line.slice(comment));
+        if (line.startsWith('%YAML')) expect(written).toContain(line);
+      }
+    });
+
+    it('reports malformed YAML without changing the file', async () => {
+      const { path } = bootstrapProjectConfig(TEST_DIR);
+      const existing = 'assistants: [\n';
+      writeFileSync(path, existing);
+      const cancel = spyOn(prompts, 'cancel').mockImplementation(() => undefined);
+
+      await expect(configureDocsPath(TEST_DIR)).rejects.toMatchObject({ exitCode: 1 });
+
+      expect(readFileSync(path, 'utf-8')).toBe(existing);
+      expect(cancel).toHaveBeenCalledWith(expect.stringContaining('Could not write docs config:'));
+    });
   });
 
   describe('bootstrapProjectConfig', () => {
@@ -156,4 +329,104 @@ describe('setup provider selection', () => {
       }
     }
   );
+});
+
+describe('setup docs path target', () => {
+  it('writes the docs path into the project the skill was installed in', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-setup-docs-'));
+    const repo = join(root, 'repo');
+    const target = join(root, 'target');
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    mkdirSync(target);
+    const repoConfig = '# untouched\n';
+    writeFileSync(join(repo, '.archon', 'config.yaml'), repoConfig);
+    const savedEnv = { ...process.env };
+    delete process.env.DEFAULT_AI_ASSISTANT;
+    process.env.HOME = root;
+    process.env.USERPROFILE = root;
+    process.env.ARCHON_HOME = join(root, 'archon');
+    const selection = spyOn(prompts, 'select').mockImplementation(async options => {
+      const chosen =
+        options.options.find(option => option.value === 'global') ?? options.options[0];
+      if (!chosen) throw new Error(`Unexpected prompt: ${options.message}`);
+      return chosen.value;
+    });
+    const input = spyOn(prompts, 'text').mockImplementation(async options =>
+      options.message === 'Project path to install the skill:'
+        ? target
+        : options.message.startsWith('Where are your project docs?')
+          ? 'documentation/'
+          : ''
+    );
+    const confirm = spyOn(prompts, 'confirm').mockImplementation(
+      async options => !options.message.startsWith('Run `archon doctor`')
+    );
+    const detect = spyOn(providerAuth, 'detectClaudeExecutablePath').mockReturnValue(null);
+    const info = spyOn(prompts.log, 'info').mockImplementation(() => undefined);
+    const originalCollect = collectAIConfig;
+    const collect = spyOn(setupAi, 'collectAIConfig').mockImplementation(options =>
+      originalCollect(
+        options,
+        async () => undefined,
+        async () => []
+      )
+    );
+    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+    try {
+      expect(await setupCommand({ repoPath: repo, providers: ['claude'] })).toBe(0);
+      const written = readFileSync(join(target, '.archon', 'config.yaml'), 'utf8');
+      expect(Bun.YAML.parse(written)).toEqual({ docs: { path: 'documentation/' } });
+      expect(readFileSync(join(repo, '.archon', 'config.yaml'), 'utf8')).toBe(repoConfig);
+    } finally {
+      for (const spy of [selection, input, confirm, detect, info, collect, platforms])
+        spy.mockRestore();
+      for (const key of Object.keys(process.env)) {
+        if (!(key in savedEnv)) delete process.env[key];
+      }
+      Object.assign(process.env, savedEnv);
+      await removeTempTree(root);
+    }
+  });
+});
+
+describe('setup model preferences', () => {
+  it('persists the Pi model before writing the default assistant and chat model', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-setup-models-'));
+    const savedHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    const policies = spyOn(platformRegistry, 'getRegisteredPlatformPolicies').mockReturnValue([]);
+    const collect = spyOn(setupAi, 'collectAIConfig').mockResolvedValue({
+      claude: true,
+      claudeAuthType: 'global',
+      codex: false,
+      pi: true,
+      piModel: 'anthropic/claude-haiku-4-5',
+      defaultAssistant: 'claude',
+      defaultAssistantSelected: true,
+      defaultModel: 'sonnet',
+    });
+    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+    const confirm = spyOn(prompts, 'confirm').mockResolvedValue(false);
+    const note = spyOn(prompts, 'note').mockImplementation(() => undefined);
+    try {
+      expect(await setupCommand({ repoPath: root, inheritedEnv: {} })).toBe(0);
+      const config = Bun.YAML.parse(readFileSync(join(root, 'home', 'config.yaml'), 'utf8'));
+      expect(config).toMatchObject({
+        defaultAssistant: 'claude',
+        assistants: {
+          pi: { model: 'anthropic/claude-haiku-4-5' },
+          claude: { model: 'sonnet' },
+        },
+      });
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining('AI: Claude (global auth), Pi'),
+        'Configuration Complete'
+      );
+    } finally {
+      for (const spy of [collect, platforms, confirm, note, policies]) spy.mockRestore();
+      if (savedHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = savedHome;
+      await removeTempTree(root);
+    }
+  });
 });

@@ -60,12 +60,6 @@ describe('round-trip fidelity', () => {
   });
 
   test('a loop with until_field round-trips exactly, schema and all (#2563)', () => {
-    // `variants/loop.ts` is a hand-written FIELD LIST, and the importer's
-    // unsupported-key warning only walks top-level wire keys — anything nested in
-    // `loop: {…}` is invisible to it. A channel missing from the converter is
-    // therefore deleted silently on the first open-and-save, with no import issue
-    // to notice: the loop would quietly fall back to another channel or stop
-    // terminating. This test is the lock on that for `until_field`.
     const structured: WireWorkflowDefinition = {
       name: 'judgment-loop',
       description: 'Terminates on a validated boolean',

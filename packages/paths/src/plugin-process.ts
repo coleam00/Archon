@@ -5,6 +5,51 @@ import { isPidProvablyGone } from './process-owner';
 
 const execFileAsync = promisify(execFile);
 
+export type ProcessGroupStop =
+  | { pgid: number; leaderReaped: true }
+  | { pgid: number; leaderReaped: false; signalError?: string };
+
+async function listPosixProcessGroups(): Promise<string> {
+  const { stdout } = await execFileAsync('/bin/ps', ['-A', '-o', 'pgid='], { timeout: 5000 });
+  return stdout;
+}
+
+/** Inspect recorded groups without a signal, including signal 0 after leader reaping. */
+export async function inspectProcessGroups(
+  pgids: readonly number[],
+  listGroups: () => Promise<string> = listPosixProcessGroups
+): Promise<number[]> {
+  if (pgids.length === 0) return [];
+  const groups = new Set(pgids);
+  const members: number[] = [];
+  for (const line of (await listGroups()).split('\n')) {
+    if (!line.trim()) continue;
+    const fields = /^\s*(\d+)\s*$/.exec(line);
+    if (!fields) throw new Error('Invalid POSIX process listing');
+    const pgid = Number(fields[1]);
+    if (!Number.isSafeInteger(pgid) || pgid < 0) {
+      throw new Error('Invalid POSIX process identifier');
+    }
+    if (groups.has(pgid)) members.push(pgid);
+  }
+  return members;
+}
+
+export async function confirmProcessGroupsGone(
+  pgids: readonly number[],
+  timeoutMs: number
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const members = await inspectProcessGroups(pgids);
+    if (members.length === 0) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`Process groups still running: ${[...new Set(members)].join(', ')}`);
+    }
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+  }
+}
+
 export function validateCommand(command: string): string | undefined {
   if (!isAbsolute(command)) return 'plugin command must be an absolute executable path';
   const extension = extname(command).toLowerCase();

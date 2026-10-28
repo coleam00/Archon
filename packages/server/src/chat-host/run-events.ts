@@ -103,6 +103,38 @@ export function projectRunEvent(event: WorkflowEmitterEvent): ProjectedRunEvent 
   }
 }
 
+function applyRunDetails(
+  run: WorkflowRun,
+  routed: ChatRunEvent,
+  platform: string,
+  platforms: ReadonlyMap<string, WorkflowCommandSurface>
+): void {
+  if (routed.type === 'approval_pending' || routed.type === 'terminal')
+    routed.authoredOutcome = run.outcome ?? undefined;
+  const approval = run.metadata.approval;
+  if (
+    routed.type === 'approval_pending' &&
+    isApprovalContext(approval) &&
+    approval.type === 'child_workflow' &&
+    approval.childRunId &&
+    approval.nodeId === routed.nodeId &&
+    approval.pauseId === routed.pauseId
+  ) {
+    const surface = platforms.get(platform);
+    if (!surface) throw new Error(`Chat platform ${platform} is unavailable`);
+    routed.message = new ChildRunRedirectError(
+      run.id,
+      [approval.childRunId],
+      routed.nodeId,
+      'approve'
+    ).messageFor(surface);
+  }
+  if (routed.type === 'terminal') {
+    const cost = runTotalCostUsd(run);
+    if (cost !== undefined) routed.totalCostUsd = cost;
+  }
+}
+
 export function subscribeChatRunEvents(
   plugins: ReadonlyMap<string, ChatSupervisor>,
   platforms: ReadonlyMap<string, WorkflowCommandSurface>
@@ -136,30 +168,7 @@ export function subscribeChatRunEvents(
           projected.type === 'workflow_started'
             ? { ...projected, conversationId: conversation.platform_conversation_id }
             : projected;
-        if (routed.type === 'approval_pending' || routed.type === 'terminal')
-          routed.authoredOutcome = run.outcome ?? undefined;
-        const approval = run.metadata.approval;
-        if (
-          routed.type === 'approval_pending' &&
-          isApprovalContext(approval) &&
-          approval.type === 'child_workflow' &&
-          approval.childRunId &&
-          approval.nodeId === routed.nodeId &&
-          approval.pauseId === routed.pauseId
-        ) {
-          const surface = platforms.get(platform);
-          if (!surface) throw new Error(`Chat platform ${platform} is unavailable`);
-          routed.message = new ChildRunRedirectError(
-            run.id,
-            [approval.childRunId],
-            routed.nodeId,
-            'approve'
-          ).messageFor(surface);
-        }
-        if (routed.type === 'terminal') {
-          const cost = runTotalCostUsd(run);
-          if (cost !== undefined) routed.totalCostUsd = cost;
-        }
+        applyRunDetails(run, routed, platform, platforms);
         const delivery = (deliveries.get(platform) ?? Promise.resolve())
           .then(async () => {
             if (!stopped) await plugin.runEvent(routed);

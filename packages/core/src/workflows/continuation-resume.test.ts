@@ -82,3 +82,20 @@ test('a codebase-less paused run resumes from the workspaces path without host r
   if (admission.kind === 'accepted') await admission.settled;
   expect(close).toHaveBeenCalledTimes(1);
 });
+
+test('an engine refusal closes its live owner before returning not-accepted', async () => {
+  const { host, resume } = headlessHost(pausedRun);
+  resume.mockResolvedValueOnce({ accepted: false, reason: 'nothing-to-resume' });
+  let closed = false;
+  close.mockImplementationOnce(async () => {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    closed = true;
+  });
+
+  const admission = await resumeRunContinuation(host, pausedRun.id, headlessContext);
+
+  expect(resume).toHaveBeenCalledTimes(1);
+  expect(admission).toEqual({ kind: 'not-accepted' });
+  expect(close).toHaveBeenCalledTimes(1);
+  expect(closed).toBe(true);
+});

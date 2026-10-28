@@ -3,8 +3,8 @@ import { isObjectSchemaNode } from '@archon/provider-contract';
 
 /**
  * Append a "respond with JSON matching this schema" instruction to the user
- * prompt. Same wording originally authored for Pi — reused verbatim so
- * prompt drift across providers is zero.
+ * prompt, for a best-effort provider that has no structured channel. Pi asks
+ * for its `structured_output` tool call instead.
  */
 export function augmentPromptForJsonSchema(
   prompt: string,

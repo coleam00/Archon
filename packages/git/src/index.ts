@@ -68,6 +68,8 @@ export {
 // Forge detection
 export { detectForge } from './forge';
 export type { ForgeType, ForgeInfo } from './forge';
+export { GITHUB_COM_HOST, parseGitHubHost, readGitHubHost, resolveGitHubHost } from './github-host';
+export type { GitHubHost } from './github-host';
 
 // Repository operations
 export {
@@ -83,6 +85,7 @@ export {
   addSafeDirectory,
 } from './repo';
 export type { CloneCredentials, CloneRepositoryOptions } from './repo';
+export { trustRegisteredPath } from './registration-trust';
 
 export {
   inspectRemoteBranches,

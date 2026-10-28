@@ -1,9 +1,11 @@
+import type { resolveWorkflowGithubEnvironment } from '@archon/workflows/run-credential-env';
 import { WORKFLOW_SOURCE_METADATA_KEY } from '@archon/workflows/schemas/workflow-run';
 import { randomUUID } from 'node:crypto';
 import {
   configureIsolation,
   WorktreePostCreateError,
   type WorktreeSetupExecutor,
+  type WorktreeSetupInput,
 } from '@archon/isolation';
 import { resolveBashPath } from '@archon/git';
 import { createLogger } from '@archon/paths';
@@ -16,13 +18,10 @@ import {
   isSubprocessTimeout,
   redactSubprocessError,
   retainStreamTail,
+  type RawSubprocessRejection,
 } from '@archon/workflows/subprocess';
 import { logWorktreeSetup } from '@archon/workflows/logger';
-import type {
-  CapturedSourceOwner,
-  PreparedWorkflowSource,
-  resolveWorkflowGithubEnvironment,
-} from '@archon/workflows/executor';
+import type { CapturedSourceOwner, PreparedWorkflowSource } from '@archon/workflows/run-source';
 import type { WorkflowEnvironment, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorktreeSetupEvent } from '@archon/workflows/schemas/worktree-setup';
@@ -33,11 +32,36 @@ export type WorktreeSetupDeps = Parameters<typeof resolveWorkflowGithubEnvironme
   store: Pick<WorkflowDeps['store'], 'getCodebase' | 'persistWorkflowEvent'>;
 };
 
+type SetupRetention =
+  | { standalone: true }
+  | { logDir: string; workflowRunId: string; label: string };
+type SetupAttribution = { parentNodeId: string; childIndex: number };
+type SetupFailureKind = WorktreePostCreateError['failureKind'];
+
+/** What every command of one setup attempt shares. */
+interface SetupAttempt {
+  input: WorktreeSetupInput;
+  environment: WorkflowEnvironment;
+  retention: SetupRetention;
+  credentials: string[];
+  emit: (event: WorktreeSetupEvent) => Promise<void>;
+}
+
+/** The redacted fields every event of one setup command carries. */
+interface SetupCommandIdentity {
+  attemptId: string;
+  commandIndex: number;
+  command: string;
+  workingPath: string;
+  parentNodeId?: string;
+  childIndex?: number;
+}
+
 function createSetupExecutor(
   environment: WorkflowEnvironment,
   audit: (event: WorktreeSetupEvent) => Promise<void>,
-  retention: { standalone: true } | { logDir: string; workflowRunId: string; label: string },
-  attribution?: { parentNodeId: string; childIndex: number }
+  retention: SetupRetention,
+  attribution?: SetupAttribution
 ): WorktreeSetupExecutor {
   return async input => {
     const attemptId = randomUUID();
@@ -50,109 +74,136 @@ function createSetupExecutor(
       try {
         await audit(event);
       } catch (error) {
-        throw redactSubprocessError(
-          error instanceof Error ? error : new Error(String(error)),
-          credentials
-        );
+        throw redactError(error, credentials);
       }
     };
+    const attempt: SetupAttempt = { input, environment, retention, credentials, emit };
     for (const [commandIndex, command] of input.commands.entries()) {
-      const safeCommand = redactCredentialValues(command, credentials);
-      const identity = {
+      const identity: SetupCommandIdentity = {
         attemptId,
         commandIndex,
-        command: safeCommand,
+        command: redactCredentialValues(command, credentials),
         workingPath: input.workingPath,
         ...attribution,
       };
-      await emit({
-        ...identity,
-        type: 'worktree_setup_started',
-        message: `Worktree setup ${commandIndex + 1} started: ${safeCommand}`,
-      });
-      // After the audit write: the timeout checks below measure the command alone.
-      const started = Date.now();
-      let result: Awaited<ReturnType<typeof runSubprocess>>;
-      try {
-        result = await runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', command], {
-          cwd: input.workingPath,
-          timeout: input.timeout,
-          ownProcessGroup: true,
-          env: environment.envVars ?? {},
-          protectedEnvKeys: environment.protectedEnvKeys,
-          protectedCredentialValues: environment.protectedCredentialValues,
-          retention:
-            'standalone' in retention
-              ? retention
-              : { ...retention, nodeId: `setup-${attemptId}-${commandIndex}` },
-        });
-      } catch (error) {
-        const rejection = redactSubprocessError(
-          error instanceof Error ? error : new Error(String(error)),
-          credentials
-        );
-        const failureKind = isSubprocessTimeout(rejection)
-          ? 'timeout'
-          : rejection.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
-            ? 'output_limit'
-            : typeof rejection.code === 'number' || rejection.signal
-              ? 'exit'
-              : 'spawn';
-        const exitCode = typeof rejection.code === 'number' ? rejection.code : undefined;
-        const errno = typeof rejection.code === 'string' ? rejection.code : undefined;
-        const signal = rejection.signal ?? undefined;
-        const detail =
-          failureKind === 'timeout'
-            ? `timed out after ${input.timeout} ms`
-            : failureKind === 'exit'
-              ? exitCode !== undefined
-                ? `failed with exit code ${exitCode}`
-                : `terminated by signal ${signal}`
-              : `failed (${failureKind}): ${rejection.message}`;
-        const failure = new WorktreePostCreateError(
-          commandIndex,
-          safeCommand,
-          failureKind,
-          `${detail}\n${retainStreamTail(rejection.stderr) ?? ''}\n${retainStreamTail(rejection.stdout) ?? ''}`,
-          exitCode,
-          errno,
-          signal,
-          rejection
-        );
-        try {
-          await emit({
-            ...identity,
-            type: 'worktree_setup_failed',
-            durationMs: Date.now() - started,
-            failureKind,
-            exitCode,
-            errno,
-            signal,
-            stdoutTail: retainStreamTail(rejection.stdout),
-            stderrTail: retainStreamTail(rejection.stderr),
-            message: failure.message,
-          });
-        } catch (auditError) {
-          const safeAuditError = redactSubprocessError(
-            auditError instanceof Error ? auditError : new Error(String(auditError)),
-            credentials
-          );
-          failure.message += `; could not persist setup failure: ${safeAuditError.message}`;
-          failure.cause = new AggregateError([rejection, safeAuditError], failure.message);
-          throw failure;
-        }
-        throw failure;
-      }
-      await emit({
-        ...identity,
-        type: 'worktree_setup_completed',
-        durationMs: Date.now() - started,
-        stdoutTail: retainStreamTail(redactCredentialValues(result.stdout, credentials)),
-        stderrTail: retainStreamTail(result.stderr),
-        message: `Worktree setup ${commandIndex + 1} completed: ${safeCommand}`,
-      });
+      await runSetupCommand(attempt, identity, command);
     }
   };
+}
+
+async function runSetupCommand(
+  { input, environment, retention, credentials, emit }: SetupAttempt,
+  identity: SetupCommandIdentity,
+  command: string
+): Promise<void> {
+  const { attemptId, commandIndex, command: safeCommand } = identity;
+  await emit({
+    ...identity,
+    type: 'worktree_setup_started',
+    message: `Worktree setup ${commandIndex + 1} started: ${safeCommand}`,
+  });
+  // After the audit write: the timeout checks below measure the command alone.
+  const started = Date.now();
+  let result: Awaited<ReturnType<typeof runSubprocess>>;
+  try {
+    result = await runSubprocess({ kind: 'host' }, resolveBashPath(), ['-c', command], {
+      cwd: input.workingPath,
+      timeout: input.timeout,
+      ownProcessGroup: true,
+      env: environment.envVars ?? {},
+      protectedEnvKeys: environment.protectedEnvKeys,
+      protectedCredentialValues: environment.protectedCredentialValues,
+      retention:
+        'standalone' in retention
+          ? retention
+          : { ...retention, nodeId: `setup-${attemptId}-${commandIndex}` },
+    });
+  } catch (error) {
+    const rejection = redactError(error, credentials);
+    throw await recordSetupFailure({ input, credentials, emit }, identity, rejection, started);
+  }
+  await emit({
+    ...identity,
+    type: 'worktree_setup_completed',
+    durationMs: Date.now() - started,
+    stdoutTail: retainStreamTail(redactCredentialValues(result.stdout, credentials)),
+    stderrTail: retainStreamTail(result.stderr),
+    message: `Worktree setup ${commandIndex + 1} completed: ${safeCommand}`,
+  });
+}
+
+/**
+ * Audit a failed setup command and return the error to throw. When the audit write
+ * fails too, the error says so and keeps both causes.
+ */
+async function recordSetupFailure(
+  { input, credentials, emit }: Pick<SetupAttempt, 'input' | 'credentials' | 'emit'>,
+  identity: SetupCommandIdentity,
+  rejection: RawSubprocessRejection,
+  started: number
+): Promise<WorktreePostCreateError> {
+  const failureKind = setupFailureKind(rejection);
+  const exitCode = typeof rejection.code === 'number' ? rejection.code : undefined;
+  const errno = typeof rejection.code === 'string' ? rejection.code : undefined;
+  const signal = rejection.signal ?? undefined;
+  const detail = setupFailureDetail(failureKind, input.timeout, exitCode, signal, rejection);
+  const failure = new WorktreePostCreateError(
+    identity.commandIndex,
+    identity.command,
+    failureKind,
+    `${detail}\n${retainStreamTail(rejection.stderr) ?? ''}\n${retainStreamTail(rejection.stdout) ?? ''}`,
+    exitCode,
+    errno,
+    signal,
+    rejection
+  );
+  try {
+    await emit({
+      ...identity,
+      type: 'worktree_setup_failed',
+      durationMs: Date.now() - started,
+      failureKind,
+      exitCode,
+      errno,
+      signal,
+      stdoutTail: retainStreamTail(rejection.stdout),
+      stderrTail: retainStreamTail(rejection.stderr),
+      message: failure.message,
+    });
+  } catch (auditError) {
+    const safeAuditError = redactError(auditError, credentials);
+    failure.message += `; could not persist setup failure: ${safeAuditError.message}`;
+    failure.cause = new AggregateError([rejection, safeAuditError], failure.message);
+  }
+  return failure;
+}
+
+function setupFailureKind(rejection: RawSubprocessRejection): SetupFailureKind {
+  if (isSubprocessTimeout(rejection)) return 'timeout';
+  if (rejection.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return 'output_limit';
+  if (typeof rejection.code === 'number' || rejection.signal) return 'exit';
+  return 'spawn';
+}
+
+function setupFailureDetail(
+  failureKind: SetupFailureKind,
+  timeout: WorktreeSetupInput['timeout'],
+  exitCode: number | undefined,
+  signal: string | undefined,
+  rejection: RawSubprocessRejection
+): string {
+  if (failureKind === 'timeout') return `timed out after ${timeout} ms`;
+  if (failureKind !== 'exit') return `failed (${failureKind}): ${rejection.message}`;
+  return exitCode !== undefined
+    ? `failed with exit code ${exitCode}`
+    : `terminated by signal ${signal}`;
+}
+
+function redactError(error: unknown, credentials: readonly string[]): RawSubprocessRejection {
+  return redactSubprocessError(
+    error instanceof Error ? error : new Error(String(error)),
+    credentials
+  );
 }
 
 export function createRunWorktreeSetupExecutor(
@@ -162,8 +213,9 @@ export function createRunWorktreeSetupExecutor(
   attribution?: { parentNodeId: string; childIndex: number }
 ): WorktreeSetupExecutor {
   return async input => {
-    const { resolveProjectPaths, resolveWorkflowGithubEnvironment } = await import(
-      '@archon/workflows/executor'
+    const { resolveProjectPaths } = await import('@archon/workflows/run-paths');
+    const { resolveWorkflowGithubEnvironment } = await import(
+      '@archon/workflows/run-credential-env'
     );
     const effectiveEnvironment = await resolveWorkflowGithubEnvironment(
       deps,
@@ -225,7 +277,7 @@ export async function retainSetupRunSource(
   cwd: string,
   codebaseId?: string
 ): Promise<PreparedWorkflowSource> {
-  const { finalizeWorkflowSource } = await import('@archon/workflows/executor');
+  const { finalizeWorkflowSource } = await import('@archon/workflows/run-source');
   const finalized = await finalizeWorkflowSource(deps, source, { cwd, codebaseId });
   owner.hold(finalized);
   await recordSetupRunSource(deps, run, finalized);
@@ -243,7 +295,7 @@ export async function recordSetupRunSource(
   run: WorkflowRun,
   source: PreparedWorkflowSource
 ): Promise<void> {
-  const { preparedWorkflowSourceRecord } = await import('@archon/workflows/executor');
+  const { preparedWorkflowSourceRecord } = await import('@archon/workflows/run-source');
   const record = preparedWorkflowSourceRecord(source);
   await deps.store.updateWorkflowRun(run.id, {
     metadata: { [WORKFLOW_SOURCE_METADATA_KEY]: record },

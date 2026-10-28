@@ -42,7 +42,14 @@ describeWorkflowStoreConformance('files', async () => {
         Object.assign(run, dates);
         return { result: undefined, changes: { runs: [{ run }] } };
       }),
-    terminalReports: () => reports,
+    seedPersistedWait: (id, wait) =>
+      commit(root, [id], async runs => {
+        const run = runs.get(id);
+        if (!run) throw new Error('Missing run');
+        run.metadata.wait = structuredClone(wait);
+        return { result: undefined, changes: { runs: [{ run }] } };
+      }),
+    terminalReports: () => [...reports],
     close: async () => {},
   };
 });

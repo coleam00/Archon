@@ -1,6 +1,6 @@
 {
   "name": "archon",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -10,6 +10,7 @@
     "cli": "bun --cwd packages/cli src/cli.ts",
     "dev": "bun run scripts/dev.ts",
     "dev:server": "bun --filter @archon/server dev",
+    "provision:docker": "bun --filter @archon/server provision:docker",
     "start": "bun --filter @archon/server start",
     "build": "bun --filter '*' build",
     "build:binaries": "bash scripts/build-binaries.sh",
@@ -33,7 +34,7 @@
     "test": "bun run scripts/repo-tests.ts",
     "test:watch": "bun --filter @archon/server test:watch",
     "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json && bun x tsc --noEmit -p .archon/workflows/tsconfig.json",
-    "lint": "bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && biome lint --error-on-warnings .",
+    "lint": "bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-pack-portability.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && biome lint --error-on-warnings .",
     "lint:fix": "biome lint --write .",
     "format": "biome format --write .",
     "format:check": "biome format .",
@@ -47,6 +48,7 @@
     "check:cli-import-boundary": "bun run scripts/check-cli-import-boundary.ts",
     "check:package-edges": "bun run scripts/check-package-edges.ts",
     "check:ratchet": "bun run scripts/check-ratchet.ts",
+    "check:mock-modules": "bun run scripts/check-mock-modules.ts",
     "generate:chat-contract-schema": "bun run --cwd=packages/chat-contract generate:schema",
     "check:chat-contract-schema": "bun run --cwd=packages/chat-contract check:schema"
   },

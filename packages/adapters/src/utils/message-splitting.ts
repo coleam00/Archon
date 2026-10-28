@@ -14,6 +14,16 @@ function getLog(): ReturnType<typeof createLogger> {
 export function splitIntoParagraphChunks(message: string, maxLength: number): string[] {
   if (!message) return [];
 
+  const chunks = collectParagraphChunks(message, maxLength);
+  const finalChunks = chunks.flatMap(chunk =>
+    chunk.length <= maxLength ? [chunk] : splitChunkByLines(chunk, maxLength)
+  );
+
+  getLog().debug({ chunkCount: finalChunks.length }, 'message.split_completed');
+  return finalChunks;
+}
+
+function collectParagraphChunks(message: string, maxLength: number): string[] {
   const paragraphs = message.split(/\n\n+/);
   const chunks: string[] = [];
   let currentChunk = '';
@@ -33,26 +43,21 @@ export function splitIntoParagraphChunks(message: string, maxLength: number): st
     chunks.push(currentChunk);
   }
 
-  // Fallback: split by lines if any chunk is still too long
-  const finalChunks: string[] = [];
-  for (const chunk of chunks) {
-    if (chunk.length <= maxLength) {
-      finalChunks.push(chunk);
+  return chunks;
+}
+
+function splitChunkByLines(chunk: string, maxLength: number): string[] {
+  const chunks: string[] = [];
+  const lines = chunk.split('\n');
+  let subChunk = '';
+  for (const line of lines) {
+    if (subChunk.length + line.length + 1 > maxLength) {
+      if (subChunk) chunks.push(subChunk);
+      subChunk = line;
     } else {
-      const lines = chunk.split('\n');
-      let subChunk = '';
-      for (const line of lines) {
-        if (subChunk.length + line.length + 1 > maxLength) {
-          if (subChunk) finalChunks.push(subChunk);
-          subChunk = line;
-        } else {
-          subChunk += (subChunk ? '\n' : '') + line;
-        }
-      }
-      if (subChunk) finalChunks.push(subChunk);
+      subChunk += (subChunk ? '\n' : '') + line;
     }
   }
-
-  getLog().debug({ chunkCount: finalChunks.length }, 'message.split_completed');
-  return finalChunks;
+  if (subChunk) chunks.push(subChunk);
+  return chunks;
 }

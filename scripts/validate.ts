@@ -37,6 +37,11 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     ],
   },
   {
+    id: 'merge-sweep-contract',
+    label: 'Merge sweep schema agrees with its recorder contract',
+    commands: [['bun', 'run', 'test', '.archon/scripts/__tests__/merge-sweep-contract.test.ts']],
+  },
+  {
     id: 'type-check',
     label: 'TypeScript across every package and script project',
     commands: [['bun', 'run', 'type-check']],
@@ -47,8 +52,14 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     commands: [['bun', 'run', 'lint']],
   },
   {
+    id: 'mock-modules',
+    label: 'Every mock.module() factory provides every export of its module, or is in the baseline',
+    commands: [['bun', 'run', 'check:mock-modules']],
+  },
+  {
     id: 'ratchet',
-    label: 'Touched functions and files are no more complex or longer than on the base',
+    label:
+      'Touched functions and files are no more complex or longer than on the base, and the mock.module() baseline does not grow',
     commands: [['bun', 'run', 'check:ratchet']],
   },
   {
@@ -64,13 +75,19 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
   },
   {
     id: 'package-tests',
-    label: 'Workspace package tests except @archon/cli, per-package isolation preserved',
+    label:
+      'Workspace package tests except @archon/cli and @archon/core, per-package isolation preserved',
     commands: [['bun', 'run', 'test', '--plan', 'packages']],
   },
   {
     id: 'cli-tests',
     label: '@archon/cli package tests',
     commands: [['bun', 'run', 'test', '--plan', 'cli']],
+  },
+  {
+    id: 'core-tests',
+    label: '@archon/core package tests',
+    commands: [['bun', 'run', 'test', '--plan', 'core']],
   },
   {
     id: 'script-tests',

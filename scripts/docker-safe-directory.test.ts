@@ -7,6 +7,16 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 const trackTempRoot = trackTempRoots();
 
+async function assertTrustFiles(
+  config: string,
+  newlinePath: boolean,
+  sibling: string,
+  siblingContents: string
+): Promise<void> {
+  expect((await stat(config)).mode & 0o777).toBe(0o660);
+  if (newlinePath) expect(await Bun.file(sibling).text()).toBe(siblingContents);
+}
+
 test.skipIf(process.platform === 'win32').each([false, true])(
   'Docker startup preserves exact effective trust (newline path: %s)',
   async newlinePath => {
@@ -56,8 +66,7 @@ test.skipIf(process.platform === 'win32').each([false, true])(
     // Only container setup and server launch are stubbed; Git edits the scratch config.
     for (let boot = 0; boot < 2; boot++) {
       execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env });
-      expect((await stat(config)).mode & 0o777).toBe(0o660);
-      if (newlinePath) expect(await Bun.file(sibling).text()).toBe(siblingContents);
+      await assertTrustFiles(config, newlinePath, sibling, siblingContents);
     }
     expect(
       execFileSync('git', ['config', '--global', '--null', '--get-all', 'safe.directory'], {
@@ -108,8 +117,7 @@ fi
       await unlink(marker);
       execFileSync(realGit, ['-C', repo, 'status', '--porcelain'], { env });
       expect(git('config', '--global', 'test.concurrent')).toBe('retained');
-      expect((await stat(config)).mode & 0o777).toBe(0o660);
-      if (newlinePath) expect(await Bun.file(sibling).text()).toBe(siblingContents);
+      await assertTrustFiles(config, newlinePath, sibling, siblingContents);
       expect(await Bun.file(`${config}.lock`).exists()).toBe(false);
     }
     execFileSync('bash', [resolve(import.meta.dir, '../docker-entrypoint.sh')], { env });
