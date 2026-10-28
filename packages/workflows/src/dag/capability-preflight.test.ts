@@ -682,6 +682,78 @@ describe('assertRunCapabilities', () => {
     });
   }
 
+  it('rejects overlapping array closure and nested dependency requirements before launch', () => {
+    const base = { properties: { value: { type: 'string' } }, required: ['value'] };
+    const complete = {
+      properties: { ...base.properties, detail: { type: 'string' } },
+      required: ['value', 'detail'],
+    };
+    const schemas = [
+      {
+        properties: { payload: { type: 'array', items: base } },
+        required: ['payload'],
+        anyOf: [{ properties: { payload: { type: 'array', contains: complete } } }],
+      },
+      ...(['dependencies', 'dependentSchemas'] as const).map(keyword => ({
+        properties: { payload: base },
+        required: ['payload'],
+        [keyword]: {
+          payload: {
+            properties: { payload: { ...base, required: ['value', 'detail'] } },
+            required: ['payload'],
+          },
+        },
+      })),
+    ];
+    for (const output_format of schemas) {
+      const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
+        name: 'preflight',
+        nodes: [
+          {
+            id: 'work',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Do the work' },
+            output_format,
+          },
+        ],
+      };
+      expect(() =>
+        assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
+      ).toThrow(/payload.*complete/);
+      expect(() =>
+        assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
+      ).not.toThrow();
+    }
+  });
+
+  it('accepts complete branches with independent unused definitions at launch', () => {
+    const base = { properties: { value: { type: 'string' } }, required: ['value'] };
+    const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
+      name: 'preflight',
+      nodes: [
+        {
+          id: 'work',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'Do the work' },
+          output_format: {
+            properties: { payload: { ...base, $defs: { Unused: base } } },
+            required: ['payload'],
+            anyOf: [
+              {
+                properties: {
+                  payload: { ...base, $defs: { Unused: { properties: {}, required: [] } } },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    expect(() =>
+      assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
+    ).not.toThrow();
+  });
+
   it('accepts annotation data and keyword-named properties after preparation', () => {
     const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
       name: 'preflight',

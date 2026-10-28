@@ -218,16 +218,16 @@ describe('schema edges', () => {
       ['out.additionalProperties', 'nested'],
       ['out.unevaluatedProperties', 'nested'],
       ['out.propertyNames', 'nested'],
-      ['out.contains', 'nested'],
-      ['out.additionalItems', 'nested'],
-      ['out.unevaluatedItems', 'nested'],
+      ['out.contains', 'array-item'],
+      ['out.additionalItems', 'array-item'],
+      ['out.unevaluatedItems', 'array-item'],
       ['out.not', 'same-instance'],
       ['out.if', 'same-instance'],
       ['out.then', 'same-instance'],
       ['out.else', 'same-instance'],
       ['out.contentSchema', 'nested'],
-      ['out.items[0]', 'nested'],
-      ['out.prefixItems[0]', 'nested'],
+      ['out.items[0]', 'array-item'],
+      ['out.prefixItems[0]', 'array-item'],
       ['out.allOf[0]', 'composition'],
       ['out.anyOf[0]', 'composition'],
       ['out.oneOf[0]', 'composition'],
@@ -235,8 +235,8 @@ describe('schema edges', () => {
       ['out.patternProperties.value', 'nested'],
       ['out.dependentSchemas.value', 'dependency'],
       ['out.dependencies.value', 'dependency'],
-      ['out.$defs.value', 'nested'],
-      ['out.definitions.value', 'nested'],
+      ['out.$defs.value', 'declaration'],
+      ['out.definitions.value', 'declaration'],
     ]);
     const visited: string[] = [];
     visitJsonSchema(schema, 'out', (_, path) => visited.push(path));
@@ -247,7 +247,7 @@ describe('schema edges', () => {
       'oneOf',
     ]);
     expect(jsonSchemaChildren({ items: leaf }, 'out')).toEqual([
-      { node: leaf, path: 'out.items', relation: 'nested' },
+      { node: leaf, path: 'out.items', relation: 'array-item', firstItem: 0, lastItem: Infinity },
     ]);
   });
 });

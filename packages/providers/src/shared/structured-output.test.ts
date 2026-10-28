@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import Ajv from 'ajv';
 import Ajv2020 from 'ajv/dist/2020.js';
+import Ajv2019 from 'ajv/dist/2019.js';
 import {
   findStrictSchemaIssues,
   findPreparedStrictSchemaIssues,
@@ -1424,4 +1425,217 @@ test('refuses an enclosing required name absent from a partial branch completed 
       ),
     }),
   ]);
+});
+
+describe('overlapping array selectors in conditional intersections', () => {
+  const base = { properties: { value: { type: 'string' } }, required: ['value'] };
+  const complete = {
+    properties: { ...base.properties, detail: { type: 'string' } },
+    required: ['value', 'detail'],
+  };
+  const selectors = {
+    draft7: {
+      items: (item: object) => ({ items: item }),
+      first: (item: object) => ({ items: [item] }),
+      second: (item: object) => ({ items: [{}, item] }),
+      contains: (item: object) => ({ contains: item }),
+      additionalItems: (item: object) => ({ items: [{}], additionalItems: item }),
+    },
+    modern: {
+      items: (item: object) => ({ items: item }),
+      first: (item: object) => ({ prefixItems: [item] }),
+      second: (item: object) => ({ prefixItems: [{}, item] }),
+      contains: (item: object) => ({ contains: item }),
+      unevaluatedItems: (item: object) => ({ unevaluatedItems: item }),
+    },
+  };
+  for (const dialect of ['draft7', 'modern'] as const) {
+    const ajv = dialect === 'draft7' ? new Ajv({ strict: false }) : new Ajv2020({ strict: false });
+    const disjoint = new Set([
+      'first/second',
+      'second/first',
+      'first/additionalItems',
+      'additionalItems/first',
+    ]);
+    const cases = Object.entries(selectors[dialect]).flatMap(([parentName, parent]) =>
+      Object.entries(selectors[dialect])
+        .filter(([localName]) => !disjoint.has(`${parentName}/${localName}`))
+        .map(([localName, local]) => ({ parentName, parent, localName, local }))
+    );
+    for (const operator of [
+      'oneOf',
+      'anyOf',
+      'allOf',
+      'dependencies',
+      ...(dialect === 'modern' ? ['dependentSchemas'] : []),
+    ]) {
+      test.each(cases)(
+        `${dialect}/${operator}/$parentName/$localName checks item closure`,
+        ({ parent, local }) => {
+          const schema = (left: object, right: object) => ({
+            properties: { payload: { type: 'array', ...parent(left) } },
+            required: ['payload'],
+            ...(operator === 'dependencies' || operator === 'dependentSchemas'
+              ? {
+                  [operator]: {
+                    payload: {
+                      properties: { payload: { type: 'array', ...local(right) } },
+                      required: ['payload'],
+                    },
+                  },
+                }
+              : {
+                  [operator]: [{ properties: { payload: { type: 'array', ...local(right) } } }],
+                }),
+          });
+          const answer = {
+            payload: [
+              { value: 'ok', detail: 'done' },
+              { value: 'ok', detail: 'done' },
+            ],
+          };
+          const input = schema(base, complete);
+          expect(ajv.compile(input)(answer)).toBe(true);
+          expect(findPreparedStrictSchemaIssues(input)).toEqual([
+            expect.objectContaining({
+              kind: 'unsupported-conversion',
+              message: expect.stringMatching(/payload.*(complete|inline)/),
+            }),
+          ]);
+          const supported = schema(complete, complete);
+          expect(findPreparedStrictSchemaIssues(supported)).toEqual([]);
+          expect(ajv.compile(normalizeJsonSchemaForOpenAiStrict(supported))(answer)).toBe(true);
+        }
+      );
+    }
+  }
+});
+
+for (const dialect of ['draft7', 'modern'] as const) {
+  test(`${dialect} preserves distinct complete positional and trailing item maps`, () => {
+    const first = { properties: { value: { type: 'string' } }, required: ['value'] };
+    const second = { properties: { detail: { type: 'string' } }, required: ['detail'] };
+    const payload =
+      dialect === 'draft7'
+        ? { type: 'array', items: [first], additionalItems: second }
+        : { type: 'array', prefixItems: [first], items: second };
+    const input = {
+      properties: { payload },
+      required: ['payload'],
+      anyOf: [{ properties: { payload } }],
+    };
+    const answer = { payload: [{ value: 'ok' }, { detail: 'done' }] };
+    const ajv = dialect === 'draft7' ? new Ajv({ strict: false }) : new Ajv2020({ strict: false });
+    expect(ajv.compile(input)(answer)).toBe(true);
+    expect(findPreparedStrictSchemaIssues(input)).toEqual([]);
+    expect(ajv.compile(normalizeJsonSchemaForOpenAiStrict(input))(answer)).toBe(true);
+  });
+}
+
+describe('nested dependency required fields across same-instance edges', () => {
+  const placements = [
+    'inline',
+    'oneOf',
+    'anyOf',
+    'allOf',
+    'dependencies',
+    'dependentSchemas',
+  ] as const;
+  const wrap = (placement: (typeof placements)[number], inner: object) => {
+    if (placement === 'inline') return inner;
+    if (placement === 'dependencies' || placement === 'dependentSchemas')
+      return { [placement]: { value: inner } };
+    return { [placement]: [inner] };
+  };
+  const complete = {
+    properties: { value: { type: 'string' }, detail: { type: 'string' } },
+    required: ['value', 'detail'],
+  };
+  const incomplete = { properties: { value: { type: 'string' } }, required: ['value', 'detail'] };
+  for (const edge of ['oneOf', 'anyOf', 'allOf', 'dependencies', 'dependentSchemas'] as const) {
+    for (const parent of placements) {
+      for (const local of placements) {
+        for (const missing of ['parent', 'local', 'both'] as const) {
+          test(`${edge}/${parent}/${local}/${missing} refuses nested undeclared requirements`, () => {
+            const schema = (left: object, right: object) => {
+              const parentSchema = {
+                properties: { value: wrap(parent, left) },
+                required: ['value'],
+              };
+              const localSchema = {
+                properties: { value: wrap(local, right) },
+                required: ['value'],
+              };
+              return {
+                ...parentSchema,
+                ...(edge === 'dependencies' || edge === 'dependentSchemas'
+                  ? { [edge]: { value: localSchema } }
+                  : { [edge]: [localSchema] }),
+              };
+            };
+            const declared = { properties: incomplete.properties, required: ['value'] };
+            const input = schema(
+              missing === 'local' ? declared : incomplete,
+              missing === 'parent' ? declared : incomplete
+            );
+            const answer = { value: { value: 'ok', detail: 'done' } };
+            const ajv = new Ajv2019({ strict: false });
+            expect(ajv.compile(input)(answer)).toBe(true);
+            expect(findPreparedStrictSchemaIssues(input)).toEqual([
+              expect.objectContaining({
+                kind: 'unsupported-conversion',
+                message: expect.stringMatching(/value.*(complete|inline)/),
+              }),
+            ]);
+            const supported = schema(complete, complete);
+            expect(findPreparedStrictSchemaIssues(supported)).toEqual([]);
+            expect(ajv.compile(normalizeJsonSchemaForOpenAiStrict(supported))(answer)).toBe(true);
+          });
+        }
+      }
+    }
+  }
+});
+
+describe('unused definitions do not constrain enclosing instances', () => {
+  for (const definitions of ['$defs', 'definitions'] as const) {
+    for (const outer of ['oneOf', 'anyOf', 'allOf'] as const) {
+      for (const inner of ['oneOf', 'anyOf', 'allOf'] as const) {
+        test(`${definitions}/${outer}/${inner} keeps independent declarations`, () => {
+          const object = { properties: { value: { type: 'string' } }, required: ['value'] };
+          const input = {
+            properties: { payload: { ...object, [definitions]: { Unused: object } } },
+            required: ['payload'],
+            [outer]: [
+              {
+                properties: {
+                  payload: {
+                    [inner]: [
+                      {
+                        ...object,
+                        [definitions]: {
+                          Unused: {
+                            properties: { detail: { type: 'string' } },
+                            required: ['detail'],
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          };
+          const ajv = new Ajv2020({ strict: false });
+          expect(findPreparedStrictSchemaIssues(input)).toEqual([]);
+          const prepared = normalizeJsonSchemaForOpenAiStrict(input);
+          expect(ajv.compile(input)({ payload: { value: 'ok' } })).toBe(true);
+          expect(ajv.compile(prepared)({ payload: { value: 'ok' } })).toBe(true);
+          expect(prepared.properties).toMatchObject({
+            payload: { [definitions]: { Unused: { additionalProperties: false } } },
+          });
+        });
+      }
+    }
+  }
 });

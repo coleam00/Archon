@@ -194,8 +194,9 @@ function assertBranchCanBeClosed(
 
 function assertNestedPropertyMapsComplete(parent: unknown, local: unknown, path: string): void {
   if (!isRecord(parent) || !isRecord(local)) return;
+  const constraints = [...sameInstanceNodes(parent), ...sameInstanceNodes(local)];
   if (
-    [...sameInstanceNodes(parent), ...sameInstanceNodes(local)].some(node =>
+    constraints.some(node =>
       ['$ref', '$dynamicRef', '$recursiveRef'].some(keyword => keyword in node)
     )
   ) {
@@ -208,9 +209,25 @@ function assertNestedPropertyMapsComplete(parent: unknown, local: unknown, path:
       assertNestedPropertyNamesMatch(parentMap, localMap, path);
     }
   }
+  const required = constraints.flatMap(node => (Array.isArray(node.required) ? node.required : []));
+  const maps = [...sameInstancePropertyMaps(parent), ...sameInstancePropertyMaps(local)];
+  if (
+    maps.some(map => required.some(name => typeof name === 'string' && !Object.hasOwn(map, name)))
+  ) {
+    throw new Error(
+      `Codex output schema at ${path} cannot close nested constraints with undeclared required fields. Use complete inline nested property maps declaring all required fields on both sides instead.`
+    );
+  }
   const parentChildren = sameInstanceNestedChildren(parent, path);
   for (const child of sameInstanceNestedChildren(local, path)) {
-    for (const inherited of parentChildren.filter(candidate => candidate.path === child.path)) {
+    for (const inherited of parentChildren.filter(
+      candidate =>
+        candidate.path === child.path ||
+        (candidate.relation === 'array-item' &&
+          child.relation === 'array-item' &&
+          candidate.firstItem <= child.lastItem &&
+          child.firstItem <= candidate.lastItem)
+    )) {
       assertNestedPropertyMapsComplete(inherited.node, child.node, child.path);
     }
   }
@@ -218,7 +235,9 @@ function assertNestedPropertyMapsComplete(parent: unknown, local: unknown, path:
 
 function sameInstanceNestedChildren(node: Record<string, unknown>, path: string) {
   return sameInstanceNodes(node).flatMap(constraint =>
-    jsonSchemaChildren(constraint, path).filter(child => child.relation === 'nested')
+    jsonSchemaChildren(constraint, path).filter(
+      child => child.relation === 'nested' || child.relation === 'array-item'
+    )
   );
 }
 
@@ -343,7 +362,9 @@ function sameInstanceNodes(node: unknown): Record<string, unknown>[] {
   return [
     node,
     ...jsonSchemaChildren(node, '').flatMap(child =>
-      child.relation === 'nested' ? [] : sameInstanceNodes(child.node)
+      child.relation === 'composition' || child.relation === 'dependency'
+        ? sameInstanceNodes(child.node)
+        : []
     ),
   ];
 }

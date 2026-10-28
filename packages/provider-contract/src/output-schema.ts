@@ -46,22 +46,25 @@ export function findStrictSchemaIssues(schema: unknown, basePath: string): Stric
 type JsonSchemaEdge =
   | { kind: 'array'; relation: 'composition' }
   | { kind: 'map'; relation: 'dependency' }
-  | { kind: 'schema' | 'array' | 'map' | 'schema-or-array'; relation: 'same-instance' | 'nested' };
+  | {
+      kind: 'schema' | 'array' | 'map' | 'schema-or-array';
+      relation: 'same-instance' | 'nested' | 'array-item' | 'declaration';
+    };
 
 const schemaEdges: Readonly<Record<string, JsonSchemaEdge | undefined>> = {
   additionalProperties: { kind: 'schema', relation: 'nested' },
   unevaluatedProperties: { kind: 'schema', relation: 'nested' },
   propertyNames: { kind: 'schema', relation: 'nested' },
-  contains: { kind: 'schema', relation: 'nested' },
-  additionalItems: { kind: 'schema', relation: 'nested' },
-  unevaluatedItems: { kind: 'schema', relation: 'nested' },
+  contains: { kind: 'schema', relation: 'array-item' },
+  additionalItems: { kind: 'schema', relation: 'array-item' },
+  unevaluatedItems: { kind: 'schema', relation: 'array-item' },
   not: { kind: 'schema', relation: 'same-instance' },
   if: { kind: 'schema', relation: 'same-instance' },
   then: { kind: 'schema', relation: 'same-instance' },
   else: { kind: 'schema', relation: 'same-instance' },
   contentSchema: { kind: 'schema', relation: 'nested' },
-  items: { kind: 'schema-or-array', relation: 'nested' },
-  prefixItems: { kind: 'array', relation: 'nested' },
+  items: { kind: 'schema-or-array', relation: 'array-item' },
+  prefixItems: { kind: 'array', relation: 'array-item' },
   allOf: { kind: 'array', relation: 'composition' },
   anyOf: { kind: 'array', relation: 'composition' },
   oneOf: { kind: 'array', relation: 'composition' },
@@ -69,42 +72,53 @@ const schemaEdges: Readonly<Record<string, JsonSchemaEdge | undefined>> = {
   patternProperties: { kind: 'map', relation: 'nested' },
   dependentSchemas: { kind: 'map', relation: 'dependency' },
   dependencies: { kind: 'map', relation: 'dependency' },
-  $defs: { kind: 'map', relation: 'nested' },
-  definitions: { kind: 'map', relation: 'nested' },
+  $defs: { kind: 'map', relation: 'declaration' },
+  definitions: { kind: 'map', relation: 'declaration' },
 };
 
 export function isJsonSchemaCompositionKeyword(key: string): boolean {
   return Object.hasOwn(schemaEdges, key) && schemaEdges[key]?.relation === 'composition';
 }
 
-interface JsonSchemaChild {
+type JsonSchemaChild = {
   node: Record<string, unknown>;
   path: string;
-  relation: JsonSchemaEdge['relation'];
-}
+} & (
+  | { relation: 'array-item'; firstItem: number; lastItem: number }
+  | { relation: Exclude<JsonSchemaEdge['relation'], 'array-item'> }
+);
 
 /** Direct object subschemas, with their relationship to the containing instance. */
 export function jsonSchemaChildren(node: Record<string, unknown>, path: string): JsonSchemaChild[] {
   return Object.entries(schemaEdges).flatMap(([key, edge]) =>
-    edge ? schemaEdgeChildren(node[key], `${path}.${key}`, edge) : []
+    edge ? schemaEdgeChildren(node, key, `${path}.${key}`, edge) : []
   );
 }
 
-function schemaEdgeChildren(value: unknown, path: string, edge: JsonSchemaEdge): JsonSchemaChild[] {
+function schemaEdgeChildren(
+  node: Record<string, unknown>,
+  key: string,
+  path: string,
+  edge: JsonSchemaEdge
+): JsonSchemaChild[] {
+  const value = node[key];
   const children: JsonSchemaChild[] = [];
-  const add = (subschema: unknown, childPath: string): void => {
+  const firstItem = arrayItemStart(node, key);
+  const add = (subschema: unknown, childPath: string, index?: number): void => {
     // Boolean schemas have no children; arrays in dependency maps are property dependencies.
     if (subschema !== null && typeof subschema === 'object' && !Array.isArray(subschema)) {
       children.push({
         node: subschema as Record<string, unknown>,
         path: childPath,
-        relation: edge.relation,
+        ...(edge.relation === 'array-item'
+          ? { relation: edge.relation, firstItem: index ?? firstItem, lastItem: index ?? Infinity }
+          : { relation: edge.relation }),
       });
     }
   };
   if (edge.kind === 'array' || (edge.kind === 'schema-or-array' && Array.isArray(value))) {
     if (Array.isArray(value)) {
-      value.forEach((item, index) => add(item, `${path}[${index}]`));
+      value.forEach((item, index) => add(item, `${path}[${index}]`, index));
     }
   } else if (edge.kind === 'map') {
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -116,6 +130,12 @@ function schemaEdgeChildren(value: unknown, path: string, edge: JsonSchemaEdge):
     add(value, path);
   }
   return children;
+}
+
+function arrayItemStart(node: Record<string, unknown>, key: string): number {
+  const tuple =
+    key === 'additionalItems' ? node.items : key === 'items' ? node.prefixItems : undefined;
+  return Array.isArray(tuple) ? tuple.length : 0;
 }
 
 /** Visit schema nodes, excluding property maps and annotation data. */
