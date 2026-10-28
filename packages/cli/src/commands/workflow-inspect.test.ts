@@ -938,7 +938,7 @@ describe('workflowGetCommand', () => {
       );
       for (const path of internalPaths) expect(lines.join('\n')).not.toContain(path);
       expect(lines.includes('    Artifact list truncated at the display cap')).toBe(fileCount > 20);
-      expect(lines).toContain('    Inventory limitation: unreadable (missing-report.md)');
+      expect(lines).toContain('    Inventory limitation: unreadable EACCES (missing-report.md)');
 
       expect(await workflowGetCommand(createTestWorkflowHost(), record.run_id, true)).toBe(0);
       expect(JSON.parse(firstJsonPayload(stdoutSpy)).terminal_record).toEqual(record);

@@ -25,7 +25,7 @@ archon provider add claude codex pi   # any subset
 
 ## Deprecated providers
 
-OpenCode and GitHub Copilot are deprecated and will be removed in the next minor release, 0.13.0. No Archon maintainer owns them. Both keep working until that release; [#4641](https://github.com/coleam00/Archon/issues/4641) tracks the removal. To keep using one after that, build and own it as a provider plugin: see [Publish a plugin](/guides/publishing-plugins/#provider-plugins) and [Adding a Community Provider](/contributing/adding-a-community-provider/).
+OpenCode and GitHub Copilot are deprecated: no Archon maintainer owns them. Both stay bundled and keep working, and no removal is scheduled, but fixes are not guaranteed. For a version you control, build and own it as a provider plugin: see [Publish a plugin](/guides/publishing-plugins/#provider-plugins) and [Adding a Community Provider](/contributing/adding-a-community-provider/).
 
 In chat, Claude, Codex and Pi launch and manage runs through native `invoke_workflow`, `register_project` and `manage_run` tools. Copilot and OpenCode have no native tools, so after you select a project with `/setproject <name>` they run `archon workflow run <workflow> "<message>" --detach` in its directory and return the run ID. Those runs are headless: they use CLI identity and send no progress or results back to the chat.
 
@@ -289,7 +289,7 @@ See the [Pi documentation](https://pi.dev) for extensions, the model registry an
 ## OpenCode
 
 :::caution[Deprecated]
-OpenCode will be removed in the next minor release. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+No Archon maintainer owns OpenCode. It keeps working. See [Deprecated providers](#deprecated-providers).
 :::
 
 Archon runs OpenCode through `@opencode-ai/sdk` as an embedded server that it starts, protects with a random password and stops after its last request. Connecting to an external OpenCode server is not supported.
@@ -309,7 +309,7 @@ assistants:
 ## GitHub Copilot
 
 :::caution[Deprecated]
-GitHub Copilot will be removed in the next minor release. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+No Archon maintainer owns GitHub Copilot. It keeps working. See [Deprecated providers](#deprecated-providers).
 :::
 
 Archon drives the Copilot CLI through `@github/copilot-sdk`. You need an active Copilot subscription.
@@ -364,10 +364,11 @@ archon ai list
 
 A run checks the credentials its AI nodes need before it creates isolation, and again before any node runs when execution starts or resumes. Vendors the run does not use are not checked, and a child workflow checks its own graph when it starts.
 
-- With `store: database`, a connected credential that cannot be read, is rejected, or cannot be verified blocks the run. Archon never falls back to another account.
+- With `store: database`, a connected credential that cannot be read or is rejected blocks the run. Archon never falls back to another account.
 - With `store: files`, or with no connected credential, runs use the provider's native or environment account, and a missing login blocks launch. A host run checks that login before isolation; a container run checks it inside the container.
 - Claude checks account information in the target directory with each node's setting sources, without a model request. An `apiKeyHelper` must exit successfully with a non-empty credential, unless an environment credential authenticates instead.
 - Providers that cannot check without a model session, including Copilot, OpenCode and Claude cloud backends, report "not checked" and may proceed.
+- A check that cannot decide (the vendor or the provider's runtime gave no answer, or the 60 s check timed out) does not block the run. The run starts and records a `credential_check_inconclusive` event with the evidence, shown in the Web UI. A bad credential then fails the first AI node as `auth`, without retry. A connected credential is refreshed again when execution starts, and blocks the run then if it still cannot be used.
 
 A key that resolves is only usable; only a model request proves the vendor accepts it.
 

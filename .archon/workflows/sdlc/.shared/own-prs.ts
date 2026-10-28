@@ -4,12 +4,14 @@
  * A maintainer whose maintainer-list entry sets `merge_queue: "own-prs"` gets each of
  * their open, non-draft pull requests a work item of its own, so a pull request they
  * opened by hand merges under the policy like one the build queue delivered. A pull
- * request a work item already names, through a build round or an earlier enrollment,
- * is left alone. A build round records its pull request when the round ends, so one
- * listed while the round still runs can enroll; that short window is an accepted gap,
- * and enrollment after the round finds the pull request recorded.
+ * request a work item already names, through a build round, the PR triage routed it to
+ * continue, or an earlier enrollment, is left alone. So is one from a `build/` branch
+ * in the repository itself: every build round opens its pull request from such a
+ * branch, and it records the pull request only when the round ends. A hand-made pull
+ * request on a `build/` branch therefore does not enroll.
  */
 
+import { BUILD_BRANCH_PREFIX } from './build.ts';
 import { forgeSource, record, samePr, type QualifiedPr } from './forge.ts';
 import { note } from './io.ts';
 import { prFromUrl } from './merge.ts';
@@ -17,7 +19,7 @@ import { stateDocuments, stateGet, statePut } from './state.ts';
 import { newWorkItem, read, type WorkItem, workItemName } from './workitem.ts';
 
 /** The fields `gh pr list --json` selects, and the type each row carries for them. */
-const OPEN_PR_FIELDS = { number: 'number', url: 'string', isDraft: 'boolean' } as const;
+const OPEN_PR_FIELDS = { number: 'number', url: 'string', isDraft: 'boolean', headRefName: 'string', isCrossRepository: 'boolean' } as const;
 type OpenPr = {
   readonly [Field in keyof typeof OPEN_PR_FIELDS]: { number: number; string: string; boolean: boolean }[(typeof OPEN_PR_FIELDS)[Field]];
 };
@@ -40,8 +42,8 @@ function openPrsBy(repo: QualifiedPr['repo'], author: string): OpenPr[] {
 }
 
 /**
- * The pull requests some work item already names: its subject, its own-PR URL, and the
- * PR every one of its build rounds recorded. Not only the latest round's, as `itemPr`
+ * The pull requests some work item already names: its subject, its own-PR URL, the PR
+ * triage routed it to continue, and the PR every one of its build rounds recorded. Not only the latest round's, as `itemPr`
  * picks for the merge path: a PR an earlier round abandoned is build history, not a
  * maintainer's own PR. A malformed item or URL is noted and skipped, as the pickup
  * skips it.
@@ -50,6 +52,8 @@ function namedPrs(): QualifiedPr[] {
   const named: QualifiedPr[] = [];
   for (const { name, doc } of stateDocuments('work/').flatMap(stored => read(stored.name, stored) ?? [])) {
     named.push(doc.subject);
+    const continued = doc.facts.triage?.pull_request;
+    if (continued != null) named.push({ repo: doc.subject.repo, number: continued });
     const urls = [...(doc.facts.build?.rounds ?? []).map(round => round.pr_url), doc.facts.own_pr?.url ?? ''];
     for (const url of urls.filter(recorded => recorded !== '')) {
       try {
@@ -60,6 +64,11 @@ function namedPrs(): QualifiedPr[] {
     }
   }
   return named;
+}
+
+/** A pull request from a round's branch: a `build/` branch in the repository itself. */
+function isQueueBuilt(pr: OpenPr): boolean {
+  return !pr.isCrossRepository && pr.headRefName.startsWith(BUILD_BRANCH_PREFIX);
 }
 
 /** An enrolled own pull request that no build round has taken over since. */
@@ -80,7 +89,7 @@ export function enrollOwnPrs(repo: QualifiedPr['repo'], authors: ReadonlySet<str
   for (const author of authors) {
     for (const pr of openPrsBy(repo, author).filter(listed => !listed.isDraft)) {
       const subject = prFromUrl(pr.url);
-      if (named.some(claimed => samePr(claimed, subject))) continue;
+      if (isQueueBuilt(pr) || named.some(claimed => samePr(claimed, subject))) continue;
       const name = workItemName(subject.number);
       const stored = stateGet(name);
       if (stored.value !== null) continue;

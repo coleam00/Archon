@@ -15,7 +15,7 @@ import {
   restoreRunAiConfigurationDefaults,
 } from './run-ai-configuration';
 import type { RunAiConfigurationSnapshot } from './schemas/run-ai-configuration';
-import type { CredentialStatus } from '@archon/provider-contract';
+import type { CredentialSource, CredentialStatus } from '@archon/provider-contract';
 import type { StoredProviderCredential, WorkflowConfig, WorkflowDeps } from './deps';
 import type { ResolvedWorkflow, WorkflowRun, DagNode } from './schemas';
 import { resolvedBodyNodes } from './graph-plan';
@@ -424,34 +424,67 @@ export class WorkflowCredentialPreflightError extends Error {
   }
 }
 
-export function assertCredentialStatus(
+/**
+ * A credential check that could not decide, which the run starts despite. A bad
+ * credential behind it then fails the first AI node as `auth`.
+ */
+export interface InconclusiveCredentialCheck {
+  provider: string;
+  vendor?: string;
+  source: CredentialSource;
+  evidence: string;
+}
+
+export function credentialRefusal(
   requirement: RunCredentialRequirement,
   status: CredentialStatus
-): void {
+): WorkflowCredentialPreflightError {
   switch (status.state) {
-    case 'usable':
-      return;
-    case 'not_checked':
-      if (status.source === 'native') return;
-      throw new WorkflowCredentialPreflightError(
-        requirement,
-        'credential adapter returned an unsupported stored status'
-      );
     case 'not_connected':
-      throw new WorkflowCredentialPreflightError(
+      return new WorkflowCredentialPreflightError(
         requirement,
         'no usable login; connect a credential or log in with the provider'
       );
     case 'unusable':
-      throw new WorkflowCredentialPreflightError(
+      return new WorkflowCredentialPreflightError(
         requirement,
         `credential cannot be used: ${status.evidence}`
       );
     case 'check_failed':
-      throw new WorkflowCredentialPreflightError(
+      return new WorkflowCredentialPreflightError(
         requirement,
         `could not verify: ${status.evidence}`
       );
+    case 'usable':
+    case 'not_checked':
+      return new WorkflowCredentialPreflightError(
+        requirement,
+        'credential adapter returned an unsupported stored status'
+      );
+  }
+}
+
+/** Refuses a definite bad credential; returns a check that could not decide. */
+export function assertCredentialStatus(
+  requirement: RunCredentialRequirement,
+  status: CredentialStatus
+): InconclusiveCredentialCheck | undefined {
+  switch (status.state) {
+    case 'usable':
+      return undefined;
+    case 'not_checked':
+      if (status.source === 'native') return undefined;
+      throw credentialRefusal(requirement, status);
+    case 'check_failed':
+      return {
+        provider: requirement.provider,
+        ...(requirement.vendor !== undefined ? { vendor: requirement.vendor } : {}),
+        source: status.source,
+        evidence: status.evidence,
+      };
+    case 'not_connected':
+    case 'unusable':
+      throw credentialRefusal(requirement, status);
   }
 }
 
@@ -469,11 +502,11 @@ async function checkNativeCredential(
   // A container runs with only the environment Archon forwards, never the host's.
   const baseEnv = context.execContext?.kind === 'container' ? {} : process.env;
   const signal = AbortSignal.timeout(NATIVE_CREDENTIAL_TIMEOUT_MS);
-  const timedOut = (): WorkflowCredentialPreflightError =>
-    new WorkflowCredentialPreflightError(
-      requirement,
-      `native authentication check timed out after ${NATIVE_CREDENTIAL_TIMEOUT_MS / 1000}s; the provider did not answer, which is not a definite authentication failure`
-    );
+  const timedOut = (): CredentialStatus => ({
+    state: 'check_failed',
+    source: 'native',
+    evidence: `native authentication check timed out after ${NATIVE_CREDENTIAL_TIMEOUT_MS / 1000}s; the provider did not answer, which is not a definite authentication failure`,
+  });
   let status: CredentialStatus;
   try {
     status = await deps.getAgentProvider(requirement.provider).checkCredential({
@@ -496,14 +529,16 @@ async function checkNativeCredential(
       { err: error as Error, provider: requirement.provider },
       'workflow.native_credential_check_failed'
     );
-    if (signal.aborted) throw timedOut();
-    throw new WorkflowCredentialPreflightError(
-      requirement,
-      'could not verify native authentication'
-    );
+    if (signal.aborted) return timedOut();
+    // The provider's raw error is not guaranteed redacted, so it stays in the log.
+    return {
+      state: 'check_failed',
+      source: 'native',
+      evidence: 'the native authentication check failed unexpectedly',
+    };
   }
   // Some providers report their own abort as a failed check rather than throwing.
-  if (status.state === 'check_failed' && signal.aborted) throw timedOut();
+  if (status.state === 'check_failed' && signal.aborted) return timedOut();
   return status;
 }
 
@@ -528,9 +563,13 @@ interface StoredCredentialReads {
  * cannot consume, which only explains a missing native login.
  */
 type StoredCredentialOutcome =
-  | { connected: true }
+  | { connected: true; inconclusive?: InconclusiveCredentialCheck }
   | { connected: false; unconsumedKind?: StoredCredentialKind };
 
+/**
+ * Refuses the run on a definite bad credential and returns the checks that could not
+ * decide, which do not refuse it. The caller that owns a run records them.
+ */
 export async function assertRunCredentials(
   deps: CredentialCheckDeps,
   prepared: PreparedRunAiConfiguration,
@@ -539,13 +578,28 @@ export async function assertRunCredentials(
   // isolation. A container sees only what Archon forwards, so before the container exists
   // check stored credentials only; executeWorkflow checks it in the container context.
   context: { cwd: string; execContext?: ExecutionContext } | 'pending-container'
-): Promise<void> {
+): Promise<InconclusiveCredentialCheck[]> {
   const reads: StoredCredentialReads = { credentials: new Map(), statuses: new Map() };
+  const inconclusive = new Map<string, InconclusiveCredentialCheck>();
   for (const requirement of prepared.requirements) {
     const stored = await checkStoredCredential(deps, prepared, requirement, reads);
-    if (stored.connected || context === 'pending-container') continue;
-    await assertNativeCredential(deps, prepared, requirement, context, stored.unconsumedKind);
+    let check = stored.connected ? stored.inconclusive : undefined;
+    if (!stored.connected && context !== 'pending-container') {
+      check = await assertNativeCredential(
+        deps,
+        prepared,
+        requirement,
+        context,
+        stored.unconsumedKind
+      );
+    }
+    // Requirements that differ only by model often share one result; record it once.
+    if (check) inconclusive.set(JSON.stringify(check), check);
   }
+  for (const check of inconclusive.values()) {
+    log.warn(check, 'workflow.credential_check_inconclusive');
+  }
+  return [...inconclusive.values()];
 }
 
 async function checkStoredCredential(
@@ -582,9 +636,9 @@ async function checkStoredCredential(
     if (prepared.connectedVendors.has(vendor)) assertCredentialStatus(requirement, status);
     return { connected: false };
   }
-  assertCredentialStatus(requirement, status);
+  const inconclusive = assertCredentialStatus(requirement, status);
   prepared.connectedVendors.add(vendor);
-  return { connected: true };
+  return inconclusive ? { connected: true, inconclusive } : { connected: true };
 }
 
 async function storedCredentialFor(
@@ -640,7 +694,7 @@ async function assertNativeCredential(
   requirement: RunCredentialRequirement,
   context: { cwd: string; execContext?: ExecutionContext },
   unconsumedKind: StoredCredentialKind | undefined
-): Promise<void> {
+): Promise<InconclusiveCredentialCheck | undefined> {
   const { provider, vendor } = requirement;
   const status = await checkNativeCredential(deps, prepared, requirement, context);
   if (unconsumedKind && vendor && status.state === 'not_connected') {
@@ -649,7 +703,7 @@ async function assertNativeCredential(
       unconsumedStoredCredentialReason(deps.providers, provider, vendor, unconsumedKind)
     );
   }
-  assertCredentialStatus(requirement, status);
+  return assertCredentialStatus(requirement, status);
 }
 
 export class StoredCredentialDeliveryError extends Error {

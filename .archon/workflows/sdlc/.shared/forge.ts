@@ -165,6 +165,112 @@ export class ForgeOperationError extends Error {
 }
 
 /**
+ * A `gh api` failure GitHub typed as passing: a 5xx, a rate limit, or no response.
+ * Only {@link retryTransient} repeats the operation that raised it.
+ */
+export class TransientForgeError extends Error {
+  constructor(
+    message: string,
+    /** The least time GitHub asked to be left alone, in ms; 0 when it named none. */
+    readonly waitMs: number
+  ) {
+    super(message);
+    this.name = 'TransientForgeError';
+  }
+}
+
+/** The waits before each repeat; their count is the number of repeats. */
+const RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+
+/**
+ * Run `operation`, repeating it while it fails with a {@link TransientForgeError}.
+ * Every other failure, and the last transient one, is thrown as it is.
+ *
+ * Wrap only an operation that is safe to repeat from its start: a read, or a write
+ * that first reads whether an earlier attempt already landed. A write that cannot
+ * tell must not be wrapped: a gateway timeout can arrive after the forge has
+ * applied the request.
+ */
+export function retryTransient<T>(
+  operation: () => T,
+  sleep: (ms: number) => void = Bun.sleepSync
+): T {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return operation();
+    } catch (error) {
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (!(error instanceof TransientForgeError) || delay === undefined) throw error;
+      const wait = Math.max(delay, error.waitMs);
+      note(`${error.message}; repeating in ${String(Math.ceil(wait / 1000))}s`);
+      sleep(wait);
+    }
+  }
+}
+
+/** One HTTP response as `gh api --include` prints it: status line, headers, body. */
+interface GhResponse {
+  readonly status: number;
+  /** Header names lowercased. */
+  readonly headers: ReadonlyMap<string, string>;
+  readonly body: string;
+}
+
+function ghResponse(stdout: string): GhResponse | undefined {
+  const status = /^HTTP\/[\d.]+ (\d{3})/.exec(stdout);
+  if (!status) return undefined;
+  const lines = stdout.split('\n');
+  const end = lines.findIndex(line => line.trim() === '');
+  const headers = new Map<string, string>();
+  for (const line of lines.slice(1, end === -1 ? undefined : end)) {
+    const colon = line.indexOf(':');
+    if (colon > 0) headers.set(line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim());
+  }
+  return { status: Number(status[1]), headers, body: end === -1 ? '' : lines.slice(end + 1).join('\n') };
+}
+
+/**
+ * How long GitHub asked to wait before a failed `gh api` request may be repeated, in
+ * ms (0 when it named no time), or undefined when the failure is permanent.
+ *
+ * A 5xx is transient. A 429, or a 403 carrying `retry-after`, is a rate limit that
+ * waits a minute when it names no time, as GitHub documents for a secondary limit.
+ * A valid `retry-after` (delta seconds) is the least wait on any retryable status.
+ * A failure with no HTTP status is ambiguous (a dropped connection, a timeout, or a
+ * local gh error) and is deliberately retried, except gh's exit 4, which is missing
+ * authentication; on exhaustion the error keeps gh's own message.
+ * Everything else, a 404 or a 422, is permanent.
+ */
+export function ghRetryWait(
+  exitCode: number,
+  response: Pick<GhResponse, 'status' | 'headers'> | undefined
+): number | undefined {
+  if (response === undefined) return exitCode === 4 ? undefined : 0;
+  const { status, headers } = response;
+  const retryAfter = headers.get('retry-after');
+  const seconds = retryAfter === undefined || retryAfter.trim() === '' ? Number.NaN : Number(retryAfter);
+  const named = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
+  if (status === 429 || (status === 403 && retryAfter !== undefined)) return named ?? 60_000;
+  return status >= 500 ? (named ?? 0) : undefined;
+}
+
+/**
+ * Run `gh api <args>` and return the response body. gh names a failed request's
+ * status only in stderr prose, so `--include` asks for the status line and headers
+ * on stdout, and {@link ghRetryWait} classifies the failure from those. `what`
+ * names the request in the error, which carries gh's own message.
+ */
+export function ghApi(what: string, args: readonly string[]): string {
+  const result = Bun.spawnSync(['gh', 'api', ...args, '--include'], { stdout: 'pipe', stderr: 'pipe' });
+  const response = ghResponse(result.stdout.toString());
+  if (result.exitCode === 0 && response) return response.body;
+  const message = `${what} failed: ${result.stderr.toString().trim()}`;
+  if (result.exitCode === 0) throw new Error(`${what} returned no HTTP response`);
+  const wait = ghRetryWait(result.exitCode, response);
+  throw wait === undefined ? new Error(message) : new TransientForgeError(message, wait);
+}
+
+/**
  * Run one typed forge operation.
  *
  * The request travels as a file so authored content — a pull-request body, a

@@ -94,7 +94,7 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
   if (missing.length)
     throw new Error(
       `ARCHON_SDLC_FORGE=forge needs a plugin with every delivery operation; missing: ${missing.join(', ')}. ` +
-        'The GitHub plugin has every one from v0.12.1. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
+        'The GitHub plugin has every one from v0.13.0. Use ARCHON_SDLC_FORGE=gh until a compatible release is installed.'
     );
 }
 

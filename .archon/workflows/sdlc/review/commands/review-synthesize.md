@@ -149,7 +149,7 @@ The report contains:
 
 ## Publication is not yours
 
-The node after this one publishes the complete report to the recorded pull request as one canonical marked comment, edited in place across rounds, through whichever forge source the run selected. Write nothing to the forge yourself, and do not describe the comment as already posted.
+The node after this one publishes the complete report to the recorded pull request as one canonical marked comment, edited in place across rounds, through whichever forge source the run selected (on the `gh` source, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one while the listing lags; the next upsert then refuses). Write nothing to the forge yourself, and do not describe the comment as already posted.
 
 ## Verify before finishing
 
@@ -159,5 +159,5 @@ Confirm both report files, this round's lens copies and `findings.json` exist, t
 - `action`: exactly `none`, `correct`, `replan`, or `ask`.
 - `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/report.md"}`. The engine refuses the verdict if that file is missing or empty.
 - `discoveries`: the accepted discovery records, or an empty list.
-- `contract_left`: one line per Contract coverage row for the required outcome or an acceptance item whose verdict is not `met`, `unmet` and `deferred` alike, each naming the item and what is missing. Invariant and steering rows are not listed, and neither is an item deferred to a later step of this delivery, such as CI: that step judges it before the pull request can merge. When coverage could not be judged or certified, one line saying why. Declare an empty list exactly when the required outcome and every acceptance item are `met` or deferred only to a later step of this delivery: the pull request closes its issue only on an empty list.
+- `contract_left`: one line per Contract coverage row for the required outcome or an acceptance item whose verdict is not `met`, `unmet` and `deferred` alike, each naming the item and what is missing. Invariant and steering rows are not listed, and neither is an item deferred to a later step of this delivery, such as CI: that step judges it before the pull request can merge. When coverage could not be judged or certified, one line saying why. Declare an empty list exactly when the required outcome and every acceptance item are `met` or deferred only to a later step of this delivery: the pull request can close its issue only on an empty list.
 - `findings_summary`: start with `Review report: $ARTIFACTS_DIR/review/report.md.` Then give 2-4 sentences with blocking and note counts, the dominant causal theme if one exists, and what blocks readiness or that nothing does.

@@ -1,7 +1,9 @@
 import { prepareWorkflowRunFailure } from '../workflow-run-failure';
 import { resumeRun } from './run-resume';
+import { createLogger } from '@archon/paths';
 import {
   createTransactionReads,
+  isConversationResetTarget,
   isResumable,
   listRunEvents,
   newestFirst,
@@ -49,7 +51,11 @@ import {
   pauseCauseOfApproval,
   pauseCauseOfWait,
 } from '../schemas/pause-cause';
-import { buildTerminalRecord } from '../terminal-record';
+import {
+  buildTerminalRecord,
+  terminalArtifactsFor,
+  type TerminalArtifacts,
+} from '../terminal-record';
 import { isDeepStrictEqual } from 'node:util';
 
 export type TransactionView = Omit<
@@ -75,10 +81,17 @@ export type TransactionView = Omit<
 
 export { TERMINAL_RUN_EVENT_TYPES } from '../schemas/workflow-run';
 
+const log = createLogger('file-store');
+
+/**
+ * `artifacts` holds the manifests the caller walked before taking the store lock; a
+ * terminal write never walks the filesystem itself.
+ */
 export function createTransactionView(
   runs: Map<string, WorkflowRun>,
   events: WorkflowEventRow[],
-  getCodebase: IWorkflowStore['getCodebase']
+  getCodebase: IWorkflowStore['getCodebase'],
+  artifacts: TerminalArtifacts
 ): TransactionView {
   const row = (id: string): WorkflowRun => {
     const run = runs.get(id);
@@ -129,38 +142,41 @@ export function createTransactionView(
     event: WorkflowEventInput;
     precedingEvents?: WorkflowEventInput[];
   }
-  const terminalBatch = async (changes: TerminalChange[]): Promise<void> => {
-    const prepared = await Promise.all(
-      changes.map(async ({ run, event, precedingEvents = [] }) => {
-        run.completed_at = new Date();
-        const terminalRecord = await buildTerminalRecord({
-          run,
-          events: [
-            ...listRunEvents(events, run.id),
-            ...precedingEvents.map(event => ({ ...event, data: event.data ?? {} })),
-          ],
-        });
-        return {
-          run,
-          precedingEvents,
-          event: {
-            ...event,
-            data: { ...event.data, terminal_record: terminalRecord },
-          },
-        };
-      })
-    );
+  const terminalBatch = (changes: TerminalChange[]): void => {
+    const prepared = changes.map(({ run, event, precedingEvents = [] }) => {
+      run.completed_at = new Date();
+      const observed = artifacts.get(run.id);
+      const manifest = terminalArtifactsFor(run, observed);
+      if (manifest !== observed)
+        log.warn({ workflowRunId: run.id }, 'file_store.terminal_artifacts_not_observed');
+      const terminalRecord = buildTerminalRecord({
+        run,
+        events: [
+          ...listRunEvents(events, run.id),
+          ...precedingEvents.map(event => ({ ...event, data: event.data ?? {} })),
+        ],
+        artifacts: manifest,
+      });
+      return {
+        run,
+        precedingEvents,
+        event: {
+          ...event,
+          data: { ...event.data, terminal_record: terminalRecord },
+        },
+      };
+    });
     for (const { run, precedingEvents, event } of prepared) {
       runs.set(run.id, run);
       for (const preceding of precedingEvents) record(preceding);
       record(event);
     }
   };
-  const terminal = async (
+  const terminal = (
     run: WorkflowRun,
     event: WorkflowEventInput,
     precedingEvents: WorkflowEventInput[] = []
-  ): Promise<void> => terminalBatch([{ run, event, precedingEvents }]);
+  ): void => terminalBatch([{ run, event, precedingEvents }]);
   const createRun: IWorkflowStore['createWorkflowRun'] = async (
     input
   ): ReturnType<IWorkflowStore['createWorkflowRun']> => {
@@ -298,7 +314,7 @@ export function createTransactionView(
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';
       Object.assign(run.metadata, metadata);
-      await terminal(run, {
+      terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.completed,
         data: completion,
@@ -307,7 +323,7 @@ export function createTransactionView(
     failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
       const run = prepareWorkflowRunFailure(id, runs.get(id), error, options);
       if (!run) return { failed: false };
-      await terminal(run, {
+      terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.failed,
         data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
@@ -419,7 +435,7 @@ export function createTransactionView(
       if (!run || !gateOpen(run, expected)) return { resolved: false };
       run.status = 'cancelled';
       const { step_name, ...data } = cancellation;
-      await terminal(
+      terminal(
         run,
         {
           workflow_run_id: id,
@@ -433,15 +449,11 @@ export function createTransactionView(
     },
     cancelResumableRunsForConversation: async (id, assertMayCancel) => {
       const targets = newestFirst(
-        [...runs.values()].filter(
-          run =>
-            (run.conversation_id === id || run.parent_conversation_id === id) &&
-            (run.status === 'paused' || run.status === 'failed')
-        )
+        [...runs.values()].filter(run => isConversationResetTarget(run, id))
       );
       const prior = structuredClone(targets);
       assertMayCancel?.(structuredClone(prior));
-      await terminalBatch(
+      terminalBatch(
         targets.map(target => ({
           run: { ...structuredClone(target), status: 'cancelled' },
           event: {
@@ -459,7 +471,7 @@ export function createTransactionView(
         return { cancelled: false };
       run.status = 'cancelled';
       const { step_name, ...data } = details ?? {};
-      await terminal(run, {
+      terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
         step_name,
@@ -473,7 +485,7 @@ export function createTransactionView(
         return { cancelled: false };
       run.status = 'cancelled';
       run.metadata.cancelled_reason = reason;
-      await terminal(run, {
+      terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
         data: { reason, cancel_reason: 'fan_out' },

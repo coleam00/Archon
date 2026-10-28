@@ -81,7 +81,6 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     backend: ReturnType<typeof makeWritebackBackend>;
     writeBack?: 'approve' | 'auto';
     runMetadata?: Record<string, unknown>;
-    claimed?: boolean;
     platform?: ReturnType<typeof createMockPlatform>;
   }): Promise<IWorkflowStore> {
     const store = createMockStore();
@@ -89,7 +88,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     store.getWorkflowRun = mock(() =>
       Promise.resolve(makeWorkflowRun('wb-run', { metadata: opts.runMetadata ?? {} }))
     );
-    store.claimWriteback = mock(() => Promise.resolve({ claimed: opts.claimed ?? true }));
+    store.claimWriteback = mock(() => Promise.resolve({ claimed: true }));
     const deps = createMockDeps(store);
     await executeDagWorkflow(
       dagOptions({
@@ -955,61 +954,6 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
-  // R2-F4 — a lost claim (concurrent/prior resume owns the apply, or a crash left it
-  // claimed after a successful apply) must NOT re-apply; complete as applied.
-  it('resume after approve with a LOST claim does NOT re-apply', async () => {
-    const backend = makeWritebackBackend();
-    const store = await runGate({
-      backend,
-      claimed: false,
-      runMetadata: { pending_writeback: { envId: 'env-x' }, approval: wbApproval('approved') },
-    });
-    expect(store.claimWriteback).toHaveBeenCalledTimes(1);
-    expect(backend.applyChanges).not.toHaveBeenCalled(); // no double-apply
-    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
-  });
-
-  it('warns when an already-claimed write-back resolution cannot be recorded', async () => {
-    const backend = makeWritebackBackend();
-    const { store } = statefulGateStore({
-      pending_writeback: { envId: 'env-x' },
-      approval: wbApproval('approved'),
-    });
-    store.claimWriteback = mock(async () => ({ claimed: false }));
-    const persistError = new Error('resolution store unavailable');
-    const update = store.updateWorkflowRun;
-    store.updateWorkflowRun = mock(async (id, updates) => {
-      if (updates.metadata?.writeback_resolved === true) throw persistError;
-      await update(id, updates);
-    });
-    const originalWarn = mockLogger.warn;
-    const warn = mock((_data: unknown, _message?: string): void => undefined);
-    mockLogger.warn = warn;
-    try {
-      await runGateWithStore(store, backend, 'approve');
-      expect(warn).toHaveBeenCalledWith(
-        {
-          runId: 'wb-run',
-          operation: 'updateWorkflowRun',
-          err: persistError,
-          recovery: expect.stringContaining('inspect the run and live-folder changes'),
-        },
-        'dag.writeback_resolution_persist_failed'
-      );
-      const warning = warn.mock.calls.find(
-        ([, event]) => event === 'dag.writeback_resolution_persist_failed'
-      );
-      expect(warning?.[0]).toHaveProperty('err', persistError);
-      expect((warning?.[0] as { err: unknown }).err).toBe(persistError);
-      expect(store.claimWriteback).toHaveBeenCalledTimes(1);
-      expect(backend.applyChanges).not.toHaveBeenCalled();
-      expect(store.releaseWritebackClaim).not.toHaveBeenCalled();
-      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
-    } finally {
-      mockLogger.warn = originalWarn;
-    }
-  });
-
   // R2-F4 — a failed apply RELEASES the claim (so `workflow resume` can retry) and
   // propagates the error (run fails → volume preserved by H2).
   it('resume after approve with a FAILED apply releases the claim and rethrows', async () => {
@@ -1119,6 +1063,41 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     });
     await expect(runGateWithStore(store, backend, 'approve')).rejects.toThrow(/read-only/);
     expect(wouldPreserve(metadata)).toBe(true);
+  });
+
+  // A held claim with no recorded resolution means a prior attempt may have crashed
+  // before, during or after the copy. The gate must not guess: no apply, no resolution,
+  // overlay preserved for the operator to reconcile.
+  it('resume after approve with a held claim and no resolution fails for reconciliation', async () => {
+    const { store, metadata } = statefulGateStore({
+      pending_writeback: { envId: 'env-x' },
+      approval: wbApproval('approved'),
+    });
+    store.claimWriteback = mock(async () => ({ claimed: false }));
+    const backend = makeWritebackBackend();
+    await expect(runGateWithStore(store, backend, 'approve')).rejects.toThrow(/reconcil/i);
+    expect(backend.applyChanges).not.toHaveBeenCalled();
+    expect(backend.discardChanges).not.toHaveBeenCalled();
+    expect(store.releaseWritebackClaim).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(metadata.writeback_resolved).toBeUndefined();
+    expect(wouldPreserve(metadata)).toBe(true);
+  });
+
+  it('resume after an apply whose resolution was recorded completes without a second apply', async () => {
+    const { store, metadata } = statefulGateStore({
+      pending_writeback: { envId: 'env-x' },
+      approval: wbApproval('approved'),
+      writeback_apply_claimed: true,
+      writeback_resolved: true,
+      writeback_outcome: 'applied',
+    });
+    const backend = makeWritebackBackend();
+    await runGateWithStore(store, backend, 'approve');
+    expect(store.claimWriteback).not.toHaveBeenCalled();
+    expect(backend.applyChanges).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(wouldPreserve(metadata)).toBe(false);
   });
 
   // N1 — an apply-throw in AUTO mode must ALSO leave pending_writeback set (auto sets the

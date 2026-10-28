@@ -4,6 +4,7 @@
  * durable events. Re-exported from the `./workflows` entry.
  */
 import type { IWorkflowStore } from '@archon/workflows/store';
+import { WORKTREE_REMOVAL_OWNER } from '@archon/isolation/types';
 import {
   sourceReleaseMetadata,
   DETACHED_LAUNCH_METADATA_KEY,
@@ -24,6 +25,7 @@ import {
   type WorkflowRun,
   type WorkflowRunOrigin,
 } from '@archon/workflows/schemas/workflow-run';
+import { observeTerminalArtifacts } from '@archon/workflows/terminal-record';
 import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
@@ -33,7 +35,10 @@ import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getWorkflowRunStatus } from './workflow-run-reads';
 import { getLog } from './workflow-run-shared';
-import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
+import {
+  insertTerminalWorkflowEvent,
+  observeRunTerminalArtifacts,
+} from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
@@ -146,10 +151,11 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
 }
 
 /**
- * A run whose checkout belongs only to destroyed worktree records cannot start.
- * Abandonment marks the record destroyed before its final claimant check, so a run
- * that reused the record too late to be seen fails here instead of starting in a
- * checkout that is being removed.
+ * A run whose checkout belongs only to destroyed worktree records, or to any record
+ * being removed, cannot start. Cleanup's removal claim commits before its final
+ * claimant check, so a run that reused the checkout too late to be seen, even through
+ * another registration of the same path, fails here instead of starting in a checkout
+ * that is being removed.
  *
  * `workingPath` is stamped by the claim itself on a row created without one
  * (`run --detach`), so the check and the claimant lookup see the checkout the
@@ -172,6 +178,7 @@ export async function claimPendingWorkflowRun(
                AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
              GROUP BY e.working_path
             HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
+                OR SUM(CASE WHEN e.status = 'active' AND ${getDialect().jsonText('e.metadata', WORKTREE_REMOVAL_OWNER)} IS NOT NULL THEN 1 ELSE 0 END) > 0
           )
           AND (
             NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
@@ -229,6 +236,13 @@ export async function cancelResumableRunsForConversation(
   let cancelledRuns: WorkflowRun[];
   let authorizationRefused = false;
   try {
+    const candidates = await getDatabase().query<Pick<WorkflowRun, 'id' | 'output_root'>>(
+      `SELECT id, output_root FROM remote_agent_workflow_runs
+       WHERE (conversation_id = $1 OR parent_conversation_id = $2)
+         AND status IN ('paused', 'failed')`,
+      [conversationId, conversationId]
+    );
+    const artifacts = await observeTerminalArtifacts(candidates.rows);
     cancelledRuns = await getDatabase().withTransaction(async query => {
       const snapshot = await query<WorkflowRunRow>(
         `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
@@ -260,11 +274,15 @@ export async function cancelResumableRunsForConversation(
         );
       }
       for (const run of resumable) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: run.id,
-          event_type: 'workflow_cancelled',
-          data: { cancel_reason: 'conversation_reset' },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: run.id,
+            event_type: 'workflow_cancelled',
+            data: { cancel_reason: 'conversation_reset' },
+          },
+          artifacts
+        );
       }
       return resumable.map(run => normalizeWorkflowRun(run));
     });
@@ -287,6 +305,7 @@ export async function completeWorkflowRun(
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = metadata
         ? await query(
@@ -302,11 +321,15 @@ export async function completeWorkflowRun(
             [id]
           );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_completed',
-          data: completion,
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_completed',
+            data: completion,
+          },
+          artifacts
+        );
       }
       return update;
     });
@@ -367,6 +390,7 @@ export async function failWorkflowRun(
         }`;
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
@@ -394,11 +418,15 @@ export async function failWorkflowRun(
         ]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_failed',
-          data: { error, ...(exitReason !== undefined ? { exit_reason: exitReason } : {}) },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_failed',
+            data: { error, ...(exitReason !== undefined ? { exit_reason: exitReason } : {}) },
+          },
+          artifacts
+        );
       }
       return update;
     });
@@ -426,6 +454,7 @@ export async function cancelWorkflowRun(
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
@@ -435,12 +464,16 @@ export async function cancelWorkflowRun(
       );
       if ((update.rowCount ?? 0) > 0) {
         const { step_name, ...data } = event ?? {};
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_cancelled',
-          step_name,
-          data,
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_cancelled',
+            step_name,
+            data,
+          },
+          artifacts
+        );
       }
       return update;
     });
@@ -468,6 +501,7 @@ export async function cancelFanOutRun(
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
+    const artifacts = await observeRunTerminalArtifacts(id);
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
@@ -478,11 +512,15 @@ export async function cancelFanOutRun(
         [id, JSON.stringify({ cancelled_reason: reason }), ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertTerminalWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'workflow_cancelled',
-          data: { reason, cancel_reason: 'fan_out' },
-        });
+        await insertTerminalWorkflowEvent(
+          query,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_cancelled',
+            data: { reason, cancel_reason: 'fan_out' },
+          },
+          artifacts
+        );
       }
       return update;
     });

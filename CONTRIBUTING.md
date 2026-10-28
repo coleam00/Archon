@@ -185,8 +185,10 @@ Never add AI attribution, generated-by text, robot emoji, or
    Bot-authored dependency pull requests (`renovate[bot]`) are exempt because
    Renovate generates the body.
 5. Link the issue the pull request addresses with `Closes #<number>`,
-   `Fixes #<number>`, or `Resolves #<number>` in the description. Pull requests
-   without a linked issue will be closed.
+   `Fixes #<number>`, or `Resolves #<number>` in the description. When the
+   issue's dated "Current scope" ruling keeps it open after this pull request,
+   link it with `Refs #<number>` instead. Pull requests without a linked issue
+   will be closed.
 
 Treat repository rules as syntax constraints, not as the writing-quality
 standard. Write in plain, natural language. Use the repository's exact terms

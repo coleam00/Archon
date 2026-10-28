@@ -6,7 +6,7 @@ description: Publish an agent provider as an independently installed process plu
 Community providers ship from their authors' repositories as optional plugins. They
 attach through the provider contract without an import in Archon's registry. Claude,
 Codex, and Pi remain maintained in this repository. The bundled OpenCode and Copilot
-providers are deprecated and will be removed in the next minor release.
+providers are deprecated: no Archon maintainer owns them.
 
 ## Implement the provider contract
 
@@ -142,7 +142,9 @@ its environment and abort signal from Archon. During run preflight it also recei
 run's `cwd`, `execContext` and `settingSources`: check authentication where the run will
 execute (the checkout, or the container for a container `execContext`), not in the
 host process directory. Return `not_checked` when the runtime cannot check without
-spending on a session.
+spending on a session. During run preflight, `not_connected` and `unusable` block the
+run, and `check_failed` lets it start with a warning event. Return `unusable` only when
+the credential is definitely bad.
 
 Optional `IAgentProvider.diagnose({ assistantConfig, signal })` and `listModels({ signal })` hooks
 serve information to hosts through `_archon/diagnose` and `_archon/list_models`.

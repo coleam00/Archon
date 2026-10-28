@@ -18,9 +18,14 @@ import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event'
 import type { WorkflowStoreHarness } from '@archon/workflows/store-conformance';
 import {
   createTransactionView,
+  isConversationResetTarget,
   TERMINAL_RUN_EVENT_TYPES,
   type TransactionView,
 } from '@archon/workflows/file-store';
+import {
+  observeTerminalArtifacts,
+  type TerminalArtifacts,
+} from '@archon/workflows/terminal-record';
 import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
 import type { User } from '@archon/core/schemas/user';
 import type { Codebase } from '@archon/core/schemas/codebase';
@@ -158,10 +163,13 @@ export function createInMemoryWorkflowStore(
     }
   };
   // Unqueued: admission calls it from inside its own queued operation.
-  const apply = async <T>(call: (view: TransactionView) => Promise<T>): Promise<T> => {
+  const apply = async <T>(
+    call: (view: TransactionView) => Promise<T>,
+    artifacts: TerminalArtifacts = new Map()
+  ): Promise<T> => {
     const nextRuns = structuredClone(runs);
     const nextEvents = structuredClone(events);
-    const result = await call(createTransactionView(nextRuns, nextEvents, getCodebase));
+    const result = await call(createTransactionView(nextRuns, nextEvents, getCodebase, artifacts));
     const priorIds = new Set(events.map(event => event.id));
     clearDeletedRunSessions(nextRuns);
     for (const event of nextEvents) {
@@ -189,6 +197,14 @@ export function createInMemoryWorkflowStore(
   };
   const write = <T>(call: (view: TransactionView) => Promise<T>): Promise<T> =>
     serialize(() => apply(call));
+  // Terminal writes record the manifests walked beforehand, as the file store's do.
+  const terminalWrite = <T>(
+    targets: (run: WorkflowRun) => boolean,
+    call: (view: TransactionView) => Promise<T>
+  ): Promise<T> =>
+    serialize(async () =>
+      apply(call, await observeTerminalArtifacts([...runs.values()].filter(targets)))
+    );
   const admission = createInMemoryResourceStartStore(
     input => apply(view => view.createWorkflowRun(input)),
     async id => structuredClone(runs.get(id) ?? null),
@@ -286,15 +302,35 @@ export function createInMemoryWorkflowStore(
     resolveApprovalGate: (id, metadata, gateEvents, expected) =>
       write(view => view.resolveApprovalGate(id, metadata, gateEvents, expected)),
     resolveAndCancelApprovalGate: (id, gateEvents, cancellation, expected) =>
-      write(view => view.resolveAndCancelApprovalGate(id, gateEvents, cancellation, expected)),
+      terminalWrite(
+        run => run.id === id,
+        view => view.resolveAndCancelApprovalGate(id, gateEvents, cancellation, expected)
+      ),
     completeWorkflowRun: (id, completion, metadata) =>
-      write(view => view.completeWorkflowRun(id, completion, metadata)),
+      terminalWrite(
+        run => run.id === id,
+        view => view.completeWorkflowRun(id, completion, metadata)
+      ),
     failWorkflowRun: (id, error, options) =>
-      write(view => view.failWorkflowRun(id, error, options)),
-    cancelWorkflowRun: (id, details) => write(view => view.cancelWorkflowRun(id, details)),
-    cancelFanOutRun: (id, reason) => write(view => view.cancelFanOutRun(id, reason)),
+      terminalWrite(
+        run => run.id === id,
+        view => view.failWorkflowRun(id, error, options)
+      ),
+    cancelWorkflowRun: (id, details) =>
+      terminalWrite(
+        run => run.id === id,
+        view => view.cancelWorkflowRun(id, details)
+      ),
+    cancelFanOutRun: (id, reason) =>
+      terminalWrite(
+        run => run.id === id,
+        view => view.cancelFanOutRun(id, reason)
+      ),
     cancelResumableRunsForConversation: (id, assertMayCancel) =>
-      write(view => view.cancelResumableRunsForConversation(id, assertMayCancel)),
+      terminalWrite(
+        run => isConversationResetTarget(run, id),
+        view => view.cancelResumableRunsForConversation(id, assertMayCancel)
+      ),
     claimWriteback: id => write(view => view.claimWriteback(id)),
     releaseWritebackClaim: id => write(view => view.releaseWritebackClaim(id)),
     setToolCallAttention: (id, streamId, calls) =>

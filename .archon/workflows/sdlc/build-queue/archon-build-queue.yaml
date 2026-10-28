@@ -148,7 +148,7 @@ nodes:
                   id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
                   label: { type: string, pattern: '\S' }
                   does: { type: string, pattern: '\S' }
-                  effect: { type: string, enum: [continue, park] }
+                  effect: { type: string, enum: [continue, ready, park] }
                   ruling: { type: string }
                 required: [id, label, does, effect, ruling]
             if_unanswered: { type: string, pattern: '\S' }
@@ -290,7 +290,7 @@ nodes:
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [continue, park] }
+        decision: { type: string, enum: [continue, ready, park] }
         section: { type: string }
         summary: { type: string }
       required: [decision, section, summary]

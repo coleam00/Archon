@@ -727,12 +727,23 @@ failed check also prints a warning naming the path:
 The artifact manifest records paths, sizes, and typed metadata observed at termination.
 It survives later file deletion, but does not preserve file contents or contain previews.
 Its `limitations` array identifies missing roots, unreadable entries, invalid metadata,
-and excluded links. Files may change during the scan, especially during cancellation:
-this is an observation, not an atomic filesystem snapshot. The human terminal-record display
-lists up to 20 non-engine file paths, counts engine-internal files instead of listing them,
-and reports truncation and inventory limitations. The persisted manifest and `--json` output
-remain exhaustive. The separate leave-behind file listing reflects the filesystem when you
-query it.
+and excluded links. The scan is bounded, and each bound is a limitation of kind
+`unsupported_entry`:
+
+- `node_modules` and `.git` directories are not walked; each is recorded with code
+  `excluded_directory`.
+- The scan stops after 10,000 entries. It records code `entry_limit` at the first entry it
+  did not list; entries after it in sorted depth-first order are not listed.
+
+The scan runs just before the terminal write, outside its database transaction. Files may
+change during the scan, especially during cancellation: this is an observation, not an
+atomic filesystem snapshot. When a run's artifacts directory was not scanned before its
+terminal write, the manifest is empty and records a `root_unavailable` limitation with code
+`not_observed`. The human terminal-record display lists up to 20 non-engine file paths,
+counts engine-internal files instead of listing them, and reports truncation and inventory
+limitations with their codes. The persisted manifest and `--json` output list every entry the
+scan observed within those bounds. The separate leave-behind file listing reflects the
+filesystem when you query it.
 
 `leave_behind.artifactFiles` lists the files a person or an agent would open, capped at
 200 for display. Each directory contributes its own files before its subdirectories,

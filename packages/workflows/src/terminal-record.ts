@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { getRunArtifactsDirForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
 import {
+  type ArtifactManifest,
   RUN_GRAPH_METADATA_KEY,
   runGraphSchema,
   terminalRecordSchema,
@@ -224,15 +225,65 @@ function selectRecordedReturn({ graph, nodes, outputs }: NodeEventFold): Termina
   return { availability: 'unavailable', node_id: selected, reason: 'output_not_persisted' };
 }
 
+function runArtifactsDir(run: Pick<WorkflowRun, 'id' | 'output_root'>): string | null {
+  const root = resolveRunStorageRoot(run, null);
+  return root === null ? null : getRunArtifactsDirForRoot(root, run.id);
+}
+
+/**
+ * Walk the run's artifacts directory for its terminal record. This touches the
+ * filesystem, so never await it while holding a database write transaction or the
+ * file-store lock.
+ */
+export async function observeRunArtifacts(
+  run: Pick<WorkflowRun, 'id' | 'output_root'>
+): Promise<ArtifactManifest> {
+  return observeArtifactManifest(
+    runArtifactsDir(run),
+    resolveRunStorageRoot(run, null) ?? undefined,
+    run.id
+  );
+}
+
+/** Artifact manifests walked before a terminal transaction, keyed by run id. */
+export type TerminalArtifacts = ReadonlyMap<string, ArtifactManifest>;
+
+export async function observeTerminalArtifacts(
+  runs: readonly Pick<WorkflowRun, 'id' | 'output_root'>[]
+): Promise<TerminalArtifacts> {
+  return new Map(
+    await Promise.all(runs.map(async run => [run.id, await observeRunArtifacts(run)] as const))
+  );
+}
+
+/**
+ * The manifest a terminal write records: `observed` when it was walked for the run's
+ * current artifacts directory. A run can miss its walk between the caller's pre-read and
+ * its transaction (a reset finds a run that became resumable, or a pending run gains its
+ * `output_root`); it then records an empty manifest marked `not_observed`.
+ */
+export function terminalArtifactsFor(
+  run: Pick<WorkflowRun, 'id' | 'output_root'>,
+  observed: ArtifactManifest | undefined
+): ArtifactManifest {
+  const root = runArtifactsDir(run);
+  if (observed !== undefined && observed.root === root) return observed;
+  return {
+    root,
+    files: [],
+    limitations: [{ path: '', kind: 'root_unavailable', code: 'not_observed' }],
+  };
+}
+
 /** Fold ordered durable events; never reconstruct producer values from artifact contents. */
-export async function buildTerminalRecord(input: {
-  run: Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'metadata' | 'output_root'>;
+export function buildTerminalRecord(input: {
+  run: Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'metadata'>;
   events: readonly TerminalRecordEvent[];
-}): Promise<TerminalRecord> {
-  const { run, events } = input;
+  artifacts: ArtifactManifest;
+}): TerminalRecord {
+  const { run, events, artifacts } = input;
   const folded = foldNodeEvents(run, events);
   const { nodes, failureOrder } = folded;
-  const root = resolveRunStorageRoot(run, null);
   const worktreeDisposition = readWorktreeDisposition(run);
   return terminalRecordSchema.parse({
     run_id: run.id,
@@ -242,11 +293,7 @@ export async function buildTerminalRecord(input: {
     first_failed_node: [...failureOrder].sort((left, right) => left[1] - right[1])[0]?.[0] ?? null,
     nodes: [...nodes.values()],
     returns: selectRecordedReturn(folded),
-    artifacts: await observeArtifactManifest(
-      root === null ? null : getRunArtifactsDirForRoot(root, run.id),
-      root ?? undefined,
-      run.id
-    ),
+    artifacts,
     ...(worktreeDisposition ? { worktree_disposition: worktreeDisposition } : {}),
   });
 }

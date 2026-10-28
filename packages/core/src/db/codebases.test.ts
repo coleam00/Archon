@@ -473,9 +473,20 @@ describe('codebases', () => {
       expect(result).toBeDefined();
       expect(result?.name).toBe('test-repo');
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_codebases WHERE default_cwd = $1 ORDER BY created_at DESC LIMIT 1',
-        ['/workspace/test-repo']
+        'SELECT * FROM remote_agent_codebases ORDER BY created_at DESC'
       );
+    });
+
+    test('returns the newest row whose default_cwd matches, skipping others', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { ...mockCodebase, id: 'other', default_cwd: '/workspace/other' },
+          { ...mockCodebase, id: 'newer', default_cwd: '/workspace/test-repo' },
+          { ...mockCodebase, id: 'older', default_cwd: '/workspace/test-repo' },
+        ])
+      );
+
+      expect((await findCodebaseByDefaultCwd('/workspace/test-repo'))?.id).toBe('newer');
     });
 
     test('should return null when codebase not found', async () => {

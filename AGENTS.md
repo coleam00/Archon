@@ -180,7 +180,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Branch from `dev` and open the pull request back to `dev`.
 - Use [`.github/pull_request_template.md`](.github/pull_request_template.md). Keep its required sections, remove instructional comments and irrelevant conditional sections, and describe the problem before the implementation.
 - Review the complete diff against the actual base branch before opening the pull request.
-- Link the source issue with a closing keyword when the work has one.
+- Link the source issue as [`CONTRIBUTING.md`](CONTRIBUTING.md) says: a closing keyword, or `Refs` when the issue's dated ruling keeps it open after the pull request.
 - Keep titles concise and outcome-focused. Do not add AI attribution to commits or pull requests.
 
 ## Find current facts

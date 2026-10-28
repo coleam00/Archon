@@ -317,7 +317,7 @@ docker compose exec -u appuser app bun run cli plugin add Wirasm/archon-video
 
 `plugin update`, `plugin remove` and `plugin list` work the same way. Plugins live in `/.archon/plugins` on the data volume, so they survive restarts and rebuilds. See [Forge operations](/reference/forge/#install-the-github-plugin) and [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs).
 
-The bundled SDLC workflows use `gh` by default. To use the forge plugin instead, set `ARCHON_SDLC_FORGE=forge` and install forge-github v0.12.1 or later; some pack steps still need `gh`. The plugin looks for `GH_TOKEN`, then `GITHUB_TOKEN`, then the container's `gh` login. Your host's `gh` login is not visible inside the container. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
+The bundled SDLC workflows use `gh` by default. To use the forge plugin instead, set `ARCHON_SDLC_FORGE=forge` and install forge-github v0.13.0 or later; some pack steps still need `gh`. The plugin looks for `GH_TOKEN`, then `GITHUB_TOKEN`, then the container's `gh` login. Your host's `gh` login is not visible inside the container. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
 The image includes a verified Slack plugin outside the data volume. When `SLACK_BOT_TOKEN` is set, in the container environment or in `/.archon/.env`, the entrypoint installs it offline into `/.archon/plugins` before the server starts, and logs the release and commit. You don't run `plugin add` for Slack. Slack still needs both `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` to connect; see [Slack](/adapters/slack/).
 

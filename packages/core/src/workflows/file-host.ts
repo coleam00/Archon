@@ -32,7 +32,7 @@ import {
   findRemoteOwner,
   assertProjectRegistrationAvailable,
 } from '../services/registration-remote';
-import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
+import { assertAbsoluteDefaultCwd, defaultCwdKey, isSameDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
 import { completedRunWorktreeDeps, createWorkflowDeps } from './store-adapter';
@@ -120,11 +120,16 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       listCodebaseClaims: async () => readPublicCodebases(),
       findCodebaseByDefaultCwd: async cwd =>
         (await readPublicCodebases())
-          .filter(row => row.default_cwd === cwd)
+          .filter(row => isSameDefaultCwd(row.default_cwd, cwd))
           .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())[0] ?? null,
       findCodebaseByPathPrefix: async cwd =>
         (await readPublicCodebases())
-          .filter(row => isPathInside(row.default_cwd, cwd, { includeRoot: true, lexical: true }))
+          .filter(row =>
+            isPathInside(defaultCwdKey(row.default_cwd), defaultCwdKey(cwd), {
+              includeRoot: true,
+              lexical: true,
+            })
+          )
           .sort((a, b) => resolve(b.default_cwd).length - resolve(a.default_cwd).length)[0] ?? null,
       findCodebaseByName: async name =>
         (await readPublicCodebases())

@@ -106,7 +106,7 @@ const FACTS: PrFacts = {
   mergeable: 'clean',
   checks: { state: 'green', failing: [], pending: [] },
   threads: { unresolved: 0, urls: [] },
-  verdict: { state: 'ready', reviewed: HEAD, url: `${PR_URL}#issuecomment-1` },
+  verdict: { state: 'ready', reviewed: HEAD, url: `${PR_URL}#issuecomment-1`, contract: 'complete' },
 };
 
 const BASE = { head: OLD, checks: { state: 'green', failing: [], pending: [] } } as const;
@@ -131,7 +131,7 @@ describe('the merge record and the gate', () => {
     const refused = (facts: Partial<PrFacts>, head = HEAD) => gateRefusals({ ...FACTS, ...facts }, head, BASE);
     expect(refused({ verdict: { ...FACTS.verdict, reviewed: OLD } })).toEqual([`its review verdict is for ${OLD}, not ${HEAD}`]);
     expect(refused({ verdict: { ...FACTS.verdict, state: 'unstamped' } })).toEqual(['its review verdict is unstamped']);
-    expect(refused({ verdict: { state: 'not_ready', reviewed: HEAD, url: null } })).toEqual(['its review verdict is not_ready']);
+    expect(refused({ verdict: { state: 'not_ready', reviewed: HEAD, url: null, contract: null } })).toEqual(['its review verdict is not_ready']);
     expect(refused({ checks: { state: 'pending', failing: [], pending: ['test (ubuntu)'] } })).toEqual([
       'CI at its head is pending (test (ubuntu))',
     ]);
@@ -164,12 +164,21 @@ describe('the merge record and the gate', () => {
     );
   });
 
-  test('a review comment carries the reviewed commit and the verdict in stamped lines; an older one has no verdict', () => {
-    expect(readReviewStamp(reviewCommentBody(HEAD, true, '# Report'))).toEqual({ reviewed: HEAD, ready: true, report: '# Report' });
-    expect(readReviewStamp(reviewCommentBody(HEAD, false, '# Report'))?.ready).toBe(false);
+  test('a review comment carries the reviewed commit, the verdict and the contract coverage in stamped lines; an older one has none', () => {
+    expect(readReviewStamp(reviewCommentBody(HEAD, true, 'complete', '# Report'))).toEqual({ reviewed: HEAD, ready: true, contract: 'complete', report: '# Report' });
+    expect(readReviewStamp(reviewCommentBody(HEAD, false, 'open', '# Report'))?.ready).toBe(false);
+    // Ready does not imply complete: a Ready review that left an operator check open reads back open.
+    expect(readReviewStamp(reviewCommentBody(HEAD, true, 'open', '# Report'))).toMatchObject({ ready: true, contract: 'open' });
+    expect(readReviewStamp(`${REVIEW_MARKER}\nReviewed commit: \`${HEAD}\`\nVerdict: ready\n\n# Report`)).toEqual({
+      reviewed: HEAD,
+      ready: true,
+      contract: null,
+      report: '# Report',
+    });
     expect(readReviewStamp(`${REVIEW_MARKER}\nReviewed commit: \`${HEAD}\`\n\n# Report`)).toEqual({
       reviewed: HEAD,
       ready: null,
+      contract: null,
       report: '# Report',
     });
     expect(readReviewStamp('Verdict: ready')).toBeNull();
@@ -281,7 +290,7 @@ interface FakePr {
   readonly merged?: readonly number[];
   readonly closed?: readonly number[];
   /** What `gh pr list --author` reports open. */
-  readonly ownPrs?: readonly { number: number; url: string; isDraft?: boolean; headRefName?: string }[];
+  readonly ownPrs?: readonly { number: number; url: string; isDraft?: boolean; headRefName?: string; isCrossRepository?: boolean }[];
   /** `gh pr list --author` fails. */
   readonly ownPrsFail?: boolean;
   readonly baseUnreadable?: boolean;
@@ -348,7 +357,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (forgePr.ownPrsFail) return out(1, '', 'HTTP 502');
     // Each row carries only the fields \`--json\` selected, as gh reports them.
     const selected = String(argv[argv.indexOf('--json') + 1]).split(',');
-    const rows = (forgePr.ownPrs ?? []).map(row => Object.fromEntries(selected.filter(field => field in row).map(field => [field, row[field]])));
+    // A row is on a hand-named branch in the repository itself unless the test says otherwise.
+    const rows = (forgePr.ownPrs ?? []).map(listed => ({ headRefName: 'hand-' + String(listed.number), isCrossRepository: false, ...listed }))
+      .map(row => Object.fromEntries(selected.filter(field => field in row).map(field => [field, row[field]])));
     return out(0, JSON.stringify(rows));
   }
   if (argv[1] === 'pr' && argv[2] === 'merge') {
@@ -389,7 +400,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
 `;
 }
 
-const REVIEWED: GhCommentRow = { id: 1, author: 'Maintainer', body: reviewCommentBody(HEAD, true, '# Review report') };
+const REVIEWED: GhCommentRow = { id: 1, author: 'Maintainer', body: reviewCommentBody(HEAD, true, 'complete', '# Review report') };
 
 function run(
   at: Install,
@@ -499,19 +510,22 @@ const BASE_RED = {
 };
 
 describe('the merge queue scripts', () => {
-  test("a maintainer who opted in gets their own open pull requests enrolled, once, and drafts and delivered ones left alone", () => {
+  test("a maintainer who opted in gets their own open pull requests enrolled, once, and drafts, delivered ones and the build queue's left alone", () => {
     const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
     seed(at, item());
     const ownPrs = [
       { number: 42, url: PR_URL, isDraft: false },
-      // Hand-opened on a branch shaped like a build branch; no work item records it.
+      // A running round's pull request: a build/ branch in the repository, recorded nowhere yet.
       { number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false, headRefName: 'build/7-fix-zzzzzzzz' },
       { number: 51, url: PR_URL.replace(/42$/, '51'), isDraft: true },
+      // Hand-made: its own branch name, or a build/ name on a fork.
+      { number: 52, url: PR_URL.replace(/42$/, '52'), isDraft: false },
+      { number: 53, url: PR_URL.replace(/42$/, '53'), isDraft: false, headRefName: 'build/7-fix-zzzzzzzz', isCrossRepository: true },
     ];
     const picked = run(at, 'facts', {}, { pr: { ownPrs } });
     const output = ok(picked) as { items: { item: { number: number }; own_pr: boolean }[] };
-    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [50, true]]);
-    expect(stored(at, 50).value?.facts.own_pr?.url).toBe(PR_URL.replace(/42$/, '50'));
+    expect(output.items.map(entry => [entry.item.number, entry.own_pr])).toEqual([[7, false], [52, true], [53, true]]);
+    expect(stored(at, 50).value).toBeNull();
     expect(stored(at, 51).value).toBeNull();
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toHaveLength(1);
   }, 60_000);
@@ -765,6 +779,15 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       items: [],
       settled: [{ item: SUBJECT, pr: PR, status: 'merged' }],
     });
+  }, 60_000);
+
+  test('a ready item whose only pull request is the one triage routed it to continue is swept, and that PR never enrolls', () => {
+    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
+    seed(at, item({ ...BUILT, rounds: [] }, undefined, { facts: { triage: { ...TRIAGE, pull_request: 42 }, build: { ...BUILT, rounds: [] } } }));
+    const output = ok(run(at, 'facts', {}, { pr: { ownPrs: [{ number: 42, url: PR_URL, isDraft: false }] } })) as { items: { pr: { number: number }; own_pr: boolean }[]; settled: unknown[] };
+    expect(output.items.map(entry => [entry.pr.number, entry.own_pr])).toEqual([[42, false]]);
+    expect(output.settled).toEqual([]);
+    expect(stored(at, 42).value).toBeNull();
   }, 60_000);
 
   test('a failed base read still records a no-PR settlement and releases its claim', () => {
@@ -1385,6 +1408,20 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
     expect(ok(on(at, 'facts', {}, { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
   }, 60_000);
 
+  test("a trusted Ready review stamped open reaches the sweep's facts as open coverage", () => {
+    const at = install();
+    seed(at, item());
+    const open = { ...REVIEWED, body: reviewCommentBody(HEAD, true, 'open', '# Review report') };
+    const output = ok(on(at, 'facts', { comments: [open] })) as { items: { facts: PrFacts }[] };
+    expect(output.items[0]?.facts.verdict).toMatchObject({ state: 'ready', contract: 'open' });
+    // A Ready review published before coverage was stamped has none, so no merge closes the issue on it.
+    const unstamped = { ...REVIEWED, body: `${REVIEW_MARKER}\nReviewed commit: \`${HEAD}\`\nVerdict: ready\n\n# Review report` };
+    const fresh = install();
+    seed(fresh, item());
+    const old = ok(on(fresh, 'facts', { comments: [unstamped] })) as { items: { facts: PrFacts }[] };
+    expect(old.items[0]?.facts.verdict).toMatchObject({ state: 'ready', contract: null });
+  }, 60_000);
+
   test('a review comment from anyone but a listed maintainer is no verdict', () => {
     const at = install();
     seed(at, item());
@@ -1418,7 +1455,7 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
   }, 60_000);
 
   test('the gate refuses a verdict given at another head, and merges nothing', () => {
-    const stale = on(install(), 'gate', { args, comments: [{ ...REVIEWED, body: reviewCommentBody(OLD, true, '# Review report') }] });
+    const stale = on(install(), 'gate', { args, comments: [{ ...REVIEWED, body: reviewCommentBody(OLD, true, 'complete', '# Review report') }] });
     expect(stale.code).toBe(1);
     expect(JSON.parse(stale.stdout).refusals).toEqual([`its review verdict is for ${OLD}, not ${HEAD}`]);
     expect(merges(stale)).toEqual([]);

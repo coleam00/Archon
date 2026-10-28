@@ -95,7 +95,7 @@ Repository runs get their own git worktree by default, so several can work on on
 The bundled `sdlc` pack is a working factory for a repository:
 
 1. **You open an issue.** `archon-intake` checks it against the current code and decides what it needs: a plan, an investigation, straight to delivery, or a maintainer's look.
-2. **The build queue picks it up.** `archon-build-queue` claims the next ready issue, writes the brief and runs `archon-ship`: plan, implement, review through specialist lenses, fix the findings, wait for CI. It stops at a pull request whose review says Ready.
+2. **The build queue picks it up.** `archon-build-queue` claims the next ready issue, writes the brief and runs `archon-ship`: plan, implement, review through specialist lenses, fix the findings, wait for CI. It stops at a pull request whose review says Ready, or one a maintainer's `ready` answer hands on; the merge gate checks either the same way.
 3. **The merge queue lands it.** `archon-merge-queue` merges the clear ready pull requests that merge cleanly, through a gate that checks the review verdict and CI at the head commit and that the base branch is not red. The queue judges open review threads itself and sends a pull request that conflicts back to the build queue.
 4. **You answer what's unclear.** A scope question, a schema change or a stuck round becomes one attention item with a recommendation. Your answer is written into the issue as the new scope.
 5. **Nothing found along the way is lost.** `archon-discoveries` reads what runs noticed outside their task and files it, tracks it on an existing issue, or drops it.

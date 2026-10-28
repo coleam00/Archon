@@ -13,12 +13,12 @@
  * out of `git show <tag>:…/sqlite.ts` recovers the vintage DDL exactly — without
  * checking out each tag or executing old code against its own dependency tree.
  * Up to v0.10.0 that literal is uninterpolated. From v0.11.0 it may interpolate
- * `${helper('literal')}`, where `helper` is a module-level function in the same
- * file whose whole body returns one template that interpolates only its single
- * string parameter; the extractor substitutes that call from the tag's own
- * source. Any other `${…}`, or a missing signature, makes this script FAIL
- * instead of writing a wrong fixture. The fix is a deliberate extractor change,
- * never a workaround.
+ * `${helper('literal')}`, where `helper` is a module-level function (exported
+ * or not) in the same file whose whole body returns one template that
+ * interpolates only its single string parameter; the extractor substitutes that
+ * call from the tag's own source. Any other `${…}`, or a missing signature,
+ * makes this script FAIL instead of writing a wrong fixture. The fix is a
+ * deliberate extractor change, never a workaround.
  *
  * Fixtures are checked in (unlike the Postgres baselines, read at CI time)
  * because the test that consumes them must also run in the shallow checkout of
@@ -74,12 +74,14 @@ function git(...args: string[]): { ok: boolean; stdout: string; stderr: string }
 }
 
 /**
- * The body of `function name(param: string): string { return `…`; }` in `source`,
+ * The body of `[export] function name(param: string): string { return `…`; }` in `source`,
  * with `arg` substituted for `${param}`. Throws when the helper is absent or its
  * body is anything but that single template return — an unresolvable call.
  */
 function resolveHelperCall(tag: string, source: string, name: string, arg: string): string {
-  const header = new RegExp(`\\nfunction ${name}\\((\\w+): string\\): string \\{\\s*return \``);
+  const header = new RegExp(
+    `\\n(?:export )?function ${name}\\((\\w+): string\\): string \\{\\s*return \``
+  );
   const match = header.exec(source);
   const unresolvable = new Error(
     `${tag}: cannot resolve \${${name}(…)} in createSchema() — extractor must be revisited`

@@ -20,6 +20,8 @@ import {
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
 } from '@archon/isolation/types';
 import { createMockLogger } from '../../test/mocks/logger';
 import { MockPlatformAdapter } from '../../test/mocks/platform';
@@ -247,6 +249,8 @@ mock.module('@archon/isolation', () => ({
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
+  WORKTREE_REMOVAL_OWNER,
+  WorktreeRemovalInProgressError,
   worktreeRegistrationMetadata,
   IsolationResolver: MockIsolationResolver,
   IsolationBlockedError: class IsolationBlockedError extends Error {

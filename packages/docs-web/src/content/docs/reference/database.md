@@ -108,7 +108,7 @@ database storage.
 
 With `store: database` (the default), **leave `DATABASE_URL` unset** in your shell and Archon's environment files. The app will automatically:
 - Create a SQLite database at `~/.archon/archon.db`
-- Initialize the schema on first run
+- Initialize the schema on first run and skip startup writes when its completion proof is current
 - Use this database for operations with `store: database`
 
 **Pros:**
@@ -127,17 +127,23 @@ transaction rolls back and reruns from the start, with a growing pause of up to 
 attempts. There is no deadline, so a run whose write is waiting stays alive until the lock
 clears. While it waits, Archon logs `db.sqlite_busy_waiting` at warn level every 30
 seconds. A repeating warning points at a process that is holding the lock. Other SQLite
-errors still fail right away.
+errors still fail right away. Schema convergence uses the same retry policy during
+synchronous database open (`operation: 'open'`); a needed upgrade waits for the writer
+before the constructor returns.
 
-Worktree cleanup retries its initial registration claim while SQLite is busy. Once
-that claim succeeds, it does not replay the transaction: filesystem deletion cannot
-safely be repeated. A later failure rolls back registration retirement and is reported
-to the caller.
+Worktree cleanup first claims the registration with a short write that records the
+removing process in its metadata (`worktree_removal_owner`). Git and filesystem
+removal then run with no database transaction open. A second short write retires the
+registration after success, or releases the claim after a failure, leaving the
+registration active and the error reported. While a claim is held, a same-workflow
+registration, adoption, and a run start in that checkout are refused. A claim whose
+process has exited on this host is released by the next write that meets it; one from
+another host stays until an operator removes the key from the environment's metadata.
 
-Cleanup holds registration exclusion through local checkout and branch removal.
+Cleanup's claim holds registration exclusion through local checkout and branch removal.
 Completion and merged cleanup retain remote branches with a warning, including
 with force, because registration ownership cannot be proved after the claim
-commits. No remote deletion runs under the SQLite writer. Enable GitHub's
+commits. Enable GitHub's
 **Automatically delete head branches** setting for merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)
@@ -279,9 +285,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - One row per browser endpoint (`UNIQUE(endpoint)`), owned by the user who enabled it and cascaded on user deletion; only that owner can delete it
   - Stores the endpoint and its encryption keys; every row on the install receives notices, and the attention router removes rows the push service reports as expired (404/410)
 
-- **`remote_agent_schema_version`** - Diagnostic schema vintage
+- **`remote_agent_schema_version`** - Schema vintage and completion metadata
   - Records the Archon build that created the database and the build that last applied its schema
   - A single row (`id = 1`); databases predating this table retain an unknown creation version
+  - Nullable `schema_fingerprint` is separate, adapter-owned completion metadata. SQLite publishes it only after successful convergence; PostgreSQL reserves the same column. Older writers can omit it
 
 - **`remote_agent_state_revisions`** - Durable project and install JSON documents and their audit history
   - Primary key: `(project_key, name, revision)`; optimistic writes append a revision
@@ -320,6 +327,15 @@ for both fresh installs and upgrades. SQLite initializes its schema
 in `packages/core/src/db/adapters/sqlite.ts` and upgrades it in
 `packages/core/src/db/adapters/sqlite-migrations.ts`. Neither adapter uses a numbered
 migration runner or migration ledger.
+
+SQLite first checks its completion fingerprint in a read snapshot. It covers the schema
+DDL and migration steps a convergence executes (comments and layout excluded), the Archon
+build, and the SQLite schema counter; pending legacy credentials or
+a missing/behind event-sequence head also require repair. A current database opens without
+taking the writer lock. Otherwise, a single writer transaction rechecks, converges, and
+publishes the fingerprint atomically. Schema changes invalidate the proof; ordinary event
+inserts do not. Failed tolerated migrations leave no completion stamp and are retried on
+the next open. Diagnostic creation and applied-build vintages keep their existing meanings.
 
 ### Workflow origin compatibility
 

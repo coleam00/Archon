@@ -22,7 +22,7 @@ import {
   RUN_GRAPH_METADATA_KEY,
   terminalRecordSchema,
 } from '@archon/workflows/schemas/terminal-record';
-import { buildTerminalRecord } from '@archon/workflows/terminal-record';
+import { buildTerminalRecord, observeRunArtifacts } from '@archon/workflows/terminal-record';
 import { fanOutOutcome as fanOutOutcomeOf } from '@archon/workflows/schemas/fan-out-outcome';
 import {
   nodeExecutionMetadataSchema,
@@ -438,7 +438,11 @@ describe('GET /api/workflows/runs/:runId', () => {
         { node_id: 'prepare', state: 'pending' },
         { node_id: 'flaky', state: 'failed', error: 'flaky failed' },
       ]);
-      const record = await buildTerminalRecord({ run: graphRun, events });
+      const record = buildTerminalRecord({
+        run: graphRun,
+        events,
+        artifacts: await observeRunArtifacts(graphRun),
+      });
       expect(run.nodes).toEqual(record.nodes);
     });
 
@@ -448,7 +452,11 @@ describe('GET /api/workflows/runs/:runId', () => {
         event('node_started', 'prepare'),
         event('node_failed', 'prepare', { error: 'prepare failed' }),
       ];
-      const record = await buildTerminalRecord({ run: graphRun, events });
+      const record = buildTerminalRecord({
+        run: graphRun,
+        events,
+        artifacts: await observeRunArtifacts(graphRun),
+      });
       const run = await getNodes(graphRun, [
         ...events,
         event('workflow_failed', null, { terminal_record: record }),
@@ -475,7 +483,11 @@ describe('GET /api/workflows/runs/:runId', () => {
           fan_out_outcome: fanOutOutcome,
         }),
       ];
-      const record = await buildTerminalRecord({ run: graphRun, events });
+      const record = buildTerminalRecord({
+        run: graphRun,
+        events,
+        artifacts: await observeRunArtifacts(graphRun),
+      });
       const run = await getNodes(graphRun, [
         ...events,
         event('workflow_failed', null, { terminal_record: record }),

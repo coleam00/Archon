@@ -718,8 +718,8 @@ export function registerAdapterTests(shared: ReturnType<typeof setupSqliteTests>
 
         const versionRows = raw_query(
           shared.currentDbPath,
-          'SELECT app_version FROM remote_agent_schema_version'
-        ) as { app_version: string }[];
+          'SELECT app_version, schema_fingerprint FROM remote_agent_schema_version'
+        ) as { app_version: string; schema_fingerprint: string | null }[];
         expect(versionRows).toHaveLength(0);
         expect(await readSchemaVersion(db)).toBeNull();
       });

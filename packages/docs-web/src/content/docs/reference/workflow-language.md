@@ -2654,7 +2654,8 @@ exists, otherwise the same fold over the events recorded so far. Active, resumed
 runs therefore show each node's current state.
 
 The manifest contains file metadata, not content previews. Its `limitations` identify
-incomplete observations. Cancellation can record pending or running nodes and files
+incomplete observations. The scan skips `node_modules` and `.git` directories and stops at
+10,000 entries; each bound is recorded in `limitations`. Cancellation can record pending or running nodes and files
 that are still changing; terminalization does not make the filesystem snapshot atomic.
 You do not need a new YAML field or collector node to obtain these facts.
 

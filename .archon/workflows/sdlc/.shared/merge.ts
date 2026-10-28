@@ -3,8 +3,9 @@
  * facts its gate reads before every merge.
  *
  * The merge queue takes the items the build queue finished: a work item whose
- * `facts.build` is `ready` names its pull request in its last round. The queue claims
- * them with intake's claim, so an item has one owner at a time across the three queues.
+ * `facts.build` is `ready`. Its pull request is the latest one a build round recorded,
+ * or, when none did, the one triage routed the item to continue. The queue claims them
+ * with intake's claim, so an item has one owner at a time across the three queues.
  *
  * Every read and the merge go through the run's forge source (./forge.ts): GitHub's
  * GraphQL API and `gh pr merge` on `gh`, or on `forge` the operations in
@@ -12,11 +13,12 @@
  * refusals do not depend on which one answered.
  */
 
+import { itemPullRequest } from './build.ts';
 import { forgeSource, invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
 import { isOwnPr } from './own-prs.ts';
 import { ghGraphql, ghIssueComments, viewPr } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
-import { readReviewStamp } from './review-comment.ts';
+import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
 /** What a merge choice does when a person picks it; archon-merge-queue.yaml declares the same enum. */
@@ -132,11 +134,14 @@ export interface MergeSettled {
 
 export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
 
-/** The pull request the build queue's last round delivered on the item, or the enrolled own pull request, or null. */
+/**
+ * The item's pull request as the build queue resolves it (its latest round's, else the
+ * one triage routed it to continue), or the enrolled own pull request, or null.
+ */
 export function itemPr(doc: WorkItem): QualifiedPr | null {
-  const url =
-    [...(doc.facts.build?.rounds ?? [])].reverse().find(round => round.pr_url !== '')?.pr_url ?? doc.facts.own_pr?.url;
-  return url === undefined ? null : prFromUrl(url);
+  const built = itemPullRequest(doc.facts.build?.rounds ?? [], doc.facts.triage, doc.subject.repo);
+  if (built !== null) return built;
+  return doc.facts.own_pr === undefined ? null : prFromUrl(doc.facts.own_pr.url);
 }
 
 /** `https://<host>/<owner>/<name>/pull/<number>`; anything else refuses. */
@@ -209,6 +214,8 @@ export interface Verdict {
   /** The commit the verdict is about. */
   readonly reviewed: string | null;
   readonly url: string | null;
+  /** The stamped contract coverage; null when the comment predates the stamp or none is trusted. */
+  readonly contract: ContractCoverage | null;
 }
 
 const MERGEABLE = ['clean', 'conflict', 'unknown'] as const;
@@ -353,10 +360,10 @@ function trustedReview(comments: readonly Comment[], maintainers: ReadonlySet<st
     return stamp !== null && trusted ? [{ stamp, url: comment.url }] : [];
   });
   const [review, ...others] = reviews;
-  if (review === undefined) return { state: 'none', reviewed: null, url: null };
-  if (others.length > 0) return { state: 'duplicate', reviewed: null, url: null };
+  if (review === undefined) return { state: 'none', reviewed: null, url: null, contract: null };
+  if (others.length > 0) return { state: 'duplicate', reviewed: null, url: null, contract: null };
   const state = review.stamp.ready === null ? 'unstamped' : review.stamp.ready ? 'ready' : 'not_ready';
-  return { state, reviewed: review.stamp.reviewed, url: review.url };
+  return { state, reviewed: review.stamp.reviewed, url: review.url, contract: review.stamp.contract };
 }
 
 const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {

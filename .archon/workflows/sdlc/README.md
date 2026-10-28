@@ -76,7 +76,9 @@ pack's own review verdict is unchanged: threads gate delivery, not the review.
 A pull request counts as ready only at the commit its review comment stamps. The
 comment's first lines are stamped by `publish-review` from the round's certified
 output ([`.shared/review-comment.ts`](.shared/review-comment.ts)): the reviewed commit
-and the verdict, which the merge queue's gate reads. CI never
+and the verdict, which the merge queue's gate reads, and the contract coverage
+(`complete` only when the review left nothing open), which the sweep reads before it
+lets a merge close the issue. CI never
 marks ready a head carrying commits the round's review did not cover. Commits pushed
 after a run ends, by a fixer or by hand, are reviewed by a continuation delivery of
 that pull request, whose first round reviews the whole change before CI marks it
@@ -116,8 +118,8 @@ gate and record read through `pr.view`, `pr.merge-state`, `checks.state`,
 `checks.commit`, `pr.threads` and `workitem.comments`, and the gate merges through
 `pr.merge` pinned to the head; `facts` refuses a plugin missing any of them before it
 claims an item. Own-PR enrollment does not run on `forge`, because the contract has
-no read for a maintainer's open pull requests, and the sweep agent's failed-job
-reruns, log reads and closing-reference body edit still use `gh`. The gate itself
+no read for a maintainer's open pull requests, and the sweep agent's issue read,
+failed-job reruns, log reads and closing-reference body edit still use `gh`. The gate itself
 doesn't refuse over threads; the sweep holds a merge only for a thread that raises a defect in code the
 pull request changes or makes reachable. Delivery reads, answers and resolves review
 threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,
@@ -396,8 +398,9 @@ request, never the state.
   The file is a JSON array whose entries are forge logins, or objects naming one with
   opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
   login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
-  open pull requests in the merge queue, except one a work item already names (see
-  Pickup there); on the `gh` source only. No file means an empty list, so every author is outside. Any other
+  open pull requests in the merge queue, except one a work item already names or one
+  from a `build/` branch in the repository itself, so a hand-made pull request on a
+  `build/` branch does not enroll (see Pickup there); on the `gh` source only. No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
@@ -439,7 +442,10 @@ request, never the state.
   outcome writes the work item and labels, then comments on the issue with a link to
   the original or the change and closes it as `duplicate` or `completed`. A
   duplicate's original gets a comment linking back. Each comment is one marked
-  comment, so a repeated run edits it rather than adding another. An item already
+  comment, so a repeated run edits it rather than adding another. The one exception, on
+  the `gh` source only: a comment write that lands but returns a retryable response (5xx, or a rate limit) or no response
+  is repeated, and if the listing lags it posts a second marked comment; the next upsert then refuses on the two, and an
+  operator deletes one. An item already
   closed for the verdict's reason (an earlier run that stopped after its close)
   still records the work item and its labels, but posts no comment and doesn't close
   it again; one closed for another reason fails the run before any comment. A demoted item and every other verdict close nothing.
@@ -580,13 +586,17 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   scope" section, reads it back, and records the answer: a `continue` choice starts
   the item's next round at once, a detached `archon-build-queue --input number=<n>`
   run on the run config (`--config-from-run`) and the `retriage_as` and
-  `round_limit` the answered run started with, and a
-  `park` choice stops working the item until a re-triage. If that launch fails, the
-  item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
+  `round_limit` the answered run started with. A `ready` choice hands the pull
+  request to the merge queue as it stands, as after a maintainer finished it by hand;
+  the merge gate still checks it, and an item with no pull request refuses the answer.
+  A `park` choice stops working the item until a re-triage. If a continue's launch
+  fails, the item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
   re-triage starts it over.
-- **Record.** The work item's `facts.build` holds the item's status (`next`,
-  `asking`, `ready` or `parked`), the brief its next round starts from, its last ten
-  rounds and its last twenty decisions with any maintainer's answer.
+- **Record.** The work item's `facts.build` holds the item's status, which says who
+  owns it: the build queue (`next`, `asking`), the merge queue (`ready`), or no queue
+  (`parked`). It also holds the brief its next round
+  starts from, its last ten rounds and its last twenty decisions with any maintainer's
+  answer.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
 item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
@@ -632,15 +642,17 @@ then the project's file, whose lines win where the two conflict.
   intake's claim and order. An item waits for the merge queue when its build record is
   `ready` and the merge queue has not settled it: it never decided it, or left it
   waiting or asking. When the build queue readies an item again after the merge queue
-  returned or parked it, it waits again. The pull request is the one the build
-  queue's last round delivered. One already merged or closed is recorded without the
+  returned or parked it, it waits again. The pull request is the latest one a build
+  round recorded, or, when no round recorded one, the one triage routed the item to
+  continue. One already merged or closed is recorded without the
   agent. Before claiming, the run enrolls each open, non-draft pull request by a
   maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
   work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
-  a build round recorded is named by its build item and never enrolls. A build round
-  records its pull request once the round ends, so one listed while the round is still
-  running can enroll; that short window is an accepted gap, and enrollment after the
-  round finds the pull request recorded. An own-PR
+  a build round recorded, or one triage routed an item to continue, is named by its
+  build item and never enrolls. Neither does one from a `build/` branch in the
+  repository itself, the namespace every build round opens its pull request from, even
+  before the round records it. A hand-made pull request on a `build/` branch therefore
+  does not enroll; name the branch something else. An own-PR
   item has no build record of its own, so where another would go back to the build queue
   (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
   sweep asks instead, naming what is wrong and the command a maintainer can launch, and
@@ -815,7 +827,8 @@ terminal report lists.
   writes. A filed issue's body begins with `<!-- archon-discovery <key> -->`, and the
   create looks for that marker across every issue first; the evidence comment carries
   the same marker and is replaced in place. So a pass run again after a stop, or a key
-  filed twice, never opens a second issue or comment. Last it records the decided refs
+  filed twice, never opens a second issue, nor a second comment except as [Intake](#intake)
+  describes. Last it records the decided refs
   and the questions on each run's document. Filed issues carry no labels: intake
   triages them like any other issue, which it does only when the install's forge
   identity is on `maintainers.json`.

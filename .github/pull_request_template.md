@@ -101,6 +101,7 @@ flowchart LR
 ## Links
 
 - Closes #
+- Refs # <!-- In place of Closes when the issue's dated ruling keeps it open after this PR. -->
 - Related #
 - Depends on #
 - Supersedes #

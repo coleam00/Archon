@@ -1,1 +1,6 @@
-export { InvalidCodebaseDefaultCwdError, assertAbsoluteDefaultCwd } from '../utils/codebase-path';
+export {
+  InvalidCodebaseDefaultCwdError,
+  assertAbsoluteDefaultCwd,
+  defaultCwdKey,
+  isSameDefaultCwd,
+} from '../utils/codebase-path';

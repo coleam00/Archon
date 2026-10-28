@@ -51,6 +51,11 @@ export const isResumable = (run: WorkflowRun): boolean =>
   (run.status === 'running' &&
     (run.last_activity_at === null || run.last_activity_at.getTime() < Date.now() - 86_400_000));
 
+/** A run `cancelResumableRunsForConversation(conversationId)` cancels. */
+export const isConversationResetTarget = (run: WorkflowRun, conversationId: string): boolean =>
+  (run.conversation_id === conversationId || run.parent_conversation_id === conversationId) &&
+  (run.status === 'paused' || run.status === 'failed');
+
 // An answered gate has no time of its own; it sorts after every timed continuation.
 function continuationTime(run: WorkflowRun): number {
   const retry = run.metadata.continuation_retry_at;
