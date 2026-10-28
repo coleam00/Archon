@@ -252,6 +252,43 @@ describe('InProcessWorkflowEngine', () => {
     }
   );
 
+  it('keeps the execution error when resume cannot mark the run failed', async () => {
+    const { engine, store } = await makeEngine();
+    const run = await store.createWorkflowRun({ workflow_name: parent.name, user_message: '' });
+    await completeNode(store, run.id, 'first');
+    await store.failWorkflowRun(run.id, 'interrupted');
+    const failed = await store.getWorkflowRun(run.id);
+    if (failed?.status !== 'failed') throw new Error('expected failed run');
+    const persistError = new Error('SQLITE_BUSY');
+    const failRun = spyOn(store, 'failWorkflowRun').mockRejectedValue(persistError);
+    try {
+      const admission = await engine.resume({
+        platform,
+        conversationId: 'conv-1',
+        cwd: '/tmp/ops',
+        userMessage: '',
+        run: failed,
+        // The executor refuses a run budget over a `workflow:` node before its own
+        // terminal-write boundary, so only the engine's catch can record the failure.
+        legacyWorkflow: resolveWorkflow({
+          name: parent.name,
+          description: 'Budgeted parent',
+          budget: { max_work_units: 5 },
+          nodes: [{ id: 'child', kind: 'workflow', workflow: 'child' }],
+        }),
+      });
+      if (!admission.accepted) throw new Error('expected resume');
+      await expect(admission.settled).rejects.toMatchObject({
+        name: 'TerminalStatusWriteError',
+        cause: persistError,
+        failure: expect.objectContaining({ message: expect.stringContaining("node 'child'") }),
+      });
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+    } finally {
+      failRun.mockRestore();
+    }
+  });
+
   it('resume settles before the host drains scratch cleanup', async () => {
     const { engine, store } = await makeEngine();
     const home = roots(await mkdtemp(join(tmpdir(), 'archon-engine-resume-scratch-')));
