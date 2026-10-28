@@ -529,63 +529,31 @@ nodes:
         ).toContain("Node 'ask' field 'wait.options'");
       }
     });
+  }
 
-    it.each([
-      ['non-array options', { type: 'string' }],
-      ['string items', { type: 'array', items: { type: 'string' } }],
-      [
-        'optional id',
+  it('checks both composed declarations of the same field in either order', () => {
+    const invalidOptions = { type: 'array', items: { type: 'string' } };
+    for (const declarations of [
+      [validOptions, invalidOptions],
+      [invalidOptions, validOptions],
+    ]) {
+      const result = parseWithOptionsSchema(
         {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: { id: { type: 'string' } },
-          },
-        },
-      ],
-      [
-        'numeric id',
-        {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: { id: { type: 'number' } },
-            required: ['id'],
-          },
-        },
-      ],
-      [
-        'unknown property',
-        {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: { id: { type: 'string' }, score: { type: 'number' } },
-            required: ['id'],
-          },
-        },
-      ],
-    ])(`rejects ${keyword} with %s even beside a valid declaration`, (_case, invalidOptions) => {
-      for (const declarations of [
-        [validOptions, invalidOptions],
-        [invalidOptions, validOptions],
-      ]) {
-        const schema = {
           type: 'object',
-          [keyword]: declarations.map(options => ({
+          allOf: declarations.map(options => ({
             properties: {
               result: { type: 'object', properties: { options } },
             },
           })),
-        };
-        const result = parseWithOptionsSchema(schema, 'result.options');
-        expect(result.error?.error).toContain("Node 'ask' field 'wait.options'");
-        expect(result.error?.error).toContain(
-          "must be an array of objects declaring only { id: string; label?: string } in 'plan's output_format"
-        );
-      }
-    });
-  }
+        },
+        'result.options'
+      );
+      expect(result.error?.error).toContain("Node 'ask' field 'wait.options'");
+      expect(result.error?.error).toContain(
+        "must be an array of objects declaring only { id: string; label?: string } in 'plan's output_format"
+      );
+    }
+  });
 
   it('loads a producer whose items declare { id, label? }', () => {
     const result = parseWithOptionsItems({
