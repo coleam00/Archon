@@ -364,7 +364,9 @@ async function branchHolderFailure(
     'branch_checked_out',
     `Branch '${branchName}' is checked out at ${holder.path}. ` +
       `Run \`git switch --detach\` in that checkout, ` +
-      'or remove it after preserving any changes, then retry.',
+      'or remove it after preserving any changes, then retry. ' +
+      'If the holder path no longer exists, run `git worktree unlock <path>` if locked, ' +
+      'then `git worktree remove <path>` from the main repository and retry.',
     cause
   );
 }
