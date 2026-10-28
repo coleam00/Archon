@@ -345,12 +345,12 @@ Examples:
   archon chat "What does the orchestrator do?"
   archon workflow list
   archon workflow run investigate-issue "Fix the login bug"
-  archon workflow run plan --cwd /path/to/repo "Add dark mode"
-  archon workflow run implement --branch feature-auth "Implement auth"
+  archon workflow run archon-plan --cwd /path/to/repo "Add dark mode"
+  archon workflow run archon-implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
-  archon workflow run investigate --folder "Explain how the repos under this root fit together"
+  archon workflow run archon-investigate --folder "Explain how the repos under this root fit together"
   archon workflow run archon-investigate --detach "Investigate the flaky test"
-  archon workflow run investigate --dry-run --stubs ./stubs.yaml --json
+  archon workflow run archon-investigate --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
   archon workflow artifacts <run-id> plan.md
