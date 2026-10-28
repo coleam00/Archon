@@ -6,7 +6,11 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { createMockLogger } from '../test/mocks/logger';
 
 const log = createMockLogger();
-mock.module('@archon/paths', () => ({ createLogger: mock(() => log) }));
+const paths = await import('@archon/paths');
+mock.module('@archon/paths', () => ({
+  ...paths,
+  createLogger: mock(() => log),
+}));
 
 import { createFakeAppServer } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
