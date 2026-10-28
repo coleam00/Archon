@@ -400,6 +400,25 @@ describe('installed pack boundaries', () => {
     }
   );
 
+  test('an entrypoint including a colliding rejected support name retains its validation error', async () => {
+    const pack = reviewKit();
+    await install({
+      ...pack,
+      files: {
+        ...pack.files,
+        'review/code-review.yaml':
+          'name: code-review\ndescription: Review\nnodes:\n  - id: helper\n    include: review\n',
+        'helper/helper.yaml': 'name: review\nthinking: high\n',
+      },
+    });
+    const { errors } = await discover();
+    const supportError = findWorkflowLoadError(errors, 'acme/review-kit/helper/helper');
+    expect(supportError?.error).toContain('thinking');
+    const entryError = findWorkflowLoadError(errors, REVIEW);
+    expect(entryError?.error).toContain(supportError!.error);
+    expect(entryError?.error).not.toContain('include cycle detected');
+  });
+
   test.each([
     ['header', 'thinking: high'],
     ['nodes', 'description: Support\nnodes:\n  - id: check'],

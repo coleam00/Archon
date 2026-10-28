@@ -30,11 +30,12 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
   const candidates = new Set([
     `${name}.yaml`,
     `${name}.yml`,
-    ...((await sortedEntries(dir)) ?? []).filter(file => /\.ya?ml$/.test(file)),
+    ...(await flatWorkflowCandidates(dir)),
   ]);
   for (const filename of candidates) {
     const absolutePath = join(dir, filename);
     try {
+      if (!(await stat(absolutePath)).isFile()) continue;
       const content = await readFile(absolutePath, 'utf-8');
       const parsed = parseWorkflow(content, filename, providerRegistry);
       if (!flatWorkflowAnswersToName(parsed, filename, name)) continue;
@@ -46,6 +47,16 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
   return null;
 }
 
+async function flatWorkflowCandidates(dir: string): Promise<string[]> {
+  const files = ((await sortedEntries(dir)) ?? []).filter(file => /\.ya?ml$/.test(file));
+  for await (const group of workflowFolderSegments(dir)) {
+    for (const file of (await sortedEntries(join(dir, group))) ?? []) {
+      if (/\.ya?ml$/.test(file)) files.push(join(group, file));
+    }
+  }
+  return files;
+}
+
 function flatWorkflowAnswersToName(
   parsed: WorkflowFile['parsed'],
   filename: string,
@@ -54,8 +65,11 @@ function flatWorkflowAnswersToName(
   if (parsed.workflow === null) {
     return (parsed.error.workflowName ?? filename.replace(/\.ya?ml$/, '')) === name;
   }
-  const acceptedNames = name.includes('/') ? [name, basename(name)] : [name];
-  return acceptedNames.includes(parsed.workflow.name);
+  const directPath = filename === `${name}.yaml` || filename === `${name}.yml`;
+  return (
+    parsed.workflow.name === name ||
+    (directPath && name.includes('/') && parsed.workflow.name === basename(name))
+  );
 }
 
 /**
