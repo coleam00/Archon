@@ -964,6 +964,12 @@ describe('interactive loop node', () => {
     expect(
       completed && readNodeRecordEvent({ ...completed, data: completed.data })?.metadata
     ).toBeUndefined();
+    const snapshot = await foldDagResumeSnapshot(
+      persistedEvents(mockDeps.store),
+      'finalize-contract'
+    );
+    expect(snapshot.costUsd).toBe(0.02);
+    expect(snapshot.costPartial).toBe(true);
     expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 

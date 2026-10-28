@@ -123,7 +123,33 @@ describe('historical token accounting', () => {
 });
 
 describe('historical cost floor', () => {
-  const attempt = (path: string, costUsd?: number): DagResumeEvent[] => {
+  it.each([
+    { costUsd: 0.02, partial: true },
+    { costUsd: 0, partial: true },
+    { costUsd: undefined, partial: true },
+    { costUsd: 0.02, partial: false },
+    { costUsd: 0, partial: false },
+  ])('retains metadata-free loop completion cost proof: %j', async ({ costUsd, partial }) => {
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        {
+          step_name: 'fan__item__loop',
+          event_type: 'node_completed',
+          data: {
+            node_output: 'approved',
+            ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+            ...(partial ? { cost_partial: true } : {}),
+          },
+        },
+      ],
+      'run'
+    );
+    expect(snapshot.costUsd).toBe(costUsd);
+    expect(snapshot.costPartial).toBe(partial);
+    expect(snapshot.unfinishedInvocations?.size ?? 0).toBe(0);
+  });
+
+  const attempt = (path: string, costUsd?: number) => {
     const start = startNodeExecution({
       runId: 'run',
       path,
@@ -160,6 +186,17 @@ describe('historical cost floor', () => {
   it('keeps reported zero distinct from absence', async () => {
     expect((await foldDagResumeSnapshot(attempt('a', 0), 'run')).costUsd).toBe(0);
     expect((await foldDagResumeSnapshot(attempt('a'), 'run')).costUsd).toBeUndefined();
+  });
+
+  it('uses modern spend proof over a conflicting flat legacy marker', async () => {
+    const rows = attempt('loop', 0.02);
+    const completion = rows[1];
+    const snapshot = await foldDagResumeSnapshot(
+      [rows[0], { ...completion, data: { ...completion.data, cost_partial: true } }],
+      'run'
+    );
+    expect(snapshot.costUsd).toBe(0.02);
+    expect(snapshot.costPartial).toBe(false);
   });
 });
 

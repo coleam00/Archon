@@ -213,11 +213,13 @@ function readUsage(
   rawUsage: NodeRecord['rawUsage'],
   execution?: Pick<NodeExecutionMetadata, 'spend'>
 ): UsageContribution {
+  const costPartial =
+    execution !== undefined
+      ? attemptSpend(execution).kind === 'unavailable'
+      : rawUsage.costPartial === true;
   const contribution: UsageContribution = {
     stepName,
-    ...(execution !== undefined && attemptSpend(execution).kind === 'unavailable'
-      ? { costPartial: true }
-      : {}),
+    ...(costPartial ? { costPartial: true } : {}),
     ...(rawUsage.tokensUnknown ? { tokensUnknown: true } : {}),
   };
   if (rawUsage.tokens !== undefined) {
