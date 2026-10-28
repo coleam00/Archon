@@ -55,6 +55,110 @@ describe.skipIf(!baseUrl)('PostgreSQL schema convergence and conflict retry', ()
     expect(await notifyTriggerOid()).toBe(before);
   });
 
+  test('waiting boots take no relation locks and converge only once', async () => {
+    await scratch.query('UPDATE remote_agent_workflow_event_sequence SET value = -1');
+    await scratch.query('CREATE TABLE boot_write_probe (n INT NOT NULL)');
+    const reader = await scratch.connect();
+    const adapters: PostgresAdapter[] = [];
+    const writes: Promise<number>[] = [];
+    const before = await notifyTriggerOid();
+    try {
+      await reader.query('BEGIN');
+      await reader.query('SELECT pg_advisory_xact_lock(1796)');
+      await reader.query('LOCK TABLE remote_agent_schema_version IN ACCESS SHARE MODE');
+      for (let i = 0; i < 8; i++) {
+        const db = new PostgresAdapter(scratchUrl);
+        adapters.push(db);
+        const write = (async () => {
+          await db.query('INSERT INTO boot_write_probe VALUES (1)');
+          const result = await db.query<{ oid: number }>(
+            "SELECT oid FROM pg_trigger WHERE tgname = 'archon_workflow_event_notify'"
+          );
+          return result.rows[0].oid;
+        })();
+        void write.catch(() => {});
+        writes.push(write);
+      }
+      let waiting = 0;
+      for (let i = 0; i < 200; i++) {
+        const locks = await scratch.query<{ waiting: number; relations: number }>(
+          `WITH waiters AS (
+             SELECT pid FROM pg_locks
+             WHERE locktype = 'advisory' AND objid = 1796 AND NOT granted
+           ) SELECT (SELECT count(*)::int FROM waiters) AS waiting,
+             (SELECT count(*)::int FROM pg_locks
+              WHERE pid IN (SELECT pid FROM waiters) AND relation IS NOT NULL) AS relations`
+        );
+        waiting = locks.rows[0].waiting;
+        expect(locks.rows[0].relations).toBe(0);
+        if (waiting === 8) break;
+        await Bun.sleep(10);
+      }
+      expect(waiting).toBe(8);
+      // This was the second edge of the version/events deadlock. Waiting boots
+      // now hold no events lock, so the read completes before we release version.
+      await reader.query('SELECT 1 FROM remote_agent_workflow_events');
+      await reader.query('COMMIT');
+      const oids = await Promise.all(writes);
+      expect(new Set(oids).size).toBe(1);
+      expect(oids[0]).not.toBe(before);
+      const count = await scratch.query<{ n: number }>(
+        'SELECT count(*)::int AS n FROM boot_write_probe'
+      );
+      expect(count.rows[0].n).toBe(8);
+      const repaired = await scratch.query<{ value: string }>(
+        'SELECT value FROM remote_agent_workflow_event_sequence WHERE id = 1'
+      );
+      expect(repaired.rows[0].value).toBe('0');
+    } finally {
+      await reader.query('ROLLBACK');
+      reader.release();
+      await Promise.allSettled(writes);
+      await Promise.all(adapters.map(db => db.close()));
+    }
+  });
+
+  test('active convergence waits for a version reader before locking events', async () => {
+    const reader = new PostgresAdapter(scratchUrl);
+    await reader.query('SELECT 1');
+    await scratch.query('UPDATE remote_agent_schema_version SET schema_fingerprint = NULL');
+    let bootResult: Promise<void> | undefined;
+    let readerRuns = 0;
+    try {
+      await reader.withTransaction(async query => {
+        readerRuns++;
+        await query('SELECT 1 FROM remote_agent_schema_version');
+        bootResult = boot();
+        void bootResult.catch(() => {});
+        let waiting = false;
+        for (let i = 0; i < 200; i++) {
+          const locks = await scratch.query<{ waiting: boolean }>(
+            `SELECT EXISTS (
+               SELECT 1 FROM pg_locks
+               WHERE locktype = 'relation' AND NOT granted AND pid IN (
+                 SELECT pid FROM pg_locks
+                 WHERE locktype = 'advisory' AND objid = 1796 AND granted
+               )
+             ) AS waiting`
+          );
+          waiting = locks.rows[0].waiting;
+          if (waiting) break;
+          await Bun.sleep(10);
+        }
+        expect(waiting).toBe(true);
+        await query('SELECT 1 FROM remote_agent_workflow_events');
+      });
+      await bootResult;
+      expect(readerRuns).toBe(1);
+      const before = await notifyTriggerOid();
+      await boot();
+      expect(await notifyTriggerOid()).toBe(before);
+    } finally {
+      await bootResult?.catch(() => {});
+      await reader.close();
+    }
+  });
+
   test.each([
     [
       'an older build converged since',

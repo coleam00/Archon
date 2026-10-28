@@ -158,6 +158,10 @@ DATABASE_URL=postgresql://user:password@host:5432/dbname
 
 When PostgreSQL picks a statement or transaction as a deadlock victim or fails it for serialization (SQLSTATE `40P01` or `40001`), the adapter reruns it, up to four attempts in all, with a short growing pause between attempts, and logs `db.postgres_query_retry` or `db.postgres_transaction_retry` at warn level. A transaction reruns from its start. Other errors fail right away.
 
+Schema initialization is serialized rather than retried; the former
+`db.postgres_schema_init_retry` event is no longer emitted. A schema failure logs
+`db.postgres_schema_init_failed` and rejects operations waiting for initialization.
+
 Upgrades are verified, not assumed: CI applies the current schema on top of a database built from
 every distinct schema Archon has ever released, re-applies it to confirm idempotence, and compares
 the result against a fresh install — columns, indexes, column comments, constraints and sequences.
@@ -339,14 +343,22 @@ publishes the fingerprint atomically. Schema changes invalidate the proof; ordin
 inserts do not. Failed tolerated migrations leave no completion stamp and are retried on
 the next open. Diagnostic creation and applied-build vintages keep their existing meanings.
 
-PostgreSQL first reads its completion fingerprint without a lock. It covers the bundled
-schema SQL, the notify trigger, and the Archon build. The database is current when that
+PostgreSQL takes the schema advisory lock before reading its completion fingerprint. It covers
+the bundled schema SQL, the notify trigger, and the Archon build. The database is current when that
 fingerprint is recorded, the recorded applied build is this build (an older released build
 that converged since stamps its own version), no legacy provider ids remain, and the
-event-sequence head is not behind. A current database starts without a transaction, lock,
-or DDL. Otherwise the adapter converges and publishes the fingerprint in the same locked
-transaction that installs the notify trigger; a role that cannot install the trigger
-converges on every start. Source checkouts all record the applied build as `dev`, so a
+event-sequence head is not behind. A current database releases the lock without DDL.
+Waiting boots take no table locks before acquiring the advisory lock, then recheck the
+fingerprint, so only the first boot converges. When convergence is needed, the version table
+is locked exclusively before events DDL, preserving the version/events order of live readers.
+Core DDL, notify-trigger installation and
+fingerprint publication commit in one transaction. Missing tables or columns mean convergence
+is needed; other fingerprint-read errors abort initialization rather than trigger DDL.
+A role that cannot install the trigger keeps polling and converges on every start; a
+savepoint rolls back trigger installation and leaves the completion fingerprint unpublished.
+Only trigger-install permission errors use this polling fallback. Version-row writes,
+fingerprint writes (including a missing version row), and other trigger errors abort initialization.
+Source checkouts all record the applied build as `dev`, so a
 checkout that predates the PostgreSQL fingerprint can converge against the same database
 without invalidating a newer checkout's fingerprint, and the newer checkout keeps the older
 function bodies. To force convergence in that case, clear it:
