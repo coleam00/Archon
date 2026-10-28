@@ -25,9 +25,9 @@ process may keep a rejected refresh token after another has saved a working logi
 causing a credential check to report "no usable login".
 
 Archon rechecks that result once in a fresh Codex process, using the same caller
-deadline and requesting a refresh again. It logs `codex.native_login_rechecked`
-with the resulting credential state. The recheck does not bypass authentication or
-send a model request. If the recheck errors, times out or returns a malformed
+deadline and requesting a refresh again. When the second read returns a status,
+it logs `codex.native_login_rechecked` with only the resulting credential state.
+The recheck does not bypass authentication or send a model request. If the recheck errors, times out or returns a malformed
 response, the check is inconclusive: the run starts with a
 `credential_check_inconclusive` warning, as any inconclusive credential check does.
 

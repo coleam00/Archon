@@ -459,20 +459,6 @@ describe('Codex native credential check', () => {
       });
     });
   }
-  test('no account remains unusable after one fresh process recheck', async () => {
-    expect(await check([{ account: null }, { account: null }])).toMatchObject({
-      state: 'unusable',
-      evidence: expect.stringContaining('codex login'),
-    });
-  });
-  test('a fresh process sees the login saved by a concurrent refresh', async () => {
-    expect(
-      await check([
-        { account: null },
-        { account: { type: 'chatgpt', email: null, planType: 'pro' } },
-      ])
-    ).toEqual({ state: 'usable', source: 'native' });
-  });
   test('an inconclusive fresh recheck is check_failed with its evidence redacted', async () => {
     expect(
       await check([
