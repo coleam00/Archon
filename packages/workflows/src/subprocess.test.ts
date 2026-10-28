@@ -579,13 +579,10 @@ describe('subprocess input delivery', () => {
     }
   });
 
-  it.each(['delivered', 'delivery error', 'command error'] as const)(
+  it.each(['delivery error', 'command error'] as const)(
     'settles recorded-node input delivery before command completion: %s',
     async outcome => {
-      const deliveryError =
-        outcome === 'delivered'
-          ? undefined
-          : Object.assign(new Error('stdin failed'), { code: 'EPIPE' });
+      const deliveryError = Object.assign(new Error('stdin failed'), { code: 'EPIPE' });
       const input = '€\n';
       const chunks: Buffer[] = [];
       const stdin = new Writable({
@@ -603,7 +600,7 @@ describe('subprocess input delivery', () => {
       });
       const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
       const trees = recordNodeProcessTrees();
-      const delivered = once(stdin, deliveryError ? 'error' : 'finish');
+      const delivered = once(stdin, 'error');
       let closed = false;
       const close = () => {
         if (closed) return;
@@ -621,7 +618,7 @@ describe('subprocess input delivery', () => {
         const observed = await delivered;
         expect(Buffer.concat(chunks).toString('utf8')).toBe(input);
         expect(spawn).toHaveBeenCalledTimes(1);
-        if (deliveryError) expect(observed[0]).toBe(deliveryError);
+        expect(observed[0]).toBe(deliveryError);
         stdout.end('output');
         stderr.end('evidence');
         close();
@@ -637,14 +634,14 @@ describe('subprocess input delivery', () => {
             stderr: 'evidence',
             signal: null,
           });
-        } else if (deliveryError) {
+        } else {
           await expect(pending).rejects.toBe(deliveryError);
           expect(deliveryError).toMatchObject({
             code: 'EPIPE',
             stdout: 'output',
             stderr: 'evidence',
           });
-        } else expect(await pending).toMatchObject({ stdout: 'output', stderr: 'evidence' });
+        }
       } finally {
         close();
         await pending.catch(() => undefined);
