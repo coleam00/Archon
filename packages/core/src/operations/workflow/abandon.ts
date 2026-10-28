@@ -3,7 +3,7 @@ import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
   readExecutionOwner,
   readOwnedWorktree,
-  readSubrunMetadata,
+  SUBRUN_METADATA_KEYS,
 } from '@archon/workflows/schemas/workflow-run';
 import type { ExecutionOwnerRecord, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { ReleasedWorktree, RunWorktreeRelease } from '../../services/cleanup/run-worktree';
@@ -209,7 +209,10 @@ interface WorktreeOwnerCheck {
 
 function isSubrun(run: WorkflowRun): boolean {
   // Parent deletion clears the foreign key, but not the spawning node's metadata.
-  return run.parent_run_id !== null || readSubrunMetadata(run.metadata).parentNodeId !== undefined;
+  return (
+    run.parent_run_id !== null ||
+    typeof run.metadata[SUBRUN_METADATA_KEYS.parentNodeId] === 'string'
+  );
 }
 
 async function checkWorktreeOwner(

@@ -956,9 +956,14 @@ describe('abandon owned worktrees', () => {
     });
   });
 
-  test.each(['abandon', 'reset'] as const)(
-    '%s retains a file-store child checkout after deleting its terminal parent',
-    async operation => {
+  test.each([
+    ['abandon', false],
+    ['reset', false],
+    ['abandon', true],
+    ['reset', true],
+  ] as const)(
+    '%s retains a file-store child checkout after parent deletion with malformed output metadata: %s',
+    async (operation, malformedOutput) => {
       const fileStore = await createFileWorkflowStore({ root: scratchRoot() });
       const parent = await fileStore.createWorkflowRun({
         workflow_name: 'parent',
@@ -971,6 +976,10 @@ describe('abandon owned worktrees', () => {
         origin: { conversationId: 'conv-1' },
         metadata: { ...owned().metadata, parent_node_id: 'nested-workflow' },
       });
+      if (malformedOutput)
+        await fileStore.updateWorkflowRun(child.id, {
+          metadata: { summary_declared_output_paths: 'invalid' },
+        });
       await fileStore.cancelWorkflowRun(parent.id);
       await fileStore.deleteWorkflowRun(parent.id);
       expect((await fileStore.getWorkflowRun(child.id))?.parent_run_id).toBeNull();
@@ -993,6 +1002,16 @@ describe('abandon owned worktrees', () => {
           : await fileOperations.abandonResumableRunsForConversation('conv-1', operator);
       expect((await fileStore.getWorkflowRun(child.id))?.status).toBe('cancelled');
       expect(result.cleanupWarnings?.join(' ')).toContain('owning execution');
+      expect(await fileStore.listWorkflowEvents(child.id)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event_type: 'workflow_cleanup_warning',
+            data: {
+              warnings: expect.arrayContaining([expect.stringContaining('owning execution')]),
+            },
+          }),
+        ])
+      );
       expect(reclaim).not.toHaveBeenCalled();
     }
   );
