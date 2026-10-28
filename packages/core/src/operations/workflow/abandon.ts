@@ -121,7 +121,9 @@ async function recordAbandonment(
       run,
       cancelled: false,
       cleanupWarnings: [...stopWarnings, ...persistenceWarnings],
-      cancelledRuns: tree.runs.filter(row => row.id !== run.id && row.status === 'cancelled'),
+      cancelledDescendants: tree.runs.filter(
+        row => row.id !== run.id && row.status === 'cancelled'
+      ),
       cascadeFailures: tree.failures,
       blockedParentRunId: null,
     };
@@ -150,7 +152,7 @@ async function releaseAbandonedWorktrees(
   let unsafeDescendant = false;
   const ownerChecks = await checkBatchWorktreeOwners(
     ctx,
-    [run, ...result.cancelledRuns],
+    [run, ...result.cancelledDescendants],
     run,
     owner
   );
@@ -388,20 +390,25 @@ async function checkBatchWorktreeOwners(
 ) {
   const ownerChecks: {
     run: WorkflowRun;
-    envId: string | undefined;
+    proof: ReturnType<typeof readOwnedWorktree>;
     check: Awaited<ReturnType<typeof checkWorktreeOwner>>;
   }[] = [];
   for (const run of runs) {
-    const envId = readOwnedWorktree(run.metadata)?.envId;
+    const proof = readOwnedWorktree(run.metadata);
     ownerChecks.push({
       run,
-      envId,
+      proof,
       check: await checkWorktreeOwner(ctx, run, root, rootOutcome),
     });
   }
-  return ownerChecks.map(({ run, envId, check }) => {
-    const sharedChecks = envId
-      ? ownerChecks.filter(other => other.envId === envId).map(other => other.check)
+  return ownerChecks.map(({ run, proof, check }) => {
+    const sharedChecks = proof
+      ? ownerChecks
+          .filter(
+            other =>
+              other.proof?.envId === proof.envId && other.proof?.creationId === proof.creationId
+          )
+          .map(other => other.check)
       : [check];
     return {
       run,
