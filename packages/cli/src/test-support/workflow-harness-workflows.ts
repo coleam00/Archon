@@ -2,6 +2,7 @@
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { afterAll, mock } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -18,14 +19,12 @@ mock.module('@archon/workflows/fixture-runner', () => ({
   runFixtures: mock(() => Promise.resolve({ results: [], passed: 0, failed: 0 })),
   formatFixtureReport: mock(() => 'FIXTURE REPORT'),
 }));
-/**
- * Ownership calls the run path makes on its capture, in order.
- *
- * `withCapturedSource` is stubbed as a faithful pass-through rather than mocked away: the
- * wrapper's whole job is that an unadopted capture gets reclaimed, and a stub that swallows
- * the owner would let a dropped `adopt()` — which deletes a live run's source — pass here.
- */
-export const capturedSourceOwnerCalls: string[] = [];
+const capturedSourceRecorders = new AsyncLocalStorage<string[]>();
+
+export function recordCapturedSourceCalls<T>(body: (calls: string[]) => Promise<T>): Promise<T> {
+  const calls: string[] = [];
+  return capturedSourceRecorders.run(calls, () => body(calls));
+}
 /** The full owned roots shape a continuation carries — shared between the prepare and
  *  continuation mocks so the two cannot drift on which fields a `ResolvedContinuation`
  *  promises its consumer. */
@@ -81,7 +80,7 @@ mock.module('@archon/workflows/run-resume', () => ({
 }));
 mock.module('@archon/workflows/run-source', () => ({
   withCapturedSource: mock((body: Parameters<typeof withObservableCapturedSource>[1]) =>
-    withObservableCapturedSource(capturedSourceOwnerCalls, body)
+    withObservableCapturedSource(capturedSourceRecorders.getStore() ?? [], body)
   ),
   resolveContinuationWorkflow: mockResolveContinuationWorkflow,
   // Stub capture so routing tests do not freeze real source trees.
