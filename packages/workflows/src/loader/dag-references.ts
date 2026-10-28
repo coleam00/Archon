@@ -25,6 +25,7 @@ import {
   OUTPUT_REF_SOURCE,
   parseWholeOutputRef,
   COMPOSITION_KEYWORDS,
+  declaredOutputPathsFromSchema,
 } from '../output-ref';
 import { visitNodeTemplateSlots, type TemplateSurface } from '../template-walker';
 import { z } from 'zod';
@@ -108,7 +109,7 @@ function referencedOptionsShapeError(
   if (schema === undefined) return undefined;
   const path = ref.field.split('.');
   // Composed options are validated against the actual value when the wait runs.
-  if (hasCompositionOnPath(schema, path)) return undefined;
+  if (hasComposedOptions(schema, path)) return undefined;
   for (const key of path) {
     const properties: unknown = isRecord(schema) ? schema.properties : undefined;
     schema = isRecord(properties) ? properties[key] : undefined;
@@ -147,15 +148,43 @@ function isAttentionOptionsSchema(schema: unknown): boolean {
   );
 }
 
-function hasCompositionOnPath(schema: unknown, path: readonly string[]): boolean {
+function hasComposition(schema: unknown): boolean {
+  return isRecord(schema) && COMPOSITION_KEYWORDS.some(key => Array.isArray(schema[key]));
+}
+
+function hasComposedOptions(schema: unknown, path: readonly string[]): boolean {
   if (!isRecord(schema)) return false;
-  if (COMPOSITION_KEYWORDS.some(key => Array.isArray(schema[key]))) return true;
   const [key, ...rest] = path;
-  return (
-    key !== undefined &&
-    isRecord(schema.properties) &&
-    hasCompositionOnPath(schema.properties[key], rest)
-  );
+  if (key === undefined) {
+    if (hasComposition(schema) || hasComposition(schema.items)) return true;
+    const properties: unknown = isRecord(schema.items) ? schema.items.properties : undefined;
+    return isRecord(properties) && Object.values(properties).some(hasComposition);
+  }
+  if (compositionDeclaresPath(schema, path)) return true;
+  return isRecord(schema.properties) && hasComposedOptions(schema.properties[key], rest);
+}
+
+function compositionDeclaresPath(
+  schema: Record<string, unknown>,
+  path: readonly string[]
+): boolean {
+  for (const keyword of COMPOSITION_KEYWORDS) {
+    const branches = schema[keyword];
+    if (!Array.isArray(branches)) continue;
+    for (const branch of branches) {
+      if (!isRecord(branch)) continue;
+      const declarations = declaredOutputPathsFromSchema(branch);
+      if (
+        declarations?.some(
+          declared =>
+            declared.length === path.length &&
+            declared.every((segment, index) => segment === path[index])
+        )
+      )
+        return true;
+    }
+  }
+  return false;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
