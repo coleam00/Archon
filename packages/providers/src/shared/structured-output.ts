@@ -134,7 +134,8 @@ function tryJsonParseObject(text: string): unknown {
  * required names from enclosing schemas on the same value before closure.
  * These requirements already hold on that value; optional fields stay optional.
  * Explicitly closed branches retain their authored restriction. Unsupported
- * conditional keywords, incompatible allOf property maps, and branch completion
+ * conditional keywords, composition constraints without usable inline property maps,
+ * incompatible allOf property name sets, and branch completion
  * that would duplicate a resource identifier throw before Codex starts.
  *
  * The other strict-mode rule
@@ -154,6 +155,7 @@ export function normalizeJsonSchemaForOpenAiStrict(
       }
     }
   });
+  assertCompositionsCanBeClosed(schema);
   const normalized = normalizeNode(schema) as Record<string, unknown>;
   visitJsonSchema(normalized, 'output_format', (node, path) => {
     if (!Array.isArray(node.allOf)) return;
@@ -161,7 +163,7 @@ export function normalizeJsonSchemaForOpenAiStrict(
     const names = new Set(maps.flatMap(map => Object.keys(map)));
     if (maps.some(map => [...names].some(name => !Object.hasOwn(map, name)))) {
       throw new Error(
-        `Codex output schema at ${path}.allOf cannot close intersections with different property maps. Declare the complete property map on the enclosing object and in explicitly closed branches, or write complete allOf branches.`
+        `Codex output schema at ${path}.allOf cannot close intersections with different property name sets. Declare the complete property map on the enclosing object and in explicitly closed branches, or write complete allOf branches.`
       );
     }
   });
@@ -219,10 +221,12 @@ function assertInheritedPropertiesCanBeCopied(
   for (const [name, value] of Object.entries(inherited)) {
     if (Object.hasOwn(local, name)) continue;
     visitJsonSchema(value, 'output_format', node => {
-      if ('$id' in node) {
-        throw new Error(
-          'Codex output schema cannot copy a property containing $id into a conditional branch. Move the reusable schema to one definition and use $ref instead.'
-        );
+      for (const keyword of ['$id', '$anchor', '$dynamicAnchor']) {
+        if (keyword in node) {
+          throw new Error(
+            `Codex output schema cannot copy a property containing ${keyword} into a conditional branch. Move the reusable schema to one definition and use $ref instead.`
+          );
+        }
       }
     });
   }
@@ -232,15 +236,45 @@ function isCompositionKeyword(key: string): boolean {
   return key === 'oneOf' || key === 'anyOf' || key === 'allOf';
 }
 
-function sameInstancePropertyMaps(node: unknown): Record<string, unknown>[] {
+function assertCompositionsCanBeClosed(schema: unknown): void {
+  visitJsonSchema(schema, 'output_format', (node, path) => {
+    if (
+      !Object.entries(node).some(
+        ([key, value]) => isCompositionKeyword(key) && Array.isArray(value)
+      )
+    )
+      return;
+    for (const constraint of sameInstanceNodes(node)) {
+      const reference = ['$ref', '$dynamicRef', '$recursiveRef'].find(key => key in constraint);
+      if (
+        reference ||
+        'patternProperties' in constraint ||
+        (!isRecord(constraint.properties) &&
+          (isObjectSchemaNode(constraint) || 'required' in constraint))
+      ) {
+        throw new Error(
+          `Codex output schema at ${path} cannot establish safe strict closure for this composition. Use complete inline oneOf/anyOf/allOf object branches with explicit properties instead of same-instance references, patternProperties, or object constraints without a property map.`
+        );
+      }
+    }
+  });
+}
+
+function sameInstanceNodes(node: unknown): Record<string, unknown>[] {
   if (!isRecord(node)) return [];
-  const maps = isRecord(node.properties) ? [node.properties] : [];
+  const nodes = [node];
   for (const [key, value] of Object.entries(node)) {
     if (isCompositionKeyword(key) && Array.isArray(value)) {
-      maps.push(...value.flatMap(sameInstancePropertyMaps));
+      nodes.push(...value.flatMap(sameInstanceNodes));
     }
   }
-  return maps;
+  return nodes;
+}
+
+function sameInstancePropertyMaps(node: unknown): Record<string, unknown>[] {
+  return sameInstanceNodes(node).flatMap(constraint =>
+    isRecord(constraint.properties) ? [constraint.properties] : []
+  );
 }
 
 /**

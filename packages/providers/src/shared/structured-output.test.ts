@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import Ajv from 'ajv';
+import Ajv2020 from 'ajv/dist/2020.js';
 import { findStrictSchemaIssues } from '@archon/provider-contract';
 import {
   augmentPromptForJsonSchema,
@@ -166,6 +167,82 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
     }
   );
 
+  for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
+    for (const definitions of ['$defs', 'definitions'] as const) {
+      test.each(['all-reference', 'mixed-inline'] as const)(
+        `rejects ${operator} ${definitions} branches with %s placement`,
+        placement => {
+          const input = {
+            ...conditionalSchema(operator),
+            [definitions]: {
+              Success: { properties: { status: { const: 'success' } } },
+              Blocked: { properties: { status: { const: 'blocked' } } },
+              Either: { properties: { status: { enum: ['success', 'blocked'] } } },
+            },
+            [operator]:
+              operator === 'allOf'
+                ? [
+                    { $ref: `#/${definitions}/Either` },
+                    ...(placement === 'mixed-inline' ? [{ properties: { status: {} } }] : []),
+                  ]
+                : [
+                    placement === 'mixed-inline'
+                      ? { properties: { status: { const: 'success' } } }
+                      : { $ref: `#/${definitions}/Success` },
+                    { $ref: `#/${definitions}/Blocked` },
+                  ],
+          };
+          const original = new Ajv({ strict: false }).compile(input);
+          expect(original({ status: 'success', message: 'Finished' })).toBe(true);
+          expect(original({ status: 'blocked', message: 'Need access' })).toBe(true);
+          expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow('complete inline');
+        }
+      );
+    }
+  }
+
+  test.each([
+    { required: ['message'] },
+    { patternProperties: { '^message$': { type: 'string' } }, required: ['message'] },
+    { type: 'object' },
+  ])('rejects allOf siblings without an inline property map: %j', sibling => {
+    const input = {
+      allOf: [
+        { properties: { status: { enum: ['success', 'blocked'] } }, required: ['status'] },
+        sibling,
+      ],
+    };
+    const original = ajv.compile(input);
+    expect(original({ status: 'success', message: 'Finished' })).toBe(true);
+    expect(original({ status: 'blocked', message: 'Need access' })).toBe(true);
+    expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow('complete inline');
+  });
+
+  for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
+    test.each(['$ref', '$dynamicRef', '$recursiveRef'])(
+      `rejects unresolved same-instance %s in ${operator}`,
+      reference => {
+        const input = {
+          ...conditionalSchema(operator),
+          [operator]: [{ [reference]: '#/external' }],
+        };
+        expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow('complete inline');
+      }
+    );
+    test.each([
+      { required: ['message'] },
+      { patternProperties: { '^message$': { type: 'string' } } },
+      { type: 'object' },
+    ])(`rejects mapless object constraints in ${operator}: %j`, branch => {
+      expect(() =>
+        normalizeJsonSchemaForOpenAiStrict({
+          ...conditionalSchema(operator),
+          [operator]: [branch],
+        })
+      ).toThrow('complete inline');
+    });
+  }
+
   test.each(['disjoint', 'complete-then-partial'] as const)(
     'rejects unsafe allOf sibling closure: %s',
     shape => {
@@ -192,75 +269,103 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
 
   test('preserves complete allOf siblings', () => {
     const input = {
-      allOf: ['success', 'blocked'].map(() => ({
-        properties: { status: { enum: ['success', 'blocked'] }, message: { type: 'string' } },
-        required: ['status', 'message'],
-      })),
+      allOf: [
+        {
+          properties: { status: { enum: ['success', 'blocked'] }, message: { type: 'string' } },
+          required: ['status', 'message'],
+        },
+        { properties: { status: { type: 'string' }, message: { minLength: 2 } } },
+      ],
     };
     const validate = ajv.compile(normalizeJsonSchemaForOpenAiStrict(input));
     expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
     expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
   });
 
-  test.each(['oneOf', 'anyOf', 'allOf'] as const)(
-    'rejects copying a resource identifier into %s branches',
-    operator => {
-      const input = {
-        ...conditionalSchema(operator),
-        properties: {
-          status: { type: 'string' },
-          message: { $id: `https://example.com/${operator}/message`, type: 'string' },
-        },
-      };
-      expect(ajv.compile(input)({ status: 'success', message: 'Finished' })).toBe(true);
-      expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow(
-        'one definition and use $ref'
-      );
-    }
-  );
+  for (const identity of ['$id', '$anchor', '$dynamicAnchor'] as const) {
+    test.each(['oneOf', 'anyOf', 'allOf'] as const)(
+      `rejects copying ${identity} into %s branches`,
+      operator => {
+        const input = {
+          ...conditionalSchema(operator),
+          properties: {
+            status: { type: 'string' },
+            message: {
+              [identity]:
+                identity === '$id' ? `https://example.com/${operator}/message` : 'message',
+              type: 'string',
+            },
+          },
+        };
+        expect(
+          new Ajv2020({ strict: false }).compile(input)({ status: 'success', message: 'Finished' })
+        ).toBe(true);
+        expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow(
+          'one definition and use $ref'
+        );
+      }
+    );
+  }
 
-  test('rejects copying nested resource identifiers', () => {
+  test.each(['$id', '$anchor', '$dynamicAnchor'])('rejects copying nested %s', identity => {
     const input = {
       ...conditionalSchema('oneOf'),
       properties: {
         status: { type: 'string' },
-        message: { type: 'array', items: { $id: 'https://example.com/item', type: 'string' } },
+        message: {
+          type: 'array',
+          items: {
+            [identity]: identity === '$id' ? 'https://example.com/item' : 'item',
+            type: 'string',
+          },
+        },
       },
     };
     expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow('one definition and use $ref');
   });
 
-  test.each(['oneOf', 'anyOf', 'allOf'] as const)(
-    'preserves resource identifiers without copying them through %s',
-    operator => {
-      const input = {
-        ...conditionalSchema(operator),
-        $defs: { Message: { $id: `https://example.com/defs/${operator}`, type: 'string' } },
-        properties: { status: { type: 'string' }, message: { $ref: '#/$defs/Message' } },
-      };
-      const validate = new Ajv({ strict: false }).compile(
-        normalizeJsonSchemaForOpenAiStrict(input)
-      );
-      expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
-      expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
-      expect(validate({ status: 'success', message: 1 })).toBe(false);
+  for (const identity of ['$id', '$anchor', '$dynamicAnchor'] as const) {
+    test.each(['oneOf', 'anyOf', 'allOf'] as const)(
+      `preserves ${identity} without copying it through %s`,
+      operator => {
+        const input = {
+          ...conditionalSchema(operator),
+          $defs: {
+            Message: {
+              [identity]: identity === '$id' ? `https://example.com/defs/${operator}` : 'message',
+              type: 'string',
+            },
+          },
+          properties: { status: { type: 'string' }, message: { $ref: '#/$defs/Message' } },
+        };
+        const validate = new Ajv2020({ strict: false }).compile(
+          normalizeJsonSchemaForOpenAiStrict(input)
+        );
+        expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
+        expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
+        expect(validate({ status: 'success', message: 1 })).toBe(false);
 
-      const complete = {
-        ...input,
-        properties: {
-          status: { type: 'string' },
-          message: { $id: `https://example.com/complete/${operator}`, type: 'string' },
-        },
-        [operator]: [{ properties: { status: { type: 'string' }, message: { type: 'string' } } }],
-      };
-      expect(
-        new Ajv({ strict: false }).compile(normalizeJsonSchemaForOpenAiStrict(complete))({
-          status: 'success',
-          message: 'Finished',
-        })
-      ).toBe(true);
-    }
-  );
+        const complete = {
+          ...input,
+          properties: {
+            status: { type: 'string' },
+            message: {
+              [identity]:
+                identity === '$id' ? `https://example.com/complete/${operator}` : 'message',
+              type: 'string',
+            },
+          },
+          [operator]: [{ properties: { status: { type: 'string' }, message: { type: 'string' } } }],
+        };
+        expect(
+          new Ajv2020({ strict: false }).compile(normalizeJsonSchemaForOpenAiStrict(complete))({
+            status: 'success',
+            message: 'Finished',
+          })
+        ).toBe(true);
+      }
+    );
+  }
 
   test('ignores conditional keyword names in property maps and annotation data', () => {
     const input = {

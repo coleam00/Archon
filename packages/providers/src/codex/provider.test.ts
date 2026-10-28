@@ -1378,17 +1378,56 @@ describe('CodexProvider', () => {
         const cases = [
           { schema: { allOf: [field, other] }, advice: 'complete property map' },
           { schema: { allOf: [complete, field] }, advice: 'complete property map' },
-          ...(['oneOf', 'anyOf', 'allOf'] as const).map(operator => ({
-            schema: {
-              ...complete,
-              properties: {
-                status: { type: 'string' },
-                message: { $id: 'https://example.com/message', type: 'string' },
+          ...(['oneOf', 'anyOf', 'allOf'] as const).flatMap(operator =>
+            ['$id', '$anchor', '$dynamicAnchor'].map(identity => ({
+              schema: {
+                ...complete,
+                properties: {
+                  status: { type: 'string' },
+                  message: {
+                    [identity]: identity === '$id' ? 'https://example.com/message' : 'message',
+                    type: 'string',
+                  },
+                },
+                [operator]: [field],
               },
-              [operator]: [field],
-            },
-            advice: 'one definition and use $ref',
+              advice: 'one definition and use $ref',
+            }))
+          ),
+          ...(['oneOf', 'anyOf', 'allOf'] as const).flatMap(operator =>
+            ['$defs', 'definitions'].flatMap(definitions =>
+              [false, true].map(mixed => ({
+                schema: {
+                  ...complete,
+                  [definitions]: { Field: field },
+                  [operator]: [{ $ref: `#/${definitions}/Field` }, ...(mixed ? [field] : [])],
+                },
+                advice: 'complete inline',
+              }))
+            )
+          ),
+          ...[
+            { required: ['message'] },
+            { patternProperties: { '^message$': { type: 'string' } } },
+            { type: 'object' },
+          ].map(sibling => ({
+            schema: { allOf: [field, sibling] },
+            advice: 'complete inline',
           })),
+          ...(['oneOf', 'anyOf', 'allOf'] as const).flatMap(operator => [
+            ...['$dynamicRef', '$recursiveRef'].map(reference => ({
+              schema: { ...complete, [operator]: [{ [reference]: '#/external' }] },
+              advice: 'complete inline',
+            })),
+            ...[
+              { required: ['message'] },
+              { patternProperties: { '^message$': {} } },
+              { type: 'object' },
+            ].map(branch => ({
+              schema: { ...complete, [operator]: [branch] },
+              advice: 'complete inline',
+            })),
+          ]),
           ...(['if', 'then', 'else', 'not'] as const).map(keyword => ({
             schema: { ...complete, [keyword]: field },
             advice: 'complete oneOf/anyOf branches',
