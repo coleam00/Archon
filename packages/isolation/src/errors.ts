@@ -92,6 +92,7 @@ export type IsolationFailureKind =
   | 'no_space'
   | 'configured_branch_missing'
   | 'submodule_failed'
+  | 'branch_checked_out'
   | 'branch_exists'
   | 'path_exists'
   | 'worktree_registered'
@@ -144,6 +145,7 @@ const FAILURE_MESSAGES = {
     'or build your configured `container.image` from ' +
     '`packages/isolation/docker/runner.Dockerfile`.',
   unclassified: undefined,
+  branch_checked_out: undefined,
   branch_exists: undefined,
   path_exists: undefined,
   worktree_registered: undefined,
