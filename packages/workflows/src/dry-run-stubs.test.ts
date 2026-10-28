@@ -44,6 +44,42 @@ describe('loadDryRunStubs', () => {
 });
 
 describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
+  test.each([false, true])(
+    'preserves authored null in agent and exec outputs with defaultStubs=%s',
+    async defaultStubs => {
+      const workflow = makeTestWorkflow({
+        name: 'null-stubs',
+        nodes: [
+          { id: 'agent', prompt: 'Produce a value' },
+          { id: 'exec', bash: 'echo unused' },
+          {
+            id: 'consumer',
+            prompt: 'agent=$agent.output; exec=$exec.output',
+            depends_on: ['agent', 'exec'],
+          },
+        ],
+      });
+      const stubs = await loadDryRunStubs(
+        temporaryFile('agent: null\nexec: null\nconsumer: done\n')
+      );
+      const result = await dryRunWorkflow({ workflow, stubs, defaultStubs });
+
+      expect(result.outcome).toBe('completed');
+      expect(result.missingStubs).toEqual([]);
+      expect(result.toleratedMissingStubs).toEqual([]);
+      expect(result.unusedStubs).toEqual([]);
+      for (const nodeId of ['agent', 'exec']) {
+        expect(result.trace.find(entry => entry.nodeId === nodeId)).toMatchObject({
+          state: 'stubbed',
+          output: 'null',
+        });
+      }
+      expect(result.trace.find(entry => entry.nodeId === 'consumer')?.resolvedText).toBe(
+        'agent=null; exec=null'
+      );
+    }
+  );
+
   test('writes YAML-native schema placeholders for flattened and loop-group node ids', async () => {
     const block = makeTestWorkflow({
       name: 'review-block',
@@ -308,6 +344,17 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
     });
     expect(missingField.outcome).toBe('failed');
     expect(missingField.trace[0]).toMatchObject({
+      nodeId: 'certified',
+      state: 'failed',
+      reason: expect.stringContaining('does not satisfy its output_format'),
+    });
+
+    const nullValue = await dryRunWorkflow({
+      workflow,
+      stubs: { certified: null },
+    });
+    expect(nullValue.outcome).toBe('failed');
+    expect(nullValue.trace[0]).toMatchObject({
       nodeId: 'certified',
       state: 'failed',
       reason: expect.stringContaining('does not satisfy its output_format'),

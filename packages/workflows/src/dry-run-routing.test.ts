@@ -294,8 +294,10 @@ describe('dry-run reachability and missing stubs', () => {
 
     expect(result.outcome).toBe('completed');
     expect(result.missingStubs).toEqual(['review-complete']);
+    expect(result.toleratedMissingStubs).toEqual(['review-complete']);
     expect(result.trace.find(entry => entry.nodeId === 'review-complete')).toMatchObject({
       state: 'stubbed',
+      output: 'TODO',
       reason: expect.stringContaining('all_done'),
     });
     expect(result.trace.find(entry => entry.nodeId === 'synthesize')?.state).toBe('stubbed');
