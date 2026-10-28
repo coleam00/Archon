@@ -304,6 +304,7 @@ export function runWorkflowEngineContractTests(
 
     it('surfaces a failed terminal write after preparation rejection without executing', async () => {
       const persistError = new Error('failure write refused');
+      const setupError = new Error('setup rejected');
       let failureWrites = 0;
       let executed = false;
       const store = resumableStore({
@@ -325,12 +326,12 @@ export function runWorkflowEngineContractTests(
           ...resumeCallInput(),
           run: makeRun({ status: 'paused' }),
           prepareExecution: async () => {
-            throw new Error('setup rejected');
+            throw setupError;
           },
         })
       );
       expect(error).toBeInstanceOf(TerminalStatusWriteError);
-      expect(error).toMatchObject({ cause: persistError });
+      expect(error).toMatchObject({ cause: persistError, failure: setupError });
       expect(failureWrites).toBe(1);
       expect(executed).toBe(false);
     });

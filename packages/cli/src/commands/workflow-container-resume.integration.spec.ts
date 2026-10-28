@@ -320,6 +320,25 @@ test.each(['restart', 'credentials'] as const)(
   }
 );
 
+test('a preparation failure whose failed-status write is refused does not claim the run failed', async () => {
+  await fixture(async f => {
+    const candidate = await f.paused('approved');
+    f.resume.mockRejectedValueOnce(new Error('restart refused'));
+    watch(spyOn(f.store, 'failWorkflowRun')).mockRejectedValueOnce(
+      new Error('SQLITE_BUSY: database is locked')
+    );
+    const error = await f.command(candidate).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain('restart refused');
+    expect(message).toContain('could not be marked failed');
+    expect(message).toContain('SQLITE_BUSY: database is locked');
+    expect(message).not.toContain('The run is marked failed');
+    expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('running');
+    expect(f.execute).not.toHaveBeenCalled();
+  });
+});
+
 test.each(['restart', 'credentials'] as const)(
   '%s setup failure before the first node permits source-release retry',
   async failure => {

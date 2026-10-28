@@ -851,7 +851,7 @@ describe('project storage collisions', () => {
 
     // Cleanup of an unowned checkout inside the process's directory.
     const stray = await gitCheckout(join(cwdCheckout, 'stray'));
-    const remove = mock(async () => {});
+    const remove = mock(async (detached: string) => fsPromises.rm(detached, { recursive: true }));
     await inDirectory(cwdCheckout, () => codebases.removeUnregisteredCheckout(stray, remove));
     expect(remove).toHaveBeenCalledTimes(1);
   });
@@ -1299,8 +1299,8 @@ describe('project storage collisions', () => {
         );
       else await fsPromises.chmod(locked, 0o000);
       const checkout = await gitCheckout(join(root, 'fresh'), 'https://github.com/acme/api.git');
-      const remove = mock(async () => {
-        await fsPromises.rm(checkout, { recursive: true });
+      const remove = mock(async (detached: string) => {
+        await fsPromises.rm(detached, { recursive: true });
       });
       const warnings: string[] = [];
       setLogSink(line => {
@@ -1330,8 +1330,8 @@ describe('project storage collisions', () => {
       await store.createCodebase({ name: 'acme/broken', default_cwd: broken });
       await rm(join(broken, '.git'), { recursive: true });
       const checkout = await gitCheckout(join(root, 'fresh'), 'https://github.com/acme/api.git');
-      const remove = mock(async () => {
-        await fsPromises.rm(checkout, { recursive: true });
+      const remove = mock(async (detached: string) => {
+        await fsPromises.rm(detached, { recursive: true });
       });
 
       await store.removeUnregisteredCheckout(checkout, remove);

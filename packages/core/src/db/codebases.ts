@@ -25,7 +25,7 @@ import {
 } from '@archon/paths';
 import {
   allocateProjectName,
-  isCheckoutRegistered,
+  removeCheckoutUnlessRegistered,
   resolveRegistrationUrl,
 } from '../services/project-registration-identity';
 import {
@@ -123,25 +123,23 @@ async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Prom
 
 export async function removeUnregisteredCheckout(
   path: string,
-  remove: () => Promise<void>
+  remove: (detached: string) => Promise<void>
 ): Promise<void> {
-  // SQLite may retry a transaction after COMMIT; filesystem removal must run only once.
-  let removed = false;
-  await getDatabase().withTransaction(async query => {
-    if (getDatabaseType() === 'postgresql') {
-      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-        CODEBASE_IDENTITY_LOCK,
-      ]);
-    } else {
-      // BEGIN is deferred; reserve the SQLite writer before checking filesystem ownership.
-      await query('UPDATE remote_agent_codebases SET id = id WHERE 1 = 0');
-    }
-    const registered = await query<Codebase>('SELECT * FROM remote_agent_codebases');
-    if (!removed && !(await isCheckoutRegistered(path, registered.rows))) {
-      await remove();
-      removed = true;
-    }
-  });
+  await removeCheckoutUnlessRegistered(path, remove, detachIfUnregistered =>
+    getDatabase().withTransaction(async query => {
+      if (getDatabaseType() === 'postgresql') {
+        await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          CODEBASE_IDENTITY_LOCK,
+        ]);
+      } else {
+        // BEGIN is deferred; reserve the SQLite writer before checking filesystem ownership.
+        await query('UPDATE remote_agent_codebases SET id = id WHERE 1 = 0');
+      }
+      await detachIfUnregistered(
+        async () => (await query<Codebase>('SELECT * FROM remote_agent_codebases')).rows
+      );
+    })
+  );
 }
 
 export async function getCodebase(id: string): Promise<Codebase | null> {

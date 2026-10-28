@@ -7,10 +7,18 @@ import {
   createTestWorkflowHost,
 } from '../test-support/workflow-command-harness';
 
-import { describe, it, expect, spyOn, mock } from 'bun:test';
+import { describe, it, expect, spyOn, mock, afterEach } from 'bun:test';
 
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
+
+// These tests replace the harness's standing codebase and discovery answers. Restore them:
+// the next suite in this process would otherwise run against a folder codebase.
+afterEach(async () => {
+  const codebases = await import('@archon/core/db/codebases');
+  (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(null);
+  mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
+});
 
 describe('workflow run credential launch refusal', () => {
   it.each(

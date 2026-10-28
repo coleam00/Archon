@@ -53,10 +53,26 @@ describe('requireTerminalStatusWrite', () => {
 
     expect(logError).toHaveBeenCalledTimes(1);
     const [context, tag] = logError.mock.calls[0] as [Record<string, unknown>, string];
-    expect(context.err).toBe(cause);
+    expect(context.err).toBeInstanceOf(TerminalStatusWriteError);
+    expect(context.err).toMatchObject({ cause });
     expect(context.workflowRunId).toBe('run-1');
     expect(context.site).toBe('executor.backstop_fail_failed');
     expect(tag).toBe('workflow.terminal_status_write_failed');
+  });
+
+  it('logs and carries the failure the write was recording', async () => {
+    const cause = new Error('SQLITE_BUSY: database is locked');
+    const failure = new Error('setup rejected');
+
+    const rejection = requireTerminalStatusWrite(Promise.reject(cause), {
+      workflowRunId: 'run-1',
+      site: 'engine.resume_preparation_failed',
+      failure,
+    });
+    await expect(rejection).rejects.toMatchObject({ cause, failure });
+
+    const [context] = logError.mock.calls[0] as [Record<string, unknown>];
+    expect(context.err).toMatchObject({ cause, failure });
   });
 
   it('keeps the original error reachable as the marker cause', async () => {
