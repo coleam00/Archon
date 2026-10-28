@@ -247,7 +247,7 @@ describe('schema edges', () => {
       'oneOf',
     ]);
     expect(jsonSchemaChildren({ items: leaf }, 'out')).toEqual([
-      { node: leaf, path: 'out.items', relation: 'array-item', firstItem: 0, lastItem: Infinity },
+      { node: leaf, path: 'out.items', relation: 'array-item' },
     ]);
   });
 });

@@ -83,10 +83,8 @@ export function isJsonSchemaCompositionKeyword(key: string): boolean {
 type JsonSchemaChild = {
   node: Record<string, unknown>;
   path: string;
-} & (
-  | { relation: 'array-item'; firstItem: number; lastItem: number }
-  | { relation: Exclude<JsonSchemaEdge['relation'], 'array-item'> }
-);
+  relation: JsonSchemaEdge['relation'];
+};
 
 /** Direct object subschemas, with their relationship to the containing instance. */
 export function jsonSchemaChildren(node: Record<string, unknown>, path: string): JsonSchemaChild[] {
@@ -103,22 +101,19 @@ function schemaEdgeChildren(
 ): JsonSchemaChild[] {
   const value = node[key];
   const children: JsonSchemaChild[] = [];
-  const firstItem = arrayItemStart(node, key);
-  const add = (subschema: unknown, childPath: string, index?: number): void => {
+  const add = (subschema: unknown, childPath: string): void => {
     // Boolean schemas have no children; arrays in dependency maps are property dependencies.
     if (subschema !== null && typeof subschema === 'object' && !Array.isArray(subschema)) {
       children.push({
         node: subschema as Record<string, unknown>,
         path: childPath,
-        ...(edge.relation === 'array-item'
-          ? { relation: edge.relation, firstItem: index ?? firstItem, lastItem: index ?? Infinity }
-          : { relation: edge.relation }),
+        relation: edge.relation,
       });
     }
   };
   if (edge.kind === 'array' || (edge.kind === 'schema-or-array' && Array.isArray(value))) {
     if (Array.isArray(value)) {
-      value.forEach((item, index) => add(item, `${path}[${index}]`, index));
+      value.forEach((item, index) => add(item, `${path}[${index}]`));
     }
   } else if (edge.kind === 'map') {
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
@@ -130,12 +125,6 @@ function schemaEdgeChildren(
     add(value, path);
   }
   return children;
-}
-
-function arrayItemStart(node: Record<string, unknown>, key: string): number {
-  const tuple =
-    key === 'additionalItems' ? node.items : key === 'items' ? node.prefixItems : undefined;
-  return Array.isArray(tuple) ? tuple.length : 0;
 }
 
 /** Visit schema nodes, excluding property maps and annotation data. */

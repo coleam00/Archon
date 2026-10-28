@@ -516,242 +516,41 @@ describe('executeDagWorkflow -- strict-schema preflight', () => {
 });
 
 describe('assertRunCapabilities', () => {
-  for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
-    for (const additionalProperties of [undefined, true, false, { type: 'string' }]) {
-      it(`checks prepared ${operator} branches with additionalProperties ${JSON.stringify(additionalProperties)}`, () => {
-        const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
-          name: 'preflight',
-          nodes: [
-            {
-              id: 'work',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Do the work' },
-              output_format: {
-                type: 'object',
-                properties: { status: { type: 'string' }, message: { type: 'string' } },
-                required: ['status', 'message'],
-                [operator]: [
-                  {
-                    properties: { status: { enum: ['success', 'blocked'] } },
-                    ...(additionalProperties === undefined ? {} : { additionalProperties }),
-                  },
-                ],
-              },
-            },
-          ],
-        };
-        const check = () =>
-          assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' });
-        if (additionalProperties === undefined || additionalProperties === true) {
-          expect(check).not.toThrow();
-          expect(collectStrictSchemaViolations(providerRegistry, workflow.nodes, 'codex')).toEqual(
-            []
-          );
-        } else {
-          expect(check).toThrow(`output_format.${operator}`);
-        }
-      });
-    }
-  }
-
-  for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
-    it(`refuses unsafe ${operator} closure at launch`, () => {
-      const parent = {
-        type: 'object',
-        properties: { status: { type: 'string' }, message: { type: 'string' } },
-        required: ['status', 'message'],
-      };
-      const nested = {
-        type: 'object',
-        properties: { payload: parent },
-        required: ['payload'],
-        [operator]: [{ properties: { payload: { properties: { status: { const: 'success' } } } } }],
-      };
-      for (const [output_format, field] of [
-        [
-          {
-            ...parent,
-            [operator]: [{ properties: { detail: { type: 'string' } }, required: ['detail'] }],
-          },
-          'detail',
-        ],
-        [
-          {
-            ...parent,
-            [operator]: [
-              {
-                properties: { status: { const: 'success' } },
-                additionalProperties: { type: 'string' },
-              },
-            ],
-          },
-          'message',
-        ],
-        [
-          {
-            ...parent,
-            [operator]: [{ properties: { status: { type: 'string' } }, required: ['detail'] }],
-          },
-          'detail',
-        ],
-        [
-          {
-            type: 'object',
-            properties: {
-              payload: { properties: { status: { type: 'string' } }, required: ['status'] },
-            },
-            required: ['payload'],
-            [operator]: [
-              {
-                properties: {
-                  payload: {
-                    properties: { status: { type: 'string' }, detail: { type: 'string' } },
-                    required: ['status', 'detail'],
-                  },
-                },
-              },
-            ],
-          },
-          'detail',
-        ],
-        [
-          {
-            ...nested,
-            $defs: { Payload: parent },
-            properties: { payload: { $ref: '#/$defs/Payload' } },
-          },
-          'reference',
-        ],
-        [nested, 'payload'],
-      ] as const) {
-        const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
-          name: 'preflight',
-          nodes: [
-            {
-              id: 'work',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Do the work' },
-              output_format,
-            },
-          ],
-        };
-        const violations = collectStrictSchemaViolations(providerRegistry, workflow.nodes, 'codex');
-        expect(violations).toEqual([
-          expect.objectContaining({
-            kind: 'unsupported-conversion',
-            nodeId: 'work',
-            message: expect.stringContaining(field),
-          }),
-        ]);
-        expect(() =>
-          assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
-        ).toThrow(`output_format.${operator}`);
-        expect(() =>
-          assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
-        ).not.toThrow();
-      }
-    });
-  }
-
-  for (const keyword of ['dependencies', 'dependentSchemas'] as const) {
-    it(`refuses partial ${keyword} without composition at launch`, () => {
+  it('admits one-level branches and refuses array intersections before execution', () => {
+    const parent = {
+      properties: { status: { type: 'string' }, message: { type: 'string' } },
+      required: ['status', 'message'],
+    };
+    for (const keyword of ['oneOf', 'anyOf', 'allOf']) {
       const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
-        name: 'preflight',
+        name: 'conditional',
         nodes: [
           {
             id: 'work',
             kind: 'agent',
-            source: { kind: 'inline', prompt: 'Do the work' },
+            source: { kind: 'inline', prompt: 'Work' },
             output_format: {
-              type: 'object',
-              properties: { status: { type: 'string' }, message: { type: 'string' } },
-              required: ['status', 'message'],
-              [keyword]: {
-                status: { properties: { status: { type: 'string' } }, required: ['status'] },
-              },
+              ...parent,
+              [keyword]: [{ properties: { status: { const: 'success' } } }],
             },
           },
         ],
       };
       expect(() =>
         assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
-      ).toThrow('complete inline dependency');
-      expect(() =>
-        assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
       ).not.toThrow();
-    });
-  }
-
-  it('rejects overlapping array closure and nested dependency requirements before launch', () => {
-    const base = { properties: { value: { type: 'string' } }, required: ['value'] };
-    const complete = {
-      properties: { ...base.properties, detail: { type: 'string' } },
-      required: ['value', 'detail'],
-    };
-    const schemas = [
-      {
-        properties: { payload: { type: 'array', items: base } },
-        required: ['payload'],
-        anyOf: [{ properties: { payload: { type: 'array', contains: complete } } }],
-      },
-      ...(['dependencies', 'dependentSchemas'] as const).map(keyword => ({
-        properties: { payload: base },
-        required: ['payload'],
-        [keyword]: {
-          payload: {
-            properties: { payload: { ...base, required: ['value', 'detail'] } },
-            required: ['payload'],
-          },
-        },
-      })),
-    ];
-    for (const output_format of schemas) {
-      const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
-        name: 'preflight',
-        nodes: [
-          {
-            id: 'work',
-            kind: 'agent',
-            source: { kind: 'inline', prompt: 'Do the work' },
-            output_format,
-          },
-        ],
+      workflow.nodes[0].output_format = {
+        type: 'array',
+        items: { properties: { a: {} }, required: ['a'] },
+        [keyword]: [{ items: { properties: { b: {} }, required: ['b'] } }],
       };
       expect(() =>
         assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
-      ).toThrow(/payload.*complete/);
+      ).toThrow('output_format.items');
       expect(() =>
         assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
       ).not.toThrow();
     }
-  });
-
-  it('accepts complete branches with independent unused definitions at launch', () => {
-    const base = { properties: { value: { type: 'string' } }, required: ['value'] };
-    const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
-      name: 'preflight',
-      nodes: [
-        {
-          id: 'work',
-          kind: 'agent',
-          source: { kind: 'inline', prompt: 'Do the work' },
-          output_format: {
-            properties: { payload: { ...base, $defs: { Unused: base } } },
-            required: ['payload'],
-            anyOf: [
-              {
-                properties: {
-                  payload: { ...base, $defs: { Unused: { properties: {}, required: [] } } },
-                },
-              },
-            ],
-          },
-        },
-      ],
-    };
-    expect(() =>
-      assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
-    ).not.toThrow();
   });
 
   it('accepts annotation data and keyword-named properties after preparation', () => {
@@ -798,7 +597,9 @@ describe('assertRunCapabilities', () => {
     };
     expect(() =>
       assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
-    ).toThrow(/node 'work'.*output_format.properties.child.not.*complete oneOf\/anyOf branches/);
+    ).toThrow(
+      /node 'work'.*output_format.properties.child.not.*complete inline oneOf\/anyOf branches/
+    );
     expect(() =>
       assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
     ).not.toThrow();

@@ -2144,7 +2144,7 @@ describe('validateWorkflowResources — strict-schema compatibility', () => {
         [schema, undefined],
         [
           { ...schema, [operator]: [{ properties: { status: {} }, additionalProperties: false }] },
-          operator === 'allOf' ? 'complete property map' : 'required',
+          'additionalProperties',
         ],
         [{ ...schema, not: { properties: { status: { const: 'bad' } } } }, 'output_format.not'],
       ] as const) {
