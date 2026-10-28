@@ -587,6 +587,41 @@ describe('assertRunCapabilities', () => {
           },
           'message',
         ],
+        [
+          {
+            ...parent,
+            [operator]: [{ properties: { status: { type: 'string' } }, required: ['detail'] }],
+          },
+          'detail',
+        ],
+        [
+          {
+            type: 'object',
+            properties: {
+              payload: { properties: { status: { type: 'string' } }, required: ['status'] },
+            },
+            required: ['payload'],
+            [operator]: [
+              {
+                properties: {
+                  payload: {
+                    properties: { status: { type: 'string' }, detail: { type: 'string' } },
+                    required: ['status', 'detail'],
+                  },
+                },
+              },
+            ],
+          },
+          'detail',
+        ],
+        [
+          {
+            ...nested,
+            $defs: { Payload: parent },
+            properties: { payload: { $ref: '#/$defs/Payload' } },
+          },
+          'reference',
+        ],
         [nested, 'payload'],
       ] as const) {
         const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
@@ -615,6 +650,35 @@ describe('assertRunCapabilities', () => {
           assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
         ).not.toThrow();
       }
+    });
+  }
+
+  for (const keyword of ['dependencies', 'dependentSchemas'] as const) {
+    it(`refuses partial ${keyword} without composition at launch`, () => {
+      const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
+        name: 'preflight',
+        nodes: [
+          {
+            id: 'work',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'Do the work' },
+            output_format: {
+              type: 'object',
+              properties: { status: { type: 'string' }, message: { type: 'string' } },
+              required: ['status', 'message'],
+              [keyword]: {
+                status: { properties: { status: { type: 'string' } }, required: ['status'] },
+              },
+            },
+          },
+        ],
+      };
+      expect(() =>
+        assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
+      ).toThrow('complete inline dependency');
+      expect(() =>
+        assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
+      ).not.toThrow();
     });
   }
 

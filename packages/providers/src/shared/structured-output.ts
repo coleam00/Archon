@@ -1,5 +1,5 @@
 import { jsonrepair } from 'jsonrepair';
-import { isObjectSchemaNode } from '@archon/provider-contract';
+import { isObjectSchemaNode, visitJsonSchema } from '@archon/provider-contract';
 
 /**
  * Append a "respond with JSON matching this schema" instruction to the user
@@ -123,19 +123,15 @@ function tryJsonParseObject(text: string): unknown {
  * untouched. See issue #1843.
  */
 export function hasOpenAdditionalProperties(schema: unknown): boolean {
-  if (Array.isArray(schema)) {
-    return schema.some(hasOpenAdditionalProperties);
-  }
-  if (schema === null || typeof schema !== 'object') {
-    return false;
-  }
-  const node = schema as Record<string, unknown>;
-  if (
-    isObjectSchemaNode(node) &&
-    'additionalProperties' in node &&
-    node.additionalProperties !== false
-  ) {
-    return true;
-  }
-  return Object.values(node).some(hasOpenAdditionalProperties);
+  let found = false;
+  visitJsonSchema(schema, 'output_format', node => {
+    if (
+      isObjectSchemaNode(node) &&
+      'additionalProperties' in node &&
+      node.additionalProperties !== false
+    ) {
+      found = true;
+    }
+  });
+  return found;
 }

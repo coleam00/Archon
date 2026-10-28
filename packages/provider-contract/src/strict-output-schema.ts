@@ -57,7 +57,7 @@ export function findPreparedStrictSchemaIssues(
  * These requirements already hold on that value; optional fields stay optional.
  * Explicitly closed branches retain their authored restriction. Unsupported
  * conditional keywords, composition constraints without usable inline property maps,
- * incomplete schema-valued dependencies on composition ancestry,
+ * incomplete schema-valued dependencies,
  * incompatible property name sets, typed partial branches, incomplete nested
  * redeclarations, and branch completion
  * that would duplicate a resource identifier or relocate a relative reference
@@ -80,28 +80,26 @@ export function normalizeJsonSchemaForOpenAiStrict(
       }
     }
   });
-  assertCompositionsCanBeClosed(schema);
+  assertSameInstanceConstraintsCanBeClosed(schema);
   const normalized = normalizeNode(schema, 'output_format');
   visitJsonSchema(normalized, 'output_format', (node, path) => {
     const constraints = sameInstanceNodes(node);
-    if (constraints.some(hasComposition)) {
-      const names = new Set(sameInstancePropertyMaps(node).flatMap(map => Object.keys(map)));
-      for (const dependency of constraints.flatMap(schemaDependencies)) {
-        if (
-          sameInstancePropertyMaps(dependency).some(map =>
-            [...names].some(name => !Object.hasOwn(map, name))
-          )
-        ) {
-          throw new Error(
-            `Codex output schema at ${path} cannot close partial schema-valued dependencies in a composition. Use complete inline dependency object branches declaring all enclosing properties instead.`
-          );
-        }
+    const names = new Set(sameInstancePropertyMaps(node).flatMap(map => Object.keys(map)));
+    for (const dependency of constraints.flatMap(schemaDependencies)) {
+      if (
+        sameInstancePropertyMaps(dependency).some(map =>
+          [...names].some(name => !Object.hasOwn(map, name))
+        )
+      ) {
+        throw new Error(
+          `Codex output schema at ${path} cannot close partial schema-valued dependencies. Use complete inline dependency object branches declaring all enclosing properties instead.`
+        );
       }
     }
     if (!Array.isArray(node.allOf)) return;
     const maps = sameInstancePropertyMaps(node);
-    const names = new Set(maps.flatMap(map => Object.keys(map)));
-    if (maps.some(map => [...names].some(name => !Object.hasOwn(map, name)))) {
+    const intersectionNames = new Set(maps.flatMap(map => Object.keys(map)));
+    if (maps.some(map => [...intersectionNames].some(name => !Object.hasOwn(map, name)))) {
       throw new Error(
         `Codex output schema at ${path}.allOf cannot close intersections with different property name sets. Declare the complete property map on the enclosing object and in explicitly closed branches, or write complete allOf branches.`
       );
@@ -144,7 +142,8 @@ function normalizeNode(
     assertInheritedPropertiesCanBeCopied(
       enclosing.properties ?? {},
       properties,
-      constraints.relocatedProperties
+      constraints.relocatedProperties,
+      path
     );
   }
   const source = expand
@@ -181,6 +180,16 @@ function assertBranchCanBeClosed(
       `Codex output schema at ${path} declares branch-only properties ${extra.join(', ')} that enclosing strict closure forbids. Declare the complete property map on the enclosing object and in its branches instead.`
     );
   }
+  const completed = { ...inherited, ...properties };
+  const undeclaredRequired = [
+    ...(enclosing.required ?? []),
+    ...(Array.isArray(node.required) ? node.required : []),
+  ].filter(name => typeof name === 'string' && !Object.hasOwn(completed, name));
+  if (undeclaredRequired.length > 0) {
+    throw new Error(
+      `Codex output schema at ${path}.required requires undeclared fields ${undeclaredRequired.join(', ')} that strict closure forbids. Declare the complete property map on the enclosing object and in its branches instead.`
+    );
+  }
   const missing = Object.keys(inherited).filter(name => !Object.hasOwn(properties, name));
   if (isRecord(node.additionalProperties) && missing.length > 0) {
     throw new Error(
@@ -194,14 +203,18 @@ function assertBranchCanBeClosed(
 
 function assertNestedPropertyMapsComplete(parent: unknown, local: unknown, path: string): void {
   if (!isRecord(parent) || !isRecord(local)) return;
+  if (
+    [...sameInstanceNodes(parent), ...sameInstanceNodes(local)].some(node =>
+      ['$ref', '$dynamicRef', '$recursiveRef'].some(keyword => keyword in node)
+    )
+  ) {
+    throw new Error(
+      `Codex output schema at ${path} cannot establish safe nested closure through a reference redeclaration. Use complete inline nested property schemas on the enclosing object and in its branches instead.`
+    );
+  }
   for (const parentMap of sameInstancePropertyMaps(parent)) {
     for (const localMap of sameInstancePropertyMaps(local)) {
-      const missing = Object.keys(parentMap).filter(name => !Object.hasOwn(localMap, name));
-      if (missing.length > 0) {
-        throw new Error(
-          `Codex output schema at ${path} cannot close a nested property missing enclosing fields ${missing.join(', ')}. Use a complete nested property map in the branch instead.`
-        );
-      }
+      assertNestedPropertyNamesMatch(parentMap, localMap, path);
     }
   }
   const parentChildren = new Map(
@@ -211,6 +224,25 @@ function assertNestedPropertyMapsComplete(parent: unknown, local: unknown, path:
     if (child.relation !== 'nested') continue;
     const inherited = parentChildren.get(child.path);
     if (inherited) assertNestedPropertyMapsComplete(inherited.node, child.node, child.path);
+  }
+}
+
+function assertNestedPropertyNamesMatch(
+  parentMap: Record<string, unknown>,
+  localMap: Record<string, unknown>,
+  path: string
+): void {
+  const extra = Object.keys(localMap).filter(name => !Object.hasOwn(parentMap, name));
+  if (extra.length > 0) {
+    throw new Error(
+      `Codex output schema at ${path} declares nested branch-only fields ${extra.join(', ')} that enclosing strict closure forbids. Declare these fields in the complete enclosing nested property map instead.`
+    );
+  }
+  const missing = Object.keys(parentMap).filter(name => !Object.hasOwn(localMap, name));
+  if (missing.length > 0) {
+    throw new Error(
+      `Codex output schema at ${path} cannot close a nested property missing enclosing fields ${missing.join(', ')}. Use a complete nested property map in the branch instead.`
+    );
   }
 }
 
@@ -231,11 +263,12 @@ function inheritedPropertyRelocations(
 function assertInheritedPropertiesCanBeCopied(
   inherited: Record<string, unknown>,
   local: Record<string, unknown>,
-  relocated: ReadonlySet<string>
+  relocated: ReadonlySet<string>,
+  path: string
 ): void {
   for (const [name, value] of Object.entries(inherited)) {
     if (Object.hasOwn(local, name)) continue;
-    visitJsonSchema(value, 'output_format', node => {
+    visitJsonSchema(value, `${path}.properties.${name}`, (node, propertyPath) => {
       for (const keyword of ['$ref', '$dynamicRef', '$recursiveRef']) {
         const reference = node[keyword];
         if (
@@ -244,14 +277,14 @@ function assertInheritedPropertiesCanBeCopied(
           !/^[a-z][a-z0-9+.-]*:/i.test(reference)
         ) {
           throw new Error(
-            `Codex output schema cannot copy a property containing relative ${keyword} across a branch $id boundary. Use complete inline composition branches or absolute property references instead.`
+            `Codex output schema at ${propertyPath} cannot copy a property containing relative ${keyword} across a branch $id boundary. Use complete inline composition branches or absolute property references instead.`
           );
         }
       }
       for (const keyword of ['$id', '$anchor', '$dynamicAnchor']) {
         if (keyword in node) {
           throw new Error(
-            `Codex output schema cannot copy a property containing ${keyword} into a conditional branch. Move the reusable schema to one definition and use $ref instead.`
+            `Codex output schema at ${propertyPath} cannot copy a property containing ${keyword} into a conditional branch. Move the reusable schema to one definition and use $ref instead.`
           );
         }
       }
@@ -265,10 +298,14 @@ function hasComposition(node: Record<string, unknown>): boolean {
   );
 }
 
-function assertCompositionsCanBeClosed(schema: unknown): void {
+function assertSameInstanceConstraintsCanBeClosed(schema: unknown): void {
   visitJsonSchema(schema, 'output_format', (node, path) => {
     const constraints = sameInstanceNodes(node);
-    if (!constraints.some(hasComposition)) return;
+    if (
+      !constraints.some(hasComposition) &&
+      !constraints.some(node => schemaDependencies(node).length > 0)
+    )
+      return;
     for (const constraint of constraints) {
       const reference = ['$ref', '$dynamicRef', '$recursiveRef'].find(key => key in constraint);
       if (
@@ -278,7 +315,7 @@ function assertCompositionsCanBeClosed(schema: unknown): void {
           (isObjectSchemaNode(constraint) || 'required' in constraint))
       ) {
         throw new Error(
-          `Codex output schema at ${path} cannot establish safe strict closure for this composition. Use complete inline oneOf/anyOf/allOf object branches with explicit properties instead of same-instance references, patternProperties, or object constraints without a property map.`
+          `Codex output schema at ${path} cannot establish safe strict closure for these same-instance constraints. Use complete inline oneOf/anyOf/allOf object branches with explicit properties instead of same-instance references, patternProperties, or object constraints without a property map.`
         );
       }
     }
