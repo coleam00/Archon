@@ -1256,6 +1256,48 @@ describe('interactive loop node', () => {
       }
     );
 
+    for (const feedbackGiven of [true, false]) {
+      it.each([
+        { signaledCostUsd: undefined, priorFloor: 0.02 },
+        { signaledCostUsd: null, priorFloor: 0.02 },
+        { signaledCostUsd: -0.01, priorFloor: 0.02 },
+        { signaledCostUsd: 0, priorFloor: 0.02 },
+        { signaledCostUsd: 0.01, priorFloor: 0.02 },
+        { signaledCostUsd: 0.04, priorFloor: 0.04 },
+      ])(
+        `preserves mismatched gate cost %j as partial with feedback=${feedbackGiven}`,
+        async ({ signaledCostUsd, priorFloor }) => {
+          const runId = `mismatched-gate-${feedbackGiven}-${signaledCostUsd}`;
+          const execution = executionMetadata(
+            finishNodeExecution(
+              startNodeExecution({
+                runId,
+                path: 'refine',
+                node: refine,
+                invocation: newNodeInvocation(),
+                provider: 'claude',
+              }),
+              { status: 'suspended', point: 'interactive_loop' },
+              { costUsd: 0.02 }
+            )
+          );
+          const { completed } = await resumeAt(
+            runId,
+            gate({ execution, signaledCostUsd }),
+            feedbackGiven
+          );
+          const floor = priorFloor + (feedbackGiven ? 0.03 : 0);
+          expect(mockSendQueryDag.mock.calls.length).toBe(feedbackGiven ? 1 : 0);
+          expect(completed?.data?.cost_usd).toBeCloseTo(floor, 5);
+          expect(completed?.data).toMatchObject({
+            spend: {
+              costUsd: { source: 'provider', value: expect.closeTo(floor, 5), partial: true },
+            },
+          });
+        }
+      );
+    }
+
     it('feedback on a legacy gate with null cost keeps the priced floor partial', async () => {
       const { store, completed, snapshot } = await resumeAt(
         'legacy-feedback',

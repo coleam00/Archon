@@ -447,6 +447,32 @@ function readLoopGate(
   return { gate, savedExecution };
 }
 
+function readLoopGateCost(
+  savedExecution: NodeExecutionRecord | undefined,
+  signaledCostUsd: number | undefined
+): Pick<LoopResume, 'costUsd' | 'priorCostKnown'> {
+  const savedSpend = attemptSpend(savedExecution);
+  const savedCost = savedExecution?.spend.costUsd;
+  const savedCostUsd =
+    savedSpend.kind === 'known'
+      ? savedSpend.usd
+      : savedCost?.source === 'provider'
+        ? savedCost.value
+        : undefined;
+  // Both fields describe the same cumulative spend. A disagreement retains the
+  // larger floor, never their sum, and cannot prove an exact total.
+  const costUsd =
+    savedCostUsd === undefined
+      ? signaledCostUsd
+      : signaledCostUsd === undefined
+        ? savedCostUsd
+        : Math.max(savedCostUsd, signaledCostUsd);
+  return {
+    costUsd,
+    priorCostKnown: savedSpend.kind === 'known' && savedSpend.usd === signaledCostUsd,
+  };
+}
+
 function readLoopResume(
   workflowRun: WorkflowRun,
   node: LoopNode,
@@ -457,6 +483,13 @@ function readLoopResume(
   const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
   const feedbackGiven = gate !== undefined && loopGateRunMeta.loop_feedback_given === true;
   const persistedUsageContext = { workflowRunId: workflowRun.id, nodeId: node.id };
+  const gateCost =
+    gate === undefined
+      ? { costUsd: undefined, priorCostKnown: true }
+      : readLoopGateCost(
+          savedExecution,
+          readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
+        );
   return {
     savedExecution,
     gate,
@@ -469,12 +502,7 @@ function readLoopResume(
       gate !== undefined && feedbackGiven
         ? Math.max(node.loop.max_iterations, startIteration)
         : node.loop.max_iterations,
-    costUsd:
-      gate !== undefined
-        ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
-        : undefined,
-    // A legacy gate has no saved execution, so its carried-in cost is never known complete.
-    priorCostKnown: gate === undefined || attemptSpend(savedExecution).kind === 'known',
+    ...gateCost,
     tokens:
       gate !== undefined
         ? readSignaledTokens(gate.signaledTokens, persistedUsageContext)
