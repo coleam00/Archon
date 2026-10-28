@@ -214,6 +214,8 @@ async function checkWorktreeOwner(
         `Retained checkout ${row.working_path ?? ''} for run ${row.id}: ${reason}; stop that owner and retry abandonment from its host and user.`,
       ],
     };
+  if (root?.parent_run_id && rootOutcome?.kind === 'no_owner_answered')
+    return retainUnresolvedSubrunCheckout(row, root);
   if (root?.id === row.id)
     return {
       safe: !(rootOutcome?.kind === 'stopped' && rootOutcome.cleanupWarnings?.length),
@@ -236,8 +238,19 @@ async function checkWorktreeOwner(
   }
   if (outcome.kind === 'not_stopped')
     return { safe: false, warnings: [`Retained checkout for run ${row.id}: ${outcome.message}`] };
+  if (!root && row.parent_run_id && outcome.kind === 'no_owner_answered')
+    return retainUnresolvedSubrunCheckout(row, row);
   const warnings = outcome.kind === 'stopped' ? (outcome.cleanupWarnings ?? []) : [];
   return { safe: warnings.length === 0, warnings };
+}
+
+function retainUnresolvedSubrunCheckout(row: WorkflowRun, target: WorkflowRun) {
+  return {
+    safe: false,
+    warnings: [
+      `Retained checkout ${row.working_path ?? ''} for run ${row.id}: no owner answered for sub-run ${target.id} (parent ${target.parent_run_id}); its enclosing execution may still be using this checkout. Cancellation is recorded, but removal was skipped. Inspect the owning execution and stop or abandon it only if you intend to stop its whole scope. Repeating abandonment of this silent sub-run alone may continue retaining the checkout.`,
+    ],
+  };
 }
 
 async function persistCleanupWarnings(
