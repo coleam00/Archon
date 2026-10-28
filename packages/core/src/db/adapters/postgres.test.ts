@@ -18,7 +18,7 @@ interface MockClient {
 // Mutable state shared between the mock factory and individual tests
 let mockPoolQuery: MockQueryFn = async () => ({ rows: [], rowCount: 0 });
 let mockClient: MockClient = {
-  query: async () => ({ rows: [], rowCount: 0 }),
+  query: async () => ({ rows: [], rowCount: 1 }),
   release: () => {},
 };
 let poolErrorHandler: ((err: Error) => void) | undefined;
@@ -76,7 +76,7 @@ describe('PostgresAdapter', () => {
     // Reset shared mock state before each test
     mockPoolQuery = async () => ({ rows: [], rowCount: 0 });
     mockClient = {
-      query: async () => ({ rows: [], rowCount: 0 }),
+      query: async () => ({ rows: [], rowCount: 1 }),
       release: () => {},
     };
     mockSchemaSQL = '-- noop schema';
@@ -482,7 +482,7 @@ describe('PostgresAdapter', () => {
             throw error;
           }
           if (sql === 'ROLLBACK') rollbacks++;
-          return { rows: [], rowCount: 0 };
+          return { rows: [], rowCount: 1 };
         },
         release: () => {
           releases++;
@@ -500,7 +500,7 @@ describe('PostgresAdapter', () => {
       mockClient = {
         query: async (sql: string) => {
           issued.push(sql);
-          return { rows: [], rowCount: 0 };
+          return { rows: [], rowCount: 1 };
         },
         release: () => {},
       };
@@ -530,7 +530,7 @@ describe('PostgresAdapter', () => {
           issued.push({ sql, params });
           // Fresh database: the pre-existence probe finds no codebases table.
           if (sql.includes('to_regclass')) return { rows: [{ exists: false }], rowCount: 1 };
-          return { rows: [], rowCount: 0 };
+          return { rows: [], rowCount: 1 };
         },
         release: () => {},
       };
@@ -556,36 +556,52 @@ describe('PostgresAdapter', () => {
       expect(issued[versionIdx]?.params).toEqual([APP_VERSION, APP_VERSION]);
     });
 
-    /**
-     * The vintage row is diagnostic metadata. A failure to write it must roll back
-     * only that statement — if it aborted initSchema, schemaInitPromise would reject
-     * and every later query would too, bricking the adapter over a row nothing gates on.
-     */
-    test('a failed vintage write rolls back to the savepoint and still commits', async () => {
-      const issued: string[] = [];
-      mockClient = {
-        query: async (sql: string) => {
-          issued.push(sql);
-          if (sql.includes('to_regclass')) return { rows: [{ exists: false }], rowCount: 1 };
-          if (sql.includes('INSERT INTO remote_agent_schema_version')) {
-            throw new Error('permission denied for table remote_agent_schema_version');
-          }
-          return { rows: [], rowCount: 0 };
-        },
-        release: () => {},
-      };
-      mockSchemaSQL = '-- schema sql';
-
-      const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
-
-      // The adapter must remain usable — this is the whole point of the savepoint.
-      await expect(a.query('SELECT 1')).resolves.toBeDefined();
-
-      expect(issued).toContain('SAVEPOINT schema_version');
-      expect(issued).toContain('ROLLBACK TO SAVEPOINT schema_version');
-      expect(issued).toContain('COMMIT');
-      expect(issued).not.toContain('ROLLBACK');
-    });
+    test.each([
+      ['insert', '40P01'],
+      ['insert', '42501'],
+      ['fingerprint', '40P01'],
+      ['fingerprint', '42501'],
+      ['missing row', undefined],
+      ['trigger', '40P01'],
+      ['trigger', '08006'],
+    ])(
+      'a failed completion %s rejects every gated operation and rolls back',
+      async (stage, code) => {
+        await adapter.query('SELECT 0');
+        const issued: string[] = [];
+        const failure = Object.assign(new Error('completion failed'), { code });
+        mockClient = {
+          query: async sql => {
+            issued.push(sql);
+            if (
+              (stage === 'insert' && sql.includes('INSERT INTO remote_agent_schema_version')) ||
+              (stage === 'fingerprint' && sql.includes('SET schema_fingerprint')) ||
+              (stage === 'trigger' && sql.includes('archon_notify_workflow_event'))
+            )
+              throw failure;
+            return { rows: [], rowCount: stage === 'missing row' ? 0 : 1 };
+          },
+          release: () => {},
+        };
+        const db = new PostgresAdapter('postgresql://localhost:5432/testdb');
+        const expected =
+          stage === 'missing row'
+            ? 'Schema completion requires exactly one version row'
+            : 'completion failed';
+        await expect(db.query('SELECT 1')).rejects.toThrow(expected);
+        await expect(db.withTransaction(async () => undefined)).rejects.toThrow(expected);
+        await expect(
+          db.listen(
+            'events',
+            () => {},
+            () => {}
+          )
+        ).rejects.toThrow(expected);
+        expect(issued).toContain('ROLLBACK');
+        expect(issued).not.toContain('COMMIT');
+        await db.close();
+      }
+    );
 
     test('leaves the creation vintage unknown for a pre-existing database', async () => {
       const issued: { sql: string; params?: unknown[] }[] = [];
@@ -593,7 +609,7 @@ describe('PostgresAdapter', () => {
         query: async (sql: string, params?: unknown[]) => {
           issued.push({ sql, params });
           if (sql.includes('to_regclass')) return { rows: [{ exists: true }], rowCount: 1 };
-          return { rows: [], rowCount: 0 };
+          return { rows: [], rowCount: 1 };
         },
         release: () => {},
       };
@@ -612,7 +628,7 @@ describe('PostgresAdapter', () => {
       mockClient = {
         query: async (sql: string) => {
           if (sql === '-- schema sql') schemaSqlCallCount++;
-          return { rows: [], rowCount: 0 };
+          return { rows: [], rowCount: 1 };
         },
         release: () => {},
       };
@@ -635,7 +651,7 @@ describe('PostgresAdapter', () => {
         query: async (sql: string) => {
           issued.push(sql);
           if (sql === '-- bad sql') throw boom;
-          return { rows: [], rowCount: 0 };
+          return { rows: [], rowCount: 1 };
         },
         release: () => {
           released = true;
@@ -697,7 +713,7 @@ describe('PostgresAdapter', () => {
             };
           if (sql.startsWith('UPDATE remote_agent_schema_version SET schema_fingerprint'))
             recorded = params?.[0];
-          return { rows: [], rowCount: 0 };
+          return { rows: [], rowCount: 1 };
         },
         release: () => {},
       };
@@ -728,8 +744,9 @@ describe('PostgresAdapter', () => {
       mockClient = {
         query: async (sql: string) => {
           issued.push(sql);
-          if (sql.includes('archon_notify_workflow_event')) throw new Error('permission denied');
-          return { rows: [], rowCount: 0 };
+          if (sql.includes('archon_notify_workflow_event'))
+            throw Object.assign(new Error('permission denied'), { code: '42501' });
+          return { rows: [], rowCount: 1 };
         },
         release: () => {},
       };
@@ -748,7 +765,7 @@ describe('PostgresAdapter', () => {
             issued.push(sql);
             if (sql.includes('AS current'))
               throw Object.assign(new Error('missing schema object'), { code });
-            return { rows: [], rowCount: 0 };
+            return { rows: [], rowCount: 1 };
           },
           release: () => {},
         };
@@ -769,7 +786,7 @@ describe('PostgresAdapter', () => {
           query: async sql => {
             issued.push(sql);
             if (sql.includes('AS current')) throw error;
-            return { rows: [], rowCount: 0 };
+            return { rows: [], rowCount: 1 };
           },
           release: () => {},
         };
@@ -795,7 +812,7 @@ describe('PostgresAdapter', () => {
       mockClient = {
         query: async (sql: string) => {
           issued.push(sql);
-          return { rows: [], rowCount: 0 };
+          return { rows: [], rowCount: 1 };
         },
         release: () => {},
       };

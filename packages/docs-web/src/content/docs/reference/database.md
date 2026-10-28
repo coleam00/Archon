@@ -349,11 +349,15 @@ fingerprint is recorded, the recorded applied build is this build (an older rele
 that converged since stamps its own version), no legacy provider ids remain, and the
 event-sequence head is not behind. A current database releases the lock without DDL.
 Waiting boots take no table locks before acquiring the advisory lock, then recheck the
-fingerprint, so only the first boot converges. Core DDL, notify-trigger installation and
+fingerprint, so only the first boot converges. When convergence is needed, the version table
+is locked exclusively before events DDL, preserving the version/events order of live readers.
+Core DDL, notify-trigger installation and
 fingerprint publication commit in one transaction. Missing tables or columns mean convergence
 is needed; other fingerprint-read errors abort initialization rather than trigger DDL.
 A role that cannot install the trigger keeps polling and converges on every start; a
 savepoint rolls back trigger installation and leaves the completion fingerprint unpublished.
+Only trigger-install permission errors use this polling fallback. Version-row writes,
+fingerprint writes (including a missing version row), and other trigger errors abort initialization.
 Source checkouts all record the applied build as `dev`, so a
 checkout that predates the PostgreSQL fingerprint can converge against the same database
 without invalidating a newer checkout's fingerprint, and the newer checkout keeps the older

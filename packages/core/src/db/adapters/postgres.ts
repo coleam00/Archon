@@ -169,15 +169,20 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       }
       // Probe before applying: afterwards every table exists, and a database that
       // predates schema-version tracking is indistinguishable from a fresh one.
-      const probe = await client.query<{ exists: boolean }>(
-        "SELECT to_regclass('remote_agent_codebases') IS NOT NULL AS exists"
+      const probe = await client.query<{ exists: boolean; version_exists: boolean }>(
+        `SELECT to_regclass('remote_agent_codebases') IS NOT NULL AS exists,
+                to_regclass('remote_agent_schema_version') IS NOT NULL AS version_exists`
       );
       const preExisting = probe.rows[0]?.exists ?? false;
+      if (probe.rows[0]?.version_exists) {
+        // Readers can hold version while requesting events. Take version's DDL
+        // lock first, before the bundled SQL can exclusively lock events.
+        await client.query('LOCK TABLE remote_agent_schema_version IN ACCESS EXCLUSIVE MODE');
+      }
       // The SQL is fully idempotent (CREATE TABLE IF NOT EXISTS,
       // ADD COLUMN IF NOT EXISTS, CREATE INDEX IF NOT EXISTS).
       await client.query(sql);
-      await this.recordSchemaVersion(client, preExisting);
-      await this.installNotifyTrigger(client, fingerprint);
+      await this.completeSchema(client, preExisting, fingerprint);
       await client.query('COMMIT');
     } catch (e) {
       if (client) {
@@ -225,51 +230,47 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
    * concurrent boots stay serialized. ON CONFLICT never touches created_app_version,
    * so the creation vintage is written once and never revised; the DO UPDATE is a
    * no-op when the app version has not changed.
-   *
-   * Behind a SAVEPOINT on purpose: the vintage row is diagnostic metadata and a
-   * failure to write it must not abort the schema transaction. Without this, a throw
-   * here would reject `schemaInitPromise` — which every query()/withTransaction()
-   * awaits — bricking the adapter for the life of the process over a row nothing
-   * gates on. Mirrors the warn-and-continue guarantee the SQLite adapter gives.
    */
-  private async recordSchemaVersion(client: PoolClient, preExisting: boolean): Promise<void> {
-    await client.query('SAVEPOINT schema_version');
-    try {
-      await client.query(
-        `INSERT INTO remote_agent_schema_version (id, created_app_version, app_version)
-         VALUES (1, $1, $2)
-         ON CONFLICT (id) DO UPDATE
-           SET app_version = EXCLUDED.app_version, applied_at = NOW()
-           WHERE remote_agent_schema_version.app_version IS DISTINCT FROM EXCLUDED.app_version`,
-        [preExisting ? null : APP_VERSION, APP_VERSION]
+  private async completeSchema(
+    client: PoolClient,
+    preExisting: boolean,
+    fingerprint: string
+  ): Promise<void> {
+    await client.query(
+      `INSERT INTO remote_agent_schema_version (id, created_app_version, app_version)
+       VALUES (1, $1, $2)
+       ON CONFLICT (id) DO UPDATE
+         SET app_version = EXCLUDED.app_version, applied_at = NOW()
+         WHERE remote_agent_schema_version.app_version IS DISTINCT FROM EXCLUDED.app_version`,
+      [preExisting ? null : APP_VERSION, APP_VERSION]
+    );
+    if (await this.installNotifyTrigger(client)) {
+      const completion = await client.query(
+        'UPDATE remote_agent_schema_version SET schema_fingerprint = $1 WHERE id = 1',
+        [fingerprint]
       );
-      await client.query('RELEASE SAVEPOINT schema_version');
-    } catch (e) {
-      await client.query('ROLLBACK TO SAVEPOINT schema_version');
-      getLog().warn(
-        { err: e instanceof Error ? e : new Error(String(e)) },
-        'db.postgres_schema_version_record_failed'
-      );
+      if (completion.rowCount !== 1) {
+        throw new Error('Schema completion requires exactly one version row');
+      }
     }
   }
 
   /** Trigger permissions are optional: retain polling without publishing completion. */
-  private async installNotifyTrigger(client: PoolClient, fingerprint: string): Promise<void> {
+  private async installNotifyTrigger(client: PoolClient): Promise<boolean> {
     await client.query('SAVEPOINT notify_trigger');
     try {
       await client.query(WORKFLOW_EVENT_NOTIFY_SQL);
-      await client.query(
-        'UPDATE remote_agent_schema_version SET schema_fingerprint = $1 WHERE id = 1',
-        [fingerprint]
-      );
       await client.query('RELEASE SAVEPOINT notify_trigger');
+      return true;
     } catch (e) {
+      if ((e as { code?: unknown } | null)?.code !== '42501') throw e;
       await client.query('ROLLBACK TO SAVEPOINT notify_trigger');
       await client.query('RELEASE SAVEPOINT notify_trigger');
       getLog().warn(
         { err: e instanceof Error ? e : new Error(String(e)) },
         'db.postgres_notify_trigger_install_failed'
       );
+      return false;
     }
   }
 

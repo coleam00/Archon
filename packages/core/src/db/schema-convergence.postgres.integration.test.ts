@@ -118,6 +118,47 @@ describe.skipIf(!baseUrl)('PostgreSQL schema convergence and conflict retry', ()
     }
   });
 
+  test('active convergence waits for a version reader before locking events', async () => {
+    const reader = new PostgresAdapter(scratchUrl);
+    await reader.query('SELECT 1');
+    await scratch.query('UPDATE remote_agent_schema_version SET schema_fingerprint = NULL');
+    let bootResult: Promise<void> | undefined;
+    let readerRuns = 0;
+    try {
+      await reader.withTransaction(async query => {
+        readerRuns++;
+        await query('SELECT 1 FROM remote_agent_schema_version');
+        bootResult = boot();
+        void bootResult.catch(() => {});
+        let waiting = false;
+        for (let i = 0; i < 200; i++) {
+          const locks = await scratch.query<{ waiting: boolean }>(
+            `SELECT EXISTS (
+               SELECT 1 FROM pg_locks
+               WHERE locktype = 'relation' AND NOT granted AND pid IN (
+                 SELECT pid FROM pg_locks
+                 WHERE locktype = 'advisory' AND objid = 1796 AND granted
+               )
+             ) AS waiting`
+          );
+          waiting = locks.rows[0].waiting;
+          if (waiting) break;
+          await Bun.sleep(10);
+        }
+        expect(waiting).toBe(true);
+        await query('SELECT 1 FROM remote_agent_workflow_events');
+      });
+      await bootResult;
+      expect(readerRuns).toBe(1);
+      const before = await notifyTriggerOid();
+      await boot();
+      expect(await notifyTriggerOid()).toBe(before);
+    } finally {
+      await bootResult?.catch(() => {});
+      await reader.close();
+    }
+  });
+
   test.each([
     [
       'an older build converged since',
