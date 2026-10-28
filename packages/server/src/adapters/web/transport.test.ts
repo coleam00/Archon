@@ -164,37 +164,6 @@ describe('SSETransport', () => {
   });
 
   test.each(['conv-1', '__dashboard__'])(
-    'retains a replay write cancelled through Hono: %s',
-    async conversationId => {
-      const transport = new SSETransport();
-      const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-      const stream = new SSEStreamingApi(writable, readable);
-      const reader = stream.responseReadable.getReader();
-      try {
-        for (const event of ['first', 'second', 'third', 'fourth']) {
-          await transport.emit(conversationId, event);
-        }
-        transport.registerStream(conversationId, checkedSSEWriter(stream));
-        const first = await reader.read();
-        expect(new TextDecoder().decode(first.value)).toBe('data: first\n\n');
-        // Hono prefetches one chunk. Without another read, the third write is pending.
-        await settleReplay();
-        await reader.cancel();
-        await settleReplay();
-        const reconnected = createMockStream();
-        transport.registerStream(conversationId, reconnected);
-        await settleReplay();
-        expect(reconnected.writeSSE).toHaveBeenCalledTimes(2);
-        expect(reconnected.writeSSE).toHaveBeenNthCalledWith(1, { data: 'third' });
-        expect(reconnected.writeSSE).toHaveBeenNthCalledWith(2, { data: 'fourth' });
-      } finally {
-        await reader.cancel();
-        transport.stop();
-      }
-    }
-  );
-
-  test.each(['conv-1', '__dashboard__'])(
     'retains a live write cancelled through Hono: %s',
     async conversationId => {
       const transport = new SSETransport();
@@ -437,6 +406,89 @@ describe('SSETransport', () => {
         transport.stop();
       }
     });
+
+    for (const conversationId of ['conv-1', '__dashboard__']) {
+      test.each(['resolve', 'reject'] as const)(
+        `retains concurrent live events in emission order for ${conversationId}: %s`,
+        async outcome => {
+          const transport = new SSETransport();
+          const first = Promise.withResolvers<void>();
+          const second = Promise.withResolvers<void>();
+          const stream = createMockStream({
+            writeSSE: mock(({ data }) => (data === 'first' ? first.promise : second.promise)),
+          });
+          try {
+            transport.registerStream(conversationId, stream);
+            const firstEmission = transport.emit(conversationId, 'first');
+            const secondEmission = transport.emit(conversationId, 'second');
+            second.reject(new Error('second failed first'));
+            await secondEmission;
+            await transport.emit(conversationId, 'third');
+            const reconnected = createMockStream();
+            transport.registerStream(conversationId, reconnected);
+            await settleReplay();
+            expect(reconnected.writeSSE).not.toHaveBeenCalled();
+
+            if (outcome === 'resolve') first.resolve();
+            else first.reject(new Error('first failed last'));
+            await firstEmission;
+            await settleReplay();
+            const expected =
+              outcome === 'resolve' ? ['second', 'third'] : ['first', 'second', 'third'];
+            expect(reconnected.writeSSE).toHaveBeenCalledTimes(expected.length);
+            for (const [index, data] of expected.entries()) {
+              expect(reconnected.writeSSE).toHaveBeenNthCalledWith(index + 1, { data });
+            }
+            transport.removeStream(conversationId, reconnected);
+            const later = createMockStream();
+            transport.registerStream(conversationId, later);
+            await settleReplay();
+            expect(later.writeSSE).not.toHaveBeenCalled();
+          } finally {
+            first.resolve();
+            second.resolve();
+            transport.stop();
+          }
+        }
+      );
+    }
+
+    for (const retention of ['expiry', 'cap'] as const) {
+      test.each(['resolve', 'reject'] as const)(
+        `live completion after ${retention} cannot restore or consume retained events: %s`,
+        async outcome => {
+          const transport = new SSETransport();
+          const clock = spyOn(Date, 'now').mockReturnValue(100_000);
+          const pending = Promise.withResolvers<void>();
+          const stream = createMockStream({ writeSSE: () => pending.promise });
+          try {
+            transport.registerStream('conv-1', stream);
+            const emitted = transport.emit('conv-1', 'same');
+            transport.removeStream('conv-1', stream);
+            const count = retention === 'expiry' ? 1 : 500;
+            if (retention === 'expiry') clock.mockReturnValue(160_000);
+            for (let i = 0; i < count; i++) await transport.emit('conv-1', 'same');
+            const reconnected = createMockStream();
+            transport.registerStream('conv-1', reconnected);
+            if (outcome === 'resolve') pending.resolve();
+            else pending.reject(new Error('late failure'));
+            await emitted;
+            for (let i = 0; i < count; i++) await settleReplay();
+            expect(reconnected.writeSSE).toHaveBeenCalledTimes(count);
+            expect(reconnected.writeSSE).toHaveBeenLastCalledWith({ data: 'same' });
+            transport.removeStream('conv-1', reconnected);
+            const later = createMockStream();
+            transport.registerStream('conv-1', later);
+            await settleReplay();
+            expect(later.writeSSE).not.toHaveBeenCalled();
+          } finally {
+            pending.resolve();
+            clock.mockRestore();
+            transport.stop();
+          }
+        }
+      );
+    }
 
     test('no-ops when stream is closed', async () => {
       const transport = new SSETransport();

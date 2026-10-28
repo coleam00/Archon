@@ -49,10 +49,10 @@ if (EVENT_BUFFER_TTL_MS < RECONNECT_GRACE_MS) {
 interface BufferedEvent {
   data: string;
   timestamp: number;
+  liveWritePending: boolean;
 }
 
 export class SSETransport {
-  private lifetime = Symbol();
   private streams = new Map<string, Set<SSEWriter>>();
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private zombieReaperHandle: ReturnType<typeof setInterval> | null = null;
@@ -116,6 +116,7 @@ export class SSETransport {
           this.clearBuffer(conversationId);
           return;
         }
+        if (event.liveWritePending) return;
         const stream = [...(this.streams.get(conversationId) ?? [])].find(s => !s.closed);
         if (!stream) return;
         getLog().debug({ conversationId, count: buffered.length }, 'sse_buffer_replay');
@@ -177,7 +178,6 @@ export class SSETransport {
   }
 
   stop(): void {
-    this.lifetime = Symbol();
     // Stop zombie stream reaper
     if (this.zombieReaperHandle) {
       clearInterval(this.zombieReaperHandle);
@@ -210,7 +210,9 @@ export class SSETransport {
   }
 
   async emit(conversationId: string, event: string): Promise<void> {
-    const lifetime = this.lifetime;
+    // Reserve emission order before concurrent live writes settle.
+    const bufferedEvent = { data: event, timestamp: Date.now(), liveWritePending: true };
+    this.bufferEvent(conversationId, bufferedEvent);
     const writes: Promise<boolean>[] = [];
     const streams = this.streams.get(conversationId);
     if (streams) {
@@ -223,14 +225,17 @@ export class SSETransport {
       }
     }
     if (writes.length === 0) {
-      this.bufferEvent(conversationId, event);
+      bufferedEvent.liveWritePending = false;
       return;
     }
     const results = await Promise.all(writes);
-    if (this.lifetime === lifetime && !results.some(Boolean)) {
-      this.bufferEvent(conversationId, event);
-      this.replayBufferedEvents(conversationId);
-    }
+    const buffered = this.eventBuffer.get(conversationId);
+    const index = buffered?.indexOf(bufferedEvent) ?? -1;
+    if (!buffered || index === -1) return;
+    bufferedEvent.liveWritePending = false;
+    if (results.some(Boolean)) buffered.splice(index, 1);
+    if (buffered.length === 0) this.clearBuffer(conversationId);
+    else this.replayBufferedEvents(conversationId);
   }
 
   /** Emit a workflow event without waiting for connected writers. */
@@ -258,16 +263,16 @@ export class SSETransport {
   }
 
   /**
-   * Buffer an event for later replay when a stream connects.
+   * Retain an event until delivery completes or a later stream replays it.
    * Events expire after EVENT_BUFFER_TTL_MS and are capped at EVENT_BUFFER_MAX per conversation.
    */
-  private bufferEvent(conversationId: string, data: string): void {
+  private bufferEvent(conversationId: string, event: BufferedEvent): void {
     let buf = this.eventBuffer.get(conversationId);
     if (!buf) {
       buf = [];
       this.eventBuffer.set(conversationId, buf);
     }
-    buf.push({ data, timestamp: Date.now() });
+    buf.push(event);
     // Cap buffer size — drop oldest if over limit. Warn so we notice if
     // this ever happens in practice: evicted events mean the UI will miss
     // something when the client reconnects.
