@@ -316,7 +316,7 @@ async function applyApprovedWriteBack(
         'live folder but never recorded that it finished, so the changes may be fully, ' +
         'partly or not applied. Archon will not apply them again. The container and ' +
         `overlay volume (env ${containerCtx.envId}) are preserved: compare the live folder ` +
-        'with the overlay, copy anything missing by hand, then run ' +
+        'with the overlay, apply any missing writes and deletions by hand, then run ' +
         `\`archon workflow abandon ${runId}\` to discard the overlay.`
     );
   }

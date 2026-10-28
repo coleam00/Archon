@@ -694,8 +694,8 @@ export function warnPreservedContainer(envId: string, runId: string | undefined)
   console.error(
     '\nWARNING: the write-back did not complete — the container + overlay volume are ' +
       'PRESERVED so your changes are not lost. ' +
-      `\`bun run cli workflow resume ${runId ?? '<run-id>'}\` retries the apply when no ` +
-      'earlier apply started; if one may have started, resume refuses and the run failure ' +
+      `\`bun run cli workflow resume ${runId ?? '<run-id>'}\` retries the apply unless an ` +
+      "earlier apply's outcome was never recorded; then resume refuses and the run failure " +
       'explains how to reconcile. Reclaim manually via ' +
       '`docker ps -a --filter label=diy.archon.managed=true`.'
   );
