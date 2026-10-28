@@ -104,6 +104,41 @@ nodes:
           expect(parseSelected(schema).error).toBeNull();
         }
       });
+      it(`handles boolean-schema branches in ${keyword} ${selector} selectors`, () => {
+        const neutral = keyword === 'allOf';
+        for (const schema of [
+          { [keyword]: [branch, neutral] },
+          {
+            type: 'object',
+            properties: branch.properties,
+            [keyword]: [{ required: ['done'] }, neutral],
+          },
+          {
+            type: 'object',
+            required: ['done'],
+            properties: { done: { [keyword]: [{ type: 'boolean' }, neutral] } },
+          },
+        ]) {
+          expect(parseSelected(schema).error).toBeNull();
+        }
+      });
+      if (keyword !== 'allOf') {
+        it(`rejects unconstrained and union-typed ${keyword} ${selector} alternatives`, () => {
+          for (const property of [{}, { type: ['boolean', 'string'] }]) {
+            for (const schema of [
+              { [keyword]: [branch, { ...branch, properties: { done: property } }] },
+              { ...branch, properties: { done: { [keyword]: [{ type: 'boolean' }, property] } } },
+              { allOf: [{ [keyword]: [branch, { ...branch, properties: { done: property } }] }] },
+            ]) {
+              const result = parseSelected(schema);
+              expect(result.workflow).toBeNull();
+              expect(result.error?.error).toContain('boolean');
+            }
+          }
+          expect(parseSelected({ [keyword]: [branch, true] }).workflow).toBeNull();
+          expect(parseSelected({ allOf: [branch, { [keyword]: [true, false] }] }).error).toBeNull();
+        });
+      }
       it(`rejects optional, undeclared and non-boolean ${keyword} ${selector} selectors`, () => {
         const rejected: [Record<string, unknown>, string, string][] = [
           [{ [keyword]: [{ ...branch, required: [] }] }, 'done', 'required'],

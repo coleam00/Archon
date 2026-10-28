@@ -1792,8 +1792,12 @@ nodes:
   (threaded back as `$node.output`) becomes the `returns:` node's output.
 - **`outcome_field:`**: an optional, explicit authored verdict relative to `returns:`. The
   selected node must declare an object `output_format` (`type: object`) whose `properties`
-  declares the field, whose `required` lists it, and whose field schema sets `type: boolean`;
-  otherwise the workflow fails to load.
+  declares the field, whose `required` guarantees its presence, and whose field schema
+  guarantees `type: boolean`; otherwise the workflow fails to load. Declarations and
+  guarantees may come from the root or through `allOf`, `anyOf`, or `oneOf`.
+  Root and `allOf` constraints combine; every viable `anyOf`/`oneOf` alternative
+  must satisfy each guarantee unless an enclosing constraint already supplies it.
+  A `false` branch accepts no values and does not weaken guarantees; `true` adds none.
   It cannot select a `loop_group` (which returns raw text) or a fan-out `workflow:` node
   (which returns an aggregate array); add a structured collector node after either one.
   Exact `true` is persisted as `outcome: succeeded`, exact `false` as `outcome: failed`.

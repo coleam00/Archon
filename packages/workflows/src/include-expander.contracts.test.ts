@@ -89,6 +89,7 @@ describe('expandWorkflowIncludes — returns drives primarySink (#2470)', () => 
               output_format: {
                 [keyword]: [
                   { type: 'object', properties: { green: { type: 'boolean' } }, required },
+                  keyword === 'allOf',
                 ],
               },
             },

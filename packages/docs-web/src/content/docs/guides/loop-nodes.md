@@ -319,10 +319,17 @@ Four rules are checked at load time, so a mistake fails the workflow rather than
 looping silently:
 
 1. the node must declare `output_format`;
-2. the property must appear in `output_format.properties`;
-3. it must be listed in `output_format.required` — an optional property the model
+2. the property must be declared in `properties`, at the root or through
+   `allOf`, `anyOf`, or `oneOf`;
+3. it must be guaranteed by `required` — an optional property the model
    omits would read as "not complete" and burn `max_iterations`;
-4. if it declares a `type`, that type must be `boolean`.
+4. a composed alternative must guarantee `type: boolean` for the field. Plain
+   properties may omit `type`; an explicit single type must be `boolean`.
+
+Constraints at the root and in `allOf` combine. For `anyOf` and `oneOf`, every
+viable alternative must satisfy the required-field and boolean guarantees, unless
+an enclosing constraint already guarantees them. A `false` schema branch accepts
+no values and does not weaken a guarantee; `true` supplies no constraint.
 
 Termination is strict identity: `true` ends the loop, and nothing else does — not
 `"true"`, not `1`. A payload that fails schema validation is a failure, not a

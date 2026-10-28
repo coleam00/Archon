@@ -182,10 +182,10 @@ function validateLoopUntilField(data: DagNodeFields, ctx: z.RefinementCtx): void
       path
     );
   }
-  if (!constraints.boolean && constraints.hasNonBooleanType) {
+  if (!constraints.boolean && constraints.requiresBooleanType) {
     addIssue(
       ctx,
-      `'loop.until_field' names '${untilField}', declares a non-boolean type — it must be 'boolean'; the loop terminates on the value being exactly true`,
+      `'loop.until_field' names '${untilField}', must be 'boolean' across every viable alternative; the loop terminates on the value being exactly true`,
       path
     );
   }

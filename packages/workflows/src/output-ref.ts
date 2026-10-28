@@ -429,6 +429,7 @@ function schemaGuarantees(
     const branches = schema[keyword];
     if (!Array.isArray(branches) || branches.length === 0) return false;
     const guarantees = (raw: unknown): boolean => {
+      if (raw === false) return true;
       const branch = asPlainObject(raw);
       return branch !== undefined && schemaGuarantees(branch, predicate);
     };
@@ -443,30 +444,32 @@ export function outputFieldConstraints(schema: Record<string, unknown>, field: s
       property !== undefined && schemaGuarantees(property, schema => schema.type === 'boolean')
     );
   };
-  const hasNonBooleanType = (schema: Record<string, unknown>): boolean => {
+  const requiresBooleanType = (schema: Record<string, unknown>): boolean => {
     if (typeof schema.type === 'string' && schema.type !== 'boolean') return true;
     return COMPOSITION_KEYWORDS.some(keyword => {
       const branches = schema[keyword];
       return (
         Array.isArray(branches) &&
-        branches.some(raw => {
-          const branch = asPlainObject(raw);
-          return branch !== undefined && hasNonBooleanType(branch);
-        })
+        (keyword !== 'allOf' ||
+          branches.some(raw => {
+            const branch = asPlainObject(raw);
+            return branch !== undefined && requiresBooleanType(branch);
+          }))
       );
     });
   };
-  const fieldHasNonBooleanType = (schema: Record<string, unknown>): boolean => {
+  const fieldRequiresBooleanType = (schema: Record<string, unknown>): boolean => {
     const property = asPlainObject(asPlainObject(schema.properties)?.[field]);
-    if (property !== undefined && hasNonBooleanType(property)) return true;
+    if (property !== undefined && requiresBooleanType(property)) return true;
     return COMPOSITION_KEYWORDS.some(keyword => {
       const branches = schema[keyword];
       return (
         Array.isArray(branches) &&
-        branches.some(raw => {
-          const branch = asPlainObject(raw);
-          return branch !== undefined && fieldHasNonBooleanType(branch);
-        })
+        (keyword !== 'allOf' ||
+          branches.some(raw => {
+            const branch = asPlainObject(raw);
+            return branch !== undefined && fieldRequiresBooleanType(branch);
+          }))
       );
     });
   };
@@ -477,7 +480,7 @@ export function outputFieldConstraints(schema: Record<string, unknown>, field: s
       schema => Array.isArray(schema.required) && schema.required.includes(field)
     ),
     boolean: schemaGuarantees(schema, propertyIsBoolean),
-    hasNonBooleanType: fieldHasNonBooleanType(schema),
+    requiresBooleanType: fieldRequiresBooleanType(schema),
   };
 }
 
