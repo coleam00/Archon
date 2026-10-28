@@ -171,7 +171,7 @@ function completeBranch(
   ) {
     refuse(`${path}.additionalProperties`);
   }
-  branch.properties = { ...structuredClone(enclosing), ...properties };
+  branch.properties = { ...enclosing, ...properties };
   branch.required = required;
 }
 
