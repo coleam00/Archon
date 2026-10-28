@@ -1,3 +1,4 @@
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { executionClaim } from './store';
 import { formatDuration } from '@archon/paths/duration';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
@@ -26,7 +27,7 @@ import {
 } from './schemas';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import type { WorkflowRunOrigin } from './schemas/workflow-run';
-import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite } from './terminal-status-write';
 import { parseDbTimestamp } from './utils/duration';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -446,7 +447,7 @@ async function holdCheckoutPathLock(
       sharedCheckoutSiblings
     );
   } catch (error) {
-    if (error instanceof TerminalStatusWriteError) throw error;
+    if (isWorkflowExecutionInterruption(error)) throw error;
     const err = error as Error;
     getLog().error(
       { err, conversationId, cwd, pendingRunId: workflowRun.id },

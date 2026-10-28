@@ -8,6 +8,7 @@ import {
   isAttentionQueueRow,
   queuedRunAttention,
   TERMINAL_WORKFLOW_STATUSES,
+  workflowRunStatusSchema,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   DashboardRunsResult,
@@ -24,6 +25,7 @@ import {
   type WorkflowRunRow,
 } from './workflow-run-normalization';
 import { getLog, jsonIntExtract } from './workflow-run-shared';
+import { readWorkflowRunStatus, WorkflowStatusReadError } from './workflow-run-status';
 
 export async function getRunningWorkflows(): Promise<
   { id: string; conversation_id: string | null; workflow_name: string; started_at: string }[]
@@ -139,6 +141,7 @@ function toCount(value: number | string | null): number | null {
  * List workflow runs with enriched JOINs for the dashboard Command Center.
  * Supports server-side search, status/date filtering, and offset-based pagination.
  * Returns runs, total matching count, and per-status counts for the filter bar.
+ * An unsupported status in the page or its unpaginated counts rejects the whole result.
  */
 export async function listDashboardRuns(
   options?: ListDashboardRunsOptions
@@ -191,8 +194,8 @@ export async function listDashboardRuns(
          LIMIT ${limitParam} OFFSET ${offsetParam}`,
         listValues
       ),
-      pool.query<{ status: string; cnt: string }>(
-        `SELECT r.status, COUNT(*) AS cnt
+      pool.query<{ id: string; status: string; cnt: string }>(
+        `SELECT MIN(CAST(r.id AS TEXT)) AS id, r.status, COUNT(*) AS cnt
          FROM remote_agent_workflow_runs r
          ${countWhereStr}
          GROUP BY r.status`,
@@ -202,19 +205,16 @@ export async function listDashboardRuns(
 
     const counts = {
       all: 0,
-      running: 0,
-      completed: 0,
-      failed: 0,
-      cancelled: 0,
-      pending: 0,
-      paused: 0,
+      ...(Object.fromEntries(workflowRunStatusSchema.options.map(status => [status, 0])) as Record<
+        WorkflowRunStatus,
+        number
+      >),
     };
     for (const row of countResult.rows) {
+      const status = readWorkflowRunStatus(row.id, row.status);
       const n = Number(row.cnt);
       counts.all += n;
-      if (row.status in counts) {
-        counts[row.status as keyof Omit<typeof counts, 'all'>] = n;
-      }
+      counts[status] = n;
     }
 
     // Total for the current filter (with status applied)
@@ -240,6 +240,7 @@ export async function listDashboardRuns(
 
     return { runs, total, counts };
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'list_dashboard_runs_failed');
     throw new Error(`Failed to list dashboard runs: ${err.message}`);
@@ -302,7 +303,8 @@ async function listPausedRuns(
 }
 
 /**
- * List workflow runs with optional filters.
+ * List workflow runs with optional filters. Unsupported statuses reject the whole list,
+ * as with dashboard and adopting-run lists; no partial result is returned.
  */
 export async function listWorkflowRuns(options?: {
   conversationId?: string;
@@ -353,6 +355,7 @@ export async function listWorkflowRuns(options?: {
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_list_failed');
     throw new Error(`Failed to list workflow runs: ${err.message}`);
@@ -414,6 +417,7 @@ export async function findAdoptingRuns(runId: string): Promise<WorkflowRun[]> {
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, runId }, 'db.workflow_run_adopters_lookup_failed');
     throw new Error(`Failed to find adopting runs: ${err.message}`);

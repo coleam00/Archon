@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { WorkflowStatusReadError } from './workflow-run-status';
 import { mockWorkflowRun } from '../test/mocks/workflow-run';
 
 const mockQuery = createMockQuery();
@@ -27,6 +28,31 @@ describe('workflow run lists', () => {
     mockQuery.mockImplementation(() => Promise.resolve(createQueryResult([])));
   });
 
+  test.each([
+    ['dashboard', () => listDashboardRuns()],
+    ['list', () => listWorkflowRuns()],
+    ['adopters', () => findAdoptingRuns('source')],
+  ] as const)('%s rejects the whole list on an unsupported row', async (_name, read) => {
+    mockQuery.mockResolvedValueOnce(
+      createQueryResult([mockWorkflowRun, { ...mockWorkflowRun, id: 'bad', status: 'unexpected' }])
+    );
+    const result = read();
+    await expect(result).rejects.toBeInstanceOf(WorkflowStatusReadError);
+    await expect(result).rejects.toMatchObject({
+      workflowRunId: 'bad',
+      storedStatus: 'unexpected',
+    });
+  });
+
+  test.each([
+    [() => listDashboardRuns(), 'Failed to list dashboard runs: offline'],
+    [() => listWorkflowRuns(), 'Failed to list workflow runs: offline'],
+    [() => findAdoptingRuns('source'), 'Failed to find adopting runs: offline'],
+  ] as const)('preserves query failure diagnostics', async (read, message) => {
+    mockQuery.mockRejectedValueOnce(new Error('offline'));
+    await expect(read()).rejects.toThrow(message);
+  });
+
   describe('listDashboardRuns', () => {
     test('derives active nodes from canonical retries and skip terminals', async () => {
       mockQuery
@@ -44,7 +70,9 @@ describe('workflow run lists', () => {
             },
           ])
         )
-        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(
+          createQueryResult([{ id: mockWorkflowRun.id, status: 'running', cnt: '1' }])
+        )
         .mockResolvedValueOnce(
           createQueryResult([
             {
@@ -115,7 +143,9 @@ describe('workflow run lists', () => {
             },
           ])
         )
-        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(
+          createQueryResult([{ id: mockWorkflowRun.id, status: 'running', cnt: '1' }])
+        )
         .mockResolvedValueOnce(createQueryResult([]));
 
       const result = await listDashboardRuns();
@@ -143,7 +173,9 @@ describe('workflow run lists', () => {
             },
           ])
         )
-        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(
+          createQueryResult([{ id: mockWorkflowRun.id, status: 'running', cnt: '1' }])
+        )
         .mockResolvedValueOnce(
           createQueryResult([
             {
@@ -185,7 +217,9 @@ describe('workflow run lists', () => {
             },
           ])
         )
-        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(
+          createQueryResult([{ id: mockWorkflowRun.id, status: 'running', cnt: '1' }])
+        )
         .mockResolvedValueOnce(
           createQueryResult([
             {
@@ -244,9 +278,9 @@ describe('workflow run lists', () => {
     test('filters by multiple statuses and totals their counts', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([])).mockResolvedValueOnce(
         createQueryResult([
-          { status: 'running', cnt: '2' },
-          { status: 'paused', cnt: '3' },
-          { status: 'completed', cnt: '4' },
+          { id: mockWorkflowRun.id, status: 'running', cnt: '2' },
+          { id: 'paused', status: 'paused', cnt: '3' },
+          { id: 'completed', status: 'completed', cnt: '4' },
         ])
       );
 

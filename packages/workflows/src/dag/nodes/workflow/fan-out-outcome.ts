@@ -1,3 +1,4 @@
+import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import type { WorkflowDeps } from '../../../deps';
 import type { WorkflowRun } from '../../../schemas';
 import { isTerminalRunStatus, readSubrunMetadata } from '../../../schemas';
@@ -89,8 +90,8 @@ export function classifyFanOutSlot(
 /**
  * Build the fan-out outcome once every slot has settled. All-completed needs no store read;
  * otherwise the node's child rows, and the cancel events of its cancelled rows, are
- * read once each. A read failure is returned, never classified, so a slot is never
- * reported from a guess.
+ * read once each. Ordinary read failures are returned; lifecycle interruptions are
+ * rethrown. Neither permits classifying a slot from a guess.
  */
 export async function buildFanOutOutcome(
   store: WorkflowDeps['store'],
@@ -123,6 +124,7 @@ export async function buildFanOutOutcome(
       ),
     };
   } catch (lookupError) {
+    if (isWorkflowExecutionInterruption(lookupError)) throw lookupError;
     return { lookupError };
   }
 }

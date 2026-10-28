@@ -1,3 +1,4 @@
+import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { reportedChildUsage, unreportedChildUsage } from '../../child-usage';
 import { runOrStagePause, pauseGateRespectingExternalTransition } from '../../pause';
 import { nodeInvocationKey } from '../../../node-record-reader';
@@ -353,6 +354,7 @@ export async function executeFanOutWorkflowNode(
   };
 
   const failChildLookup = async (error: unknown): Promise<NodeExecutionResult> => {
+    if (isWorkflowExecutionInterruption(error)) throw error;
     const msg = `Failed to look up fan-out child runs for node '${node.id}': ${(error as Error).message}`;
     await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
     return failResult(msg, 'unknown');
@@ -399,7 +401,6 @@ export async function executeFanOutWorkflowNode(
       childId => cancelChild(childId, 'fan_out_orphan')
     );
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError) throw err;
     // Notify like every other early-failure branch — this one was the odd one out, so a
     // store error was the single fan-out failure that reached the user only via the
     // end-of-run digest.
