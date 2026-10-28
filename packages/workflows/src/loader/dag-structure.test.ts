@@ -431,6 +431,13 @@ describe('attention wait options from an upstream output_format (#4038)', () => 
       properties: { options: { type: 'array', items } },
       required: ['options'],
     };
+    return parseWithOptionsSchema(outputFormat);
+  }
+
+  function parseWithOptionsSchema(
+    outputFormat: Record<string, unknown>,
+    field = 'options'
+  ): ParseResult {
     return parseWorkflow(
       `name: referenced-options
 description: Options computed upstream
@@ -443,10 +450,141 @@ nodes:
     wait:
       attention: Which one?
       form: select
-      options: "$plan.output.options"
+      options: "$plan.output.${field}"
 `,
       'referenced-options.yaml'
     );
+  }
+
+  const validOptions = {
+    type: 'array',
+    items: {
+      type: 'object',
+      properties: { id: { type: 'string' }, label: { type: 'string' } },
+      required: ['id'],
+    },
+  };
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf'] as const) {
+    for (const mixed of [false, true]) {
+      it(`loads ${keyword} options with ${mixed ? 'mixed' : 'composition-only'} properties`, () => {
+        const schema = {
+          type: 'object',
+          ...(mixed ? { properties: { summary: { type: 'string' } } } : {}),
+          [keyword]: [{ properties: { options: validOptions } }],
+        };
+        expect(parseWithOptionsSchema(schema).error).toBeNull();
+      });
+
+      it(`loads nested ${keyword} options with ${mixed ? 'mixed' : 'composition-only'} properties`, () => {
+        const schema = {
+          type: 'object',
+          ...(mixed ? { properties: { summary: { type: 'string' } } } : {}),
+          [keyword]: [
+            {
+              properties: {
+                result: {
+                  type: ['object', 'null'],
+                  [keyword]: [{ allOf: [{ properties: { options: validOptions } }] }],
+                },
+              },
+            },
+          ],
+        };
+        expect(parseWithOptionsSchema(schema, 'result.options').error).toBeNull();
+        expect(parseWithOptionsSchema(schema, 'result.unknown').error?.error).toContain(
+          "Node 'ask' field 'wait.options'"
+        );
+      });
+    }
+
+    it(`loads ${keyword} options below a directly declared parent`, () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          result: {
+            type: 'object',
+            [keyword]: [
+              { properties: { options: validOptions } },
+              { properties: { options: validOptions, detail: { type: 'string' } } },
+            ],
+          },
+        },
+      };
+      expect(parseWithOptionsSchema(schema, 'result.options').error).toBeNull();
+    });
+
+    it(`checks both direct and ${keyword} declarations of the same field`, () => {
+      const invalidOptions = { type: 'array', items: { type: 'string' } };
+      for (const [direct, composed] of [
+        [validOptions, invalidOptions],
+        [invalidOptions, validOptions],
+      ]) {
+        expect(
+          parseWithOptionsSchema({
+            type: 'object',
+            properties: { options: direct },
+            [keyword]: [{ properties: { options: composed } }],
+          }).error?.error
+        ).toContain("Node 'ask' field 'wait.options'");
+      }
+    });
+
+    it.each([
+      ['non-array options', { type: 'string' }],
+      ['string items', { type: 'array', items: { type: 'string' } }],
+      [
+        'optional id',
+        {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { id: { type: 'string' } },
+          },
+        },
+      ],
+      [
+        'numeric id',
+        {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { id: { type: 'number' } },
+            required: ['id'],
+          },
+        },
+      ],
+      [
+        'unknown property',
+        {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { id: { type: 'string' }, score: { type: 'number' } },
+            required: ['id'],
+          },
+        },
+      ],
+    ])(`rejects ${keyword} with %s even beside a valid declaration`, (_case, invalidOptions) => {
+      for (const declarations of [
+        [validOptions, invalidOptions],
+        [invalidOptions, validOptions],
+      ]) {
+        const schema = {
+          type: 'object',
+          [keyword]: declarations.map(options => ({
+            properties: {
+              result: { type: 'object', properties: { options } },
+            },
+          })),
+        };
+        const result = parseWithOptionsSchema(schema, 'result.options');
+        expect(result.error?.error).toContain("Node 'ask' field 'wait.options'");
+        expect(result.error?.error).toContain(
+          "must be an array of objects declaring only { id: string; label?: string } in 'plan's output_format"
+        );
+      }
+    });
   }
 
   it('loads a producer whose items declare { id, label? }', () => {
