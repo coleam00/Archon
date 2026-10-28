@@ -186,8 +186,9 @@ export async function updateWorkflowRunMetadataIfRunning(
  * only while it is unset — so exactly one resume wins the claim. Returns whether
  * THIS caller won. The caller must apply the overlay only on `claimed === true`, and
  * on apply FAILURE release the claim (`releaseWritebackClaim`) so a `workflow resume`
- * can retry; on a crash AFTER a successful apply the claim stays set, so the next
- * resume finds it claimed and does NOT re-apply (no path applies twice).
+ * can retry. A claim that stays set without a recorded resolution (a crash, or a lost
+ * resolution write) makes the next resume refuse to apply and fail the run for
+ * operator reconciliation, so no path applies twice.
  */
 export async function claimWriteback(id: string): Promise<{ claimed: boolean }> {
   const dialect = getDialect();

@@ -298,38 +298,27 @@ async function applyApprovedWriteBack(
 ): Promise<'applied'> {
   // Retry-safe apply (R2-F4). CLAIM the apply atomically BEFORE mutating the live
   // root. Semantics:
-  //  - `claimed` false ⇒ a concurrent/prior resume already claimed the apply (or a
-  //    crash left it claimed AFTER a successful apply). Do NOT re-apply — no path
-  //    applies twice — and complete as applied (the resume CAS already serializes
-  //    resumes; the only skipped-apply window is a sub-ms crash between claim and
-  //    the apply call, which leaves the volume preserved by H2 for manual recovery).
+  //  - `claimed` false ⇒ an earlier attempt took the claim and never recorded a
+  //    resolution (a recorded one returns earlier, at the `writeback_resolved` check in
+  //    `runContainerWriteBackGate`). It may have crashed before, during or after the
+  //    copy, so the outcome is unknown. Fail the run without recording a resolution:
+  //    `pending_writeback` stays unresolved, teardown preserves the volume, and the
+  //    operator reconciles. Every later resume refuses the same way, so no path
+  //    applies twice.
   //  - `claimed` true ⇒ we own the apply. On SUCCESS record `writeback_resolved`;
   //    on FAILURE release the claim so `workflow resume` can retry (H2), keep the
   //    volume, and rethrow so the run fails with the reconcile teardown message.
   const { claimed } = await deps.store.claimWriteback(runId);
   if (!claimed) {
-    getLog().warn({ runId }, 'dag.writeback_apply_already_claimed');
-    await deps.store
-      .updateWorkflowRun(runId, {
-        metadata: { writeback_resolved: true, writeback_outcome: 'applied' },
-      })
-      .catch((err: unknown) => {
-        // The independent apply claim stays set even if resolution bookkeeping fails.
-        // Retaining it prevents another apply; it does not prove the overlay landed.
-        getLog().warn(
-          {
-            runId,
-            operation: 'updateWorkflowRun',
-            err,
-            recovery:
-              'Resolution metadata was not recorded; the apply claim is retained. ' +
-              'Before manual reconciliation, inspect the run and live-folder changes; ' +
-              'do not release the claim or automatically apply again.',
-          },
-          'dag.writeback_resolution_persist_failed'
-        );
-      });
-    return 'applied';
+    getLog().error({ runId, envId: containerCtx.envId }, 'dag.writeback_apply_outcome_unknown');
+    throw new Error(
+      'The write-back needs reconciliation: an earlier attempt claimed the apply to the ' +
+        'live folder but never recorded that it finished, so the changes may be fully, ' +
+        'partly or not applied. Archon will not apply them again. The container and ' +
+        `overlay volume (env ${containerCtx.envId}) are preserved: compare the live folder ` +
+        'with the overlay, copy anything missing by hand, then run ' +
+        `\`archon workflow abandon ${runId}\` to discard the overlay.`
+    );
   }
   let applied;
   try {
