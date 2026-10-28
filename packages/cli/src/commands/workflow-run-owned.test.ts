@@ -287,6 +287,30 @@ describe('workflowRunCommand', () => {
     await expect(run).rejects.toThrow(`Did you mean:\n  - ${candidate}`);
   });
 
+  it('suggests names on an exact miss despite a differently cased load error', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'archon-review' })],
+      errors: [
+        {
+          filename: '/workflows/duplicate.yaml',
+          workflowName: 'ARCHON-REVIEW',
+          error: "Duplicate workflow name 'ARCHON-REVIEW'",
+          errorType: 'validation_error',
+        },
+      ],
+    });
+
+    const run = workflowRunCommand(
+      createTestWorkflowHost(),
+      '/test/path',
+      'Archon-review',
+      'hello'
+    );
+    await expect(run).rejects.toThrow("Workflow 'Archon-review' not found");
+    await expect(run).rejects.toThrow('Did you mean:\n  - archon-review');
+  });
+
   it('should throw error when workflow execution fails', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');

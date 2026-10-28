@@ -224,10 +224,10 @@ Run a workflow with an optional user message, which the workflow reads as `$ARGU
 
 ```bash
 # Basic usage
-archon workflow run investigate --cwd /path/to/repo "Why does the export job time out?"
+archon workflow run archon-investigate --cwd /path/to/repo "Why does the export job time out?"
 
 # With isolation
-archon workflow run plan --cwd /path/to/repo --branch feature-x "Add caching"
+archon workflow run archon-plan --cwd /path/to/repo --branch feature-x "Add caching"
 
 # Supplying a workflow's declared inputs (one flag per input)
 archon workflow run review-block --cwd /path/to/repo \
@@ -352,7 +352,7 @@ The layer is sparse: omitted settings keep their normal lower-layer values. In `
 
 ```bash
 # Author in ~/dev/archon (uncommitted), run against a clean checkout elsewhere
-archon workflow run implement \
+archon workflow run archon-implement \
   --workflow-source ~/dev/archon \
   --cwd ~/checkouts/archon-target \
   "implement the plan"
@@ -386,22 +386,22 @@ classify:
 investigate: "Root cause: stale cache"
 YAML
 
-archon workflow run triage --cwd /path/to/repo \
+archon workflow run archon-triage --cwd /path/to/repo \
   --dry-run --stubs stubs.yaml "Issue #2100"
 
 # One complete JSON document, safe to pipe in CI
-archon workflow run triage --cwd /path/to/repo \
+archon workflow run archon-triage --cwd /path/to/repo \
   --dry-run --stubs stubs.yaml --json | jq '.trace, .outcome, .authoredOutcome'
 ```
 
 Generate a starting fixture when a composed workflow has many nodes, then keep only the values that drive the path you want to test:
 
 ```bash
-archon workflow run deliver --cwd /path/to/repo \
+archon workflow run archon-deliver --cwd /path/to/repo \
   --dry-run --stubs-init fixtures/deliver.yaml
 
 # After editing the load-bearing values in the generated YAML:
-archon workflow run deliver --cwd /path/to/repo \
+archon workflow run archon-deliver --cwd /path/to/repo \
   --dry-run --stubs fixtures/deliver.yaml --default-stubs
 ```
 
@@ -473,7 +473,7 @@ cut-from, so pairing the two flags splits them:
 
 ```bash
 # Branch off release/2.0, but open the PR against dev
-archon workflow run implement --from origin/release/2.0 --base dev "Backport the fix"
+archon workflow run archon-implement --from origin/release/2.0 --base dev "Backport the fix"
 ```
 
 `--from` is handed to `git worktree add` verbatim, so a remote ref such as
@@ -1998,7 +1998,7 @@ When project registration fails, the command fails with the registration error, 
 
 ```bash
 archon project list
-archon workflow run investigate --project owner/repo --cwd /other/clone --no-worktree "Investigate the failing build"
+archon workflow run archon-investigate --project owner/repo --cwd /other/clone --no-worktree "Investigate the failing build"
 ```
 
 `--project` selects the run's registered identity, managed project environment variables, artifacts and logs. For an ordinary fresh run, `--cwd` supplies workflow source, launch configuration and in-place execution. Adoption retains its existing lane, source and configuration rules. `--workflow-source` can still override the authoring directory. With isolation enabled, execution and worktree creation use the registered checkout, including its remote/ref operations and worktree configuration; branches that exist only in the separate clone are not available there. Use `--no-worktree` to execute in the launch clone. This selector applies only to fresh `workflow run` invocations, requires a registered repository, and does not register a second clone. Unknown, ambiguous, or deleted selections fail before launch.

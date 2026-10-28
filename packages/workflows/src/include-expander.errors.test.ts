@@ -17,18 +17,25 @@ describe('missing include discovery errors', () => {
     expect(isSourceReadFailure(result.errors[0]?.cause)).toBe(true);
   });
 
-  test('the target is looked up the way every other load-error consumer looks it up', () => {
+  test.each([
+    ['Missing', "Node 'wrapped': invalid definition", 'validation_error'],
+    [
+      'missing',
+      "Node 'wrapped': include target 'Missing' not found; it may be declared in an unreadable source (unreadable.yaml: source unavailable)",
+      'read_error',
+    ],
+  ])('attributes only an exact declared name (%s)', (workflowName, message, errorType) => {
     const result = expandWorkflowIncludes(mapOf(root), undefined, [
       { filename: 'unreadable.yaml', error: 'source unavailable', errorType: 'read_error', cause },
       {
         filename: 'invalid.yaml',
-        workflowName: 'missing',
+        workflowName,
         error: 'invalid definition',
         errorType: 'validation_error',
       },
     ]);
-    expect(result.errors[0]?.error).toBe("Node 'wrapped': invalid definition");
-    expect(result.errors[0]?.errorType).toBe('validation_error');
+    expect(result.errors[0]?.error).toBe(message);
+    expect(result.errors[0]?.errorType).toBe(errorType);
   });
 });
 

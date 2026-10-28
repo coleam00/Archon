@@ -88,7 +88,7 @@ parallel checkouts. To start a fresh run in a separate clone under the existing 
 identity and storage, use:
 
 ```bash
-archon workflow run investigate --project owner/repo --cwd /other/clone --no-worktree
+archon workflow run archon-investigate --project owner/repo --cwd /other/clone --no-worktree
 ```
 
 Find the registered name or ID with `archon project list`. `--no-worktree` executes in the
