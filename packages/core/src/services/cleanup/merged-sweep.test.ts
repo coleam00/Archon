@@ -325,8 +325,8 @@ describe('cleanupMergedWorktrees', () => {
     expect(mockGetDefaultBranch).not.toHaveBeenCalled();
   });
 
-  // Same contract as the breakdown path: an unhonourable `assistants.*` value
-  // stops the sweep before any worktree is inspected or removed.
+  // An unhonourable `assistants.*` value stops the sweep before any worktree
+  // is inspected or removed.
   test('surfaces an invalid assistants config instead of sweeping worktrees', async () => {
     mergedSweepFinds(worktreeEnv('merged-branch'));
     mockLoadRepoConfig.mockRejectedValue(

@@ -231,6 +231,9 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
   try {
     const breakdown = await getWorktreeStatusBreakdown(codebase.id, codebase.default_cwd);
     msg += `\n\nWorktrees: ${String(breakdown.total)} total`;
+    if (breakdown.classificationUnavailable) {
+      return `${msg}\n  • Merge/stale classification unavailable (base ref resolution failed; check repository config and remote default branch)`;
+    }
     if (breakdown.merged > 0 || breakdown.stale > 0 || breakdown.inspectionFailedEnvs.length > 0) {
       if (breakdown.merged > 0) {
         msg += `\n  • ${String(breakdown.merged)} merged (can auto-remove)`;

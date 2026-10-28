@@ -250,7 +250,14 @@ export async function getWorktreeStatusBreakdown(
     inspectionFailedEnvs: [],
   };
 
-  const { remoteMainRef } = await resolveRepoGitContext(repoPath, mainRepoPath);
+  let remoteMainRef: BranchName;
+  try {
+    ({ remoteMainRef } = await resolveRepoGitContext(repoPath, mainRepoPath));
+  } catch {
+    // Config and remote errors can contain secrets; report the failed operation without raw evidence.
+    getLog().warn({ codebaseId }, 'worktree_status_base_ref_resolution_failed');
+    return { ...breakdown, classificationUnavailable: 'base-ref-resolution-failed' };
+  }
 
   for (const env of environments) {
     const reason = unknownPlatformReason(env.created_by_platform);
