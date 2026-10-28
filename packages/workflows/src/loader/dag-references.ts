@@ -8,8 +8,6 @@ import {
   isIncludeDirective,
 } from '../schemas';
 import { attentionOptionSchema } from '../schemas/wait-node';
-import { isAnnotationOnlyOutputSchema } from '../structured-output';
-import { outputSchemaAlternativesForPath } from '../output-schema-projection';
 import {
   findUnsupportedNestedWhenRef,
   assertSupportedWhenOutputRefs,
@@ -26,6 +24,7 @@ import {
   PRIOR_OUTPUT_PATH_SOURCE,
   OUTPUT_REF_SOURCE,
   parseWholeOutputRef,
+  COMPOSITION_KEYWORDS,
 } from '../output-ref';
 import { visitNodeTemplateSlots, type TemplateSurface } from '../template-walker';
 import { z } from 'zod';
@@ -105,15 +104,16 @@ function referencedOptionsShapeError(
   if (ref?.field === undefined) return undefined;
   const producer = producerOf(ref.nodeId);
   if (producer === undefined || isIncludeDirective(producer)) return undefined;
-  if (producer.output_format === undefined) return undefined;
+  let schema: unknown = producer.output_format;
+  if (schema === undefined) return undefined;
   const path = ref.field.split('.');
-  const alternatives = outputSchemaAlternativesForPath(producer.output_format, path, schema =>
-    isAnnotationOnlyOutputSchema(schema) ? undefined : isAttentionOptionsSchema(schema)
-  );
-  const fits =
-    alternatives.length > 0 &&
-    alternatives.every(checks => checks.includes(true) && checks.every(Boolean));
-  if (fits) return undefined;
+  // Composed options are validated against the actual value when the wait runs.
+  if (hasCompositionOnPath(schema, path)) return undefined;
+  for (const key of path) {
+    const properties: unknown = isRecord(schema) ? schema.properties : undefined;
+    schema = isRecord(properties) ? properties[key] : undefined;
+  }
+  if (isAttentionOptionsSchema(schema)) return undefined;
   const { properties: optionProperties = {}, required: optionRequired = [] } =
     ATTENTION_OPTION_JSON_SCHEMA;
   const expected = Object.entries(optionProperties)
@@ -144,6 +144,17 @@ function isAttentionOptionsSchema(schema: unknown): boolean {
     optionRequired.every(
       key => key in itemProperties && Array.isArray(itemRequired) && itemRequired.includes(key)
     )
+  );
+}
+
+function hasCompositionOnPath(schema: unknown, path: readonly string[]): boolean {
+  if (!isRecord(schema)) return false;
+  if (COMPOSITION_KEYWORDS.some(key => Array.isArray(schema[key]))) return true;
+  const [key, ...rest] = path;
+  return (
+    key !== undefined &&
+    isRecord(schema.properties) &&
+    hasCompositionOnPath(schema.properties[key], rest)
   );
 }
 

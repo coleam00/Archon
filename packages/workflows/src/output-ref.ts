@@ -45,7 +45,6 @@
  * completion. See `similarNodeIds`.
  */
 import { z } from 'zod';
-import { COMPOSITION_KEYWORDS } from './output-schema-projection';
 import type { NodeOutput } from './schemas';
 import { findSimilar } from './utils/fuzzy-match';
 import { hasTruncationMarker } from './utils/output-truncation';
@@ -437,6 +436,8 @@ export function declaredFieldsFromSchema(
  */
 export const declaredOutputPathsSchema = z.array(z.array(z.string()).min(1));
 export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
+
+export const COMPOSITION_KEYWORDS = ['allOf', 'anyOf', 'oneOf'] as const;
 
 export function declaredOutputPathsFromSchema(
   outputFormat: Record<string, unknown> | undefined
