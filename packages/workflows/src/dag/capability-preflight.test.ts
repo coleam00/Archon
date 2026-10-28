@@ -516,6 +516,68 @@ describe('executeDagWorkflow -- strict-schema preflight', () => {
 });
 
 describe('assertRunCapabilities', () => {
+  for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
+    for (const additionalProperties of [undefined, true, false, { type: 'string' }]) {
+      it(`checks prepared ${operator} branches with additionalProperties ${JSON.stringify(additionalProperties)}`, () => {
+        const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
+          name: 'preflight',
+          nodes: [
+            {
+              id: 'work',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Do the work' },
+              output_format: {
+                type: 'object',
+                properties: { status: { type: 'string' }, message: { type: 'string' } },
+                required: ['status', 'message'],
+                [operator]: [
+                  {
+                    properties: { status: { enum: ['success', 'blocked'] } },
+                    ...(additionalProperties === undefined ? {} : { additionalProperties }),
+                  },
+                ],
+              },
+            },
+          ],
+        };
+        const check = () =>
+          assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' });
+        if (additionalProperties === undefined || additionalProperties === true) {
+          expect(check).not.toThrow();
+          expect(collectStrictSchemaViolations(providerRegistry, workflow.nodes, 'codex')).toEqual(
+            []
+          );
+        } else {
+          expect(check).toThrow(`output_format.${operator}`);
+        }
+      });
+    }
+  }
+
+  it('refuses unsupported conversion at launch with the node, path and alternative', () => {
+    const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
+      name: 'preflight',
+      nodes: [
+        {
+          id: 'work',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'Do the work' },
+          output_format: {
+            type: 'object',
+            properties: { child: { not: { type: 'string' } } },
+            required: ['child'],
+          },
+        },
+      ],
+    };
+    expect(() =>
+      assertRunCapabilities(providerRegistry, workflow, 'codex', undefined, { kind: 'host' })
+    ).toThrow(/node 'work'.*output_format.properties.child.not.*complete oneOf\/anyOf branches/);
+    expect(() =>
+      assertRunCapabilities(providerRegistry, workflow, 'claude', undefined, { kind: 'host' })
+    ).not.toThrow();
+  });
+
   it('names the properties a strict provider needs listed in required', () => {
     const workflow: Pick<ResolvedWorkflow, 'name' | 'nodes'> = {
       name: 'preflight',

@@ -3,7 +3,7 @@
  * scoping), the reasoning effort, the output schema and the prompt with its folded-in
  * system prompt.
  */
-import { clampEffort } from '@archon/provider-contract';
+import { clampEffort, normalizeJsonSchemaForOpenAiStrict } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import type {
   CodexProviderDefaults,
@@ -13,10 +13,7 @@ import type {
 } from '../types';
 import { loadMcpConfig } from '../mcp/config';
 import { ClassifiedProviderError } from '../shared/failure';
-import {
-  hasOpenAdditionalProperties,
-  normalizeJsonSchemaForOpenAiStrict,
-} from '../shared/structured-output';
+import { hasOpenAdditionalProperties } from '../shared/structured-output';
 import { CODEX_EFFORTS } from './config';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
 

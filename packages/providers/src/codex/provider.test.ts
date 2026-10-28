@@ -1333,7 +1333,6 @@ describe('CodexProvider', () => {
           required: ['status', 'message'],
           oneOf: ['success', 'blocked'].map(status => ({
             properties: { status: { const: status } },
-            required: ['status'],
           })),
         };
         const { provider, server } = providerWith();

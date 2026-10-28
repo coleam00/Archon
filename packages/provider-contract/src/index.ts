@@ -156,3 +156,9 @@ export {
 } from './config-schema';
 
 export { nativeToolInputParser } from './native-tools';
+
+export {
+  normalizeJsonSchemaForOpenAiStrict,
+  findPreparedStrictSchemaIssues,
+  type PreparedStrictSchemaIssue,
+} from './strict-output-schema';

@@ -2131,6 +2131,42 @@ describe('validateWorkflowResources — strict-schema compatibility', () => {
     } as DagNode;
   }
 
+  test.each(['oneOf', 'anyOf', 'allOf'] as const)(
+    'accepts inherited required fields in %s and reports unsupported conversions',
+    async operator => {
+      const schema = {
+        type: 'object',
+        properties: { status: { type: 'string' }, message: { type: 'string' } },
+        required: ['status', 'message'],
+        [operator]: [{ properties: { status: { enum: ['success', 'blocked'] } } }],
+      };
+      for (const [branch, expected] of [
+        [schema, undefined],
+        [
+          { ...schema, [operator]: [{ properties: { status: {} }, additionalProperties: false }] },
+          operator === 'allOf' ? 'complete property map' : 'required',
+        ],
+        [{ ...schema, not: { properties: { status: { const: 'bad' } } } }, 'output_format.not'],
+      ] as const) {
+        const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: branch })]);
+        const issues = await validateWorkflowResources(
+          workflow,
+          tmpDir,
+          providerRegistry,
+          {},
+          'codex'
+        );
+        const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+        if (expected === undefined) expect(errors).toEqual([]);
+        else {
+          expect(errors).toHaveLength(1);
+          expect(errors[0].message).toContain(expected);
+          expect(errors[0].nodeId).toBe('plan');
+        }
+      }
+    }
+  );
+
   test('Codex-routed agent node with optional-by-omission reports error', async () => {
     const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: looseSchema })]);
 

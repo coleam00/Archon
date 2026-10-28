@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import Ajv from 'ajv';
 import Ajv2020 from 'ajv/dist/2020.js';
-import { findStrictSchemaIssues } from '@archon/provider-contract';
+import {
+  findStrictSchemaIssues,
+  normalizeJsonSchemaForOpenAiStrict,
+} from '@archon/provider-contract';
 import {
   augmentPromptForJsonSchema,
   tryParseStructuredOutput,
-  normalizeJsonSchemaForOpenAiStrict,
   hasOpenAdditionalProperties,
 } from './structured-output';
 
@@ -132,10 +134,9 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
     required: ['status', 'message'],
     [operator]:
       operator === 'allOf'
-        ? [{ properties: { status: { enum: ['success', 'blocked'] } }, required: ['status'] }]
+        ? [{ properties: { status: { enum: ['success', 'blocked'] } } }]
         : ['success', 'blocked'].map(status => ({
             properties: { status: { const: status } },
-            required: ['status'],
           })),
   });
   const ajv = new Ajv({ strict: false });
