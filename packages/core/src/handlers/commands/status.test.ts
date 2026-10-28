@@ -8,6 +8,7 @@ import {
   makeWorkflowRun,
   makeIsolationEnvironment,
   mockGetCodebase,
+  mockListCodebases,
   mockGetWorktreeStatusBreakdown,
   mockFindCodebaseByDefaultCwd,
   mockGetActiveSession,
@@ -54,6 +55,54 @@ describe('CommandHandler', () => {
         // cwd is null → the working directory falls back to the project root
         // (issue #1993: web-created project conversations have null cwd).
         expect(result.message).toContain('Working Directory: /workspace/my-repo');
+      });
+
+      test.each([
+        ['https://user:secret@gitlab.example/org/repo.git?token=secret#secret', 'gitlab.example'],
+        ['https://user:secret@github.com/org/repo?token=secret', 'github.com'],
+        ['ssh://secret@gitlab.example:2222/org/repo.git', 'gitlab.example:2222'],
+        ['secret@github.com:org/repo.git', 'github.com'],
+        ['/local/repo', 'local repository'],
+        ['https://gitlab.example/org/path-secret/repo.git', 'gitlab.example'],
+        ['https://github.com/org/path-secret/repo.git', 'github.com'],
+        ['secret@gitlab.example:org/path-secret/repo.git', 'gitlab.example'],
+        ['file:///local/path-secret/repo', 'local repository'],
+        ['invalid-secret', 'repository identity unavailable'],
+      ])('shows a credential-free repository identity for %s', async (remote, identity) => {
+        mockGetCodebase.mockResolvedValue(makeCodebase({ repository_url: remote }));
+        mockListCodebases.mockResolvedValueOnce([makeCodebase({ repository_url: remote })]);
+        const result = await handleCommand(
+          { ...baseConversation, codebase_id: 'cb-123' },
+          '/status',
+          operator
+        );
+        expect(result.message).toContain(`(${identity})`);
+        expect(result.message).not.toContain('secret');
+      });
+
+      test('shows the successful worktree breakdown', async () => {
+        mockGetCodebase.mockResolvedValue(makeCodebase());
+        mockGetWorktreeStatusBreakdown.mockResolvedValueOnce({
+          total: 3,
+          merged: 1,
+          stale: 1,
+          active: 1,
+          mergedEnvs: [{ id: 'merged', branchName: 'merged' }],
+          staleEnvs: [{ id: 'stale', branchName: 'stale', daysInactive: 30 }],
+          activeEnvs: [{ id: 'active', branchName: 'active' }],
+          inspectionFailedEnvs: [],
+        });
+
+        const result = await handleCommand(
+          { ...baseConversation, codebase_id: 'cb-123' },
+          '/status',
+          operator
+        );
+
+        expect(result.success).toBe(true);
+        expect(result.message).toEndWith(
+          'Worktrees: 3 total\n  • 1 merged (can auto-remove)\n  • 1 stale (14+ days inactive)\n  • 1 active'
+        );
       });
 
       test('shows merge inspection failures and their causes separately from stale worktrees', async () => {

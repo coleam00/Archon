@@ -158,15 +158,24 @@ export async function handleStatusCommand(
   return { success: true, message: msg };
 }
 
+function repositoryIdentity(remote: string): string {
+  const scp = /^(?:[^@/]+@)?([^/:]+):(.+)$/.exec(remote);
+  try {
+    const url = new URL(remote.includes('://') || !scp ? remote : `ssh://${scp[1]}/${scp[2]}`);
+    if (url.protocol === 'file:') return 'local repository';
+    return url.host || 'repository identity unavailable';
+  } catch {
+    return remote.startsWith('/') ? 'local repository' : 'repository identity unavailable';
+  }
+}
+
 async function registeredProjectsSection(): Promise<string> {
   const allCodebases = await codebaseDb.listCodebases();
   if (allCodebases.length === 0)
     return '\n\n## Registered Projects\nNone — ask the orchestrator to add a project.';
   let msg = `\n\n## Registered Projects (${String(allCodebases.length)})\n`;
   for (const cb of allCodebases) {
-    const urlSuffix = cb.repository_url
-      ? ` (${cb.repository_url.replace(/.*github\.com\//, '')})`
-      : '';
+    const urlSuffix = cb.repository_url ? ` (${repositoryIdentity(cb.repository_url)})` : '';
     msg += `- ${cb.name}${urlSuffix}\n`;
   }
   return msg;
@@ -231,6 +240,9 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
   try {
     const breakdown = await getWorktreeStatusBreakdown(codebase.id, codebase.default_cwd);
     msg += `\n\nWorktrees: ${String(breakdown.total)} total`;
+    if (breakdown.classificationUnavailable) {
+      return `${msg}\n  • Merge/stale classification unavailable (base ref resolution failed: ${breakdown.classificationUnavailable.reason})`;
+    }
     if (breakdown.merged > 0 || breakdown.stale > 0 || breakdown.inspectionFailedEnvs.length > 0) {
       if (breakdown.merged > 0) {
         msg += `\n  • ${String(breakdown.merged)} merged (can auto-remove)`;
