@@ -7,6 +7,7 @@ import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import {
   createMockStore,
+  persistedEvents,
   mockClaudeCapabilities,
   mockSendQueryDag,
   mockGetAgentProviderDag,
@@ -650,6 +651,64 @@ describe('loop_group body inputs: included blocks, command files and loop variab
       );
     expect(includedCompletions.map(event => event.data?.iteration)).toEqual([1, 2]);
   });
+
+  it.each([false, true])(
+    'preserves inner loop cost completeness through nested=%s groups',
+    async nested => {
+      let call = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        call++;
+        yield {
+          type: 'agent_message_chunk',
+          text: call === 2 ? '<promise>INNER_DONE</promise> DONE' : 'work',
+        };
+        yield { type: 'result', sessionId: 'inner', ...(call === 2 ? { cost: 0.02 } : {}) };
+      });
+      const inner: DagNode = {
+        id: 'inner',
+        kind: 'loop',
+        loop: {
+          prompt: 'Work',
+          until: 'INNER_DONE',
+          max_iterations: 2,
+          fresh_context: false,
+        },
+      };
+      const group = (id: string, child: DagNode): DagNode => ({
+        id,
+        kind: 'loop_group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          fresh_context: false,
+          nodes: [child],
+        },
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'nested-cost',
+            nodes: [group('outer', nested ? group('middle', inner) : inner)],
+          },
+          workflowRun: makeWorkflowRun('nested-cost'),
+        })
+      );
+      const events = persistedEvents(store);
+      for (const path of nested
+        ? ['outer.middle.inner', 'outer.middle', 'outer']
+        : ['outer.inner', 'outer']) {
+        expect(
+          events.find(e => e.step_name === path && e.event_type === 'node_completed')?.data
+        ).toMatchObject({
+          spend: { costUsd: { source: 'provider', value: 0.02, partial: true } },
+        });
+      }
+    }
+  );
 
   it('runs a command-backed loop node inside a loop_group body with namespaced lifecycle events', async () => {
     // A `loop:` body node may use `loop.command` like any top-level loop. The

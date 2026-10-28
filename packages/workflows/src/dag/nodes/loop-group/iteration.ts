@@ -342,6 +342,7 @@ function addIterationUsage(run: LoopGroupRun, iterCtx: RunLayersContext, i: numb
   if (iterCtx.totalCostUsd !== undefined) {
     usage.costUsd = (usage.costUsd ?? 0) + iterCtx.totalCostUsd;
   }
+  usage.costPartial ||= iterCtx.totalCostPartial;
   usage.tokensUnknown ||= iterCtx.totalTokensUnknown;
   if (usage.tokensUnknown) {
     usage.tokens = undefined;

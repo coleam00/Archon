@@ -25,7 +25,7 @@ import { evaluateCondition } from '../condition-evaluator';
 import { writeNodeArtifact } from '../artifacts-index';
 import { safeSendMessage } from '../platform-messages';
 import { getLog } from './log';
-import { sumTokenUsage } from './usage';
+import { incrementalLoopUsage, sumTokenUsage } from './usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from './node-source';
 import {
   beginExecution,
@@ -630,15 +630,24 @@ async function aggregateLayerResults(
 // summed here and ONLY here. Terminal telemetry does not read this: it
 // folds the persisted node events (getDagResumeSnapshot) across segments.
 function addNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult): void {
-  if (output.costUsd !== undefined) {
+  const execution = output.execution;
+  const prior =
+    execution === undefined
+      ? undefined
+      : ctx.unfinishedInvocations?.get(
+          nodeInvocationKey(execution.path, execution.invocation.loopPath)
+        );
+  const usage = incrementalLoopUsage(output, prior);
+  ctx.totalCostPartial ||= output.costPartial;
+  if (usage.costUsd !== undefined) {
     // Same guard as tokens below, and for the same reason: cost comes from
     // providers (incl. community ones), and one NaN poisons the run total for
     // every other node — NaN > 0 is false, so the cost is dropped from the run
     // row with no trace. Exactly the silent loss #2469 exists to
     // remove. Guarded here, at the single aggregation point, so one bad node
     // costs only its own contribution.
-    if (Number.isFinite(output.costUsd)) {
-      ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + output.costUsd;
+    if (Number.isFinite(usage.costUsd)) {
+      ctx.totalCostUsd = (ctx.totalCostUsd ?? 0) + usage.costUsd;
     } else {
       getLog().warn({ nodeId, costUsd: output.costUsd }, 'dag.usage_cost_non_finite_ignored');
     }
@@ -646,9 +655,9 @@ function addNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult
   ctx.totalTokensUnknown ||= output.tokensUnknown === true;
   if (ctx.totalTokensUnknown) {
     ctx.totalTokens = undefined;
-  } else if (output.tokens !== undefined) {
+  } else if (usage.tokens !== undefined) {
     ctx.totalTokens = sumTokenUsage(
-      [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), output.tokens],
+      [...(ctx.totalTokens !== undefined ? [ctx.totalTokens] : []), usage.tokens],
       { nodeId }
     );
   }

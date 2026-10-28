@@ -1257,8 +1257,43 @@ describe('interactive loop node', () => {
       }
     );
 
+    it.each(
+      [-0.01, undefined, 'invalid'].flatMap(signaledCostUsd =>
+        [true, false].map(feedbackGiven => ({ signaledCostUsd, feedbackGiven }))
+      )
+    )(
+      'uses saved execution cost with inconsistent gate fields: %j',
+      async ({ signaledCostUsd, feedbackGiven }) => {
+        const runId = `inconsistent-gate-${signaledCostUsd}-${feedbackGiven}`;
+        const execution = executionMetadata(
+          finishNodeExecution(
+            startNodeExecution({
+              runId,
+              path: 'refine',
+              node: refine,
+              invocation: newNodeInvocation(),
+              provider: 'claude',
+            }),
+            { status: 'suspended', point: 'interactive_loop' },
+            { costUsd: 0.02 }
+          )
+        );
+        const { completed } = await resumeAt(
+          runId,
+          gate({ execution, signaledCostUsd }),
+          feedbackGiven
+        );
+        const expected = feedbackGiven ? 0.05 : 0.02;
+        expect(completed?.data).toMatchObject({
+          cost_usd: expected,
+          spend: { costUsd: { source: 'provider', value: expected } },
+        });
+        expect(completed?.data).not.toHaveProperty('spend.costUsd.partial');
+      }
+    );
+
     it.each(['provider', 'command load', 'compiled error', 'compiled metadata'] as const)(
-      'preserves partial gate spend on early %s failure',
+      'counts partial gate spend once after early %s failure and retry',
       async failure => {
         const runId = `gate-failure-${failure}`;
         const node: LoopNode = {
@@ -1289,7 +1324,11 @@ describe('interactive loop node', () => {
               provider: 'claude',
             }),
             { status: 'suspended', point: 'interactive_loop' },
-            { costUsd: 0.04, costPartial: true }
+            {
+              costUsd: 0.04,
+              costPartial: true,
+              tokens: { input: 40, output: 4, cacheRead: 10, cacheWrite: 0 },
+            }
           )
         );
         const mockDeps = createMockDeps();
@@ -1301,7 +1340,11 @@ describe('interactive loop node', () => {
             workflow: { name: 'gate-early-failure', nodes: [node] },
             workflowRun: makeWorkflowRun(runId, {
               metadata: {
-                approval: gate({ execution, signaledCostUsd: 0.04 }),
+                approval: gate({
+                  execution,
+                  signaledCostUsd: 0.04,
+                  signaledTokens: { input: 40, output: 4, cacheRead: 10, cacheWrite: 0 },
+                }),
                 loop_user_input: 'again',
                 loop_feedback_given: true,
               },
@@ -1323,6 +1366,71 @@ describe('interactive loop node', () => {
           expect.objectContaining({ total_cost_usd: 0.04 }),
         ]);
         expect((await foldDagResumeSnapshot(events, runId)).costUsd).toBeCloseTo(0.04, 5);
+
+        mockGetAgentProviderDag.mockImplementation(() => ({
+          sendQuery: mockSendQueryDag,
+          checkCredential: async () => ({
+            state: 'not_checked' as const,
+            source: 'native' as const,
+          }),
+          getType: () => 'claude',
+          getCapabilities: mockClaudeCapabilities,
+        }));
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield { type: 'agent_message_chunk', text: '<promise>APPROVED</promise>' };
+          yield {
+            type: 'result',
+            cost: 0.03,
+            sessionId: 'continued',
+            tokens: { input: 30, output: 3, cacheRead: 5, cacheWrite: 0 },
+          };
+        });
+        const snapshot = await foldDagResumeSnapshot(events, runId);
+        (
+          mockDeps.store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>
+        ).mockImplementation(async () => snapshot);
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: { name: 'gate-retry', nodes: [refine] },
+            workflowRun: makeWorkflowRun(runId, {
+              metadata: {
+                approval: gate({
+                  execution,
+                  signaledCostUsd: 0.04,
+                  signaledTokens: { input: 40, output: 4, cacheRead: 10, cacheWrite: 0 },
+                }),
+                loop_user_input: 'again',
+                loop_feedback_given: true,
+              },
+            }),
+            priorCompletedNodes: snapshot.completedNodeOutputs,
+            priorUsage: snapshot,
+          })
+        );
+        const retriedEvents = persistedEvents(mockDeps.store);
+        const completed = retriedEvents.find(
+          e => e.event_type === 'node_completed' && e.step_name === 'refine'
+        );
+        expect(completed?.data).toMatchObject({
+          spend: { costUsd: { source: 'provider', value: 0.07, partial: true } },
+        });
+        expect((await foldDagResumeSnapshot(retriedEvents, runId)).costUsd).toBeCloseTo(0.07, 5);
+        expect(runUsageWrites(mockDeps.store).at(-1)).toMatchObject({
+          total_cost_usd: 0.07,
+          total_tokens_in: 70,
+          total_tokens_out: 7,
+          total_cache_read_tokens: 15,
+          total_cache_write_tokens: 0,
+        });
+        expect((await foldDagResumeSnapshot(retriedEvents, runId)).tokens).toMatchObject({
+          input: 70,
+          output: 7,
+          cacheRead: 15,
+          cacheWrite: 0,
+        });
       }
     );
 

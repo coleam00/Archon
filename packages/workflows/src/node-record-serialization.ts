@@ -26,6 +26,7 @@ import {
   type ExecutionOutput,
 } from './schemas/node-execution';
 import { executionMetadata } from './node-execution';
+import { attemptSpend } from './run-budget';
 import { unqualifiedResourceName } from './packaged-workflow';
 import type { DagNode } from './schemas';
 
@@ -397,6 +398,7 @@ function childRunDiagnosticFields(d: ExecutionDiagnostics): SerializedNodeData {
 
 export type NodeExecutionResult = NodeOutput & {
   costUsd?: number;
+  costPartial?: boolean;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   loopIterations?: number;
@@ -445,6 +447,7 @@ function nodeOutputFields(record: NodeExecutionRecord) {
       ? { tokensUnknown: true }
       : {}),
     ...(record.spend.costUsd.source === 'provider' ? { costUsd: record.spend.costUsd.value } : {}),
+    ...(attemptSpend(record).kind === 'unavailable' ? { costPartial: true } : {}),
     ...(record.diagnostics?.loopIterations !== undefined
       ? { loopIterations: record.diagnostics.loopIterations }
       : {}),

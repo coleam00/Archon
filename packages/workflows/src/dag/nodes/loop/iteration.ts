@@ -584,7 +584,7 @@ async function pauseAtLoopGate(
     commandSnapshot: run.promptTemplate,
   };
   const deferredLoopOutput: NodeExecutionResult = {
-    ...serializeNodeOutput(state.execution),
+    ...serializeNodeOutput(suspended),
     ...(state.costUsd !== undefined ? { costUsd: state.costUsd } : {}),
     ...(state.tokens !== undefined ? { tokens: state.tokens } : {}),
     ...(state.tokensUnknown ? { tokensUnknown: true } : {}),

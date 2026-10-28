@@ -464,6 +464,7 @@ function readLoopResume(
   const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
   const feedbackGiven = gate !== undefined && loopGateRunMeta.loop_feedback_given === true;
   const persistedUsageContext = { workflowRunId: workflowRun.id, nodeId: node.id };
+  const savedCost = savedExecution?.spend.costUsd;
   return {
     savedExecution,
     gate,
@@ -477,9 +478,13 @@ function readLoopResume(
         ? Math.max(node.loop.max_iterations, startIteration)
         : node.loop.max_iterations,
     costUsd:
-      gate !== undefined
-        ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
-        : undefined,
+      savedExecution !== undefined
+        ? savedCost?.source === 'provider'
+          ? savedCost.value
+          : undefined
+        : gate !== undefined
+          ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
+          : undefined,
     priorCostKnown: gate === undefined || attemptSpend(savedExecution).kind === 'known',
     tokens:
       gate !== undefined

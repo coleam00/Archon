@@ -211,3 +211,50 @@ describe('composed instance accounting segments', () => {
     expect(closed.tokens).toEqual(open.tokens);
   });
 });
+
+describe('loop configuration failure accounting', () => {
+  it.each([
+    { failureKind: 'config', sameInvocation: true, expected: 0.07 },
+    { failureKind: 'config', sameInvocation: false, expected: 0.11 },
+    { failureKind: 'unknown', sameInvocation: true, expected: 0.11 },
+  ] as const)(
+    'reconciles only the same invocation configuration restatement: %j',
+    async ({ failureKind, sameInvocation, expected }) => {
+      const first = startNodeExecution({
+        runId: 'run',
+        path: 'loop',
+        provider: 'claude',
+        invocation: newNodeInvocation(),
+        node: {
+          id: 'loop',
+          kind: 'loop',
+          loop: { prompt: 'Work', until: 'DONE', max_iterations: 2, fresh_context: false },
+        },
+      });
+      const failed = serializeNodeStateRecord(
+        finishNodeExecution(
+          first,
+          { status: 'failed', error: 'failed', failureKind },
+          { costUsd: 0.04, costPartial: true }
+        )
+      );
+      const next = {
+        ...first,
+        invocation: sameInvocation ? first.invocation : newNodeInvocation(),
+      };
+      const completed = serializeNodeStateRecord(
+        finishNodeExecution(next, { status: 'completed' }, { costUsd: 0.07, costPartial: true })
+      );
+      expect((await foldDagResumeSnapshot([failed, completed], 'run')).costUsd).toBeCloseTo(
+        expected,
+        5
+      );
+      if (failureKind === 'config' && sameInvocation) {
+        expect((await foldDagResumeSnapshot([failed, failed], 'run')).costUsd).toBeCloseTo(0.04, 5);
+        expect(
+          (await foldDagResumeSnapshot([failed, failed, completed], 'run')).costUsd
+        ).toBeCloseTo(0.07, 5);
+      }
+    }
+  );
+});

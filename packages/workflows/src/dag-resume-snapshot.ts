@@ -115,6 +115,7 @@ function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefi
 
 interface UsageContribution {
   stepName: string;
+  loopConfigFailureInvocationId?: string;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   costUsd?: number;
@@ -446,7 +447,23 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   // Other aggregate rows merely restate usage already carried by their leaves.
   if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
   if (row.event_type !== 'node_skipped_prior_success') {
-    addUsage(fold, row.step_name, record.rawUsage);
+    const metadata = record.metadata;
+    if (metadata?.node.kind === 'loop') {
+      // Configuration failures make no provider call. Their carried gate measurement
+      // is replaced when the same invocation continues, rather than charged again.
+      fold.usageContributions = fold.usageContributions.filter(
+        contribution =>
+          contribution.stepName !== row.step_name ||
+          contribution.loopConfigFailureInvocationId !== metadata.invocation.id
+      );
+      const contribution = readUsage(fold, row.step_name, record.rawUsage);
+      if (metadata.lifecycle.status === 'failed' && metadata.lifecycle.failureKind === 'config') {
+        contribution.loopConfigFailureInvocationId = metadata.invocation.id;
+      }
+      fold.usageContributions.push(contribution);
+    } else {
+      addUsage(fold, row.step_name, record.rawUsage);
+    }
   }
 }
 

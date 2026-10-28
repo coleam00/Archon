@@ -149,6 +149,7 @@ export async function finalizeLoopFromSignal(
       ? { declaredOutputPaths: output.declaredOutputPaths }
       : {}),
     ...(finalizeUsage?.costUsd !== undefined ? { costUsd: finalizeUsage.costUsd } : {}),
+    ...(finalizeUsage?.costPartial ? { costPartial: true } : {}),
     ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
   };

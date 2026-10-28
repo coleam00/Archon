@@ -144,6 +144,7 @@ async function recordGroupResult(
         ...('structuredOutput' in result ? { structured: result.structuredOutput } : {}),
       },
       costUsd: result.costUsd,
+      costPartial: result.costPartial,
       tokens: result.tokens,
       tokensUnknown: result.tokensUnknown,
       diagnostics: { loopIterations: result.loopIterations },
@@ -158,6 +159,7 @@ function runningGroupOutput(
   return {
     ...serializeNodeOutput(execution),
     ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
+    ...(result.costPartial ? { costPartial: true } : {}),
     ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
     ...(result.tokensUnknown ? { tokensUnknown: true } : {}),
   };
