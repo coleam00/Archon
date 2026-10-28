@@ -143,7 +143,6 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
     const fingerprint = schemaFingerprint(sql);
     try {
       await this.initSchemaOnce(sql, fingerprint);
-      getLog().info('db.postgres_schema_init_completed');
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
       getLog().fatal({ err }, 'db.postgres_schema_init_failed');
@@ -184,6 +183,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       await client.query(sql);
       await this.completeSchema(client, preExisting, fingerprint);
       await client.query('COMMIT');
+      getLog().info('db.postgres_schema_init_completed');
     } catch (e) {
       if (client) {
         try {
