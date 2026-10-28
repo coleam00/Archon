@@ -154,7 +154,9 @@ Set your remote connection string in `~/.archon/.env` for user-wide settings or 
 DATABASE_URL=postgresql://user:password@host:5432/dbname
 ```
 
-**No manual migration step is required.** On startup, the Postgres adapter applies the bundled `migrations/000_combined.sql` inside an advisory-lock transaction. The SQL is idempotent (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`), so both fresh installs and version upgrades converge automatically — including new tables and columns added in later releases.
+**No manual migration step is required.** On startup, the Postgres adapter applies the bundled `migrations/000_combined.sql` inside an advisory-lock transaction. The SQL is idempotent (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`), so both fresh installs and version upgrades converge automatically — including new tables and columns added in later releases. A process that finds the schema already current skips this step; see [Schema initialization and upgrades](#schema-initialization-and-upgrades).
+
+When PostgreSQL picks a statement or transaction as a deadlock victim or fails it for serialization (SQLSTATE `40P01` or `40001`), the adapter reruns it, up to four attempts in all, with a short growing pause between attempts, and logs `db.postgres_query_retry` or `db.postgres_transaction_retry` at warn level. A transaction reruns from its start. Other errors fail right away.
 
 Upgrades are verified, not assumed: CI applies the current schema on top of a database built from
 every distinct schema Archon has ever released, re-applies it to confirm idempotence, and compares
@@ -288,7 +290,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_schema_version`** - Schema vintage and completion metadata
   - Records the Archon build that created the database and the build that last applied its schema
   - A single row (`id = 1`); databases predating this table retain an unknown creation version
-  - Nullable `schema_fingerprint` is separate, adapter-owned completion metadata. SQLite publishes it only after successful convergence; PostgreSQL reserves the same column. Older writers can omit it
+  - Nullable `schema_fingerprint` is separate, adapter-owned completion metadata. Each adapter publishes it only after successful convergence. Older writers can omit it
 
 - **`remote_agent_state_revisions`** - Durable project and install JSON documents and their audit history
   - Primary key: `(project_key, name, revision)`; optimistic writes append a revision
@@ -323,7 +325,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 ## Schema initialization and upgrades
 
 The PostgreSQL adapter applies `migrations/000_combined.sql` idempotently on startup
-for both fresh installs and upgrades. SQLite initializes its schema
+for both fresh installs and upgrades, unless the database is already current. SQLite initializes its schema
 in `packages/core/src/db/adapters/sqlite.ts` and upgrades it in
 `packages/core/src/db/adapters/sqlite-migrations.ts`. Neither adapter uses a numbered
 migration runner or migration ledger.
@@ -336,6 +338,19 @@ taking the writer lock. Otherwise, a single writer transaction rechecks, converg
 publishes the fingerprint atomically. Schema changes invalidate the proof; ordinary event
 inserts do not. Failed tolerated migrations leave no completion stamp and are retried on
 the next open. Diagnostic creation and applied-build vintages keep their existing meanings.
+
+PostgreSQL first reads its completion fingerprint without a lock. It covers the bundled
+schema SQL, the notify trigger, and the Archon build. The database is current when that
+fingerprint is recorded, the recorded applied build is this build (an older released build
+that converged since stamps its own version), no legacy provider ids remain, and the
+event-sequence head is not behind. A current database starts without a transaction, lock,
+or DDL. Otherwise the adapter converges and publishes the fingerprint in the same locked
+transaction that installs the notify trigger; a role that cannot install the trigger
+converges on every start. Source checkouts all record the applied build as `dev`, so a
+checkout that predates the PostgreSQL fingerprint can converge against the same database
+without invalidating a newer checkout's fingerprint, and the newer checkout keeps the older
+function bodies. To force convergence in that case, clear it:
+`UPDATE remote_agent_schema_version SET schema_fingerprint = NULL WHERE id = 1`.
 
 ### Workflow origin compatibility
 
