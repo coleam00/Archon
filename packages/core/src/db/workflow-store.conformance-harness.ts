@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
+import { dashboardRunsResultSchema } from '@archon/workflows/schemas/workflow-run-listing';
 import { WorkflowStatusReadError } from './workflows';
 import type { IDatabase, SqlDialect, QueryResult } from './adapters/types';
 import type { WorkflowTerminalProperties } from '@archon/paths';
@@ -95,7 +96,7 @@ export function describeSqlStatusReadConformance(
     try {
       const { db, store } = harness;
       const { getWorkflowRun } = await import('./workflow-run-reads');
-      const { listWorkflowRuns } = await import('./workflow-run-lists');
+      const { listWorkflowRuns, listDashboardRuns } = await import('./workflow-run-lists');
       expect(await getWorkflowRun(randomUUID())).toBeNull();
       expect(await store.getWorkflowRun(randomUUID())).toBeNull();
       expect(await listWorkflowRuns()).toEqual([]);
@@ -110,9 +111,17 @@ export function describeSqlStatusReadConformance(
         expect((await getWorkflowRun(run.id))?.status).toBe(status);
         expect((await store.getWorkflowRun(run.id))?.status).toBe(status);
         expect((await listWorkflowRuns()).find(row => row.id === run.id)?.status).toBe(status);
-        expect((await store.listWorkflowRuns()).runs.find(row => row.id === run.id)?.status).toBe(
-          status
+        const dashboard = await store.listWorkflowRuns();
+        expect(dashboard.runs.find(row => row.id === run.id)?.status).toBe(status);
+        expect(dashboardRunsResultSchema.shape.counts.parse(dashboard.counts)).toEqual(
+          dashboard.counts
         );
+        expect(dashboard.counts.all).toBe(2);
+        for (const value of workflowRunStatusSchema.options) {
+          expect(dashboard.counts[value]).toBe(
+            Number(value === 'pending') + Number(value === status)
+          );
+        }
       }
       for (const status of ['unexpected', '']) {
         await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
@@ -131,6 +140,8 @@ export function describeSqlStatusReadConformance(
           () => store.getWorkflowRun(run.id),
           () => listWorkflowRuns(),
           () => store.listWorkflowRuns(),
+          () => listDashboardRuns({ limit: 0 }),
+          () => listDashboardRuns({ status: 'pending' }),
         ]) {
           const result = read();
           await expect(result).rejects.toBeInstanceOf(WorkflowStatusReadError);

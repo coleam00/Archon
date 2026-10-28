@@ -160,3 +160,108 @@ test.each([true, false])(
     }
   }
 );
+
+test.each([false, true])(
+  'nested launch preserves an unsupported ancestor status (fan-out: %s)',
+  async fanOut => {
+    const root = track(await mkdtemp(join(tmpdir(), 'ancestor-status-')));
+    const originalHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    try {
+      registerBuiltinProviders();
+      await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
+      await writeFile(
+        join(root, '.archon', 'workflows', 'leaf.yaml'),
+        'name: leaf\ndescription: leaf\nmutates_checkout: false\nnodes:\n  - id: work\n    prompt: do work\n'
+      );
+      const store = createWorkflowStore();
+      const provider = mock((): never => {
+        throw new Error('Unexpected provider call');
+      });
+      const deps: WorkflowDeps = {
+        store,
+        providers: providerRegistry,
+        getAgentProvider: provider,
+        loadConfig: async () => ({
+          assistant: 'claude',
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+          defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
+        }),
+      };
+      const platform: IWorkflowPlatform = {
+        sendMessage: async () => {},
+        getPlatformType: () => 'test',
+        getStreamingMode: () => 'batch',
+      };
+      const ancestor = await store.createWorkflowRun({
+        workflow_name: 'ancestor',
+        user_message: '',
+      });
+      const descendant = await store.createWorkflowRun({
+        workflow_name: 'descendant',
+        user_message: '',
+        parent_run_id: ancestor.id,
+      });
+      await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+        'unsupported',
+        ancestor.id,
+      ]);
+      const ancestorRow = async () =>
+        (await db.query('SELECT * FROM remote_agent_workflow_runs WHERE id = $1', [ancestor.id]))
+          .rows;
+      const before = await ancestorRow();
+      const writes = [
+        spyOn(store, 'failWorkflowRun'),
+        spyOn(store, 'cancelWorkflowRun'),
+        spyOn(store, 'cancelFanOutRun'),
+        spyOn(store, 'completeWorkflowRun'),
+        spyOn(store, 'pauseWorkflowRun'),
+        spyOn(store, 'createWorkflowRun'),
+      ];
+      const workflow = makeTestResolvedWorkflow({
+        name: 'descendant',
+        mutates_checkout: false,
+        nodes: [
+          {
+            id: 'launch',
+            workflow: 'leaf',
+            ...(fanOut
+              ? {
+                  fan_out: {
+                    items: '[1]',
+                    as: 'item',
+                    max_parallel: 1,
+                    join: 'all_success' as const,
+                  },
+                }
+              : {}),
+          },
+        ],
+      });
+      const result = executeWorkflow(deps, platform, 'test', root, workflow, '', undefined, {
+        preCreatedRun: descendant,
+        resolvedBaseBranch: 'main',
+      });
+      await expect(result).rejects.toBeInstanceOf(WorkflowStatusReadError);
+      await expect(result).rejects.toMatchObject({
+        workflowRunId: ancestor.id,
+        storedStatus: 'unsupported',
+      });
+      for (const write of writes) expect(write).not.toHaveBeenCalled();
+      expect(provider).not.toHaveBeenCalled();
+      expect(await ancestorRow()).toEqual(before);
+      expect((await store.getWorkflowRun(descendant.id))?.status).toBe('running');
+      expect(
+        (await store.listWorkflowEvents(descendant.id)).filter(event =>
+          ['node_failed', 'workflow_failed', 'workflow_cancelled', 'workflow_completed'].includes(
+            event.event_type
+          )
+        )
+      ).toEqual([]);
+    } finally {
+      if (originalHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = originalHome;
+    }
+  }
+);

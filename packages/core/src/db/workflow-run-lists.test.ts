@@ -70,7 +70,9 @@ describe('workflow run lists', () => {
             },
           ])
         )
-        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(
+          createQueryResult([{ id: mockWorkflowRun.id, status: 'running', cnt: '1' }])
+        )
         .mockResolvedValueOnce(
           createQueryResult([
             {
@@ -141,7 +143,9 @@ describe('workflow run lists', () => {
             },
           ])
         )
-        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(
+          createQueryResult([{ id: mockWorkflowRun.id, status: 'running', cnt: '1' }])
+        )
         .mockResolvedValueOnce(createQueryResult([]));
 
       const result = await listDashboardRuns();
@@ -169,7 +173,9 @@ describe('workflow run lists', () => {
             },
           ])
         )
-        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(
+          createQueryResult([{ id: mockWorkflowRun.id, status: 'running', cnt: '1' }])
+        )
         .mockResolvedValueOnce(
           createQueryResult([
             {
@@ -211,7 +217,9 @@ describe('workflow run lists', () => {
             },
           ])
         )
-        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(
+          createQueryResult([{ id: mockWorkflowRun.id, status: 'running', cnt: '1' }])
+        )
         .mockResolvedValueOnce(
           createQueryResult([
             {
@@ -270,9 +278,9 @@ describe('workflow run lists', () => {
     test('filters by multiple statuses and totals their counts', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([])).mockResolvedValueOnce(
         createQueryResult([
-          { status: 'running', cnt: '2' },
-          { status: 'paused', cnt: '3' },
-          { status: 'completed', cnt: '4' },
+          { id: mockWorkflowRun.id, status: 'running', cnt: '2' },
+          { id: 'paused', status: 'paused', cnt: '3' },
+          { id: 'completed', status: 'completed', cnt: '4' },
         ])
       );
 

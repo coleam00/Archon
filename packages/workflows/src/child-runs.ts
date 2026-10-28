@@ -294,6 +294,7 @@ async function guardChildAncestry(
   try {
     ancestry = [args.parentRun, ...(await deps.store.getRunAncestry(args.parentRun.id))];
   } catch (err) {
+    if (isWorkflowExecutionInterruption(err)) throw err;
     return refuse(`Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`);
   }
   if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {

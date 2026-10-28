@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { workflowRunSchema, workflowRunStatusSchema } from './workflow-run';
+import { workflowRunSchema, workflowRunStatusSchema, type WorkflowRunStatus } from './workflow-run';
 
 // ---------------------------------------------------------------------------
 // DashboardWorkflowRun
@@ -50,12 +50,9 @@ export const dashboardRunsResultSchema = z.object({
   total: z.number(),
   counts: z.object({
     all: z.number(),
-    running: z.number(),
-    completed: z.number(),
-    failed: z.number(),
-    cancelled: z.number(),
-    pending: z.number(),
-    paused: z.number(),
+    ...(Object.fromEntries(
+      workflowRunStatusSchema.options.map(status => [status, z.number()])
+    ) as Record<WorkflowRunStatus, z.ZodNumber>),
   }),
 });
 
