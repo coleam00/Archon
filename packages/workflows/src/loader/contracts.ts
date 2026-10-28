@@ -7,7 +7,7 @@ import {
   loopGroupOutputNodes,
 } from '../schemas';
 import { isOutputFormatEnforced } from '../schemas/node-ignored-fields';
-import { declaredFieldsFromSchema } from '../output-ref';
+import { declaredFieldsFromSchema, outputFieldConstraints } from '../output-ref';
 import { compileOutputSchema } from '../structured-output';
 
 /**
@@ -55,23 +55,18 @@ function validateOutcomeFieldSchema(
   if (schema === undefined) {
     return `Workflow outcome_field: '${field}' selects node '${nodeId}', but that node declares no output_format`;
   }
-  if (schema.type !== 'object') {
+  const constraints = outputFieldConstraints(schema, field);
+  if (!constraints.object) {
     return `Workflow outcome_field: '${field}' requires node '${nodeId}' output_format to declare type: object`;
   }
   const declared = declaredFieldsFromSchema(schema);
   if (!declared?.includes(field)) {
     return `Workflow outcome_field: '${field}' is not declared in node '${nodeId}' output_format properties${declared && declared.length > 0 ? ` (declared: ${declared.join(', ')})` : ''}`;
   }
-  if (!Array.isArray(schema.required) || !schema.required.includes(field)) {
+  if (!constraints.required) {
     return `Workflow outcome_field: '${field}' must be listed in node '${nodeId}' output_format.required`;
   }
-  const properties = schema.properties as Record<string, unknown>;
-  const property = properties[field];
-  const propertyType =
-    property !== null && typeof property === 'object'
-      ? (property as { type?: unknown }).type
-      : undefined;
-  if (propertyType !== 'boolean') {
+  if (!constraints.boolean) {
     return `Workflow outcome_field: '${field}' on node '${nodeId}' must explicitly declare type: boolean`;
   }
   return null;

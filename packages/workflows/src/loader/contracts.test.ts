@@ -52,6 +52,92 @@ nodes:
     expect(workflow?.outcome_field).toBe('green');
   });
 
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    for (const selector of ['loop', 'outcome']) {
+      const parseSelected = (output_format: Record<string, unknown>, field = 'done') =>
+        parseWorkflow(
+          Bun.YAML.stringify({
+            name: 'composed-selector',
+            description: 'Composed boolean selector contract',
+            ...(selector === 'outcome' ? { returns: 'result', outcome_field: field } : {}),
+            nodes: [
+              {
+                id: 'result',
+                ...(selector === 'loop'
+                  ? { loop: { prompt: 'work', until_field: field, max_iterations: 2 } }
+                  : { prompt: 'work' }),
+                output_format,
+              },
+            ],
+          }),
+          'composed-selector.yaml'
+        );
+      const branch = {
+        type: 'object',
+        properties: { done: { type: 'boolean' } },
+        required: ['done'],
+      };
+      it(`accepts required ${keyword} booleans for ${selector} selectors`, () => {
+        for (const schema of [
+          { [keyword]: [branch] },
+          { type: 'object', properties: branch.properties, [keyword]: [{ required: ['done'] }] },
+          {
+            [keyword]: [
+              { ...branch, properties: { done: { type: 'boolean', const: true } } },
+              { ...branch, properties: { done: { type: 'boolean', const: false } } },
+            ],
+          },
+          { allOf: [{ type: 'object', required: ['done'] }, { properties: branch.properties }] },
+          { type: 'object', required: ['done'], [keyword]: [{ properties: branch.properties }] },
+          {
+            allOf: [
+              { type: 'object' },
+              { [keyword]: [{ properties: branch.properties, required: ['done'] }] },
+            ],
+          },
+          {
+            type: 'object',
+            properties: { done: { [keyword]: [{ type: 'boolean' }] } },
+            required: ['done'],
+          },
+        ]) {
+          expect(parseSelected(schema).error).toBeNull();
+        }
+      });
+      it(`rejects optional, undeclared and non-boolean ${keyword} ${selector} selectors`, () => {
+        const rejected: [Record<string, unknown>, string, string][] = [
+          [{ [keyword]: [{ ...branch, required: [] }] }, 'done', 'required'],
+          [{ [keyword]: [branch] }, 'missing', 'not declared'],
+          [
+            { [keyword]: [{ ...branch, properties: { done: { type: 'string' } } }] },
+            'done',
+            'boolean',
+          ],
+        ];
+        if (keyword !== 'allOf') {
+          rejected.push(
+            [
+              { [keyword]: [branch, { type: 'string' }] },
+              'done',
+              selector === 'outcome' ? 'object' : 'required',
+            ],
+            [{ [keyword]: [branch, { ...branch, required: [] }] }, 'done', 'required'],
+            [
+              { [keyword]: [branch, { ...branch, properties: { done: { type: 'string' } } }] },
+              'done',
+              'boolean',
+            ]
+          );
+        }
+        for (const [schema, field, message] of rejected) {
+          const result = parseSelected(schema, field);
+          expect(result.workflow).toBeNull();
+          expect(result.error?.error).toContain(message);
+        }
+      });
+    }
+  }
+
   it('rejects outcome_field without an explicit returns node', () => {
     const { workflow, error } = parseOutcomeWorkflow('outcome_field: green');
 

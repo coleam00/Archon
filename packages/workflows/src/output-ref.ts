@@ -411,21 +411,74 @@ export function similarNodeIds(nodeId: string, knownIds: Iterable<string>): stri
   return findSimilar(nodeId, Array.from(knownIds));
 }
 
-/**
- * Top-level property names of an `output_format` schema, for load-time checks that
- * name one top-level field (`loop.until_field`, `outcome_field`). Returns:
- *   - the property names (possibly `[]` for an explicit empty `properties: {}`) when
- *     the schema declares an object shape;
- *   - `undefined` when there is no schema or it has no `properties` map (a non-object
- *     schema).
- */
 export function declaredFieldsFromSchema(
   outputFormat: Record<string, unknown> | undefined
 ): string[] | undefined {
-  if (!outputFormat) return undefined;
-  const props = outputFormat.properties;
-  if (props === null || typeof props !== 'object' || Array.isArray(props)) return undefined;
-  return Object.keys(props as Record<string, unknown>);
+  const paths = declaredOutputPathsFromSchema(outputFormat);
+  return paths === undefined ? undefined : rootOutputFields(paths);
+}
+
+// allOf adds constraints; an alternative constrains every result only when all
+// its branches do. This checks explicit declarations without branch products.
+function schemaGuarantees(
+  schema: Record<string, unknown>,
+  predicate: (schema: Record<string, unknown>) => boolean
+): boolean {
+  if (predicate(schema)) return true;
+  return COMPOSITION_KEYWORDS.some(keyword => {
+    const branches = schema[keyword];
+    if (!Array.isArray(branches) || branches.length === 0) return false;
+    const guarantees = (raw: unknown): boolean => {
+      const branch = asPlainObject(raw);
+      return branch !== undefined && schemaGuarantees(branch, predicate);
+    };
+    return keyword === 'allOf' ? branches.some(guarantees) : branches.every(guarantees);
+  });
+}
+
+export function outputFieldConstraints(schema: Record<string, unknown>, field: string) {
+  const propertyIsBoolean = (schema: Record<string, unknown>): boolean => {
+    const property = asPlainObject(asPlainObject(schema.properties)?.[field]);
+    return (
+      property !== undefined && schemaGuarantees(property, schema => schema.type === 'boolean')
+    );
+  };
+  const hasNonBooleanType = (schema: Record<string, unknown>): boolean => {
+    if (typeof schema.type === 'string' && schema.type !== 'boolean') return true;
+    return COMPOSITION_KEYWORDS.some(keyword => {
+      const branches = schema[keyword];
+      return (
+        Array.isArray(branches) &&
+        branches.some(raw => {
+          const branch = asPlainObject(raw);
+          return branch !== undefined && hasNonBooleanType(branch);
+        })
+      );
+    });
+  };
+  const fieldHasNonBooleanType = (schema: Record<string, unknown>): boolean => {
+    const property = asPlainObject(asPlainObject(schema.properties)?.[field]);
+    if (property !== undefined && hasNonBooleanType(property)) return true;
+    return COMPOSITION_KEYWORDS.some(keyword => {
+      const branches = schema[keyword];
+      return (
+        Array.isArray(branches) &&
+        branches.some(raw => {
+          const branch = asPlainObject(raw);
+          return branch !== undefined && fieldHasNonBooleanType(branch);
+        })
+      );
+    });
+  };
+  return {
+    object: schemaGuarantees(schema, schema => schema.type === 'object'),
+    required: schemaGuarantees(
+      schema,
+      schema => Array.isArray(schema.required) && schema.required.includes(field)
+    ),
+    boolean: schemaGuarantees(schema, propertyIsBoolean),
+    hasNonBooleanType: fieldHasNonBooleanType(schema),
+  };
 }
 
 /**
