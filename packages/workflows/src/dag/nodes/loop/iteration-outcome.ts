@@ -150,12 +150,11 @@ export async function failedStream(
   if (attempt.abort.signal.aborted && !attempt.cutOff) {
     return failed(await stoppedDuringStream(run, state, i, attempt));
   }
-  // A timed-out `output_format` iteration is exempt from both checks below: the
-  // structured gate owns it, naming the contract that failed and failing on the first
-  // attempt. That mirrors executeAgentNode, where the generic guards are unreachable
-  // once `output_format` is set, and mirrors canReask's own idle-timeout exclusion — a
-  // retry would spend another full idle_timeout window per attempt for the same answer.
-  if (scope.wantsStructured && attempt.cutOff?.kind === 'idle_timeout') return undefined;
+  // Before a result, the structured gate owns an output_format timeout, naming the
+  // missing payload and failing without a reask. After a result, settlement must be
+  // checked first even when a schema-valid payload arrived.
+  if (scope.wantsStructured && !attempt.sawResult && attempt.cutOff?.kind === 'idle_timeout')
+    return undefined;
   const failure =
     emptyOutputFailure(run, i, attempt, scope.iterationStart) ??
     unsettledFailure(run, i, attempt, scope.iterationStart);
@@ -204,6 +203,7 @@ function emptyOutputFailure(
   attempt: StreamedAttempt,
   iterationStart: number
 ): IterationFailure | undefined {
+  if (attempt.sawResult && !attempt.settled) return undefined;
   if (attempt.fullOutput.trim() !== '' || attempt.structured !== undefined) return undefined;
   const { node } = run;
   const iterationDuration = Date.now() - iterationStart;
@@ -235,7 +235,8 @@ function unsettledFailure(
   const { node } = run;
   const unsettledError = unsettledTurnError(
     attempt.cutOff,
-    attempt.providerEvents.liveSubtaskIds()
+    attempt.providerEvents.liveSubtaskIds(),
+    attempt.sawResult ? run.workflowProvider : undefined
   );
   getLog().error({ nodeId: node.id, iteration: i }, 'loop_node.iteration_unsettled');
   recordIterationFailed(run, i, unsettledError, Date.now() - iterationStart);

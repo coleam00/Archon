@@ -78,6 +78,7 @@ export interface StreamedAttempt {
   lastWatchdogReset: WatchdogReset | undefined;
   /** Whether this attempt's stream ended on the provider's `settled` (see the AI-node path's streamSettled). */
   settled: boolean;
+  sawResult: boolean;
   /** Raw structured payload seen on this attempt, before validation. */
   structured: unknown;
   /**
@@ -224,6 +225,7 @@ function newAttempt(run: LoopRun): StreamedAttempt {
     cutOff: undefined,
     lastWatchdogReset: undefined,
     settled: false,
+    sawResult: false,
     structured: undefined,
     stopStatus: undefined,
     abort: new AbortController(),
@@ -490,14 +492,18 @@ async function consumeIterationStream(
         watchdogResets.observe(type, resetAt);
       },
       () =>
-        providerEvents.hasOpenTools() ||
-        (capabilities.backgroundWork === 'reported' && providerEvents.liveSubtaskIds().length > 0),
+        !attempt.sawResult &&
+        (providerEvents.hasOpenTools() ||
+          (capabilities.backgroundWork === 'reported' &&
+            providerEvents.liveSubtaskIds().length > 0)),
       shouldStopStream
     )) {
       // A result is not the end of the iteration; `settled` is. See the
       // AI-node stream loop for the full rationale.
-      if (msg.type === 'result') applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
-      else if (msg.type !== 'settled') await providerEvents.handle(msg);
+      if (msg.type === 'result') {
+        attempt.sawResult = true;
+        applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
+      } else if (msg.type !== 'settled') await providerEvents.handle(msg);
       const stopped = await shouldStopStream();
       if (msg.type === 'result' && (!stopped || attempt.cutOff)) throwOnResultFailure(run, i, msg);
       if (stopped) break;

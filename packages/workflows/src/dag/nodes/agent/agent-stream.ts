@@ -159,9 +159,10 @@ export async function runStreamPass(
         state.watchdogResets.observe(type, resetAt);
       },
       () =>
-        providerEvents.hasOpenTools() ||
-        (pc.capabilities.backgroundWork === 'reported' &&
-          providerEvents.liveSubtaskIds().length > 0),
+        !state.passSawResult &&
+        (providerEvents.hasOpenTools() ||
+          (pc.capabilities.backgroundWork === 'reported' &&
+            providerEvents.liveSubtaskIds().length > 0)),
       shouldStopStream
     )) {
       const tickNow = Date.now();

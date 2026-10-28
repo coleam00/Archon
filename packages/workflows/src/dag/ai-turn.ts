@@ -56,11 +56,12 @@ export function cutOffClause(): string {
  */
 export function unsettledTurnError(
   cutOff: TurnCutOff | undefined,
-  liveTaskIds: readonly string[]
+  liveTaskIds: readonly string[],
+  resultProvider: string | undefined
 ): string {
   const cause =
     cutOff?.kind === 'idle_timeout'
-      ? `timed out after ${String(cutOff.timeoutMs / 60000)} min without an event, before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(cutOff.lastReset)}`
+      ? `timed out after ${String(cutOff.timeoutMs / 60000)} min without an event${resultProvider ? ` while waiting for turn settlement after result from provider '${resultProvider}'` : ''}, before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(cutOff.lastReset)}`
       : cutOff !== undefined
         ? `${cutOffClause()}, before the provider signalled that its turn settled.`
         : 'the provider stream ended without signalling that its turn settled.';

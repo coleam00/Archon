@@ -146,13 +146,13 @@ describe('ending a stalled turn', () => {
               kind: 'agent' as const,
               source: { kind: 'command' as const, name: 'my-cmd' },
               ...(kind === 'structured agent' ? { output_format: DONE_SCHEMA } : {}),
-              idle_timeout: 10,
+              idle_timeout: 5_000,
               retry: { max_attempts: retry ? 1 : 0, delay_ms: 1 },
             }
           : {
               id: 'ci',
               kind: 'loop' as const,
-              idle_timeout: 10,
+              idle_timeout: 5_000,
               retry: { max_attempts: retry ? 1 : 0, delay_ms: 1 },
               ...structuredLoop(kind === 'structured loop'),
             };
@@ -177,7 +177,7 @@ describe('ending a stalled turn', () => {
       );
 
       await stalled;
-      // Open work remains live beyond idle_timeout until the operator requests recovery.
+      // The operator can end stalled work before the post-result idle timeout.
       expect(signal?.aborted).toBe(false);
       expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
       expect(runAttention(workflowRun)).toMatchObject({
