@@ -19,7 +19,7 @@ import {
 } from '../when-atom';
 import {
   assertDeclaredOutputPath,
-  declaredOutputSchemasFromSchema,
+  outputSchemaAlternativesForPath,
   assertSupportedOutputRefs,
   outputRefText,
   CURRENT_OUTPUT_PATH_SOURCE,
@@ -107,20 +107,10 @@ function referencedOptionsShapeError(
   if (producer === undefined || isIncludeDirective(producer)) return undefined;
   if (producer.output_format === undefined) return undefined;
   const path = ref.field.split('.');
-  const declarations = (declaredOutputSchemasFromSchema(producer.output_format) ?? []).filter(
-    declaration =>
-      declaration.path.length === path.length &&
-      declaration.path.every((segment, index) => segment === path[index])
-  );
-  const conjunctions = new Map<symbol, unknown[]>();
-  for (const { schema, conjunction } of declarations) {
-    const schemas = conjunctions.get(conjunction) ?? [];
-    schemas.push(schema);
-    conjunctions.set(conjunction, schemas);
-  }
+  const alternatives = outputSchemaAlternativesForPath(producer.output_format, path);
   const fits =
-    conjunctions.size > 0 &&
-    [...conjunctions.values()].every(
+    alternatives.length > 0 &&
+    alternatives.every(
       schemas =>
         schemas.some(isAttentionOptionsSchema) &&
         schemas.every(

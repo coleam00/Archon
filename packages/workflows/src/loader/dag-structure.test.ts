@@ -3,6 +3,8 @@ import { parseError, parseWorkflow } from './test-utils';
 import { describe, it, expect } from 'bun:test';
 import { evaluateCondition } from '../condition-evaluator';
 import type { ParseResult } from '../loader';
+import { validateStructuredOutput } from '../structured-output';
+import { resolveAttentionOptions } from '../dag/references';
 
 describe('scalar shared session context', () => {
   function parseSessionContext(yaml: string): ParseResult {
@@ -531,6 +533,64 @@ nodes:
     });
   }
 
+  describe('selectable branches with missing declarations', () => {
+    for (const keyword of ['anyOf', 'oneOf'] as const) {
+      for (const nested of [false, true]) {
+        const atPath = (schema: Record<string, unknown>) =>
+          nested ? { properties: { result: schema } } : schema;
+        const field = nested ? 'result.options' : 'options';
+        for (const [name, branch] of [
+          ['true', true],
+          ['empty', {}],
+          ['unrelated property', { properties: { other: { type: 'string' } } }],
+          ['annotation', { description: 'Unconstrained output' }],
+        ] as const) {
+          it(`rejects ${keyword} ${name} branch omitting ${field}`, () => {
+            const schema = atPath({
+              [keyword]: [{ properties: { options: validOptions } }, branch],
+            });
+            const badOutput = nested ? { result: { options: 'bad' } } : { options: 'bad' };
+            expect(validateStructuredOutput(badOutput, schema)).toEqual({ valid: true });
+            expect(() =>
+              resolveAttentionOptions(
+                'ask',
+                `$plan.output.${field}`,
+                new Map([['plan', { state: 'completed', output: JSON.stringify(badOutput) }]])
+              )
+            ).toThrow('not a valid option list');
+            expect(parseWithOptionsSchema(schema, field).error?.error).toContain(
+              'must be an array of objects declaring only'
+            );
+          });
+        }
+        it(`ignores impossible ${keyword} branches at ${field}`, () => {
+          expect(
+            parseWithOptionsSchema(
+              atPath({ [keyword]: [{ properties: { options: validOptions } }, false] }),
+              field
+            ).error
+          ).toBeNull();
+        });
+        it(`keeps conjunctive constraints across ${keyword} at ${field}`, () => {
+          expect(
+            parseWithOptionsSchema(
+              atPath({ properties: { options: validOptions }, [keyword]: [true] }),
+              field
+            ).error
+          ).toBeNull();
+        });
+      }
+    }
+
+    it('allows allOf conjuncts omitting the options path', () => {
+      expect(
+        parseWithOptionsSchema({
+          allOf: [{ properties: { options: validOptions } }, true, {}, { description: 'Choices' }],
+        }).error
+      ).toBeNull();
+    });
+  });
+
   it('loads allOf options with annotation-only declarations in either order', () => {
     for (const annotation of [
       {
@@ -592,8 +652,7 @@ nodes:
       expect(
         parseWithOptionsSchema({
           type: 'object',
-          properties: { options: validOptions },
-          [keyword]: [branch],
+          [keyword]: [{ properties: { options: validOptions } }, branch],
         }).error?.error
       ).toContain('must be an array of objects declaring only');
     }

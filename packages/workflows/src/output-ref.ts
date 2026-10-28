@@ -437,30 +437,52 @@ export function declaredFieldsFromSchema(
 export const declaredOutputPathsSchema = z.array(z.array(z.string()).min(1));
 export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
 
-interface DeclaredOutputSchema {
-  path: string[];
-  schema: unknown;
-  conjunction: symbol;
+const COMPOSITION_KEYWORDS = ['allOf', 'anyOf', 'oneOf'] as const;
+
+/** Each entry is a conjunction of declarations; entries are selectable alternatives.
+ * An empty conjunction leaves the path unconstrained, while no alternatives means false.
+ */
+export function outputSchemaAlternativesForPath(
+  schema: unknown,
+  path: readonly string[]
+): unknown[][] {
+  if (path.length === 0) return [[schema]];
+  if (schema === false) return [];
+  const object = asPlainObject(schema);
+  if (object === undefined) return [[]];
+  const [key, ...rest] = path;
+  const properties = asPlainObject(object.properties);
+  let alternatives =
+    properties !== undefined && key !== undefined && Object.hasOwn(properties, key)
+      ? outputSchemaAlternativesForPath(properties[key], rest)
+      : [[]];
+  const conjoin = (branches: unknown[][]): void => {
+    alternatives = alternatives.flatMap(left => branches.map(right => [...left, ...right]));
+  };
+  for (const keyword of COMPOSITION_KEYWORDS) {
+    const branches = object[keyword];
+    if (!Array.isArray(branches)) continue;
+    if (keyword === 'allOf') {
+      for (const branch of branches) conjoin(outputSchemaAlternativesForPath(branch, path));
+    } else {
+      conjoin(branches.flatMap(branch => outputSchemaAlternativesForPath(branch, path)));
+    }
+  }
+  return alternatives;
 }
 
-/**
- * Enumerate explicit declarations, retaining every source schema for repeated paths.
- * Conjunctive declarations share an identity; each selectable branch starts a new one.
- * Children are paths only when their parent may be an object; dotted keys stay one segment.
- */
-export function declaredOutputSchemasFromSchema(
+export function declaredOutputPathsFromSchema(
   outputFormat: Record<string, unknown> | undefined
-): DeclaredOutputSchema[] | undefined {
-  const keywords = ['allOf', 'anyOf', 'oneOf'] as const;
+): DeclaredOutputPaths | undefined {
   if (
     outputFormat === undefined ||
     (asPlainObject(outputFormat.properties) === undefined &&
-      !keywords.some(keyword => Array.isArray(outputFormat[keyword])))
+      !COMPOSITION_KEYWORDS.some(keyword => Array.isArray(outputFormat[keyword])))
   ) {
     return undefined;
   }
-  const declarations: DeclaredOutputSchema[] = [];
-  const visit = (schema: Record<string, unknown>, prefix: string[], conjunction: symbol): void => {
+  const paths = new Map<string, string[]>();
+  const visit = (schema: Record<string, unknown>, prefix: string[]): void => {
     const type = schema.type;
     if (
       prefix.length > 0 &&
@@ -472,32 +494,20 @@ export function declaredOutputSchemasFromSchema(
     }
     for (const [key, raw] of Object.entries(asPlainObject(schema.properties) ?? {})) {
       const path = [...prefix, key];
-      declarations.push({ path, schema: raw, conjunction });
+      paths.set(JSON.stringify(path), path);
       const child = asPlainObject(raw);
-      if (child !== undefined) visit(child, path, conjunction);
+      if (child !== undefined) visit(child, path);
     }
-    const branches = keywords.flatMap(keyword => {
-      const value = schema[keyword];
-      return Array.isArray(value)
-        ? value.map(raw => ({ raw, conjunction: keyword === 'allOf' ? conjunction : Symbol() }))
-        : [];
-    });
-    for (const { raw, conjunction: branchConjunction } of branches) {
-      const branch = asPlainObject(raw);
-      if (branch !== undefined) visit(branch, prefix, branchConjunction);
+    for (const keyword of COMPOSITION_KEYWORDS) {
+      const branches = schema[keyword];
+      if (!Array.isArray(branches)) continue;
+      for (const raw of branches) {
+        const branch = asPlainObject(raw);
+        if (branch !== undefined) visit(branch, prefix);
+      }
     }
   };
-  visit(outputFormat, [], Symbol());
-  return declarations;
-}
-
-export function declaredOutputPathsFromSchema(
-  outputFormat: Record<string, unknown> | undefined
-): DeclaredOutputPaths | undefined {
-  const declarations = declaredOutputSchemasFromSchema(outputFormat);
-  if (declarations === undefined) return undefined;
-  const paths = new Map<string, string[]>();
-  for (const { path } of declarations) paths.set(JSON.stringify(path), path);
+  visit(outputFormat, []);
   return [...paths.values()];
 }
 
