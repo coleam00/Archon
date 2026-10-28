@@ -1050,7 +1050,7 @@ describe('abandon owned worktrees', () => {
   );
 
   test.each([false, true])(
-    'reset reconciles shared stops in either row order: reversed=%s',
+    'reset retains silent sub-runs despite a matching stopped owner in either row order: reversed=%s',
     async reversed => {
       for (const answering of ['run-1', 'child', 'grandchild']) {
         for (const warned of [false, true]) {
@@ -1075,13 +1075,46 @@ describe('abandon owned worktrees', () => {
           const result = await operations.abandonResumableRunsForConversation('conv-1', operator);
 
           expect(result.abandoned).toBe(3);
-          expect(reclaim.mock.calls.map(call => call[0].id)).toEqual(
-            warned ? [] : rows.map(row => row.id)
-          );
+          expect(reclaim).not.toHaveBeenCalled();
+          expect(result.cleanupWarnings?.join(' ')).toContain('owning execution');
           if (warned) expect(result.cleanupWarnings).toContain('Held output');
-          else expect(result.cleanupWarnings).toBeUndefined();
         }
       }
+    }
+  );
+
+  test.each([false, true])(
+    'reset retains a stale child whose owner tuple matches a different stopped incarnation: reversed=%s',
+    async reversed => {
+      mockPersistWorkflowEvent.mockClear();
+      const staleChild = owned('stale-child', { parent_run_id: 'previous-root' });
+      const currentRoot = owned('current-root');
+      expect(staleChild.metadata.execution_owner).toEqual(currentRoot.metadata.execution_owner);
+      const rows = reversed ? [staleChild, currentRoot] : [currentRoot, staleChild];
+      mockCancelResumableRunsForConversation.mockResolvedValueOnce(rows);
+      const stop = mock(async () => ({ warnings: [] }));
+      mockRequestDetachedRunStop.mockImplementation(async id => {
+        if (id === staleChild.id)
+          throw new DetachedRunOwnerUnavailableError(id, 'ENOENT', 'unreachable');
+        expect(id).toBe(currentRoot.id);
+        return { pid: 4242, stop, release: () => undefined };
+      });
+
+      const result = await operations.abandonResumableRunsForConversation('conv-1', operator);
+
+      expect(result.abandoned).toBe(2);
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(mockRequestDetachedRunStop.mock.calls).toEqual(rows.map(row => [row.id]));
+      expect(reclaim).not.toHaveBeenCalled();
+      expect(result.releasedWorktrees).toBeUndefined();
+      expect(result.cleanupWarnings?.join(' ')).toContain('Cancellation is recorded');
+      expect(result.cleanupWarnings?.join(' ')).toContain('previous-root');
+      expect(result.cleanupWarnings?.join(' ')).toContain('Inspect the owning execution');
+      expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
+        workflow_run_id: staleChild.id,
+        event_type: 'workflow_cleanup_warning',
+        data: { warnings: expect.arrayContaining([expect.stringContaining('owning execution')]) },
+      });
     }
   );
 

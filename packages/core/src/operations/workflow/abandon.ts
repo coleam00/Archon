@@ -204,7 +204,6 @@ export async function collectAbandonmentTree(
 interface WorktreeOwnerCheck {
   safe: boolean;
   warnings: string[];
-  releaseEvidence?: 'stopped_owner' | 'silent_subrun';
 }
 
 function isSubrun(run: WorkflowRun): boolean {
@@ -270,16 +269,12 @@ async function checkOwnerStopForRelease(
   return {
     safe: warnings.length === 0,
     warnings,
-    ...(outcome.kind === 'stopped' && !warnings.length
-      ? { releaseEvidence: 'stopped_owner' as const }
-      : {}),
   };
 }
 
 function retainUnresolvedSubrunCheckout(row: WorkflowRun, target: WorkflowRun): WorktreeOwnerCheck {
   return {
     safe: false,
-    releaseEvidence: 'silent_subrun',
     warnings: [
       `Retained checkout ${row.working_path ?? ''} for run ${row.id}: no owner answered for sub-run ${target.id} (parent ${target.parent_run_id ?? 'parent record deleted'}); its enclosing execution may still be using this checkout. Cancellation is recorded, but removal was skipped. Inspect the owning execution and stop or abandon it only if you intend to stop its whole scope. Repeating abandonment of this silent sub-run alone may continue retaining the checkout.`,
     ],
@@ -424,20 +419,9 @@ async function checkBatchWorktreeOwners(
       check: await checkWorktreeOwner(ctx, run, root, rootOutcome),
     });
   }
-  if (!root) {
-    for (const entry of ownerChecks) {
-      if (entry.check.releaseEvidence !== 'silent_subrun' || !entry.owner) continue;
-      const owner = entry.owner;
-      const stopped = ownerChecks.some(
-        other =>
-          sameExecutionOwner(owner, other.owner) && other.check.releaseEvidence === 'stopped_owner'
-      );
-      if (stopped) entry.check = { safe: true, warnings: [] };
-    }
-  }
   return ownerChecks.map(({ run, owner, check }) => {
-    // An endpoint can disappear when a sibling stops their shared owner. Resolve
-    // the whole batch before releasing any checkout so those warnings survive.
+    // Matching owner tuples can spread retention warnings, but cannot prove a stop:
+    // a later process may reuse the same host, PID and UID.
     const sharedChecks = owner
       ? ownerChecks
           .filter(other => sameExecutionOwner(owner, other.owner))
