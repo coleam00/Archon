@@ -256,6 +256,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
         ? { nodeId: node.id, bodyGateId: terminalSuspendNode.id, iteration: i }
         : undefined,
     unfinishedInvocations: ctx.unfinishedInvocations,
+    loopConfigFailureBaselines: ctx.loopConfigFailureBaselines,
     deps: ctx.deps,
     platform: ctx.platform,
     conversationId: ctx.conversationId,

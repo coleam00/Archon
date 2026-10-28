@@ -1294,11 +1294,14 @@ describe('interactive loop node', () => {
 
     it.each(
       (['provider', 'command load', 'compiled error', 'compiled metadata'] as const).flatMap(
-        failure => [false, true].map(throughGate => ({ failure, throughGate }))
+        failure =>
+          [0, 1, 2].flatMap(depth =>
+            [false, true].map(throughGate => ({ failure, throughGate, depth }))
+          )
       )
     )(
-      'counts gate spend once after $failure failure with further gate=$throughGate',
-      async ({ failure, throughGate }) => {
+      'counts gate spend once after $failure failure with further gate=$throughGate at group depth=$depth',
+      async ({ failure, throughGate, depth }) => {
         const runId = `gate-failure-${failure}`;
         const node: LoopNode = {
           ...refine,
@@ -1318,13 +1321,34 @@ describe('interactive loop node', () => {
             throw new Error('Provider initialization failed');
           });
         }
+        const loopPath = Array.from({ length: depth }, (_, index) => ({
+          groupId: `group${index}`,
+          iteration: 1,
+        }));
+        const stepName = [...loopPath.map(frame => frame.groupId), 'refine'].join('.');
+        const workflowNodes = (leaf: DagNode): DagNode[] => {
+          let wrapped = leaf;
+          for (const frame of [...loopPath].reverse()) {
+            wrapped = {
+              id: frame.groupId,
+              kind: 'loop_group',
+              loop_group: {
+                until: 'APPROVED',
+                max_iterations: 1,
+                fresh_context: false,
+                nodes: [wrapped],
+              },
+            };
+          }
+          return [wrapped];
+        };
         const execution = executionMetadata(
           finishNodeExecution(
             startNodeExecution({
               runId,
-              path: 'refine',
+              path: stepName,
               node,
-              invocation: newNodeInvocation(),
+              invocation: newNodeInvocation(loopPath),
               provider: 'claude',
             }),
             { status: 'suspended', point: 'interactive_loop' },
@@ -1341,7 +1365,7 @@ describe('interactive loop node', () => {
             deps: mockDeps,
             platform: createMockPlatform(),
             cwd: testDir,
-            workflow: { name: 'gate-early-failure', nodes: [node] },
+            workflow: { name: 'gate-early-failure', nodes: workflowNodes(node) },
             workflowRun: makeWorkflowRun(runId, {
               metadata: {
                 approval: gate({
@@ -1357,7 +1381,7 @@ describe('interactive loop node', () => {
         );
         const events = persistedEvents(mockDeps.store);
         const failed = events.filter(
-          e => e.event_type === 'node_failed' && e.step_name === 'refine'
+          e => e.event_type === 'node_failed' && e.step_name === stepName
         );
         expect(failed).toHaveLength(1);
         expect(failed[0]?.data).toMatchObject({
@@ -1401,7 +1425,7 @@ describe('interactive loop node', () => {
             deps: mockDeps,
             platform: createMockPlatform(),
             cwd: testDir,
-            workflow: { name: 'gate-retry', nodes: [refine] },
+            workflow: { name: 'gate-retry', nodes: workflowNodes(refine) },
             workflowRun: makeWorkflowRun(runId, {
               metadata: {
                 approval: gate({
@@ -1418,6 +1442,13 @@ describe('interactive loop node', () => {
           })
         );
         if (throughGate) {
+          expect(runUsageWrites(mockDeps.store).at(-1)).toMatchObject({
+            total_cost_usd: 0.07,
+            total_tokens_in: 70,
+            total_tokens_out: 7,
+            total_cache_read_tokens: 15,
+            total_cache_write_tokens: 0,
+          });
           const nextGate = mockDeps.store.pauseWorkflowRun.mock.calls.at(-1)?.[1];
           expect(nextGate?.execution?.spend.tokens).toMatchObject({
             source: 'provider',
@@ -1451,7 +1482,7 @@ describe('interactive loop node', () => {
               deps: mockDeps,
               platform: createMockPlatform(),
               cwd: testDir,
-              workflow: { name: 'gate-retry-again', nodes: [refine] },
+              workflow: { name: 'gate-retry-again', nodes: workflowNodes(refine) },
               workflowRun: makeWorkflowRun(runId, {
                 metadata: {
                   approval: nextGate,
@@ -1473,7 +1504,7 @@ describe('interactive loop node', () => {
         };
         const retriedEvents = persistedEvents(mockDeps.store);
         const completed = retriedEvents.find(
-          e => e.event_type === 'node_completed' && e.step_name === 'refine'
+          e => e.event_type === 'node_completed' && e.step_name === stepName
         );
         expect(completed?.data).toMatchObject({
           spend: {
