@@ -531,6 +531,71 @@ nodes:
     });
   }
 
+  it('loads allOf options with annotation-only declarations in either order', () => {
+    for (const annotation of [
+      {
+        description: 'Available choices',
+        title: 'Options',
+        $comment: 'Display metadata',
+        default: [],
+        examples: [],
+        deprecated: false,
+        readOnly: true,
+        writeOnly: false,
+      },
+      {},
+      true,
+    ]) {
+      for (const [direct, composed] of [
+        [validOptions, annotation],
+        [annotation, validOptions],
+      ]) {
+        expect(
+          parseWithOptionsSchema({
+            type: 'object',
+            properties: { options: direct },
+            allOf: [{ properties: { options: composed } }],
+          }).error
+        ).toBeNull();
+      }
+    }
+  });
+
+  it('loads nested allOf options with a separate description', () => {
+    const result = parseWithOptionsSchema(
+      {
+        type: 'object',
+        allOf: [validOptions, { description: 'Available choices' }].map(options => ({
+          properties: { result: { type: 'object', properties: { options } } },
+        })),
+      },
+      'result.options'
+    );
+    expect(result.error).toBeNull();
+  });
+
+  it.each(['anyOf', 'oneOf'])('rejects an unconstrained %s option alternative', keyword => {
+    const annotation = { properties: { options: { description: 'Available choices' } } };
+    for (const branch of [annotation, { allOf: [annotation] }]) {
+      expect(
+        parseWithOptionsSchema({
+          type: 'object',
+          properties: { options: validOptions },
+          [keyword]: [branch],
+        }).error?.error
+      ).toContain('must be an array of objects declaring only');
+    }
+  });
+
+  it('rejects annotation-only options without an option shape', () => {
+    expect(
+      parseWithOptionsSchema({
+        type: 'object',
+        allOf: [{ properties: { options: { description: 'Available choices' } } }],
+      }).error?.error
+    ).toContain('must be an array of objects declaring only');
+  });
+
   it('checks both composed declarations of the same field in either order', () => {
     const invalidOptions = { type: 'array', items: { type: 'string' } };
     for (const declarations of [

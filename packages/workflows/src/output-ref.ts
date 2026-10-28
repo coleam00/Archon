@@ -437,13 +437,19 @@ export function declaredFieldsFromSchema(
 export const declaredOutputPathsSchema = z.array(z.array(z.string()).min(1));
 export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
 
+interface DeclaredOutputSchema {
+  path: string[];
+  schema: unknown;
+  inAlternative: boolean;
+}
+
 /**
  * Enumerate explicit declarations, retaining every source schema for repeated paths.
  * Children are paths only when their parent may be an object; dotted keys stay one segment.
  */
 export function declaredOutputSchemasFromSchema(
   outputFormat: Record<string, unknown> | undefined
-): { path: string[]; schema: unknown }[] | undefined {
+): DeclaredOutputSchema[] | undefined {
   const keywords = ['allOf', 'anyOf', 'oneOf'] as const;
   if (
     outputFormat === undefined ||
@@ -452,8 +458,12 @@ export function declaredOutputSchemasFromSchema(
   ) {
     return undefined;
   }
-  const declarations: { path: string[]; schema: unknown }[] = [];
-  const visit = (schema: Record<string, unknown>, prefix: string[]): void => {
+  const declarations: DeclaredOutputSchema[] = [];
+  const visit = (
+    schema: Record<string, unknown>,
+    prefix: string[],
+    inAlternative: boolean
+  ): void => {
     const type = schema.type;
     if (
       prefix.length > 0 &&
@@ -465,20 +475,22 @@ export function declaredOutputSchemasFromSchema(
     }
     for (const [key, raw] of Object.entries(asPlainObject(schema.properties) ?? {})) {
       const path = [...prefix, key];
-      declarations.push({ path, schema: raw });
+      declarations.push({ path, schema: raw, inAlternative });
       const child = asPlainObject(raw);
-      if (child !== undefined) visit(child, path);
+      if (child !== undefined) visit(child, path, inAlternative);
     }
     const branches = keywords.flatMap(keyword => {
       const value = schema[keyword];
-      return Array.isArray(value) ? value : [];
+      return Array.isArray(value)
+        ? value.map(raw => ({ raw, inAlternative: inAlternative || keyword !== 'allOf' }))
+        : [];
     });
-    for (const raw of branches) {
+    for (const { raw, inAlternative: branchInAlternative } of branches) {
       const branch = asPlainObject(raw);
-      if (branch !== undefined) visit(branch, prefix);
+      if (branch !== undefined) visit(branch, prefix, branchInAlternative);
     }
   };
-  visit(outputFormat, []);
+  visit(outputFormat, [], false);
   return declarations;
 }
 

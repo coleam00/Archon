@@ -106,14 +106,18 @@ function referencedOptionsShapeError(
   if (producer === undefined || isIncludeDirective(producer)) return undefined;
   if (producer.output_format === undefined) return undefined;
   const path = ref.field.split('.');
-  const schemas = (declaredOutputSchemasFromSchema(producer.output_format) ?? [])
-    .filter(
-      declaration =>
-        declaration.path.length === path.length &&
-        declaration.path.every((segment, index) => segment === path[index])
-    )
-    .map(declaration => declaration.schema);
-  if (schemas.length > 0 && schemas.every(isAttentionOptionsSchema)) return undefined;
+  const declarations = (declaredOutputSchemasFromSchema(producer.output_format) ?? []).filter(
+    declaration =>
+      declaration.path.length === path.length &&
+      declaration.path.every((segment, index) => segment === path[index])
+  );
+  const fits =
+    declarations.some(({ schema }) => isAttentionOptionsSchema(schema)) &&
+    declarations.every(
+      ({ schema, inAlternative }) =>
+        isAttentionOptionsSchema(schema) || (!inAlternative && isAnnotationOnlySchema(schema))
+    );
+  if (fits) return undefined;
   const { properties: optionProperties = {}, required: optionRequired = [] } =
     ATTENTION_OPTION_JSON_SCHEMA;
   const expected = Object.entries(optionProperties)
@@ -123,6 +127,21 @@ function referencedOptionsShapeError(
     })
     .join('; ');
   return `'${options}' must be an array of objects declaring only { ${expected} } in '${ref.nodeId}'s output_format`;
+}
+
+function isAnnotationOnlySchema(schema: unknown): boolean {
+  if (schema === true) return true;
+  const annotations = [
+    '$comment',
+    'title',
+    'description',
+    'default',
+    'examples',
+    'deprecated',
+    'readOnly',
+    'writeOnly',
+  ];
+  return isRecord(schema) && Object.keys(schema).every(key => annotations.includes(key));
 }
 
 function isAttentionOptionsSchema(schema: unknown): boolean {
