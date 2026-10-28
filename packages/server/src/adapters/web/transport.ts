@@ -52,6 +52,7 @@ interface BufferedEvent {
 }
 
 export class SSETransport {
+  private lifetime = Symbol();
   private streams = new Map<string, Set<SSEWriter>>();
   private cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private zombieReaperHandle: ReturnType<typeof setInterval> | null = null;
@@ -176,6 +177,7 @@ export class SSETransport {
   }
 
   stop(): void {
+    this.lifetime = Symbol();
     // Stop zombie stream reaper
     if (this.zombieReaperHandle) {
       clearInterval(this.zombieReaperHandle);
@@ -208,6 +210,7 @@ export class SSETransport {
   }
 
   async emit(conversationId: string, event: string): Promise<void> {
+    const lifetime = this.lifetime;
     const writes: Promise<boolean>[] = [];
     const streams = this.streams.get(conversationId);
     if (streams) {
@@ -221,8 +224,13 @@ export class SSETransport {
     }
     if (writes.length === 0) {
       this.bufferEvent(conversationId, event);
+      return;
     }
-    await Promise.all(writes);
+    const results = await Promise.all(writes);
+    if (this.lifetime === lifetime && !results.some(Boolean)) {
+      this.bufferEvent(conversationId, event);
+      this.replayBufferedEvents(conversationId);
+    }
   }
 
   /** Emit a workflow event without waiting for connected writers. */

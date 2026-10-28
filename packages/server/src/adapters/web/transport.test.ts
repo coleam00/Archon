@@ -20,6 +20,8 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+import { SSEStreamingApi } from 'hono/streaming';
+import { checkedSSEWriter } from './sse-writer';
 import { SSETransport, type SSEWriter } from './transport';
 
 function createMockStream(overrides?: Partial<SSEWriter>): SSEWriter {
@@ -86,6 +88,11 @@ describe('SSETransport', () => {
       expect(failed.close).toHaveBeenCalledTimes(1);
       expect(healthy.writeSSE).toHaveBeenCalledTimes(2);
       expect(transport.hasActiveStream('__dashboard__')).toBe(true);
+      transport.removeStream('__dashboard__', healthy);
+      const reconnected = createMockStream();
+      transport.registerStream('__dashboard__', reconnected);
+      await settleReplay();
+      expect(reconnected.writeSSE).not.toHaveBeenCalled();
     } finally {
       transport.stop();
     }
@@ -148,11 +155,112 @@ describe('SSETransport', () => {
       transport.removeStream('conv-1', old);
       await transport.emit('conv-1', 'new event');
       expect(transport.hasActiveStream('conv-1')).toBe(true);
+      expect(replacement.writeSSE).toHaveBeenCalledWith({ data: 'old event' });
       expect(replacement.writeSSE).toHaveBeenCalledWith({ data: 'new event' });
+      expect(replacement.writeSSE).toHaveBeenCalledTimes(2);
     } finally {
       transport.stop();
     }
   });
+
+  test.each(['conv-1', '__dashboard__'])(
+    'retains a replay write cancelled through Hono: %s',
+    async conversationId => {
+      const transport = new SSETransport();
+      const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+      const stream = new SSEStreamingApi(writable, readable);
+      const reader = stream.responseReadable.getReader();
+      try {
+        for (const event of ['first', 'second', 'third', 'fourth']) {
+          await transport.emit(conversationId, event);
+        }
+        transport.registerStream(conversationId, checkedSSEWriter(stream));
+        const first = await reader.read();
+        expect(new TextDecoder().decode(first.value)).toBe('data: first\n\n');
+        // Hono prefetches one chunk. Without another read, the third write is pending.
+        await settleReplay();
+        await reader.cancel();
+        await settleReplay();
+        const reconnected = createMockStream();
+        transport.registerStream(conversationId, reconnected);
+        await settleReplay();
+        expect(reconnected.writeSSE).toHaveBeenCalledTimes(2);
+        expect(reconnected.writeSSE).toHaveBeenNthCalledWith(1, { data: 'third' });
+        expect(reconnected.writeSSE).toHaveBeenNthCalledWith(2, { data: 'fourth' });
+      } finally {
+        await reader.cancel();
+        transport.stop();
+      }
+    }
+  );
+
+  test.each(['conv-1', '__dashboard__'])(
+    'retains a live write cancelled through Hono: %s',
+    async conversationId => {
+      const transport = new SSETransport();
+      const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+      const stream = new SSEStreamingApi(writable, readable);
+      const reader = stream.responseReadable.getReader();
+      try {
+        transport.registerStream(conversationId, checkedSSEWriter(stream));
+        await transport.emit(conversationId, 'prefetched');
+        const emitted = transport.emit(conversationId, 'pending');
+        await reader.cancel();
+        await emitted;
+        const reconnected = createMockStream();
+        transport.registerStream(conversationId, reconnected);
+        await settleReplay();
+        expect(reconnected.writeSSE).toHaveBeenCalledTimes(1);
+        expect(reconnected.writeSSE).toHaveBeenCalledWith({ data: 'pending' });
+      } finally {
+        await reader.cancel();
+        transport.stop();
+      }
+    }
+  );
+
+  test.each(['aborted', 'closed'] as const)(
+    'the Hono writer rejects writes to an already %s stream',
+    async state => {
+      const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+      const stream = new SSEStreamingApi(writable, readable);
+      const writer = checkedSSEWriter(stream);
+      try {
+        if (state === 'aborted') stream.abort();
+        else await stream.close();
+        expect(writer.closed).toBe(true);
+        await expect(writer.writeSSE({ data: 'event' })).rejects.toThrow('disconnected');
+      } finally {
+        await stream.responseReadable.cancel();
+        await writer.close();
+      }
+    }
+  );
+
+  test.each(['resolve', 'reject'] as const)(
+    'stop prevents a pending live write from restoring old events: %s',
+    async outcome => {
+      const transport = new SSETransport();
+      const pending = Promise.withResolvers<void>();
+      try {
+        transport.registerStream('conv-1', createMockStream({ writeSSE: () => pending.promise }));
+        const emitted = transport.emit('conv-1', 'old');
+        transport.stop();
+        await transport.emit('conv-1', 'new');
+        if (outcome === 'resolve') pending.resolve();
+        else pending.reject(new Error('disconnected'));
+        await emitted;
+        const reconnected = createMockStream();
+        transport.registerStream('conv-1', reconnected);
+        await settleReplay();
+        expect(reconnected.writeSSE).toHaveBeenCalledTimes(1);
+        expect(reconnected.writeSSE).toHaveBeenCalledWith({ data: 'new' });
+      } finally {
+        pending.resolve();
+        transport.stop();
+      }
+    }
+  );
 
   describe('registerStream', () => {
     test('registers a stream for a conversation', () => {
@@ -340,17 +448,28 @@ describe('SSETransport', () => {
       expect(stream.writeSSE).not.toHaveBeenCalled();
     });
 
-    test('removes stream on write failure', async () => {
-      const transport = new SSETransport();
-      const stream = createMockStream({
-        writeSSE: mock(() => Promise.reject(new Error('write failed'))),
-      });
+    test.each(['conv-1', '__dashboard__'])(
+      'retains a failed live write for reconnect: %s',
+      async conversationId => {
+        const transport = new SSETransport();
+        const stream = createMockStream({
+          writeSSE: mock(() => Promise.reject(new Error('write failed'))),
+        });
 
-      transport.registerStream('conv-1', stream);
-      await transport.emit('conv-1', '{"type":"text"}');
-
-      expect(transport.hasActiveStream('conv-1')).toBe(false);
-    });
+        try {
+          transport.registerStream(conversationId, stream);
+          await transport.emit(conversationId, '{"type":"text"}');
+          expect(transport.hasActiveStream(conversationId)).toBe(false);
+          const reconnected = createMockStream();
+          transport.registerStream(conversationId, reconnected);
+          await settleReplay();
+          expect(reconnected.writeSSE).toHaveBeenCalledTimes(1);
+          expect(reconnected.writeSSE).toHaveBeenCalledWith({ data: '{"type":"text"}' });
+        } finally {
+          transport.stop();
+        }
+      }
+    );
   });
 
   describe('pending replay', () => {
