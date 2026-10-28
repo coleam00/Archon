@@ -634,9 +634,7 @@ function addNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult
   const prior =
     execution === undefined
       ? undefined
-      : ctx.unfinishedInvocations?.get(
-          nodeInvocationKey(execution.path, execution.invocation.loopPath)
-        );
+      : ctx.loopConfigFailureBaselines?.get(execution.invocation.id);
   const usage = incrementalLoopUsage(output, prior);
   ctx.totalCostPartial ||= output.costPartial;
   if (usage.costUsd !== undefined) {

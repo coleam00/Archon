@@ -1292,9 +1292,13 @@ describe('interactive loop node', () => {
       }
     );
 
-    it.each(['provider', 'command load', 'compiled error', 'compiled metadata'] as const)(
-      'counts partial gate spend once after early %s failure and retry',
-      async failure => {
+    it.each(
+      (['provider', 'command load', 'compiled error', 'compiled metadata'] as const).flatMap(
+        failure => [false, true].map(throughGate => ({ failure, throughGate }))
+      )
+    )(
+      'counts gate spend once after $failure failure with further gate=$throughGate',
+      async ({ failure, throughGate }) => {
         const runId = `gate-failure-${failure}`;
         const node: LoopNode = {
           ...refine,
@@ -1343,7 +1347,7 @@ describe('interactive loop node', () => {
                 approval: gate({
                   execution,
                   signaledCostUsd: 0.04,
-                  signaledTokens: { input: 40, output: 4, cacheRead: 10, cacheWrite: 0 },
+                  signaledTokens: undefined,
                 }),
                 loop_user_input: 'again',
                 loop_feedback_given: true,
@@ -1377,7 +1381,10 @@ describe('interactive loop node', () => {
           getCapabilities: mockClaudeCapabilities,
         }));
         mockSendQueryDag.mockImplementation(async function* () {
-          yield { type: 'agent_message_chunk', text: '<promise>APPROVED</promise>' };
+          yield {
+            type: 'agent_message_chunk',
+            text: throughGate ? 'Review this iteration.' : '<promise>APPROVED</promise>',
+          };
           yield {
             type: 'result',
             cost: 0.03,
@@ -1400,7 +1407,7 @@ describe('interactive loop node', () => {
                 approval: gate({
                   execution,
                   signaledCostUsd: 0.04,
-                  signaledTokens: { input: 40, output: 4, cacheRead: 10, cacheWrite: 0 },
+                  signaledTokens: { input: 1, output: 1, cacheRead: 0, cacheWrite: 1 },
                 }),
                 loop_user_input: 'again',
                 loop_feedback_given: true,
@@ -1410,27 +1417,81 @@ describe('interactive loop node', () => {
             priorUsage: snapshot,
           })
         );
+        if (throughGate) {
+          const nextGate = mockDeps.store.pauseWorkflowRun.mock.calls.at(-1)?.[1];
+          expect(nextGate?.execution?.spend.tokens).toMatchObject({
+            source: 'provider',
+            value: { input: 70, output: 7, cacheRead: 15, cacheWrite: 0 },
+          });
+          const pausedSnapshot = await foldDagResumeSnapshot(
+            persistedEvents(mockDeps.store),
+            runId
+          );
+          expect(pausedSnapshot.costUsd).toBeCloseTo(0.04, 5);
+          expect(pausedSnapshot.loopConfigFailureBaselines?.get(execution.invocation.id)).toEqual(
+            execution.spend
+          );
+          (
+            mockDeps.store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>
+          ).mockImplementation(async () => pausedSnapshot);
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: '<promise>APPROVED</promise>' };
+            yield {
+              type: 'result',
+              cost: 0.03,
+              sessionId: 'continued-again',
+              tokens: { input: 30, output: 3, cacheRead: 5, cacheWrite: 0 },
+            };
+          });
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              platform: createMockPlatform(),
+              cwd: testDir,
+              workflow: { name: 'gate-retry-again', nodes: [refine] },
+              workflowRun: makeWorkflowRun(runId, {
+                metadata: {
+                  approval: nextGate,
+                  loop_user_input: 'again',
+                  loop_feedback_given: true,
+                },
+              }),
+              priorCompletedNodes: pausedSnapshot.completedNodeOutputs,
+              priorUsage: pausedSnapshot,
+            })
+          );
+        }
+        const expectedCost = throughGate ? 0.1 : 0.07;
+        const expectedTokens = {
+          input: throughGate ? 100 : 70,
+          output: throughGate ? 10 : 7,
+          cacheRead: throughGate ? 20 : 15,
+          cacheWrite: 0,
+        };
         const retriedEvents = persistedEvents(mockDeps.store);
         const completed = retriedEvents.find(
           e => e.event_type === 'node_completed' && e.step_name === 'refine'
         );
         expect(completed?.data).toMatchObject({
-          spend: { costUsd: { source: 'provider', value: 0.07, partial: true } },
+          spend: {
+            costUsd: { source: 'provider', value: expectedCost, partial: true },
+            tokens: { source: 'provider', value: expectedTokens },
+          },
         });
-        expect((await foldDagResumeSnapshot(retriedEvents, runId)).costUsd).toBeCloseTo(0.07, 5);
+        expect((await foldDagResumeSnapshot(retriedEvents, runId)).costUsd).toBeCloseTo(
+          expectedCost,
+          5
+        );
         expect(runUsageWrites(mockDeps.store).at(-1)).toMatchObject({
-          total_cost_usd: 0.07,
-          total_tokens_in: 70,
-          total_tokens_out: 7,
-          total_cache_read_tokens: 15,
+          total_cost_usd: expectedCost,
+          total_tokens_in: expectedTokens.input,
+          total_tokens_out: expectedTokens.output,
+          total_cache_read_tokens: expectedTokens.cacheRead,
           total_cache_write_tokens: 0,
         });
-        expect((await foldDagResumeSnapshot(retriedEvents, runId)).tokens).toMatchObject({
-          input: 70,
-          output: 7,
-          cacheRead: 15,
-          cacheWrite: 0,
-        });
+        const finalSnapshot = await foldDagResumeSnapshot(retriedEvents, runId);
+        expect(finalSnapshot.tokens).toMatchObject(expectedTokens);
+        expect(finalSnapshot.loopConfigFailureBaselines?.size).toBe(0);
       }
     );
 

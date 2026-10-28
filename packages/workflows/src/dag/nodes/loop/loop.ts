@@ -464,7 +464,16 @@ function readLoopResume(
   const loopGateRunMeta = (workflowRun.metadata ?? {}) as LoopGateRunMetadata;
   const feedbackGiven = gate !== undefined && loopGateRunMeta.loop_feedback_given === true;
   const persistedUsageContext = { workflowRunId: workflowRun.id, nodeId: node.id };
-  const savedCost = savedExecution?.spend.costUsd;
+  let costUsd: number | undefined;
+  let tokens: TokenUsage | undefined;
+  if (savedExecution !== undefined) {
+    const spend = savedExecution.spend;
+    costUsd = spend.costUsd.source === 'provider' ? spend.costUsd.value : undefined;
+    tokens = spend.tokens.source === 'provider' ? spend.tokens.value : undefined;
+  } else if (gate !== undefined) {
+    costUsd = readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext);
+    tokens = readSignaledTokens(gate.signaledTokens, persistedUsageContext);
+  }
   return {
     savedExecution,
     gate,
@@ -477,19 +486,9 @@ function readLoopResume(
       gate !== undefined && feedbackGiven
         ? Math.max(node.loop.max_iterations, startIteration)
         : node.loop.max_iterations,
-    costUsd:
-      savedExecution !== undefined
-        ? savedCost?.source === 'provider'
-          ? savedCost.value
-          : undefined
-        : gate !== undefined
-          ? readSignaledCostUsd(gate.signaledCostUsd, persistedUsageContext)
-          : undefined,
+    costUsd,
     priorCostKnown: gate === undefined || attemptSpend(savedExecution).kind === 'known',
-    tokens:
-      gate !== undefined
-        ? readSignaledTokens(gate.signaledTokens, persistedUsageContext)
-        : undefined,
+    tokens,
   };
 }
 

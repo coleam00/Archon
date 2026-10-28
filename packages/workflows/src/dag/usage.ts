@@ -112,22 +112,17 @@ function tokensAgree(a: RunUsageFigures, b: RunUsageFigures): boolean {
 
 export function incrementalLoopUsage(
   output: NodeExecutionResult,
-  prior: NodeExecutionMetadata | undefined
+  prior: NodeExecutionMetadata['spend'] | undefined
 ): Pick<NodeExecutionResult, 'costUsd' | 'tokens'> {
   const execution = output.execution;
   if (execution?.node.kind !== 'loop') return output;
-  if (
-    prior?.invocation.id !== execution.invocation.id ||
-    prior.lifecycle.status !== 'failed' ||
-    prior.lifecycle.failureKind !== 'config'
-  )
-    return output;
-  const priorCost = prior.spend.costUsd;
+  if (prior === undefined) return output;
+  const priorCost = prior.costUsd;
   const tokens = output.tokens === undefined ? undefined : { ...output.tokens };
-  if (tokens !== undefined && prior.spend.tokens.source === 'provider') {
-    for (const axis of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) {
+  if (tokens !== undefined && prior.tokens.source === 'provider') {
+    for (const axis of RECONCILED_TOKEN_AXES) {
       const value = tokens[axis];
-      const baseline = prior.spend.tokens.value[axis];
+      const baseline = prior.tokens.value[axis];
       if (value !== undefined && baseline !== undefined) tokens[axis] = value - baseline;
     }
   }

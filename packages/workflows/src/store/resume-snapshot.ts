@@ -42,6 +42,8 @@ export interface DagResumeSnapshot extends RunUsageFigures {
   unattributedChildUsagePaths?: Set<string>;
   /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
   unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
+  /** Already counted loop configuration failures, keyed by invocation id, surviving later gates. */
+  loopConfigFailureBaselines?: Map<string, NodeExecutionMetadata['spend']>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
   /** Nodes whose latest record is `node_failed`; a run continued after a pause replays them. */
   failedNodes: Map<string, PriorFailedNode>;

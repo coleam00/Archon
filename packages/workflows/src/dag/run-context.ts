@@ -181,6 +181,7 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   guardedLayerSnapshots?: Set<string>;
   bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
+  loopConfigFailureBaselines?: DagResumeSnapshot['loopConfigFailureBaselines'];
   /** Each workflow path dispatches once per segment; prior events are the fixed accounting baseline. */
   reportedChildUsage?: DagResumeSnapshot['reportedChildUsage'];
   unattributedChildUsagePaths?: DagResumeSnapshot['unattributedChildUsagePaths'];

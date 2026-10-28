@@ -115,7 +115,7 @@ function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefi
 
 interface UsageContribution {
   stepName: string;
-  loopConfigFailureInvocationId?: string;
+  loopConfigFailure?: NodeExecutionMetadata;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   costUsd?: number;
@@ -454,11 +454,11 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
       fold.usageContributions = fold.usageContributions.filter(
         contribution =>
           contribution.stepName !== row.step_name ||
-          contribution.loopConfigFailureInvocationId !== metadata.invocation.id
+          contribution.loopConfigFailure?.invocation.id !== metadata.invocation.id
       );
       const contribution = readUsage(fold, row.step_name, record.rawUsage);
       if (metadata.lifecycle.status === 'failed' && metadata.lifecycle.failureKind === 'config') {
-        contribution.loopConfigFailureInvocationId = metadata.invocation.id;
+        contribution.loopConfigFailure = metadata;
       }
       fold.usageContributions.push(contribution);
     } else {
@@ -665,6 +665,13 @@ export async function foldDagResumeSnapshot(
     reportedChildUsage: fold.reportedChildUsage,
     unattributedChildUsagePaths: fold.unattributedChildUsagePaths,
     unfinishedInvocations: fold.unfinishedInvocations,
+    loopConfigFailureBaselines: new Map(
+      fold.usageContributions.flatMap(({ loopConfigFailure }) =>
+        loopConfigFailure === undefined
+          ? []
+          : [[loopConfigFailure.invocation.id, loopConfigFailure.spend] as const]
+      )
+    ),
     completedNodeOutputs: fold.completedNodeOutputs,
     failedNodes: fold.failedNodes,
     fanOutSnapshots: fold.fanOutSnapshots,
