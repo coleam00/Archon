@@ -1428,6 +1428,23 @@ describe('CodexProvider', () => {
               advice: 'complete inline',
             })),
           ]),
+          ...['dependencies', 'dependentSchemas'].flatMap(keyword =>
+            ['oneOf', 'anyOf', 'allOf'].flatMap(operator =>
+              [false, true].map(reference => ({
+                schema: {
+                  ...complete,
+                  $defs: { Dependency: other },
+                  [operator]: [
+                    {
+                      ...field,
+                      [keyword]: { status: reference ? { $ref: '#/$defs/Dependency' } : other },
+                    },
+                  ],
+                },
+                advice: 'complete inline',
+              }))
+            )
+          ),
           ...(['if', 'then', 'else', 'not'] as const).map(keyword => ({
             schema: { ...complete, [keyword]: field },
             advice: 'complete oneOf/anyOf branches',

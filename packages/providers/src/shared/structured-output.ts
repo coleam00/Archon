@@ -135,6 +135,7 @@ function tryJsonParseObject(text: string): unknown {
  * These requirements already hold on that value; optional fields stay optional.
  * Explicitly closed branches retain their authored restriction. Unsupported
  * conditional keywords, composition constraints without usable inline property maps,
+ * incomplete schema-valued dependencies on composition ancestry,
  * incompatible allOf property name sets, and branch completion
  * that would duplicate a resource identifier throw before Codex starts.
  *
@@ -158,6 +159,21 @@ export function normalizeJsonSchemaForOpenAiStrict(
   assertCompositionsCanBeClosed(schema);
   const normalized = normalizeNode(schema) as Record<string, unknown>;
   visitJsonSchema(normalized, 'output_format', (node, path) => {
+    const constraints = sameInstanceNodes(node);
+    if (constraints.some(hasComposition)) {
+      const names = new Set(sameInstancePropertyMaps(node).flatMap(map => Object.keys(map)));
+      for (const dependency of constraints.flatMap(schemaDependencies)) {
+        if (
+          sameInstancePropertyMaps(dependency).some(map =>
+            [...names].some(name => !Object.hasOwn(map, name))
+          )
+        ) {
+          throw new Error(
+            `Codex output schema at ${path} cannot close partial schema-valued dependencies in a composition. Use complete inline dependency object branches declaring all enclosing properties instead.`
+          );
+        }
+      }
+    }
     if (!Array.isArray(node.allOf)) return;
     const maps = sameInstancePropertyMaps(node);
     const names = new Set(maps.flatMap(map => Object.keys(map)));
@@ -236,15 +252,17 @@ function isCompositionKeyword(key: string): boolean {
   return key === 'oneOf' || key === 'anyOf' || key === 'allOf';
 }
 
+function hasComposition(node: Record<string, unknown>): boolean {
+  return Object.entries(node).some(
+    ([key, value]) => isCompositionKeyword(key) && Array.isArray(value)
+  );
+}
+
 function assertCompositionsCanBeClosed(schema: unknown): void {
   visitJsonSchema(schema, 'output_format', (node, path) => {
-    if (
-      !Object.entries(node).some(
-        ([key, value]) => isCompositionKeyword(key) && Array.isArray(value)
-      )
-    )
-      return;
-    for (const constraint of sameInstanceNodes(node)) {
+    const constraints = sameInstanceNodes(node);
+    if (!constraints.some(hasComposition)) return;
+    for (const constraint of constraints) {
       const reference = ['$ref', '$dynamicRef', '$recursiveRef'].find(key => key in constraint);
       if (
         reference ||
@@ -262,13 +280,19 @@ function assertCompositionsCanBeClosed(schema: unknown): void {
 
 function sameInstanceNodes(node: unknown): Record<string, unknown>[] {
   if (!isRecord(node)) return [];
-  const nodes = [node];
+  const nodes = [node, ...schemaDependencies(node).flatMap(sameInstanceNodes)];
   for (const [key, value] of Object.entries(node)) {
     if (isCompositionKeyword(key) && Array.isArray(value)) {
       nodes.push(...value.flatMap(sameInstanceNodes));
     }
   }
   return nodes;
+}
+
+function schemaDependencies(node: Record<string, unknown>): Record<string, unknown>[] {
+  return ['dependencies', 'dependentSchemas'].flatMap(key =>
+    isRecord(node[key]) ? Object.values(node[key]).filter(isRecord) : []
+  );
 }
 
 function sameInstancePropertyMaps(node: unknown): Record<string, unknown>[] {

@@ -201,6 +201,88 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
     }
   }
 
+  for (const keyword of ['dependencies', 'dependentSchemas'] as const) {
+    for (const operator of ['oneOf', 'anyOf', 'allOf'] as const) {
+      test.each(['partial-inline', 'partial-reference', 'complete-inline'] as const)(
+        `${keyword}/${operator}/%s retains valid answers or refuses before conversion`,
+        shape => {
+          const dependency = {
+            properties: {
+              message: { type: 'string', minLength: 2 },
+              ...(shape === 'complete-inline' ? { status: { type: 'string' } } : {}),
+            },
+            required: ['message'],
+          };
+          const input = {
+            ...conditionalSchema(operator),
+            $defs: { Dependency: dependency },
+            [operator]: [
+              {
+                properties: { status: { enum: ['success', 'blocked'] } },
+                [keyword]: {
+                  status:
+                    shape === 'partial-reference' ? { $ref: '#/$defs/Dependency' } : dependency,
+                },
+              },
+            ],
+          };
+          const compiler = keyword === 'dependencies' ? ajv : new Ajv2020({ strict: false });
+          const original = compiler.compile(input);
+          expect(original({ status: 'success', message: 'Finished' })).toBe(true);
+          expect(original({ status: 'blocked', message: 'Need access' })).toBe(true);
+          if (shape !== 'complete-inline') {
+            expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow('complete inline');
+          } else {
+            const converted = compiler.compile(normalizeJsonSchemaForOpenAiStrict(input));
+            for (const validate of [original, converted]) {
+              expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
+              expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
+              expect(validate({ status: 'success', message: 'x' })).toBe(false);
+              expect(validate({ status: 'success' })).toBe(false);
+              expect(validate({ status: 'unknown', message: 'Finished' })).toBe(false);
+            }
+          }
+        }
+      );
+    }
+  }
+
+  for (const keyword of ['dependencies', 'dependentSchemas'] as const) {
+    test.each(['enclosing', 'nested', 'composition-in-dependency'] as const)(
+      `rejects unsafe ${keyword} on %s composition ancestry`,
+      placement => {
+        const partial = { properties: { status: { type: 'string' } } };
+        const dependency = placement === 'nested' ? { [keyword]: { message: partial } } : partial;
+        const conditional = conditionalSchema('anyOf');
+        const input =
+          placement === 'composition-in-dependency'
+            ? {
+                type: 'object',
+                properties: { status: { type: 'string' }, message: { type: 'string' } },
+                required: ['status', 'message'],
+                [keyword]: { status: { anyOf: [partial] } },
+              }
+            : { ...conditional, [keyword]: { status: dependency } };
+        const compiler = keyword === 'dependencies' ? ajv : new Ajv2020({ strict: false });
+        const original = compiler.compile(input);
+        expect(original({ status: 'success', message: 'Finished' })).toBe(true);
+        expect(original({ status: 'blocked', message: 'Need access' })).toBe(true);
+        expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow('complete inline');
+      }
+    );
+  }
+
+  test.each(['oneOf', 'anyOf', 'allOf'] as const)(
+    'preserves array-valued property dependencies with %s',
+    operator => {
+      const input = { ...conditionalSchema(operator), dependencies: { status: ['message'] } };
+      const converted = ajv.compile(normalizeJsonSchemaForOpenAiStrict(input));
+      expect(converted({ status: 'success', message: 'Finished' })).toBe(true);
+      expect(converted({ status: 'blocked', message: 'Need access' })).toBe(true);
+      expect(converted({ status: 'success' })).toBe(false);
+    }
+  );
+
   test.each([
     { required: ['message'] },
     { patternProperties: { '^message$': { type: 'string' } }, required: ['message'] },
@@ -277,9 +359,12 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
         { properties: { status: { type: 'string' }, message: { minLength: 2 } } },
       ],
     };
-    const validate = ajv.compile(normalizeJsonSchemaForOpenAiStrict(input));
-    expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
-    expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
+    for (const schema of [input, normalizeJsonSchemaForOpenAiStrict(input)]) {
+      const validate = ajv.compile(schema);
+      expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
+      expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
+      expect(validate({ status: 'success', message: 'x' })).toBe(false);
+    }
   });
 
   for (const identity of ['$id', '$anchor', '$dynamicAnchor'] as const) {
