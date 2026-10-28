@@ -165,6 +165,82 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
     );
   }
 
+  const overlappingConstraints = [
+    {
+      field: 'minimum',
+      root: { type: 'number', minimum: 10 },
+      branch: { minimum: 0 },
+      expected: 10,
+    },
+    {
+      field: 'minLength',
+      root: { type: 'string', minLength: 8 },
+      branch: { minLength: 0 },
+      expected: 'TTTTTTTT',
+    },
+    {
+      field: 'minItems',
+      root: { type: 'array', minItems: 2, items: { type: 'integer' } },
+      branch: { minItems: 0 },
+      expected: [0, 0],
+    },
+    {
+      field: 'items',
+      root: { type: 'array', minItems: 1, items: { const: 'keep' } },
+      branch: { items: { type: 'string' } },
+      expected: ['keep'],
+    },
+    {
+      field: 'enum',
+      root: { type: 'string', enum: ['keep'] },
+      branch: { enum: ['other', 'keep'] },
+      expected: 'keep',
+    },
+    {
+      field: 'default',
+      root: { type: 'string', enum: ['keep'], default: 'keep' },
+      branch: { default: 'other' },
+      expected: 'keep',
+    },
+    {
+      field: 'type',
+      root: { type: 'integer', minimum: 10 },
+      branch: { type: ['integer'] },
+      expected: 10,
+    },
+  ];
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    for (const location of ['root', 'nested']) {
+      test.each(overlappingConstraints)(
+        `preserves valid ${location} $field candidates with ${keyword} in scaffolds and defaults`,
+        async ({ root, branch, expected }) => {
+          const composed = { ...root, [keyword]: [branch] };
+          const outputFormat =
+            location === 'root'
+              ? composed
+              : { type: 'object', properties: { value: composed }, required: ['value'] };
+          const value = location === 'root' ? expected : { value: expected };
+          const workflow = makeTestWorkflow({
+            name: 'overlapping-constraints',
+            nodes: [{ id: 'producer', prompt: 'Produce', output_format: outputFormat }],
+          });
+          const scaffold = createDryRunStubScaffold(workflow);
+          expect(scaffold.producer).toEqual(
+            typeof value === 'string' ? JSON.stringify(value) : value
+          );
+          for (const options of [{ stubs: scaffold }, { defaultStubs: true }]) {
+            const result = await dryRunWorkflow({ workflow, ...options });
+            expect(result.outcome).toBe('completed');
+            expect(result.trace[0]?.output).toBe(
+              typeof value === 'string' ? value : JSON.stringify(value)
+            );
+          }
+        }
+      );
+    }
+  }
+
   test('combines required properties and overlapping nested allOf declarations', () => {
     const workflow = makeTestWorkflow({
       name: 'overlapping-stubs',

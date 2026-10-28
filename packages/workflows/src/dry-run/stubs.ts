@@ -114,8 +114,17 @@ function composedPlaceholderSchema(schema: Record<string, unknown>): Record<stri
 
 function schemaPlaceholder(input: unknown): unknown {
   if (!isRecord(input)) return 'TODO';
-  const schema = composedPlaceholderSchema(input);
+  const value = placeholderFromSchema(input);
+  if (
+    !COMPOSITION_KEYWORDS.some(keyword => Array.isArray(input[keyword])) ||
+    validateStructuredOutput(value, input).valid
+  ) {
+    return value;
+  }
+  return placeholderFromSchema(composedPlaceholderSchema(input));
+}
 
+function placeholderFromSchema(schema: Record<string, unknown>): unknown {
   if ('const' in schema) return structuredClone(schema.const);
   if ('default' in schema) return structuredClone(schema.default);
   if (Array.isArray(schema.enum) && schema.enum.length > 0) {
