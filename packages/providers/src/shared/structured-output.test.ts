@@ -132,6 +132,83 @@ describe('one-level conditional schemas', () => {
     required: ['status', 'message'],
   };
 
+  test.each(['oneOf', 'anyOf'])(
+    '%s preserves self-contained branches with nested objects and arrays',
+    keyword => {
+      const schema = {
+        type: 'object',
+        properties: {
+          decisions: {
+            type: 'array',
+            items: {
+              [keyword]: [
+                {
+                  type: 'object',
+                  properties: {
+                    status: { const: 'success' },
+                    refs: { type: 'array', items: { type: 'string' } },
+                  },
+                  required: ['status', 'refs'],
+                },
+                {
+                  type: 'object',
+                  properties: {
+                    status: { const: 'blocked' },
+                    detail: {
+                      type: 'object',
+                      properties: { reason: { type: 'string' } },
+                      required: ['reason'],
+                    },
+                  },
+                  required: ['status', 'detail'],
+                },
+              ],
+            },
+          },
+        },
+        required: ['decisions'],
+      };
+      const before = structuredClone(schema);
+      const prepared = normalizeJsonSchemaForOpenAiStrict(schema);
+      const ajv = new Ajv({ strict: false });
+      const authored = ajv.compile(schema);
+      const outgoing = ajv.compile(prepared);
+      for (const decision of [
+        { status: 'success', refs: ['issue-1'] },
+        { status: 'blocked', detail: { reason: 'Need access' } },
+      ]) {
+        const answer = { decisions: [decision] };
+        expect(authored(answer)).toBe(true);
+        expect(outgoing(answer)).toBe(true);
+      }
+      for (const decision of [
+        { status: 'success' },
+        { status: 'success', refs: [1] },
+        { status: 'blocked', detail: {} },
+        { status: 'blocked', detail: { reason: 'Need access', extra: true } },
+        { status: 'unknown', refs: [] },
+        { status: 'success', refs: [], detail: { reason: 'Extra field' } },
+      ])
+        expect(outgoing({ decisions: [decision] })).toBe(false);
+      expect(findPreparedStrictSchemaIssues(schema)).toEqual([]);
+      expect(normalizeJsonSchemaForOpenAiStrict(prepared)).toEqual(prepared);
+      expect(schema).toEqual(before);
+    }
+  );
+
+  test.each(['oneOf', 'anyOf'])(
+    '%s still refuses array intersections without enclosing object properties',
+    keyword => {
+      const schema = {
+        type: 'array',
+        items: { properties: { a: {} }, required: ['a'] },
+        [keyword]: [{ items: { properties: { b: {} }, required: ['b'] } }],
+      };
+      expect(new Ajv({ strict: false }).compile(schema)([{ a: 1, b: 2 }])).toBe(true);
+      expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow('output_format.items');
+    }
+  );
+
   for (const keyword of ['oneOf', 'anyOf']) {
     test(`${keyword} preserves valid answers, branch rules and strict closure`, () => {
       const branch = (status: string) => ({

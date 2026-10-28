@@ -133,6 +133,12 @@ function completeBranches(parent: Record<string, unknown>, keyword: string, path
   assertFlatComposition(parent, path);
   const branches = parent[keyword];
   if (!Array.isArray(branches)) refuse(`${path}.${keyword}`);
+  if (!isObjectSchemaNode(parent) && !('required' in parent)) {
+    for (const [index, branch] of branches.entries()) {
+      if (isRecord(branch)) assertSupportedKeywords(branch, `${path}.${keyword}[${index}]`);
+    }
+    return;
+  }
   const enclosing = isRecord(parent.properties) ? parent.properties : undefined;
   if (!enclosing && (isObjectSchemaNode(parent) || 'required' in parent)) {
     refuse(`${path}.${keyword}`);
