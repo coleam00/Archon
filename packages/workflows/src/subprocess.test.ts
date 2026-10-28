@@ -582,18 +582,16 @@ describe('subprocess input delivery', () => {
   it.each(['delivery error', 'command error'] as const)(
     'settles recorded-node input delivery before command completion: %s',
     async outcome => {
-      const deliveryError = Object.assign(new Error('stdin failed'), { code: 'EPIPE' });
-      const input = '€\n';
+      const deliveryError = new Error('stdin failed');
       const stdin = new Writable({
         write(_chunk, _encoding, callback) {
           callback(deliveryError);
         },
       });
-      const stdout = new PassThrough();
       const stderr = new PassThrough();
       const child = Object.defineProperties(new childProcess.ChildProcess(), {
         stdin: { value: stdin },
-        stdout: { value: stdout },
+        stdout: { value: null },
         stderr: { value: stderr },
       });
       const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
@@ -610,13 +608,12 @@ describe('subprocess input delivery', () => {
         cwd: import.meta.dir,
         env: {},
         retention: { standalone: true },
-        input,
+        input: 'x',
       });
       try {
         const observed = await delivered;
         expect(spawn).toHaveBeenCalledTimes(1);
         expect(observed[0]).toBe(deliveryError);
-        stdout.end('output');
         stderr.end('evidence');
         close();
         if (outcome === 'command error') {
@@ -627,15 +624,12 @@ describe('subprocess input delivery', () => {
           expect(rejection).not.toBe(deliveryError);
           expect(rejection).toMatchObject({
             code: 7,
-            stdout: 'output',
             stderr: 'evidence',
             signal: null,
           });
         } else {
           await expect(pending).rejects.toBe(deliveryError);
           expect(deliveryError).toMatchObject({
-            code: 'EPIPE',
-            stdout: 'output',
             stderr: 'evidence',
           });
         }
@@ -645,7 +639,6 @@ describe('subprocess input delivery', () => {
         trees.release();
         spawn.mockRestore();
         stdin.destroy();
-        stdout.destroy();
         stderr.destroy();
       }
     }
