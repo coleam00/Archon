@@ -6,6 +6,7 @@ import { basename, join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { discoverPlugins, PluginDiscoveryError } from './discovery';
 import { dispatchForge } from './dispatch';
+import type { ForgePluginConfig } from './plugin-config';
 import * as pluginProcess from './plugin-process';
 
 const fixture = join(import.meta.dir, 'fixtures', 'test-plugin.ts');
@@ -21,11 +22,12 @@ const operations: ('stat' | 'access')[] =
 async function withInspectionFailure(
   operation: 'stat' | 'access',
   name: string,
-  check: (directory: string, command: string, failure: Error) => Promise<void>
+  check: (directory: string, command: string, failure: Error) => Promise<void>,
+  code = 'EIO'
 ): Promise<void> {
   const directory = await fs.mkdtemp(join(tmpdir(), 'forge-inspection-'));
   const command = join(directory, `archon-forge-${name}${exe}`);
-  const failure = Object.assign(new Error('inspection sentinel'), { code: 'EIO' });
+  const failure = Object.assign(new Error('inspection sentinel'), { code });
   const originalStat = fs.stat;
   const originalAccess = fs.access;
   function inspectedStat(
@@ -65,47 +67,55 @@ async function withInspectionFailure(
   }
 }
 
-test.each(operations)(
-  '%s failures preserve evidence while healthy hosts still resolve',
-  async operation => {
-    await withInspectionFailure(operation, 'uninspectable', async (directory, command, failure) => {
-      const discovery = await discoverPlugins({
-        config: { plugins: [healthyPlugin], pluginDirs: [directory], scanPath: false },
-        env: {},
-      });
-      expect(discovery.byHost.get('forge.example')?.metadata.name).toBe('test');
-      expect(discovery.unavailable).toHaveLength(1);
-      const error = discovery.unavailable[0];
-      expect(error).toBeInstanceOf(PluginDiscoveryError);
-      expect(error.kind).toBe('process_failed');
-      expect(error.cause).toBe(failure);
-      for (const evidence of [
-        'plugin-dir:uninspectable',
-        command,
-        operation,
-        'EIO',
-        failure.message,
-      ]) {
-        expect(error.message).toContain(evidence);
-      }
-      const healthy = await dispatchForge(
-        { operationId: 'healthy', op: 'resolve', remote: 'https://forge.example/team/repo' },
-        { discovery, env: {} }
-      );
-      expect(healthy.plugin).toEqual({ name: 'test', version: '1.0.0' });
-      expect(healthy.response).toMatchObject({
-        ok: true,
-        result: { op: 'resolve', value: { kind: 'resolved' } },
-      });
-      const unknown = await dispatchForge(
-        { operationId: 'unknown', op: 'resolve', remote: 'https://unknown.example/team/repo' },
-        { discovery, env: {} }
-      );
-      expect(unknown.response).toMatchObject({
-        ok: false,
-        error: { kind: 'process_failed', message: expect.stringContaining(error.message) },
-      });
-    });
+const failures = operations.map(operation => ({ operation, code: 'EIO' }));
+if (process.platform !== 'win32') failures.push({ operation: 'access', code: 'EACCES' });
+
+test.each(failures)(
+  '$operation $code failures preserve evidence while healthy hosts still resolve',
+  async ({ operation, code }) => {
+    await withInspectionFailure(
+      operation,
+      'uninspectable',
+      async (directory, command, failure) => {
+        const discovery = await discoverPlugins({
+          config: { plugins: [healthyPlugin], pluginDirs: [directory], scanPath: false },
+          env: {},
+        });
+        expect(discovery.byHost.get('forge.example')?.metadata.name).toBe('test');
+        expect(discovery.unavailable).toHaveLength(1);
+        const error = discovery.unavailable[0];
+        expect(error).toBeInstanceOf(PluginDiscoveryError);
+        expect(error.kind).toBe('process_failed');
+        expect(error.cause).toBe(failure);
+        for (const evidence of [
+          'plugin-dir:uninspectable',
+          command,
+          operation,
+          code,
+          failure.message,
+        ]) {
+          expect(error.message).toContain(evidence);
+        }
+        const healthy = await dispatchForge(
+          { operationId: 'healthy', op: 'resolve', remote: 'https://forge.example/team/repo' },
+          { discovery, env: {} }
+        );
+        expect(healthy.plugin).toEqual({ name: 'test', version: '1.0.0' });
+        expect(healthy.response).toMatchObject({
+          ok: true,
+          result: { op: 'resolve', value: { kind: 'resolved' } },
+        });
+        const unknown = await dispatchForge(
+          { operationId: 'unknown', op: 'resolve', remote: 'https://unknown.example/team/repo' },
+          { discovery, env: {} }
+        );
+        expect(unknown.response).toMatchObject({
+          ok: false,
+          error: { kind: 'process_failed', message: expect.stringContaining(error.message) },
+        });
+      },
+      code
+    );
   }
 );
 
@@ -171,3 +181,38 @@ test.skipIf(process.platform === 'win32')(
     }
   }
 );
+
+for (const configuredSource of ['plugins', 'hosts'] as const) {
+  for (const scanSource of ['installed', 'pluginDirs', 'PATH'] as const) {
+    test.each(operations)(
+      `${configuredSource} duplicate scanned from ${scanSource} preserves %s evidence and fatal policy`,
+      async operation => {
+        await withInspectionFailure(operation, 'duplicate', async (directory, command, failure) => {
+          const plugin = { plugin: 'duplicate', command, args: [] };
+          const config: ForgePluginConfig = {
+            plugins: configuredSource === 'plugins' ? [plugin] : [],
+            hosts: configuredSource === 'hosts' ? { 'selected.example': plugin } : {},
+            pluginDirs: scanSource === 'pluginDirs' ? [directory] : [],
+            scanPath: scanSource === 'PATH',
+          };
+          try {
+            await discoverPlugins({
+              config,
+              env: scanSource === 'PATH' ? { PATH: directory } : {},
+              pluginsDir: scanSource === 'installed' ? directory : undefined,
+            });
+            throw new Error('Expected configured plugin discovery to fail');
+          } catch (error) {
+            expect(error).toBeInstanceOf(PluginDiscoveryError);
+            if (!(error instanceof PluginDiscoveryError)) throw error;
+            expect(error.kind).toBe('process_failed');
+            expect(error.cause).toBe(failure);
+            expect(error.message).toContain(
+              `${operation} failed for ${command} (EIO): ${failure.message}`
+            );
+          }
+        });
+      }
+    );
+  }
+}

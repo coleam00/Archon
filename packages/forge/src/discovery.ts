@@ -102,8 +102,10 @@ async function scannedCandidate(
     args: [],
     expectedName: name,
   };
+  let mode: number;
   try {
     const details = await stat(command);
+    mode = details.mode;
     if (!details.isFile()) return undefined;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -117,7 +119,7 @@ async function scannedCandidate(
     try {
       await access(command, constants.X_OK);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EACCES') {
+      if ((error as NodeJS.ErrnoException).code !== 'EACCES' || (mode & 0o111) !== 0) {
         return {
           kind: 'unavailable',
           candidate,
@@ -253,14 +255,21 @@ async function discoverCandidates(
     kind: 'ready',
     candidate,
   }));
-  return [...configured, ...scanned].filter(
-    ({ candidate }, index, all) =>
-      all.findIndex(
-        ({ candidate: other }) =>
-          other.command === candidate.command &&
-          JSON.stringify(other.args) === JSON.stringify(candidate.args)
-      ) === index
-  );
+  return mergeCandidates([...configured, ...scanned]);
+}
+
+function mergeCandidates(inspections: readonly CandidateInspection[]): CandidateInspection[] {
+  const unique = new Map<string, CandidateInspection>();
+  for (const inspection of inspections) {
+    const { candidate } = inspection;
+    const key = JSON.stringify([candidate.command, candidate.args]);
+    const existing = unique.get(key);
+    if (!existing) unique.set(key, inspection);
+    else if (inspection.kind === 'unavailable') {
+      unique.set(key, { ...inspection, candidate: existing.candidate });
+    }
+  }
+  return [...unique.values()];
 }
 
 async function discoverCandidateMetadata(
