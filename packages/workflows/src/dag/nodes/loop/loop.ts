@@ -165,7 +165,10 @@ export async function executeLoopNode(
       { err, nodeId: node.id, provider: workflowProvider },
       'loop_node.provider_failed'
     );
-    return failLoopNode(ctx, node.id, state, errorMsg, { failureKind: 'config' });
+    return failLoopNode(ctx, node.id, state, errorMsg, {
+      failureKind: 'config',
+      ...loopSpend(state),
+    });
   }
 
   const execution = await beginLoopAttempt(ctx, node, savedExecution, {
@@ -313,7 +316,11 @@ async function resolveCommandPromptTemplate(
 ): Promise<string | NodeExecutionResult> {
   const compiled = (node.loop as LoopNode['loop'] & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND];
   const failConfig = (message: string): Promise<NodeExecutionResult> =>
-    failLoopNode(ctx, node.id, state, message, { failureKind: 'config', data: { command } });
+    failLoopNode(ctx, node.id, state, message, {
+      failureKind: 'config',
+      data: { command },
+      ...loopSpend(state),
+    });
   const hasCompiledError = compiled !== undefined && typeof compiled.error === 'string';
   const hasCompiledPrompt = compiled !== undefined && typeof compiled.prompt === 'string';
   if (hasCompiledError && !hasCompiledPrompt) {

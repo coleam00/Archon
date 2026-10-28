@@ -26,7 +26,8 @@ import {
   newNodeInvocation,
   startNodeExecution,
 } from '../../../node-execution';
-import type { DagNode } from '../../../schemas';
+import type { DagNode, LoopNode } from '../../../schemas';
+import { COMPILED_LOOP_COMMAND } from '../../../compiled-command';
 import type { IWorkflowStore } from '../../../store';
 
 describe('interactive loop node', () => {
@@ -1297,6 +1298,107 @@ describe('interactive loop node', () => {
         }
       );
     }
+
+    it.each(['provider', 'command load', 'compiled error', 'compiled metadata'] as const)(
+      'preserves the reconciled gate floor on early %s failure',
+      async failure => {
+        const runId = `gate-failure-${failure}`;
+        const node: LoopNode = {
+          ...refine,
+          loop:
+            failure === 'provider'
+              ? { ...refine.loop }
+              : { ...refine.loop, prompt: undefined, command: 'missing-command' },
+        };
+        if (failure === 'compiled error' || failure === 'compiled metadata') {
+          Object.assign(node.loop, {
+            [COMPILED_LOOP_COMMAND]:
+              failure === 'compiled error' ? { error: 'Command compilation failed' } : {},
+          });
+        }
+        if (failure === 'provider') {
+          mockGetAgentProviderDag.mockImplementation(() => {
+            throw new Error('Provider initialization failed');
+          });
+        }
+        const execution = executionMetadata(
+          finishNodeExecution(
+            startNodeExecution({
+              runId,
+              path: 'refine',
+              node,
+              invocation: newNodeInvocation(),
+              provider: 'claude',
+            }),
+            { status: 'suspended', point: 'interactive_loop' },
+            { costUsd: 0.02 }
+          )
+        );
+        const mockDeps = createMockDeps();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: { name: 'gate-early-failure', nodes: [node] },
+            workflowRun: makeWorkflowRun(runId, {
+              metadata: {
+                approval: gate({ execution, signaledCostUsd: 0.04 }),
+                loop_user_input: 'again',
+                loop_feedback_given: true,
+              },
+            }),
+          })
+        );
+        const events = persistedEvents(mockDeps.store);
+        const failed = events.filter(
+          e => e.event_type === 'node_failed' && e.step_name === 'refine'
+        );
+        expect(failed).toHaveLength(1);
+        expect(failed[0]?.data).toMatchObject({
+          failure_kind: 'config',
+          cost_usd: 0.04,
+          spend: { costUsd: { source: 'provider', value: 0.04, partial: true } },
+        });
+        expect(mockSendQueryDag).not.toHaveBeenCalled();
+        expect(runUsageWrites(mockDeps.store)).toEqual([
+          expect.objectContaining({ total_cost_usd: 0.04 }),
+        ]);
+        expect((await foldDagResumeSnapshot(events, runId)).costUsd).toBeCloseTo(0.04, 5);
+      }
+    );
+
+    it('preserves a larger partial saved gate floor through feedback', async () => {
+      const runId = 'larger-partial-gate';
+      const execution = executionMetadata(
+        finishNodeExecution(
+          startNodeExecution({
+            runId,
+            path: 'refine',
+            node: refine,
+            invocation: newNodeInvocation(),
+            provider: 'claude',
+          }),
+          { status: 'suspended', point: 'interactive_loop' },
+          { costUsd: 0.04, costPartial: true }
+        )
+      );
+      const { completed, store, snapshot } = await resumeAt(
+        runId,
+        gate({ execution, signaledCostUsd: 0.02 }),
+        true
+      );
+      expect(completed?.data).toMatchObject({
+        cost_usd: expect.closeTo(0.07, 5),
+        spend: {
+          costUsd: { source: 'provider', value: expect.closeTo(0.07, 5), partial: true },
+        },
+      });
+      expect(runUsageWrites(store)).toEqual([
+        expect.objectContaining({ total_cost_usd: expect.closeTo(0.07, 5) }),
+      ]);
+      expect(snapshot.costUsd).toBeCloseTo(0.07, 5);
+    });
 
     it('feedback on a legacy gate with null cost keeps the priced floor partial', async () => {
       const { store, completed, snapshot } = await resumeAt(
