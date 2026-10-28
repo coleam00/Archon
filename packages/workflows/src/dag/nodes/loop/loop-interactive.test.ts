@@ -1207,6 +1207,55 @@ describe('interactive loop node', () => {
       };
     };
 
+    it.each([true, false])(
+      'ignores negative persisted gate cost on resume with feedback=%s',
+      async feedbackGiven => {
+        const runId = `negative-gate-${feedbackGiven}`;
+        const execution = executionMetadata(
+          finishNodeExecution(
+            startNodeExecution({
+              runId,
+              path: 'refine',
+              node: refine,
+              invocation: newNodeInvocation(),
+              provider: 'claude',
+            }),
+            { status: 'suspended', point: 'interactive_loop' },
+            { costUsd: -0.01 }
+          )
+        );
+        const { completed, snapshot } = await resumeAt(
+          runId,
+          gate({ execution, signaledCostUsd: -0.01 }),
+          feedbackGiven,
+          feedbackGiven
+            ? [refine]
+            : [
+                refine,
+                {
+                  id: 'after',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Next.' },
+                  depends_on: ['refine'],
+                },
+              ]
+        );
+        expect(mockSendQueryDag.mock.calls.length).toBe(1);
+        if (feedbackGiven) {
+          expect(completed?.data?.cost_usd).toBe(0.03);
+          expect(completed?.data).toMatchObject({
+            spend: { costUsd: { source: 'provider', value: 0.03, partial: true } },
+          });
+        } else {
+          expect(completed?.data).not.toHaveProperty('cost_usd');
+          expect(completed?.data).toMatchObject({
+            spend: { costUsd: { source: 'unavailable', reason: 'invalid' } },
+          });
+        }
+        expect(snapshot.costUsd).toBeCloseTo(0.03, 5);
+      }
+    );
+
     it('feedback on a legacy gate with null cost keeps the priced floor partial', async () => {
       const { store, completed, snapshot } = await resumeAt(
         'legacy-feedback',

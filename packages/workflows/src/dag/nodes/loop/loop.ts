@@ -99,7 +99,7 @@ function readSignaledCostUsd(
   context: { workflowRunId: string; nodeId: string }
 ): number | undefined {
   if (raw === undefined || raw === null) return undefined;
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
   getLog().warn({ ...context, costUsd: raw }, 'dag_loop.signaled_cost_invalid_ignored');
   return undefined;
 }
@@ -429,6 +429,20 @@ function readLoopGate(
     throw new Error(
       `Loop execution identity does not match '${execution.path}' in run ${workflowRun.id}`
     );
+  }
+  const savedSpend = attemptSpend(savedExecution);
+  if (
+    savedExecution !== undefined &&
+    savedSpend.kind === 'unavailable' &&
+    savedSpend.reason === 'invalid'
+  ) {
+    savedExecution = {
+      ...savedExecution,
+      spend: {
+        ...savedExecution.spend,
+        costUsd: { source: 'unavailable', reason: 'invalid' },
+      },
+    };
   }
   return { gate, savedExecution };
 }
