@@ -558,6 +558,14 @@ archon workflow runs --all             # list across all projects
 archon workflow runs --open            # failed runs nothing has adopted or superseded
 ```
 
+With the SQL store, the recent-run list rejects the entire result if a returned row or a
+status-count group contains an unsupported persisted status; it never returns a partial
+list or silently drops that row. Counts cover the project scope before `--status` and
+`--limit`, so narrowing either option cannot bypass a bad row in that scope. The command
+fails with the offending run ID and exact stored value; `--json` returns `{ok:false,error}`
+with exit code 1. The error is also logged. `--open` uses a separate failed-run query rather
+than these counts.
+
 If `cwd` is an unregistered Git checkout, the command falls back to a global list and says so; `--json` carries `scopeFallback: true` so a consumer never mistakes a global result for a project-scoped one. A registry lookup failure fails the command, including with `--open`; JSON mode returns `{ok:false,error}` with exit code 1.
 
 After a separate-clone launch, use `archon workflow get <full-run-id>` to inspect the run directly, or run `archon workflow runs` from the registered checkout for a project-scoped list. The global list defaults to 20 rows and may omit the run.

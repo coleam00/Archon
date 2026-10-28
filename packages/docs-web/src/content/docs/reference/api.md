@@ -326,6 +326,11 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 
 For `/signal`, send `{ "event": "checks.complete", "occurrence": "<metadata.wait.pauseId>", "payload": { "conclusion": "success" } }`. The occurrence identifies the exact wait, including when deadlines repeat. The legacy `resumeAt` selector remains accepted and is required when `occurrence` is omitted; it cannot distinguish two occurrences with the same event and deadline. If both selectors are supplied, both must match. Waits persisted without a `pauseId` can still be signaled using `resumeAt`.
 
+`GET /api/workflows/runs` rejects the entire list if any row it reads has an unsupported
+persisted status. It returns HTTP 500 (`Failed to list workflow runs`), with no partial list;
+it never silently drops the offending row. Server logs record `WorkflowStatusReadError` with
+the offending run ID and exact stored value; the HTTP error does not include those details.
+
 Run responses expose `status` and `outcome` as separate fields. `status` is the execution
 lifecycle. `outcome` is the workflow-authored verdict (`"succeeded"`, `"failed"`, or `null`) and
 is never derived by the API from status or output text. Contradictory combinations are valid: for
@@ -505,6 +510,13 @@ Returns `{ commands: [{ name, source: "bundled" | "project" }] }`.
 | GET | `/api/dashboard/conversations` | Active and queued conversation processing in this server process, with acquisition and enqueue times |
 
 Query parameters include status filters, date ranges, and pagination. Used by the Command Center UI.
+
+`GET /api/dashboard/runs` rejects the entire result if a returned row or a status-count group
+contains an unsupported persisted status. Counts cover the filtered set before the status
+filter and pagination, so a bad row can fail the request even when it is outside the selected
+status or page. The response is HTTP 500 (`Failed to list dashboard runs`), with no partial
+list or counts. Server logs record `WorkflowStatusReadError` with an offending run ID and
+exact stored value; the HTTP error does not include those details.
 
 Each run includes `active_nodes`, ordered by unresolved `node_started` event order. Completion,
 failure, and both skip lifecycle events remove a node; `node_suspended` keeps it active; a retrying start adds it again. Concurrent
