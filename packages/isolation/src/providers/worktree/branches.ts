@@ -6,6 +6,7 @@
 import { createHash } from 'crypto';
 
 import {
+  GitFailure,
   execFileAsync,
   fetchWithRetry,
   listWorktrees,
@@ -331,7 +332,7 @@ export async function createNewBranch(
       remote
     );
   } catch (error) {
-    if (!(error instanceof WorktreeAddError)) throw error;
+    if (!(error instanceof WorktreeAddError) && !(error instanceof GitFailure)) throw error;
     let held: IsolationFailure | undefined;
     try {
       held = await branchHolderFailure(repoPath, worktreePath, branchName, error);

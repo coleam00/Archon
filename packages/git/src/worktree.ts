@@ -189,14 +189,14 @@ export async function listWorktrees(repoPath: RepoPath): Promise<WorktreeInfo[]>
   try {
     const { stdout } = await execFileAsync(
       'git',
-      ['-C', repoPath, 'worktree', 'list', '--porcelain'],
+      ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
       { timeout: 10000 }
     );
 
     const worktrees: WorktreeInfo[] = [];
     let currentPath = '';
 
-    for (const line of stdout.split('\n')) {
+    for (const line of stdout.split('\0')) {
       if (line.startsWith('worktree ')) {
         currentPath = toNativeWorktreePath(line.substring(9));
       } else if (line.startsWith('branch ')) {
