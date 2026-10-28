@@ -419,19 +419,22 @@ describe('GET /api/workflows/:name', () => {
       ],
       errors: [],
     });
-    // Exact, or ignoring case, as the CLI and chat resolve a qualified name.
-    for (const name of ['acme/kit:review', 'ACME/Kit:Review']) {
-      mockDiscoverWorkflows.mockImplementationOnce(catalog);
-      const found = await app.request(`/api/workflows/${encodeURIComponent(name)}`);
-      expect(found.status).toBe(200);
-      expect(await found.json()).toMatchObject({
-        source: 'installed',
-        filename: 'acme/kit:review',
-        workflow: { name: 'acme/kit:review' },
-      });
-    }
+    mockDiscoverWorkflows.mockImplementationOnce(catalog);
+    const found = await app.request('/api/workflows/acme%2Fkit%3Areview');
+    expect(found.status).toBe(200);
+    expect(await found.json()).toMatchObject({
+      source: 'installed',
+      filename: 'acme/kit:review',
+      workflow: { name: 'acme/kit:review' },
+    });
     // No file exists for these either, so the file lookups that follow also miss.
-    for (const name of ['acme/kit:helper', 'acme/kit:copied', 'acme/kit:missing']) {
+    for (const name of [
+      'ACME/Kit:Review',
+      'acme/kit:rev',
+      'acme/kit:helper',
+      'acme/kit:copied',
+      'acme/kit:missing',
+    ]) {
       mockDiscoverWorkflows.mockImplementationOnce(catalog);
       const refused = await app.request(`/api/workflows/${encodeURIComponent(name)}`);
       expect(refused.status).toBe(404);
