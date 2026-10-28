@@ -40,15 +40,12 @@ says nothing about the native login. If the native login remains unavailable, ru
 `codex login` under that user and environment and check again. `codex login status`
 alone does not prove that a refresh will succeed.
 
-For container execution, host doctor does not verify the container's login. Check
-the credential source available inside the container and the run's container
-credential preflight result; repair that source if the login is unavailable.
+Codex does not support workflow container execution (`containerExec: false`). Run
+Codex workflows on the host without `--container`; repairing container credentials
+does not enable this capability. See [container provider support](/guides/container-isolation/#provider-support).
 
 A host credential preflight refusal before run creation leaves no run to resume:
-repeat the original `archon workflow run` command after fixing the login. A
-container native credential refusal happens after run creation and marks that run
-failed. After fixing its credential source, resume the existing run with
-`archon workflow resume <run-id>`.
+repeat the original `archon workflow run` command after fixing the login.
 
 ## Project uses an unexpected provider
 
