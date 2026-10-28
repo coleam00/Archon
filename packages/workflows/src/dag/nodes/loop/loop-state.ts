@@ -66,7 +66,7 @@ export interface LoopState {
    */
   resolvedModel: ResolvedModel | undefined;
   costUsd: number | undefined;
-  /** Every consumed attempt and result, including carried-in gate spend, reported finite cost. */
+  /** Every consumed attempt and result, including carried-in gate spend, reported finite nonnegative cost. */
   costKnown: boolean;
   tokens: TokenUsage | undefined;
   tokensUnknown: boolean;

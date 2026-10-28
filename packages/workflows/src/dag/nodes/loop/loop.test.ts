@@ -346,6 +346,57 @@ describe('loop node execution', () => {
     }
   );
 
+  it('persists a partial cost when an unpriced transient attempt recovers on retry', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      if (++calls === 1) {
+        yield {
+          type: 'result',
+          isError: true,
+          failure: { class: 'transient', evidence: 'temporary' },
+          errors: ['temporary'],
+        };
+      } else {
+        yield {
+          type: 'result',
+          sessionId: 'recovered-session',
+          text: '<promise>COMPLETE</promise>',
+          cost: 0.02,
+        };
+      }
+    });
+    const deps = createMockDeps();
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        cwd: testDir,
+        workflow: {
+          name: 'retry-cost',
+          nodes: [
+            {
+              id: 'my-loop',
+              kind: 'loop',
+              retry: { max_attempts: 1, delay_ms: 0 },
+              loop: {
+                prompt: 'Work.',
+                until: 'COMPLETE',
+                max_iterations: 1,
+                fresh_context: false,
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('retry-cost-run'),
+      })
+    );
+    expect(calls).toBe(2);
+    const completed = persistedEvents(deps.store).find(e => e.event_type === 'node_completed');
+    expect(completed?.data).toMatchObject({
+      cost_usd: 0.02,
+      spend: { costUsd: { source: 'provider', value: 0.02, partial: true } },
+    });
+  });
+
   it('resets the retry budget after a successful iteration', async () => {
     let calls = 0;
     mockSendQueryDag.mockImplementation(async function* () {
@@ -935,6 +986,10 @@ describe('loop node execution', () => {
   });
 
   it.each([
+    { costs: [-0.01, 0.02], expected: 0.02, partial: true },
+    { costs: [0.02, -0.01], expected: 0.02, partial: true },
+    { costs: [Number.POSITIVE_INFINITY, 0.02], expected: 0.02, partial: true },
+    { costs: [Number.NEGATIVE_INFINITY, 0.02], expected: 0.02, partial: true },
     { costs: [undefined, 0.02], expected: 0.02, partial: true },
     { costs: [0.02, undefined], expected: 0.02, partial: true },
     { costs: [0.01, 0.02], expected: 0.03, partial: false },
@@ -1130,7 +1185,7 @@ describe('loop node execution', () => {
     expect(completedEvent?.[0].data).toMatchObject({ spend: { costUsd: { partial: true } } });
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
-        call => call[1] === 'loop_node.usage_cost_non_finite_ignored'
+        call => call[1] === 'loop_node.usage_cost_invalid_ignored'
       )
     ).toBe(true);
   });

@@ -640,14 +640,15 @@ function addResultUsage(
   msg: ResultChunk
 ): void {
   const nodeId = run.node.id;
-  state.costKnown &&= msg.cost !== undefined && Number.isFinite(msg.cost);
+  const costValid = msg.cost !== undefined && Number.isFinite(msg.cost) && msg.cost >= 0;
+  state.costKnown &&= costValid;
   if (msg.cost !== undefined) {
-    if (Number.isFinite(msg.cost)) {
+    if (costValid) {
       usage.cost = (usage.cost ?? 0) + msg.cost;
     } else {
       getLog().warn(
         { nodeId, iteration: i, costUsd: msg.cost },
-        'loop_node.usage_cost_non_finite_ignored'
+        'loop_node.usage_cost_invalid_ignored'
       );
     }
   }
