@@ -105,7 +105,20 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
         config: { pluginDirs: [dirs[0], broken], scanPath: false },
       });
       expect(linked.byHost.has('good.example')).toBe(true);
-      expect(linked.unavailable).toHaveLength(1);
+      expect(linked.unavailable.map(error => error.message)).toEqual([
+        'plugin-dir:missing: metadata handshake failed',
+      ]);
+      const unresolved = await dispatchForge(
+        { operationId: 'broken-link', op: 'resolve', remote: 'https://unknown.example/a/b' },
+        { discovery: linked }
+      );
+      expect(unresolved.response).toMatchObject({
+        ok: false,
+        error: {
+          kind: 'process_failed',
+          message: expect.stringContaining('plugin-dir:missing: metadata handshake failed'),
+        },
+      });
     }
   } finally {
     await removeTempTree(root);
