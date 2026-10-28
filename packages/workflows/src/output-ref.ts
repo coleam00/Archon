@@ -439,36 +439,91 @@ export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
 
 const COMPOSITION_KEYWORDS = ['allOf', 'anyOf', 'oneOf'] as const;
 
+interface PathAlternative {
+  schemas: unknown[];
+  ancestorTypes: (string[] | undefined)[];
+}
+
+function schemaTypes(schema: Record<string, unknown>): string[] | undefined {
+  const type = schema.type;
+  if (type === undefined) return undefined;
+  const types: unknown[] = typeof type === 'string' ? [type] : Array.isArray(type) ? type : [];
+  return types.flatMap(value =>
+    typeof value !== 'string' ? [] : value === 'number' ? ['number', 'integer'] : [value]
+  );
+}
+
 /** Each entry is a conjunction of declarations; entries are selectable alternatives.
  * An empty conjunction leaves the path unconstrained, while no alternatives means false.
+ * Ancestor type intersections discard impossible branches before their types are projected away.
  */
 export function outputSchemaAlternativesForPath(
   schema: unknown,
   path: readonly string[]
 ): unknown[][] {
-  if (path.length === 0) return [[schema]];
-  if (schema === false) return [];
-  const object = asPlainObject(schema);
-  if (object === undefined) return [[]];
-  const [key, ...rest] = path;
-  const properties = asPlainObject(object.properties);
-  let alternatives =
-    properties !== undefined && key !== undefined && Object.hasOwn(properties, key)
-      ? outputSchemaAlternativesForPath(properties[key], rest)
-      : [[]];
-  const conjoin = (branches: unknown[][]): void => {
-    alternatives = alternatives.flatMap(left => branches.map(right => [...left, ...right]));
-  };
-  for (const keyword of COMPOSITION_KEYWORDS) {
-    const branches = object[keyword];
-    if (!Array.isArray(branches)) continue;
-    if (keyword === 'allOf') {
-      for (const branch of branches) conjoin(outputSchemaAlternativesForPath(branch, path));
-    } else {
-      conjoin(branches.flatMap(branch => outputSchemaAlternativesForPath(branch, path)));
+  const unique = (alternatives: PathAlternative[]): PathAlternative[] => {
+    const byConstraint = new Map<string, PathAlternative>();
+    for (const alternative of alternatives) {
+      const schemas = new Map(alternative.schemas.map(value => [JSON.stringify(value), value]));
+      const key = JSON.stringify([
+        alternative.ancestorTypes.map(types => types?.slice().sort()),
+        [...schemas.keys()].sort(),
+      ]);
+      byConstraint.set(key, { ...alternative, schemas: [...schemas.values()] });
     }
-  }
-  return alternatives;
+    return [...byConstraint.values()];
+  };
+  const conjoin = (left: PathAlternative[], right: PathAlternative[]): PathAlternative[] => {
+    const combined: PathAlternative[] = [];
+    for (const a of left) {
+      for (const b of right) {
+        const ancestorTypes = a.ancestorTypes.map((types, depth) => {
+          const other = b.ancestorTypes[depth];
+          return types === undefined
+            ? other
+            : other === undefined
+              ? types
+              : types.filter(type => other.includes(type));
+        });
+        if (ancestorTypes.some(types => types?.length === 0)) continue;
+        combined.push({ schemas: [...a.schemas, ...b.schemas], ancestorTypes });
+      }
+    }
+    return unique(combined);
+  };
+  const visit = (current: unknown, remaining: readonly string[]): PathAlternative[] => {
+    if (remaining.length === 0) return [{ schemas: [current], ancestorTypes: [] }];
+    if (current === false) return [];
+    const object = asPlainObject(current);
+    const [key, ...rest] = remaining;
+    const properties = asPlainObject(object?.properties);
+    const children =
+      properties !== undefined && key !== undefined && Object.hasOwn(properties, key)
+        ? visit(properties[key], rest)
+        : [{ schemas: [], ancestorTypes: rest.map(() => undefined) }];
+    let alternatives = children.map(child => ({
+      schemas: child.schemas,
+      ancestorTypes: [
+        object === undefined ? undefined : schemaTypes(object),
+        ...child.ancestorTypes,
+      ],
+    }));
+    for (const keyword of COMPOSITION_KEYWORDS) {
+      const branches = object?.[keyword];
+      if (!Array.isArray(branches)) continue;
+      if (keyword === 'allOf') {
+        for (const branch of branches)
+          alternatives = conjoin(alternatives, visit(branch, remaining));
+      } else {
+        alternatives = conjoin(
+          alternatives,
+          unique(branches.flatMap(branch => visit(branch, remaining)))
+        );
+      }
+    }
+    return alternatives;
+  };
+  return visit(schema, path).map(alternative => alternative.schemas);
 }
 
 export function declaredOutputPathsFromSchema(

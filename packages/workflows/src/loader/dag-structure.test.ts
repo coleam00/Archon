@@ -5,6 +5,7 @@ import { evaluateCondition } from '../condition-evaluator';
 import type { ParseResult } from '../loader';
 import { validateStructuredOutput } from '../structured-output';
 import { resolveAttentionOptions } from '../dag/references';
+import { outputSchemaAlternativesForPath } from '../output-ref';
 
 describe('scalar shared session context', () => {
   function parseSessionContext(yaml: string): ParseResult {
@@ -588,6 +589,99 @@ nodes:
           allOf: [{ properties: { options: validOptions } }, true, {}, { description: 'Choices' }],
         }).error
       ).toBeNull();
+    });
+  });
+
+  describe('options projection viability and cost', () => {
+    for (const keyword of ['anyOf', 'oneOf'] as const) {
+      for (const nested of [false, true]) {
+        const field = nested ? 'result.options' : 'options';
+        const atPath = (schema: Record<string, unknown>) =>
+          nested ? { type: 'object', properties: { result: schema } } : schema;
+
+        it(`loads ${keyword} options at ${field} despite an incompatible string branch`, () => {
+          const schema = atPath({
+            type: ['object', 'null'],
+            [keyword]: [
+              { type: 'object', properties: { options: validOptions }, required: ['options'] },
+              { type: 'string' },
+            ],
+          });
+          const value = { options: [{ id: 'continue' }] };
+          expect(validateStructuredOutput(nested ? { result: value } : value, schema)).toEqual({
+            valid: true,
+          });
+          expect(parseWithOptionsSchema(schema, field).error).toBeNull();
+          const selectable = {
+            [keyword]: [
+              { type: 'object', properties: { options: validOptions } },
+              { type: 'string' },
+            ],
+          };
+          expect(
+            parseWithOptionsSchema(atPath({ type: 'object', ...selectable }), field).error
+          ).toBeNull();
+          expect(
+            parseWithOptionsSchema(atPath({ allOf: [selectable, { type: 'object' }] }), field).error
+          ).toBeNull();
+        });
+
+        it(`retains a viable ${keyword} string branch at ${field}`, () => {
+          expect(
+            parseWithOptionsSchema(
+              atPath({
+                [keyword]: [
+                  { type: 'object', properties: { options: validOptions } },
+                  { type: 'string' },
+                ],
+              }),
+              field
+            ).error?.error
+          ).toContain('must be an array of objects declaring only');
+          expect(
+            parseWithOptionsSchema(
+              atPath({
+                allOf: [
+                  { type: 'object', properties: { options: validOptions } },
+                  { type: 'string' },
+                ],
+              }),
+              field
+            ).error?.error
+          ).toContain('must be an array of objects declaring only');
+        });
+
+        it(`collapses independent ${keyword} companions at ${field}`, () => {
+          const schema = atPath({
+            type: 'object',
+            properties: { options: validOptions },
+            allOf: Array.from({ length: 22 }, (_, index) => ({
+              [keyword]: [true, false].map(flag => ({
+                properties: { [`flag${index}`]: { const: flag } },
+                required: [`flag${index}`],
+              })),
+            })),
+          });
+          expect(outputSchemaAlternativesForPath(schema, field.split('.'))).toHaveLength(1);
+          expect(parseWithOptionsSchema(schema, field).error).toBeNull();
+        });
+      }
+    }
+
+    it('collapses simultaneous anyOf and oneOf companions', () => {
+      const schema = {
+        properties: { options: validOptions },
+        anyOf: [
+          { properties: { left: { const: true } } },
+          { properties: { left: { const: false } } },
+        ],
+        oneOf: [
+          { properties: { right: { const: true } } },
+          { properties: { right: { const: false } } },
+        ],
+      };
+      expect(outputSchemaAlternativesForPath(schema, ['options'])).toHaveLength(1);
+      expect(parseWithOptionsSchema(schema).error).toBeNull();
     });
   });
 
