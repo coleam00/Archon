@@ -141,7 +141,70 @@ describe('post-result turn settlement timeout', () => {
       expect(aborted).toBe(true);
     });
 
+    for (const transport of ['native', 'plugin'] as const) {
+      for (const output of ['prose', 'silent', 'structured'] as const) {
+        it(`${kind}: rejects ${transport} settlement without a result (${output})`, async () => {
+          const sendQuery: IAgentProvider['sendQuery'] = async function* () {
+            if (output === 'prose')
+              yield { type: 'agent_message_chunk', text: 'Done. <promise>COMPLETE</promise>' };
+            yield { type: 'settled' };
+          };
+          const pair = streamPair();
+          const serving =
+            transport === 'plugin'
+              ? serveProvider(
+                  {
+                    descriptor: codexDescriptor,
+                    create: () => ({
+                      getType: () => 'codex',
+                      getCapabilities: mockCodexCapabilities,
+                      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+                      sendQuery,
+                    }),
+                  },
+                  pair.provider
+                )
+              : undefined;
+          const client = transport === 'plugin' ? await connectProvider(pair.host) : undefined;
+          try {
+            const store = await run(
+              kind,
+              client ? client.sendQuery.bind(client) : sendQuery,
+              output === 'structured'
+            );
+            const failure = persistedEvents(store).find(
+              event => event.event_type === 'node_failed'
+            );
+            expect(failure?.data?.error).toContain("provider 'codex' sent settled before result");
+            expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+          } finally {
+            await client?.close();
+            await serving;
+          }
+        });
+      }
+    }
+
     for (const [work, chunks] of Object.entries(liveWork)) {
+      for (const wake of ['running', 'work start', 'running and work start'] as const) {
+        it(`${kind}: protects quiet ${work} in a later wake turn (${wake})`, async () => {
+          let aborted = false;
+          const store = await run(kind, async function* (_prompt, _cwd, _session, options) {
+            if (wake === 'running') yield chunks.start;
+            yield { type: 'result', text: 'Waiting.' };
+            if (wake !== 'work start') yield { type: 'state_update', state: 'running' };
+            if (wake !== 'running') yield chunks.start;
+            await waitForAbort(options?.abortSignal);
+            aborted = options?.abortSignal?.aborted ?? false;
+            yield chunks.end;
+            yield { type: 'result', text: 'Done. <promise>COMPLETE</promise>' };
+            yield { type: 'settled' };
+          });
+          expect(aborted).toBe(false);
+          expect(store.completeWorkflowRun).toHaveBeenCalled();
+        });
+      }
+
       for (const output of [
         'prose',
         'valid payload',

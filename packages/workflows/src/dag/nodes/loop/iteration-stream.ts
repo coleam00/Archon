@@ -7,6 +7,8 @@ import {
   structuredOutputPass,
   NodeFailure,
   providerReportedFailure,
+  awaitingTurnSettlement,
+  assertResultBeforeSettlement,
 } from '../../ai-turn';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
@@ -458,6 +460,7 @@ async function consumeIterationStream(
       },
     }
   );
+  let awaitingSettlement = false;
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   const shouldStopStream = (): Promise<boolean> => stopStreamIfRunStopped(run, i, attempt);
   try {
@@ -492,12 +495,14 @@ async function consumeIterationStream(
         watchdogResets.observe(type, resetAt);
       },
       () =>
-        !attempt.sawResult &&
+        !awaitingSettlement &&
         (providerEvents.hasOpenTools() ||
           (capabilities.backgroundWork === 'reported' &&
             providerEvents.liveSubtaskIds().length > 0)),
       shouldStopStream
     )) {
+      awaitingSettlement = awaitingTurnSettlement(awaitingSettlement, msg);
+      assertResultBeforeSettlement(msg, attempt.sawResult, run.workflowProvider);
       // A result is not the end of the iteration; `settled` is. See the
       // AI-node stream loop for the full rationale.
       if (msg.type === 'result') {

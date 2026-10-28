@@ -36,6 +36,8 @@ import {
   type WatchdogReset,
   type structuredOutputPass,
   providerReportedFailure,
+  awaitingTurnSettlement,
+  assertResultBeforeSettlement,
 } from '../../ai-turn';
 
 /** What every stream pass of one agent attempt reads and never changes. */
@@ -148,6 +150,7 @@ export async function runStreamPass(
   resetPass(pc, state, pass);
   const providerEvents = createPassEventHandler(pc, state);
   const shouldStopStream = stopCheck(pc, state, providerEvents);
+  let awaitingSettlement = false;
   try {
     for await (const msg of withIdleTimeout(
       passChunks(pc, prompt, pass.resumeSessionId),
@@ -159,12 +162,14 @@ export async function runStreamPass(
         state.watchdogResets.observe(type, resetAt);
       },
       () =>
-        !state.passSawResult &&
+        !awaitingSettlement &&
         (providerEvents.hasOpenTools() ||
           (pc.capabilities.backgroundWork === 'reported' &&
             providerEvents.liveSubtaskIds().length > 0)),
       shouldStopStream
     )) {
+      awaitingSettlement = awaitingTurnSettlement(awaitingSettlement, msg);
+      assertResultBeforeSettlement(msg, state.passSawResult, pc.provider);
       const tickNow = Date.now();
 
       if (msg.type === 'result') recordResult(pc, state, pass, msg);

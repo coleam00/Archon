@@ -4,6 +4,27 @@ import { type ProviderFailure } from '@archon/provider-contract';
 import { nodeFailureKindOf } from '../executor-shared';
 import { getLog } from './log';
 
+export function awaitingTurnSettlement(wasAwaiting: boolean, chunk: MessageChunk): boolean {
+  if (chunk.type === 'result') return true;
+  if (
+    (chunk.type === 'state_update' && chunk.state === 'running') ||
+    chunk.type === 'tool_call' ||
+    (chunk.type === 'subtask' && chunk.status === 'started')
+  )
+    return false;
+  return wasAwaiting;
+}
+
+export function assertResultBeforeSettlement(
+  chunk: MessageChunk,
+  sawResult: boolean,
+  provider: string
+): void {
+  if (chunk.type === 'settled' && !sawResult) {
+    throw new NodeFailure('unknown', `provider '${provider}' sent settled before result`);
+  }
+}
+
 export interface WatchdogReset {
   type: MessageChunk['type'];
   at: number;

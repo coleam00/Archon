@@ -210,6 +210,7 @@ describe('background task completion gating (#2083)', () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'subtask', taskId: 'quiet', status: 'started', description: 'quiet bash' };
       yield { type: 'result', sessionId: 's', text: 'waiting' };
+      yield { type: 'state_update', state: 'running' };
       await new Promise(resolve => setTimeout(resolve, 100));
       yield { type: 'subtask', taskId: 'quiet', status: 'completed' };
       yield { type: 'result', sessionId: 's', text: 'finished' };

@@ -1352,11 +1352,14 @@ archon workflow end-turn <run-id> --json
 archon workflow wait <run-id> --json
 ```
 
-Open tools and reported background work remain running when silent. After
+Before a result, open tools and reported background work remain running when silent. After
 `workflows.toolCallAttentionMs` without progress (30 minutes by default), attention
 shows their node, provider, sanitized description and idle duration. A silent turn
 with no open tool or reported background work still fails after its node's
-`idle_timeout` and follows its existing retry policy.
+`idle_timeout` and follows its existing retry policy. After a result, silence also
+counts toward `idle_timeout` while waiting for settlement, even with live work;
+the node can fail before the attention threshold. A new running wake turn or
+newly started tool or subtask restores live-work protection until its next result.
 
 The command records each observed `(streamId, toolCallId, raisedAt)` occurrence.
 A live owner checks about every ten seconds and aborts only one of its own current
