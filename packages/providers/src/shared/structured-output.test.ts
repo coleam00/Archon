@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import Ajv from 'ajv';
+import { findStrictSchemaIssues } from '@archon/provider-contract';
 import {
   augmentPromptForJsonSchema,
   tryParseStructuredOutput,
@@ -122,6 +124,194 @@ After careful evaluation, here is the JSON:
 });
 
 describe('normalizeJsonSchemaForOpenAiStrict', () => {
+  const conditionalSchema = (operator: 'oneOf' | 'anyOf' | 'allOf') => ({
+    type: 'object',
+    additionalProperties: false,
+    properties: { status: { type: 'string' }, message: { type: 'string' } },
+    required: ['status', 'message'],
+    [operator]:
+      operator === 'allOf'
+        ? [{ properties: { status: { enum: ['success', 'blocked'] } }, required: ['status'] }]
+        : ['success', 'blocked'].map(status => ({
+            properties: { status: { const: status } },
+            required: ['status'],
+          })),
+  });
+  const ajv = new Ajv({ strict: false });
+
+  test.each(['oneOf', 'anyOf', 'allOf'] as const)(
+    'preserves parent fields and partial %s constraints',
+    operator => {
+      const input = conditionalSchema(operator);
+      const before = structuredClone(input);
+      const normalized = normalizeJsonSchemaForOpenAiStrict(input);
+      const original = ajv.compile(input);
+      const converted = ajv.compile(normalized);
+      for (const [payload, valid] of [
+        [{ status: 'success', message: 'Finished' }, true],
+        [{ status: 'blocked', message: 'Need access' }, true],
+        [{ status: 'success' }, false],
+        [{ message: 'Finished' }, false],
+        [{ status: 'unknown', message: 'Finished' }, false],
+        [{ status: 1, message: 'Finished' }, false],
+        [{ status: 'success', message: 1 }, false],
+        [{ status: 'success', message: 'Finished', extra: true }, false],
+      ] as const) {
+        expect(original(payload)).toBe(valid);
+        expect(converted(payload)).toBe(valid);
+      }
+      expect(findStrictSchemaIssues(normalized, 'schema')).toEqual([]);
+      expect(input).toEqual(before);
+      expect(normalizeJsonSchemaForOpenAiStrict(normalized)).toEqual(normalized);
+    }
+  );
+
+  test('carries constraints through intermediate compositions and completes copied nested fields', () => {
+    const input = {
+      type: 'object',
+      properties: {
+        status: { type: 'string' },
+        meta: { type: 'object', properties: { tag: { type: 'string' } }, required: ['tag'] },
+      },
+      required: ['status', 'meta'],
+      anyOf: [
+        {
+          allOf: [
+            {
+              oneOf: [
+                { properties: { status: { const: 'success' } }, required: ['status'] },
+                { properties: { status: { const: 'blocked' } }, required: ['status'] },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const converted = ajv.compile(normalizeJsonSchemaForOpenAiStrict(input));
+    expect(converted({ status: 'success', meta: { tag: 'ok' } })).toBe(true);
+    expect(converted({ status: 'blocked', meta: { tag: 'ok' } })).toBe(true);
+    expect(converted({ status: 'success', meta: {} })).toBe(false);
+    expect(converted({ status: 'success', meta: { tag: 'ok', extra: true } })).toBe(false);
+  });
+
+  test('starts independent contexts for properties, array items and definitions', () => {
+    const child = conditionalSchema('oneOf');
+    const input = {
+      type: 'object',
+      properties: {
+        outer: { type: 'string' },
+        child,
+        children: { type: 'array', items: child },
+        defined: { $ref: '#/$defs/Child' },
+      },
+      required: ['outer', 'child', 'children', 'defined'],
+      $defs: { Child: child },
+      anyOf: [{ properties: { outer: { const: 'parent' } }, required: ['outer'] }],
+    };
+    const converted = ajv.compile(normalizeJsonSchemaForOpenAiStrict(input));
+    const payload = { status: 'success', message: 'Finished' };
+    expect(
+      converted({ outer: 'parent', child: payload, children: [payload], defined: payload })
+    ).toBe(true);
+    expect(
+      converted({ outer: 'other', child: payload, children: [payload], defined: payload })
+    ).toBe(false);
+  });
+
+  test.each([undefined, true])(
+    'inherits only required fields with additionalProperties %j',
+    additionalProperties => {
+      const input = {
+        type: 'object',
+        properties: { status: { type: 'string' }, optional: { type: 'number' } },
+        required: ['status'],
+        anyOf: [
+          {
+            properties: { status: { const: 'success' } },
+            required: ['status'],
+            ...(additionalProperties === undefined ? {} : { additionalProperties }),
+          },
+        ],
+      };
+      const converted = ajv.compile(normalizeJsonSchemaForOpenAiStrict(input));
+      expect(converted({ status: 'success' })).toBe(true);
+      expect(converted({ status: 'success', optional: 3 })).toBe(true);
+      expect(converted({ status: 'success', optional: 'wrong' })).toBe(false);
+      expect(converted({ optional: 3 })).toBe(false);
+    }
+  );
+
+  test('preserves authored branch closure and existing typed-additional-properties policy', () => {
+    for (const additionalProperties of [false, { type: 'string' }]) {
+      const input = {
+        ...conditionalSchema('oneOf'),
+        oneOf: [
+          {
+            properties: { status: { const: 'success' } },
+            required: ['status'],
+            additionalProperties,
+          },
+        ],
+      };
+      const normalized = normalizeJsonSchemaForOpenAiStrict(input);
+      expect(normalized.oneOf).toEqual([
+        {
+          properties: { status: { const: 'success' } },
+          required: ['status'],
+          additionalProperties: false,
+        },
+      ]);
+      expect(ajv.compile(normalized)({ status: 'success', message: 'Finished' })).toBe(false);
+    }
+  });
+
+  test('keeps complete branches, narrower constraints, and oneOf exclusivity', () => {
+    const input = {
+      type: 'object',
+      additionalProperties: false,
+      properties: { status: { type: 'string' }, message: { type: 'string', minLength: 2 } },
+      required: ['status', 'message'],
+      oneOf: [
+        {
+          properties: { status: { enum: ['success', 'blocked'] }, message: { pattern: '^F' } },
+          required: ['message'],
+        },
+        { properties: { status: { const: 'blocked' } }, required: ['status'] },
+      ],
+    };
+    const original = ajv.compile(input);
+    const converted = ajv.compile(normalizeJsonSchemaForOpenAiStrict(input));
+    for (const [payload, valid] of [
+      [{ status: 'success', message: 'Finished' }, true],
+      [{ status: 'success', message: 'Other' }, false],
+      [{ status: 'success', message: 'F' }, false],
+      [{ status: 'blocked', message: 'Finished' }, false],
+      [{ status: 'blocked', message: 'Need access' }, true],
+    ] as const) {
+      expect(original(payload)).toBe(valid);
+      expect(converted(payload)).toBe(valid);
+    }
+  });
+
+  test('leaves complete closed composition branches unchanged', () => {
+    const input = {
+      type: 'object',
+      properties: { status: { type: 'string' }, message: { type: 'string' } },
+      required: ['status', 'message'],
+      additionalProperties: false,
+      oneOf: ['success', 'blocked'].map(status => ({
+        properties: { status: { const: status }, message: { type: 'string' } },
+        required: ['status', 'message'],
+        additionalProperties: false,
+      })),
+    };
+    const normalized = normalizeJsonSchemaForOpenAiStrict(input);
+    expect(normalized).toEqual(input);
+    const converted = ajv.compile(normalized);
+    expect(converted({ status: 'success', message: 'Finished' })).toBe(true);
+    expect(converted({ status: 'blocked', message: 'Need access' })).toBe(true);
+  });
+
   test('adds additionalProperties:false to a top-level object schema', () => {
     const out = normalizeJsonSchemaForOpenAiStrict({
       type: 'object',

@@ -1,4 +1,5 @@
 import { spyOn } from 'bun:test';
+import Ajv from 'ajv';
 import * as binaryResolver from './binary-resolver';
 import { overStreams } from '../test/plugin';
 import { createProvider, descriptor } from './index';
@@ -1321,6 +1322,49 @@ describe('CodexProvider', () => {
         additionalProperties: false,
       });
     });
+
+    test.each(['explicit', 'workflow', 'split'] as const)(
+      'sends satisfiable conditional output through the %s path',
+      async path => {
+        const conditional = {
+          type: 'object',
+          additionalProperties: false,
+          properties: { status: { type: 'string' }, message: { type: 'string' } },
+          required: ['status', 'message'],
+          oneOf: ['success', 'blocked'].map(status => ({
+            properties: { status: { const: status } },
+            required: ['status'],
+          })),
+        };
+        const { provider, server } = providerWith();
+        await run(provider, {
+          ...(path === 'explicit'
+            ? { outputFormat: { type: 'json_schema', schema: conditional } as const }
+            : {}),
+          nodeConfig: { output_format: path === 'explicit' ? schema : conditional },
+          ...(path === 'split'
+            ? {
+                assistantConfig: { model: 'glm-5.3', toolFreeStructuredOutputModels: ['glm-5.3'] },
+              }
+            : {}),
+        });
+        expect(server.processes).toHaveLength(path === 'split' ? 2 : 1);
+        if (path === 'split') {
+          expect(
+            server.processes[0].requests.find(r => r.method === 'turn/start')?.params
+          ).not.toHaveProperty('outputSchema');
+        }
+        const outgoing = paramsOf(server, 'turn/start')?.outputSchema;
+        expect(outgoing).toBeDefined();
+        if (outgoing === null || typeof outgoing !== 'object')
+          throw new Error('Missing output schema');
+        const validate = new Ajv({ strict: false }).compile(outgoing);
+        expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
+        expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
+        expect(validate({ status: 'success' })).toBe(false);
+        expect(validate({ status: 'unknown', message: 'Finished' })).toBe(false);
+      }
+    );
 
     test('parses the last message onto structuredOutput (workflow output_format path)', async () => {
       const chunks = await streamOf(

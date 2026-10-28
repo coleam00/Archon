@@ -130,7 +130,12 @@ function tryJsonParseObject(text: string): unknown {
  * Callers that want to warn the author before silently dropping those semantics
  * can detect the case up front with {@link hasOpenAdditionalProperties}.
  *
- * Scope: only `additionalProperties` is injected. The other strict-mode rule
+ * Partial oneOf/anyOf/allOf object branches inherit missing properties and
+ * required names from enclosing schemas on the same value before closure.
+ * These requirements already hold on that value; optional fields stay optional.
+ * Explicitly closed branches retain their authored restriction.
+ *
+ * The other strict-mode rule
  * (every key in `properties` must appear in `required`) is intentionally NOT
  * enforced here — forcing it would silently turn optional fields into required
  * ones. See issue #1843.
@@ -141,28 +146,46 @@ export function normalizeJsonSchemaForOpenAiStrict(
   return normalizeNode(schema) as Record<string, unknown>;
 }
 
-/**
- * Recursive worker for {@link normalizeJsonSchemaForOpenAiStrict}. Walks any
- * JSON value (object, array, or scalar); only object nodes are closed. Kept
- * private so the public entry point can express the real `Record → Record`
- * contract while recursion still descends into arrays and scalars.
- */
-function normalizeNode(node: unknown): unknown {
+interface ObjectConstraints {
+  properties: Record<string, unknown>;
+  required: string[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeNode(node: unknown, enclosing?: ObjectConstraints): unknown {
   if (Array.isArray(node)) {
-    return node.map(normalizeNode);
+    return node.map(value => normalizeNode(value));
   }
-  if (node === null || typeof node !== 'object') {
-    return node;
-  }
+  if (!isRecord(node)) return node;
 
+  const properties = isRecord(node.properties) ? node.properties : undefined;
+  const required = Array.isArray(node.required)
+    ? node.required.filter((name): name is string => typeof name === 'string')
+    : [];
+  const constraints: ObjectConstraints = {
+    properties: { ...enclosing?.properties, ...properties },
+    required: [...new Set([...(enclosing?.required ?? []), ...required])],
+  };
+  const expand =
+    enclosing !== undefined &&
+    properties !== undefined &&
+    (node.additionalProperties === undefined || node.additionalProperties === true);
+  const source = expand
+    ? { ...node, properties: constraints.properties, required: constraints.required }
+    : node;
   const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-    result[key] = normalizeNode(value);
+  for (const [key, value] of Object.entries(source)) {
+    // Only compositions constrain the same instance. Property values, items and
+    // definitions must not inherit the containing object's fields.
+    result[key] =
+      (key === 'oneOf' || key === 'anyOf' || key === 'allOf') && Array.isArray(value)
+        ? value.map(branch => normalizeNode(branch, constraints))
+        : normalizeNode(value);
   }
-  if (isObjectSchemaNode(result)) {
-    result.additionalProperties = false;
-  }
-
+  if (isObjectSchemaNode(result)) result.additionalProperties = false;
   return result;
 }
 
