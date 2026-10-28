@@ -141,25 +141,17 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
   private async initSchema(): Promise<void> {
     const sql = getSchemaSQL();
     const fingerprint = schemaFingerprint(sql);
-    if (await this.schemaIsCurrent(fingerprint)) {
-      getLog().debug('db.postgres_schema_current');
-      return;
-    }
     try {
-      await retryConflicts(() => this.initSchemaOnce(sql), 'db.postgres_schema_init_retry');
+      await this.initSchemaOnce(sql, fingerprint);
       getLog().info('db.postgres_schema_init_completed');
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
       getLog().fatal({ err }, 'db.postgres_schema_init_failed');
       throw err;
     }
-    // Best-effort, AFTER the core schema commits: a role without CREATE FUNCTION/
-    // TRIGGER must not fail boot — the dashboard poller's interval backstop still
-    // streams CLI runs, just without the instant LISTEN/NOTIFY push.
-    await this.installNotifyTrigger(fingerprint);
   }
 
-  private async initSchemaOnce(sql: string): Promise<void> {
+  private async initSchemaOnce(sql: string, fingerprint: string): Promise<void> {
     let client: PoolClient | undefined;
     try {
       client = await this.pool.connect();
@@ -168,6 +160,13 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       // Key 1796 is arbitrary — just needs to be stable across processes.
       await client.query('BEGIN');
       await client.query(SCHEMA_LOCK_SQL);
+      // Take no relation locks before the advisory lock: fingerprint reads otherwise
+      // lock version then events, opposite to the bundled DDL's lock order.
+      if (await this.schemaIsCurrent(client, fingerprint)) {
+        await client.query('COMMIT');
+        getLog().debug('db.postgres_schema_current');
+        return;
+      }
       // Probe before applying: afterwards every table exists, and a database that
       // predates schema-version tracking is indistinguishable from a fresh one.
       const probe = await client.query<{ exists: boolean }>(
@@ -178,6 +177,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       // ADD COLUMN IF NOT EXISTS, CREATE INDEX IF NOT EXISTS).
       await client.query(sql);
       await this.recordSchemaVersion(client, preExisting);
+      await this.installNotifyTrigger(client, fingerprint);
       await client.query('COMMIT');
     } catch (e) {
       if (client) {
@@ -199,21 +199,23 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
     }
   }
 
-  /**
-   * Read without a lock or transaction: a stale answer only means this boot converges
-   * again, which is what every boot did before. Any error (a database that predates
-   * the column, a fresh database) reads as "not current".
-   */
-  private async schemaIsCurrent(fingerprint: string): Promise<boolean> {
+  private async schemaIsCurrent(client: PoolClient, fingerprint: string): Promise<boolean> {
+    await client.query('SAVEPOINT schema_current');
     try {
-      const result = await this.pool.query<{ current: boolean }>(SCHEMA_CURRENT_SQL, [
+      const result = await client.query<{ current: boolean }>(SCHEMA_CURRENT_SQL, [
         fingerprint,
         APP_VERSION,
         Object.keys(LEGACY_VENDOR_ALIASES),
       ]);
+      await client.query('RELEASE SAVEPOINT schema_current');
       return result.rows[0]?.current === true;
-    } catch {
-      return false;
+    } catch (error) {
+      await client.query('ROLLBACK TO SAVEPOINT schema_current');
+      await client.query('RELEASE SAVEPOINT schema_current');
+      // Fresh and older databases can lack the fingerprint's tables or column.
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === '42P01' || code === '42703') return false;
+      throw error;
     }
   }
 
@@ -251,44 +253,23 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
     }
   }
 
-  /**
-   * Install the Postgres-only `pg_notify` trigger on workflow_events (real-time
-   * dashboard push). Idempotent and non-fatal — its own advisory-locked txn so
-   * concurrent boots don't race on DROP/CREATE TRIGGER. Shares the schema lock:
-   * both transactions mutate workflow_events, so separate locks can deadlock.
-   *
-   * The fingerprint commits with the trigger, after the schema committed, so a boot
-   * that skips convergence never skips something that did not happen, and a concurrent
-   * boot of another build cannot interleave its own convergence before the write.
-   */
-  private async installNotifyTrigger(fingerprint: string): Promise<void> {
-    let client: PoolClient | undefined;
+  /** Trigger permissions are optional: retain polling without publishing completion. */
+  private async installNotifyTrigger(client: PoolClient, fingerprint: string): Promise<void> {
+    await client.query('SAVEPOINT notify_trigger');
     try {
-      client = await this.pool.connect();
-      await client.query('BEGIN');
-      await client.query(SCHEMA_LOCK_SQL);
       await client.query(WORKFLOW_EVENT_NOTIFY_SQL);
       await client.query(
         'UPDATE remote_agent_schema_version SET schema_fingerprint = $1 WHERE id = 1',
         [fingerprint]
       );
-      await client.query('COMMIT');
-      getLog().info('db.postgres_notify_trigger_installed');
+      await client.query('RELEASE SAVEPOINT notify_trigger');
     } catch (e) {
-      if (client) {
-        try {
-          await client.query('ROLLBACK');
-        } catch {
-          /* best-effort cleanup */
-        }
-      }
+      await client.query('ROLLBACK TO SAVEPOINT notify_trigger');
+      await client.query('RELEASE SAVEPOINT notify_trigger');
       getLog().warn(
         { err: e instanceof Error ? e : new Error(String(e)) },
         'db.postgres_notify_trigger_install_failed'
       );
-      // Non-fatal — degrade to poll-only.
-    } finally {
-      client?.release();
     }
   }
 

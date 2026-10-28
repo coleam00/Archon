@@ -464,36 +464,9 @@ describe('PostgresAdapter', () => {
   // -------------------------------------------------------------------------
 
   describe('initSchema()', () => {
-    test.each(['40P01', '40001'])(
-      'retries a schema transaction after %s only after rollback and release',
-      async code => {
-        await adapter.query('SELECT 0');
-        const issued: string[] = [];
-        let attempts = 0;
-        mockSchemaSQL = '-- retry schema';
-        mockClient = {
-          query: async sql => {
-            issued.push(sql);
-            if (sql === mockSchemaSQL && ++attempts === 1)
-              throw Object.assign(new Error('schema conflict'), { code });
-            return { rows: [], rowCount: 0 };
-          },
-          release: () => {
-            issued.push('release');
-          },
-        };
-        const db = new PostgresAdapter('postgresql://localhost:5432/testdb');
-        await db.query('SELECT 1');
-        expect(attempts).toBe(2);
-        const rollback = issued.indexOf('ROLLBACK');
-        expect(issued.slice(rollback, rollback + 3)).toEqual(['ROLLBACK', 'release', 'BEGIN']);
-        expect(issued.filter(sql => sql === 'COMMIT')).toHaveLength(2);
-      }
-    );
-
     test.each([
-      ['40P01', 4],
-      ['40001', 4],
+      ['40P01', 1],
+      ['40001', 1],
       ['42501', 1],
     ] as const)('a persistent schema error %s fails after %s attempts', async (code, count) => {
       await adapter.query('SELECT 0');
@@ -568,7 +541,9 @@ describe('PostgresAdapter', () => {
 
       const probeIdx = issued.findIndex(q => q.sql.includes('to_regclass'));
       const schemaIdx = issued.findIndex(q => q.sql === '-- schema sql');
-      const versionIdx = issued.findIndex(q => q.sql.includes('remote_agent_schema_version'));
+      const versionIdx = issued.findIndex(q =>
+        q.sql.includes('INSERT INTO remote_agent_schema_version')
+      );
       const commitIdx = issued.findIndex(q => q.sql === 'COMMIT');
 
       // Probe must precede the schema SQL — afterwards a pre-existing database is
@@ -627,7 +602,7 @@ describe('PostgresAdapter', () => {
       const a = new PostgresAdapter('postgresql://localhost:5432/testdb');
       await a.query('SELECT 1');
 
-      const version = issued.find(q => q.sql.includes('remote_agent_schema_version'));
+      const version = issued.find(q => q.sql.includes('INSERT INTO remote_agent_schema_version'));
       // NULL, never a guess: this database existed before vintage tracking.
       expect(version?.params).toEqual([null, APP_VERSION]);
     });
@@ -688,16 +663,38 @@ describe('PostgresAdapter', () => {
      * lock on the workflow events table (DROP/CREATE TRIGGER) while live runs were
      * inserting node events, and those inserts died as deadlock victims.
      */
+    test('a fingerprint found current under the advisory lock runs no DDL', async () => {
+      await adapter.query('SELECT 0');
+      const issued: string[] = [];
+      mockClient = {
+        query: async sql => {
+          issued.push(sql);
+          return { rows: [{ current: true }], rowCount: 1 };
+        },
+        release: () => {},
+      };
+      mockSchemaSQL = '-- must not run';
+      await new PostgresAdapter('postgresql://localhost:5432/testdb').query('SELECT 1');
+      const lockAt = issued.indexOf('SELECT pg_advisory_xact_lock(1796)');
+      const checkAt = issued.findIndex(sql => sql.includes('AS current'));
+      expect(lockAt).toBeGreaterThan(0);
+      expect(checkAt).toBeGreaterThan(lockAt);
+      expect(issued).not.toContain(mockSchemaSQL);
+      expect(issued.some(sql => sql.includes('archon_notify_workflow_event'))).toBe(false);
+      expect(issued.at(-1)).toBe('COMMIT');
+    });
+
     test('records a fingerprint with the trigger; a later boot skips convergence until the schema changes', async () => {
       let recorded: unknown;
-      mockPoolQuery = async (sql, params) =>
-        sql.includes('AS current')
-          ? { rows: [{ current: recorded !== undefined && params?.[0] === recorded }], rowCount: 1 }
-          : { rows: [], rowCount: 0 };
       const issued: string[] = [];
       mockClient = {
         query: async (sql: string, params?: unknown[]) => {
           issued.push(sql);
+          if (sql.includes('AS current'))
+            return {
+              rows: [{ current: recorded !== undefined && params?.[0] === recorded }],
+              rowCount: 1,
+            };
           if (sql.startsWith('UPDATE remote_agent_schema_version SET schema_fingerprint'))
             recorded = params?.[0];
           return { rows: [], rowCount: 0 };
@@ -709,14 +706,17 @@ describe('PostgresAdapter', () => {
       await new PostgresAdapter('postgresql://localhost:5432/testdb').query('SELECT 1');
       expect(issued).toContain('-- schema sql');
       expect(typeof recorded).toBe('string');
-      // Written inside the trigger transaction, before its COMMIT.
+      expect(issued.filter(sql => sql === 'BEGIN')).toHaveLength(1);
+      expect(issued.filter(sql => sql === 'COMMIT')).toHaveLength(1);
+      // Core DDL and completion publish in the same commit.
       const fingerprintAt = issued.findIndex(sql => sql.includes('SET schema_fingerprint'));
       expect(issued.indexOf('COMMIT', fingerprintAt)).toBeGreaterThan(fingerprintAt);
 
       issued.length = 0;
       await new PostgresAdapter('postgresql://localhost:5432/testdb').query('SELECT 2');
-      // No transaction, no advisory lock, no DDL, no trigger rebuild.
-      expect(issued).toEqual([]);
+      expect(issued).toContain('SELECT pg_advisory_xact_lock(1796)');
+      expect(issued).not.toContain('-- schema sql');
+      expect(issued.some(sql => sql.includes('archon_notify_workflow_event'))).toBe(false);
 
       mockSchemaSQL = '-- new schema sql';
       await new PostgresAdapter('postgresql://localhost:5432/testdb').query('SELECT 3');
@@ -739,27 +739,56 @@ describe('PostgresAdapter', () => {
       expect(issued.some(sql => sql.includes('SET schema_fingerprint'))).toBe(false);
     });
 
-    test('a failed fingerprint probe falls back to converging', async () => {
-      mockPoolQuery = async sql => {
-        if (sql.includes('AS current'))
-          throw Object.assign(new Error('column "schema_fingerprint" does not exist'), {
-            code: '42703',
-          });
-        return { rows: [], rowCount: 0 };
-      };
-      const issued: string[] = [];
-      mockClient = {
-        query: async (sql: string) => {
-          issued.push(sql);
-          return { rows: [], rowCount: 0 };
-        },
-        release: () => {},
-      };
-      mockSchemaSQL = '-- schema sql';
+    test.each(['42P01', '42703'])(
+      'a missing schema object (%s) permits convergence',
+      async code => {
+        const issued: string[] = [];
+        mockClient = {
+          query: async (sql: string) => {
+            issued.push(sql);
+            if (sql.includes('AS current'))
+              throw Object.assign(new Error('missing schema object'), { code });
+            return { rows: [], rowCount: 0 };
+          },
+          release: () => {},
+        };
+        mockSchemaSQL = '-- schema sql';
 
-      await new PostgresAdapter('postgresql://localhost:5432/testdb').query('SELECT 1');
-      expect(issued).toContain('-- schema sql');
-    });
+        await new PostgresAdapter('postgresql://localhost:5432/testdb').query('SELECT 1');
+        expect(issued).toContain('-- schema sql');
+      }
+    );
+
+    test.each(['40P01', '40001', '42501', '08006'])(
+      'a fingerprint error %s fails initialization without running DDL',
+      async code => {
+        await adapter.query('SELECT 0');
+        const error = Object.assign(new Error('fingerprint failed'), { code });
+        const issued: string[] = [];
+        mockClient = {
+          query: async sql => {
+            issued.push(sql);
+            if (sql.includes('AS current')) throw error;
+            return { rows: [], rowCount: 0 };
+          },
+          release: () => {},
+        };
+        mockSchemaSQL = '-- must not run';
+        const db = new PostgresAdapter('postgresql://localhost:5432/testdb');
+        await expect(db.query('SELECT 1')).rejects.toBe(error);
+        await expect(db.withTransaction(async () => undefined)).rejects.toBe(error);
+        await expect(
+          db.listen(
+            'events',
+            () => {},
+            () => {}
+          )
+        ).rejects.toBe(error);
+        expect(issued).not.toContain(mockSchemaSQL);
+        expect(issued).toContain('ROLLBACK');
+        await db.close();
+      }
+    );
 
     test('withTransaction() awaits schema init before opening a tx', async () => {
       const issued: string[] = [];

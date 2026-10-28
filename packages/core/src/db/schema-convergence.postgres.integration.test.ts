@@ -55,53 +55,57 @@ describe.skipIf(!baseUrl)('PostgreSQL schema convergence and conflict retry', ()
     expect(await notifyTriggerOid()).toBe(before);
   });
 
-  test('a schema deadlock rolls back repairs and retries before the first caller writes', async () => {
+  test('waiting boots take no relation locks and converge only once', async () => {
     await scratch.query('UPDATE remote_agent_workflow_event_sequence SET value = -1');
     await scratch.query('CREATE TABLE boot_write_probe (n INT NOT NULL)');
     const reader = await scratch.connect();
-    let db: PostgresAdapter | undefined;
-    let write: Promise<unknown> | undefined;
+    const adapters: PostgresAdapter[] = [];
+    const writes: Promise<number>[] = [];
+    const before = await notifyTriggerOid();
     try {
       await reader.query('BEGIN');
-      // The schema waiter must detect the cycle first and become its victim.
-      await reader.query("SET LOCAL deadlock_timeout = '10s'");
+      await reader.query('SELECT pg_advisory_xact_lock(1796)');
       await reader.query('LOCK TABLE remote_agent_schema_version IN ACCESS SHARE MODE');
-      db = new PostgresAdapter(scratchUrl);
-      write = db.query('INSERT INTO boot_write_probe VALUES (1)');
-      // Observe rejection before waiting on PostgreSQL to avoid an unhandled rejection.
-      const outcome = write.then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error })
-      );
-
-      let schemaWaiting = false;
+      for (let i = 0; i < 8; i++) {
+        const db = new PostgresAdapter(scratchUrl);
+        adapters.push(db);
+        const write = (async () => {
+          await db.query('INSERT INTO boot_write_probe VALUES (1)');
+          const result = await db.query<{ oid: number }>(
+            "SELECT oid FROM pg_trigger WHERE tgname = 'archon_workflow_event_notify'"
+          );
+          return result.rows[0].oid;
+        })();
+        void write.catch(() => {});
+        writes.push(write);
+      }
+      let waiting = 0;
       for (let i = 0; i < 200; i++) {
-        const locks = await scratch.query<{ waiting: boolean }>(
-          `SELECT EXISTS (
-             SELECT 1 FROM pg_locks v JOIN pg_locks e ON e.pid = v.pid
-             WHERE v.relation = 'remote_agent_schema_version'::regclass
-               AND v.mode = 'AccessExclusiveLock' AND NOT v.granted
-               AND e.relation = 'remote_agent_workflow_events'::regclass
-               AND e.mode = 'AccessExclusiveLock' AND e.granted
-           ) AS waiting`
+        const locks = await scratch.query<{ waiting: number; relations: number }>(
+          `WITH waiters AS (
+             SELECT pid FROM pg_locks
+             WHERE locktype = 'advisory' AND objid = 1796 AND NOT granted
+           ) SELECT (SELECT count(*)::int FROM waiters) AS waiting,
+             (SELECT count(*)::int FROM pg_locks
+              WHERE pid IN (SELECT pid FROM waiters) AND relation IS NOT NULL) AS relations`
         );
-        if (locks.rows[0].waiting) {
-          schemaWaiting = true;
-          break;
-        }
+        waiting = locks.rows[0].waiting;
+        expect(locks.rows[0].relations).toBe(0);
+        if (waiting === 8) break;
         await Bun.sleep(10);
       }
-      expect(schemaWaiting).toBe(true);
+      expect(waiting).toBe(8);
+      // This was the second edge of the version/events deadlock. Waiting boots
+      // now hold no events lock, so the read completes before we release version.
       await reader.query('SELECT 1 FROM remote_agent_workflow_events');
-      const rolledBack = await reader.query<{ value: string }>(
-        'SELECT value FROM remote_agent_workflow_event_sequence WHERE id = 1'
-      );
-      expect(rolledBack.rows[0].value).toBe('-1');
       await reader.query('COMMIT');
-
-      expect(await outcome).toEqual({ ok: true });
-      const writes = await scratch.query('SELECT n FROM boot_write_probe');
-      expect(writes.rows).toEqual([{ n: 1 }]);
+      const oids = await Promise.all(writes);
+      expect(new Set(oids).size).toBe(1);
+      expect(oids[0]).not.toBe(before);
+      const count = await scratch.query<{ n: number }>(
+        'SELECT count(*)::int AS n FROM boot_write_probe'
+      );
+      expect(count.rows[0].n).toBe(8);
       const repaired = await scratch.query<{ value: string }>(
         'SELECT value FROM remote_agent_workflow_event_sequence WHERE id = 1'
       );
@@ -109,8 +113,8 @@ describe.skipIf(!baseUrl)('PostgreSQL schema convergence and conflict retry', ()
     } finally {
       await reader.query('ROLLBACK');
       reader.release();
-      await write?.catch(() => {});
-      await db?.close();
+      await Promise.allSettled(writes);
+      await Promise.all(adapters.map(db => db.close()));
     }
   });
 
