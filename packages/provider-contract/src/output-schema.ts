@@ -38,37 +38,38 @@ export type StrictSchemaIssue =
  * schema-root-relative locations (e.g. pass `'output_format'`).
  */
 export function findStrictSchemaIssues(schema: unknown, basePath: string): StrictSchemaIssue[] {
-  return collectStrictSchemaIssues(schema, basePath);
+  const issues: StrictSchemaIssue[] = [];
+  visitJsonSchema(schema, basePath, (node, path) => collectObjectIssues(node, path, issues));
+  return issues;
 }
 
-function collectStrictSchemaIssues(
+/** Visit schema nodes, excluding property maps and annotation data. */
+export function visitJsonSchema(
   schema: unknown,
   path: string,
-  out: StrictSchemaIssue[] = []
-): StrictSchemaIssue[] {
-  if (schema === null || typeof schema !== 'object') return out;
+  visit: (node: Record<string, unknown>, path: string) => void
+): void {
+  if (schema === null || typeof schema !== 'object') return;
   if (Array.isArray(schema)) {
-    schema.forEach((item, i) => collectStrictSchemaIssues(item, `${path}[${i}]`, out));
-    return out;
+    schema.forEach((item, i) => visitJsonSchema(item, `${path}[${i}]`, visit));
+    return;
   }
   const record = schema as Record<string, unknown>;
-  collectObjectIssues(record, path, out);
+  visit(record, path);
 
   const collectSchema = (key: string): void => {
-    if (key in record) collectStrictSchemaIssues(record[key], `${path}.${key}`, out);
+    if (key in record) visitJsonSchema(record[key], `${path}.${key}`, visit);
   };
   const collectSchemaArray = (key: string): void => {
     const schemas = record[key];
     if (!Array.isArray(schemas)) return;
-    schemas.forEach((item, index) =>
-      collectStrictSchemaIssues(item, `${path}.${key}[${index}]`, out)
-    );
+    schemas.forEach((item, index) => visitJsonSchema(item, `${path}.${key}[${index}]`, visit));
   };
   const collectSchemaMap = (key: string): void => {
     const schemas = record[key];
     if (schemas === null || typeof schemas !== 'object' || Array.isArray(schemas)) return;
     for (const [name, subschema] of Object.entries(schemas)) {
-      collectStrictSchemaIssues(subschema, `${path}.${key}.${name}`, out);
+      visitJsonSchema(subschema, `${path}.${key}.${name}`, visit);
     }
   };
 
@@ -98,7 +99,6 @@ function collectStrictSchemaIssues(
   ]) {
     collectSchemaMap(key);
   }
-  return out;
 }
 
 function collectObjectIssues(

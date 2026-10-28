@@ -1366,6 +1366,58 @@ describe('CodexProvider', () => {
       }
     );
 
+    test.each(['explicit', 'workflow', 'split'] as const)(
+      'rejects unsupported conditional schemas before starting Codex through the %s path',
+      async path => {
+        const field = { properties: { status: { type: 'string' } }, required: ['status'] };
+        const other = { properties: { message: { type: 'string' } }, required: ['message'] };
+        const complete = {
+          properties: { ...field.properties, ...other.properties },
+          required: ['status', 'message'],
+        };
+        const cases = [
+          { schema: { allOf: [field, other] }, advice: 'complete property map' },
+          { schema: { allOf: [complete, field] }, advice: 'complete property map' },
+          ...(['oneOf', 'anyOf', 'allOf'] as const).map(operator => ({
+            schema: {
+              ...complete,
+              properties: {
+                status: { type: 'string' },
+                message: { $id: 'https://example.com/message', type: 'string' },
+              },
+              [operator]: [field],
+            },
+            advice: 'one definition and use $ref',
+          })),
+          ...(['if', 'then', 'else', 'not'] as const).map(keyword => ({
+            schema: { ...complete, [keyword]: field },
+            advice: 'complete oneOf/anyOf branches',
+          })),
+        ];
+        for (const { schema: unsupported, advice } of cases) {
+          const { provider, server } = providerWith();
+          const result = resultOf(
+            await run(provider, {
+              ...(path === 'explicit'
+                ? { outputFormat: { type: 'json_schema', schema: unsupported } as const }
+                : { nodeConfig: { output_format: unsupported } }),
+              ...(path === 'split'
+                ? {
+                    assistantConfig: {
+                      model: 'glm-5.3',
+                      toolFreeStructuredOutputModels: ['glm-5.3'],
+                    },
+                  }
+                : {}),
+            })
+          );
+          expect(result.isError).toBe(true);
+          expect(result.failure?.evidence).toContain(advice);
+          expect(server.processes).toHaveLength(0);
+        }
+      }
+    );
+
     test('parses the last message onto structuredOutput (workflow output_format path)', async () => {
       const chunks = await streamOf(
         {

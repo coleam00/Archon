@@ -1,5 +1,5 @@
 import { jsonrepair } from 'jsonrepair';
-import { isObjectSchemaNode } from '@archon/provider-contract';
+import { isObjectSchemaNode, visitJsonSchema } from '@archon/provider-contract';
 
 /**
  * Append a "respond with JSON matching this schema" instruction to the user
@@ -133,7 +133,9 @@ function tryJsonParseObject(text: string): unknown {
  * Partial oneOf/anyOf/allOf object branches inherit missing properties and
  * required names from enclosing schemas on the same value before closure.
  * These requirements already hold on that value; optional fields stay optional.
- * Explicitly closed branches retain their authored restriction.
+ * Explicitly closed branches retain their authored restriction. Unsupported
+ * conditional keywords, incompatible allOf property maps, and branch completion
+ * that would duplicate a resource identifier throw before Codex starts.
  *
  * The other strict-mode rule
  * (every key in `properties` must appear in `required`) is intentionally NOT
@@ -143,7 +145,27 @@ function tryJsonParseObject(text: string): unknown {
 export function normalizeJsonSchemaForOpenAiStrict(
   schema: Record<string, unknown>
 ): Record<string, unknown> {
-  return normalizeNode(schema) as Record<string, unknown>;
+  visitJsonSchema(schema, 'output_format', (node, path) => {
+    for (const keyword of ['if', 'then', 'else', 'not']) {
+      if (keyword in node) {
+        throw new Error(
+          `Codex output schema at ${path}.${keyword} cannot preserve this conditional keyword in strict mode. Use complete oneOf/anyOf branches instead.`
+        );
+      }
+    }
+  });
+  const normalized = normalizeNode(schema) as Record<string, unknown>;
+  visitJsonSchema(normalized, 'output_format', (node, path) => {
+    if (!Array.isArray(node.allOf)) return;
+    const maps = sameInstancePropertyMaps(node);
+    const names = new Set(maps.flatMap(map => Object.keys(map)));
+    if (maps.some(map => [...names].some(name => !Object.hasOwn(map, name)))) {
+      throw new Error(
+        `Codex output schema at ${path}.allOf cannot close intersections with different property maps. Declare the complete property map on the enclosing object and in explicitly closed branches, or write complete allOf branches.`
+      );
+    }
+  });
+  return normalized;
 }
 
 interface ObjectConstraints {
@@ -173,20 +195,52 @@ function normalizeNode(node: unknown, enclosing?: ObjectConstraints): unknown {
     enclosing !== undefined &&
     properties !== undefined &&
     (node.additionalProperties === undefined || node.additionalProperties === true);
+  if (expand) assertInheritedPropertiesCanBeCopied(enclosing.properties, properties);
   const source = expand
     ? { ...node, properties: constraints.properties, required: constraints.required }
     : node;
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(source)) {
-    // Only compositions constrain the same instance. Property values, items and
-    // definitions must not inherit the containing object's fields.
+    // Composition branches constrain the same instance. Property values, items
+    // and definitions must not inherit the containing object's fields.
     result[key] =
-      (key === 'oneOf' || key === 'anyOf' || key === 'allOf') && Array.isArray(value)
+      isCompositionKeyword(key) && Array.isArray(value)
         ? value.map(branch => normalizeNode(branch, constraints))
         : normalizeNode(value);
   }
   if (isObjectSchemaNode(result)) result.additionalProperties = false;
   return result;
+}
+
+function assertInheritedPropertiesCanBeCopied(
+  inherited: Record<string, unknown>,
+  local: Record<string, unknown>
+): void {
+  for (const [name, value] of Object.entries(inherited)) {
+    if (Object.hasOwn(local, name)) continue;
+    visitJsonSchema(value, 'output_format', node => {
+      if ('$id' in node) {
+        throw new Error(
+          'Codex output schema cannot copy a property containing $id into a conditional branch. Move the reusable schema to one definition and use $ref instead.'
+        );
+      }
+    });
+  }
+}
+
+function isCompositionKeyword(key: string): boolean {
+  return key === 'oneOf' || key === 'anyOf' || key === 'allOf';
+}
+
+function sameInstancePropertyMaps(node: unknown): Record<string, unknown>[] {
+  if (!isRecord(node)) return [];
+  const maps = isRecord(node.properties) ? [node.properties] : [];
+  for (const [key, value] of Object.entries(node)) {
+    if (isCompositionKeyword(key) && Array.isArray(value)) {
+      maps.push(...value.flatMap(sameInstancePropertyMaps));
+    }
+  }
+  return maps;
 }
 
 /**

@@ -166,6 +166,131 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
     }
   );
 
+  test.each(['disjoint', 'complete-then-partial'] as const)(
+    'rejects unsafe allOf sibling closure: %s',
+    shape => {
+      const input = {
+        allOf: [
+          {
+            properties: {
+              status: { enum: ['success', 'blocked'] },
+              ...(shape === 'complete-then-partial' ? { message: { type: 'string' } } : {}),
+            },
+            required: shape === 'complete-then-partial' ? ['status', 'message'] : ['status'],
+          },
+          shape === 'disjoint'
+            ? { properties: { message: { type: 'string' } }, required: ['message'] }
+            : { properties: { status: { type: 'string' } }, required: ['status'] },
+        ],
+      };
+      const validate = ajv.compile(input);
+      expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
+      expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
+      expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow('complete property map');
+    }
+  );
+
+  test('preserves complete allOf siblings', () => {
+    const input = {
+      allOf: ['success', 'blocked'].map(() => ({
+        properties: { status: { enum: ['success', 'blocked'] }, message: { type: 'string' } },
+        required: ['status', 'message'],
+      })),
+    };
+    const validate = ajv.compile(normalizeJsonSchemaForOpenAiStrict(input));
+    expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
+    expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
+  });
+
+  test.each(['oneOf', 'anyOf', 'allOf'] as const)(
+    'rejects copying a resource identifier into %s branches',
+    operator => {
+      const input = {
+        ...conditionalSchema(operator),
+        properties: {
+          status: { type: 'string' },
+          message: { $id: `https://example.com/${operator}/message`, type: 'string' },
+        },
+      };
+      expect(ajv.compile(input)({ status: 'success', message: 'Finished' })).toBe(true);
+      expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow(
+        'one definition and use $ref'
+      );
+    }
+  );
+
+  test('rejects copying nested resource identifiers', () => {
+    const input = {
+      ...conditionalSchema('oneOf'),
+      properties: {
+        status: { type: 'string' },
+        message: { type: 'array', items: { $id: 'https://example.com/item', type: 'string' } },
+      },
+    };
+    expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow('one definition and use $ref');
+  });
+
+  test.each(['oneOf', 'anyOf', 'allOf'] as const)(
+    'preserves resource identifiers without copying them through %s',
+    operator => {
+      const input = {
+        ...conditionalSchema(operator),
+        $defs: { Message: { $id: `https://example.com/defs/${operator}`, type: 'string' } },
+        properties: { status: { type: 'string' }, message: { $ref: '#/$defs/Message' } },
+      };
+      const validate = new Ajv({ strict: false }).compile(
+        normalizeJsonSchemaForOpenAiStrict(input)
+      );
+      expect(validate({ status: 'success', message: 'Finished' })).toBe(true);
+      expect(validate({ status: 'blocked', message: 'Need access' })).toBe(true);
+      expect(validate({ status: 'success', message: 1 })).toBe(false);
+
+      const complete = {
+        ...input,
+        properties: {
+          status: { type: 'string' },
+          message: { $id: `https://example.com/complete/${operator}`, type: 'string' },
+        },
+        [operator]: [{ properties: { status: { type: 'string' }, message: { type: 'string' } } }],
+      };
+      expect(
+        new Ajv({ strict: false }).compile(normalizeJsonSchemaForOpenAiStrict(complete))({
+          status: 'success',
+          message: 'Finished',
+        })
+      ).toBe(true);
+    }
+  );
+
+  test('ignores conditional keyword names in property maps and annotation data', () => {
+    const input = {
+      type: 'object',
+      properties: { if: { type: 'string' }, not: { type: 'string' } },
+      required: ['if', 'not'],
+      default: {
+        if: true,
+        not: false,
+        allOf: [{ properties: { x: {} } }, { properties: { y: {} } }],
+      },
+    };
+    expect(() => normalizeJsonSchemaForOpenAiStrict(input)).not.toThrow();
+  });
+
+  test.each(['if', 'then', 'else', 'not'] as const)(
+    'rejects unsupported %s before changing its meaning',
+    keyword => {
+      const input = {
+        type: 'object',
+        properties: { status: { type: 'string' }, message: { type: 'string' } },
+        required: ['status', 'message'],
+        [keyword]: { properties: { status: { const: 'success' } }, required: ['status'] },
+      };
+      expect(() => normalizeJsonSchemaForOpenAiStrict(input)).toThrow(
+        'complete oneOf/anyOf branches'
+      );
+    }
+  );
+
   test('carries constraints through intermediate compositions and completes copied nested fields', () => {
     const input = {
       type: 'object',

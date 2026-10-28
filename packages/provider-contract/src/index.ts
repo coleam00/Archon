@@ -70,6 +70,7 @@ export { addResultUsage, mergeTokenUsage, type ResultUsageTotal } from './result
 export {
   isObjectSchemaNode,
   findStrictSchemaIssues,
+  visitJsonSchema,
   type StrictSchemaIssue,
 } from './output-schema';
 export {
