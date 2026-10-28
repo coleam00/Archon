@@ -1331,10 +1331,13 @@ When the selected run is a sub-run and no owner answers at its own endpoint,
 Archon retains its subtree's owned checkouts. A sub-run can execute inside an enclosing
 run without publishing its own endpoint; silence does not establish that execution
 stopped. Cancellation still succeeds, with cleanup warnings. A separately resumed
-sub-run whose exact owner is stopped without warnings can release its owned checkouts.
+sub-run whose exact owner is stopped without warnings can release its owned checkout.
+Each descendant needs its own owner check. A silent descendant retains its checkout
+and the selected root's checkout even if the root's owner stopped.
 Conversation reset also retains a silent sub-run's checkout, even if another run with
 matching host, PID, and user metadata stops: those fields cannot identify a process
-incarnation. Inspect the owning execution
+incarnation. Retention follows the checkout ID; a separate checkout can still release
+after its owner stops. Inspect the owning execution
 and stop or abandon it only if you intend to stop its whole scope. Repeated child-only
 abandonment may continue retaining the checkout even after its enclosing execution stops.
 

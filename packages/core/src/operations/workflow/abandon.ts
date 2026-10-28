@@ -237,21 +237,16 @@ async function checkWorktreeOwner(
       safe: !(rootOutcome?.kind === 'stopped' && rootOutcome.cleanupWarnings?.length),
       warnings: [],
     };
-  return checkOwnerStopForRelease(ctx, row, root, rootOutcome);
+  return checkOwnerStopForRelease(ctx, row);
 }
 
 async function checkOwnerStopForRelease(
   ctx: OperationContext,
-  row: WorkflowRun,
-  root: WorkflowRun | undefined,
-  rootOutcome: AbandonOwnerOutcome | undefined
+  row: WorkflowRun
 ): Promise<WorktreeOwnerCheck> {
   let outcome: Awaited<ReturnType<typeof stopLiveOwner>>;
   try {
-    outcome =
-      ranInStoppedRootOwner(readExecutionOwner(row.metadata), root, rootOutcome) && rootOutcome
-        ? rootOutcome
-        : await stopLiveOwner(ctx, row);
+    outcome = await stopLiveOwner(ctx, row);
   } catch (err) {
     getLog().warn({ err, runId: row.id }, 'operations.workflow_abandon_child_owner_check_failed');
     return {
@@ -263,7 +258,7 @@ async function checkOwnerStopForRelease(
   }
   if (outcome.kind === 'not_stopped')
     return { safe: false, warnings: [`Retained checkout for run ${row.id}: ${outcome.message}`] };
-  if (!root && isSubrun(row) && outcome.kind === 'no_owner_answered')
+  if (isSubrun(row) && outcome.kind === 'no_owner_answered')
     return retainUnresolvedSubrunCheckout(row, row);
   const warnings = outcome.kind === 'stopped' ? (outcome.cleanupWarnings ?? []) : [];
   return {
@@ -317,21 +312,6 @@ function unreachableOwnerReason(
   return process.getuid && recorded.uid !== process.getuid()
     ? `execution owner belongs to uid ${String(recorded.uid)}`
     : undefined;
-}
-
-/** A descendant recorded under the root's owner process, which abandon already stopped. */
-function ranInStoppedRootOwner(
-  recorded: ExecutionOwnerRecord | undefined,
-  root: WorkflowRun | undefined,
-  rootOutcome: AbandonOwnerOutcome | undefined
-): boolean {
-  const rootOwner = root ? readExecutionOwner(root.metadata) : undefined;
-  return (
-    rootOwner !== undefined &&
-    recorded !== undefined &&
-    rootOutcome?.kind === 'stopped' &&
-    sameExecutionOwner(recorded, rootOwner)
-  );
 }
 
 export async function releaseRunWorktree(
@@ -408,24 +388,20 @@ async function checkBatchWorktreeOwners(
 ) {
   const ownerChecks: {
     run: WorkflowRun;
-    owner: ExecutionOwnerRecord | undefined;
+    envId: string | undefined;
     check: Awaited<ReturnType<typeof checkWorktreeOwner>>;
   }[] = [];
   for (const run of runs) {
-    const owner = readExecutionOwner(run.metadata);
+    const envId = readOwnedWorktree(run.metadata)?.envId;
     ownerChecks.push({
       run,
-      owner,
+      envId,
       check: await checkWorktreeOwner(ctx, run, root, rootOutcome),
     });
   }
-  return ownerChecks.map(({ run, owner, check }) => {
-    // Matching owner tuples can spread retention warnings, but cannot prove a stop:
-    // a later process may reuse the same host, PID and UID.
-    const sharedChecks = owner
-      ? ownerChecks
-          .filter(other => sameExecutionOwner(owner, other.owner))
-          .map(other => other.check)
+  return ownerChecks.map(({ run, envId, check }) => {
+    const sharedChecks = envId
+      ? ownerChecks.filter(other => other.envId === envId).map(other => other.check)
       : [check];
     return {
       run,
@@ -433,16 +409,4 @@ async function checkBatchWorktreeOwners(
       warnings: [...new Set(sharedChecks.flatMap(other => other.warnings))],
     };
   });
-}
-
-function sameExecutionOwner(
-  owner: ExecutionOwnerRecord,
-  other: ExecutionOwnerRecord | undefined
-): boolean {
-  return (
-    other !== undefined &&
-    owner.host === other.host &&
-    owner.pid === other.pid &&
-    owner.uid === other.uid
-  );
 }
