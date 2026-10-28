@@ -307,7 +307,9 @@ Options:
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
   --config-from-run <run-id> Start a fresh run with the run config another run was started with
-  --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
+  --resume                   Resume the newest eligible failed, paused, or stale running run of this workflow
+                             Running is stale when activity is missing or older than one day; verify its owner is gone first.
+                             Mutually exclusive with --branch
   --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
   --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
   --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider

@@ -86,7 +86,9 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--resume',
     description:
-      'Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)',
+      'Resume the newest eligible failed, paused, or stale running run of this workflow\n' +
+      'Running is stale when activity is missing or older than one day; verify its owner is gone first.\n' +
+      'Mutually exclusive with --branch',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
