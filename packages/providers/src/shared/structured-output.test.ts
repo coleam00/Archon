@@ -198,13 +198,10 @@ describe('one-level conditional schemas', () => {
       'output_format.oneOf[0].required',
       { ...parent, oneOf: [{ properties: {}, required: ['detail'] }] },
     ],
-    ...[false, { type: 'string' }].map(
-      additionalProperties =>
-        [
-          'output_format.oneOf[0].additionalProperties',
-          { ...parent, oneOf: [{ properties: { status: {} }, additionalProperties }] },
-        ] as [string, Record<string, unknown>]
-    ),
+    ...[false, { type: 'string' }].map<[string, Record<string, unknown>]>(additionalProperties => [
+      'output_format.oneOf[0].additionalProperties',
+      { ...parent, oneOf: [{ properties: { status: {} }, additionalProperties }] },
+    ]),
     ['output_format.oneOf[0].$ref', { ...parent, oneOf: [{ $ref: '#/$defs/Branch' }] }],
     ['output_format.oneOf[0].anyOf', { ...parent, oneOf: [{ anyOf: [{ properties: {} }] }] }],
     [
@@ -223,31 +220,21 @@ describe('one-level conditional schemas', () => {
       },
     ],
     ['output_format.allOf', { allOf: [{ properties: { a: {} } }, { properties: { b: {} } }] }],
-    ...['dependencies', 'dependentSchemas'].map(
-      keyword =>
-        [
-          `output_format.${keyword}.status`,
-          { ...parent, [keyword]: { status: { properties: {} } } },
-        ] as [string, Record<string, unknown>]
-    ),
-    ...['if', 'then', 'else', 'not', 'contains', 'unevaluatedItems'].map(
-      keyword =>
-        [`output_format.${keyword}`, { ...parent, [keyword]: { properties: {} } }] as [
-          string,
-          Record<string, unknown>,
-        ]
-    ),
-    ...['$id', '$anchor', '$dynamicAnchor'].map(
-      keyword =>
-        [
-          `output_format.properties.message.${keyword}`,
-          {
-            ...parent,
-            properties: { ...parent.properties, message: { type: 'string', [keyword]: 'name' } },
-            oneOf: [{ properties: {} }],
-          },
-        ] as [string, Record<string, unknown>]
-    ),
+    ...['dependencies', 'dependentSchemas'].map<[string, Record<string, unknown>]>(keyword => [
+      `output_format.${keyword}.status`,
+      { ...parent, [keyword]: { status: { properties: {} } } },
+    ]),
+    ...['if', 'then', 'else', 'not', 'contains', 'unevaluatedItems'].map<
+      [string, Record<string, unknown>]
+    >(keyword => [`output_format.${keyword}`, { ...parent, [keyword]: { properties: {} } }]),
+    ...['$id', '$anchor', '$dynamicAnchor'].map<[string, Record<string, unknown>]>(keyword => [
+      `output_format.properties.message.${keyword}`,
+      {
+        ...parent,
+        properties: { ...parent.properties, message: { type: 'string', [keyword]: 'name' } },
+        oneOf: [{ properties: {} }],
+      },
+    ]),
   ];
   test.each(unsupported)('refuses %s with a supported alternative', (path, schema) => {
     expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow(path);
