@@ -456,19 +456,19 @@ export async function cloneRepository(
       default_branch: options.baseBranch ?? null,
     });
   } catch (error) {
+    // A failed delete leaves the checkout at its detached path, not at targetPath.
+    let leftover = targetPath;
     try {
-      await codebases.removeUnregisteredCheckout(targetPath, detached =>
-        rm(detached, { recursive: true })
-      );
+      await codebases.removeUnregisteredCheckout(targetPath, detached => {
+        leftover = detached;
+        return rm(detached, { recursive: true });
+      });
     } catch (cleanupError) {
-      getLog().error(
-        { path: targetPath, err: cleanupError },
-        'registration.checkout_cleanup_failed'
-      );
+      getLog().error({ path: leftover, err: cleanupError }, 'registration.checkout_cleanup_failed');
       throw new AggregateError(
         [error, cleanupError],
         `${error instanceof Error ? error.message : String(error)} ` +
-          `Checkout cleanup failed at ${targetPath}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+          `Checkout cleanup failed at ${leftover}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
         { cause: error }
       );
     }

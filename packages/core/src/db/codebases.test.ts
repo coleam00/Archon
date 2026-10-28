@@ -11,6 +11,8 @@ import { getArchonWorkspacesPath } from '@archon/paths';
 
 const mockQuery = createMockQuery();
 let transactionOpen = false;
+// SQLite can replay a transaction body after COMMIT; a test sets this to replay it.
+let transactionRuns = 1;
 const trackTempRoot = trackTempRoots();
 
 // Mock the connection module before importing the module under test
@@ -22,7 +24,9 @@ mock.module('./connection', () => ({
     withTransaction: async <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => {
       transactionOpen = true;
       try {
-        return await fn(mockQuery);
+        let result = await fn(mockQuery);
+        for (let run = 1; run < transactionRuns; run++) result = await fn(mockQuery);
+        return result;
       } finally {
         transactionOpen = false;
       }
@@ -56,6 +60,7 @@ import {
 describe('codebases', () => {
   beforeEach(() => {
     mockQuery.mockClear();
+    transactionRuns = 1;
   });
 
   const mockCodebase: Codebase = {
@@ -239,6 +244,21 @@ describe('codebases', () => {
       else await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
     }
   );
+
+  test('checkout cleanup detaches and removes a checkout once when the transaction replays', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'codebase-cleanup-')));
+    const checkout = join(root, 'checkout');
+    await mkdir(checkout);
+    transactionRuns = 2;
+    const remove = mock(async (detached: string) => {
+      await rm(detached, { recursive: true });
+    });
+
+    await removeUnregisteredCheckout(checkout, remove);
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
   describe('getCodebase', () => {
     test('returns existing codebase', async () => {
