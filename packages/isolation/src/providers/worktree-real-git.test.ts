@@ -1351,7 +1351,7 @@ describe('WorktreeProvider against real git', () => {
         expect(await registeredWorktrees()).toEqual([repoPath, holder]);
         expect(
           await gitModule.findWorktreeByBranch(toRepoPath(repoPath), toBranchName(PR_BRANCH))
-        ).toBe(holder);
+        ).toBe(toWorktreePath(holder));
         expect((await provider.get(holder))?.workingPath).toBe(holder);
         expect((await provider.list(repoPath)).map(env => env.workingPath)).toContain(holder);
         expect((await provider.adopt(holder))?.workingPath).toBe(holder);
