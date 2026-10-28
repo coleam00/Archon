@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { findStrictSchemaIssues } from './output-schema';
+import {
+  findStrictSchemaIssues,
+  isJsonSchemaCompositionKeyword,
+  jsonSchemaChildren,
+  visitJsonSchema,
+} from './output-schema';
 
 describe('findStrictSchemaIssues', () => {
   test('returns empty when required fully covers properties', () => {
@@ -175,6 +180,70 @@ describe('findStrictSchemaIssues', () => {
     const schema = { type: 'object', properties: { f: {} } };
     expect(findStrictSchemaIssues(schema, 'output_format')).toEqual([
       { kind: 'missing-required', schemaPath: 'output_format', missing: ['f'] },
+    ]);
+  });
+});
+
+describe('schema edges', () => {
+  test('classifies schema children and keeps data outside the traversal', () => {
+    const leaf = { type: 'string' };
+    const schema = {
+      additionalProperties: leaf,
+      unevaluatedProperties: leaf,
+      propertyNames: leaf,
+      contains: leaf,
+      not: leaf,
+      if: leaf,
+      then: leaf,
+      else: leaf,
+      contentSchema: leaf,
+      items: [leaf, true],
+      prefixItems: [leaf],
+      allOf: [leaf, false],
+      anyOf: [leaf],
+      oneOf: [leaf],
+      properties: { properties: leaf },
+      patternProperties: { value: leaf },
+      dependentSchemas: { value: leaf },
+      dependencies: { value: leaf, propertyDependency: ['other'] },
+      $defs: { value: leaf },
+      definitions: { value: leaf },
+      default: { properties: leaf },
+      examples: [{ properties: leaf }],
+    };
+    const children = jsonSchemaChildren(schema, 'out');
+    expect(children.map(({ path, relation }) => [path, relation])).toEqual([
+      ['out.additionalProperties', 'nested'],
+      ['out.unevaluatedProperties', 'nested'],
+      ['out.propertyNames', 'nested'],
+      ['out.contains', 'nested'],
+      ['out.not', 'same-instance'],
+      ['out.if', 'same-instance'],
+      ['out.then', 'same-instance'],
+      ['out.else', 'same-instance'],
+      ['out.contentSchema', 'nested'],
+      ['out.items[0]', 'nested'],
+      ['out.prefixItems[0]', 'nested'],
+      ['out.allOf[0]', 'composition'],
+      ['out.anyOf[0]', 'composition'],
+      ['out.oneOf[0]', 'composition'],
+      ['out.properties.properties', 'nested'],
+      ['out.patternProperties.value', 'nested'],
+      ['out.dependentSchemas.value', 'dependency'],
+      ['out.dependencies.value', 'dependency'],
+      ['out.$defs.value', 'nested'],
+      ['out.definitions.value', 'nested'],
+    ]);
+    const visited: string[] = [];
+    visitJsonSchema(schema, 'out', (_, path) => visited.push(path));
+    expect(visited).toEqual(['out', ...children.map(child => child.path)]);
+    expect(Object.keys(schema).filter(isJsonSchemaCompositionKeyword)).toEqual([
+      'allOf',
+      'anyOf',
+      'oneOf',
+    ]);
+    expect(jsonSchemaChildren({ items: leaf }, 'out')).toEqual([
+      { node: leaf, path: 'out.items', relation: 'nested' },
     ]);
   });
 });

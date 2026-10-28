@@ -71,6 +71,8 @@ export {
   isObjectSchemaNode,
   findStrictSchemaIssues,
   visitJsonSchema,
+  jsonSchemaChildren,
+  isJsonSchemaCompositionKeyword,
   type StrictSchemaIssue,
 } from './output-schema';
 export {

@@ -1,5 +1,10 @@
 import { jsonrepair } from 'jsonrepair';
-import { isObjectSchemaNode, visitJsonSchema } from '@archon/provider-contract';
+import {
+  isObjectSchemaNode,
+  visitJsonSchema,
+  jsonSchemaChildren,
+  isJsonSchemaCompositionKeyword,
+} from '@archon/provider-contract';
 
 /**
  * Append a "respond with JSON matching this schema" instruction to the user
@@ -222,7 +227,7 @@ function normalizeNode(node: unknown, enclosing?: ObjectConstraints): unknown {
     // Composition branches constrain the same instance. Property values, items
     // and definitions must not inherit the containing object's fields.
     result[key] =
-      isCompositionKeyword(key) && Array.isArray(value)
+      isJsonSchemaCompositionKeyword(key) && Array.isArray(value)
         ? value.map(branch => normalizeNode(branch, constraints))
         : normalizeNode(value);
   }
@@ -248,13 +253,9 @@ function assertInheritedPropertiesCanBeCopied(
   }
 }
 
-function isCompositionKeyword(key: string): boolean {
-  return key === 'oneOf' || key === 'anyOf' || key === 'allOf';
-}
-
 function hasComposition(node: Record<string, unknown>): boolean {
   return Object.entries(node).some(
-    ([key, value]) => isCompositionKeyword(key) && Array.isArray(value)
+    ([key, value]) => isJsonSchemaCompositionKeyword(key) && Array.isArray(value)
   );
 }
 
@@ -280,18 +281,17 @@ function assertCompositionsCanBeClosed(schema: unknown): void {
 
 function sameInstanceNodes(node: unknown): Record<string, unknown>[] {
   if (!isRecord(node)) return [];
-  const nodes = [node, ...schemaDependencies(node).flatMap(sameInstanceNodes)];
-  for (const [key, value] of Object.entries(node)) {
-    if (isCompositionKeyword(key) && Array.isArray(value)) {
-      nodes.push(...value.flatMap(sameInstanceNodes));
-    }
-  }
-  return nodes;
+  return [
+    node,
+    ...jsonSchemaChildren(node, '').flatMap(child =>
+      child.relation === 'nested' ? [] : sameInstanceNodes(child.node)
+    ),
+  ];
 }
 
 function schemaDependencies(node: Record<string, unknown>): Record<string, unknown>[] {
-  return ['dependencies', 'dependentSchemas'].flatMap(key =>
-    isRecord(node[key]) ? Object.values(node[key]).filter(isRecord) : []
+  return jsonSchemaChildren(node, '').flatMap(child =>
+    child.relation === 'dependency' ? [child.node] : []
   );
 }
 

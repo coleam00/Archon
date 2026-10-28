@@ -43,6 +43,79 @@ export function findStrictSchemaIssues(schema: unknown, basePath: string): Stric
   return issues;
 }
 
+type JsonSchemaEdge =
+  | { kind: 'array'; relation: 'composition' }
+  | { kind: 'map'; relation: 'dependency' }
+  | { kind: 'schema' | 'array' | 'map' | 'schema-or-array'; relation: 'same-instance' | 'nested' };
+
+const schemaEdges: Readonly<Record<string, JsonSchemaEdge | undefined>> = {
+  additionalProperties: { kind: 'schema', relation: 'nested' },
+  unevaluatedProperties: { kind: 'schema', relation: 'nested' },
+  propertyNames: { kind: 'schema', relation: 'nested' },
+  contains: { kind: 'schema', relation: 'nested' },
+  not: { kind: 'schema', relation: 'same-instance' },
+  if: { kind: 'schema', relation: 'same-instance' },
+  then: { kind: 'schema', relation: 'same-instance' },
+  else: { kind: 'schema', relation: 'same-instance' },
+  contentSchema: { kind: 'schema', relation: 'nested' },
+  items: { kind: 'schema-or-array', relation: 'nested' },
+  prefixItems: { kind: 'array', relation: 'nested' },
+  allOf: { kind: 'array', relation: 'composition' },
+  anyOf: { kind: 'array', relation: 'composition' },
+  oneOf: { kind: 'array', relation: 'composition' },
+  properties: { kind: 'map', relation: 'nested' },
+  patternProperties: { kind: 'map', relation: 'nested' },
+  dependentSchemas: { kind: 'map', relation: 'dependency' },
+  dependencies: { kind: 'map', relation: 'dependency' },
+  $defs: { kind: 'map', relation: 'nested' },
+  definitions: { kind: 'map', relation: 'nested' },
+};
+
+export function isJsonSchemaCompositionKeyword(key: string): boolean {
+  return Object.hasOwn(schemaEdges, key) && schemaEdges[key]?.relation === 'composition';
+}
+
+interface JsonSchemaChild {
+  node: Record<string, unknown>;
+  path: string;
+  relation: JsonSchemaEdge['relation'];
+}
+
+/** Direct object subschemas, with their relationship to the containing instance. */
+export function jsonSchemaChildren(node: Record<string, unknown>, path: string): JsonSchemaChild[] {
+  return Object.entries(schemaEdges).flatMap(([key, edge]) =>
+    edge ? schemaEdgeChildren(node[key], `${path}.${key}`, edge) : []
+  );
+}
+
+function schemaEdgeChildren(value: unknown, path: string, edge: JsonSchemaEdge): JsonSchemaChild[] {
+  const children: JsonSchemaChild[] = [];
+  const add = (subschema: unknown, childPath: string): void => {
+    // Boolean schemas have no children; arrays in dependency maps are property dependencies.
+    if (subschema !== null && typeof subschema === 'object' && !Array.isArray(subschema)) {
+      children.push({
+        node: subschema as Record<string, unknown>,
+        path: childPath,
+        relation: edge.relation,
+      });
+    }
+  };
+  if (edge.kind === 'array' || (edge.kind === 'schema-or-array' && Array.isArray(value))) {
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => add(item, `${path}[${index}]`));
+    }
+  } else if (edge.kind === 'map') {
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [name, subschema] of Object.entries(value)) {
+        add(subschema, `${path}.${name}`);
+      }
+    }
+  } else {
+    add(value, path);
+  }
+  return children;
+}
+
 /** Visit schema nodes, excluding property maps and annotation data. */
 export function visitJsonSchema(
   schema: unknown,
@@ -56,48 +129,8 @@ export function visitJsonSchema(
   }
   const record = schema as Record<string, unknown>;
   visit(record, path);
-
-  const collectSchema = (key: string): void => {
-    if (key in record) visitJsonSchema(record[key], `${path}.${key}`, visit);
-  };
-  const collectSchemaArray = (key: string): void => {
-    const schemas = record[key];
-    if (!Array.isArray(schemas)) return;
-    schemas.forEach((item, index) => visitJsonSchema(item, `${path}.${key}[${index}]`, visit));
-  };
-  const collectSchemaMap = (key: string): void => {
-    const schemas = record[key];
-    if (schemas === null || typeof schemas !== 'object' || Array.isArray(schemas)) return;
-    for (const [name, subschema] of Object.entries(schemas)) {
-      visitJsonSchema(subschema, `${path}.${key}.${name}`, visit);
-    }
-  };
-
-  for (const key of [
-    'additionalProperties',
-    'unevaluatedProperties',
-    'propertyNames',
-    'contains',
-    'not',
-    'if',
-    'then',
-    'else',
-    'contentSchema',
-  ]) {
-    collectSchema(key);
-  }
-  if (Array.isArray(record.items)) collectSchemaArray('items');
-  else collectSchema('items');
-  for (const key of ['prefixItems', 'allOf', 'anyOf', 'oneOf']) collectSchemaArray(key);
-  for (const key of [
-    'properties',
-    'patternProperties',
-    'dependentSchemas',
-    'dependencies',
-    '$defs',
-    'definitions',
-  ]) {
-    collectSchemaMap(key);
+  for (const child of jsonSchemaChildren(record, path)) {
+    visitJsonSchema(child.node, child.path, visit);
   }
 }
 
