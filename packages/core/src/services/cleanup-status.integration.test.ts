@@ -87,13 +87,9 @@ function statusEnvironment(
   };
 }
 
-test.each(
-  ['config', 'default branch'].flatMap(source =>
-    [quotedGitFailure, ...unsafeRemoteFailures].map(failure => [source, failure])
-  )
-)(
+test.each(['config', 'default branch'])(
   'status retains the total when %s resolution rejects, without exposing secrets',
-  async (source, failure) => {
+  async source => {
     setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
     const codebase = makeCodebase({
       repository_url: 'https://user:secret@gitlab.example/org/repo.git?token=secret#secret',
@@ -113,8 +109,8 @@ test.each(
         : 'Remote default branch is unavailable';
     const error =
       source === 'config'
-        ? new InvalidConfigError('Invalid setting', '/repo/.archon/config.yaml', failure)
-        : new git.GitFailure('default_branch_missing', failure);
+        ? new InvalidConfigError('Invalid setting', '/repo/.archon/config.yaml', quotedGitFailure)
+        : new git.GitFailure('default_branch_missing', quotedGitFailure);
     const loadConfig = spyOn(config, 'loadRepoConfig').mockResolvedValue({});
     const defaultBranch = spyOn(git, 'getDefaultBranch');
     if (source === 'config') loadConfig.mockRejectedValueOnce(error);
@@ -139,11 +135,7 @@ test.each(
     );
     expect(result.message).toContain('(gitlab.example)');
     expect(result.message).not.toContain('topsecret');
-    expect(result.message).not.toContain('scp-secret');
-    expect(result.message).not.toContain('patch-secret');
-    expect(result.message).not.toContain('fragment-secret');
     expect(JSON.stringify(warn.mock.calls)).not.toContain('topsecret');
-    expect(JSON.stringify(warn.mock.calls)).not.toContain('scp-secret');
     expect(result.message).not.toContain('user:');
     expect(result.message).not.toContain('example.com');
     expect(result.message).not.toContain('0 active');
@@ -152,11 +144,8 @@ test.each(
   }
 );
 
-test.each([
-  quotedGitFailure,
-  'ssh://patch-secret@example.com/repo#fragment-secret',
-  ...unsafeRemoteFailures,
-])('status keeps both inspection failure categories and omits %s', async failure => {
+test('status keeps both inspection failure categories without exposing secrets', async () => {
+  const failure = 'ssh://patch-secret@example.com/repo#fragment-secret';
   setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
   const codebase = makeCodebase();
   spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
@@ -192,13 +181,9 @@ test.each([
   expect(result.message).toContain('task-1: merge inspection failed');
   expect(result.message).toContain(`Ancestry: ${omitted}`);
   expect(result.message).toContain(`Patch equivalence: ${omitted}`);
-  expect(result.message).not.toContain('topsecret');
-  expect(result.message).not.toContain('scp-secret');
   expect(result.message).not.toContain('patch-secret');
   expect(result.message).not.toContain('fragment-secret');
   expect(result.message).not.toContain('example.com');
-  expect(JSON.stringify(warn.mock.calls)).not.toContain('topsecret');
-  expect(JSON.stringify(warn.mock.calls)).not.toContain('scp-secret');
 });
 
 test('status omits a bare credential from an unstructured failure and warning', async () => {
@@ -236,7 +221,11 @@ test('status omits a bare credential from an unstructured failure and warning', 
   expect(JSON.stringify(warn.mock.calls)).not.toContain(credential);
 });
 
-test.each(unsafeRemoteFailures)('does not publish unstructured remote errors: %s', failure => {
+test.each([
+  quotedGitFailure,
+  'ssh://patch-secret@example.com/repo#fragment-secret',
+  ...unsafeRemoteFailures,
+])('does not publish unstructured remote errors: %s', failure => {
   for (const error of [failure, new Error(failure), { message: failure }]) {
     expect(statusDiagnostic(error)).toBe(omitted);
   }
