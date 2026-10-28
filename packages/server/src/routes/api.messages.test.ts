@@ -1,7 +1,11 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
-import type { WebAdapter } from '../adapters/web';
+import { SSEStreamingApi } from 'hono/streaming';
+import { WebAdapter } from '../adapters/web';
+import { MessagePersistence } from '../adapters/web/persistence';
+import { SSETransport, DASHBOARD_STREAM } from '../adapters/web/transport';
+import { WorkflowEventBridge } from '../adapters/web/workflow-bridge';
 import { validationErrorHook } from './openapi-defaults';
 import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
@@ -201,13 +205,15 @@ const MOCK_MESSAGES = [
   },
 ];
 
-function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
+function makeApp(webAdapter?: WebAdapter): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
-  const mockWebAdapter = {
-    setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
-    emitSSE: mock(async () => {}),
-    emitLockEvent: mock(async () => {}),
-  } as unknown as WebAdapter;
+  const mockWebAdapter =
+    webAdapter ??
+    ({
+      setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
+      emitSSE: mock(async () => {}),
+      emitLockEvent: mock(async () => {}),
+    } as unknown as WebAdapter);
   const mockLockManager = {
     acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
       await fn();
@@ -688,4 +694,78 @@ describe('GET /api/conversations/:id/messages — tool output bounding', () => {
     const body = (await response.json()) as Array<{ metadata: string }>;
     expect(body[0]!.metadata).toBe(metadata);
   });
+});
+
+describe('SSE route replay', () => {
+  test.each(['web-test-abc', DASHBOARD_STREAM])(
+    'retains cancelled replay and drains it once through /api/stream/%s',
+    async conversationId => {
+      const transport = new SSETransport();
+      const adapter = new WebAdapter(
+        transport,
+        new MessagePersistence((id, event) => transport.emit(id, event)),
+        new WorkflowEventBridge(transport)
+      );
+      const { app } = makeApp(adapter);
+      type ResponseReader = Pick<ReadableStreamDefaultReader<Uint8Array>, 'read' | 'cancel'>;
+      const readers: ResponseReader[] = [];
+      const heartbeatWaits: ReturnType<typeof Promise.withResolvers<void>>[] = [];
+      // Hold heartbeat scheduling outside this delivery test and release every route in teardown.
+      const sleep = spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(() => {
+        const wait = Promise.withResolvers<void>();
+        heartbeatWaits.push(wait);
+        return wait.promise;
+      });
+      async function settleReplay(): Promise<void> {
+        for (let i = 0; i < 40; i++) await Promise.resolve();
+      }
+      async function connect(): Promise<ResponseReader> {
+        const response = await app.request(`/api/stream/${conversationId}`);
+        expect(response.status).toBe(200);
+        expect(response.headers.get('Content-Type')).toContain('text/event-stream');
+        if (!response.body) throw new Error('Missing SSE response body');
+        const reader = response.body.getReader();
+        readers.push(reader);
+        expect(await read(reader)).toContain('"type":"heartbeat"');
+        return reader;
+      }
+      async function read(reader: ResponseReader): Promise<string> {
+        const chunk = await reader.read();
+        expect(chunk.done).toBe(false);
+        return new TextDecoder().decode(chunk.value);
+      }
+      try {
+        for (const event of ['first', 'second', 'third', 'fourth']) {
+          await adapter.emitSSE(conversationId, event);
+        }
+        const original = await connect();
+        expect(await read(original)).toBe('data: first\n\n');
+        // Hono prefetches second; third is pending when the response is cancelled.
+        await settleReplay();
+        await original.cancel();
+        await settleReplay();
+
+        const reconnected = await connect();
+        expect(await read(reconnected)).toBe('data: third\n\n');
+        expect(await read(reconnected)).toBe('data: fourth\n\n');
+        await settleReplay();
+        const live = adapter.emitSSE(conversationId, 'after replay');
+        expect(await read(reconnected)).toBe('data: after replay\n\n');
+        await live;
+        await reconnected.cancel();
+        await settleReplay();
+
+        const later = await connect();
+        const next = adapter.emitSSE(conversationId, 'after reconnect');
+        expect(await read(later)).toBe('data: after reconnect\n\n');
+        await next;
+      } finally {
+        for (const reader of readers) await reader.cancel();
+        for (const wait of heartbeatWaits) wait.reject(new Error('cancel'));
+        await settleReplay();
+        sleep.mockRestore();
+        transport.stop();
+      }
+    }
+  );
 });

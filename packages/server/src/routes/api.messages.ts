@@ -5,6 +5,7 @@ import { streamSSE } from 'hono/streaming';
 import type { AttachedFile, Conversation, HandleMessageContext } from '@archon/core';
 import * as messageDb from '@archon/core/db/messages';
 import type { WebAdapter } from '../adapters/web';
+import { checkedSSEWriter } from '../adapters/web/sse-writer';
 import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { isConversationOwnershipEnforced } from '../auth';
 import { type OrchestratorDispatch, persistUploadedFiles } from './api-message-dispatch';
@@ -154,12 +155,13 @@ export function registerMessageRoutes(
         data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
       });
 
-      webAdapter.registerStream(DASHBOARD_STREAM, stream);
+      const writer = checkedSSEWriter(stream);
+      webAdapter.registerStream(DASHBOARD_STREAM, writer);
       getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_opened');
 
       stream.onAbort(() => {
         getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_disconnected');
-        webAdapter.removeStream(DASHBOARD_STREAM, stream);
+        webAdapter.removeStream(DASHBOARD_STREAM, writer);
       });
 
       try {
@@ -177,7 +179,7 @@ export function registerMessageRoutes(
           getLog().warn({ err: e as Error }, 'dashboard_sse_heartbeat_error');
         }
       } finally {
-        webAdapter.removeStream(DASHBOARD_STREAM, stream);
+        webAdapter.removeStream(DASHBOARD_STREAM, writer);
         getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_closed');
       }
     });
@@ -211,12 +213,13 @@ export function registerMessageRoutes(
         data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
       });
 
-      webAdapter.registerStream(conversationId, stream);
+      const writer = checkedSSEWriter(stream);
+      webAdapter.registerStream(conversationId, writer);
       getLog().debug({ conversationId }, 'sse_stream_opened');
 
       stream.onAbort(() => {
         getLog().debug({ conversationId }, 'sse_client_disconnected');
-        webAdapter.removeStream(conversationId, stream);
+        webAdapter.removeStream(conversationId, writer);
       });
 
       try {
@@ -236,7 +239,7 @@ export function registerMessageRoutes(
           getLog().warn({ err: e as Error, conversationId }, 'sse_heartbeat_error');
         }
       } finally {
-        webAdapter.removeStream(conversationId, stream);
+        webAdapter.removeStream(conversationId, writer);
         getLog().debug({ conversationId }, 'sse_stream_closed');
       }
     });
