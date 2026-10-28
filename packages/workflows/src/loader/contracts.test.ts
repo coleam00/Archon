@@ -139,6 +139,35 @@ nodes:
           expect(parseSelected({ allOf: [branch, { [keyword]: [true, false] }] }).error).toBeNull();
         });
       }
+      it(`rejects ${keyword} ${selector} selectors with type arrays excluding boolean`, () => {
+        for (const type of [['string'], ['string', 'null']]) {
+          for (const schema of [
+            { ...branch, properties: { done: { type } }, [keyword]: [{}] },
+            { [keyword]: [{ ...branch, properties: { done: { type } } }] },
+            { ...branch, properties: { done: { [keyword]: [{ type }] } } },
+          ]) {
+            const result = parseSelected(schema);
+            expect(result.workflow).toBeNull();
+            expect(result.error?.error).toContain('boolean');
+          }
+        }
+      });
+      if (selector === 'loop' && keyword === 'allOf') {
+        it('preserves plain type arrays and allOf type arrays that permit booleans', () => {
+          for (const type of [['string'], ['boolean'], ['boolean', 'string']]) {
+            expect(parseSelected({ ...branch, properties: { done: { type } } }).error).toBeNull();
+          }
+          for (const type of [['boolean'], ['boolean', 'string']]) {
+            for (const schema of [
+              { ...branch, properties: { done: { type } }, allOf: [{}] },
+              { allOf: [{ ...branch, properties: { done: { type } } }] },
+              { ...branch, properties: { done: { allOf: [{ type }] } } },
+            ]) {
+              expect(parseSelected(schema).error).toBeNull();
+            }
+          }
+        });
+      }
       it(`rejects optional, undeclared and non-boolean ${keyword} ${selector} selectors`, () => {
         const rejected: [Record<string, unknown>, string, string][] = [
           [{ [keyword]: [{ ...branch, required: [] }] }, 'done', 'required'],

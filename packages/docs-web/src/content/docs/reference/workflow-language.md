@@ -1795,9 +1795,10 @@ nodes:
   declares the field, whose `required` guarantees its presence, and whose field schema
   guarantees `type: boolean`; otherwise the workflow fails to load. Declarations and
   guarantees may come from the root or through `allOf`, `anyOf`, or `oneOf`.
-  Root and `allOf` constraints combine; every viable `anyOf`/`oneOf` alternative
-  must satisfy each guarantee unless an enclosing constraint already supplies it.
-  A `false` branch accepts no values and does not weaken guarantees; `true` adds none.
+  Root and `allOf` constraints combine; every `anyOf`/`oneOf` alternative except
+  literal `false` must supply each guarantee unless an enclosing constraint already
+  supplies it. Only literal `false` is exempt: the loader does not detect other
+  impossible branches such as `{not: {}}`. A `true` branch adds no constraint.
   It cannot select a `loop_group` (which returns raw text) or a fan-out `workflow:` node
   (which returns an aggregate array); add a structured collector node after either one.
   Exact `true` is persisted as `outcome: succeeded`, exact `false` as `outcome: failed`.

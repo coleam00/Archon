@@ -444,8 +444,10 @@ export function outputFieldConstraints(schema: Record<string, unknown>, field: s
       property !== undefined && schemaGuarantees(property, schema => schema.type === 'boolean')
     );
   };
-  const requiresBooleanType = (schema: Record<string, unknown>): boolean => {
+  const requiresBooleanType = (schema: Record<string, unknown>, composed: boolean): boolean => {
+    composed ||= COMPOSITION_KEYWORDS.some(keyword => Array.isArray(schema[keyword]));
     if (typeof schema.type === 'string' && schema.type !== 'boolean') return true;
+    if (composed && Array.isArray(schema.type) && !schema.type.includes('boolean')) return true;
     return COMPOSITION_KEYWORDS.some(keyword => {
       const branches = schema[keyword];
       return (
@@ -453,14 +455,15 @@ export function outputFieldConstraints(schema: Record<string, unknown>, field: s
         (keyword !== 'allOf' ||
           branches.some(raw => {
             const branch = asPlainObject(raw);
-            return branch !== undefined && requiresBooleanType(branch);
+            return branch !== undefined && requiresBooleanType(branch, true);
           }))
       );
     });
   };
-  const fieldRequiresBooleanType = (schema: Record<string, unknown>): boolean => {
+  const fieldRequiresBooleanType = (schema: Record<string, unknown>, composed = false): boolean => {
+    composed ||= COMPOSITION_KEYWORDS.some(keyword => Array.isArray(schema[keyword]));
     const property = asPlainObject(asPlainObject(schema.properties)?.[field]);
-    if (property !== undefined && requiresBooleanType(property)) return true;
+    if (property !== undefined && requiresBooleanType(property, composed)) return true;
     return COMPOSITION_KEYWORDS.some(keyword => {
       const branches = schema[keyword];
       return (
@@ -468,7 +471,7 @@ export function outputFieldConstraints(schema: Record<string, unknown>, field: s
         (keyword !== 'allOf' ||
           branches.some(raw => {
             const branch = asPlainObject(raw);
-            return branch !== undefined && fieldRequiresBooleanType(branch);
+            return branch !== undefined && fieldRequiresBooleanType(branch, true);
           }))
       );
     });

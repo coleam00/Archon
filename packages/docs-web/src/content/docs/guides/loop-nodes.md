@@ -323,13 +323,15 @@ looping silently:
    `allOf`, `anyOf`, or `oneOf`;
 3. it must be guaranteed by `required` — an optional property the model
    omits would read as "not complete" and burn `max_iterations`;
-4. a composed alternative must guarantee `type: boolean` for the field. Plain
-   properties may omit `type`; an explicit single type must be `boolean`.
+4. an explicit type in a composed schema must permit booleans. For `anyOf` and
+   `oneOf`, the alternatives must guarantee `type: boolean` as described below.
+   Plain properties may omit `type`; an explicit single type must be `boolean`.
 
 Constraints at the root and in `allOf` combine. For `anyOf` and `oneOf`, every
-viable alternative must satisfy the required-field and boolean guarantees, unless
-an enclosing constraint already guarantees them. A `false` schema branch accepts
-no values and does not weaken a guarantee; `true` supplies no constraint.
+alternative except literal `false` must supply the required-field and boolean
+guarantees, unless an enclosing constraint already supplies them. Only literal
+`false` is exempt: the loader does not detect other impossible branches such as
+`{not: {}}`. A `true` branch supplies no constraint.
 
 Termination is strict identity: `true` ends the loop, and nothing else does — not
 `"true"`, not `1`. A payload that fails schema validation is a failure, not a
