@@ -41,12 +41,14 @@ mock.module('pg', () => ({
 }));
 
 // ---- also mock @archon/paths so logger calls don't blow up ----------------
+const logError = mock(() => {});
+const logFatal = mock(() => {});
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
     info: () => {},
     warn: () => {},
-    error: () => {},
-    fatal: () => {},
+    error: logError,
+    fatal: logFatal,
     debug: () => {},
     trace: () => {},
   }),
@@ -81,6 +83,8 @@ describe('PostgresAdapter', () => {
     };
     mockSchemaSQL = '-- noop schema';
     poolErrorHandler = undefined;
+    logError.mockClear();
+    logFatal.mockClear();
 
     adapter = new PostgresAdapter('postgresql://localhost:5432/testdb');
   });
@@ -806,6 +810,61 @@ describe('PostgresAdapter', () => {
         await db.close();
       }
     );
+
+    describe.each([
+      ['schema_current', '08006'],
+      ['schema_current', '42P01'],
+      ['schema_current', '42703'],
+      ['notify_trigger', '42501'],
+    ])('%s failure %s', (savepoint, code) => {
+      test.each(['ROLLBACK TO', 'RELEASE'])(
+        'preserves the original error when %s SAVEPOINT fails',
+        async operation => {
+          await adapter.query('SELECT 0');
+          logError.mockClear();
+          logFatal.mockClear();
+          const original = Object.assign(new Error('original failure'), { code });
+          const cleanup = Object.assign(new Error('cleanup failed'), { code: '08003' });
+          const issued: string[] = [];
+          mockClient = {
+            query: async sql => {
+              issued.push(sql);
+              if (
+                (savepoint === 'schema_current' && sql.includes('AS current')) ||
+                (savepoint === 'notify_trigger' && sql.includes('archon_notify_workflow_event'))
+              )
+                throw original;
+              if (sql === `${operation} SAVEPOINT ${savepoint}`) throw cleanup;
+              return { rows: [], rowCount: 1 };
+            },
+            release: () => {},
+          };
+          const db = new PostgresAdapter('postgresql://localhost:5432/testdb');
+          await expect(db.query('SELECT 1')).rejects.toBe(original);
+          await expect(db.withTransaction(async () => undefined)).rejects.toBe(original);
+          await expect(
+            db.listen(
+              'events',
+              () => {},
+              () => {}
+            )
+          ).rejects.toBe(original);
+          expect(logError).toHaveBeenCalledWith(
+            { err: cleanup, savepoint },
+            'db.postgres_savepoint_recovery_failed'
+          );
+          expect(logFatal).toHaveBeenCalledWith(
+            { err: original },
+            'db.postgres_schema_init_failed'
+          );
+          expect(issued).toContain('ROLLBACK');
+          expect(issued).not.toContain('COMMIT');
+          expect(issued.some(sql => sql.includes('SET schema_fingerprint'))).toBe(false);
+          if (savepoint === 'schema_current') expect(issued).not.toContain(mockSchemaSQL);
+          await db.close();
+        }
+      );
+    });
 
     test('withTransaction() awaits schema init before opening a tx', async () => {
       const issued: string[] = [];

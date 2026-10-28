@@ -204,6 +204,23 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
     }
   }
 
+  private async recoverSavepoint(
+    client: PoolClient,
+    savepoint: 'schema_current' | 'notify_trigger',
+    originalError: unknown
+  ): Promise<void> {
+    try {
+      await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+      await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+    } catch (error) {
+      getLog().error(
+        { err: error instanceof Error ? error : new Error(String(error)), savepoint },
+        'db.postgres_savepoint_recovery_failed'
+      );
+      throw originalError;
+    }
+  }
+
   private async schemaIsCurrent(client: PoolClient, fingerprint: string): Promise<boolean> {
     await client.query('SAVEPOINT schema_current');
     try {
@@ -215,8 +232,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       await client.query('RELEASE SAVEPOINT schema_current');
       return result.rows[0]?.current === true;
     } catch (error) {
-      await client.query('ROLLBACK TO SAVEPOINT schema_current');
-      await client.query('RELEASE SAVEPOINT schema_current');
+      await this.recoverSavepoint(client, 'schema_current', error);
       // Fresh and older databases can lack the fingerprint's tables or column.
       const code = (error as { code?: unknown } | null)?.code;
       if (code === '42P01' || code === '42703') return false;
@@ -264,8 +280,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       return true;
     } catch (e) {
       if ((e as { code?: unknown } | null)?.code !== '42501') throw e;
-      await client.query('ROLLBACK TO SAVEPOINT notify_trigger');
-      await client.query('RELEASE SAVEPOINT notify_trigger');
+      await this.recoverSavepoint(client, 'notify_trigger', e);
       getLog().warn(
         { err: e instanceof Error ? e : new Error(String(e)) },
         'db.postgres_notify_trigger_install_failed'
