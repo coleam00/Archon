@@ -93,9 +93,10 @@ export function resolveContainerBackendConfig(
 /**
  * H2 — a container run has an UNRESOLVED write-back when its overlay diff was raised
  * for review (`pending_writeback` set) but never applied or discarded
- * (`writeback_resolved !== true`). This happens on a failed/partial apply. The CLI
- * teardown must PRESERVE the container+volume in this state (the overlay is the only
- * copy of the changes) rather than destroy it. Pure so the decision is unit-testable.
+ * (`writeback_resolved !== true`). This happens on a failed/partial apply, or an apply
+ * whose outcome is unknown after a crash. The CLI teardown must PRESERVE the
+ * container+volume in this state (the overlay may be the only copy of the changes)
+ * rather than destroy it. Pure so the decision is unit-testable.
  */
 export function hasUnresolvedWriteback(metadata: Record<string, unknown> | undefined): boolean {
   if (!metadata) return false;
@@ -692,9 +693,11 @@ export async function readUnresolvedWriteback(
 export function warnPreservedContainer(envId: string, runId: string | undefined): void {
   console.error(
     '\nWARNING: the write-back did not complete — the container + overlay volume are ' +
-      'PRESERVED so your changes are not lost. Retry with ' +
-      `\`bun run cli workflow resume ${runId ?? '<run-id>'}\` (re-applies the ` +
-      'overlay), or reclaim manually via `docker ps -a --filter label=diy.archon.managed=true`.'
+      'PRESERVED so your changes are not lost. ' +
+      `\`bun run cli workflow resume ${runId ?? '<run-id>'}\` retries the apply unless an ` +
+      "earlier apply's outcome was never recorded; then resume refuses and the run failure " +
+      'explains how to reconcile. Reclaim manually via ' +
+      '`docker ps -a --filter label=diy.archon.managed=true`.'
   );
   getLog().warn({ envId, runId }, 'workflow.container_preserved_unresolved_writeback');
 }
