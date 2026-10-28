@@ -134,6 +134,36 @@ describe('failure-class conformance', () => {
 });
 
 describe('settled conformance', () => {
+  test.each([
+    { type: 'state_update', state: 'running' },
+    { type: 'tool_call', toolCallId: 'wake', name: 'bash' },
+    { type: 'subtask', taskId: 'wake', status: 'started' },
+  ])('requires a fresh result after %j', async wake => {
+    const stale = { name: 'wake', run: turn({ type: 'result' }, wake, { type: 'settled' }) };
+    expect(await checkSettled([stale])).toEqual([
+      'wake: settled arrives before the current phase result',
+    ]);
+    expect(
+      await checkSettled([
+        {
+          name: 'wake',
+          run: turn({ type: 'result' }, wake, { type: 'result' }, { type: 'settled' }),
+        },
+      ])
+    ).toEqual([]);
+  });
+
+  test('a heartbeat preserves the current result', async () => {
+    expect(
+      await checkSettled([
+        {
+          name: 'heartbeat',
+          run: turn({ type: 'result' }, { type: 'heartbeat' }, { type: 'settled' }),
+        },
+      ])
+    ).toEqual([]);
+  });
+
   test.each<[string, ProviderTurnCase, string]>([
     [
       'no settled',
@@ -167,7 +197,7 @@ describe('settled conformance', () => {
     [
       'settled with no result',
       { ...settlingTurn, run: turn({ type: 'settled' }) },
-      'background work: settled arrives before any result',
+      'background work: settled arrives before the current phase result',
     ],
   ])('flags %s', async (_label, turnCase, violation) => {
     const violations = await checkSettled([turnCase]);

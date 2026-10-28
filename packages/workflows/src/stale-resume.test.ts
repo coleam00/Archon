@@ -60,22 +60,25 @@ describe('withStaleResumeRetry', () => {
     expect(JSON.stringify(mockWarn.mock.calls)).not.toContain(staleId);
   });
 
-  test('pre-turn setup reports do not prevent the retry and are kept', async () => {
-    const warning: MessageChunk = { type: 'warning', code: 'setup', message: 'setup note' };
-    const { send, calls } = sender([warning, staleResult], [freshResult]);
+  test.each<[MessageChunk]>([
+    [{ type: 'warning', code: 'setup', message: 'setup note' }],
+    [{ type: 'mcp_server_status', server: 'setup', status: 'connected' }],
+    [{ type: 'heartbeat' }],
+  ])('pre-turn report %j permits a fresh retry and is kept', async first => {
+    const { send, calls } = sender([first, staleResult], [freshResult]);
     const chunks = await collect(withStaleResumeRetry(send, staleId, { logContext: {} }));
     expect(calls).toEqual([staleId, undefined]);
-    expect(chunks).toEqual([warning, { ...freshResult, resumed: false }]);
+    expect(chunks).toEqual([first, { ...freshResult, resumed: false }]);
   });
 
   test.each<[string, MessageChunk]>([
     ['output', reply],
     ['a tool call', { type: 'tool_call', toolCallId: 't1', name: 'Read' }],
   ])('a stale rejection after %s fails as before', async (_name, first) => {
-    const { send, calls } = sender([first, staleResult], [freshResult]);
+    const { send, calls } = sender([{ type: 'heartbeat' }, first, staleResult], [freshResult]);
     const chunks = await collect(withStaleResumeRetry(send, staleId, { logContext: {} }));
     expect(calls).toEqual([staleId]);
-    expect(chunks).toEqual([first, staleResult]);
+    expect(chunks).toEqual([{ type: 'heartbeat' }, first, staleResult]);
   });
 
   test('a failure the provider did not mark stale does not retry', async () => {
@@ -91,10 +94,18 @@ describe('withStaleResumeRetry', () => {
   });
 
   test('a second stale rejection fails without another retry', async () => {
-    const { send, calls } = sender([staleResult], [staleResult], [freshResult]);
+    const { send, calls } = sender(
+      [{ type: 'heartbeat' }, staleResult],
+      [{ type: 'heartbeat' }, staleResult],
+      [freshResult]
+    );
     const chunks = await collect(withStaleResumeRetry(send, staleId, { logContext: {} }));
     expect(calls).toEqual([staleId, undefined]);
-    expect(chunks).toEqual([{ ...staleResult, resumed: false }]);
+    expect(chunks).toEqual([
+      { type: 'heartbeat' },
+      { type: 'heartbeat' },
+      { ...staleResult, resumed: false },
+    ]);
   });
 
   test('a turn without a resume passes through untouched', async () => {

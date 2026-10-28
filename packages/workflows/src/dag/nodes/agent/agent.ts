@@ -374,15 +374,20 @@ async function finishTurnOutput(
 
 // Every provider ends a turn with `settled`. Output without it means the stream was
 // cut off (idle timeout, operator request, a provider that died or broke the contract), so the node
-// fails rather than completing on a turn that may not be done. Zero output falls
-// through to the empty-output guard; cancellation is handled by the caller.
+// fails rather than completing on a turn that may not be done. Without a result, zero
+// output falls through to the empty-output guard; cancellation is handled by the caller.
 function assertTurnSettled(pc: AgentPassContext, state: AgentAttemptState): void {
   const { cutOff } = state;
   if (state.settled) return;
-  if (state.outputText.trim() === '' && state.structuredOutput === undefined) return;
+  if (
+    !state.passSawResult &&
+    state.outputText.trim() === '' &&
+    state.structuredOutput === undefined
+  )
+    return;
   throw new NodeFailure(
     cutOff ? 'timeout' : 'unknown',
-    `Node '${pc.node.id}' failed: ${unsettledTurnError(cutOff, state.backgroundTasksIncomplete)}`
+    `Node '${pc.node.id}' failed: ${unsettledTurnError(cutOff, state.backgroundTasksIncomplete, pc.provider, state.awaitingSettlement)}`
   );
 }
 

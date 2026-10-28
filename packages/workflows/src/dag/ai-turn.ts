@@ -4,6 +4,16 @@ import { type ProviderFailure } from '@archon/provider-contract';
 import { nodeFailureKindOf } from '../executor-shared';
 import { getLog } from './log';
 
+export function assertResultBeforeSettlement(
+  chunk: MessageChunk,
+  awaitingSettlement: boolean,
+  provider: string
+): void {
+  if (chunk.type === 'settled' && !awaitingSettlement) {
+    throw new NodeFailure('unknown', `provider '${provider}' sent settled before result`);
+  }
+}
+
 export interface WatchdogReset {
   type: MessageChunk['type'];
   at: number;
@@ -56,11 +66,13 @@ export function cutOffClause(): string {
  */
 export function unsettledTurnError(
   cutOff: TurnCutOff | undefined,
-  liveTaskIds: readonly string[]
+  liveTaskIds: readonly string[],
+  provider: string,
+  awaitingSettlement: boolean
 ): string {
   const cause =
     cutOff?.kind === 'idle_timeout'
-      ? `timed out after ${String(cutOff.timeoutMs / 60000)} min without an event, before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(cutOff.lastReset)}`
+      ? `timed out after ${String(cutOff.timeoutMs / 60000)} min without an event while waiting for ${awaitingSettlement ? 'turn settlement after result' : 'result'} from provider '${provider}', before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(cutOff.lastReset)}`
       : cutOff !== undefined
         ? `${cutOffClause()}, before the provider signalled that its turn settled.`
         : 'the provider stream ended without signalling that its turn settled.';

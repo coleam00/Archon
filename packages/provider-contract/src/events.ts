@@ -198,6 +198,9 @@ export const stateUpdateSchema = z.object({
   state: z.enum(['running', 'requires_action']),
 });
 
+/** Provider activity that resets the idle watchdog without starting a new result phase. */
+export const heartbeatSchema = z.object({ type: z.literal('heartbeat') });
+
 /** Every non-terminal event a provider may stream. */
 export const providerEventSchema = z.discriminatedUnion('type', [
   agentMessageChunkSchema,
@@ -210,6 +213,7 @@ export const providerEventSchema = z.discriminatedUnion('type', [
   subtaskSchema,
   hookSchema,
   stateUpdateSchema,
+  heartbeatSchema,
 ]);
 export type ProviderEvent = z.infer<typeof providerEventSchema>;
 

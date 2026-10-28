@@ -1,3 +1,4 @@
+import { awaitingTurnSettlement } from '@archon/provider-contract';
 import type { MessageChunk, ProviderFailure, TokenUsage } from '@archon/provider-contract';
 import { sessionPreview } from '@archon/provider-contract';
 import {
@@ -7,6 +8,7 @@ import {
   structuredOutputPass,
   NodeFailure,
   providerReportedFailure,
+  assertResultBeforeSettlement,
 } from '../../ai-turn';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import type { NodeExecutionResult } from '../../../node-record-serialization';
@@ -78,6 +80,8 @@ export interface StreamedAttempt {
   lastWatchdogReset: WatchdogReset | undefined;
   /** Whether this attempt's stream ended on the provider's `settled` (see the AI-node path's streamSettled). */
   settled: boolean;
+  sawResult: boolean;
+  awaitingSettlement: boolean;
   /** Raw structured payload seen on this attempt, before validation. */
   structured: unknown;
   /**
@@ -224,6 +228,8 @@ function newAttempt(run: LoopRun): StreamedAttempt {
     cutOff: undefined,
     lastWatchdogReset: undefined,
     settled: false,
+    sawResult: false,
+    awaitingSettlement: false,
     structured: undefined,
     stopStatus: undefined,
     abort: new AbortController(),
@@ -490,14 +496,20 @@ async function consumeIterationStream(
         watchdogResets.observe(type, resetAt);
       },
       () =>
-        providerEvents.hasOpenTools() ||
-        (capabilities.backgroundWork === 'reported' && providerEvents.liveSubtaskIds().length > 0),
+        !attempt.awaitingSettlement &&
+        (providerEvents.hasOpenTools() ||
+          (capabilities.backgroundWork === 'reported' &&
+            providerEvents.liveSubtaskIds().length > 0)),
       shouldStopStream
     )) {
+      attempt.awaitingSettlement = awaitingTurnSettlement(attempt.awaitingSettlement, msg);
+      assertResultBeforeSettlement(msg, attempt.awaitingSettlement, run.workflowProvider);
       // A result is not the end of the iteration; `settled` is. See the
       // AI-node stream loop for the full rationale.
-      if (msg.type === 'result') applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
-      else if (msg.type !== 'settled') await providerEvents.handle(msg);
+      if (msg.type === 'result') {
+        attempt.sawResult = true;
+        applyResultChunk(run, state, i, scope, pass.threadsSession, msg);
+      } else if (msg.type !== 'settled') await providerEvents.handle(msg);
       const stopped = await shouldStopStream();
       if (msg.type === 'result' && (!stopped || attempt.cutOff)) throwOnResultFailure(run, i, msg);
       if (stopped) break;

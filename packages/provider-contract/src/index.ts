@@ -38,6 +38,7 @@ export {
   agentThoughtChunkSchema,
   compactionSchema,
   hookSchema,
+  heartbeatSchema,
   mcpServerStatusSchema,
   providerChunkSchema,
   providerEventSchema,
@@ -56,7 +57,7 @@ export {
   type ProviderEvent,
   type ProviderWarning,
 } from './events';
-export { providerSettledSchema, type ProviderSettled } from './settled';
+export { awaitingTurnSettlement, providerSettledSchema, type ProviderSettled } from './settled';
 export { providerCapabilitiesSchema, type ProviderCapabilities } from './capabilities';
 
 export {

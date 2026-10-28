@@ -58,6 +58,7 @@ const oneOfEach: ProviderEvent[] = [
     status: 'succeeded',
     exitCode: 0,
   },
+  { type: 'heartbeat' },
   { type: 'state_update', state: 'requires_action' },
 ];
 
