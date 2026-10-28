@@ -41,8 +41,11 @@ says nothing about the native login. If the native login remains unavailable, ru
 alone does not prove that a refresh will succeed.
 
 Codex does not support workflow container execution (`containerExec: false`). Run
-Codex workflows on the host without `--container`; repairing container credentials
-does not enable this capability. See [container provider support](/guides/container-isolation/#provider-support).
+Codex workflows on the host: omit `--container` and disable any effective workflow
+or global/project configuration `container.enabled` setting. See the
+[container selection rules](/reference/configuration/#container-isolation-folder-projects).
+Repairing container credentials does not enable this capability. See
+[container provider support](/guides/container-isolation/#provider-support).
 
 A host credential preflight refusal before run creation leaves no run to resume:
 repeat the original `archon workflow run` command after fixing the login.
