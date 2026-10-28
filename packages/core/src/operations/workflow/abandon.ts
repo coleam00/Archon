@@ -152,33 +152,34 @@ async function releaseAbandonedWorktrees(
 ): Promise<{ warnings: string[]; releasedWorktrees: ReleasedWorktree[] }> {
   const warnings = [...(result.cleanupWarnings ?? [])];
   const releasedWorktrees: ReleasedWorktree[] = [];
-  const released: OwnedWorktree[] = [];
-  let unsafeDescendant = false;
+  const released: ReturnType<typeof readOwnedWorktree>[] = [];
   const ownerChecks = await checkBatchWorktreeOwners(
     ctx,
     [run, ...result.cancelledDescendants],
     run,
     owner
   );
+  const retainRoot =
+    result.cascadeFailures > 0 || ownerChecks.some(check => check.run.id !== run.id && !check.safe);
+  const rootProof = readOwnedWorktree(run.metadata);
+  if (retainRoot) {
+    warnings.push(
+      `Retained checkout for run ${run.id}: descendants could not all be accounted for. Abandoning this run again only retries worktree removal and does not cancel descendants; abandon or stop each remaining descendant first.`
+    );
+  }
   for (const { run: row, ...ownerCheck } of ownerChecks.reverse()) {
     const proof = readOwnedWorktree(row.metadata);
     if (released.some(other => sameWorktreeProof(other, proof))) continue;
-    if (row.id === run.id && (result.cascadeFailures || unsafeDescendant)) {
-      warnings.push(
-        `Retained checkout for run ${run.id}: descendants could not all be accounted for. Abandoning this run again only retries worktree removal and does not cancel descendants; abandon or stop each remaining descendant first.`
-      );
-      continue;
-    }
     warnings.push(...(await persistCleanupWarnings(ctx, row, ownerCheck.warnings)));
     warnings.push(...ownerCheck.warnings);
-    if (!ownerCheck.safe) {
-      unsafeDescendant = true;
-      continue;
-    }
+    const isRootCheckout = row.id === run.id || sameWorktreeProof(rootProof, proof);
+    if (!ownerCheck.safe || (retainRoot && isRootCheckout)) continue;
     const release = await releaseRunWorktree(ctx, row);
     warnings.push(...release.warnings);
-    if (release.released) releasedWorktrees.push(release.released);
-    if (release.released && proof) released.push(proof);
+    if (release.released) {
+      releasedWorktrees.push(release.released);
+      released.push(proof);
+    }
   }
   return { warnings, releasedWorktrees };
 }
