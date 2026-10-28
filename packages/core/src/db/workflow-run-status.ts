@@ -3,18 +3,8 @@ import {
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 
-export class WorkflowStatusReadError extends Error {
-  override readonly name = 'WorkflowStatusReadError';
-
-  constructor(
-    readonly workflowRunId: string,
-    readonly storedStatus: string
-  ) {
-    super(
-      `Unsupported workflow run status for run ${workflowRunId}: ${JSON.stringify(storedStatus)}`
-    );
-  }
-}
+import { WorkflowStatusReadError } from '@archon/workflows/workflow-status-read';
+export { WorkflowStatusReadError } from '@archon/workflows/workflow-status-read';
 
 export function readWorkflowRunStatus(id: string, storedStatus: string): WorkflowRunStatus {
   const status = workflowRunStatusSchema.safeParse(storedStatus);

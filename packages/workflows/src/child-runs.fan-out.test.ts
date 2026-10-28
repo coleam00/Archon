@@ -21,6 +21,7 @@ import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { executeWorkflow } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
@@ -1098,6 +1099,82 @@ nodes:
     expect(serial).toMatchObject({ tally: { total: 3, completed: 1, failed: 2 } });
     expect(await strippedOutcome('all')).toEqual(serial);
   });
+
+  it.each(['held refresh', 'final slots'] as const)(
+    'preserves an unsupported child status at %s',
+    async site => {
+      await writeWorkflow(
+        'status-child',
+        site === 'held refresh'
+          ? `
+name: status-child
+description: pauses for approval
+mutates_checkout: false
+nodes:
+  - id: wait
+    approval:
+      message: Wait
+`
+          : fanChildCond.replaceAll('fan-child-cond', 'status-child')
+      );
+      await writeWorkflow(
+        'status-parent',
+        `
+name: status-parent
+description: status read interruption
+mutates_checkout: false
+nodes:
+  - id: work
+    workflow: status-child
+    fan_out:
+      items: '["boom"]'
+      max_parallel: 1
+`
+      );
+      const store = new InMemoryStore();
+      const find = store.findChildRuns;
+      let error: WorkflowStatusReadError | undefined;
+      let eventsBefore: typeof store.events = [];
+      let rowsBefore: WorkflowRun[] = [];
+      store.findChildRuns = async id => {
+        const rows = await find(id);
+        if (rows.some(row => row.status === (site === 'held refresh' ? 'paused' : 'failed'))) {
+          error ??= new WorkflowStatusReadError(rows[0].id, 'unsupported');
+          if (rowsBefore.length === 0) {
+            rowsBefore = structuredClone([...store.runs.values()]);
+            eventsBefore = [...store.events];
+          }
+          throw error;
+        }
+        return rows;
+      };
+      const execution = executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'test',
+        cwd,
+        await discover('status-parent'),
+        ''
+      );
+      await expect(execution).rejects.toBeInstanceOf(WorkflowStatusReadError);
+      await expect(execution).rejects.toBe(error);
+      expect(error).toBeDefined();
+      expect([...store.runs.values()].map(row => ({ id: row.id, status: row.status }))).toEqual(
+        rowsBefore.map(row => ({ id: row.id, status: row.status }))
+      );
+      expect(
+        store.events
+          .slice(eventsBefore.length)
+          .filter(
+            event =>
+              event.event_type === 'node_failed' ||
+              ['workflow_failed', 'workflow_completed', 'workflow_cancelled'].includes(
+                event.event_type
+              )
+          )
+      ).toEqual([]);
+    }
+  );
 
   it('a failed read of settled children fails the node without completing it or touching a child', async () => {
     await writeWorkflow('fan-child-cond', fanChildCond);

@@ -1,3 +1,4 @@
+import { WorkflowStatusReadError } from '../../../workflow-status-read';
 import { describe, expect, it } from 'bun:test';
 import type { ChildWorkflowOutcome } from '../../child-run';
 import type { WorkflowRun } from '../../../schemas';
@@ -166,6 +167,17 @@ describe('buildFanOutOutcome', () => {
       child_run_id: 'c1',
       cancel_reason: 'operator',
     });
+  });
+
+  it('rethrows lifecycle interruptions without replacing the error', async () => {
+    const error = new WorkflowStatusReadError('child', 'unsupported');
+    const store = storeWith([], {});
+    store.findChildRuns = async () => {
+      throw error;
+    };
+    await expect(buildFanOutOutcome(store, 'parent', 'work', [outcome('failed')])).rejects.toBe(
+      error
+    );
   });
 
   it('returns a read failure instead of classifying any slot', async () => {

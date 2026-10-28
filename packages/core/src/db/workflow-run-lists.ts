@@ -24,6 +24,7 @@ import {
   type WorkflowRunRow,
 } from './workflow-run-normalization';
 import { getLog, jsonIntExtract } from './workflow-run-shared';
+import { WorkflowStatusReadError } from './workflow-run-status';
 
 export async function getRunningWorkflows(): Promise<
   { id: string; conversation_id: string | null; workflow_name: string; started_at: string }[]
@@ -240,6 +241,7 @@ export async function listDashboardRuns(
 
     return { runs, total, counts };
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'list_dashboard_runs_failed');
     throw new Error(`Failed to list dashboard runs: ${err.message}`);
@@ -302,7 +304,8 @@ async function listPausedRuns(
 }
 
 /**
- * List workflow runs with optional filters.
+ * List workflow runs with optional filters. Unsupported statuses reject the whole list,
+ * as with dashboard and adopting-run lists; no partial result is returned.
  */
 export async function listWorkflowRuns(options?: {
   conversationId?: string;
@@ -353,6 +356,7 @@ export async function listWorkflowRuns(options?: {
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_list_failed');
     throw new Error(`Failed to list workflow runs: ${err.message}`);
@@ -414,6 +418,7 @@ export async function findAdoptingRuns(runId: string): Promise<WorkflowRun[]> {
     );
     return result.rows.map(normalizeWorkflowRun);
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, runId }, 'db.workflow_run_adopters_lookup_failed');
     throw new Error(`Failed to find adopting runs: ${err.message}`);

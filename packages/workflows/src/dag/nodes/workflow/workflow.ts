@@ -265,6 +265,7 @@ export async function executeWorkflowNode(
   try {
     existing = await findExistingChild(ctx, executionNodeId);
   } catch (err) {
+    if (isWorkflowExecutionInterruption(err)) throw err;
     return failResult(
       `Failed to look up child runs for node '${node.id}': ${(err as Error).message}`,
       'unknown'
