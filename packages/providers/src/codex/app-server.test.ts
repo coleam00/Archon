@@ -533,7 +533,9 @@ describe('Codex native credential check', () => {
     ).toEqual([]);
   });
   test('an abort stops an unanswered account read', async () => {
-    expect(await check({ ignoreAccountRead: true })).toMatchObject({ state: 'check_failed' });
+    expect(await check({ deferAccountRead: () => undefined })).toMatchObject({
+      state: 'check_failed',
+    });
   });
   test('starts the binary a turn starts, from assistant config', async () => {
     const { CodexProvider } = await import('./provider');
