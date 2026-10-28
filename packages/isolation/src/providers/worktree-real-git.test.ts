@@ -1470,53 +1470,53 @@ describe('WorktreeProvider against real git', () => {
       expect(env.metadata).toHaveProperty('branchCreated', true);
     });
 
-    test.each([true, false])(
-      'diagnoses a failed local fast-forward only when a holder appeared (%s)',
-      async occupied => {
-        const originalTip = await commitOn(PR_BRANCH, 'one');
-        await commitOn(PR_BRANCH, 'two');
-        await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
-        await git(repoPath, 'branch', '-f', PR_BRANCH, originalTip);
-        const holder = join(root, 'concurrent checkout');
-        const exec = gitModule.execFileAsync;
-        const fetchFailure = new gitModule.GitFailure(
-          'unclassified',
-          'distinctive vendor failure 5186'
-        );
-        const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
-          async (cmd, args, options) => {
-            if (args.includes('fetch') && args.includes('.')) {
-              if (occupied && !existsSync(holder)) {
-                await git(repoPath, 'worktree', 'add', holder, PR_BRANCH);
-                await writeFile(join(holder, 'uncommitted'), 'operator work');
-              }
-              throw fetchFailure;
+    test.each(
+      ['remote fetch', 'ref comparison', 'local fast-forward'].flatMap(operation =>
+        [true, false].map(occupied => [operation, occupied] as const)
+      )
+    )('preserves a failed %s even when a holder appeared (%s)', async (operation, occupied) => {
+      const originalTip = await commitOn(PR_BRANCH, 'one');
+      await commitOn(PR_BRANCH, 'two');
+      await git(repoPath, 'push', '-q', 'origin', PR_BRANCH);
+      await git(repoPath, 'branch', '-f', PR_BRANCH, originalTip);
+      const holder = join(root, 'concurrent checkout');
+      const exec = gitModule.execFileAsync;
+      const preparationFailure = new gitModule.GitFailure(
+        'unclassified',
+        'distinctive vendor failure 5186'
+      );
+      const spy = spyOn(gitModule, 'execFileAsync').mockImplementation(
+        async (cmd, args, options) => {
+          const shouldFail =
+            operation === 'ref comparison'
+              ? args.includes('rev-list')
+              : args.includes('fetch') &&
+                (operation === 'remote fetch'
+                  ? args.includes(`+refs/heads/${PR_BRANCH}:refs/remotes/origin/${PR_BRANCH}`)
+                  : args.includes('.'));
+          if (shouldFail) {
+            if (occupied && !existsSync(holder)) {
+              await git(repoPath, 'worktree', 'add', holder, PR_BRANCH);
+              await writeFile(join(holder, 'uncommitted'), 'operator work');
             }
-            return exec(cmd, args, options);
+            throw preparationFailure;
           }
-        );
-        try {
-          const error = await provider.create(attempt).catch((error: unknown) => error);
-          expect(fetchFailure).toBeInstanceOf(gitModule.GitFailure);
-          if (occupied) {
-            if (!(error instanceof IsolationFailure))
-              throw new Error(`expected IsolationFailure: ${error}`);
-            expect(error).toHaveProperty('kind', 'branch_checked_out');
-            expect(error.cause).toBe(fetchFailure);
-            expect(classifyIsolationError(error)).toContain(holder);
-            expect(classifyIsolationError(error)).toContain('switch --detach');
-            expect((await git(holder, 'symbolic-ref', '--short', 'HEAD')).trim()).toBe(PR_BRANCH);
-            expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
-          } else {
-            expect(error).toBe(fetchFailure);
-          }
-          expect(await localHead()).toBe(originalTip);
-          expect(await registeredWorktrees()).toEqual(occupied ? [repoPath, holder] : [repoPath]);
-        } finally {
-          spy.mockRestore();
+          return exec(cmd, args, options);
         }
+      );
+      try {
+        const error = await provider.create(attempt).catch((error: unknown) => error);
+        expect(error).toBe(preparationFailure);
+        if (occupied) {
+          expect((await git(holder, 'symbolic-ref', '--short', 'HEAD')).trim()).toBe(PR_BRANCH);
+          expect(await readFile(join(holder, 'uncommitted'), 'utf8')).toBe('operator work');
+        }
+        expect(await localHead()).toBe(originalTip);
+        expect(await registeredWorktrees()).toEqual(occupied ? [repoPath, holder] : [repoPath]);
+      } finally {
+        spy.mockRestore();
       }
-    );
+    });
 
     test.each([false, true])(
       'fast-forwards a local branch behind its remote (transient ref lock: %s)',
