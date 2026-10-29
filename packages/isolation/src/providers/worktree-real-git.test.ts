@@ -361,6 +361,39 @@ describe('WorktreeProvider against real git', () => {
     expect(await readFile(join(target, 'untracked.txt'), 'utf8')).toBe('keep me\n');
   });
 
+  test('existing task discovery refuses a non-local symbolic HEAD and preserves its checkout', async () => {
+    const branch = 'refs/custom/foo';
+    const namedRequest: IsolationRequest = {
+      ...request,
+      workflowType: 'task',
+      taskBranch: { kind: 'existing', branch: toBranchName(branch) },
+    };
+    const target = join(root, 'external-checkout');
+    await git(repoPath, 'worktree', 'add', '-b', branch, target, 'main');
+    await writeFile(join(target, 'README.md'), 'operator edits\n');
+    await writeFile(join(target, 'untracked.txt'), 'keep me\n');
+    expect((await provider.create(namedRequest)).workingPath).toBe(target);
+    await git(target, 'update-ref', branch, 'HEAD');
+    await git(target, 'symbolic-ref', 'HEAD', branch);
+    await git(repoPath, 'branch', '-D', branch);
+    const head = await git(target, 'rev-parse', 'HEAD');
+    const status = await git(target, 'status', '--porcelain');
+
+    const message = `Cannot list worktree at ${target}: HEAD refers to '${branch}', not a local branch`;
+    await expect(provider.create(namedRequest)).rejects.toThrow(message);
+    await expect(
+      gitModule.findWorktreeByBranch(toRepoPath(repoPath), toBranchName(branch))
+    ).rejects.toThrow(message);
+    await expect(provider.get(target)).rejects.toThrow(message);
+    await expect(provider.adopt(target)).rejects.toThrow(message);
+    await expect(provider.list(repoPath)).rejects.toThrow(message);
+    expect((await git(target, 'symbolic-ref', 'HEAD')).trim()).toBe(branch);
+    expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
+    expect(await git(target, 'status', '--porcelain')).toBe(status);
+    expect(await readFile(join(target, 'README.md'), 'utf8')).toBe('operator edits\n');
+    expect(await readFile(join(target, 'untracked.txt'), 'utf8')).toBe('keep me\n');
+  });
+
   test.each(['workspace sync', 'repository sync', 'fork PR', 'remote refresh'] as const)(
     'recovers %s after real Git ref contention clears',
     async operation => {
