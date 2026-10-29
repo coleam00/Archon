@@ -201,20 +201,15 @@ describe('CodexProvider', () => {
         const calls = mockLogger.debug.mock.calls.filter(([fields]) => 'runId' in fields);
         if (chunk.type === 'result') expect(calls).toEqual([]);
         if (chunk.type === 'settled') {
-          expect(calls.map(([, phase]) => phase)).toEqual([
-            'codex.host_tool_calls_finished',
-            'codex.stdin_finished',
-            'codex.child_exit',
-            'codex.child_close',
-            'codex.settle',
-          ]);
           const runId: unknown = calls[0][0].runId;
           expect(typeof runId).toBe('string');
-          for (const [fields, phase] of calls) {
-            expect(fields).toEqual(
-              phase === 'codex.child_exit' ? { runId, code: 0, signal: null } : { runId }
-            );
-          }
+          expect(calls).toEqual([
+            [{ runId }, 'codex.host_tool_calls_finished'],
+            [{ runId }, 'codex.stdin_finished'],
+            [{ runId, code: 0, signal: null }, 'codex.child_exit'],
+            [{ runId }, 'codex.child_close'],
+            [{ runId }, 'codex.settle'],
+          ]);
           ids.push(String(runId));
         }
       }
