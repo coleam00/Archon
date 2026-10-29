@@ -274,7 +274,7 @@ async function recheckNamedScriptSource(
 async function runScript(
   ctx: RunLayersContext,
   node: ExecNode,
-  { command, args }: ScriptInvocation,
+  { command, args, input }: ScriptInvocation,
   env: NodeJS.ProcessEnv
 ): Promise<ReturnType<typeof certifyExecOutput>> {
   const { workflowRun } = ctx;
@@ -289,6 +289,7 @@ async function runScript(
       cwd: ctx.cwd,
       timeout: node.timeout,
       endTreeOnTimeout: true,
+      input,
       env,
       protectedEnvKeys: ctx.config.protectedEnvKeys,
       protectedCredentialValues: ctx.config.protectedCredentialValues,
