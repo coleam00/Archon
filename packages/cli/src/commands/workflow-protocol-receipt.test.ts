@@ -19,8 +19,10 @@ import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-
 import { setLogLevel } from '@archon/paths';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
 import { checkInstalledProviders } from './doctor-providers';
-import { listPlugins } from './plugin-installed';
+import { listPlugins, removePlugin } from './plugin-installed';
 import { installBinaryPlugin } from './plugin-binary';
+import { brokenReceiptNote } from './plugin-common';
+import { installPlugin } from './plugin-install';
 import { parsePluginRef } from './plugin-source';
 import { spyOnJsonStdout, spyOnStderr } from '../test-support/workflow-harness-output';
 import { captureCommand } from '../test-support/command';
@@ -84,7 +86,9 @@ test.each([false, true])(
             const notice = listStderr.mock.calls.flat().join('');
             expect(notice).toContain(`Plugin unavailable: ${id}`);
             expect(notice).toContain('uses protocol 2, but this Archon requires protocol 3');
-            expect(notice).toContain('archon provider add claude');
+            expect(notice).toContain(
+              `archon plugin remove ${maintainedProviderPluginId('claude')}`
+            );
           }
         } finally {
           listStdout.mockRestore();
@@ -99,7 +103,9 @@ test.each([false, true])(
             expect(payload).toMatchObject({ passed: 1, failed: 0, errors: [] });
             const notice = stderr.mock.calls.flat().join('');
             expect(notice).toContain('uses protocol 2, but this Archon requires protocol 3');
-            expect(notice).toContain('archon provider add claude');
+            expect(notice).toContain(
+              `archon plugin remove ${maintainedProviderPluginId('claude')}`
+            );
           }
           fixtureOutput = stdout.mock.calls
             .map((call: readonly unknown[]) => String(call[0]))
@@ -117,7 +123,9 @@ test.each([false, true])(
     if (!json) {
       expect(result.output).toContain(`Plugin unavailable: ${id}`);
       expect(result.output).toContain('uses protocol 2, but this Archon requires protocol 3');
-      expect(result.output).toContain('archon provider add claude');
+      expect(result.output).toContain(
+        `archon plugin remove ${maintainedProviderPluginId('claude')}`
+      );
     }
     if (!json) expect(fixtureOutput).toContain('1 passed, 0 failed');
     expect(result.output + fixtureOutput).not.toContain('workflow(s) failed to load');
@@ -176,7 +184,11 @@ test('repair prerequisites admit each old provider alongside other old receipts'
   expect(scan.broken).toHaveLength(entries.length);
   for (const entry of entries) {
     const notice = scan.broken.find(value => value.id === entry.id);
-    expect(notice?.message).toContain(`If ${entry.target} exists, move it aside before retrying`);
+    if (isMaintainedProvider(entry.descriptor.id)) {
+      expect(notice?.message).toContain(`archon plugin remove ${entry.id}`);
+    } else {
+      expect(notice?.message).toContain(`If ${entry.target} exists, move it aside before retrying`);
+    }
     const install = () =>
       installBinaryPlugin(
         parsePluginRef(entry.id),
@@ -209,7 +221,9 @@ test('list and doctor distinguish old protocols and retain healthy peer versions
       expect(check.status).toBe('fail');
       expect(check.message).toContain('peer (1.2.3)');
       expect(check.message).toContain(`Plugin unavailable: ${old.id}`);
-      expect(check.message).toContain('archon provider add claude');
+      expect(check.message).toContain(
+        `archon plugin remove ${maintainedProviderPluginId('claude')}`
+      );
     } finally {
       clearRegistry();
     }
@@ -218,3 +232,131 @@ test('list and doctor distinguish old protocols and retain healthy peer versions
   expect(result.output).toContain(`${old.id}  unavailable  Plugin unavailable:`);
   expect(result.output).not.toContain('unreadable');
 });
+
+test.each(['acme', 'acme/broken@v1', 'acme/repo/plugins/broken@v1'])(
+  'old provider at stray location %s keeps manual deletion advice',
+  async id => {
+    const root = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-stray-')));
+    const pluginsDir = join(root, 'plugins');
+    const entry = await installReceipt(pluginsDir, 'community', 2);
+    const file = receiptPath(pluginsDir, id);
+    await mkdir(dirname(file), { recursive: true });
+    await rename(receiptPath(pluginsDir, entry.id), file);
+    const scan = await scanReceipts(pluginsDir);
+    expect(scan.broken).toHaveLength(1);
+    expect(brokenReceiptNote(scan.broken[0])).toContain('delete it by hand');
+    const env = { pluginsDir, projectDir: root, archonVersion: '1.2.3' };
+    await expect(installPlugin(parsePluginRef('acme/new'), 'install', env)).rejects.toThrow(
+      'delete it by hand'
+    );
+    const target = join(
+      pluginsDir,
+      entry.manifest.executable + (process.platform === 'win32' ? '.exe' : '')
+    );
+    await writeFile(target, 'stray executable');
+    await expect(
+      installBinaryPlugin(
+        parsePluginRef(entry.id),
+        { kind: 'provider', manifest: entry.manifest, tag: 'v1.2.3', commit: 'a'.repeat(40) },
+        scan.receipts,
+        scan.broken,
+        undefined,
+        env,
+        async () => {
+          throw new Error('must not acquire');
+        }
+      )
+    ).rejects.toThrow('delete it by hand');
+  }
+);
+
+test('JSON workflows retain project results when the installed store cannot be scanned', async () => {
+  const root = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-scan-')));
+  const home = join(root, 'home');
+  const project = join(root, 'project');
+  const workflow = join(project, '.archon', 'workflows', 'scan-check');
+  await mkdir(join(workflow, 'fixtures'), { recursive: true });
+  await writeFile(
+    join(workflow, 'check.yaml'),
+    'name: scan-check\ndescription: Test\nnodes:\n  - id: check\n    prompt: Check\n'
+  );
+  await writeFile(
+    join(workflow, 'fixtures', 'check.stubs.yaml'),
+    'fixture:\n  expect: completed\ncheck: done\n'
+  );
+  await mkdir(join(home, 'plugins'), { recursive: true });
+  await writeFile(join(home, 'plugins', 'installed'), 'not a directory');
+  const result = await captureCommand({ ARCHON_HOME: home }, async () => {
+    setPlatformPolicies(defaultPlatformPolicies);
+    clearRegistry();
+    registerProvider(processProviderRegistration(claudeDescriptor, ['unused']));
+    const stdout = spyOnJsonStdout();
+    try {
+      await workflowListCommand(project, { json: true });
+      const list = JSON.parse(String(stdout.mock.calls[0]?.[0]));
+      expect(list.workflows.some((entry: { name: string }) => entry.name === 'scan-check')).toBe(
+        true
+      );
+      expect(list.errors).toHaveLength(1);
+      expect(JSON.stringify(list.errors)).toContain(join(home, 'plugins'));
+      stdout.mockClear();
+      expect(await workflowTestCommand(project, 'scan-check', { json: true })).toBe(1);
+      const report = JSON.parse(String(stdout.mock.calls[0]?.[0]));
+      expect(report.passed).toBe(1);
+      expect(report.errors).toHaveLength(1);
+      expect(JSON.stringify(report.errors)).toContain(join(home, 'plugins'));
+    } finally {
+      stdout.mockRestore();
+      clearPlatformPolicies();
+      clearRegistry();
+    }
+  });
+  expect(result.status, result.output).toBe(0);
+});
+
+test('doctor fails on a malformed receipt beside a healthy provider', async () => {
+  const home = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-doctor-')));
+  const pluginsDir = join(home, 'plugins');
+  const peer = await installReceipt(pluginsDir, 'peer', 3);
+  const file = receiptPath(pluginsDir, 'acme/broken');
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, '{invalid json');
+  const result = await captureCommand({ ARCHON_HOME: home }, async () => {
+    clearRegistry();
+    try {
+      registerProvider(processProviderRegistration(peer.descriptor, ['unused']));
+      const check = await checkInstalledProviders(providerRegistry);
+      expect(check.status).toBe('fail');
+      expect(check.message).toContain('peer (1.2.3)');
+      expect(check.message).toContain(`Invalid JSON in plugin receipt ${file}`);
+    } finally {
+      clearRegistry();
+    }
+  });
+  expect(result.status, result.output).toBe(0);
+});
+
+test.each([...MAINTAINED_PROVIDER_IDS])(
+  'source repair removes obsolete %s receipt and preserves its executable',
+  async provider => {
+    const home = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-remove-')));
+    const pluginsDir = join(home, 'plugins');
+    const entry = await installReceipt(pluginsDir, provider, 2);
+    const target = join(pluginsDir, entry.manifest.executable);
+    await writeFile(target, 'old executable');
+    const result = await captureCommand({ ARCHON_HOME: home }, async () => {
+      const scan = await scanReceipts(pluginsDir);
+      expect(scan.broken[0].message).toContain(`archon plugin remove ${entry.id}`);
+      await removePlugin(parsePluginRef(entry.id), {
+        pluginsDir,
+        projectDir: home,
+        archonVersion: '1.2.3',
+      });
+      expect((await scanReceipts(pluginsDir)).broken).toEqual([]);
+      expect(await Bun.file(target).text()).toBe('old executable');
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain('Removed the unavailable receipt');
+    expect(result.output).not.toContain('unreadable');
+  }
+);

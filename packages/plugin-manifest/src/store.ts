@@ -12,6 +12,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join, sep } from 'node:path';
 import { z } from 'zod';
+import { BUNDLED_IS_BINARY } from '@archon/paths';
 import { isMaintainedProvider } from '@archon/provider-contract';
 import {
   PROVIDER_PLUGIN_PROTOCOL,
@@ -126,17 +127,22 @@ async function readReceipt(
   const provider = providerProtocolReceiptSchema.safeParse(raw);
   if (provider.success && provider.data.descriptor.protocol !== PROVIDER_PLUGIN_PROTOCOL) {
     const descriptor = provider.data.descriptor;
-    const command =
-      isMaintainedProvider(descriptor.id) && isMaintainedProviderPlugin(id, descriptor.id)
-        ? `archon provider add ${descriptor.id}`
-        : `archon plugin update ${id}`;
+    const maintained =
+      isMaintainedProvider(descriptor.id) && isMaintainedProviderPlugin(id, descriptor.id);
+    const command = maintained
+      ? `archon provider add ${descriptor.id}`
+      : `archon plugin update ${id}`;
     const executable = join(
       pluginsDir,
       provider.data.manifest.executable + (process.platform === 'win32' ? '.exe' : '')
     );
+    const repair =
+      maintained && !BUNDLED_IS_BINARY
+        ? `Source checkouts run maintained providers from source. Remove this obsolete receipt: archon plugin remove ${id}`
+        : `If ${executable} exists, move it aside before retrying. Run: ${command}`;
     return {
       unavailableReason: 'provider-protocol',
-      message: `Plugin unavailable: ${id} (provider '${descriptor.id}') uses protocol ${descriptor.protocol}, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. If ${executable} exists, move it aside before retrying. Run: ${command}`,
+      message: `Plugin unavailable: ${id} (provider '${descriptor.id}') uses protocol ${descriptor.protocol}, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. ${repair}`,
     };
   }
   return { message: `Invalid plugin receipt ${file}: ${describeIssues(parsed.error)}` };

@@ -57,7 +57,10 @@ import {
 } from './workflow-inspect';
 
 async function reportUnavailablePlugins(): Promise<void> {
-  const { broken } = await scanReceipts(getPluginsPath());
+  // Discovery reports scan failures alongside any independently loaded workflows.
+  const scan = await scanReceipts(getPluginsPath()).catch(() => undefined);
+  if (!scan) return;
+  const { broken } = scan;
   for (const entry of broken) {
     if (entry.unavailableReason) await writeStderr(`${entry.message}\n`);
   }

@@ -26,17 +26,17 @@ export function stagingName(fileName: string): string {
 }
 
 export function brokenReceiptNote(broken: BrokenReceipt): string {
-  if (broken.unavailableReason) return broken.message;
   // A receipt.json placed outside the owner/repo layout has no id the commands accept.
   let ref: PluginRef;
   try {
     ref = parsePluginRef(broken.id);
   } catch {
-    return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand`;
+    return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand (${broken.file})`;
   }
   if (ref.id !== broken.id) {
-    return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand`;
+    return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand (${broken.file})`;
   }
+  if (broken.unavailableReason) return broken.message;
   return `${broken.message}. Repair it: archon plugin update ${broken.id}, or archon plugin remove ${broken.id}`;
 }
 

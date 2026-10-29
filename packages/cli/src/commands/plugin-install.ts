@@ -66,7 +66,7 @@ export async function installPlugin(
   }
   if (brokenSelf) {
     console.log(
-      `  Replaced the unreadable receipt ${brokenSelf.file}. The files it named could not be identified; any this install did not overwrite remain under ${env.pluginsDir}.`
+      `  Replaced the ${brokenSelf.unavailableReason ? 'unavailable' : 'unreadable'} receipt ${brokenSelf.file}. File ownership could not be verified; any this install did not overwrite remain under ${env.pluginsDir}.`
     );
   }
 }

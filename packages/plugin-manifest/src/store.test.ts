@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { BUNDLED_IS_BINARY } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerCapabilitiesSchema, MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
 import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
@@ -110,11 +111,19 @@ test.each([
     const { receipts, broken } = await scanReceipts(dir);
     expect(receipts).toEqual([]);
     expect(broken).toHaveLength(1);
+    const sourceRemoval =
+      MAINTAINED_PROVIDER_IDS.some(value => id === maintainedProviderPluginId(value)) &&
+      !BUNDLED_IS_BINARY;
+    const repair = sourceRemoval
+      ? `Source checkouts run maintained providers from source. Remove this obsolete receipt: archon plugin remove ${id}`
+      : `If ${join(dir, 'archon-provider-' + provider + (process.platform === 'win32' ? '.exe' : ''))} exists, move it aside before retrying. Run: ${command}`;
     expect(broken[0]).toMatchObject({
       unavailableReason: 'provider-protocol',
-      message: `Plugin unavailable: ${id} (provider '${provider}') uses protocol 2, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. If ${join(dir, 'archon-provider-' + provider + (process.platform === 'win32' ? '.exe' : ''))} exists, move it aside before retrying. Run: ${command}`,
+      message: `Plugin unavailable: ${id} (provider '${provider}') uses protocol 2, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. ${repair}`,
     });
-    await expect(readReceipts(dir)).rejects.toThrow(command);
+    await expect(readReceipts(dir)).rejects.toThrow(
+      sourceRemoval ? `archon plugin remove ${id}` : command
+    );
   }
 );
 
