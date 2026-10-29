@@ -190,7 +190,7 @@ The write merges: a key it sets replaces that key, a key it unsets is removed, a
 
 ## The queue contract
 
-Everything above is also JSON, for scripts and agents. The list, the single read, the stream and `workflow wait` derive from the same run projection, so they never disagree about what a run needs.
+Everything above is also JSON, for scripts and agents. The list, the single read, the stream and `workflow wait` share the run projection for readable runs. An unreadable stored descendant is an exception: a batch can omit its blocked parent, while a single read or `workflow wait` can fail.
 
 | Operation | CLI | HTTP |
 |---|---|---|
@@ -204,7 +204,7 @@ Everything above is also JSON, for scripts and agents. The list, the single read
 
 An unreadable stored origin cannot become an item. Batch list and count results instead include
 an optional `degraded` array with one `{ "type": "degraded", "reason": "run_unreadable", "runId": "<id>" }`
-per unreadable paused run. Valid work stays available; counts cover readable matching items only.
+per unreadable paused run. A parent blocked on an unreadable paused descendant can be omitted because the child already has a report. If the unreadable descendant is not paused, the batch reports the affected paused parent instead. An absent parent does not mean its block has cleared. Independent valid work stays available; counts cover readable matching items only.
 Healthy results omit the array. Project views omit warning IDs because membership cannot be established;
 label filters retain the warnings too. The console shows repair advisories beside actionable work,
 and CLI text does the same. These diagnostics offer no resume or answer action and change no run state.
@@ -240,7 +240,7 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
 }
 ```
 
-- **`kind`** is one of the four kinds above. A `usage_limit` item carries `node` and `resetAt` and has no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers a parent whose sub-run tree cannot be read: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
+- **`kind`** is one of the four kinds above. A `usage_limit` item carries `node` and `resetAt` and has no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
 - **`occurrence`** identifies an answerable pause. Pass it back with `--occurrence`. If a refusal does not name the current occurrence, read the item again before retrying.
 - **`revision`** starts at 1 and grows by one with every label write on an attention wait. It stays 1 for other kinds, so it does not identify every change to an item.
 - **`project`** is the project the run belongs to, never a label. `key` is the storage key [state documents](/reference/cli/#state) scope by, so `archon state --project <item.project.key>` reaches the same project. Copy it exactly when you pass `--project`. `codebaseId` is null for a project with no codebase row, such as a run in an unregistered directory (`@cwd/<basename>-<digest>`). A run started before its codebase was renamed keeps the key it started with. `project` is null only for a run with no trusted storage root.

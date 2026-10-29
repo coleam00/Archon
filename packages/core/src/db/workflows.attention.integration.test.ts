@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { afterAll, expect, mock, spyOn, test } from 'bun:test';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/run-status';
 import type { WorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
@@ -150,73 +151,113 @@ test.each([
 test.each(
   ['child_workflow', 'fan_out'].flatMap(type =>
     ['private-origin-sentinel-not-json', '[]'].flatMap(origin =>
-      [false, true].map(nested => ({ type, origin, nested }))
+      workflowRunStatusSchema.options.flatMap(status =>
+        [false, true].map(nested => ({ type, origin, nested, status }))
+      )
     )
   )
-)('batch attention contains unreadable descendants: %j', async ({ type, origin, nested }) => {
-  const { listAttentionQueue } = await import('@archon/workflows/attention-queue');
-  const ids: string[] = [];
-  async function paused(approval: Record<string, unknown>) {
-    const run = await workflows.createWorkflowRun({
-      workflow_name: 'mixed-tree',
-      user_message: '',
+)(
+  'batch attention contains unreadable descendants: %j',
+  async ({ type, origin, nested, status }) => {
+    const { listAttentionQueue } = await import('@archon/workflows/attention-queue');
+    const ids: string[] = [];
+    async function paused(approval: Record<string, unknown>) {
+      const run = await workflows.createWorkflowRun({
+        workflow_name: 'mixed-tree',
+        user_message: '',
+      });
+      ids.push(run.id);
+      await db.query(
+        "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+        [
+          JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?', ...approval } }),
+          run.id,
+        ]
+      );
+      return run;
+    }
+    const blocked = (childRunId: string) =>
+      type === 'child_workflow' ? { type, childRunId } : { type, childRunIds: [childRunId] };
+    const valid = await paused({});
+    const child = await paused({});
+    await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+      origin,
+      child.id,
+    ]);
+    await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+      status,
+      child.id,
+    ]);
+    const badPaused = status === 'paused' ? child : await paused({});
+    if (badPaused !== child) {
+      await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+        origin,
+        badPaused.id,
+      ]);
+    }
+    const intermediate = nested ? await paused(blocked(child.id)) : child;
+    const parent = await paused(blocked(intermediate.id));
+    const missing = await paused(blocked(crypto.randomUUID()));
+    const snapshot = async () => ({
+      rows: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
+      events: (await db.query('SELECT * FROM remote_agent_workflow_events ORDER BY id')).rows,
     });
-    ids.push(run.id);
-    await db.query(
-      "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
-      [JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?', ...approval } }), run.id]
-    );
-    return run;
+    const before = await snapshot();
+    const { getLog } = await import('./workflow-run-shared');
+    const log = spyOn(getLog(), 'error').mockImplementation(() => {});
+    const pointRead = mock(workflows.getWorkflowRunForAttention);
+    try {
+      const result = splitAttentionRead(
+        await listAttentionQueue({
+          store: {
+            listAttentionQueueRows: workflows.listAttentionQueueRows,
+            getWorkflowRun: workflows.getWorkflowRun,
+            getWorkflowRunForAttention: pointRead,
+            getCodebase: async () => null,
+          },
+          branchOf: async () => null,
+        })
+      );
+      expect(result.values.map(item => item.runId)).toContain(valid.id);
+      expect(result.values.find(item => item.runId === missing.id)?.kind).toBe('unreadable');
+      expect(result.values.map(item => item.runId)).not.toContain(parent.id);
+      if (nested) expect(result.values.map(item => item.runId)).not.toContain(intermediate.id);
+      expect(result.degraded).toEqual(
+        expect.arrayContaining([
+          { type: 'degraded', reason: 'run_unreadable', runId: badPaused.id },
+          ...(status === 'paused'
+            ? []
+            : [
+                { type: 'degraded', reason: 'run_unreadable', runId: parent.id },
+                ...(nested
+                  ? [{ type: 'degraded', reason: 'run_unreadable', runId: intermediate.id }]
+                  : []),
+              ]),
+        ])
+      );
+      expect(result.degraded).toHaveLength(status === 'paused' ? 1 : nested ? 3 : 2);
+      expect(pointRead.mock.calls.length).toBeGreaterThan(0);
+      if (status === 'paused')
+        expect(pointRead.mock.calls.map(([id]) => id)).not.toContain(child.id);
+      if (nested) expect(pointRead.mock.calls.map(([id]) => id)).toContain(intermediate.id);
+      expect(log.mock.calls).toEqual([
+        [{ workflowRunId: badPaused.id }, 'attention_run_normalization_failed'],
+        ...(status === 'paused'
+          ? []
+          : Array.from(
+              { length: nested ? 2 : 1 },
+              () => [{ workflowRunId: child.id }, 'attention_run_normalization_failed'] as const
+            )),
+      ]);
+      expect(JSON.stringify(result)).not.toContain('private-origin-sentinel');
+      expect(await snapshot()).toEqual(before);
+    } finally {
+      log.mockRestore();
+      for (const id of ids)
+        await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
+    }
   }
-  const blocked = (childRunId: string) =>
-    type === 'child_workflow' ? { type, childRunId } : { type, childRunIds: [childRunId] };
-  const valid = await paused({});
-  const child = await paused({});
-  await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
-    origin,
-    child.id,
-  ]);
-  const intermediate = nested ? await paused(blocked(child.id)) : child;
-  await paused(blocked(intermediate.id));
-  const missing = await paused(blocked(crypto.randomUUID()));
-  const snapshot = async () => ({
-    rows: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
-    events: (await db.query('SELECT * FROM remote_agent_workflow_events ORDER BY id')).rows,
-  });
-  const before = await snapshot();
-  const { getLog } = await import('./workflow-run-shared');
-  const log = spyOn(getLog(), 'error').mockImplementation(() => {});
-  const pointRead = mock(workflows.getWorkflowRun);
-  try {
-    const result = splitAttentionRead(
-      await listAttentionQueue({
-        store: {
-          listAttentionQueueRows: workflows.listAttentionQueueRows,
-          getWorkflowRun: pointRead,
-          getCodebase: async () => null,
-        },
-        branchOf: async () => null,
-      })
-    );
-    expect(result.values.map(item => item.runId)).toContain(valid.id);
-    expect(result.values.find(item => item.runId === missing.id)?.kind).toBe('unreadable');
-    expect(result.degraded).toEqual([
-      { type: 'degraded', reason: 'run_unreadable', runId: child.id },
-    ]);
-    expect(pointRead.mock.calls.length).toBeGreaterThan(0);
-    expect(pointRead.mock.calls.map(([id]) => id)).not.toContain(child.id);
-    if (nested) expect(pointRead.mock.calls.map(([id]) => id)).toContain(intermediate.id);
-    expect(log.mock.calls).toEqual([
-      [{ workflowRunId: child.id }, 'attention_run_normalization_failed'],
-    ]);
-    expect(JSON.stringify(result)).not.toContain('private-origin-sentinel');
-    expect(await snapshot()).toEqual(before);
-  } finally {
-    log.mockRestore();
-    for (const id of ids)
-      await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
-  }
-});
+);
 
 test('batch attention preserves unexpected descendant read failures', async () => {
   const { listAttentionQueue } = await import('@archon/workflows/attention-queue');
@@ -236,20 +277,22 @@ test('batch attention preserves unexpected descendant read failures', async () =
     ]
   );
   const failure = new Error('point read unavailable');
+  const rows = await workflows.listAttentionQueueRows();
+  const query = spyOn(db, 'query').mockRejectedValueOnce(failure);
   try {
     await expect(
       listAttentionQueue({
         store: {
-          listAttentionQueueRows: workflows.listAttentionQueueRows,
-          getWorkflowRun: async () => {
-            throw failure;
-          },
+          listAttentionQueueRows: async () => rows,
+          getWorkflowRun: workflows.getWorkflowRun,
+          getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
           getCodebase: async () => null,
         },
         branchOf: async () => null,
       })
     ).rejects.toBe(failure);
   } finally {
+    query.mockRestore();
     await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [run.id]);
   }
 });

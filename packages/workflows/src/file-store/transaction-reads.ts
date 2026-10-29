@@ -21,6 +21,7 @@ type TransactionReads = Pick<
   TransactionView,
   | 'listDueWorkflowContinuations'
   | 'getWorkflowRun'
+  | 'getWorkflowRunForAttention'
   | 'getWorkflowRunStatus'
   | 'listWorkflowEvents'
   | 'listEventsForRuns'
@@ -109,6 +110,7 @@ export function createTransactionReads(
           .slice(0, limit)
       ),
     getWorkflowRun: async id => structuredClone(runs.get(id) ?? null),
+    getWorkflowRunForAttention: async id => structuredClone(runs.get(id) ?? null),
     getWorkflowRunStatus: async id => runs.get(id)?.status ?? null,
     listWorkflowEvents: async (id, options) =>
       listEvents(id).filter(event => !options?.excludeEventTypes?.includes(event.event_type)),

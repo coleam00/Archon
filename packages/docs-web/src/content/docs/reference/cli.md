@@ -1003,8 +1003,12 @@ The default scope is the current project, resolved from the working directory as
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
 `item` is null when there is no queue item; a parent blocked on sub-runs resolves to the
-item of the child that holds the pause, or to its own `unreadable` item when its sub-run
-tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
+item of the child that holds the pause, or to its own `unreadable` item for a missing
+child, a revisited run, or a tree exceeding 500 runs. A descendant with unreadable stored
+origin data can instead make a single read fail. Batch lists omit a parent blocked on an
+unreadable paused descendant and report that child through `degraded`; if the descendant
+is not paused, they report the affected paused parent instead. An absent parent does not
+mean its block has cleared. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
 
 Batch list and count reads add an optional `degraded` array when paused rows cannot be read,

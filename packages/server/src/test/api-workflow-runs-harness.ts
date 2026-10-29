@@ -189,6 +189,7 @@ mock.module('@archon/core', () => ({
   createWorkflowDeps: mock(() => ({
     store: {
       getWorkflowRun: mockGetWorkflowRun,
+      getWorkflowRunForAttention: mockGetWorkflowRun,
       signalWorkflowWait: mockSignalWorkflowWait,
       listDueWorkflowContinuations: mockListDueWorkflowContinuations,
       deferWorkflowContinuation: mock(async () => {}),
@@ -394,6 +395,7 @@ mock.module('@archon/core/db/workflows', () => ({
   listDashboardRuns: mockListDashboardRuns,
   listAttentionQueueRows: mockListAttentionQueueRows,
   getWorkflowRun: mockGetWorkflowRun,
+  getWorkflowRunForAttention: mockGetWorkflowRun,
   findChildRuns: mockFindChildRuns,
   cancelWorkflowRun: mockCancelWorkflowRun,
   deleteWorkflowRun: mockDeleteWorkflowRun,

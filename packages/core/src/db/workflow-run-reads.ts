@@ -1,3 +1,4 @@
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import {
   STALE_PENDING_AGE_MS,
   WORKFLOW_PATH_LOCK_STATUSES,
@@ -14,7 +15,11 @@ import {
 import { getDatabaseType, getDialect, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { notOriginAnchor } from './workflow-origin-anchor';
-import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
+import {
+  normalizeWorkflowRun,
+  readWorkflowRunOrigin,
+  type WorkflowRunRow,
+} from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
 import { WorkflowStatusReadError, readWorkflowRunStatus } from './workflow-run-status';
 
@@ -32,6 +37,25 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
     getLog().error({ err }, 'db.workflow_run_get_failed');
     throw new Error(`Failed to get workflow run: ${err.message}`);
   }
+}
+
+export async function getWorkflowRunForAttention(
+  id: string
+): Promise<AttentionRead<WorkflowRun> | null> {
+  const result = await pool.query<WorkflowRunRow>(
+    'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
+    [id]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  try {
+    readWorkflowRunOrigin(row);
+  } catch {
+    // Origin parser errors can include private stored contents.
+    getLog().error({ workflowRunId: id }, 'attention_run_normalization_failed');
+    return { type: 'degraded', reason: 'run_unreadable', runId: id };
+  }
+  return normalizeWorkflowRun(row);
 }
 
 /**

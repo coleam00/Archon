@@ -168,6 +168,7 @@ export type AttentionWatchStore = Pick<
   | 'readWorkflowEventsAfter'
   | 'listAttentionQueueRows'
   | 'getWorkflowRun'
+  | 'getWorkflowRunForAttention'
   | 'getCodebase'
   | 'listWorkflowRuns'
   | 'listEventsForRuns'

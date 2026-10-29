@@ -170,6 +170,7 @@ export function createWorkflowStore(): IWorkflowStore {
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,
     recordWorkflowRunCheckoutBaseline: workflowDb.recordWorkflowRunCheckoutBaseline,
     getWorkflowRun: workflowDb.getWorkflowRun,
+    getWorkflowRunForAttention: workflowDb.getWorkflowRunForAttention,
     findChildRuns: workflowDb.findChildRuns,
     getRunAncestry: workflowDb.getRunAncestry,
     getActiveWorkflowRunByPath: workflowDb.getActiveWorkflowRunByPath,
