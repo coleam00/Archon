@@ -8,6 +8,7 @@ import { describeWorkflowStoreConformance } from '@archon/workflows/store-confor
 import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
+  describeSqlAttentionReadConformance,
 } from './workflow-store.conformance-harness';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
@@ -31,6 +32,7 @@ const makeHarness = async () => {
 describeWorkflowStoreConformance('SQLite', makeHarness);
 
 describeSqlStatusReadConformance(makeHarness);
+describeSqlAttentionReadConformance(makeHarness, 'sqlite');
 
 test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
   const harness = await makeHarness();

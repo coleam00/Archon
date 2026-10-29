@@ -7,6 +7,7 @@
  * (`attention-watch.ts`) cannot disagree. Labels are data. The queue filters them by exact match and sorts them as
  * plain strings, and nothing here depends on who is asking.
  */
+import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
 import { z } from 'zod';
 import {
   getRunArtifactsDirForRoot,
@@ -313,11 +314,15 @@ export async function attentionQueueItemForRun(
 /** The items for rows the store's queue list returned, in their order. */
 export async function attentionQueueItems(
   source: AttentionQueueSource,
-  runs: readonly WorkflowRun[]
-): Promise<AttentionQueueItem[]> {
+  runs: readonly AttentionRead<WorkflowRun>[]
+): Promise<AttentionRead<AttentionQueueItem>[]> {
   const codebases: CodebaseCache = new Map();
-  const items: AttentionQueueItem[] = [];
+  const items: AttentionRead<AttentionQueueItem>[] = [];
   for (const run of runs) {
+    if (isAttentionDegraded(run)) {
+      items.push(run);
+      continue;
+    }
     const item = await attentionQueueItemForRun(source, run, codebases);
     if (item !== null) items.push(item);
   }
@@ -327,7 +332,7 @@ export async function attentionQueueItems(
 /** Every item in the install, in the store's order: most recently started run first. */
 export async function listAttentionQueue(
   source: AttentionQueueSource
-): Promise<AttentionQueueItem[]> {
+): Promise<AttentionRead<AttentionQueueItem>[]> {
   return attentionQueueItems(source, await source.store.listAttentionQueueRows());
 }
 

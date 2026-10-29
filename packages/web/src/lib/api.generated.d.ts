@@ -5510,6 +5510,13 @@ export interface components {
     RunsNeedingAttentionResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
       items: components['schemas']['AttentionQueueItem'][];
+      degraded?: {
+        /** @enum {string} */
+        type: 'degraded';
+        /** @enum {string} */
+        reason: 'run_unreadable';
+        runId?: string;
+      }[];
     };
     DashboardWorkflowRun: {
       origin: {
@@ -6456,6 +6463,13 @@ export interface components {
         };
     AttentionQueueCountsResponse: {
       counts: components['schemas']['AttentionQueueCounts'];
+      degraded?: {
+        /** @enum {string} */
+        type: 'degraded';
+        /** @enum {string} */
+        reason: 'run_unreadable';
+        runId?: string;
+      }[];
     };
     AttentionQueueCounts:
       | {

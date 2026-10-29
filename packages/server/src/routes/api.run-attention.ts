@@ -1,3 +1,7 @@
+import {
+  splitAttentionRead,
+  scopeAttentionDegraded,
+} from '@archon/workflows/schemas/attention-degraded';
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as workflowDb from '@archon/core/db/workflows';
@@ -135,17 +139,24 @@ export function registerRunAttentionRoutes(
       }
       // One read backs both the items and the console's dashboard rows for the same runs.
       const rows = await workflowDb.listAttentionQueueRows();
-      const items = await attentionQueueItems(attentionQueue, rows);
+      const { values: items, degraded } = splitAttentionRead(
+        await attentionQueueItems(attentionQueue, rows)
+      );
+      const reports = scopeAttentionDegraded(degraded, scope);
       const { labels, order, countBy } = request;
       if (countBy !== undefined)
-        return c.json({ counts: countAttentionQueue(items, { scope, labels, countBy }) });
+        return c.json({
+          counts: countAttentionQueue(items, { scope, labels, countBy }),
+          ...reports,
+        });
       const selected = selectAttentionQueue(items, { scope, labels, order });
       const ids = new Set(selected.map(item => item.runId));
-      const runs = rows.filter(run => ids.has(run.id));
+      const runs = splitAttentionRead(rows).values.filter(run => ids.has(run.id));
       // The queue lists only paused runs, and only a running run has an owner to observe.
       return c.json({
         runs: runs.map(run => toApiDashboardWorkflowRun(run, null)),
         items: selected,
+        ...reports,
       });
     } catch (error) {
       getLog().error({ err: error }, 'list_runs_needing_attention_failed');

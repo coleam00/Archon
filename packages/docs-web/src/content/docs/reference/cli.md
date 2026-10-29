@@ -1006,8 +1006,17 @@ item of the child that holds the pause, or to its own `unreadable` item when its
 tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
 
+Batch list and count reads add an optional `degraded` array when paused rows cannot be read,
+with one `{ "type": "degraded", "reason": "run_unreadable", "runId": "<id>" }` per run.
+`runId` is present only for install-wide reads; project membership is unknown for these rows.
+Warnings survive label and project filters. Readable items remain available, counts cover only
+readable matches, and mixed reads still exit `0`. Text output prints a repair advisory per warning.
+Healthy JSON omits `degraded`. Operator logs retain safe run IDs without stored origin contents;
+repair the stored data and read again.
+
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open
-item in scope, then `ready`, then follows changes any process commits, as
+item in scope and an identifier-free `degraded` warning per unreadable paused row,
+then `ready`, then follows changes any process commits, as
 `attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
 Every run line carries the run's `workflow` and `parentRunId`, so a consumer can keep
 top-level runs or one parent's children, and a failed `terminal` line carries `cause`, the

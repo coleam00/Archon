@@ -1,3 +1,4 @@
+import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { createLogger } from '@archon/paths';
 import type { IDatabase } from '@archon/core/db';
 import { listRunsNeedingAttention, listNotifiedTerminalRuns } from '@archon/core/db/workflows';
@@ -37,7 +38,13 @@ export async function recordActivationBaseline(
   inlinePlatforms: ReadonlySet<string>,
   query: IDatabase['query']
 ): Promise<void> {
-  const runs = await listRunsNeedingAttention(query);
+  const { values: runs, degraded } = splitAttentionRead(await listRunsNeedingAttention(query));
+  for (const report of degraded) {
+    createLogger('server.attention-router').error(
+      { runId: report.runId },
+      'attention.read_degraded'
+    );
+  }
   const conversationPlatforms = await attentionConversationPlatforms(
     runs.map(run => run.id),
     query
@@ -98,10 +105,14 @@ export class AttentionRouter {
       if (state === 'active') active.push(destination);
     }
     if (active.length === 0) return;
-    const [runs, terminalRuns] = await Promise.all([
+    const [entries, terminalRuns] = await Promise.all([
       listRunsNeedingAttention(),
       listNotifiedTerminalRuns(),
     ]);
+    const { values: runs, degraded } = splitAttentionRead(entries);
+    for (const report of degraded) {
+      this.log.error({ runId: report.runId }, 'attention.read_degraded');
+    }
     const runIds = [...runs, ...terminalRuns].map(run => run.id);
     const [ledger, conversationPlatforms, undeliveredNotices] = await Promise.all([
       listAttentionNotices(runIds),

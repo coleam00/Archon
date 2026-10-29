@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MemoryRouter } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { RunsPage } from './RunsPage';
 import { invalidate, set, subscribeKey } from '../store/cache';
 import { K } from '../store/keys';
@@ -58,7 +58,7 @@ test('the banner includes an attention wait with Resume and a gate beyond the fi
     total: 52,
     counts: { all: 52, running: 50, paused: 2, failed: 0, cancelled: 0, completed: 0, pending: 0 },
   });
-  set(K.runsAttention, [old, action]);
+  set(K.runsAttention, { runs: [old, action], degraded: [] });
   const html = renderToStaticMarkup(
     <MemoryRouter>
       <RunsPage />
@@ -83,7 +83,7 @@ test('the attention cache refetches on the same runs cue as the feed', async () 
     },
     async () => {
       reads++;
-      return [action];
+      return { runs: [action], degraded: [] };
     }
   );
   try {
@@ -106,6 +106,7 @@ test('the console attention skill uses the unpaged endpoint and preserves its AP
         typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
       );
       return Response.json({
+        degraded: [{ type: 'degraded', reason: 'run_unreadable', runId: 'bad-skill' }],
         runs: [
           {
             id: action.id,
@@ -121,7 +122,11 @@ test('the console attention skill uses the unpaged endpoint and preserves its AP
     { preconnect: originalFetch.preconnect }
   );
   try {
-    expect((await listRunsNeedingAttention())[0]?.attention).toEqual(action.attention);
+    const result = await listRunsNeedingAttention();
+    expect(result.runs[0]?.attention).toEqual(action.attention);
+    expect(result.degraded).toEqual([
+      { type: 'degraded', reason: 'run_unreadable', runId: 'bad-skill' },
+    ]);
     expect(requests).toEqual(['/api/runs/attention']);
   } finally {
     globalThis.fetch = originalFetch;
@@ -142,7 +147,7 @@ test('unreadable paused gates appear as repair entries without fabricated action
       detail: 'paused with an approval gate this build cannot read',
     },
   });
-  set(K.runsAttention, [repair]);
+  set(K.runsAttention, { runs: [repair], degraded: [] });
   const html = renderToStaticMarkup(
     <MemoryRouter>
       <RunsPage />
@@ -155,3 +160,29 @@ test('unreadable paused gates appear as repair entries without fabricated action
   expect(html).not.toContain('Approve');
   expect(html).not.toContain('Reject');
 });
+
+test.each([false, true])(
+  'degraded advisories preserve valid work without fabricated actions (project: %s)',
+  project => {
+    const degraded = ['bad-a', 'bad-b'].map(runId => ({
+      type: 'degraded' as const,
+      reason: 'run_unreadable' as const,
+      runId,
+    }));
+    set(K.runsAttention, { runs: [{ ...action, projectId: 'alpha' }], degraded });
+    const html = renderToStaticMarkup(
+      <MemoryRouter initialEntries={[project ? '/p/alpha' : '/']}>
+        <Routes>
+          <Route path={project ? '/p/:projectId' : '/'} element={<RunsPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(html.match(/Attention coverage incomplete/g)).toHaveLength(2);
+    expect(html.includes('bad-a')).toBe(!project);
+    expect(html.includes('bad-b')).toBe(!project);
+    expect(html).toContain('data-pending-run-id="action-run"');
+    expect(html).toContain('Resume');
+    expect(html).not.toContain('data-pending-run-id="bad-');
+    expect(html).not.toContain('/console/r/bad-');
+  }
+);

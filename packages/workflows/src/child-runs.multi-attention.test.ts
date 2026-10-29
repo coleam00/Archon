@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { splitAttentionRead } from './schemas/attention-degraded';
 import { makeDeps, makePlatform } from './child-runs/test-utils';
 import { providerRegistry } from '@archon/providers';
 import { afterEach, expect, test } from 'bun:test';
@@ -109,7 +110,13 @@ test('all questions open together and apply independently, second first, across 
   expect(started.success && 'paused' in started && started.paused).toBe(true);
   if (!started.workflowRunId) throw new Error('Expected parent run');
   const parentId = started.workflowRunId;
-  const queue = () => listAttentionQueue({ store, branchOf: async () => null });
+  const queue = async () => {
+    const result = splitAttentionRead(
+      await listAttentionQueue({ store, branchOf: async () => null })
+    );
+    expect(result.degraded).toEqual([]);
+    return result.values;
+  };
   const items = (await queue())
     .filter(item => item.kind === 'attention')
     .sort((a, b) => a.fanOut!.index - b.fanOut!.index);
@@ -207,7 +214,10 @@ test('all opens every question even when the list exceeds the default window', a
     { conversationId: 'conversation' }
   );
   expect(result.success && 'paused' in result && result.paused).toBe(true);
-  const items = await listAttentionQueue({ store, branchOf: async () => null });
+  const { values: items, degraded } = splitAttentionRead(
+    await listAttentionQueue({ store, branchOf: async () => null })
+  );
+  expect(degraded).toEqual([]);
   expect(items).toHaveLength(questions.length);
   expect(items.map(item => item.fanOut?.index).sort()).toEqual([0, 1, 2, 3, 4, 5]);
 });

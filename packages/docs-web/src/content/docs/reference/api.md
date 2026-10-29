@@ -478,6 +478,14 @@ These routes record the decision and return. The server's continuation scheduler
 | GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
 
+List and count responses add `degraded` only when a paused row cannot be read:
+`{ "type": "degraded", "reason": "run_unreadable", "runId": "<id>" }` per unreadable run.
+Readable runs and items remain available; counts cover readable matching items and may be incomplete.
+Project-scoped responses omit each warning's `runId` because project membership is unknown.
+Warnings survive project and label filters. Operator logs retain safe run IDs without stored origin contents.
+Repair the stored data and read again; warnings offer no run action and do not transition runs.
+Healthy responses omit `degraded`.
+
 Queue items include answerable pauses, `usage_limit` waits that continue automatically
 when a provider usage limit resets or a rate limit's wait ends (its reported reset, else a backoff), and `unreadable` pauses needing inspection. Branch on `kind` before acting:
 only `attention` and `awaiting_response` accept answers. Outside answerers can submit an

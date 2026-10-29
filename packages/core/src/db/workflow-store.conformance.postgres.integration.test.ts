@@ -12,6 +12,7 @@ import {
 import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
+  describeSqlAttentionReadConformance,
 } from './workflow-store.conformance-harness';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
@@ -216,6 +217,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   }
 
   describeSqlStatusReadConformance(makeHarness);
+  describeSqlAttentionReadConformance(makeHarness, 'postgresql');
   test.each([false, true])(
     'source suspension excludes a resume on another connection (resumed=%s)',
     async resumed => {
