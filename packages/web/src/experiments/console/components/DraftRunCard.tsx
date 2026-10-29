@@ -12,6 +12,7 @@ import { WorkflowPicker } from './WorkflowPicker';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
+import { HttpError } from '../lib/http';
 import { orderWithRecommended } from '../lib/recommended';
 import { missingRequiredInputs, collectSuppliedInputs } from '../lib/workflow-inputs';
 import { collectRunModelOverrides, type RunModelOverrideRow } from '../lib/run-model-overrides';
@@ -246,7 +247,13 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       setMode('collapsed');
       invalidate('runs');
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to start run.');
+      setError(
+        err instanceof HttpError
+          ? (err.serverError ?? err.bodySnippet)
+          : err instanceof Error
+            ? err.message
+            : 'Failed to start run.'
+      );
     } finally {
       setSubmitting(false);
     }
