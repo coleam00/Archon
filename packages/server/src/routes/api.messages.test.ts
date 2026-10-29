@@ -7,6 +7,7 @@ import { MessagePersistence } from '../adapters/web/persistence';
 import { SSETransport, DASHBOARD_STREAM } from '../adapters/web/transport';
 import { WorkflowEventBridge } from '../adapters/web/workflow-bridge';
 import { validationErrorHook } from './openapi-defaults';
+import { getLog } from './api-route-kit';
 import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 import { MAX_TOOL_OUTPUT_CHARS } from '../adapters/web/truncate';
@@ -768,4 +769,100 @@ describe('SSE route replay', () => {
       }
     }
   );
+});
+
+describe('SSE heartbeat lifecycle', () => {
+  for (const conversationId of ['web-test-abc', DASHBOARD_STREAM]) {
+    test.each(['abort', 'close', 'error'] as const)(
+      `${conversationId} stops heartbeats and finishes after %s`,
+      async disconnect => {
+        const transport = new SSETransport();
+        const webAdapter = new WebAdapter(
+          transport,
+          new MessagePersistence((id, event) => transport.emit(id, event)),
+          new WorkflowEventBridge(transport)
+        );
+        const { app } = makeApp(webAdapter);
+        const waits: ReturnType<typeof Promise.withResolvers<void>>[] = [];
+        let activeStream: SSEStreamingApi | undefined;
+        const sleep = spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(function (
+          this: SSEStreamingApi,
+          ms: number
+        ) {
+          expect(ms).toBe(30000);
+          activeStream = this;
+          const wait = Promise.withResolvers<void>();
+          waits.push(wait);
+          return wait.promise;
+        });
+        const write = spyOn(SSEStreamingApi.prototype, 'writeSSE');
+        const close = spyOn(SSEStreamingApi.prototype, 'close');
+        const remove = spyOn(webAdapter, 'removeStream');
+        const register = spyOn(webAdapter, 'registerStream');
+        const warn = spyOn(getLog(), 'warn').mockClear();
+        const failure = new Error('cancel is part of an unexpected failure message');
+        async function settle(): Promise<void> {
+          for (let i = 0; i < 40; i++) await Promise.resolve();
+        }
+        const response = await app.request(`/api/stream/${conversationId}`);
+        if (!response.body) throw new Error('Missing SSE response body');
+        const reader = response.body.getReader();
+        try {
+          expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+            '"type":"heartbeat"'
+          );
+          await settle();
+          expect(waits).toHaveLength(1);
+          waits[0]!.resolve();
+          expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+            '"type":"heartbeat"'
+          );
+          await settle();
+          expect(waits).toHaveLength(2);
+          expect(write).toHaveBeenCalledTimes(2);
+          if (!activeStream) throw new Error('Heartbeat did not start');
+          if (disconnect === 'abort') {
+            await reader.cancel();
+            expect(activeStream.aborted).toBe(true);
+            expect(activeStream.closed).toBe(false);
+          } else if (disconnect === 'close') {
+            await activeStream.close();
+            expect(activeStream.closed).toBe(true);
+            expect(activeStream.aborted).toBe(false);
+          }
+          const closesBeforeWake = close.mock.calls.length;
+          if (disconnect === 'error') waits[1]!.reject(failure);
+          else waits[1]!.resolve();
+          await settle();
+          expect(write).toHaveBeenCalledTimes(2);
+          expect(waits).toHaveLength(2);
+          // Hono closes the stream after the route callback returns.
+          expect(close).toHaveBeenCalledTimes(closesBeforeWake + 1);
+          expect(remove).toHaveBeenCalledWith(conversationId, register.mock.calls[0]![1]);
+          expect(transport.hasActiveStream(conversationId)).toBe(false);
+          if (disconnect === 'error') {
+            expect(warn).toHaveBeenCalledWith(
+              expect.objectContaining({ err: failure }),
+              conversationId === DASHBOARD_STREAM
+                ? 'dashboard_sse_heartbeat_error'
+                : 'sse_heartbeat_error'
+            );
+          } else {
+            expect(warn).not.toHaveBeenCalled();
+          }
+        } finally {
+          await reader.cancel();
+          for (const wait of waits) wait.reject(new Error('test teardown'));
+          await settle();
+          sleep.mockRestore();
+          write.mockRestore();
+          close.mockRestore();
+          remove.mockRestore();
+          register.mockRestore();
+          warn.mockRestore();
+          transport.stop();
+        }
+      }
+    );
+  }
 });
