@@ -332,6 +332,35 @@ describe('WorktreeProvider against real git', () => {
     }
   );
 
+  test('named task reuse refuses a non-branch symbolic HEAD without changing the checkout', async () => {
+    const branch = 'refs/custom/foo';
+    const namedRequest: IsolationRequest = {
+      ...request,
+      workflowType: 'task',
+      baseBranch: toBranchName('main'),
+      taskBranch: { kind: 'new', branch: toBranchName(branch) },
+    };
+    const remote = join(root, 'remote');
+    await cp(templateRepo, remote, { recursive: true });
+    await git(repoPath, 'remote', 'add', 'origin', remote);
+    const { workingPath: target } = await provider.create(namedRequest);
+    await writeFile(join(target, 'README.md'), 'operator edits\n');
+    await writeFile(join(target, 'untracked.txt'), 'keep me\n');
+    await git(target, 'update-ref', branch, 'HEAD');
+    await git(target, 'symbolic-ref', 'HEAD', branch);
+    const head = await git(target, 'rev-parse', 'HEAD');
+    const status = await git(target, 'status', '--porcelain');
+
+    await expect(provider.create(namedRequest)).rejects.toThrow(
+      `Failed to inspect the current branch at ${target}: HEAD refers to '${branch}', not a local branch`
+    );
+    expect((await git(target, 'symbolic-ref', 'HEAD')).trim()).toBe(branch);
+    expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
+    expect(await git(target, 'status', '--porcelain')).toBe(status);
+    expect(await readFile(join(target, 'README.md'), 'utf8')).toBe('operator edits\n');
+    expect(await readFile(join(target, 'untracked.txt'), 'utf8')).toBe('keep me\n');
+  });
+
   test.each(['workspace sync', 'repository sync', 'fork PR', 'remote refresh'] as const)(
     'recovers %s after real Git ref contention clears',
     async operation => {

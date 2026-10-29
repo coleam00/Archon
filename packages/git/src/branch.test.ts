@@ -440,6 +440,14 @@ describe('git utilities', () => {
       );
     });
 
+    test('getCurrentBranchStrict refuses a symbolic HEAD outside local branches', async () => {
+      execSpy.mockResolvedValue(output('refs/custom/foo\n'));
+
+      await expect(git.getCurrentBranchStrict('/workspace/repo' as Git.RepoPath)).rejects.toThrow(
+        "HEAD refers to 'refs/custom/foo', not a local branch"
+      );
+    });
+
     test('getCurrentBranchStrict returns null only for detached HEAD', async () => {
       execSpy.mockRejectedValue(Object.assign(new Error('not a symbolic ref'), { code: 1 }));
 

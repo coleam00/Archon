@@ -503,7 +503,11 @@ export async function getCurrentBranchStrict(
       ['-C', workingPath, 'symbolic-ref', '--quiet', 'HEAD'],
       { timeout: 10000 }
     );
-    const branch = stdout.trim().replace(/^refs\/heads\//, '');
+    const ref = stdout.trim();
+    if (!ref.startsWith('refs/heads/')) {
+      throw new Error(`HEAD refers to '${ref}', not a local branch`);
+    }
+    const branch = ref.slice('refs/heads/'.length);
     if (!branch) {
       throw new Error(`Git returned no branch for checkout ${workingPath}`);
     }

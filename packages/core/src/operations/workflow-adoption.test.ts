@@ -4,13 +4,17 @@
  *
  * The resolver's whole contract is fail-loud: every refusal names the operator's
  * next action and NONE of them degrade to a fresh start. The database boundary
- * is mocked and the filesystem/git seams are injected; the lane decision logic
- * is what is under test.
+ * is mocked. Most cases inject filesystem/Git seams; real-Git cases verify that
+ * non-branch symbolic refs cannot pass either continuation check.
  */
 import { describe, expect, test } from 'bun:test';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { toBranchName } from '@archon/git';
+import { execFileAsync, toBranchName } from '@archon/git';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   resolveRegisteredWorktree,
   resolveWorkflowAdoption,
@@ -389,5 +393,52 @@ test.each(['token', 'legacy', 'destroyed'] as const)(
         lane
       )
     ).rejects.toThrow('changed during adoption');
+  }
+);
+
+const trackTempRoot = trackTempRoots();
+
+test.each(['selection', 'registration recheck'] as const)(
+  'continuation %s refuses a non-branch symbolic HEAD',
+  async operation => {
+    const target = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-adoption-ref-')));
+    const git = async (...args: string[]) =>
+      (await execFileAsync('git', ['-C', target, ...args])).stdout.trim();
+    await git('init', '-b', 'main');
+    await git(
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.com',
+      'commit',
+      '--allow-empty',
+      '-m',
+      'initial'
+    );
+    const branch = 'refs/custom/foo';
+    await git('update-ref', branch, 'HEAD');
+    await git('symbolic-ref', 'HEAD', branch);
+    const head = await git('rev-parse', 'HEAD');
+    const environment = envRow({ working_path: target, branch_name: branch });
+    const attempt =
+      operation === 'selection'
+        ? resolveWorkflowAdoption({
+            ...baseArgs,
+            adoptedRunId: 'run-1',
+            deps: {
+              ...makeDeps({ run: runRow({ working_path: target }), environment }),
+              existsSync: path => path === target,
+              currentBranch: undefined,
+            },
+          })
+        : resolveRegisteredWorktree(
+            { getById: async () => environment },
+            { kind: 'reuse-worktree', environment }
+          );
+    await expect(attempt).rejects.toThrow(
+      `Failed to inspect the current branch at ${target}: HEAD refers to '${branch}', not a local branch`
+    );
+    expect(await git('symbolic-ref', 'HEAD')).toBe(branch);
+    expect(await git('rev-parse', 'HEAD')).toBe(head);
   }
 );

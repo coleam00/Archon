@@ -195,6 +195,38 @@ describe('workflow run launch config', () => {
 });
 
 describe('registered named-branch reuse', () => {
+  test('refuses a non-branch symbolic HEAD before workflow execution', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-branch-reuse-'));
+    cleanupPaths.push(root);
+    const archonHome = join(root, 'home');
+    mkdirSync(archonHome, { recursive: true });
+    const repo = createRepo(root, true);
+    const branch = 'refs/custom/foo';
+    await runForeground(repo, archonHome, branch);
+    const first = latestRun(archonHome);
+    const target = first.working_path;
+    writeFileSync(join(target, '.archon', 'config.yaml'), '# operator edits\n');
+    writeFileSync(join(target, 'untracked.txt'), 'keep me\n');
+    git(target, 'update-ref', branch, 'HEAD');
+    git(target, 'symbolic-ref', 'HEAD', branch);
+    const head = git(target, 'rev-parse', 'HEAD');
+    const status = git(target, 'status', '--porcelain');
+
+    const refused = await captureWorkflowCommand(archonHome, async host => {
+      await workflowRunCommand(host, repo, 'launch-config', 'go', { branchName: branch });
+    });
+    expect(refused.status).toBe(1);
+    expect(refused.output).toContain(
+      `Failed to inspect the current branch at ${target}: HEAD refers to '${branch}', not a local branch`
+    );
+    expect(latestRun(archonHome).id).toBe(first.id);
+    expect(git(target, 'symbolic-ref', 'HEAD').trim()).toBe(branch);
+    expect(git(target, 'rev-parse', 'HEAD')).toBe(head);
+    expect(git(target, 'status', '--porcelain')).toBe(status);
+    expect(readFileSync(join(target, '.archon', 'config.yaml'), 'utf8')).toBe('# operator edits\n');
+    expect(readFileSync(join(target, 'untracked.txt'), 'utf8')).toBe('keep me\n');
+  }, 30_000);
+
   test.each(['other branch', 'detached HEAD', 'colliding short ref'] as const)(
     'refuses %s before workflow execution without changing the checkout',
     async state => {
