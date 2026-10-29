@@ -39,6 +39,7 @@ import {
   type WorkflowRunRow,
 } from './workflow-run-normalization';
 import { getLog, jsonIntExtract, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
+import { WorkflowStatusReadError } from './workflow-run-status';
 
 /** Replace the engine-owned wait object and remove any stale human approval. */
 function replaceWaitMetadata(paramIndex: number, causeIndex: number): string {
@@ -364,6 +365,7 @@ export async function answerAttentionWait(
       return { answered: true };
     });
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_attention_answer_failed');
     throw new Error(`Failed to answer attention wait: ${err.message}`);
@@ -390,6 +392,7 @@ export async function labelAttentionWait(
       return { labeled: true, wait: labeled } as const;
     });
   } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_attention_label_failed');
     throw new Error(`Failed to label attention wait: ${err.message}`);

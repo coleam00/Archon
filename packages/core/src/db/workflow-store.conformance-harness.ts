@@ -91,6 +91,82 @@ export async function makeSqlConformanceHarness(
 export function describeSqlStatusReadConformance(
   makeHarness: () => Promise<WorkflowStoreHarness & { db: IDatabase }>
 ): void {
+  test.each(['direct', 'parent'] as const)(
+    'partial status reads validate %s runs',
+    async association => {
+      const harness = await makeHarness();
+      try {
+        const { db, store } = harness;
+        const { listConversationDetachBlockers } = await import('./workflow-run-reads');
+        const { lockedRunRow } = await import('./workflow-run-shared');
+        const run = await store.createWorkflowRun({
+          workflow_name: 'partial-status-read',
+          user_message: '',
+          origin:
+            association === 'direct'
+              ? { conversationId: CONFORMANCE_CONVERSATION_ID }
+              : { parentConversationId: CONFORMANCE_CONVERSATION_ID },
+          metadata: { keep: 'value' },
+        });
+        const locked = (id: string) => db.withTransaction(query => lockedRunRow(query, id));
+        const blockers = (id: string) =>
+          db.withTransaction(query => listConversationDetachBlockers(query, id));
+        const writes = (id: string) => [
+          { write: () => store.setToolCallAttention(id, 'stream', []), unchanged: false },
+          {
+            write: () =>
+              store.answerAttentionWait(id, {
+                pauseId: 'ask',
+                answer: { decision: 'proceed', text: '' },
+                answeredVia: 'cli',
+                answeredAt: '2026-01-01T00:05:00.000Z',
+              }),
+            unchanged: { answered: false },
+          },
+          {
+            write: () =>
+              store.labelAttentionWait(id, {
+                pauseId: 'ask',
+                set: { priority: 'high' },
+                unset: [],
+                via: 'cli',
+              }),
+            unchanged: { labeled: false as const },
+          },
+        ];
+        const missing = randomUUID();
+        expect(await locked(missing)).toBeUndefined();
+        expect(await blockers(missing)).toEqual([]);
+        for (const { write, unchanged } of writes(missing)) {
+          expect(await write()).toEqual(unchanged);
+        }
+        expect(await locked(run.id)).toMatchObject({ status: 'pending' });
+        expect(await blockers(CONFORMANCE_CONVERSATION_ID)).toEqual([
+          { id: run.id, status: 'pending' },
+        ]);
+        const status = 'unexpected';
+        await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+          status,
+          run.id,
+        ]);
+        for (const read of [
+          () => locked(run.id),
+          () => blockers(CONFORMANCE_CONVERSATION_ID),
+          ...writes(run.id).map(({ write }) => write),
+        ]) {
+          const result = read();
+          await expect(result).rejects.toBeInstanceOf(WorkflowStatusReadError);
+          await expect(result).rejects.toMatchObject({
+            workflowRunId: run.id,
+            storedStatus: status,
+            message: `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`,
+          });
+        }
+      } finally {
+        await harness.close();
+      }
+    }
+  );
   test('full-row reads validate statuses without lifecycle writes or partial lists', async () => {
     const harness = await makeHarness();
     try {
