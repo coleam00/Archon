@@ -134,7 +134,7 @@ describe('git utilities', () => {
           output(`worktree /path/to/custom\0HEAD abc123\0branch ${ref}\0\0`)
         );
         await expect(git.listWorktrees(repo('/path/to/main'))).rejects.toThrow(
-          `Cannot list worktree at /path/to/custom: HEAD refers to '${ref}', not a local branch`
+          `Cannot list worktree at ${listed('/path/to/custom')}: HEAD refers to '${ref}', not a local branch`
         );
       }
     );
