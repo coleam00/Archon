@@ -5,6 +5,30 @@ import {
 } from './strict-output-schema';
 
 describe('required fields forbidden by strict closure', () => {
+  for (const keyword of ['oneOf', 'anyOf']) {
+    test.each([undefined, false, true])(
+      `names the enclosing forbidden field before completing ${keyword} (additionalProperties %s)`,
+      additionalProperties => {
+        const schema = {
+          type: 'object',
+          properties: { a: { type: 'string' } },
+          required: ['a', 'b'],
+          [keyword]: [{ properties: { a: { const: 'ok' } } }],
+          ...(additionalProperties === undefined ? {} : { additionalProperties }),
+        };
+        expect(findPreparedStrictSchemaIssues(schema)).toEqual([
+          {
+            kind: 'unsupported-conversion',
+            schemaPath: 'output_format',
+            message: expect.stringMatching(
+              /output_format.required.*b.*properties.*additionalProperties: false/
+            ),
+          },
+        ]);
+      }
+    );
+  }
+
   test.each([undefined, false, true])(
     'refuses undeclared required fields with authored additionalProperties %s',
     additionalProperties => {

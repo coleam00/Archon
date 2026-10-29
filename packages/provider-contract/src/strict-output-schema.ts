@@ -63,7 +63,6 @@ export function normalizeJsonSchemaForOpenAiStrict(
     }
     const compositions = Object.keys(node).filter(isJsonSchemaCompositionKeyword);
     if (compositions.length > 1) refuse(`${path}.${compositions[1]}`);
-    for (const keyword of compositions) completeBranches(node, keyword, path);
     if (isObjectSchemaNode(node)) {
       const properties = node.properties;
       if (isRecord(properties)) {
@@ -74,8 +73,9 @@ export function normalizeJsonSchemaForOpenAiStrict(
           );
         }
       }
-      node.additionalProperties = false;
     }
+    for (const keyword of compositions) completeBranches(node, keyword, path);
+    if (isObjectSchemaNode(node)) node.additionalProperties = false;
   });
   return result;
 }
