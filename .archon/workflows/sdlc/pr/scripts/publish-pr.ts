@@ -49,12 +49,13 @@ type Repo = QualifiedPr['repo'];
 
 const { start: SECTION_START, end: SECTION_END } = DESCRIPTION_SECTION;
 
-/**
- * Where the markdown holds code: fenced blocks (an unclosed fence runs to the end) and
- * inline code spans. Used only when this Bun has no Markdown renderer (before 1.4).
- */
-function codeRanges(markdown: string): [number, number][] {
-  const ranges: [number, number][] = [];
+type MarkdownRange = [number, number];
+
+function isInside(ranges: readonly MarkdownRange[], at: number): boolean {
+  return ranges.some(([from, to]) => at >= from && at < to);
+}
+
+function appendFencedCodeRanges(markdown: string, ranges: MarkdownRange[]): void {
   const fence = /^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)/gm;
   let open: RegExpExecArray | null;
   while ((open = fence.exec(markdown)) !== null) {
@@ -66,31 +67,51 @@ function codeRanges(markdown: string): [number, number][] {
     ranges.push([open.index, stop]);
     fence.lastIndex = stop;
   }
-  const inside = (at: number): boolean => ranges.some(([from, to]) => at >= from && at < to);
+}
+
+function appendIndentedCodeRanges(markdown: string, ranges: MarkdownRange[]): void {
   // Indented code: a run of lines indented four or more that starts the text or follows a
   // blank line or an HTML comment line (a paragraph line would absorb it instead).
   const indented = /(?:^|\n(?:[ \t]*|[^\n]*-->[ \t]*)\n)((?:(?: {4}|\t)[^\n]*(?:\n|$))+)/g;
   let block: RegExpExecArray | null;
   while ((block = indented.exec(markdown)) !== null) {
     const from = block.index + block[0].length - (block[1]?.length ?? 0);
-    if (!inside(from)) ranges.push([from, block.index + block[0].length]);
+    if (!isInside(ranges, from)) ranges.push([from, block.index + block[0].length]);
   }
+}
+
+function appendHtmlCodeRanges(markdown: string, ranges: MarkdownRange[]): void {
   // Raw HTML containers whose comments are not the document's (an unclosed one runs to the end).
   const container = /<(code|pre|script|style|textarea|table|thead|tbody|tr|td|th)\b[^>]*>/gi;
   let tag: RegExpExecArray | null;
   while ((tag = container.exec(markdown)) !== null) {
-    if (inside(tag.index)) continue;
+    if (isInside(ranges, tag.index)) continue;
     const close = markdown.toLowerCase().indexOf(`</${(tag[1] ?? '').toLowerCase()}>`, container.lastIndex);
     const stop = close === -1 ? markdown.length : close + (tag[1]?.length ?? 0) + 3;
     ranges.push([tag.index, stop]);
     container.lastIndex = stop;
   }
+}
+
+function appendInlineCodeRanges(markdown: string, ranges: MarkdownRange[]): void {
   const inline = /(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
   let span: RegExpExecArray | null;
   while ((span = inline.exec(markdown)) !== null) {
     const at = span.index;
-    if (!inside(at)) ranges.push([at, at + span[0].length]);
+    if (!isInside(ranges, at)) ranges.push([at, at + span[0].length]);
   }
+}
+
+/**
+ * Where the markdown holds code blocks and spans. Used only when this Bun has no
+ * Markdown renderer (before 1.4).
+ */
+function codeRanges(markdown: string): MarkdownRange[] {
+  const ranges: MarkdownRange[] = [];
+  appendFencedCodeRanges(markdown, ranges);
+  appendIndentedCodeRanges(markdown, ranges);
+  appendHtmlCodeRanges(markdown, ranges);
+  appendInlineCodeRanges(markdown, ranges);
   return ranges;
 }
 
