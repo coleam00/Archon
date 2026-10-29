@@ -49,7 +49,61 @@ type Repo = QualifiedPr['repo'];
 
 const { start: SECTION_START, end: SECTION_END } = DESCRIPTION_SECTION;
 
+/**
+ * Where the markdown holds code: fenced blocks (an unclosed fence runs to the end) and
+ * inline code spans. Used only when this Bun has no Markdown renderer (before 1.4).
+ */
+function codeRanges(markdown: string): [number, number][] {
+  const ranges: [number, number][] = [];
+  const fence = /^ {0,3}(`{3,}|~{3,})[^\n]*(?:\n|$)/gm;
+  let open: RegExpExecArray | null;
+  while ((open = fence.exec(markdown)) !== null) {
+    const mark = open[1] ?? '```';
+    const close = new RegExp(`^ {0,3}${mark.startsWith('`') ? '`' : '~'}{${mark.length},}[ \\t]*$`, 'gm');
+    close.lastIndex = fence.lastIndex;
+    const end = close.exec(markdown);
+    const stop = end === null ? markdown.length : end.index + end[0].length;
+    ranges.push([open.index, stop]);
+    fence.lastIndex = stop;
+  }
+  const inside = (at: number): boolean => ranges.some(([from, to]) => at >= from && at < to);
+  // Indented code: a run of lines indented four or more that starts the text or follows a
+  // blank line or an HTML comment line (a paragraph line would absorb it instead).
+  const indented = /(?:^|\n(?:[ \t]*|[^\n]*-->[ \t]*)\n)((?:(?: {4}|\t)[^\n]*(?:\n|$))+)/g;
+  let block: RegExpExecArray | null;
+  while ((block = indented.exec(markdown)) !== null) {
+    const from = block.index + block[0].length - (block[1]?.length ?? 0);
+    if (!inside(from)) ranges.push([from, block.index + block[0].length]);
+  }
+  // Raw HTML containers whose comments are not the document's (an unclosed one runs to the end).
+  const container = /<(code|pre|script|style|textarea|table|thead|tbody|tr|td|th)\b[^>]*>/gi;
+  let tag: RegExpExecArray | null;
+  while ((tag = container.exec(markdown)) !== null) {
+    if (inside(tag.index)) continue;
+    const close = markdown.toLowerCase().indexOf(`</${(tag[1] ?? '').toLowerCase()}>`, container.lastIndex);
+    const stop = close === -1 ? markdown.length : close + (tag[1]?.length ?? 0) + 3;
+    ranges.push([tag.index, stop]);
+    container.lastIndex = stop;
+  }
+  const inline = /(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
+  let span: RegExpExecArray | null;
+  while ((span = inline.exec(markdown)) !== null) {
+    const at = span.index;
+    if (!inside(at)) ranges.push([at, at + span[0].length]);
+  }
+  return ranges;
+}
+
 async function descriptionMarkers(markdown: string): Promise<{ marker: string; at: number }[]> {
+  if (typeof (Bun as { markdown?: { html?: unknown } }).markdown?.html !== 'function') {
+    const code = codeRanges(markdown);
+    const found: { marker: string; at: number }[] = [];
+    for (const match of markdown.matchAll(new RegExp(Object.values(DESCRIPTION_SECTION).join('|'), 'g'))) {
+      const at = match.index ?? 0;
+      if (!code.some(([from, to]) => at >= from && at < to)) found.push({ marker: match[0], at });
+    }
+    return found;
+  }
   const candidates: { marker: string; at: number; token: string }[] = [];
   const tagged = markdown.replace(
     new RegExp(Object.values(DESCRIPTION_SECTION).join('|'), 'g'),
