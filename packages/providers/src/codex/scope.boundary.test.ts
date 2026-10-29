@@ -53,10 +53,9 @@ const HOOK_SCRIPT = `require('node:fs').appendFileSync(process.argv[3], process.
 const TEMPLATE_DIR = 'template-home';
 /**
  * Codex's scratch directory in a home. Every app-server start syncs the curated plugins
- * there with `git`, and that `git` outlives the app-server: once stdin closes the server
- * exits and `git` is reparented to PID 1 and keeps writing for seconds. A copy that reads
- * it races that write, so the template's copies leave it out. No case reads it; the
- * installed plugins live in `plugins/cache`.
+ * there with `git`. The provider stops that fetch if it outlives app-server, leaving
+ * unfinished sync state. The template's copies leave scratch out; no case reads it,
+ * and the installed plugins live in `plugins/cache`.
  */
 const CODEX_SCRATCH_DIR = '.tmp';
 

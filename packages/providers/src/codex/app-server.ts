@@ -23,6 +23,7 @@ import type { ClientRequest } from './protocol/ClientRequest';
 import type { ServerNotification } from './protocol/ServerNotification';
 import type { ServerRequest } from './protocol/ServerRequest';
 import type { CodexBinary } from './binary-resolver';
+import { stopAppServerDescendants } from './process-tree';
 
 const TOOL_CALL_METHOD = 'item/tool/call';
 
@@ -36,7 +37,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export type Spawner = (
   command: string,
   args: string[],
-  options: { env: Record<string, string>; stdio: ['pipe', 'pipe', 'pipe'] }
+  options: { env: Record<string, string>; stdio: ['pipe', 'pipe', 'pipe']; detached: boolean }
 ) => ChildProcessWithoutNullStreams;
 
 type Method = ClientRequest['method'];
@@ -54,10 +55,13 @@ export class JsonRpcError extends Error {
   }
 }
 
+type ProcessExit = { kind: 'exited'; code: number | null; signal: NodeJS.Signals | null };
+
 /** How the connection ended. */
 export type ConnectionEnd =
-  | { kind: 'exited'; code: number | null; signal: NodeJS.Signals | null }
-  | { kind: 'spawn_failed'; error: NodeJS.ErrnoException };
+  | ProcessExit
+  | { kind: 'spawn_failed'; error: NodeJS.ErrnoException }
+  | { kind: 'cleanup_failed'; exit: ProcessExit; error: Error };
 
 /**
  * How often an app-server that has not exited yet is reported. There is no deadline: a
@@ -66,6 +70,10 @@ export type ConnectionEnd =
  * node. Cancelling the run stops the provider plugin, which ends the wait.
  */
 const TERM_EXIT_WARN_MS = 30_000;
+
+// Descendants can inherit stdio handles and hold 'close' open after Codex exits.
+// Keep reading final JSONL frames, but bound that drain independently of a live process.
+const POST_EXIT_DRAIN_MS = 250;
 
 /** How much raw stderr a connection buffers, and how much of it becomes evidence. */
 const STDERR_BUFFER_CHARS = 8000;
@@ -122,9 +130,14 @@ export class ConnectionClosedError extends Error {
 }
 
 function describeEnd(end: ConnectionEnd): string {
-  return end.kind === 'spawn_failed'
-    ? `could not start: ${end.error.message}`
-    : `exited (${end.signal ? `signal ${end.signal}` : `code ${String(end.code)}`})`;
+  switch (end.kind) {
+    case 'spawn_failed':
+      return `could not start: ${end.error.message}`;
+    case 'cleanup_failed':
+      return `${describeEnd(end.exit)}; descendant cleanup failed: ${end.error.message}`;
+    case 'exited':
+      return `exited (${end.signal ? `signal ${end.signal}` : `code ${String(end.code)}`})`;
+  }
 }
 
 /** Whether `promise` settles within `ms`. A rejection counts as settled. */
@@ -179,16 +192,20 @@ export class AppServerConnection {
   private readonly queue: ServerNotification[] = [];
   private wake: (() => void) | undefined;
   private endedWith: ConnectionEnd | undefined;
+  private exitedAt: number | undefined;
+  private drainTimer: ReturnType<typeof setTimeout> | undefined;
+  private closing = false;
   private responded = false;
   private stderrTail = '';
   /** Credential values from the process env, redacted from its stderr. */
   private readonly credentialValues: readonly string[];
   private readonly endSignal = Promise.withResolvers<ConnectionEnd>();
-  /** Resolves once the process is gone, however it ended. */
+  /** Resolves after process exit, bounded pipe drainage, and descendant cleanup. */
   readonly ended = this.endSignal.promise;
 
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
+    private readonly startedAt: number,
     env: Record<string, string>,
     protectedEnvKeys?: readonly string[],
     readonly runId?: string
@@ -220,12 +237,24 @@ export class AppServerConnection {
       if (this.runId) getLog().debug({ runId: this.runId }, 'codex.stdin_finished');
     });
     child.once('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+      this.exitedAt = Date.now();
       if (this.runId) getLog().debug({ runId: this.runId, code, signal }, 'codex.child_exit');
+      if (this.closing) return;
+      this.drainTimer = setTimeout(() => {
+        getLog().debug(
+          { runId: this.runId, drainMs: POST_EXIT_DRAIN_MS },
+          'codex.post_exit_drain_expired'
+        );
+        this.close({ kind: 'exited', code, signal });
+        child.stdin.destroy();
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }, POST_EXIT_DRAIN_MS);
     });
     child.once('error', (error: NodeJS.ErrnoException) => {
       this.close({ kind: 'spawn_failed', error });
     });
-    // 'close', not 'exit': it fires after stdout drained, so the last frames are read first.
+    // Prefer natural closure so final frames are read without paying the drain deadline.
     child.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
       if (this.runId) getLog().debug({ runId: this.runId }, 'codex.child_close');
       this.close({ kind: 'exited', code, signal });
@@ -246,11 +275,13 @@ export class AppServerConnection {
       const key = pathKey(childEnv);
       childEnv[key] = [...binary.pathDirs, childEnv[key]].filter(Boolean).join(delimiter);
     }
+    const startedAt = Date.now();
     const child = spawner(binary.path, ['app-server', ...args], {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     });
-    return new AppServerConnection(child, childEnv, protectedEnvKeys, runId);
+    return new AppServerConnection(child, startedAt, childEnv, protectedEnvKeys, runId);
   }
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */
@@ -286,11 +317,11 @@ export class AppServerConnection {
 
   /**
    * Ends the process: close stdin, which makes app-server exit, then wait for the exit
-   * however long it takes. With `termAfterMs`, a process that has not exited by then is
+   * and bounded pipe drainage. With `termAfterMs`, a process that has not exited by then is
    * sent SIGTERM. Without it, none is sent: a SIGTERM that lands while Codex is still
    * exiting after stdin closed makes it wait about 40 seconds and exit 1, where it would
-   * have exited 0 within seconds. Never SIGKILL: SIGTERM lets Codex stop the commands it
-   * started, while SIGKILL orphans them.
+   * have exited 0 within seconds. Never SIGKILL a live app-server: SIGTERM lets Codex
+   * clean up its commands. After exit, stop any remaining descendants before settling.
    */
   async shutdown(
     termAfterMs?: number,
@@ -298,7 +329,11 @@ export class AppServerConnection {
   ): Promise<ConnectionEnd | undefined> {
     if (this.endedWith) return this.endedWith;
     this.child.stdin.end();
-    if (termAfterMs !== undefined && !(await this.exitsWithin(termAfterMs))) {
+    if (
+      termAfterMs !== undefined &&
+      !(await this.exitsWithin(termAfterMs)) &&
+      this.exitedAt === undefined
+    ) {
       this.child.kill('SIGTERM');
     }
     let waitedMs = 0;
@@ -424,7 +459,29 @@ export class AppServerConnection {
 
   /** The one place the connection ends: pending requests fail and notifications stop. */
   private close(end: ConnectionEnd): void {
-    if (this.endedWith) return;
+    if (this.closing) return;
+    this.closing = true;
+    clearTimeout(this.drainTimer);
+    if (end.kind === 'exited' && this.child.pid !== undefined) {
+      void stopAppServerDescendants(
+        this.child.pid,
+        this.startedAt,
+        this.exitedAt ?? Date.now()
+      ).then(
+        () => this.finishClose(end),
+        (error: unknown) =>
+          this.finishClose({
+            kind: 'cleanup_failed',
+            exit: end,
+            error: error instanceof Error ? error : new Error(String(error)),
+          })
+      );
+    } else {
+      this.finishClose(end);
+    }
+  }
+
+  private finishClose(end: ConnectionEnd): void {
     this.endedWith = end;
     for (const request of this.pending.values()) request.reject(this.closedError(end));
     this.pending.clear();

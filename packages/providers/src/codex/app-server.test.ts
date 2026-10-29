@@ -1,8 +1,9 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
-import type { ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { createMockLogger } from '../test/mocks/logger';
+import * as processTree from './process-tree';
 
 const log = createMockLogger();
 mock.module('@archon/paths', () => ({
@@ -13,6 +14,7 @@ import {
   AppServerConnection,
   ConnectionClosedError,
   JsonRpcError,
+  settlesWithin,
   type Spawner,
 } from './app-server';
 
@@ -33,7 +35,6 @@ function rawChild(onKill: (child: EventEmitter, signal: string) => void = () => 
     stdin,
     stdout,
     stderr,
-    pid: 7,
     kill: (signal: string) => {
       onKill(child, signal);
       return true;
@@ -65,7 +66,128 @@ function rawChild(onKill: (child: EventEmitter, signal: string) => void = () => 
 const BINARY = { path: '/bin/codex', pathDirs: ['/vendor/codex-path'] };
 const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
+function killIfRunning(pid: number): void {
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
 describe('AppServerConnection', () => {
+  test('stops descendants holding inherited pipes after exit and leaves other processes alone', async () => {
+    const script = `
+      const { spawn } = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        stdio: ['ignore', 'inherit', 'inherit']
+      });
+      process.stdin.on('data', () => process.stdout.write(JSON.stringify({ id: 1, result: child.pid }) + '\\n'));
+      process.stdin.on('end', () => process.stdout.write(
+        JSON.stringify({ method: 'turn/completed', params: {} }) + '\\n', () => process.exit(0)
+      ));
+    `;
+    const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    let root: ChildProcessWithoutNullStreams | undefined;
+    let descendant: number | undefined;
+    const connection = AppServerConnection.start(
+      BINARY,
+      [],
+      process.env as Record<string, string>,
+      (_command, _args, options) => {
+        root = spawn(process.execPath, ['-e', script], options);
+        return root;
+      }
+    );
+    try {
+      const response = await connection.request('thread/start', {});
+      if (typeof response !== 'number') throw new Error('Missing descendant PID');
+      descendant = response;
+      const ownedPid = response;
+      expect(process.kill(descendant, 0)).toBe(true);
+      expect(await connection.shutdown()).toEqual({ kind: 'exited', code: 0, signal: null });
+      const deadline = Date.now() + 1000;
+      while (Date.now() < deadline) {
+        try {
+          process.kill(descendant, 0);
+        } catch {
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(() => process.kill(ownedPid, 0)).toThrow();
+      if (other.pid === undefined) throw new Error('Missing unrelated process PID');
+      expect(process.kill(other.pid, 0)).toBe(true);
+      const frames = [];
+      for await (const frame of connection.notifications()) frames.push(frame.method);
+      expect(frames).toEqual(['turn/completed']);
+    } finally {
+      other.kill();
+      root?.kill();
+      if (descendant !== undefined) killIfRunning(descendant);
+    }
+  }, 10_000);
+
+  test('a descendant cleanup failure fails pending work and cannot report a clean exit', async () => {
+    const stop = spyOn(processTree, 'stopAppServerDescendants').mockRejectedValue(
+      new Error('cleanup refused')
+    );
+    try {
+      const fake = rawChild();
+      Object.defineProperty(fake.child, 'pid', { value: 2_147_483_647 });
+      const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+      const pending = connection.request('thread/start', {}).catch((error: unknown) => error);
+      fake.child.emit('exit', 0, null);
+      fake.child.emit('close', 0, null);
+      expect(await connection.shutdown()).toMatchObject({ kind: 'cleanup_failed' });
+      expect(await pending).toBeInstanceOf(ConnectionClosedError);
+      expect(((await pending) as ConnectionClosedError).message).toContain('cleanup refused');
+    } finally {
+      stop.mockRestore();
+    }
+  });
+
+  test.each([
+    { code: 0, signal: null },
+    { code: 1, signal: null },
+    { code: null, signal: 'SIGTERM' as const },
+  ])(
+    'bounds pipe drainage after exit code $code signal $signal and keeps final frames',
+    async end => {
+      const signals: string[] = [];
+      const fake = rawChild((_child, signal) => signals.push(signal));
+      const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+      const response = connection.request('thread/start', {});
+      const missing = connection.request('account/read', {}).catch((error: unknown) => error);
+      fake.child.emit('exit', end.code, end.signal);
+      const stopping = connection.shutdown(1);
+      await tick();
+      fake.stdout.write('{"id":1,"result":"final');
+      await tick();
+      fake.stdout.write(' response"}\n{"method":"turn/completed","params":{}}\n');
+      fake.stderr.write('final stderr evidence\n');
+      expect(await response).toBe('final response');
+      const ended = await settlesWithin(stopping, 1500);
+      if (!ended) fake.child.emit('close', end.code, end.signal);
+      expect(await stopping).toEqual({ kind: 'exited', ...end });
+      expect(ended).toBe(true);
+      expect(signals).toEqual([]);
+      expect(fake.stdout.destroyed).toBe(true);
+      expect(fake.stderr.destroyed).toBe(true);
+      expect(fake.child.stdin.destroyed).toBe(true);
+      expect(await missing).toBeInstanceOf(ConnectionClosedError);
+      expect(((await missing) as ConnectionClosedError).evidence).toContain(
+        'final stderr evidence'
+      );
+      const frames = [];
+      for await (const frame of connection.notifications()) frames.push(frame.method);
+      expect(frames).toEqual(['turn/completed']);
+      fake.child.emit('close', 99, null);
+      expect(await connection.ended).toEqual({ kind: 'exited', ...end });
+    }
+  );
+
   test('phase diagnostics distinguish stdin finish, exit and pipe closure', async () => {
     log.debug.mockClear();
     const fake = rawChild();
@@ -87,6 +209,8 @@ describe('AppServerConnection', () => {
     fake.child.emit('close', 0, null);
     expect(await stopping).toEqual({ kind: 'exited', code: 0, signal: null });
     expect(log.debug.mock.calls.at(-1)).toEqual([{ runId: 'run-1' }, 'codex.child_close']);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(fake.stdout.destroyed).toBe(false);
     expect(log.debug).toHaveBeenCalledTimes(3);
   });
 

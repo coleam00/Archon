@@ -48,6 +48,7 @@ import {
   type FakeTurnScript,
 } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
+import * as processTree from './process-tree';
 import { TOOL_FREE_THREAD_CONFIG } from './turn-params';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
 import type { ServerNotification } from './protocol/ServerNotification';
@@ -168,6 +169,29 @@ beforeEach(() => {
 });
 
 describe('CodexProvider', () => {
+  test('a descendant cleanup failure after the result does not settle', async () => {
+    const stop = spyOn(processTree, 'stopAppServerDescendants').mockRejectedValue(
+      new Error('cleanup refused')
+    );
+    try {
+      const server = createFakeAppServer();
+      const provider = new CodexProvider((command, args, options) => {
+        const child = server(command, args, options);
+        Object.defineProperty(child, 'pid', { value: 2_147_483_647 });
+        return child;
+      });
+      expect((await run(provider)).map(chunk => chunk.type)).toEqual(['result']);
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          err: expect.objectContaining({ message: expect.stringContaining('cleanup refused') }),
+        }),
+        'codex.app_server_abnormal_exit'
+      );
+    } finally {
+      stop.mockRestore();
+    }
+  });
+
   test('post-result diagnostics share a run ID and settle only after shutdown', async () => {
     const ids: string[] = [];
     for (let i = 0; i < 2; i++) {
@@ -180,12 +204,17 @@ describe('CodexProvider', () => {
           expect(calls.map(([, phase]) => phase)).toEqual([
             'codex.host_tool_calls_finished',
             'codex.stdin_finished',
+            'codex.child_exit',
             'codex.child_close',
             'codex.settle',
           ]);
           const runId: unknown = calls[0][0].runId;
           expect(typeof runId).toBe('string');
-          for (const [fields] of calls) expect(fields).toEqual({ runId });
+          for (const [fields, phase] of calls) {
+            expect(fields).toEqual(
+              phase === 'codex.child_exit' ? { runId, code: 0, signal: null } : { runId }
+            );
+          }
           ids.push(String(runId));
         }
       }

@@ -229,6 +229,7 @@ const MISCONFIGURED_SPAWN_ERRNOS: ReadonlySet<string> = new Set([
 export function failureClassOfStop(error: unknown): ProviderFailureClass {
   if (!(error instanceof ConnectionClosedError)) return failureClassOfThrown(error);
   const { end } = error;
+  if (end.kind === 'cleanup_failed') return 'unknown';
   if (end.kind === 'spawn_failed') {
     return end.error.code !== undefined && MISCONFIGURED_SPAWN_ERRNOS.has(end.error.code)
       ? 'misconfigured'

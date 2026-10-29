@@ -169,13 +169,15 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       closed = true;
       stdout.end();
       stderr.end();
-      setImmediate(() => child.emit('close', code, signal));
+      setImmediate(() => {
+        child.emit('exit', code, signal);
+        child.emit('close', code, signal);
+      });
     };
     Object.assign(child, {
       stdin,
       stdout,
       stderr,
-      pid: 4242,
       kill: (signal: string = 'SIGTERM') => {
         record.signals.push(signal);
         if (turn.exitsAfterStdinCloseMs === undefined) close(null, signal);
