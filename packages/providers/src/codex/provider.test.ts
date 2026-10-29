@@ -177,9 +177,9 @@ describe('CodexProvider', () => {
         new Error('cleanup refused')
       );
       try {
-        Object.defineProperty(process, 'platform', { value: 'linux' });
         const server = createFakeAppServer();
         const provider = new CodexProvider((command, args, options) => {
+          Object.defineProperty(process, 'platform', { value: 'linux' });
           const child = server(command, args, options);
           Object.defineProperty(child, 'pid', { value: 2_147_483_647 });
           return child;

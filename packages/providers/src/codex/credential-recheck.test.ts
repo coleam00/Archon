@@ -57,6 +57,7 @@ describe('Codex native login recheck', () => {
         server.processes.length + 1 === attempt ? script : { account: null }
       );
       const spawner: Spawner = (command, args, options) => {
+        Object.defineProperty(process, 'platform', { value: 'linux' });
         const child = server(command, args, options);
         if (server.processes.length === attempt) {
           Object.defineProperty(child, 'pid', { value: 2_147_483_647 });
@@ -64,7 +65,6 @@ describe('Codex native login recheck', () => {
         return child;
       };
       try {
-        Object.defineProperty(process, 'platform', { value: 'linux' });
         expect(
           await new CodexProvider(spawner, 1).checkCredential({
             env: loginFixture().env,
@@ -122,6 +122,7 @@ describe('Codex native login recheck', () => {
               : { account: null }
           );
           const spawner: Spawner = (command, args, options) => {
+            Object.defineProperty(process, 'platform', { value: 'linux' });
             const child = server(command, args, options);
             if (server.processes.length === attempt) {
               Object.defineProperty(child, 'pid', { value: 2_147_483_647 });
@@ -129,7 +130,6 @@ describe('Codex native login recheck', () => {
             return child;
           };
           try {
-            Object.defineProperty(process, 'platform', { value: 'linux' });
             const status = await new CodexProvider(spawner, 1).checkCredential({
               env: { ...loginFixture().env, TEST_SECRET: secret },
               signal: AbortSignal.timeout(1000),
