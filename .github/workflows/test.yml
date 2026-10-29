@@ -449,6 +449,11 @@ jobs:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: bun run --cwd packages/core test src/db/users.postgres.integration.test.ts
 
+      - name: Run Postgres OAuth rotation test
+        env:
+          ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: bun run --cwd packages/core test src/db/user-provider-key-store.postgres.integration.test.ts
+
       - name: Run Postgres workflows test
         env:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres

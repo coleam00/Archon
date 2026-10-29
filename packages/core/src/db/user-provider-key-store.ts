@@ -231,8 +231,8 @@ export async function getDecryptedProviderCredential(
  * The status of the user's stored credential for a vendor, without the secret.
  * Runs the same decrypt and refresh a run would, so the answer is the one the
  * run would meet (a needed refresh happens here and its rotation is saved). A
- * refresh whose rotation could not be saved reports `unusable`: the stored
- * credential can no longer refresh.
+ * refresh that exhausted its save attempts after changing the refresh token
+ * reports `unusable`. A superseded rotation leaves the replacement untouched.
  */
 export async function getStoredCredentialStatus(
   userId: string,
@@ -281,7 +281,14 @@ async function resolveOAuthCredential(
     };
   }
   const rawCreds = result.newCredentials;
-  const storedLost = await saveRotatedOAuthCredentials(userId, provider, creds, rawCreds, key);
+  const storedLost = await saveRotatedOAuthCredentials(
+    userId,
+    provider,
+    creds,
+    rawCreds,
+    key,
+    ciphertext
+  );
   return {
     state: 'usable',
     source: 'archon',
@@ -349,21 +356,24 @@ function oauthRefreshFailure(userId: string, provider: string, err: unknown): St
 
 /**
  * Write only the rotated blob, so the row's label and other columns survive a
- * refresh. A row the user removed or replaced with an API key meanwhile matches
- * nothing and stays as the user left it.
+ * refresh. The original ciphertext identifies this grant: even reconnecting the
+ * same plaintext encrypts with a fresh IV and must supersede the in-flight refresh.
  */
 async function saveRotatedOAuthBlob(
   userId: string,
   provider: string,
   oauthCreds: OAuthCredentials,
-  key: Buffer
-): Promise<void> {
-  await pool.query(
+  key: Buffer,
+  originalCiphertext: string
+): Promise<boolean> {
+  const result = await pool.query(
     `UPDATE remote_agent_user_provider_keys
        SET oauth_creds_encrypted = $1, updated_at = ${getDialect().now()}
-     WHERE user_id = $2 AND provider = $3 AND kind = 'oauth'`,
-    [encryptToken(JSON.stringify(oauthCreds), key), userId, provider]
+     WHERE user_id = $2 AND provider = $3 AND kind = 'oauth'
+       AND oauth_creds_encrypted = $4`,
+    [encryptToken(JSON.stringify(oauthCreds), key), userId, provider, originalCiphertext]
   );
+  return result.rowCount === 1;
 }
 
 /** Returns true when the stored credential was lost: it can no longer refresh. */
@@ -372,7 +382,8 @@ async function saveRotatedOAuthCredentials(
   provider: string,
   creds: OAuthCredentials,
   rawCreds: OAuthCredentials,
-  key: Buffer
+  key: Buffer,
+  originalCiphertext: string
 ): Promise<boolean> {
   // Compare the meaningful fields (not JSON, which is key-order-sensitive → needless
   // writes on a reordered-but-equal blob).
@@ -390,7 +401,11 @@ async function saveRotatedOAuthCredentials(
   // credential is returned either way: it works for this run.
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      await saveRotatedOAuthBlob(userId, provider, rawCreds, key);
+      const saved = await saveRotatedOAuthBlob(userId, provider, rawCreds, key, originalCiphertext);
+      if (!saved) {
+        getLog().info({ userId, provider, attempt }, 'user_provider_key.oauth_rotation_superseded');
+        return false;
+      }
       getLog().debug({ userId, provider, attempt }, 'user_provider_key.oauth_rotated_resaved');
       return false;
     } catch (err) {
