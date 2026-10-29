@@ -62,7 +62,9 @@ test('old provider receipts warn without failing workflow list or fixture testin
       const stdout = spyOnJsonStdout();
       try {
         expect(await workflowTestCommand(project, 'receipt-check')).toBe(0);
-        fixtureOutput = stdout.mock.calls.map(call => String(call[0])).join('');
+        fixtureOutput = stdout.mock.calls
+          .map((call: readonly unknown[]) => String(call[0]))
+          .join('');
       } finally {
         stdout.mockRestore();
       }
