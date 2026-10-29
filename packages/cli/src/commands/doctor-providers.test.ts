@@ -16,7 +16,7 @@ describe('provider diagnostics', () => {
   it('no registered providers fails and names the add command', async () => {
     const check = await checkInstalledProviders(
       { get: () => undefined, list: () => [] },
-      async () => new Map()
+      async () => ({ versions: new Map(), notices: [] })
     );
     expect(check.status).toBe('fail');
     expect(check.message).toContain(
@@ -34,7 +34,7 @@ describe('provider diagnostics', () => {
     if (!opencode) throw new Error('OpenCode did not register');
     const check = await checkInstalledProviders(
       { get: () => undefined, list: () => [opencode] },
-      async () => new Map()
+      async () => ({ versions: new Map(), notices: [] })
     );
     expect(check).toEqual({
       label: 'Installed providers',
@@ -184,7 +184,10 @@ describe('bundled deprecated providers', () => {
   });
 
   it('the installed line names only installed providers', async () => {
-    const check = await checkInstalledProviders(providerRegistry, async () => new Map());
+    const check = await checkInstalledProviders(providerRegistry, async () => ({
+      versions: new Map(),
+      notices: [],
+    }));
     expect(check.status).toBe('pass');
     expect(check.message).toContain('claude');
     expect(check.message).not.toMatch(/opencode|copilot|old/);

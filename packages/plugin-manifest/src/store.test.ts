@@ -112,7 +112,7 @@ test.each([
     expect(broken).toHaveLength(1);
     expect(broken[0]).toMatchObject({
       unavailableReason: 'provider-protocol',
-      message: `Plugin unavailable: ${id} (provider '${provider}') uses protocol 2, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. Run: ${command}`,
+      message: `Plugin unavailable: ${id} (provider '${provider}') uses protocol 2, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. If ${join(dir, 'archon-provider-' + provider + (process.platform === 'win32' ? '.exe' : ''))} exists, move it aside before retrying. Run: ${command}`,
     });
     await expect(readReceipts(dir)).rejects.toThrow(command);
   }

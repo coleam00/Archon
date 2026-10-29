@@ -25,8 +25,8 @@ export function stagingName(fileName: string): string {
   return `.${fileName}.${randomBytes(6).toString('hex')}.partial${fileName.endsWith('.exe') ? '.exe' : ''}`;
 }
 
-/** A broken receipt's own error and the two commands that repair it. */
 export function brokenReceiptNote(broken: BrokenReceipt): string {
+  if (broken.unavailableReason) return broken.message;
   // A receipt.json placed outside the owner/repo layout has no id the commands accept.
   let ref: PluginRef;
   try {

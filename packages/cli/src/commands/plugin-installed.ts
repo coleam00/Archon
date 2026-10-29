@@ -66,5 +66,9 @@ export async function listPlugins(env: PluginEnvironment): Promise<void> {
       `${receipt.id}  ${receipt.manifest.kind}  ${receipt.tag ?? '-'}  ${receipt.commit.slice(0, 12)}  archon ${archon}`
     );
   }
-  for (const entry of broken) console.log(`${entry.id}  unreadable  ${brokenReceiptNote(entry)}`);
+  for (const entry of broken) {
+    console.log(
+      `${entry.id}  ${entry.unavailableReason ? 'unavailable' : 'unreadable'}  ${brokenReceiptNote(entry)}`
+    );
+  }
 }

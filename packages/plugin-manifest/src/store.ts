@@ -90,7 +90,7 @@ export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
     if (basename(entry) !== RECEIPT_FILE) continue;
     const file = join(root, entry);
     const id = dirname(entry).split(sep).join('/');
-    const result = await readReceipt(file, id);
+    const result = await readReceipt(file, id, pluginsDir);
     if ('message' in result) {
       broken.push({ id, file, ...result });
     } else {
@@ -103,7 +103,8 @@ export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
 /** The receipt, or the message saying why it cannot be used. */
 async function readReceipt(
   file: string,
-  id: string
+  id: string,
+  pluginsDir: string
 ): Promise<PluginReceipt | Pick<BrokenReceipt, 'message' | 'cause' | 'unavailableReason'>> {
   let contents: string;
   try {
@@ -129,9 +130,13 @@ async function readReceipt(
       isMaintainedProvider(descriptor.id) && isMaintainedProviderPlugin(id, descriptor.id)
         ? `archon provider add ${descriptor.id}`
         : `archon plugin update ${id}`;
+    const executable = join(
+      pluginsDir,
+      provider.data.manifest.executable + (process.platform === 'win32' ? '.exe' : '')
+    );
     return {
       unavailableReason: 'provider-protocol',
-      message: `Plugin unavailable: ${id} (provider '${descriptor.id}') uses protocol ${descriptor.protocol}, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. Run: ${command}`,
+      message: `Plugin unavailable: ${id} (provider '${descriptor.id}') uses protocol ${descriptor.protocol}, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. If ${executable} exists, move it aside before retrying. Run: ${command}`,
     };
   }
   return { message: `Invalid plugin receipt ${file}: ${describeIssues(parsed.error)}` };
