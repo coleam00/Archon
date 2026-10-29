@@ -45,7 +45,6 @@ import {
   JsonRpcError,
   settlesWithin,
   type Spawner,
-  type ConnectionEnd,
 } from './app-server';
 import { failureClassOfStop, withModelAccessAdvice } from './turn-error';
 import { codexLaunch, codexLogin, type CodexLogin } from './login';
@@ -335,7 +334,7 @@ export class CodexProvider implements IAgentProvider {
     signal.throwIfAborted();
     const connection = AppServerConnection.start(binary, [], env, this.spawner);
     let response: unknown;
-    let end: ConnectionEnd | undefined;
+    const errors: string[] = [];
     try {
       await Promise.race([
         aborted,
@@ -351,13 +350,24 @@ export class CodexProvider implements IAgentProvider {
         // account/read, so this refresh is the check's own.
         connection.request('account/read', { refreshToken: true }),
       ]);
-    } finally {
-      // Cleanup keeps observing the process after cancellation; the credential decision
-      // must still end at the caller's deadline.
-      end = await Promise.race([aborted, connection.shutdown(this.shutdownGraceMs)]);
-      signal.throwIfAborted();
+    } catch (error) {
+      errors.push(
+        error instanceof ConnectionClosedError
+          ? error.evidence
+          : error instanceof Error
+            ? error.message
+            : String(error)
+      );
     }
-    if (end?.kind === 'cleanup_failed') throw connection.closedError(end);
+    // Cleanup keeps observing the process after cancellation; the credential decision
+    // must still end at the caller's deadline.
+    const end = await Promise.race([aborted, connection.shutdown(this.shutdownGraceMs)]);
+    signal.throwIfAborted();
+    if (!end) throw new Error('Codex app-server shutdown returned no exit status.');
+    if (end.kind !== 'exited' || end.code !== 0 || end.signal !== null) {
+      throw connection.closedError(end, errors);
+    }
+    if (errors.length) throw new Error(errors.join('\n'));
     const validated = accountResponseSchema.safeParse(response);
     if (!validated.success) {
       return {

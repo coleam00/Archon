@@ -80,6 +80,76 @@ describe('Codex native login recheck', () => {
     }
   );
 
+  for (const attempt of [1, 2]) {
+    test.each([
+      { name: 'code 1', script: { stdinCloseExitCode: 1 } },
+      { name: 'signal SIGTERM', script: { ignoreStdinClose: true } },
+    ])(
+      'process exit $name after account response in attempt ' + attempt,
+      async ({ name, script }) => {
+        const server = createFakeAppServer(() =>
+          server.processes.length + 1 === attempt ? { account, ...script } : { account: null }
+        );
+        expect(
+          await new CodexProvider(server, 1).checkCredential({
+            env: loginFixture().env,
+            signal: AbortSignal.timeout(1000),
+          })
+        ).toMatchObject({
+          state: 'check_failed',
+          source: 'native',
+          evidence: expect.stringContaining(name),
+        });
+        expectRefreshes(server, attempt);
+      }
+    );
+
+    for (const method of ['initialize', 'account/read'] as const) {
+      test.each([{ cleanupFails: false }, { cleanupFails: true }])(
+        method + ' rejection in attempt ' + attempt + ' with cleanup failure $cleanupFails',
+        async ({ cleanupFails }) => {
+          const secret = 'fixture-rpc-cleanup-secret';
+          const stop = spyOn(processTree, 'stopAppServerDescendants').mockImplementation(
+            async () => {
+              if (cleanupFails) throw new Error(`cleanup refused ${secret}`);
+            }
+          );
+          const server = createFakeAppServer(() =>
+            server.processes.length + 1 === attempt
+              ? { errors: { [method]: { code: -32603, message: `RPC refused ${secret}` } } }
+              : { account: null }
+          );
+          const spawner: Spawner = (command, args, options) => {
+            const child = server(command, args, options);
+            if (server.processes.length === attempt) {
+              Object.defineProperty(child, 'pid', { value: 2_147_483_647 });
+            }
+            return child;
+          };
+          try {
+            const status = await new CodexProvider(spawner, 1).checkCredential({
+              env: { ...loginFixture().env, TEST_SECRET: secret },
+              signal: AbortSignal.timeout(1000),
+            });
+            if (status.state !== 'check_failed') throw new Error('Expected check_failed');
+            expect(status.source).toBe('native');
+            expect(status.evidence).toContain('RPC refused [REDACTED]');
+            expect(status.evidence).not.toContain(secret);
+            if (cleanupFails) expect(status.evidence).toContain('cleanup refused [REDACTED]');
+            expect(server.processes).toHaveLength(attempt);
+            expect(server.processes.at(-1)?.methods).toEqual(
+              method === 'initialize' ? ['initialize'] : ['initialize', 'account/read']
+            );
+            expect(server.processes.every(process => process.stdinEnded)).toBe(true);
+            expect(stop).toHaveBeenCalledTimes(1);
+          } finally {
+            stop.mockRestore();
+          }
+        }
+      );
+    }
+  }
+
   test('two simultaneous refreshes succeed after the loser reloads the saved login', async () => {
     log.info.mockClear();
     const fixture = loginFixture();
