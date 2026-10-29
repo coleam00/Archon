@@ -1,8 +1,8 @@
 /**
  * Check the run's decision, perform the writes it declared, and read each one back.
  *
- * The decision is the last agent's that ran: answer's over route's. At the round cap an
- * answer that asks is the scope question. A route that launched is answered after its round, so its own decision is
+ * The decision is the last agent's that ran: answer's over route's. An answer that asks
+ * declares its own class (`stop` or `scope`), recorded as declared. A route that launched is answered after its round, so its own decision is
  * recorded only when it asked or found the pull request already Ready; then apply takes it out of draft. A push the answer declared is made whatever the run
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. The push comes first, then the work item, in one conditional

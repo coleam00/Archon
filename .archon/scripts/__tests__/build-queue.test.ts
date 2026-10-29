@@ -212,6 +212,7 @@ describe('the build record', () => {
     expect(field('answer', 'decision')?.enum).toEqual([...ANSWER_DECISIONS]);
     expect(field('apply', 'decision')?.enum).toEqual([...APPLY_DECISIONS]);
     expect(field('apply', 'class')?.enum).toEqual(['', ...ASKED_BY]);
+    expect(field('answer', 'ask_class')?.enum as unknown).toEqual([...ASKED_BY.filter(by => by !== 'route'), null]);
     expect(field('ruling', 'decision')?.enum).toEqual([...BUILD_EFFECTS]);
     for (const id of ['route', 'answer']) {
       const attention = field(id, 'attention')?.properties;
@@ -757,6 +758,15 @@ describe('the build queue scripts', () => {
     const applied = ok(run(at, 'apply', applyInputs({ ...ASK, brief: 'continue PR 42 on R1', reason: 'the correction adds a subsystem', ask_class: 'scope' })));
     expect(applied).toMatchObject({ decision: 'asked', class: 'scope', asked: { brief: 'continue PR 42 on R1', by: 'scope' } });
     expect(stored(at).value?.facts.build).toMatchObject({ status: 'asking', decisions: [{ decision: 'ask scope' }] });
+  }, 60_000);
+
+  test('an evidence-only ask at the round cap keeps its declared stop class', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const inputs = { ...applyInputs({ ...ASK, reason: 'only a 50-run Windows loop at the head is left', ask_class: 'stop' }), INPUTS_AT_CAP: 'true' };
+    const applied = ok(run(at, 'apply', inputs));
+    expect(applied).toMatchObject({ decision: 'asked', class: 'stop', asked: { by: 'stop' } });
+    expect(stored(at).value?.facts.build).toMatchObject({ status: 'asking', decisions: [{ decision: 'ask stop' }] });
   }, 60_000);
 
   test('an attention item recommending a choice it does not offer refuses before any write', () => {
