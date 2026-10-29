@@ -323,10 +323,7 @@ export class AppServerConnection {
    * have exited 0 within seconds. Never SIGKILL a live app-server: SIGTERM lets Codex
    * clean up its commands. After exit, stop any remaining descendants before settling.
    */
-  async shutdown(
-    termAfterMs?: number,
-    warnMs = TERM_EXIT_WARN_MS
-  ): Promise<ConnectionEnd | undefined> {
+  async shutdown(termAfterMs?: number, warnMs = TERM_EXIT_WARN_MS): Promise<ConnectionEnd> {
     if (this.endedWith) return this.endedWith;
     this.child.stdin.end();
     if (
@@ -348,7 +345,7 @@ export class AppServerConnection {
         'codex.app_server_still_exiting'
       );
     }
-    return this.endedWith;
+    return this.ended;
   }
 
   private exitsWithin(ms: number): Promise<boolean> {

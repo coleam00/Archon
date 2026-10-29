@@ -363,7 +363,6 @@ export class CodexProvider implements IAgentProvider {
     // must still end at the caller's deadline.
     const end = await Promise.race([aborted, connection.shutdown(this.shutdownGraceMs)]);
     signal.throwIfAborted();
-    if (!end) throw new Error('Codex app-server shutdown returned no exit status.');
     if (end.kind !== 'exited' || end.code !== 0 || end.signal !== null) {
       throw connection.closedError(end, errors);
     }
@@ -583,18 +582,16 @@ export class CodexProvider implements IAgentProvider {
     await connection.finishToolCalls();
     getLog().debug({ runId: connection.runId }, 'codex.host_tool_calls_finished');
     const end = await connection.shutdown();
-    if (end?.kind === 'exited' && end.code === 0 && end.signal === null) return true;
-    if (end) {
-      getLog().error(
-        {
-          err: connection.closedError(end),
-          ...(end.kind === 'exited' && {
-            lifecycle: 'process_abnormal_exit' satisfies ProviderLifecycleEvent,
-          }),
-        },
-        'codex.app_server_abnormal_exit'
-      );
-    }
+    if (end.kind === 'exited' && end.code === 0 && end.signal === null) return true;
+    getLog().error(
+      {
+        err: connection.closedError(end),
+        ...(end.kind === 'exited' && {
+          lifecycle: 'process_abnormal_exit' satisfies ProviderLifecycleEvent,
+        }),
+      },
+      'codex.app_server_abnormal_exit'
+    );
     return false;
   }
 
