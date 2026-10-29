@@ -769,6 +769,16 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.facts.build).toMatchObject({ status: 'asking', decisions: [{ decision: 'ask stop' }] });
   }, 60_000);
 
+  test('an ask without a declared class refuses before any write', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const before = stored(at).revision;
+    const applied = run(at, 'apply', applyInputs({ ...ASK, ask_class: null }));
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain('asks without declaring ask_class');
+    expect(stored(at).revision).toBe(before);
+  }, 60_000);
+
   test('an attention item recommending a choice it does not offer refuses before any write', () => {
     const at = install();
     seed(at, triaged(CLAIMED));
