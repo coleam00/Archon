@@ -162,7 +162,12 @@ async function installReceipt<Protocol extends number>(
       tag: 'v1.2.3',
       commit: 'a'.repeat(40),
       installedAt: new Date(0).toISOString(),
-      files: [{ path: manifest.executable, sha256: 'b'.repeat(64) }],
+      files: [
+        {
+          path: manifest.executable + (process.platform === 'win32' ? '.exe' : ''),
+          sha256: 'b'.repeat(64),
+        },
+      ],
     })
   );
   return { id, manifest, descriptor };
@@ -202,7 +207,11 @@ test('repair prerequisites admit each old provider alongside other old receipts'
           throw new Error('acquisition reached');
         }
       );
-    await expect(install()).rejects.toThrow('exists and may belong');
+    if (isMaintainedProvider(entry.descriptor.id)) {
+      await expect(install()).rejects.toThrow('acquisition reached');
+    } else {
+      await expect(install()).rejects.toThrow('exists and may belong');
+    }
     await rename(entry.target, entry.target + '.old');
     await expect(install()).rejects.toThrow('acquisition reached');
   }

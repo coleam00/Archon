@@ -52,11 +52,26 @@ export interface BrokenReceipt {
   cause?: unknown;
   unavailableReason?: 'provider-protocol';
   invalidLocation?: true;
+  incompatibleProviderReceipt?: z.infer<typeof providerProtocolReceiptSchema>;
 }
 
 export interface ReceiptScan {
   receipts: PluginReceipt[];
   broken: BrokenReceipt[];
+}
+
+export function isOlderMaintainedProviderReceipt(
+  provider: BrokenReceipt['incompatibleProviderReceipt'],
+  fileName: string
+): boolean {
+  return (
+    provider !== undefined &&
+    provider.descriptor.protocol < PROVIDER_PLUGIN_PROTOCOL &&
+    isMaintainedProvider(provider.descriptor.id) &&
+    isMaintainedProviderPlugin(provider.id, provider.descriptor.id) &&
+    provider.manifest.executable === `archon-provider-${provider.descriptor.id}` &&
+    provider.files.some(file => file.path === fileName)
+  );
 }
 
 /**
@@ -73,7 +88,7 @@ export async function readReceipts(pluginsDir: string): Promise<PluginReceipt[]>
 /**
  * Every receipt, sorted by path, with the broken ones returned beside the valid
  * ones. Runtime loaders report and skip broken receipts; plugin commands decide
- * per command what a broken receipt blocks. File ownership checks use `readReceipts`.
+ * per command what a broken receipt blocks, including executable ownership.
  */
 export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
   const root = join(pluginsDir, 'installed');
@@ -154,16 +169,18 @@ function incompatibleProviderReceipt(
   const command = maintained
     ? `archon provider add ${descriptor.id}`
     : `archon plugin update ${id}`;
-  const executable = join(
-    pluginsDir,
-    provider.manifest.executable + (process.platform === 'win32' ? '.exe' : '')
-  );
+  const fileName = provider.manifest.executable + (process.platform === 'win32' ? '.exe' : '');
+  const executable = join(pluginsDir, fileName);
+  const upgradeable = isOlderMaintainedProviderReceipt(provider, fileName);
   const repair =
     maintained && !BUNDLED_IS_BINARY
       ? `Source checkouts run maintained providers from source. Remove this obsolete receipt: archon plugin remove ${id}`
-      : `If ${executable} exists, move it aside before retrying. Run: ${command}`;
+      : upgradeable
+        ? `Run: ${command}. Validated older receipts allow direct replacement; ambiguous file ownership can still require moving the executable aside.`
+        : `If ${executable} exists, move it aside before retrying. Run: ${command}`;
   return {
     unavailableReason: 'provider-protocol',
+    incompatibleProviderReceipt: provider,
     message: `Plugin unavailable: ${id} (provider '${descriptor.id}') uses protocol ${descriptor.protocol}, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. ${repair}`,
   };
 }
