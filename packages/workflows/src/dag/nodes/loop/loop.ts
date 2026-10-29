@@ -1,11 +1,15 @@
+import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { finalizeLoopFromSignal } from '../../loop-completion';
 import { requireProvider } from '@archon/provider-contract';
-import type { NodeExecutionResult } from '../../../node-record-serialization';
+import {
+  serializeDeferredNodeUsage,
+  type NodeExecutionResult,
+} from '../../../node-record-serialization';
 import {
   nodeExecutionMetadataSchema,
   type NodeExecutionRecord,
 } from '../../../schemas/node-execution';
-import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
+import { NodeEventWriteError, persistNodeEvent, recordNodeState } from '../../../node-event-write';
 import type { SendQueryOptions, ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
 import type {
   ApprovalContext,
@@ -370,10 +374,6 @@ async function failOnIterationLimit(run: LoopRun, state: LoopState): Promise<Nod
   });
 }
 
-/**
- * Run one iteration and settle a thrown iteration as a failed node carrying the spend
- * of the iterations already paid for.
- */
 async function runSettledLoopIteration(
   run: LoopRun,
   state: LoopState,
@@ -382,8 +382,10 @@ async function runSettledLoopIteration(
   try {
     return await runLoopIteration(run, state, i);
   } catch (error) {
-    // An iteration reads no node source, reserves no run budget and writes no terminal
-    // status; a failed event write is the only engine error it can raise.
+    if (isWorkflowExecutionInterruption(error)) {
+      await preserveInterruptedLoopUsage(run, state);
+      throw error;
+    }
     if (error instanceof NodeEventWriteError) throw error;
     const { ctx, node } = run;
     const message = error instanceof Error ? error.message : String(error);
@@ -401,6 +403,39 @@ async function runSettledLoopIteration(
       run.msgContext
     );
     return failed;
+  }
+}
+
+async function preserveInterruptedLoopUsage(run: LoopRun, state: LoopState): Promise<void> {
+  const { ctx } = run;
+  try {
+    await persistNodeEvent(
+      ctx.deps.store,
+      serializeDeferredNodeUsage({
+        ...state.execution,
+        spend: {
+          ...state.execution.spend,
+          tokens: state.tokensUnknown
+            ? { source: 'unavailable', reason: 'incomplete' }
+            : state.tokens !== undefined
+              ? { source: 'provider', value: state.tokens }
+              : state.execution.spend.tokens,
+          costUsd:
+            state.costUsd !== undefined
+              ? {
+                  source: 'provider',
+                  value: state.costUsd,
+                  ...(!state.costKnown ? { partial: true } : {}),
+                }
+              : state.execution.spend.costUsd,
+        },
+      })
+    );
+  } catch (usageError) {
+    getLog().error(
+      { err: usageError, workflowRunId: ctx.workflowRun.id, nodeId: run.node.id },
+      'loop_node.interrupted_usage_write_failed'
+    );
   }
 }
 
