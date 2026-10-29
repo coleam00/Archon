@@ -74,14 +74,38 @@ function killIfRunning(pid: number): void {
   }
 }
 
+async function expectProcessStopped(pid: number): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  expect(() => process.kill(pid, 0)).toThrow();
+}
+
 describe('AppServerConnection', () => {
   test('stops descendants holding inherited pipes after exit and leaves other processes alone', async () => {
-    const script = `
+    const childScript = `
       const { spawn } = require('node:child_process');
-      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
         stdio: ['ignore', 'inherit', 'inherit']
       });
-      process.stdin.on('data', () => process.stdout.write(JSON.stringify({ id: 1, result: child.pid }) + '\\n'));
+      process.stdout.write(String(grandchild.pid));
+      setInterval(() => {}, 1000);
+    `;
+    const script = `
+      const { spawn } = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {
+        stdio: ['ignore', 'pipe', 'inherit']
+      });
+      const ready = new Promise(resolve => child.stdout.once('data', data => resolve(Number(data))));
+      process.stdin.on('data', async () => process.stdout.write(JSON.stringify({
+        id: 1, result: [child.pid, await ready]
+      }) + '\\n'));
       process.stdin.on('end', () => process.stdout.write(
         JSON.stringify({ method: 'turn/completed', params: {} }) + '\\n', () => process.exit(0)
       ));
@@ -90,7 +114,7 @@ describe('AppServerConnection', () => {
       stdio: 'ignore',
     });
     let root: ChildProcessWithoutNullStreams | undefined;
-    let descendant: number | undefined;
+    const descendants: number[] = [];
     const connection = AppServerConnection.start(
       BINARY,
       [],
@@ -102,21 +126,19 @@ describe('AppServerConnection', () => {
     );
     try {
       const response = await connection.request('thread/start', {});
-      if (typeof response !== 'number') throw new Error('Missing descendant PID');
-      descendant = response;
-      const ownedPid = response;
-      expect(process.kill(descendant, 0)).toBe(true);
-      expect(await connection.shutdown()).toEqual({ kind: 'exited', code: 0, signal: null });
-      const deadline = Date.now() + 1000;
-      while (Date.now() < deadline) {
-        try {
-          process.kill(descendant, 0);
-        } catch {
-          break;
-        }
-        await new Promise(resolve => setTimeout(resolve, 10));
+      if (
+        !Array.isArray(response) ||
+        response.length !== 2 ||
+        !response.every((pid: unknown) => typeof pid === 'number')
+      ) {
+        throw new Error('Missing child and grandchild PIDs');
       }
-      expect(() => process.kill(ownedPid, 0)).toThrow();
+      for (const pid of response) {
+        descendants.push(pid);
+        expect(process.kill(pid, 0)).toBe(true);
+      }
+      expect(await connection.shutdown()).toEqual({ kind: 'exited', code: 0, signal: null });
+      for (const pid of descendants) await expectProcessStopped(pid);
       if (other.pid === undefined) throw new Error('Missing unrelated process PID');
       expect(process.kill(other.pid, 0)).toBe(true);
       const frames = [];
@@ -125,7 +147,7 @@ describe('AppServerConnection', () => {
     } finally {
       other.kill();
       root?.kill();
-      if (descendant !== undefined) killIfRunning(descendant);
+      for (const pid of descendants) killIfRunning(pid);
     }
   }, 10_000);
 

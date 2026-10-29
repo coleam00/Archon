@@ -45,6 +45,7 @@ import {
   JsonRpcError,
   settlesWithin,
   type Spawner,
+  type ConnectionEnd,
 } from './app-server';
 import { failureClassOfStop, withModelAccessAdvice } from './turn-error';
 import { codexLaunch, codexLogin, type CodexLogin } from './login';
@@ -333,6 +334,8 @@ export class CodexProvider implements IAgentProvider {
   ): Promise<CredentialStatus> {
     signal.throwIfAborted();
     const connection = AppServerConnection.start(binary, [], env, this.spawner);
+    let response: unknown;
+    let end: ConnectionEnd | undefined;
     try {
       await Promise.race([
         aborted,
@@ -342,38 +345,38 @@ export class CodexProvider implements IAgentProvider {
         }),
       ]);
       connection.notify('initialized');
-      const response = await Promise.race([
+      response = await Promise.race([
         aborted,
         // Ask for a refresh so a revoked sign-in reads as no account. A turn never sends
         // account/read, so this refresh is the check's own.
         connection.request('account/read', { refreshToken: true }),
       ]);
-      signal.throwIfAborted();
-      const validated = accountResponseSchema.safeParse(response);
-      if (!validated.success) {
-        return {
-          state: 'check_failed',
-          source: 'native',
-          evidence: 'Codex account/read returned an invalid protocol response.',
-        };
-      }
-      const { account, requiresOpenaiAuth } = validated.data;
-      if (account !== null) return { state: 'usable', source: 'native' };
-      // A model provider configured in Codex that needs no OpenAI login authenticates on its
-      // own terms, which account/read does not report.
-      if (!requiresOpenaiAuth) return { state: 'not_checked', source: 'native' };
-      return {
-        state: 'unusable',
-        source: 'native',
-        evidence:
-          'Codex reports no usable login: it is not signed in, or its sign-in could not be refreshed. Run `codex login`.',
-      };
     } finally {
       // Cleanup keeps observing the process after cancellation; the credential decision
       // must still end at the caller's deadline.
-      await Promise.race([aborted, connection.shutdown(this.shutdownGraceMs)]);
+      end = await Promise.race([aborted, connection.shutdown(this.shutdownGraceMs)]);
       signal.throwIfAborted();
     }
+    if (end?.kind === 'cleanup_failed') throw connection.closedError(end);
+    const validated = accountResponseSchema.safeParse(response);
+    if (!validated.success) {
+      return {
+        state: 'check_failed',
+        source: 'native',
+        evidence: 'Codex account/read returned an invalid protocol response.',
+      };
+    }
+    const { account, requiresOpenaiAuth } = validated.data;
+    if (account !== null) return { state: 'usable', source: 'native' };
+    // A model provider configured in Codex that needs no OpenAI login authenticates on its
+    // own terms, which account/read does not report.
+    if (!requiresOpenaiAuth) return { state: 'not_checked', source: 'native' };
+    return {
+      state: 'unusable',
+      source: 'native',
+      evidence:
+        'Codex reports no usable login: it is not signed in, or its sign-in could not be refreshed. Run `codex login`.',
+    };
   }
 
   getCapabilities(): ProviderCapabilities {

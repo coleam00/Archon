@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ mock.module('@archon/paths', () => ({
 import { createFakeAppServer } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
 import type { Spawner } from './app-server';
+import * as processTree from './process-tree';
 
 const trackTempRoot = trackTempRoots();
 const account = { type: 'chatgpt', email: 'fixture@example.test', planType: 'pro' } as const;
@@ -39,6 +40,46 @@ function expectRefreshes(server: ReturnType<typeof createFakeAppServer>, count: 
 }
 
 describe('Codex native login recheck', () => {
+  test.each([
+    { attempt: 1, script: { account } },
+    { attempt: 1, script: { account: null } },
+    { attempt: 1, script: { account: null, requiresOpenaiAuth: false } },
+    { attempt: 1, script: { accountResponse: 'invalid' } },
+    { attempt: 2, script: { account } },
+  ])(
+    'cleanup failure in account process $attempt fails the check for $script',
+    async ({ attempt, script }) => {
+      const stop = spyOn(processTree, 'stopAppServerDescendants').mockRejectedValue(
+        new Error('credential cleanup refused')
+      );
+      const server = createFakeAppServer(() =>
+        server.processes.length + 1 === attempt ? script : { account: null }
+      );
+      const spawner: Spawner = (command, args, options) => {
+        const child = server(command, args, options);
+        if (server.processes.length === attempt) {
+          Object.defineProperty(child, 'pid', { value: 2_147_483_647 });
+        }
+        return child;
+      };
+      try {
+        expect(
+          await new CodexProvider(spawner, 1).checkCredential({
+            env: loginFixture().env,
+            signal: AbortSignal.timeout(1000),
+          })
+        ).toMatchObject({
+          state: 'check_failed',
+          source: 'native',
+          evidence: expect.stringContaining('credential cleanup refused'),
+        });
+        expectRefreshes(server, attempt);
+      } finally {
+        stop.mockRestore();
+      }
+    }
+  );
+
   test('two simultaneous refreshes succeed after the loser reloads the saved login', async () => {
     log.info.mockClear();
     const fixture = loginFixture();
