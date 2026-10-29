@@ -260,15 +260,19 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
       if (env.reason) msg += `\n  • ${env.branchName}: ${env.reason}`;
     }
   } catch (error) {
-    const code =
-      typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
-    const sqlState =
-      typeof code === 'string' && code.length === 5 && !/[^0-9A-Z]/.test(code) ? code : undefined;
     getLog().error(
-      { reason: statusDiagnostic(error), code: sqlState, codebaseId: codebase.id },
+      { reason: statusDiagnostic(error), code: sqlState(error), codebaseId: codebase.id },
       'cmd.worktree_breakdown_failed'
     );
     return '\n\nWorktrees: inventory unavailable (count unknown)';
   }
   return msg;
+}
+
+function sqlState(error: unknown): string | undefined {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
+  return typeof code === 'string' && code.length === 5 && !/[^0-9A-Z]/.test(code)
+    ? code
+    : undefined;
 }
