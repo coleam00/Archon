@@ -63,6 +63,17 @@ export function normalizeJsonSchemaForOpenAiStrict(
     }
     const compositions = Object.keys(node).filter(isJsonSchemaCompositionKeyword);
     if (compositions.length > 1) refuse(`${path}.${compositions[1]}`);
+    if (isObjectSchemaNode(node)) {
+      const properties = node.properties;
+      if (isRecord(properties)) {
+        const forbidden = requiredNames(node).filter(name => !Object.hasOwn(properties, name));
+        if (forbidden.length > 0) {
+          throw new Error(
+            `Codex output schema at ${path}.required names ${forbidden.join(', ')} absent from properties. Strict conversion sets additionalProperties: false, forbidding these required fields. Declare their schemas in properties or correct the required list.`
+          );
+        }
+      }
+    }
     for (const keyword of compositions) completeBranches(node, keyword, path);
     if (isObjectSchemaNode(node)) node.additionalProperties = false;
   });
