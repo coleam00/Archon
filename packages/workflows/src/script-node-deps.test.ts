@@ -543,7 +543,7 @@ describe('script node deps field — command construction', () => {
     expect(args).toEqual(['run', 'python', '-c', 'print("no deps")']);
   });
 
-  it('bun inline with deps uses bun --no-env-file -e (no extra dep flags — bun auto-installs)', async () => {
+  it('bun inline with deps uses bun --no-env-file stdin (no extra dep flags — bun auto-installs)', async () => {
     const node: ExecNode = {
       id: 'bun-with-deps',
       kind: 'exec',
@@ -564,15 +564,16 @@ describe('script node deps field — command construction', () => {
     const calls = mockExecFileAsync.mock.calls;
     const scriptCall = calls.find(c => (c[0] as string) === 'bun');
     expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
+    const [cmd, args, options] = scriptCall as [string, string[], { input?: string }];
     expect(cmd).toBe('bun');
     // --no-env-file prevents repo .env auto-load; no dep flags — bun auto-installs
-    expect(args).toEqual(['--no-env-file', '-e', node.script]);
+    expect(args).toEqual(['--no-env-file', '-']);
+    expect(options.input).toBe(node.script);
     expect(args).not.toContain('--packages');
     expect(args).not.toContain('--with');
   });
 
-  it('bun inline without deps uses bun --no-env-file -e', async () => {
+  it('bun inline without deps uses bun --no-env-file stdin', async () => {
     const node: ExecNode = {
       id: 'bun-no-deps',
       kind: 'exec',
@@ -592,9 +593,10 @@ describe('script node deps field — command construction', () => {
     const calls = mockExecFileAsync.mock.calls;
     const scriptCall = calls.find(c => (c[0] as string) === 'bun');
     expect(scriptCall).toBeDefined();
-    const [cmd, args] = scriptCall as [string, string[]];
+    const [cmd, args, options] = scriptCall as [string, string[], { input?: string }];
     expect(cmd).toBe('bun');
-    expect(args).toEqual(['--no-env-file', '-e', 'console.log("hello")']);
+    expect(args).toEqual(['--no-env-file', '-']);
+    expect(options.input).toBe('console.log("hello")');
   });
 
   it('uv named script with deps uses uv run --with flags', async () => {

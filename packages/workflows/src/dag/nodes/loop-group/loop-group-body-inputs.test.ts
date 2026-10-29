@@ -976,12 +976,12 @@ describe('loop_group body inputs: included blocks, command files and loop variab
       );
 
       const scriptCall = execSpy.mock.calls.find(
-        c => (c[0] as string) === 'bun' && (c[1] as string[]).includes('-e')
-      ) as [string, string[], { env: NodeJS.ProcessEnv }] | undefined;
+        c => (c[0] as string) === 'bun' && (c[1] as string[]).includes('-')
+      ) as [string, string[], { env: NodeJS.ProcessEnv; input?: string }] | undefined;
       expect(scriptCall).toBeDefined();
       // Source is byte-identical to the author's body — the payload is not interpolated.
-      expect(scriptCall?.[1][2]).toBe('console.log("$LOOP_USER_INPUT"); console.log("DONE")');
-      expect(scriptCall?.[1][2]).not.toContain('process.exit');
+      expect(scriptCall?.[2].input).toBe('console.log("$LOOP_USER_INPUT"); console.log("DONE")');
+      expect(scriptCall?.[2].input).not.toContain('process.exit');
       // The per-iteration feedback reaches the script through the environment.
       expect(scriptCall?.[2].env.LOOP_USER_INPUT).toBe(injection);
     } finally {
