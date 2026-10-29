@@ -13,6 +13,7 @@ import {
   AppServerConnection,
   ConnectionClosedError,
   JsonRpcError,
+  settlesWithin,
   type Spawner,
 } from './app-server';
 
@@ -205,6 +206,61 @@ describe('AppServerConnection', () => {
     expect(error).toBeInstanceOf(ConnectionClosedError);
     expect((error as Error).message).toContain('exited (code 1)');
   });
+
+  test('a descendant retaining stdout cannot keep an exited app-server connection open', async () => {
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const response = connection.request('thread/start', {});
+    fake.reply({ id: 1, result: 'final response' });
+    expect(await response).toBe('final response');
+
+    // Node reports `exit` when the app-server is gone, but withholds `close` while a
+    // descendant retains an inherited pipe handle.
+    fake.child.emit('exit', 0, null);
+    const ended = await settlesWithin(connection.ended, 1_500);
+
+    try {
+      expect(ended).toBe(true);
+      expect(await connection.ended).toEqual({ kind: 'exited', code: 0, signal: null });
+    } finally {
+      if (!ended) fake.child.emit('close', 0, null);
+    }
+  }, 3_000);
+
+  test('frames queued after exit are read before close ends the connection', async () => {
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const response = connection.request('thread/start', {});
+
+    fake.child.emit('exit', 0, null);
+    fake.reply({ id: 1, result: 'last frame' });
+    fake.stdout.end();
+    fake.stderr.end();
+    fake.child.emit('close', 0, null);
+
+    expect(await response).toBe('last frame');
+    expect(await connection.ended).toEqual({ kind: 'exited', code: 0, signal: null });
+  });
+
+  test('an incomplete frame after exit is an abnormal connection end', async () => {
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const pending = connection.request('thread/start', {});
+    fake.stdout.write('{"id":1,"result":"partial');
+    await tick();
+    fake.child.emit('exit', 0, null);
+
+    const end = await connection.ended;
+    expect(end).toEqual({
+      kind: 'output_incomplete',
+      code: 0,
+      signal: null,
+      bytes: Buffer.byteLength('{"id":1,"result":"partial'),
+    });
+    const error = await pending.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ConnectionClosedError);
+    expect((error as Error).message).toContain('with an incomplete stdout frame');
+  }, 2_000);
 
   test('a process ending keeps the tail of its stderr as evidence, off the error message', async () => {
     const fake = rawChild();

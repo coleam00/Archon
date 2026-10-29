@@ -57,7 +57,16 @@ export class JsonRpcError extends Error {
 /** How the connection ended. */
 export type ConnectionEnd =
   | { kind: 'exited'; code: number | null; signal: NodeJS.Signals | null }
+  | {
+      kind: 'output_incomplete';
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      bytes: number;
+    }
   | { kind: 'spawn_failed'; error: NodeJS.ErrnoException };
+
+/** Time to drain final frames after the app-server process itself is confirmed gone. */
+const EXIT_PIPE_DRAIN_MS = 1_000;
 
 /**
  * How often an app-server that has not exited yet is reported. There is no deadline: a
@@ -122,9 +131,11 @@ export class ConnectionClosedError extends Error {
 }
 
 function describeEnd(end: ConnectionEnd): string {
-  return end.kind === 'spawn_failed'
-    ? `could not start: ${end.error.message}`
-    : `exited (${end.signal ? `signal ${end.signal}` : `code ${String(end.code)}`})`;
+  if (end.kind === 'spawn_failed') return `could not start: ${end.error.message}`;
+  const exit = end.signal ? `signal ${end.signal}` : `code ${String(end.code)}`;
+  return end.kind === 'output_incomplete'
+    ? `exited (${exit}) with an incomplete stdout frame (${String(end.bytes)} bytes)`
+    : `exited (${exit})`;
 }
 
 /** Whether `promise` settles within `ms`. A rejection counts as settled. */
@@ -179,6 +190,8 @@ export class AppServerConnection {
   private readonly queue: ServerNotification[] = [];
   private wake: (() => void) | undefined;
   private endedWith: ConnectionEnd | undefined;
+  private stdoutRemainder = '';
+  private pipeDrainTimer: ReturnType<typeof setTimeout> | undefined;
   private responded = false;
   private stderrTail = '';
   /** Credential values from the process env, redacted from its stderr. */
@@ -193,16 +206,15 @@ export class AppServerConnection {
     protectedEnvKeys?: readonly string[]
   ) {
     this.credentialValues = collectCredentialValues(env, protectedEnvKeys);
-    let buffered = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
-      buffered += chunk;
-      let newline = buffered.indexOf('\n');
+      this.stdoutRemainder += chunk;
+      let newline = this.stdoutRemainder.indexOf('\n');
       while (newline >= 0) {
-        const line = buffered.slice(0, newline).trim();
-        buffered = buffered.slice(newline + 1);
+        const line = this.stdoutRemainder.slice(0, newline).trim();
+        this.stdoutRemainder = this.stdoutRemainder.slice(newline + 1);
         if (line) this.receive(line);
-        newline = buffered.indexOf('\n');
+        newline = this.stdoutRemainder.indexOf('\n');
       }
     });
     // Codex logs to stderr. Reading it keeps the pipe from filling and blocking the server,
@@ -218,9 +230,12 @@ export class AppServerConnection {
     child.once('error', (error: NodeJS.ErrnoException) => {
       this.close({ kind: 'spawn_failed', error });
     });
-    // 'close', not 'exit': it fires after stdout drained, so the last frames are read first.
+    child.once('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+      this.drainPipesAfterExit({ kind: 'exited', code, signal });
+    });
+    // Normally `close` follows `exit` after stdout drains, so final frames arrive first.
     child.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
-      this.close({ kind: 'exited', code, signal });
+      this.finishExit({ kind: 'exited', code, signal });
     });
   }
 
@@ -411,6 +426,43 @@ export class AppServerConnection {
     const wake = this.wake;
     this.wake = undefined;
     wake?.();
+  }
+
+  /** Bound pipe draining only after the OS has confirmed that app-server exited. */
+  private drainPipesAfterExit(end: Extract<ConnectionEnd, { kind: 'exited' }>): void {
+    if (this.endedWith || this.pipeDrainTimer) return;
+    this.pipeDrainTimer = setTimeout(() => {
+      if (this.endedWith) return;
+      const incompleteBytes = Buffer.byteLength(this.stdoutRemainder.trim());
+      getLog().warn(
+        { pid: this.child.pid, drainMs: EXIT_PIPE_DRAIN_MS, incompleteBytes },
+        'codex.app_server_pipe_drain_bounded'
+      );
+      // The process is already gone. Destroying our pipe endpoints releases inherited
+      // handles without signalling or abandoning a live app-server process.
+      this.child.stdin.destroy();
+      this.child.stdout.destroy();
+      this.child.stderr.destroy();
+      this.finishExit(end);
+    }, EXIT_PIPE_DRAIN_MS);
+  }
+
+  /** Complete an observed exit, rejecting a trailing partial JSONL frame. */
+  private finishExit(end: Extract<ConnectionEnd, { kind: 'exited' }>): void {
+    if (this.endedWith) return;
+    if (this.pipeDrainTimer) clearTimeout(this.pipeDrainTimer);
+    this.pipeDrainTimer = undefined;
+    const incomplete = this.stdoutRemainder.trim();
+    if (incomplete) {
+      this.close({
+        kind: 'output_incomplete',
+        code: end.code,
+        signal: end.signal,
+        bytes: Buffer.byteLength(incomplete),
+      });
+      return;
+    }
+    this.close(end);
   }
 
   /** The one place the connection ends: pending requests fail and notifications stop. */
