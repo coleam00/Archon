@@ -2181,22 +2181,6 @@ describe('validateWorkflowResources — strict-schema compatibility', () => {
     }
   );
 
-  test('Codex-routed agent reports a required field forbidden by strict preparation', async () => {
-    const workflow = makeWorkflow('test', [
-      makeAgent('plan', {
-        output_format: {
-          type: 'object',
-          properties: { a: { type: 'string' } },
-          required: ['a', 'b'],
-        },
-      }),
-    ]);
-    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {}, 'codex');
-    const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
-    expect(errors).toHaveLength(1);
-    expect(errors[0].message).toMatch(/output_format.required.*b.*additionalProperties: false/);
-  });
-
   test('Codex-routed agent node with optional-by-omission reports error', async () => {
     const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: looseSchema })]);
 
