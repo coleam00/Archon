@@ -23,7 +23,7 @@ import type { ClientRequest } from './protocol/ClientRequest';
 import type { ServerNotification } from './protocol/ServerNotification';
 import type { ServerRequest } from './protocol/ServerRequest';
 import type { CodexBinary } from './binary-resolver';
-import { stopAppServerDescendants } from './process-tree';
+import { terminateTree } from '@archon/paths/plugin-process';
 
 const TOOL_CALL_METHOD = 'item/tool/call';
 
@@ -467,9 +467,10 @@ export class AppServerConnection {
     if (
       end.kind === 'exited' &&
       this.child.pid !== undefined &&
-      this.processGroupOwner === 'connection'
+      this.processGroupOwner === 'connection' &&
+      process.platform !== 'win32'
     ) {
-      void stopAppServerDescendants(this.child.pid).then(
+      void terminateTree(this.child.pid).then(
         () => this.finishClose(end),
         (error: unknown) =>
           this.finishClose({

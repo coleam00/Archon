@@ -48,7 +48,7 @@ import {
   type FakeTurnScript,
 } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
-import * as processTree from './process-tree';
+import * as pluginProcess from '@archon/paths/plugin-process';
 import { TOOL_FREE_THREAD_CONFIG } from './turn-params';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
 import type { ServerNotification } from './protocol/ServerNotification';
@@ -172,10 +172,12 @@ describe('CodexProvider', () => {
   test.each([false, true])(
     'a post-result cleanup failure throws without settling (remote=%s)',
     async remote => {
-      const stop = spyOn(processTree, 'stopAppServerDescendants').mockRejectedValue(
+      const originalPlatform = process.platform;
+      const stop = spyOn(pluginProcess, 'terminateTree').mockRejectedValue(
         new Error('cleanup refused')
       );
       try {
+        Object.defineProperty(process, 'platform', { value: 'linux' });
         const server = createFakeAppServer();
         const provider = new CodexProvider((command, args, options) => {
           const child = server(command, args, options);
@@ -196,6 +198,7 @@ describe('CodexProvider', () => {
           'codex.app_server_abnormal_exit'
         );
       } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform });
         stop.mockRestore();
       }
     }

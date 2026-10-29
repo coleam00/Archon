@@ -3,7 +3,6 @@ import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { createMockLogger } from '../test/mocks/logger';
-import * as processTree from './process-tree';
 import * as pluginProcess from '@archon/paths/plugin-process';
 
 const log = createMockLogger();
@@ -89,21 +88,32 @@ async function expectProcessStopped(pid: number): Promise<void> {
 }
 
 describe('AppServerConnection', () => {
-  test.each(['win32', 'linux', 'darwin'] as const)(
-    'post-exit cleanup uses a process group only on POSIX (%s)',
-    async platform => {
-      const originalPlatform = process.platform;
-      const stop = spyOn(pluginProcess, 'terminateTree').mockResolvedValue(undefined);
-      try {
-        Object.defineProperty(process, 'platform', { value: platform });
-        await processTree.stopAppServerDescendants(12345);
-        expect(stop.mock.calls).toEqual(platform === 'win32' ? [] : [[12345]]);
-      } finally {
-        Object.defineProperty(process, 'platform', { value: originalPlatform });
-        stop.mockRestore();
+  for (const processGroupOwner of ['connection', 'host'] as const) {
+    test.each(['win32', 'linux', 'darwin'] as const)(
+      `post-exit cleanup respects platform and ${processGroupOwner} group ownership (%s)`,
+      async platform => {
+        const originalPlatform = process.platform;
+        const stop = spyOn(pluginProcess, 'terminateTree').mockResolvedValue(undefined);
+        try {
+          Object.defineProperty(process, 'platform', { value: platform });
+          const fake = rawChild();
+          Object.defineProperty(fake.child, 'pid', { value: 12345 });
+          const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner, {
+            processGroupOwner,
+          });
+          fake.child.emit('exit', 0, null);
+          fake.child.emit('close', 0, null);
+          expect(await connection.shutdown()).toEqual({ kind: 'exited', code: 0, signal: null });
+          expect(stop.mock.calls).toEqual(
+            platform !== 'win32' && processGroupOwner === 'connection' ? [[12345]] : []
+          );
+        } finally {
+          Object.defineProperty(process, 'platform', { value: originalPlatform });
+          stop.mockRestore();
+        }
       }
-    }
-  );
+    );
+  }
 
   test.skipIf(process.platform === 'win32')(
     'stops POSIX descendants holding inherited pipes after exit and leaves other processes alone',
@@ -173,10 +183,12 @@ describe('AppServerConnection', () => {
   );
 
   test('a descendant cleanup failure fails pending work and cannot report a clean exit', async () => {
-    const stop = spyOn(processTree, 'stopAppServerDescendants').mockRejectedValue(
+    const originalPlatform = process.platform;
+    const stop = spyOn(pluginProcess, 'terminateTree').mockRejectedValue(
       new Error('cleanup refused')
     );
     try {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
       const fake = rawChild();
       Object.defineProperty(fake.child, 'pid', { value: 2_147_483_647 });
       const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
@@ -187,6 +199,7 @@ describe('AppServerConnection', () => {
       expect(await pending).toBeInstanceOf(ConnectionClosedError);
       expect(((await pending) as ConnectionClosedError).message).toContain('cleanup refused');
     } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
       stop.mockRestore();
     }
   });
