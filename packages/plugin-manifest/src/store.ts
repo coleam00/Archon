@@ -60,6 +60,20 @@ export interface ReceiptScan {
   broken: BrokenReceipt[];
 }
 
+export function isOlderMaintainedProviderReceipt(
+  provider: BrokenReceipt['incompatibleProviderReceipt'],
+  fileName: string
+): boolean {
+  return (
+    provider !== undefined &&
+    provider.descriptor.protocol < PROVIDER_PLUGIN_PROTOCOL &&
+    isMaintainedProvider(provider.descriptor.id) &&
+    isMaintainedProviderPlugin(provider.id, provider.descriptor.id) &&
+    provider.manifest.executable === `archon-provider-${provider.descriptor.id}` &&
+    provider.files.some(file => file.path === fileName)
+  );
+}
+
 /**
  * Every receipt, sorted by path. An unreadable or invalid receipt throws
  * rather than being skipped: skipping it would make an installed plugin
@@ -157,11 +171,7 @@ function incompatibleProviderReceipt(
     : `archon plugin update ${id}`;
   const fileName = provider.manifest.executable + (process.platform === 'win32' ? '.exe' : '');
   const executable = join(pluginsDir, fileName);
-  const upgradeable =
-    maintained &&
-    descriptor.protocol < PROVIDER_PLUGIN_PROTOCOL &&
-    provider.manifest.executable === `archon-provider-${descriptor.id}` &&
-    provider.files.some(file => file.path === fileName);
+  const upgradeable = isOlderMaintainedProviderReceipt(provider, fileName);
   const repair =
     maintained && !BUNDLED_IS_BINARY
       ? `Source checkouts run maintained providers from source. Remove this obsolete receipt: archon plugin remove ${id}`

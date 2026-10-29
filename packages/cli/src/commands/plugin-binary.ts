@@ -18,7 +18,12 @@ import {
   type ProviderManifest,
   type PluginReceipt,
 } from '@archon/plugin-manifest';
-import { receiptPath, RECEIPT_FILE, type BrokenReceipt } from '@archon/plugin-manifest/store';
+import {
+  receiptPath,
+  RECEIPT_FILE,
+  isOlderMaintainedProviderReceipt,
+  type BrokenReceipt,
+} from '@archon/plugin-manifest/store';
 import { inspectProviderPlugin } from '@archon/core/providers/inspect-provider-plugin';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
 import {
@@ -159,15 +164,7 @@ export function canUpgradeProvider(
   broken: readonly BrokenReceipt[]
 ): boolean {
   const self = broken.find(entry => entry.id === id)?.incompatibleProviderReceipt;
-  if (
-    !self ||
-    self.descriptor.protocol >= PROVIDER_PLUGIN_PROTOCOL ||
-    !isMaintainedProvider(self.descriptor.id) ||
-    !isMaintainedProviderPlugin(id, self.descriptor.id) ||
-    self.manifest.executable !== `archon-provider-${self.descriptor.id}` ||
-    !self.files.some(file => file.path === fileName)
-  )
-    return false;
+  if (!isOlderMaintainedProviderReceipt(self, fileName)) return false;
   return broken.every(entry => {
     if (entry.id === id) return true;
     const peer = entry.incompatibleProviderReceipt;
