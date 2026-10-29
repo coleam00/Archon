@@ -122,9 +122,12 @@ queue. Launch one run per item you want worked at the same time; the launch's
 A round ends one of three ways, recorded on the item:
 
 - `done`: the pull request's latest review says Ready at its head. The merge queue
-  takes it from there. A pull request already reviewed Ready at its head is marked
+  takes it from there. When only a check no round can run is left, the run asks once
+  for it instead. A pull request already reviewed Ready at its head is marked
   ready without another round.
-- `continue`: the issue already answers what stopped the round. The run starts the
+- `continue`: the issue already answers what stopped the round, and the correction
+  stays inside the issue's shape (one that adds machinery the issue does not name asks
+  instead). The run starts the
   item's next round at once, as a detached `archon-build-queue --input number=<n>`
   run on the same run config and the same `retriage_as` and `round_limit`.
   If that launch fails, the item waits for the next queue run.

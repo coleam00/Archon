@@ -20,9 +20,14 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
     steering documents or the rulings already answer;
   - a stop that names as a blocker work a later step owns, such as a review, CI or a
     maintainer's merge (a false blocker).
+
+  Any round that would continue is first checked against the contract's shape. A
+  correction that adds machinery the contract does not name asks instead, naming the
+  subtractive option.
 - **Push** commits a run left committed but unpushed on its pull request's branch.
 - **Done** when the pull request's latest review says Ready at its head commit and CI
-  marked it ready.
+  marked it ready. When the only thing left is a check no round can run, such as an
+  operator check the review deferred, the queue asks once for it at that head instead.
 
 ## Unclear: the queue asks
 

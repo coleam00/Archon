@@ -103,7 +103,7 @@ archon workflow run archon-build-queue \
   --input repo_host=github.com --input repo_path=acme/widgets --input number=42 --detach
 ```
 
-A round runs `archon-ship`: investigate or plan if the route needs it, implement, open a draft pull request, review it, fix the findings, wait for CI and mark it ready. When a round ends on something the contract already answers, such as a review finding or red CI the change caused, the queue starts the next round at once as a new detached run. The item is done when the pull request's latest review says Ready at its head, or when a maintainer answers `ready`, for example after finishing the pull request by hand; the merge gate still checks the verdict and CI either way. Follow it with `archon workflow runs` and answer anything it asks (step 6).
+A round runs `archon-ship`: investigate or plan if the route needs it, implement, open a draft pull request, review it, fix the findings, wait for CI and mark it ready. When a round ends on something the contract already answers, such as a review finding or red CI the change caused, the queue starts the next round at once as a new detached run, unless the fix would add machinery the issue does not ask for; then it asks you first. The item is done when the pull request's latest review says Ready at its head, or when a maintainer answers `ready`, for example after finishing the pull request by hand; the merge gate still checks the verdict and CI either way. Follow it with `archon workflow runs` and answer anything it asks (step 6).
 
 Merge it:
 
