@@ -275,14 +275,14 @@ test.each([
       await listPlugins({ pluginsDir, projectDir: root, archonVersion: '1.2.3' });
       await workflowListCommand(root, { json: true });
       const list = JSON.parse(String(stdout.mock.calls[0]?.[0]));
-      expect(JSON.stringify(list.errors)).toContain(`Invalid plugin receipt location ${file}`);
+      expect(list.errors[0].error).toContain(`Invalid plugin receipt location ${file}`);
       expect(stderr.mock.calls.flat().join('')).not.toContain('Plugin unavailable:');
       stdout.mockClear();
       expect(await workflowTestCommand(root, 'receipt-check', { json: true })).toBe(1);
       const report = JSON.parse(String(stdout.mock.calls[0]?.[0]));
       expect(report.passed).toBe(1);
       expect(report.errors).toHaveLength(1);
-      expect(JSON.stringify(report.errors)).toContain(`Invalid plugin receipt location ${file}`);
+      expect(report.errors[0].error).toContain(`Invalid plugin receipt location ${file}`);
     } finally {
       stderr.mockRestore();
       stdout.mockRestore();
@@ -346,13 +346,13 @@ test('JSON workflows retain project results when the installed store cannot be s
         true
       );
       expect(list.errors).toHaveLength(1);
-      expect(JSON.stringify(list.errors)).toContain(join(home, 'plugins'));
+      expect(list.errors[0].error).toContain(join(home, 'plugins'));
       stdout.mockClear();
       expect(await workflowTestCommand(project, 'scan-check', { json: true })).toBe(1);
       const report = JSON.parse(String(stdout.mock.calls[0]?.[0]));
       expect(report.passed).toBe(1);
       expect(report.errors).toHaveLength(1);
-      expect(JSON.stringify(report.errors)).toContain(join(home, 'plugins'));
+      expect(report.errors[0].error).toContain(join(home, 'plugins'));
     } finally {
       stdout.mockRestore();
       clearPlatformPolicies();
