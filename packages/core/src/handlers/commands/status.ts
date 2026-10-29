@@ -259,9 +259,8 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
       if (env.reason) msg += `\n  • ${env.branchName}: ${env.reason}`;
     }
   } catch (error) {
-    // Don't fail status if breakdown fails
-    const err = error as Error;
-    getLog().error({ err, codebaseId: codebase.id }, 'cmd.worktree_breakdown_failed');
+    getLog().error({ err: error, codebaseId: codebase.id }, 'cmd.worktree_breakdown_failed');
+    return '\n\nWorktrees: inventory unavailable (count unknown)';
   }
   return msg;
 }

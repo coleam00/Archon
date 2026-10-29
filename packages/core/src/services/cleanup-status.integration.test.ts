@@ -9,7 +9,13 @@ import * as codebases from '../db/codebases';
 import * as sessions from '../db/sessions';
 import * as workflows from '../db/workflows';
 import { handleStatusCommand } from '../handlers/commands/status';
-import { makeCodebase, makeConversation } from '../test/orchestrator-agent-fixtures';
+import {
+  makeCodebase,
+  makeConversation,
+  makeRun,
+  makeSession,
+} from '../test/orchestrator-agent-fixtures';
+import { getLog as getCommandLog } from '../handlers/commands/log';
 import * as config from '../config/config-loader';
 import * as environments from '../db/isolation-environments';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
@@ -86,6 +92,41 @@ function statusEnvironment(
     days_since_activity: 30,
   };
 }
+
+test('status reports unavailable inventory without a count and preserves the other sections', async () => {
+  setPlatformPolicies([{ id: 'test', workspaceRetention: 'age-based' }]);
+  const codebase = makeCodebase();
+  spyOn(codebases, 'listCodebases').mockResolvedValue([codebase]);
+  spyOn(codebases, 'getCodebase').mockResolvedValue(codebase);
+  spyOn(sessions, 'getActiveSession').mockResolvedValue(makeSession());
+  spyOn(workflows, 'getActiveWorkflowRun').mockResolvedValue(makeRun());
+  spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
+  const failure = new Error('Inventory failed: token=inventory-secret; stored private content');
+  const inventory = spyOn(environments, 'listByCodebaseWithAge').mockRejectedValueOnce(failure);
+  const error = spyOn(getCommandLog(), 'error').mockImplementation(() => {});
+
+  const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
+    formatWorkflowCommand: command => command,
+  });
+
+  expect(result.success).toBe(true);
+  expect(inventory).toHaveBeenCalledWith(codebase.id);
+  expect(error).toHaveBeenCalledWith(
+    { err: failure, codebaseId: codebase.id },
+    'cmd.worktree_breakdown_failed'
+  );
+  expect(result.message).toEndWith('Worktrees: inventory unavailable (count unknown)');
+  expect(result.message).not.toContain(' total');
+  expect(result.message).not.toContain('0 active');
+  expect(result.message).not.toContain('inventory-secret');
+  expect(result.message).not.toContain('stored private content');
+  expect(result.message).toContain('## Orchestrator Status');
+  expect(result.message).toContain('## Registered Projects (1)');
+  expect(result.message).toContain(`Project: ${codebase.name} @ main`);
+  expect(result.message).toContain(`Working Directory: ${codebase.default_cwd}`);
+  expect(result.message).toContain('Active Session: session-');
+  expect(result.message).toContain('Active Workflow: `test-workflow`');
+});
 
 test.each(['config', 'default branch'])(
   'status retains the total when %s resolution rejects, without exposing secrets',
