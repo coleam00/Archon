@@ -19,7 +19,8 @@ import { MAINTAINED_PROVIDER_IDS, isMaintainedProvider } from '@archon/provider-
 import { setLogLevel } from '@archon/paths';
 import { processProviderRegistration } from '@archon/core/providers/process-registration';
 import { checkInstalledProviders } from './doctor-providers';
-import { listPlugins, removePlugin } from './plugin-installed';
+import { copyPlugin, listPlugins, removePlugin } from './plugin-installed';
+import { pluginCommand } from './plugin';
 import { installBinaryPlugin } from './plugin-binary';
 import { brokenReceiptNote } from './plugin-common';
 import { installPlugin } from './plugin-install';
@@ -234,12 +235,12 @@ test('list and doctor distinguish old protocols and retain healthy peer versions
 });
 
 test.each([
-  'acme',
-  'acme/broken@v1',
-  'acme/repo/plugins/broken@v1',
-  'acme/elsewhere',
-  'acme/repo/plugins/elsewhere',
-])('old provider at stray location %s keeps manual deletion advice', async id => {
+  ['acme', false],
+  ['acme/broken@v1', false],
+  ['acme/repo/plugins/broken@v1', false],
+  ['acme/elsewhere', true],
+  ['acme/repo/plugins/elsewhere', true],
+] as const)('stray receipt %s has usable removal advice', async (id, removable) => {
   const root = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-stray-')));
   const workflow = join(root, '.archon', 'workflows', 'receipt-check');
   await mkdir(join(workflow, 'fixtures'), { recursive: true });
@@ -293,11 +294,14 @@ test.each([
   expect(result.status, result.output).toBe(0);
   expect(result.output).toContain(`${id}  unreadable`);
   expect(result.output).not.toContain(`archon plugin update ${id}`);
-  expect(brokenReceiptNote(scan.broken[0])).toContain('delete it by hand');
+  const advice = removable ? `archon plugin remove ${id}` : 'delete it by hand';
+  expect(result.output).toContain(advice);
+  expect(brokenReceiptNote(scan.broken[0])).toContain(advice);
   const env = { pluginsDir, projectDir: root, archonVersion: '1.2.3' };
-  await expect(installPlugin(parsePluginRef('acme/new'), 'install', env)).rejects.toThrow(
-    'delete it by hand'
-  );
+  await expect(installPlugin(parsePluginRef('acme/new'), 'install', env)).rejects.toThrow(advice);
+  if (removable) {
+    await expect(copyPlugin(parsePluginRef(id), env)).rejects.toThrow(advice);
+  }
   const target = join(
     pluginsDir,
     entry.manifest.executable + (process.platform === 'win32' ? '.exe' : '')
@@ -315,7 +319,17 @@ test.each([
         throw new Error('must not acquire');
       }
     )
-  ).rejects.toThrow('delete it by hand');
+  ).rejects.toThrow(advice);
+  if (removable) {
+    const removed = await captureCommand({ ARCHON_HOME: root }, async () => {
+      expect(await pluginCommand('remove', [id], env)).toBe(0);
+    });
+    expect(removed.status, removed.output).toBe(0);
+    expect(removed.output).toContain(`Removed the unreadable receipt of ${id}: ${file}`);
+    expect(await Bun.file(file).exists()).toBe(false);
+    expect((await scanReceipts(pluginsDir)).broken).toEqual([]);
+    expect(await Bun.file(target).text()).toBe('stray executable');
+  }
 });
 
 test('JSON workflows retain project results when the installed store cannot be scanned', async () => {
