@@ -118,6 +118,7 @@ test.each([
       ? `Source checkouts run maintained providers from source. Remove this obsolete receipt: archon plugin remove ${id}`
       : `If ${join(dir, 'archon-provider-' + provider + (process.platform === 'win32' ? '.exe' : ''))} exists, move it aside before retrying. Run: ${command}`;
     expect(broken[0]).toMatchObject({
+      incompatibleProviderReceipt: JSON.parse(JSON.stringify(receipt)),
       unavailableReason: 'provider-protocol',
       message: `Plugin unavailable: ${id} (provider '${provider}') uses protocol 2, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. ${repair}`,
     });
@@ -146,6 +147,7 @@ test('only a well-formed receipt with a different numeric protocol is classified
     const { receipts, broken } = await scanReceipts(dir);
     expect(receipts).toEqual([]);
     expect(broken[0].unavailableReason).toBeUndefined();
+    expect(broken[0].incompatibleProviderReceipt).toBeUndefined();
     expect(broken[0].message).toContain('Invalid plugin receipt');
   }
   await writeReceipt(
@@ -177,6 +179,7 @@ test.each([...MAINTAINED_PROVIDER_IDS, 'example'])(
     expect(receipts).toEqual([]);
     expect(broken).toHaveLength(1);
     expect(broken[0].unavailableReason).toBeUndefined();
+    expect(broken[0].incompatibleProviderReceipt).toBeUndefined();
     expect(broken[0].message).toContain(`Invalid plugin receipt location ${file}`);
     expect(broken[0].message).toContain(providerReceipt.id);
     expect(broken[0].message).toContain(id);
@@ -185,3 +188,17 @@ test.each([...MAINTAINED_PROVIDER_IDS, 'example'])(
     await expect(readReceipts(dir)).rejects.toThrow('Invalid plugin receipt location');
   }
 );
+
+test('a future protocol retains validated evidence without becoming a usable receipt', async () => {
+  const dir = tempRoot(await mkdtemp(join(tmpdir(), 'plugin-future-')));
+  const receipt = {
+    ...providerReceipt,
+    descriptor: { ...providerReceipt.descriptor, protocol: PROVIDER_PLUGIN_PROTOCOL + 1 },
+  };
+  await writeReceipt(dir, receipt.id, JSON.stringify(receipt));
+  const scan = await scanReceipts(dir);
+  expect(scan.receipts).toEqual([]);
+  expect(scan.broken[0].incompatibleProviderReceipt).toEqual(JSON.parse(JSON.stringify(receipt)));
+  expect(pluginReceiptSchema.safeParse(receipt).success).toBe(false);
+  await expect(readReceipts(dir)).rejects.toThrow('uses protocol');
+});

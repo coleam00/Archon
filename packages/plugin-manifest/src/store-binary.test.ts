@@ -35,7 +35,12 @@ test.each([...MAINTAINED_PROVIDER_IDS])(
         tag: 'v0.13.0',
         commit: 'a'.repeat(40),
         installedAt: new Date(0).toISOString(),
-        files: [{ path: executable, sha256: 'b'.repeat(64) }],
+        files: [
+          {
+            path: executable + (process.platform === 'win32' ? '.exe' : ''),
+            sha256: 'b'.repeat(64),
+          },
+        ],
         descriptor: {
           protocol: 2,
           id: provider,
@@ -64,5 +69,20 @@ test.each([...MAINTAINED_PROVIDER_IDS])(
     expect(notice).toContain('uses protocol 2, but this Archon requires protocol 3');
     expect(notice).toContain(`Run: archon provider add ${provider}`);
     expect(notice).not.toContain('archon plugin remove');
+    expect(notice).toContain('Validated older receipts allow direct replacement');
+    expect(notice).toContain('ambiguous file ownership');
+    expect(notice).not.toContain('move it aside before retrying');
+
+    const receipt = JSON.parse(await Bun.file(file).text());
+    for (const value of [
+      { ...receipt, descriptor: { ...receipt.descriptor, protocol: 4 } },
+      { ...receipt, files: [{ ...receipt.files[0], path: 'another-file' }] },
+      { ...receipt, manifest: { ...receipt.manifest, executable: 'archon-provider-other' } },
+    ]) {
+      await writeFile(file, JSON.stringify(value));
+      const conservative = (await scanReceipts(pluginsDir)).broken[0].message;
+      expect(conservative).toContain('move it aside before retrying');
+      expect(conservative).not.toContain('allow direct replacement');
+    }
   }
 );

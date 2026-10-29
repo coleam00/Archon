@@ -27,6 +27,7 @@ import {
   MAINTAINED_PROVIDER_IDS,
   providerVersionMismatchMessage,
 } from '@archon/provider-contract';
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
 import type { ProviderPluginDescriptor } from '@archon/provider-contract/plugin';
 import {
   RESERVED_CHAT_PLATFORMS,
@@ -152,6 +153,32 @@ export async function downloadBinary(
   };
 }
 
+export function canUpgradeProvider(
+  id: string,
+  fileName: string,
+  broken: readonly BrokenReceipt[]
+): boolean {
+  const self = broken.find(entry => entry.id === id)?.incompatibleProviderReceipt;
+  if (
+    !self ||
+    self.descriptor.protocol >= PROVIDER_PLUGIN_PROTOCOL ||
+    !isMaintainedProvider(self.descriptor.id) ||
+    !isMaintainedProviderPlugin(id, self.descriptor.id) ||
+    self.manifest.executable !== `archon-provider-${self.descriptor.id}` ||
+    !self.files.some(file => file.path === fileName)
+  )
+    return false;
+  return broken.every(entry => {
+    if (entry.id === id) return true;
+    const peer = entry.incompatibleProviderReceipt;
+    return (
+      peer !== undefined &&
+      peer.descriptor.protocol < PROVIDER_PLUGIN_PROTOCOL &&
+      !peer.files.some(file => file.path === fileName)
+    );
+  });
+}
+
 /** Refuse a target another plugin owns, or one that may belong to a plugin whose receipt is broken. */
 async function assertTargetClaimable(
   ref: PluginRef,
@@ -169,10 +196,9 @@ async function assertTargetClaimable(
     );
   }
   if (owner || !(await pathExists(target))) return;
-  // A broken receipt cannot say which files it owns, so an unclaimed target may be
-  // replaced only by the repair of the one broken receipt there is: no valid receipt
-  // claims it, and no other broken receipt could. The target is always inside
-  // `pluginsDir`, because a manifest's executable name holds no separator.
+  if (canUpgradeProvider(ref.id, fileName, broken)) return;
+  // Preserve sole broken-self repair when no other receipt could own the target.
+  // The target is inside pluginsDir: executable names cannot contain separators.
   const others = broken.filter(entry => entry.id !== ref.id);
   if (others.length > 0) {
     throw new Error(

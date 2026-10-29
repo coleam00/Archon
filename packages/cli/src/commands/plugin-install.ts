@@ -2,7 +2,7 @@ import { isBinaryReceipt, type PluginReceipt } from '@archon/plugin-manifest';
 import { scanReceipts, type BrokenReceipt } from '@archon/plugin-manifest/store';
 import { parsePluginRef, resolveSource, type PluginRef } from './plugin-source';
 import { brokenReceiptNote, type PluginEnvironment } from './plugin-common';
-import { downloadBinary, installBinaryPlugin } from './plugin-binary';
+import { canUpgradeProvider, downloadBinary, installBinaryPlugin } from './plugin-binary';
 import { installPack } from './plugin-pack';
 import { withPluginMutationLock } from './plugin-mutation-lock';
 
@@ -64,7 +64,19 @@ export async function installPlugin(
     const packReceipt = previous && !isBinaryReceipt(previous) ? previous : undefined;
     await installPack(ref, source, receipts, packReceipt, env);
   }
-  if (brokenSelf) {
+  if (
+    brokenSelf &&
+    source.kind !== 'workflow-pack' &&
+    canUpgradeProvider(
+      ref.id,
+      source.manifest.executable + ((env.platform ?? process.platform) === 'win32' ? '.exe' : ''),
+      broken
+    )
+  ) {
+    console.log(
+      `  Replaced the older-protocol receipt ${brokenSelf.file} using validated executable ownership.`
+    );
+  } else if (brokenSelf) {
     console.log(
       `  Replaced the ${brokenSelf.unavailableReason ? 'unavailable' : 'unreadable'} receipt ${brokenSelf.file}. File ownership could not be verified; any this install did not overwrite remain under ${env.pluginsDir}.`
     );
