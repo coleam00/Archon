@@ -146,3 +146,110 @@ test.each([
     await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [run.id]);
   }
 });
+
+test.each(
+  ['child_workflow', 'fan_out'].flatMap(type =>
+    ['private-origin-sentinel-not-json', '[]'].flatMap(origin =>
+      [false, true].map(nested => ({ type, origin, nested }))
+    )
+  )
+)('batch attention contains unreadable descendants: %j', async ({ type, origin, nested }) => {
+  const { listAttentionQueue } = await import('@archon/workflows/attention-queue');
+  const ids: string[] = [];
+  async function paused(approval: Record<string, unknown>) {
+    const run = await workflows.createWorkflowRun({
+      workflow_name: 'mixed-tree',
+      user_message: '',
+    });
+    ids.push(run.id);
+    await db.query(
+      "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+      [JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?', ...approval } }), run.id]
+    );
+    return run;
+  }
+  const blocked = (childRunId: string) =>
+    type === 'child_workflow' ? { type, childRunId } : { type, childRunIds: [childRunId] };
+  const valid = await paused({});
+  const child = await paused({});
+  await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+    origin,
+    child.id,
+  ]);
+  const intermediate = nested ? await paused(blocked(child.id)) : child;
+  await paused(blocked(intermediate.id));
+  const missing = await paused(blocked(crypto.randomUUID()));
+  const snapshot = async () => ({
+    rows: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
+    events: (await db.query('SELECT * FROM remote_agent_workflow_events ORDER BY id')).rows,
+  });
+  const before = await snapshot();
+  const { getLog } = await import('./workflow-run-shared');
+  const log = spyOn(getLog(), 'error').mockImplementation(() => {});
+  const pointRead = mock(workflows.getWorkflowRun);
+  try {
+    const result = splitAttentionRead(
+      await listAttentionQueue({
+        store: {
+          listAttentionQueueRows: workflows.listAttentionQueueRows,
+          getWorkflowRun: pointRead,
+          getCodebase: async () => null,
+        },
+        branchOf: async () => null,
+      })
+    );
+    expect(result.values.map(item => item.runId)).toContain(valid.id);
+    expect(result.values.find(item => item.runId === missing.id)?.kind).toBe('unreadable');
+    expect(result.degraded).toEqual([
+      { type: 'degraded', reason: 'run_unreadable', runId: child.id },
+    ]);
+    expect(pointRead.mock.calls.length).toBeGreaterThan(0);
+    expect(pointRead.mock.calls.map(([id]) => id)).not.toContain(child.id);
+    if (nested) expect(pointRead.mock.calls.map(([id]) => id)).toContain(intermediate.id);
+    expect(log.mock.calls).toEqual([
+      [{ workflowRunId: child.id }, 'attention_run_normalization_failed'],
+    ]);
+    expect(JSON.stringify(result)).not.toContain('private-origin-sentinel');
+    expect(await snapshot()).toEqual(before);
+  } finally {
+    log.mockRestore();
+    for (const id of ids)
+      await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
+  }
+});
+
+test('batch attention preserves unexpected descendant read failures', async () => {
+  const { listAttentionQueue } = await import('@archon/workflows/attention-queue');
+  const run = await workflows.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
+  await db.query(
+    "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+    [
+      JSON.stringify({
+        approval: {
+          nodeId: 'child',
+          message: 'Waiting',
+          type: 'child_workflow',
+          childRunId: 'unavailable',
+        },
+      }),
+      run.id,
+    ]
+  );
+  const failure = new Error('point read unavailable');
+  try {
+    await expect(
+      listAttentionQueue({
+        store: {
+          listAttentionQueueRows: workflows.listAttentionQueueRows,
+          getWorkflowRun: async () => {
+            throw failure;
+          },
+          getCodebase: async () => null,
+        },
+        branchOf: async () => null,
+      })
+    ).rejects.toBe(failure);
+  } finally {
+    await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [run.id]);
+  }
+});

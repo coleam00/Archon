@@ -7,7 +7,11 @@
  * (`attention-watch.ts`) cannot disagree. Labels are data. The queue filters them by exact match and sorts them as
  * plain strings, and nothing here depends on who is asking.
  */
-import { isAttentionDegraded, type AttentionRead } from './schemas/attention-degraded';
+import {
+  isAttentionDegraded,
+  splitAttentionRead,
+  type AttentionRead,
+} from './schemas/attention-degraded';
 import { z } from 'zod';
 import {
   getRunArtifactsDirForRoot,
@@ -316,6 +320,21 @@ export async function attentionQueueItems(
   source: AttentionQueueSource,
   runs: readonly AttentionRead<WorkflowRun>[]
 ): Promise<AttentionRead<AttentionQueueItem>[]> {
+  const unreadableIds = new Set(splitAttentionRead(runs).degraded.map(report => report.runId));
+  const reportedUnreadableRun = new Error('Run already reported unreadable by attention batch');
+  const batchSource: AttentionQueueSource = {
+    ...source,
+    store: {
+      listAttentionQueueRows: () => source.store.listAttentionQueueRows(),
+      getCodebase: id => source.store.getCodebase(id),
+      getWorkflowRun: async id => {
+        // The batch already reports this row. Rereading it could log stored parser text;
+        // treating it as missing would instead invent a missing-child queue item.
+        if (unreadableIds.has(id)) throw reportedUnreadableRun;
+        return source.store.getWorkflowRun(id);
+      },
+    },
+  };
   const codebases: CodebaseCache = new Map();
   const items: AttentionRead<AttentionQueueItem>[] = [];
   for (const run of runs) {
@@ -323,8 +342,12 @@ export async function attentionQueueItems(
       items.push(run);
       continue;
     }
-    const item = await attentionQueueItemForRun(source, run, codebases);
-    if (item !== null) items.push(item);
+    try {
+      const item = await attentionQueueItemForRun(batchSource, run, codebases);
+      if (item !== null) items.push(item);
+    } catch (error) {
+      if (error !== reportedUnreadableRun) throw error;
+    }
   }
   return items;
 }
