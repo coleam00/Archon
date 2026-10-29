@@ -120,7 +120,7 @@ bun install
 
 ### Prerequisites (Source Install)
 
-- [Bun](https://bun.sh) >= 1.0.0
+- [Bun](https://bun.sh), using the version pinned in `engines.bun` in the repository's root `package.json`
 - [GitHub CLI](https://cli.github.com/) (`gh`)
 - [Claude Code](https://claude.ai/code) (`claude`), if you use the Claude provider
 
