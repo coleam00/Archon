@@ -4,6 +4,7 @@ import { PassThrough } from 'stream';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { createMockLogger } from '../test/mocks/logger';
 import * as processTree from './process-tree';
+import * as pluginProcess from '@archon/paths/plugin-process';
 
 const log = createMockLogger();
 mock.module('@archon/paths', () => ({
@@ -88,8 +89,26 @@ async function expectProcessStopped(pid: number): Promise<void> {
 }
 
 describe('AppServerConnection', () => {
-  test('stops descendants holding inherited pipes after exit and leaves other processes alone', async () => {
-    const childScript = `
+  test.each(['win32', 'linux', 'darwin'] as const)(
+    'post-exit cleanup uses a process group only on POSIX (%s)',
+    async platform => {
+      const originalPlatform = process.platform;
+      const stop = spyOn(pluginProcess, 'terminateTree').mockResolvedValue(undefined);
+      try {
+        Object.defineProperty(process, 'platform', { value: platform });
+        await processTree.stopAppServerDescendants(12345);
+        expect(stop.mock.calls).toEqual(platform === 'win32' ? [] : [[12345]]);
+      } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform });
+        stop.mockRestore();
+      }
+    }
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'stops POSIX descendants holding inherited pipes after exit and leaves other processes alone',
+    async () => {
+      const childScript = `
       const { spawn } = require('node:child_process');
       const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
         stdio: ['ignore', 'inherit', 'inherit']
@@ -97,7 +116,7 @@ describe('AppServerConnection', () => {
       process.stdout.write(String(grandchild.pid));
       setInterval(() => {}, 1000);
     `;
-    const script = `
+      const script = `
       const { spawn } = require('node:child_process');
       const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {
         stdio: ['ignore', 'pipe', 'inherit']
@@ -110,46 +129,48 @@ describe('AppServerConnection', () => {
         JSON.stringify({ method: 'turn/completed', params: {} }) + '\\n', () => process.exit(0)
       ));
     `;
-    const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-      stdio: 'ignore',
-    });
-    let root: ChildProcessWithoutNullStreams | undefined;
-    const descendants: number[] = [];
-    const connection = AppServerConnection.start(
-      BINARY,
-      [],
-      process.env as Record<string, string>,
-      (_command, _args, options) => {
-        root = spawn(process.execPath, ['-e', script], options);
-        return root;
+      const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        stdio: 'ignore',
+      });
+      let root: ChildProcessWithoutNullStreams | undefined;
+      const descendants: number[] = [];
+      const connection = AppServerConnection.start(
+        BINARY,
+        [],
+        process.env as Record<string, string>,
+        (_command, _args, options) => {
+          root = spawn(process.execPath, ['-e', script], options);
+          return root;
+        }
+      );
+      try {
+        const response = await connection.request('thread/start', {});
+        if (
+          !Array.isArray(response) ||
+          response.length !== 2 ||
+          !response.every((pid: unknown) => typeof pid === 'number')
+        ) {
+          throw new Error('Missing child and grandchild PIDs');
+        }
+        for (const pid of response) {
+          descendants.push(pid);
+          expect(process.kill(pid, 0)).toBe(true);
+        }
+        expect(await connection.shutdown()).toEqual({ kind: 'exited', code: 0, signal: null });
+        for (const pid of descendants) await expectProcessStopped(pid);
+        if (other.pid === undefined) throw new Error('Missing unrelated process PID');
+        expect(process.kill(other.pid, 0)).toBe(true);
+        const frames = [];
+        for await (const frame of connection.notifications()) frames.push(frame.method);
+        expect(frames).toEqual(['turn/completed']);
+      } finally {
+        other.kill();
+        if (root?.pid !== undefined) await pluginProcess.terminateTree(root.pid);
+        for (const pid of descendants) killIfRunning(pid);
       }
-    );
-    try {
-      const response = await connection.request('thread/start', {});
-      if (
-        !Array.isArray(response) ||
-        response.length !== 2 ||
-        !response.every((pid: unknown) => typeof pid === 'number')
-      ) {
-        throw new Error('Missing child and grandchild PIDs');
-      }
-      for (const pid of response) {
-        descendants.push(pid);
-        expect(process.kill(pid, 0)).toBe(true);
-      }
-      expect(await connection.shutdown()).toEqual({ kind: 'exited', code: 0, signal: null });
-      for (const pid of descendants) await expectProcessStopped(pid);
-      if (other.pid === undefined) throw new Error('Missing unrelated process PID');
-      expect(process.kill(other.pid, 0)).toBe(true);
-      const frames = [];
-      for await (const frame of connection.notifications()) frames.push(frame.method);
-      expect(frames).toEqual(['turn/completed']);
-    } finally {
-      other.kill();
-      root?.kill();
-      for (const pid of descendants) killIfRunning(pid);
-    }
-  }, 10_000);
+    },
+    10_000
+  );
 
   test('a descendant cleanup failure fails pending work and cannot report a clean exit', async () => {
     const stop = spyOn(processTree, 'stopAppServerDescendants').mockRejectedValue(

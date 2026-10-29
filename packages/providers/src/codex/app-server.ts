@@ -192,7 +192,7 @@ export class AppServerConnection {
   private readonly queue: ServerNotification[] = [];
   private wake: (() => void) | undefined;
   private endedWith: ConnectionEnd | undefined;
-  private exitedAt: number | undefined;
+  private hasExited = false;
   private drainTimer: ReturnType<typeof setTimeout> | undefined;
   private closing = false;
   private responded = false;
@@ -200,12 +200,11 @@ export class AppServerConnection {
   /** Credential values from the process env, redacted from its stderr. */
   private readonly credentialValues: readonly string[];
   private readonly endSignal = Promise.withResolvers<ConnectionEnd>();
-  /** Resolves after process exit, bounded pipe drainage, and descendant cleanup. */
+  /** Resolves after process exit, bounded pipe drainage, and POSIX process-group cleanup. */
   readonly ended = this.endSignal.promise;
 
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
-    private readonly startedAt: number,
     env: Record<string, string>,
     protectedEnvKeys?: readonly string[],
     readonly runId?: string
@@ -237,7 +236,7 @@ export class AppServerConnection {
       if (this.runId) getLog().debug({ runId: this.runId }, 'codex.stdin_finished');
     });
     child.once('exit', (code: number | null, signal: NodeJS.Signals | null) => {
-      this.exitedAt = Date.now();
+      this.hasExited = true;
       if (this.runId) getLog().debug({ runId: this.runId, code, signal }, 'codex.child_exit');
       if (this.closing) return;
       this.drainTimer = setTimeout(() => {
@@ -275,13 +274,12 @@ export class AppServerConnection {
       const key = pathKey(childEnv);
       childEnv[key] = [...binary.pathDirs, childEnv[key]].filter(Boolean).join(delimiter);
     }
-    const startedAt = Date.now();
     const child = spawner(binary.path, ['app-server', ...args], {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     });
-    return new AppServerConnection(child, startedAt, childEnv, protectedEnvKeys, runId);
+    return new AppServerConnection(child, childEnv, protectedEnvKeys, runId);
   }
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */
@@ -321,16 +319,12 @@ export class AppServerConnection {
    * sent SIGTERM. Without it, none is sent: a SIGTERM that lands while Codex is still
    * exiting after stdin closed makes it wait about 40 seconds and exit 1, where it would
    * have exited 0 within seconds. Never SIGKILL a live app-server: SIGTERM lets Codex
-   * clean up its commands. After exit, stop any remaining descendants before settling.
+   * clean up its commands. After exit on POSIX, stop the process group before settling.
    */
   async shutdown(termAfterMs?: number, warnMs = TERM_EXIT_WARN_MS): Promise<ConnectionEnd> {
     if (this.endedWith) return this.endedWith;
     this.child.stdin.end();
-    if (
-      termAfterMs !== undefined &&
-      !(await this.exitsWithin(termAfterMs)) &&
-      this.exitedAt === undefined
-    ) {
+    if (termAfterMs !== undefined && !(await this.exitsWithin(termAfterMs)) && !this.hasExited) {
       this.child.kill('SIGTERM');
     }
     let waitedMs = 0;
@@ -460,11 +454,7 @@ export class AppServerConnection {
     this.closing = true;
     clearTimeout(this.drainTimer);
     if (end.kind === 'exited' && this.child.pid !== undefined) {
-      void stopAppServerDescendants(
-        this.child.pid,
-        this.startedAt,
-        this.exitedAt ?? Date.now()
-      ).then(
+      void stopAppServerDescendants(this.child.pid).then(
         () => this.finishClose(end),
         (error: unknown) =>
           this.finishClose({
