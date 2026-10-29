@@ -102,11 +102,13 @@ async function listReceiptPacks(
     return { packs, errors };
   }
   errors.push(
-    ...scan.broken.map(entry => ({
-      path: entry.file,
-      message: entry.message,
-      cause: entry.cause,
-    }))
+    ...scan.broken
+      .filter(entry => !entry.unavailableReason)
+      .map(entry => ({
+        path: entry.file,
+        message: entry.message,
+        cause: entry.cause,
+      }))
   );
   for (const receipt of scan.receipts) {
     if (receipt.manifest.kind !== 'workflow-pack') continue;

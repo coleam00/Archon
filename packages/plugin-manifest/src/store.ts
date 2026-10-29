@@ -11,7 +11,23 @@
  */
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join, sep } from 'node:path';
-import { describeIssues, pluginReceiptSchema, type PluginReceipt } from './index';
+import { z } from 'zod';
+import { isMaintainedProvider } from '@archon/provider-contract';
+import {
+  PROVIDER_PLUGIN_PROTOCOL,
+  providerPluginDescriptorSchema,
+} from '@archon/provider-contract/plugin/wire';
+import {
+  describeIssues,
+  isMaintainedProviderPlugin,
+  pluginReceiptSchema,
+  providerReceiptSchema,
+  type PluginReceipt,
+} from './index';
+
+const providerProtocolReceiptSchema = providerReceiptSchema.extend({
+  descriptor: providerPluginDescriptorSchema.extend({ protocol: z.int().positive() }),
+});
 
 export const RECEIPT_FILE = 'receipt.json';
 
@@ -29,9 +45,10 @@ export interface BrokenReceipt {
   /** `owner/repo[/path]`, from the receipt's directory under `installed/`. */
   id: string;
   file: string;
-  /** Names `file` and why it is broken. */
+  /** Names the plugin or receipt file and why it cannot be used. */
   message: string;
   cause?: unknown;
+  unavailableReason?: 'provider-protocol';
 }
 
 export interface ReceiptScan {
@@ -72,9 +89,10 @@ export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
   for (const entry of entries.sort()) {
     if (basename(entry) !== RECEIPT_FILE) continue;
     const file = join(root, entry);
-    const result = await readReceipt(file);
+    const id = dirname(entry).split(sep).join('/');
+    const result = await readReceipt(file, id);
     if ('message' in result) {
-      broken.push({ id: dirname(entry).split(sep).join('/'), file, ...result });
+      broken.push({ id, file, ...result });
     } else {
       receipts.push(result);
     }
@@ -84,8 +102,9 @@ export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
 
 /** The receipt, or the message saying why it cannot be used. */
 async function readReceipt(
-  file: string
-): Promise<PluginReceipt | Pick<BrokenReceipt, 'message' | 'cause'>> {
+  file: string,
+  id: string
+): Promise<PluginReceipt | Pick<BrokenReceipt, 'message' | 'cause' | 'unavailableReason'>> {
   let contents: string;
   try {
     contents = await readFile(file, 'utf8');
@@ -102,7 +121,18 @@ async function readReceipt(
     return { message: `Invalid JSON in plugin receipt ${file}` };
   }
   const parsed = pluginReceiptSchema.safeParse(raw);
-  if (!parsed.success)
-    return { message: `Invalid plugin receipt ${file}: ${describeIssues(parsed.error)}` };
-  return parsed.data;
+  if (parsed.success) return parsed.data;
+  const provider = providerProtocolReceiptSchema.safeParse(raw);
+  if (provider.success && provider.data.descriptor.protocol !== PROVIDER_PLUGIN_PROTOCOL) {
+    const descriptor = provider.data.descriptor;
+    const command =
+      isMaintainedProvider(descriptor.id) && isMaintainedProviderPlugin(id, descriptor.id)
+        ? `archon provider add ${descriptor.id}`
+        : `archon plugin update ${id}`;
+    return {
+      unavailableReason: 'provider-protocol',
+      message: `Plugin unavailable: ${id} (provider '${descriptor.id}') uses protocol ${descriptor.protocol}, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. Run: ${command}`,
+    };
+  }
+  return { message: `Invalid plugin receipt ${file}: ${describeIssues(parsed.error)}` };
 }

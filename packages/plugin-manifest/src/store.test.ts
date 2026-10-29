@@ -3,7 +3,9 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import type { PluginReceipt } from './index';
+import { providerCapabilitiesSchema, MAINTAINED_PROVIDER_IDS } from '@archon/provider-contract';
+import { PROVIDER_PLUGIN_PROTOCOL } from '@archon/provider-contract/plugin/wire';
+import { maintainedProviderPluginId, pluginReceiptSchema, type PluginReceipt } from './index';
 import { readReceipts, receiptPath, scanReceipts } from './store';
 
 const tempRoot = trackTempRoots();
@@ -51,4 +53,100 @@ describe('scanReceipts', () => {
       `Invalid JSON in plugin receipt ${badJson}`
     );
   });
+});
+
+const providerReceipt = {
+  schemaVersion: 1,
+  id: 'acme/provider',
+  manifest: {
+    schemaVersion: 1,
+    kind: 'provider',
+    name: 'example',
+    description: 'test',
+    executable: 'archon-provider-example',
+  },
+  tag: 'v0.13.0',
+  commit: 'a'.repeat(40),
+  installedAt: new Date(0).toISOString(),
+  files: [{ path: 'archon-provider-example', sha256: 'b'.repeat(64) }],
+  descriptor: {
+    protocol: 2,
+    id: 'example',
+    displayName: 'Example',
+    version: '0.13.0',
+    credentials: { kind: 'static', specs: [] },
+    configSchema: {},
+    capabilities: {
+      ...Object.fromEntries(Object.keys(providerCapabilitiesSchema.shape).map(key => [key, false])),
+      backgroundWork: 'none',
+      sessionFork: undefined,
+      knownToolNames: undefined,
+      renamedTools: undefined,
+    },
+  },
+};
+
+test.each([
+  ...MAINTAINED_PROVIDER_IDS.map(id => ({
+    id: maintainedProviderPluginId(id),
+    provider: id,
+    command: `archon provider add ${id}`,
+  })),
+  { id: 'acme/provider', provider: 'example', command: 'archon plugin update acme/provider' },
+  { id: 'acme/claude', provider: 'claude', command: 'archon plugin update acme/claude' },
+])(
+  'protocol mismatch for $id names both protocols and the appropriate command',
+  async ({ id, provider, command }) => {
+    const dir = tempRoot(await mkdtemp(join(tmpdir(), 'plugin-protocol-')));
+    const receipt = {
+      ...providerReceipt,
+      id,
+      manifest: { ...providerReceipt.manifest, executable: `archon-provider-${provider}` },
+      files: [{ path: `archon-provider-${provider}`, sha256: 'b'.repeat(64) }],
+      descriptor: { ...providerReceipt.descriptor, id: provider },
+    };
+    await writeReceipt(dir, id, JSON.stringify(receipt));
+    expect(pluginReceiptSchema.safeParse(receipt).success).toBe(false);
+    const { receipts, broken } = await scanReceipts(dir);
+    expect(receipts).toEqual([]);
+    expect(broken).toHaveLength(1);
+    expect(broken[0]).toMatchObject({
+      unavailableReason: 'provider-protocol',
+      message: `Plugin unavailable: ${id} (provider '${provider}') uses protocol 2, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. Run: ${command}`,
+    });
+    await expect(readReceipts(dir)).rejects.toThrow(command);
+  }
+);
+
+test('only a well-formed receipt with a different numeric protocol is classified as unavailable', async () => {
+  const dir = tempRoot(await mkdtemp(join(tmpdir(), 'plugin-malformed-')));
+  for (const receipt of [
+    { ...providerReceipt, files: [{ path: '../escape', sha256: 'b'.repeat(64) }] },
+    { ...providerReceipt, descriptor: { ...providerReceipt.descriptor, protocol: '2' } },
+    {
+      ...providerReceipt,
+      descriptor: {
+        ...providerReceipt.descriptor,
+        protocol: PROVIDER_PLUGIN_PROTOCOL,
+        credentials: null,
+      },
+    },
+    { ...providerReceipt, descriptor: { ...providerReceipt.descriptor, credentials: null } },
+  ]) {
+    await writeReceipt(dir, providerReceipt.id, JSON.stringify(receipt));
+    const { receipts, broken } = await scanReceipts(dir);
+    expect(receipts).toEqual([]);
+    expect(broken[0].unavailableReason).toBeUndefined();
+    expect(broken[0].message).toContain('Invalid plugin receipt');
+  }
+  await writeReceipt(
+    dir,
+    providerReceipt.id,
+    JSON.stringify({
+      ...providerReceipt,
+      descriptor: { ...providerReceipt.descriptor, protocol: PROVIDER_PLUGIN_PROTOCOL },
+    })
+  );
+  expect((await scanReceipts(dir)).broken).toEqual([]);
+  expect(await readReceipts(dir)).toHaveLength(1);
 });

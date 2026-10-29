@@ -180,7 +180,7 @@ test('incompatible receipts are reported and retained while valid providers stil
   const contents = JSON.stringify({
     ...receipt,
     id: 'owner/stale',
-    descriptor: { ...descriptor, protocol: 1 },
+    descriptor: { ...descriptor, protocol: 2 },
   });
   await writeFile(stale, contents);
   await writeFile(good, JSON.stringify(receipt));
@@ -192,10 +192,12 @@ test('incompatible receipts are reported and retained while valid providers stil
       descriptor.id,
     ]);
     expect(warning.mock.calls.flat().join(' ')).toContain('archon plugin update owner/stale');
-    expect(warning.mock.calls.flat().join(' ')).toContain('archon plugin remove owner/stale');
+    expect(warning.mock.calls[0][1]).toBe(
+      "Plugin unavailable: owner/stale (provider 'process-fixture') uses protocol 2, but this Archon requires protocol 3. Run: archon plugin update owner/stale"
+    );
     expect(warning.mock.calls[0][0]).toMatchObject({ receipt: stale });
     expect(await readFile(stale, 'utf8')).toBe(contents);
-    await expect(readReceipts(dir)).rejects.toThrow(stale);
+    await expect(readReceipts(dir)).rejects.toThrow('uses protocol 2');
   } finally {
     loggerFactory.mockRestore();
     warning.mockRestore();
