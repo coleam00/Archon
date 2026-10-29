@@ -1,3 +1,5 @@
+import { getPluginsPath } from '@archon/paths';
+import { scanReceipts } from '@archon/plugin-manifest/store';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -54,6 +56,16 @@ import {
   printRunDetail,
 } from './workflow-inspect';
 
+async function reportUnavailablePlugins(): Promise<void> {
+  // Discovery reports scan failures alongside any independently loaded workflows.
+  const scan = await scanReceipts(getPluginsPath()).catch(() => undefined);
+  if (!scan) return;
+  const { broken } = scan;
+  for (const entry of broken) {
+    if (entry.unavailableReason) await writeStderr(`${entry.message}\n`);
+  }
+}
+
 export interface WorkflowListOptions {
   json?: boolean;
   name?: string;
@@ -85,6 +97,7 @@ export async function workflowTestCommand(
 ): Promise<number> {
   const { resolveDiscoveryCwd } = await import('../utils/project-cwd');
   const cwd = await resolveDiscoveryCwd(invokingCwd);
+  if (options.json) await reportUnavailablePlugins();
   const { workflows, errors } = await loadWorkflows(cwd);
   // The fixture runner freezes this repo's source before executing anything, exactly as
   // `workflow run` does, and this config decides which directories get frozen. A malformed
@@ -234,6 +247,7 @@ export async function workflowListCommand(
   cwd: string,
   options: WorkflowListOptions = {}
 ): Promise<void> {
+  if (options.json) await reportUnavailablePlugins();
   const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
   const listedEntries = selectWorkflowEntries(workflowEntries, errors, options.name);
 

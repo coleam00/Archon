@@ -8,6 +8,7 @@ import { discoverPlugins } from '@archon/forge/discovery';
 import { compileDiscoveryPlugin } from '@archon/forge/test-fixtures';
 import { removeTempTree, skipCompiledBinaryTests, trackTempRoots } from '@archon/paths/test-utils';
 import { receiptPath } from '@archon/plugin-manifest/store';
+import { claudeDescriptor } from '@archon/providers';
 import { pluginCommand } from './plugin';
 import { stagingName, type PluginEnvironment } from './plugin-common';
 import { parsePluginRef } from './plugin-source';
@@ -388,7 +389,7 @@ describe('archon plugin with an unreadable receipt', () => {
       const env = await environment();
       const stray = await breakReceipt(env, strayId);
       expect((await run(env, 'list')).out).toBe(
-        `${strayId}  unreadable  Invalid JSON in plugin receipt ${stray}. It is not where archon plugin writes receipts; delete it by hand`
+        `${strayId}  unreadable  Invalid JSON in plugin receipt ${stray}. It is not where archon plugin writes receipts; delete it by hand (${stray})`
       );
     }
   );
@@ -401,7 +402,9 @@ describe('archon plugin with an unreadable receipt', () => {
     const removed = await run(env, 'remove', BROKEN);
     expect(removed.code).toBe(0);
     expect(removed.out).toContain(`Removed the unreadable receipt of ${BROKEN}: ${broken}`);
-    expect(removed.out).toContain('could not be identified and were left in place');
+    expect(removed.out).toContain(
+      'File ownership could not be verified, so the files were left in place'
+    );
     delete before[join('installed', ...BROKEN.split('/'), 'receipt.json')];
     expect(await snapshot(env.pluginsDir)).toEqual(before);
   });
@@ -446,6 +449,35 @@ describe('archon plugin with an unreadable receipt', () => {
     expect(await receiptOf(env)).toMatchObject({ tag: 'v2.0.0', commit: commits.get('v2.0.0') });
     expect(new Uint8Array(await readFile(target))).toEqual(new Uint8Array([2, 2]));
     expect((await run(env, 'list')).code).toBe(0);
+  });
+
+  test('repair reports an incompatible provider receipt as unavailable', async () => {
+    const env = await environment();
+    const file = receiptPath(env.pluginsDir, ID);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: ID,
+        manifest: {
+          schemaVersion: 1,
+          kind: 'provider',
+          name: 'old-provider',
+          description: 'old',
+          executable: 'archon-provider-old',
+        },
+        descriptor: { ...claudeDescriptor, id: 'old', protocol: 2 },
+        tag: 'v1.0.0',
+        commit: 'a'.repeat(40),
+        installedAt: new Date(0).toISOString(),
+        files: [{ path: 'archon-provider-old', sha256: 'b'.repeat(64) }],
+      })
+    );
+    const updated = await run(env, 'update', `${ID}@v2.0.0`);
+    expect(updated.code, updated.err).toBe(0);
+    expect(updated.out).toContain('Replaced the unavailable receipt');
+    expect(updated.out).not.toContain('unreadable');
   });
 
   test('update of a valid plugin works while another receipt is broken', async () => {

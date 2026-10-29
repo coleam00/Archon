@@ -11,7 +11,25 @@
  */
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname, join, sep } from 'node:path';
-import { describeIssues, pluginReceiptSchema, type PluginReceipt } from './index';
+import { z } from 'zod';
+import { BUNDLED_IS_BINARY } from '@archon/paths';
+import { isMaintainedProvider } from '@archon/provider-contract';
+import {
+  PROVIDER_PLUGIN_PROTOCOL,
+  providerPluginDescriptorSchema,
+} from '@archon/provider-contract/plugin/wire';
+import {
+  describeIssues,
+  isPluginId,
+  isMaintainedProviderPlugin,
+  pluginReceiptSchema,
+  providerReceiptSchema,
+  type PluginReceipt,
+} from './index';
+
+const providerProtocolReceiptSchema = providerReceiptSchema.extend({
+  descriptor: providerPluginDescriptorSchema.extend({ protocol: z.int().positive() }),
+});
 
 export const RECEIPT_FILE = 'receipt.json';
 
@@ -29,9 +47,11 @@ export interface BrokenReceipt {
   /** `owner/repo[/path]`, from the receipt's directory under `installed/`. */
   id: string;
   file: string;
-  /** Names `file` and why it is broken. */
+  /** Names the plugin or receipt file and why it cannot be used. */
   message: string;
   cause?: unknown;
+  unavailableReason?: 'provider-protocol';
+  invalidLocation?: true;
 }
 
 export interface ReceiptScan {
@@ -72,9 +92,10 @@ export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
   for (const entry of entries.sort()) {
     if (basename(entry) !== RECEIPT_FILE) continue;
     const file = join(root, entry);
-    const result = await readReceipt(file);
+    const id = dirname(entry).split(sep).join('/');
+    const result = await readReceipt(file, id, pluginsDir);
     if ('message' in result) {
-      broken.push({ id: dirname(entry).split(sep).join('/'), file, ...result });
+      broken.push({ id, file, ...result });
     } else {
       receipts.push(result);
     }
@@ -84,8 +105,10 @@ export async function scanReceipts(pluginsDir: string): Promise<ReceiptScan> {
 
 /** The receipt, or the message saying why it cannot be used. */
 async function readReceipt(
-  file: string
-): Promise<PluginReceipt | Pick<BrokenReceipt, 'message' | 'cause'>> {
+  file: string,
+  id: string,
+  pluginsDir: string
+): Promise<PluginReceipt | Omit<BrokenReceipt, 'id' | 'file'>> {
   let contents: string;
   try {
     contents = await readFile(file, 'utf8');
@@ -102,7 +125,45 @@ async function readReceipt(
     return { message: `Invalid JSON in plugin receipt ${file}` };
   }
   const parsed = pluginReceiptSchema.safeParse(raw);
-  if (!parsed.success)
-    return { message: `Invalid plugin receipt ${file}: ${describeIssues(parsed.error)}` };
-  return parsed.data;
+  if (parsed.success) return parsed.data;
+  const provider = providerProtocolReceiptSchema.safeParse(raw);
+  if (provider.success && provider.data.descriptor.protocol !== PROVIDER_PLUGIN_PROTOCOL) {
+    return incompatibleProviderReceipt(provider.data, id, file, pluginsDir);
+  }
+  return { message: `Invalid plugin receipt ${file}: ${describeIssues(parsed.error)}` };
+}
+
+function incompatibleProviderReceipt(
+  provider: z.infer<typeof providerProtocolReceiptSchema>,
+  id: string,
+  file: string,
+  pluginsDir: string
+): Omit<BrokenReceipt, 'id' | 'file'> {
+  if (!isPluginId(id)) {
+    return { message: `Invalid plugin receipt location ${file}: expected owner/repo[/path]` };
+  }
+  if (provider.id !== id) {
+    return {
+      invalidLocation: true,
+      message: `Invalid plugin receipt location ${file}: receipt ID ${provider.id} does not match directory ID ${id}`,
+    };
+  }
+  const descriptor = provider.descriptor;
+  const maintained =
+    isMaintainedProvider(descriptor.id) && isMaintainedProviderPlugin(id, descriptor.id);
+  const command = maintained
+    ? `archon provider add ${descriptor.id}`
+    : `archon plugin update ${id}`;
+  const executable = join(
+    pluginsDir,
+    provider.manifest.executable + (process.platform === 'win32' ? '.exe' : '')
+  );
+  const repair =
+    maintained && !BUNDLED_IS_BINARY
+      ? `Source checkouts run maintained providers from source. Remove this obsolete receipt: archon plugin remove ${id}`
+      : `If ${executable} exists, move it aside before retrying. Run: ${command}`;
+  return {
+    unavailableReason: 'provider-protocol',
+    message: `Plugin unavailable: ${id} (provider '${descriptor.id}') uses protocol ${descriptor.protocol}, but this Archon requires protocol ${PROVIDER_PLUGIN_PROTOCOL}. ${repair}`,
+  };
 }
