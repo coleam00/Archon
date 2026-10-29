@@ -46,6 +46,7 @@ answer:
   brief: "stub: continue PR 8 under the ruling"
   push: null
   reason: "stub: the plan asks to relax a stated constraint"
+  ask_class: stop
   attention:
     what: "stub: the item and the decision"
     why: "stub: what either answer changes"

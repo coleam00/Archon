@@ -227,8 +227,11 @@ nodes:
             number: { type: integer, minimum: 1 }
           required: [repo, number]
         reason: { type: string, pattern: '\S' }
+        # On ask, what the question is about, as the agent judged it: `scope` for the
+        # contract's shape or the rounds' trend, `stop` for anything else. Null otherwise.
+        ask_class: { type: [string, 'null'], enum: [stop, scope, null] }
         attention: *attention
-      required: [decision, brief, push, reason, attention]
+      required: [decision, brief, push, reason, ask_class, attention]
 
   # Checks the decision, performs the writes it declared and reads each one back:
   # the push, then the work item.
@@ -244,7 +247,6 @@ nodes:
       route: { from: "$route.output", if_skipped: null }
       ending: { from: "$ship.output", if_skipped: null }
       answer: { from: "$answer.output", if_skipped: null }
-      at_cap: "$facts.output.at_cap"
     output_format:
       type: object
       properties:
