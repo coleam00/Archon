@@ -131,7 +131,7 @@ export function describeSqlStatusReadConformance(
                 unset: [],
                 via: 'cli',
               }),
-            unchanged: { labeled: false },
+            unchanged: { labeled: false as const },
           },
         ];
         const missing = randomUUID();
