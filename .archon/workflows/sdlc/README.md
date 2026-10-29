@@ -537,7 +537,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   whole run that declares one.
 - **Rounds.** One round is one included `archon-ship-block` run. The `answer` agent reads how
   it ended and decides: `done` when the pull request's latest review says Ready at its
-  head commit, `continue` with a brief when the contract already answers what stopped
+  head commit and nothing but a check no round can run remains, `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. Before any `continue`, it compares the whole change with the contract's shape, and asks when a correction would add machinery the contract does not name. A Ready, green pull request whose only remaining check no round can run is asked about once rather than continued. It declares the pull request when the round left commits unpushed.
   A `continue` starts the item's next round at once, a detached `archon-build-queue
