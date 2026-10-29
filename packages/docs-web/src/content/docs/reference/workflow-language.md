@@ -2929,7 +2929,7 @@ Workflow-level `modelReasoningEffort:` is deprecated. The loader applies it as `
 
 ### Web Execution Mode
 
-A workflow started from the Web UI runs in the background in a worker conversation, and its output appears in the run view. A run that pauses at a `wait: attention` node, or at a deprecated approval or interactive loop gate, pauses durably however it was started. The console's [Needs your input](/guides/workflow-triggers/#find-runs-needing-your-input) banner lists it, and the CLI answers it by run id. The same holds for a `--detach` launch and a trigger start.
+A workflow started from the Web UI runs in the background in a worker conversation, and its output appears in the run view. A run that pauses at a `wait: attention` node, or at a deprecated approval or interactive loop gate, pauses durably however it was started. The console's [Needs your input](/guides/workflow-triggers/#find-runs-needing-your-input) banner lists readable runs, and the CLI answers them by run id. If stored run data is unreadable, the console shows a repair advisory instead of answer controls; browser and chat notices are not sent. Operator logs provide safe run IDs for repair, as described in the linked guide. The same holds for a `--detach` launch and a trigger start.
 
 ### Provider Validation
 

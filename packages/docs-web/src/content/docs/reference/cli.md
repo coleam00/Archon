@@ -979,8 +979,9 @@ inspect the run normally with `workflow get <run-id>`.
 
 ### `workflow attention`
 
-List, count, stream or read the [attention queue](/getting-started/operate/): every paused
-run that needs an answer or inspection, plus observable provider usage- and rate-limit waits.
+List, count, stream or read the [attention queue](/getting-started/operate/): readable paused
+runs that need an answer or inspection, plus observable provider usage- and rate-limit waits.
+Batch reads report unreadable stored rows separately through `degraded` warnings, described below.
 Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_limit`
 continues automatically after reset, and `unreadable` needs inspection. Read-only.
 

@@ -22,7 +22,9 @@ Both hosts use the same admission records, so a server and a scheduled CLI comma
 
 ## Find runs needing your input
 
-The console's **Needs your input** banner lists every run that needs attention, including triggered runs and runs older than the first page of the feed. Approval gates keep their decision and response controls. A `wait: attention` run shows its question with answer controls for its form and an **Abandon** action; a wait paused before attention waits took answers shows **Resume** instead.
+The console's **Needs your input** banner lists readable runs that need attention, including triggered runs and runs older than the first page of the feed. Approval gates keep their decision and response controls. A `wait: attention` run shows its question with answer controls for its form and an **Abandon** action; a wait paused before attention waits took answers shows **Resume** instead.
+
+If stored run data cannot be read, the console shows a separate repair advisory without answer or abandon controls. These runs receive no browser or chat attention notice. Operator logs identify the unreadable runs without exposing stored origin contents; repair the data and read again. See [incomplete attention reads](/getting-started/operate/#the-queue-contract).
 
 Keep the console open to receive live updates from runs started by another process. **Dismiss** hides an occurrence for this browser session; reloading or a new pause brings it back. Resuming still requires the server to have access to the run's working path.
 
@@ -30,7 +32,7 @@ Keep the console open to receive live updates from runs started by another proce
 
 In **Settings → Alerts**, enable **Also notify this browser when the console is closed** and allow notifications. Subscription requires a signed-in web user or an identity supplied by your trusted authentication proxy. Push works over HTTPS or localhost in a browser supporting Web Push. On iOS, first install Archon as a home-screen web app.
 
-Every opted-in browser on this install receives notices for approval gates and `wait: attention` pauses, including runs started by the CLI or triggers. Runs already rendered inline by a chat plugin are excluded. A notified run also gets a completion notice. Notifications name the workflow and the kind of attention; messages, outputs and identities stay in Archon. Click the notification to open the run page and act there.
+Every opted-in browser on this install receives notices for readable approval gates and `wait: attention` pauses, including runs started by the CLI or triggers. Runs already rendered inline by a chat plugin are excluded. A notified run also gets a completion notice. Notifications name the workflow and the kind of attention; messages, outputs and identities stay in Archon. Click the notification to open the run page and act there.
 
 The first browser subscription quietly records existing pauses as a baseline. New pause occurrences are delivered once across scans and server restarts. Archon sends before recording delivery, so a crash can cause a duplicate. If only some browsers receive a push, the next scan retries every browser. These duplicates replace the same browser notification because its tag is the run ID. There is no per-browser delivery ledger.
 
@@ -55,7 +57,7 @@ to the plugin. Restart the server after changing routes. A route whose platform 
 installed plugin, or whose plugin lacks the capability, is logged at startup and shows as
 `misconfigured` in `/api/health`; the server still starts.
 
-Each route receives one message per approval gate or `wait: attention` pause occurrence,
+Each route receives one message per readable approval gate or `wait: attention` pause occurrence,
 across scans and server restarts, including runs started by the CLI or triggers. The message
 carries the gate's decisions or the wait's form and options, so the plugin can offer them as
 actions. A re-ask of the same gate is a new occurrence and gets a new message. A notified run
