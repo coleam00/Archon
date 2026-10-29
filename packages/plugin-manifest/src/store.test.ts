@@ -159,3 +159,29 @@ test('only a well-formed receipt with a different numeric protocol is classified
   expect((await scanReceipts(dir)).broken).toEqual([]);
   expect(await readReceipts(dir)).toHaveLength(1);
 });
+
+test.each([...MAINTAINED_PROVIDER_IDS, 'example'])(
+  'old %s receipt with a different directory ID stays malformed',
+  async provider => {
+    const dir = tempRoot(await mkdtemp(join(tmpdir(), 'plugin-location-')));
+    const id = 'acme/elsewhere';
+    const file = await writeReceipt(
+      dir,
+      id,
+      JSON.stringify({
+        ...providerReceipt,
+        descriptor: { ...providerReceipt.descriptor, id: provider },
+      })
+    );
+    const { receipts, broken } = await scanReceipts(dir);
+    expect(receipts).toEqual([]);
+    expect(broken).toHaveLength(1);
+    expect(broken[0].unavailableReason).toBeUndefined();
+    expect(broken[0].message).toContain(`Invalid plugin receipt location ${file}`);
+    expect(broken[0].message).toContain(providerReceipt.id);
+    expect(broken[0].message).toContain(id);
+    expect(broken[0].message).not.toContain('archon plugin update');
+    expect(broken[0].message).not.toContain('archon provider add');
+    await expect(readReceipts(dir)).rejects.toThrow('Invalid plugin receipt location');
+  }
+);

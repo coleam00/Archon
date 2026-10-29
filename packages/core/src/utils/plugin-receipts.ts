@@ -7,7 +7,7 @@ export async function loadRuntimeReceipts(pluginsDir: string) {
   for (const entry of broken) {
     createLogger('core.plugin-receipts').warn(
       { receipt: entry.file, reason: entry.message },
-      entry.unavailableReason || !isPluginId(entry.id)
+      entry.unavailableReason || entry.invalidLocation || !isPluginId(entry.id)
         ? entry.message
         : `Plugin unavailable. Run archon plugin update ${entry.id} or archon plugin remove ${entry.id}`
     );

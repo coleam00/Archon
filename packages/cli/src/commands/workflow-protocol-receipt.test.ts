@@ -233,71 +233,90 @@ test('list and doctor distinguish old protocols and retain healthy peer versions
   expect(result.output).not.toContain('unreadable');
 });
 
-test.each(['acme', 'acme/broken@v1', 'acme/repo/plugins/broken@v1'])(
-  'old provider at stray location %s keeps manual deletion advice',
-  async id => {
-    const root = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-stray-')));
-    const pluginsDir = join(root, 'plugins');
-    const entry = await installReceipt(pluginsDir, 'community', 2);
-    const file = receiptPath(pluginsDir, id);
-    await mkdir(dirname(file), { recursive: true });
-    await rename(receiptPath(pluginsDir, entry.id), file);
-    const scan = await scanReceipts(pluginsDir);
-    expect(scan.broken).toHaveLength(1);
-    expect(scan.broken[0].unavailableReason).toBeUndefined();
-    expect(scan.broken[0].message).toContain(`Invalid plugin receipt location ${file}`);
-    expect(scan.broken[0].message).not.toContain('archon plugin update');
-    const result = await captureCommand({ ARCHON_HOME: root }, async () => {
-      setPlatformPolicies(defaultPlatformPolicies);
+test.each([
+  'acme',
+  'acme/broken@v1',
+  'acme/repo/plugins/broken@v1',
+  'acme/elsewhere',
+  'acme/repo/plugins/elsewhere',
+])('old provider at stray location %s keeps manual deletion advice', async id => {
+  const root = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-stray-')));
+  const workflow = join(root, '.archon', 'workflows', 'receipt-check');
+  await mkdir(join(workflow, 'fixtures'), { recursive: true });
+  await writeFile(
+    join(workflow, 'check.yaml'),
+    'name: receipt-check\ndescription: Test\nnodes:\n  - id: check\n    prompt: Check\n'
+  );
+  await writeFile(
+    join(workflow, 'fixtures', 'check.stubs.yaml'),
+    'fixture:\n  expect: completed\ncheck: done\n'
+  );
+  const pluginsDir = join(root, 'plugins');
+  const entry = await installReceipt(pluginsDir, 'community', 2);
+  const file = receiptPath(pluginsDir, id);
+  await mkdir(dirname(file), { recursive: true });
+  await rename(receiptPath(pluginsDir, entry.id), file);
+  const scan = await scanReceipts(pluginsDir);
+  expect(scan.broken).toHaveLength(1);
+  expect(scan.broken[0].unavailableReason).toBeUndefined();
+  expect(scan.broken[0].message).toContain(`Invalid plugin receipt location ${file}`);
+  expect(scan.broken[0].message).not.toContain('archon plugin update');
+  const result = await captureCommand({ ARCHON_HOME: root }, async () => {
+    setPlatformPolicies(defaultPlatformPolicies);
+    clearRegistry();
+    const stdout = spyOnJsonStdout();
+    const stderr = spyOnStderr();
+    try {
+      await registerHostProviders();
+      const check = await checkInstalledProviders(providerRegistry);
+      expect(check.status).toBe('fail');
+      expect(check.message).toContain(`Invalid plugin receipt location ${file}`);
+      expect(check.message).not.toContain(`archon plugin update ${id}`);
+      await listPlugins({ pluginsDir, projectDir: root, archonVersion: '1.2.3' });
+      await workflowListCommand(root, { json: true });
+      const list = JSON.parse(String(stdout.mock.calls[0]?.[0]));
+      expect(JSON.stringify(list.errors)).toContain(`Invalid plugin receipt location ${file}`);
+      expect(stderr.mock.calls.flat().join('')).not.toContain('Plugin unavailable:');
+      stdout.mockClear();
+      expect(await workflowTestCommand(root, 'receipt-check', { json: true })).toBe(1);
+      const report = JSON.parse(String(stdout.mock.calls[0]?.[0]));
+      expect(report.passed).toBe(1);
+      expect(report.errors).toHaveLength(1);
+      expect(JSON.stringify(report.errors)).toContain(`Invalid plugin receipt location ${file}`);
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+      clearPlatformPolicies();
       clearRegistry();
-      const stdout = spyOnJsonStdout();
-      const stderr = spyOnStderr();
-      try {
-        await registerHostProviders();
-        const check = await checkInstalledProviders(providerRegistry);
-        expect(check.status).toBe('fail');
-        expect(check.message).toContain(`Invalid plugin receipt location ${file}`);
-        expect(check.message).not.toContain(`archon plugin update ${id}`);
-        await listPlugins({ pluginsDir, projectDir: root, archonVersion: '1.2.3' });
-        await workflowListCommand(root, { json: true });
-        const list = JSON.parse(String(stdout.mock.calls[0]?.[0]));
-        expect(JSON.stringify(list.errors)).toContain(`Invalid plugin receipt location ${file}`);
-        expect(stderr.mock.calls.flat().join('')).not.toContain('Plugin unavailable:');
-      } finally {
-        stderr.mockRestore();
-        stdout.mockRestore();
-        clearPlatformPolicies();
-        clearRegistry();
+    }
+  });
+  expect(result.status, result.output).toBe(0);
+  expect(result.output).toContain(`${id}  unreadable`);
+  expect(result.output).not.toContain(`archon plugin update ${id}`);
+  expect(brokenReceiptNote(scan.broken[0])).toContain('delete it by hand');
+  const env = { pluginsDir, projectDir: root, archonVersion: '1.2.3' };
+  await expect(installPlugin(parsePluginRef('acme/new'), 'install', env)).rejects.toThrow(
+    'delete it by hand'
+  );
+  const target = join(
+    pluginsDir,
+    entry.manifest.executable + (process.platform === 'win32' ? '.exe' : '')
+  );
+  await writeFile(target, 'stray executable');
+  await expect(
+    installBinaryPlugin(
+      parsePluginRef(entry.id),
+      { kind: 'provider', manifest: entry.manifest, tag: 'v1.2.3', commit: 'a'.repeat(40) },
+      scan.receipts,
+      scan.broken,
+      undefined,
+      env,
+      async () => {
+        throw new Error('must not acquire');
       }
-    });
-    expect(result.status, result.output).toBe(0);
-    expect(result.output).toContain(`${id}  unreadable`);
-    expect(result.output).not.toContain(`archon plugin update ${id}`);
-    expect(brokenReceiptNote(scan.broken[0])).toContain('delete it by hand');
-    const env = { pluginsDir, projectDir: root, archonVersion: '1.2.3' };
-    await expect(installPlugin(parsePluginRef('acme/new'), 'install', env)).rejects.toThrow(
-      'delete it by hand'
-    );
-    const target = join(
-      pluginsDir,
-      entry.manifest.executable + (process.platform === 'win32' ? '.exe' : '')
-    );
-    await writeFile(target, 'stray executable');
-    await expect(
-      installBinaryPlugin(
-        parsePluginRef(entry.id),
-        { kind: 'provider', manifest: entry.manifest, tag: 'v1.2.3', commit: 'a'.repeat(40) },
-        scan.receipts,
-        scan.broken,
-        undefined,
-        env,
-        async () => {
-          throw new Error('must not acquire');
-        }
-      )
-    ).rejects.toThrow('delete it by hand');
-  }
-);
+    )
+  ).rejects.toThrow('delete it by hand');
+});
 
 test('JSON workflows retain project results when the installed store cannot be scanned', async () => {
   const root = trackRoot(await mkdtemp(join(tmpdir(), 'protocol-scan-')));

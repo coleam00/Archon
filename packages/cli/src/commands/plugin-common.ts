@@ -25,7 +25,7 @@ export function stagingName(fileName: string): string {
 }
 
 export function brokenReceiptNote(broken: BrokenReceipt): string {
-  if (!isPluginId(broken.id)) {
+  if (broken.invalidLocation || !isPluginId(broken.id)) {
     return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand (${broken.file})`;
   }
   if (broken.unavailableReason) return broken.message;

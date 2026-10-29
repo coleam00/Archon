@@ -51,6 +51,7 @@ export interface BrokenReceipt {
   message: string;
   cause?: unknown;
   unavailableReason?: 'provider-protocol';
+  invalidLocation?: true;
 }
 
 export interface ReceiptScan {
@@ -107,7 +108,7 @@ async function readReceipt(
   file: string,
   id: string,
   pluginsDir: string
-): Promise<PluginReceipt | Pick<BrokenReceipt, 'message' | 'cause' | 'unavailableReason'>> {
+): Promise<PluginReceipt | Omit<BrokenReceipt, 'id' | 'file'>> {
   let contents: string;
   try {
     contents = await readFile(file, 'utf8');
@@ -129,6 +130,12 @@ async function readReceipt(
   if (provider.success && provider.data.descriptor.protocol !== PROVIDER_PLUGIN_PROTOCOL) {
     if (!isPluginId(id)) {
       return { message: `Invalid plugin receipt location ${file}: expected owner/repo[/path]` };
+    }
+    if (provider.data.id !== id) {
+      return {
+        invalidLocation: true,
+        message: `Invalid plugin receipt location ${file}: receipt ID ${provider.data.id} does not match directory ID ${id}`,
+      };
     }
     const descriptor = provider.data.descriptor;
     const maintained =
