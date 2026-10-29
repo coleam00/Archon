@@ -244,6 +244,35 @@ test.each(['acme', 'acme/broken@v1', 'acme/repo/plugins/broken@v1'])(
     await rename(receiptPath(pluginsDir, entry.id), file);
     const scan = await scanReceipts(pluginsDir);
     expect(scan.broken).toHaveLength(1);
+    expect(scan.broken[0].unavailableReason).toBeUndefined();
+    expect(scan.broken[0].message).toContain(`Invalid plugin receipt location ${file}`);
+    expect(scan.broken[0].message).not.toContain('archon plugin update');
+    const result = await captureCommand({ ARCHON_HOME: root }, async () => {
+      setPlatformPolicies(defaultPlatformPolicies);
+      clearRegistry();
+      const stdout = spyOnJsonStdout();
+      const stderr = spyOnStderr();
+      try {
+        await registerHostProviders();
+        const check = await checkInstalledProviders(providerRegistry);
+        expect(check.status).toBe('fail');
+        expect(check.message).toContain(`Invalid plugin receipt location ${file}`);
+        expect(check.message).not.toContain(`archon plugin update ${id}`);
+        await listPlugins({ pluginsDir, projectDir: root, archonVersion: '1.2.3' });
+        await workflowListCommand(root, { json: true });
+        const list = JSON.parse(String(stdout.mock.calls[0]?.[0]));
+        expect(JSON.stringify(list.errors)).toContain(`Invalid plugin receipt location ${file}`);
+        expect(stderr.mock.calls.flat().join('')).not.toContain('Plugin unavailable:');
+      } finally {
+        stderr.mockRestore();
+        stdout.mockRestore();
+        clearPlatformPolicies();
+        clearRegistry();
+      }
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(`${id}  unreadable`);
+    expect(result.output).not.toContain(`archon plugin update ${id}`);
     expect(brokenReceiptNote(scan.broken[0])).toContain('delete it by hand');
     const env = { pluginsDir, projectDir: root, archonVersion: '1.2.3' };
     await expect(installPlugin(parsePluginRef('acme/new'), 'install', env)).rejects.toThrow(

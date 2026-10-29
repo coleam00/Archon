@@ -1,8 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
-import type { PluginManifest } from '@archon/plugin-manifest';
+import { isPluginId, type PluginManifest } from '@archon/plugin-manifest';
 import type { BrokenReceipt } from '@archon/plugin-manifest/store';
-import { parsePluginRef, type PluginRef } from './plugin-source';
 
 export interface PluginEnvironment {
   /** `ARCHON_HOME/plugins`, the directory forge discovery scans. */
@@ -26,14 +25,7 @@ export function stagingName(fileName: string): string {
 }
 
 export function brokenReceiptNote(broken: BrokenReceipt): string {
-  // A receipt.json placed outside the owner/repo layout has no id the commands accept.
-  let ref: PluginRef;
-  try {
-    ref = parsePluginRef(broken.id);
-  } catch {
-    return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand (${broken.file})`;
-  }
-  if (ref.id !== broken.id) {
+  if (!isPluginId(broken.id)) {
     return `${broken.message}. It is not where archon plugin writes receipts; delete it by hand (${broken.file})`;
   }
   if (broken.unavailableReason) return broken.message;

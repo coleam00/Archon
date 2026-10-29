@@ -34,6 +34,14 @@ export function isPluginPathSegment(segment: string): boolean {
   return /^[A-Za-z0-9._-]+$/.test(segment) && segment !== '.' && segment !== '..';
 }
 
+export function isPluginId(id: string): boolean {
+  const [owner = '', repo = '', ...path] = id.split('/');
+  return (
+    /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(owner) &&
+    [repo, ...path].every(isPluginPathSegment)
+  );
+}
+
 const pluginName = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'lowercase words joined by "-"');
 
 /** The file name forge discovery scans for, without the Windows `.exe` suffix. */

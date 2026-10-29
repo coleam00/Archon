@@ -20,6 +20,7 @@ import {
 } from '@archon/provider-contract/plugin/wire';
 import {
   describeIssues,
+  isPluginId,
   isMaintainedProviderPlugin,
   pluginReceiptSchema,
   providerReceiptSchema,
@@ -126,6 +127,9 @@ async function readReceipt(
   if (parsed.success) return parsed.data;
   const provider = providerProtocolReceiptSchema.safeParse(raw);
   if (provider.success && provider.data.descriptor.protocol !== PROVIDER_PLUGIN_PROTOCOL) {
+    if (!isPluginId(id)) {
+      return { message: `Invalid plugin receipt location ${file}: expected owner/repo[/path]` };
+    }
     const descriptor = provider.data.descriptor;
     const maintained =
       isMaintainedProvider(descriptor.id) && isMaintainedProviderPlugin(id, descriptor.id);
