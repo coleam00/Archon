@@ -180,7 +180,7 @@ export async function worktreeExists(worktreePath: WorktreePath): Promise<boolea
 
 /**
  * List worktrees on local branches for a repository.
- * Detached checkouts are excluded; symbolic HEAD refs outside refs/heads/ are refused.
+ * Detached checkouts and symbolic HEAD refs outside refs/heads/ are excluded.
  * Returns array of {path, branch} objects parsed from git worktree list --porcelain
  *
  * Only returns [] for expected "not a git repository" errors.
@@ -202,11 +202,7 @@ export async function listWorktrees(repoPath: RepoPath): Promise<WorktreeInfo[]>
         currentPath = toNativeWorktreePath(line.substring(9));
       } else if (line.startsWith('branch ')) {
         const ref = line.slice('branch '.length);
-        if (!ref.startsWith('refs/heads/')) {
-          throw new Error(
-            `Cannot list worktree at ${currentPath}: HEAD refers to '${ref}', not a local branch`
-          );
-        }
+        if (!ref.startsWith('refs/heads/')) continue;
         const branch = ref.slice('refs/heads/'.length);
         if (currentPath) {
           worktrees.push({ path: toWorktreePath(currentPath), branch: toBranchName(branch) });

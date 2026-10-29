@@ -128,14 +128,17 @@ describe('git utilities', () => {
     });
 
     test.each(['refs/custom/foo', 'refs/custom/refs/heads/foo'])(
-      'refuses non-local symbolic ref %s without branding it as a branch',
+      'excludes non-local symbolic ref %s without losing local branches',
       async ref => {
         execSpy.mockResolvedValue(
-          output(`worktree /path/to/custom\0HEAD abc123\0branch ${ref}\0\0`)
+          output(
+            `worktree /path/to/custom\0HEAD abc123\0branch ${ref}\0\0` +
+              'worktree /path/to/valid\0HEAD abc123\0branch refs/heads/valid\0\0'
+          )
         );
-        await expect(git.listWorktrees(repo('/path/to/main'))).rejects.toThrow(
-          `Cannot list worktree at ${listed('/path/to/custom')}: HEAD refers to '${ref}', not a local branch`
-        );
+        expect(await git.listWorktrees(repo('/path/to/main'))).toEqual([
+          { path: listed('/path/to/valid'), branch: branch('valid') },
+        ]);
       }
     );
 

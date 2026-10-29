@@ -361,7 +361,7 @@ describe('WorktreeProvider against real git', () => {
     expect(await readFile(join(target, 'untracked.txt'), 'utf8')).toBe('keep me\n');
   });
 
-  test('existing task discovery refuses a non-local symbolic HEAD and preserves its checkout', async () => {
+  test('discovery excludes a non-local symbolic HEAD and preserves independent valid worktrees', async () => {
     const branch = 'refs/custom/foo';
     const namedRequest: IsolationRequest = {
       ...request,
@@ -376,17 +376,33 @@ describe('WorktreeProvider against real git', () => {
     await git(target, 'update-ref', branch, 'HEAD');
     await git(target, 'symbolic-ref', 'HEAD', branch);
     await git(repoPath, 'branch', '-D', branch);
+    const validBranch = toBranchName('feature/valid');
+    const validTarget = toWorktreePath(join(root, 'valid-checkout'));
+    await git(repoPath, 'worktree', 'add', '-b', validBranch, validTarget, 'main');
     const head = await git(target, 'rev-parse', 'HEAD');
     const status = await git(target, 'status', '--porcelain');
 
-    const message = `Cannot list worktree at ${target}: HEAD refers to '${branch}', not a local branch`;
-    await expect(provider.create(namedRequest)).rejects.toThrow(message);
-    await expect(
-      gitModule.findWorktreeByBranch(toRepoPath(repoPath), toBranchName(branch))
-    ).rejects.toThrow(message);
-    await expect(provider.get(target)).rejects.toThrow(message);
-    await expect(provider.adopt(target)).rejects.toThrow(message);
-    await expect(provider.list(repoPath)).rejects.toThrow(message);
+    expect(
+      (
+        await provider.create({
+          ...namedRequest,
+          taskBranch: { kind: 'existing', branch: validBranch },
+        })
+      ).workingPath
+    ).toBe(validTarget);
+    expect(await gitModule.findWorktreeByBranch(toRepoPath(repoPath), validBranch)).toBe(
+      validTarget
+    );
+    expect((await provider.get(validTarget))?.workingPath).toBe(validTarget);
+    expect((await provider.adopt(validTarget))?.workingPath).toBe(validTarget);
+    expect((await provider.list(repoPath)).map(environment => environment.workingPath)).toEqual([
+      validTarget,
+    ]);
+    expect(
+      await gitModule.findWorktreeByBranch(toRepoPath(repoPath), toBranchName(branch))
+    ).toBeNull();
+    expect(await provider.get(target)).toBeNull();
+    expect(await provider.adopt(target)).toBeNull();
     expect((await git(target, 'symbolic-ref', 'HEAD')).trim()).toBe(branch);
     expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
     expect(await git(target, 'status', '--porcelain')).toBe(status);
