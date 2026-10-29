@@ -167,7 +167,7 @@ every distinct schema Archon has ever released, re-applies it to confirm idempot
 the result against a fresh install — columns, indexes, column comments, constraints and sequences.
 Run the same check yourself against any PostgreSQL with `bun run check:schema-upgrades`.
 
-If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.pg_schema_init_failed`.
+If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.postgres_schema_init_failed`.
 
 ## Local PostgreSQL via Docker
 
