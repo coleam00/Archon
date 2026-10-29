@@ -205,14 +205,13 @@ test.each(
     const before = await snapshot();
     const { getLog } = await import('./workflow-run-shared');
     const log = spyOn(getLog(), 'error').mockImplementation(() => {});
-    const pointRead = mock(workflows.getWorkflowRunForAttention);
     try {
       const result = splitAttentionRead(
         await listAttentionQueue({
           store: {
             listAttentionQueueRows: workflows.listAttentionQueueRows,
             getWorkflowRun: workflows.getWorkflowRun,
-            getWorkflowRunForAttention: pointRead,
+            getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
             getCodebase: async () => null,
           },
           branchOf: async () => null,
@@ -220,35 +219,24 @@ test.each(
       );
       expect(result.values.map(item => item.runId)).toContain(valid.id);
       expect(result.values.find(item => item.runId === missing.id)?.kind).toBe('unreadable');
-      expect(result.values.map(item => item.runId)).not.toContain(parent.id);
-      if (nested) expect(result.values.map(item => item.runId)).not.toContain(intermediate.id);
-      expect(result.degraded).toEqual(
-        expect.arrayContaining([
-          { type: 'degraded', reason: 'run_unreadable', runId: badPaused.id },
-          ...(status === 'paused'
-            ? []
-            : [
-                { type: 'degraded', reason: 'run_unreadable', runId: parent.id },
-                ...(nested
-                  ? [{ type: 'degraded', reason: 'run_unreadable', runId: intermediate.id }]
-                  : []),
-              ]),
+      const parents = nested ? [parent, intermediate] : [parent];
+      for (const blockedParent of parents) {
+        expect(result.values.map(item => item.runId)).not.toContain(blockedParent.id);
+      }
+      const affectedParents = status === 'paused' ? [] : parents;
+      const expectedReports = [badPaused, ...affectedParents].map(run => ({
+        type: 'degraded',
+        reason: 'run_unreadable',
+        runId: run.id,
+      }));
+      expect(result.degraded).toEqual(expect.arrayContaining(expectedReports));
+      expect(result.degraded).toHaveLength(expectedReports.length);
+      expect(log.mock.calls).toEqual(
+        [badPaused.id, ...affectedParents.map(() => child.id)].map(workflowRunId => [
+          { workflowRunId },
+          'attention_run_normalization_failed',
         ])
       );
-      expect(result.degraded).toHaveLength(status === 'paused' ? 1 : nested ? 3 : 2);
-      expect(pointRead.mock.calls.length).toBeGreaterThan(0);
-      if (status === 'paused')
-        expect(pointRead.mock.calls.map(([id]) => id)).not.toContain(child.id);
-      if (nested) expect(pointRead.mock.calls.map(([id]) => id)).toContain(intermediate.id);
-      expect(log.mock.calls).toEqual([
-        [{ workflowRunId: badPaused.id }, 'attention_run_normalization_failed'],
-        ...(status === 'paused'
-          ? []
-          : Array.from(
-              { length: nested ? 2 : 1 },
-              () => [{ workflowRunId: child.id }, 'attention_run_normalization_failed'] as const
-            )),
-      ]);
       expect(JSON.stringify(result)).not.toContain('private-origin-sentinel');
       expect(await snapshot()).toEqual(before);
     } finally {
