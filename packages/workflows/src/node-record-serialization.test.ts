@@ -147,6 +147,13 @@ describe('node record serializers', () => {
       ['accounting', 'invocation', 'spend', 'tokens', 'cost_usd'].sort()
     );
     expect(readNodeRecordEvent(event)).toBeUndefined();
+    const withBaseline = serializeDeferredNodeUsage(source, source.spend);
+    expect(
+      readDeferredNodeUsageEvent({
+        ...withBaseline,
+        data: JSON.stringify(withBaseline.data),
+      })?.data.loopBaseline
+    ).toEqual(source.spend);
   });
 
   it('distinguishes incomplete token accounting from an ordinary unavailable measurement', () => {

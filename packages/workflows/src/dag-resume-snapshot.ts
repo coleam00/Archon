@@ -116,7 +116,7 @@ function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefi
 
 interface UsageContribution {
   stepName: string;
-  loopConfigFailure?: NodeExecutionMetadata;
+  loopBaseline?: Pick<NodeExecutionMetadata, 'invocation' | 'spend'>;
   tokens?: TokenUsage;
   tokensUnknown?: boolean;
   costUsd?: number;
@@ -260,15 +260,32 @@ function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
       cause: parseErr,
     });
   }
-  if (usage && nodeCostScope(usage.data) !== 'total') {
-    replaceLoopConfigFailure(fold, row.step_name, usage.data.invocation?.id);
-    addUsage(
+  if (!usage || nodeCostScope(usage.data) === 'total') return;
+  if (usage.data.loopBaseline !== undefined && usage.data.invocation !== undefined) {
+    replaceLoopBaseline(fold, row.step_name, usage.data.invocation.id);
+    const spend = usage.data.loopBaseline;
+    const baseline = readUsage(
       fold,
       row.step_name,
-      usage.rawUsage,
-      usage.data.spend === undefined ? undefined : { spend: usage.data.spend }
+      {
+        tokens: spend.tokens.source === 'provider' ? spend.tokens.value : undefined,
+        tokensUnknown:
+          spend.tokens.source === 'unavailable' && spend.tokens.reason === 'incomplete',
+        costUsd: spend.costUsd.source === 'provider' ? spend.costUsd.value : undefined,
+      },
+      { spend }
     );
+    baseline.loopBaseline = { invocation: usage.data.invocation, spend: usage.data.loopBaseline };
+    fold.usageContributions.push(baseline);
+  } else {
+    replaceLoopBaseline(fold, row.step_name, usage.data.invocation?.id);
   }
+  addUsage(
+    fold,
+    row.step_name,
+    usage.rawUsage,
+    usage.data.spend === undefined ? undefined : { spend: usage.data.spend }
+  );
 }
 
 /** The row's data, or undefined after a warn when its JSON cannot be parsed. */
@@ -452,9 +469,9 @@ async function readCompletedOutput(
   };
 }
 
-// Configuration failures make no provider call. A cumulative continuation replaces
-// their carried gate measurement only when it proves the same invocation.
-function replaceLoopConfigFailure(
+// Configuration failures and interrupted continuations can report carried gate spend.
+// A later cumulative report replaces that baseline, leaving paid interrupted attempts.
+function replaceLoopBaseline(
   fold: ResumeFold,
   stepName: string,
   invocationId: string | undefined
@@ -463,7 +480,7 @@ function replaceLoopConfigFailure(
   fold.usageContributions = fold.usageContributions.filter(
     contribution =>
       contribution.stepName !== stepName ||
-      contribution.loopConfigFailure?.invocation.id !== invocationId
+      contribution.loopBaseline?.invocation.id !== invocationId
   );
 }
 
@@ -484,10 +501,10 @@ function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): vo
   if (row.event_type !== 'node_skipped_prior_success') {
     const metadata = record.metadata;
     if (metadata?.node.kind === 'loop') {
-      replaceLoopConfigFailure(fold, row.step_name, metadata.invocation.id);
+      replaceLoopBaseline(fold, row.step_name, metadata.invocation.id);
       const contribution = readUsage(fold, row.step_name, record.rawUsage, metadata);
       if (metadata.lifecycle.status === 'failed' && metadata.lifecycle.failureKind === 'config') {
-        contribution.loopConfigFailure = metadata;
+        contribution.loopBaseline = metadata;
       }
       fold.usageContributions.push(contribution);
     } else {
@@ -695,11 +712,11 @@ export async function foldDagResumeSnapshot(
     reportedChildUsage: fold.reportedChildUsage,
     unattributedChildUsagePaths: fold.unattributedChildUsagePaths,
     unfinishedInvocations: fold.unfinishedInvocations,
-    loopConfigFailureBaselines: new Map(
-      fold.usageContributions.flatMap(({ loopConfigFailure }) =>
-        loopConfigFailure === undefined
+    loopUsageBaselines: new Map(
+      fold.usageContributions.flatMap(({ loopBaseline }) =>
+        loopBaseline === undefined
           ? []
-          : [[loopConfigFailure.invocation.id, loopConfigFailure.spend] as const]
+          : [[loopBaseline.invocation.id, loopBaseline.spend] as const]
       )
     ),
     completedNodeOutputs: fold.completedNodeOutputs,

@@ -1,8 +1,10 @@
+import { observeExecutionSpend } from '../../../node-execution';
 import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import { finalizeLoopFromSignal } from '../../loop-completion';
 import { requireProvider } from '@archon/provider-contract';
 import {
   serializeDeferredNodeUsage,
+  serializeNodeOutput,
   type NodeExecutionResult,
 } from '../../../node-record-serialization';
 import {
@@ -30,7 +32,7 @@ import { describeUnmetCompletion } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
 import { type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
-import { sumTokenUsage } from '../../usage';
+import { incrementalLoopUsage, sumTokenUsage } from '../../usage';
 import { loadNodeCommandPrompt } from '../../node-source';
 import {
   aiNodeEnvironment,
@@ -409,27 +411,35 @@ async function runSettledLoopIteration(
 async function preserveInterruptedLoopUsage(run: LoopRun, state: LoopState): Promise<void> {
   const { ctx } = run;
   try {
+    const cumulative = {
+      ...state.execution,
+      spend: observeExecutionSpend(state.execution.spend, {
+        ...loopSpend(state),
+        costPartial: !state.costKnown,
+      }),
+    };
+    const baseline =
+      run.resume.gate === undefined
+        ? undefined
+        : observeExecutionSpend(state.execution.spend, {
+            tokens: run.resume.tokens,
+            costUsd: run.resume.costUsd,
+            costPartial: !run.resume.priorCostKnown,
+          });
+    const incremental = incrementalLoopUsage(serializeNodeOutput(cumulative), baseline);
     await persistNodeEvent(
       ctx.deps.store,
-      serializeDeferredNodeUsage({
-        ...state.execution,
-        spend: {
-          ...state.execution.spend,
-          tokens: state.tokensUnknown
-            ? { source: 'unavailable', reason: 'incomplete' }
-            : state.tokens !== undefined
-              ? { source: 'provider', value: state.tokens }
-              : state.execution.spend.tokens,
-          costUsd:
-            state.costUsd !== undefined
-              ? {
-                  source: 'provider',
-                  value: state.costUsd,
-                  ...(!state.costKnown ? { partial: true } : {}),
-                }
-              : state.execution.spend.costUsd,
+      serializeDeferredNodeUsage(
+        {
+          ...state.execution,
+          spend: observeExecutionSpend(cumulative.spend, {
+            ...incremental,
+            tokensUnknown: state.tokensUnknown,
+            costPartial: !state.costKnown,
+          }),
         },
-      })
+        baseline
+      )
     );
   } catch (usageError) {
     getLog().error(

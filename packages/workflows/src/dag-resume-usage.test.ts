@@ -318,7 +318,7 @@ describe('loop configuration failure accounting', () => {
           expected === 0.07 ? { input: 70, output: 7 } : { input: 110, output: 11 }
         );
         if (failureKind === 'config' && sameInvocation)
-          expect(snapshot.loopConfigFailureBaselines?.size).toBe(0);
+          expect(snapshot.loopUsageBaselines?.size).toBe(0);
         expect(snapshot.costUsd).toBeCloseTo(expected, 5);
         expect(snapshot.costPartial).toBe(!(failureKind === 'config' && sameInvocation));
         if (failureKind === 'config' && sameInvocation) {
