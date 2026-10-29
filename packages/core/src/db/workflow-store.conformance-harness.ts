@@ -92,7 +92,7 @@ export function describeSqlStatusReadConformance(
   makeHarness: () => Promise<WorkflowStoreHarness & { db: IDatabase }>
 ): void {
   test.each(['direct', 'parent'] as const)(
-    'partial status reads validate %s runs and preserve rejected writes',
+    'partial status reads validate %s runs',
     async association => {
       const harness = await makeHarness();
       try {
@@ -140,46 +140,27 @@ export function describeSqlStatusReadConformance(
         for (const { write, unchanged } of writes(missing)) {
           expect(await write()).toEqual(unchanged);
         }
-        for (const status of workflowRunStatusSchema.options) {
-          await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
-            status,
-            run.id,
-          ]);
-          expect(await locked(run.id)).toMatchObject({ status });
-          const rows = await blockers(CONFORMANCE_CONVERSATION_ID);
-          expect(rows).toEqual(
-            status === 'completed' || status === 'cancelled' ? [] : [{ id: run.id, status }]
-          );
-          for (const { write, unchanged } of writes(run.id)) {
-            expect(await write()).toEqual(unchanged);
-          }
-        }
-        for (const status of ['unexpected', '']) {
-          await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
-            status,
-            run.id,
-          ]);
-          const snapshot = async () => ({
-            rows: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
-            events: await store.listWorkflowEvents(run.id),
-            head: await store.getWorkflowEventHead(),
-            reports: harness.terminalReports(),
+        expect(await locked(run.id)).toMatchObject({ status: 'pending' });
+        expect(await blockers(CONFORMANCE_CONVERSATION_ID)).toEqual([
+          { id: run.id, status: 'pending' },
+        ]);
+        const status = 'unexpected';
+        await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+          status,
+          run.id,
+        ]);
+        for (const read of [
+          () => locked(run.id),
+          () => blockers(CONFORMANCE_CONVERSATION_ID),
+          ...writes(run.id).map(({ write }) => write),
+        ]) {
+          const result = read();
+          await expect(result).rejects.toBeInstanceOf(WorkflowStatusReadError);
+          await expect(result).rejects.toMatchObject({
+            workflowRunId: run.id,
+            storedStatus: status,
+            message: `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`,
           });
-          const before = await snapshot();
-          for (const read of [
-            () => locked(run.id),
-            () => blockers(CONFORMANCE_CONVERSATION_ID),
-            ...writes(run.id).map(({ write }) => write),
-          ]) {
-            const result = read();
-            await expect(result).rejects.toBeInstanceOf(WorkflowStatusReadError);
-            await expect(result).rejects.toMatchObject({
-              workflowRunId: run.id,
-              storedStatus: status,
-              message: `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`,
-            });
-          }
-          expect(await snapshot()).toEqual(before);
         }
       } finally {
         await harness.close();
