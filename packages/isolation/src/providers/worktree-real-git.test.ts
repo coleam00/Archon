@@ -288,6 +288,42 @@ describe('WorktreeProvider against real git', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
+  test.each(['other branch', 'detached HEAD'] as const)(
+    'named task target-path reuse refuses %s and preserves dirty contents',
+    async state => {
+      const namedRequest: IsolationRequest = {
+        ...request,
+        workflowType: 'task',
+        baseBranch: toBranchName('main'),
+        taskBranch: { kind: 'new', branch: toBranchName('feature/reuse') },
+      };
+      const remote = join(root, 'remote');
+      await cp(templateRepo, remote, { recursive: true });
+      await git(repoPath, 'remote', 'add', 'origin', remote);
+      const created = await provider.create(namedRequest);
+      const target = created.workingPath;
+      await writeFile(join(target, 'README.md'), 'operator edits\n');
+      await writeFile(join(target, 'untracked.txt'), 'keep me\n');
+      expect((await provider.create(namedRequest)).workingPath).toBe(target);
+      if (state === 'other branch') await git(target, 'switch', '-c', 'feature/other');
+      else await git(target, 'checkout', '--detach');
+      const head = await git(target, 'rev-parse', 'HEAD');
+      const status = await git(target, 'status', '--porcelain');
+      const branch = await git(target, 'rev-parse', '--abbrev-ref', 'HEAD');
+
+      const failure = await typedFailure(provider.create(namedRequest));
+      expect(failure.kind).toBe('adoption_refused');
+      expect(failure.message).toContain('feature/reuse');
+      expect(failure.message).toContain(state === 'other branch' ? 'feature/other' : state);
+      expect(failure.message).toContain(target);
+      expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
+      expect(await git(target, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(branch);
+      expect(await git(target, 'status', '--porcelain')).toBe(status);
+      expect(await readFile(join(target, 'README.md'), 'utf8')).toBe('operator edits\n');
+      expect(await readFile(join(target, 'untracked.txt'), 'utf8')).toBe('keep me\n');
+    }
+  );
+
   test.each(['workspace sync', 'repository sync', 'fork PR', 'remote refresh'] as const)(
     'recovers %s after real Git ref contention clears',
     async operation => {

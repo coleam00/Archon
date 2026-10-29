@@ -15,7 +15,7 @@ afterEach(async () => {
   for (const path of cleanupPaths.splice(0)) await removeTempTree(path);
 });
 
-function git(cwd: string, ...args: string[]): void {
+function git(cwd: string, ...args: string[]): string {
   const result = spawnSync(
     'git',
     [
@@ -30,6 +30,7 @@ function git(cwd: string, ...args: string[]): void {
     { cwd, encoding: 'utf8' }
   );
   if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  return result.stdout;
 }
 
 function runCli(args: string[], cwd: string, archonHome: string): string {
@@ -191,4 +192,50 @@ describe('workflow run launch config', () => {
     expect(secondRun.assistant).toBe('codex');
     expect(resolvedProviders(second)).toEqual(['codex']);
   }, 120_000);
+});
+
+describe('registered named-branch reuse', () => {
+  test.each(['other branch', 'detached HEAD'] as const)(
+    'refuses %s before workflow execution without changing the checkout',
+    async state => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-branch-reuse-'));
+      cleanupPaths.push(root);
+      const archonHome = join(root, 'home');
+      mkdirSync(archonHome, { recursive: true });
+      const repo = createRepo(root, true);
+      await runForeground(repo, archonHome, 'feature/reuse');
+      const first = latestRun(archonHome);
+      const target = first.working_path;
+      writeFileSync(join(target, '.archon', 'config.yaml'), '# operator edits\n');
+      writeFileSync(join(target, 'untracked.txt'), 'keep me\n');
+      await runForeground(repo, archonHome, 'feature/reuse');
+      const reused = latestRun(archonHome);
+      expect(reused.id).not.toBe(first.id);
+      expect(reused.working_path).toBe(target);
+      if (state === 'other branch') git(target, 'switch', '-c', 'feature/other');
+      else git(target, 'checkout', '--detach');
+      const head = git(target, 'rev-parse', 'HEAD');
+      const branch = git(target, 'rev-parse', '--abbrev-ref', 'HEAD');
+      const status = git(target, 'status', '--porcelain');
+
+      const refused = await captureWorkflowCommand(archonHome, async host => {
+        await workflowRunCommand(host, repo, 'launch-config', 'go', {
+          branchName: 'feature/reuse',
+        });
+      });
+      expect(refused.status).toBe(1);
+      expect(refused.output).toContain('feature/reuse');
+      expect(refused.output).toContain(state === 'other branch' ? 'feature/other' : state);
+      expect(refused.output).toContain(target);
+      expect(latestRun(archonHome).id).toBe(reused.id);
+      expect(git(target, 'rev-parse', 'HEAD')).toBe(head);
+      expect(git(target, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(branch);
+      expect(git(target, 'status', '--porcelain')).toBe(status);
+      expect(readFileSync(join(target, '.archon', 'config.yaml'), 'utf8')).toBe(
+        '# operator edits\n'
+      );
+      expect(readFileSync(join(target, 'untracked.txt'), 'utf8')).toBe('keep me\n');
+    },
+    30_000
+  );
 });
