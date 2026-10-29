@@ -12,7 +12,8 @@ export const worktreeHelp: HelpGroup = {
       command: 'isolation',
       subcommand: 'cleanup',
       spec: 'isolation cleanup [days]',
-      description: 'Remove stale environments (default: 7 days)',
+      description:
+        'Remove eligible worktrees by inactivity, containers by creation age (default: 7 days)',
     },
     {
       command: 'isolation',
