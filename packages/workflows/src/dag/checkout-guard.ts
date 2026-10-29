@@ -185,6 +185,7 @@ export async function assertCheckoutUntouched(
   return {
     ...amended,
     costUsd: result.costUsd,
+    costPartial: result.costPartial,
     tokens: result.tokens,
     tokensUnknown: result.tokensUnknown,
   };

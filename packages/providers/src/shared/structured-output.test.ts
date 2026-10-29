@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test';
+import Ajv from 'ajv';
+import {
+  normalizeJsonSchemaForOpenAiStrict,
+  findPreparedStrictSchemaIssues,
+} from '@archon/provider-contract';
 import {
   augmentPromptForJsonSchema,
   tryParseStructuredOutput,
-  normalizeJsonSchemaForOpenAiStrict,
   hasOpenAdditionalProperties,
 } from './structured-output';
 
@@ -121,6 +125,372 @@ After careful evaluation, here is the JSON:
   });
 });
 
+describe('one-level conditional schemas', () => {
+  const parent = {
+    type: 'object',
+    properties: { status: { type: 'string' }, message: { type: 'string' } },
+    required: ['status', 'message'],
+  };
+
+  test.each(['oneOf', 'anyOf'])(
+    '%s preserves self-contained branches with nested objects and arrays',
+    keyword => {
+      const schema = {
+        type: 'object',
+        properties: {
+          decisions: {
+            type: 'array',
+            items: {
+              [keyword]: [
+                {
+                  type: 'object',
+                  properties: {
+                    status: { const: 'success' },
+                    refs: { type: 'array', items: { type: 'string' } },
+                  },
+                  required: ['status', 'refs'],
+                },
+                {
+                  type: 'object',
+                  properties: {
+                    status: { const: 'blocked' },
+                    detail: {
+                      type: 'object',
+                      properties: { reason: { type: 'string' } },
+                      required: ['reason'],
+                    },
+                  },
+                  required: ['status', 'detail'],
+                },
+              ],
+            },
+          },
+        },
+        required: ['decisions'],
+      };
+      const before = structuredClone(schema);
+      const prepared = normalizeJsonSchemaForOpenAiStrict(schema);
+      const ajv = new Ajv({ strict: false });
+      const authored = ajv.compile(schema);
+      const outgoing = ajv.compile(prepared);
+      for (const decision of [
+        { status: 'success', refs: ['issue-1'] },
+        { status: 'blocked', detail: { reason: 'Need access' } },
+      ]) {
+        const answer = { decisions: [decision] };
+        expect(authored(answer)).toBe(true);
+        expect(outgoing(answer)).toBe(true);
+      }
+      for (const decision of [
+        { status: 'success' },
+        { status: 'success', refs: [1] },
+        { status: 'blocked', detail: {} },
+        { status: 'blocked', detail: { reason: 'Need access', extra: true } },
+        { status: 'unknown', refs: [] },
+        { status: 'success', refs: [], detail: { reason: 'Extra field' } },
+      ])
+        expect(outgoing({ decisions: [decision] })).toBe(false);
+      expect(findPreparedStrictSchemaIssues(schema)).toEqual([]);
+      expect(normalizeJsonSchemaForOpenAiStrict(prepared)).toEqual(prepared);
+      expect(schema).toEqual(before);
+    }
+  );
+
+  test.each(['oneOf', 'anyOf'])(
+    '%s still refuses array intersections without enclosing object properties',
+    keyword => {
+      const schema = {
+        type: 'array',
+        items: { properties: { a: {} }, required: ['a'] },
+        [keyword]: [{ items: { properties: { b: {} }, required: ['b'] } }],
+      };
+      expect(new Ajv({ strict: false }).compile(schema)([{ a: 1, b: 2 }])).toBe(true);
+      expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow('output_format.items');
+    }
+  );
+
+  for (const keyword of ['oneOf', 'anyOf']) {
+    test(`${keyword} preserves valid answers, branch rules and strict closure`, () => {
+      const branch = (status: string) => ({
+        properties: { status: { const: status } },
+        required: ['status'],
+      });
+      const schema = {
+        ...parent,
+        [keyword]: [branch('success'), branch('blocked')],
+      };
+      const before = structuredClone(schema);
+      const prepared = normalizeJsonSchemaForOpenAiStrict(schema);
+      const ajv = new Ajv({ strict: false });
+      const authored = ajv.compile(schema);
+      const outgoing = ajv.compile(prepared);
+      for (const answer of [
+        { status: 'success', message: 'Finished' },
+        { status: 'blocked', message: 'Need access' },
+      ]) {
+        expect(authored(answer)).toBe(true);
+        expect(outgoing(answer)).toBe(true);
+      }
+      for (const answer of [
+        { status: 'success' },
+        { message: 'Finished' },
+        { status: 'unknown', message: 'Finished' },
+        { status: 'success', message: 'Finished', extra: true },
+      ])
+        expect(outgoing(answer)).toBe(false);
+      expect(prepared).toHaveProperty(keyword);
+      expect(findPreparedStrictSchemaIssues(schema)).toEqual([]);
+      expect(normalizeJsonSchemaForOpenAiStrict(prepared)).toEqual(prepared);
+      expect(schema).toEqual(before);
+    });
+  }
+
+  test.each(['oneOf', 'anyOf', 'allOf'])(
+    '%s refuses implicit nested object intersections',
+    keyword => {
+      for (const location of ['parent', 'branch']) {
+        for (const properties of [{ a: true }, {}]) {
+          const nested = { properties, required: Object.keys(properties) };
+          const schema = {
+            properties: { payload: location === 'parent' ? nested : {} },
+            required: ['payload'],
+            [keyword]: [{ properties: { payload: location === 'branch' ? nested : {} } }],
+          };
+          expect(new Ajv({ strict: false }).compile(schema)({ payload: { a: 1, b: 2 } })).toBe(
+            true
+          );
+          expect(findPreparedStrictSchemaIssues(schema)).toEqual([
+            expect.objectContaining({ kind: 'unsupported-conversion' }),
+          ]);
+          expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow('output_format');
+        }
+      }
+    }
+  );
+
+  test.each(['oneOf', 'anyOf', 'allOf'])(
+    '%s refuses boolean-only nested property maps',
+    keyword => {
+      const schema = {
+        properties: { payload: { properties: { a: true }, required: ['a'] } },
+        required: ['payload'],
+        [keyword]: [{ properties: { payload: { properties: { b: true }, required: ['b'] } } }],
+      };
+      expect(new Ajv({ strict: false }).compile(schema)({ payload: { a: 1, b: 2 } })).toBe(true);
+      expect(findPreparedStrictSchemaIssues(schema)).toEqual([
+        expect.objectContaining({ kind: 'unsupported-conversion' }),
+      ]);
+    }
+  );
+
+  test.each([
+    ['allOf', [{ properties: { status: { const: 'success' } } }]],
+    ['dependentRequired', { status: ['message'] }],
+    ['dependentSchemas', { status: true }],
+    ['dependentSchemas', { status: false }],
+    ['dependentSchemas', { status: {} }],
+    ['dependentSchemas', {}],
+  ] as const)('refuses strict-mode keyword %s by presence', (keyword, value) => {
+    for (const [schema, path] of [
+      [{ ...parent, [keyword]: value }, `output_format.${keyword}`],
+      [
+        { ...parent, properties: { ...parent.properties, status: { [keyword]: value } } },
+        `output_format.properties.status.${keyword}`,
+      ],
+      [
+        { ...parent, anyOf: [{ properties: { status: {} }, [keyword]: value }] },
+        `output_format.anyOf[0].${keyword}`,
+      ],
+    ] as const) {
+      expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow(path);
+      expect(findPreparedStrictSchemaIssues(schema)).toEqual([
+        expect.objectContaining({
+          kind: 'unsupported-conversion',
+          message: expect.stringContaining(path),
+        }),
+      ]);
+    }
+  });
+
+  test('keeps oneOf exclusivity and optional fields', () => {
+    const schema = {
+      ...parent,
+      required: ['status'],
+      oneOf: [
+        { properties: { status: { const: 'success' } } },
+        { properties: { status: { enum: ['success', 'blocked'] } } },
+      ],
+    };
+    const prepared = normalizeJsonSchemaForOpenAiStrict(schema);
+    const validate = new Ajv({ strict: false }).compile(prepared);
+    expect(validate({ status: 'success', message: 'Finished' })).toBe(false);
+    expect(validate({ status: 'blocked' })).toBe(true);
+    expect(findPreparedStrictSchemaIssues(schema)).toContainEqual(
+      expect.objectContaining({ kind: 'missing-required', missing: ['message'] })
+    );
+  });
+
+  const unsupported: [string, Record<string, unknown>][] = [
+    [
+      'output_format.oneOf[0].properties.detail',
+      { ...parent, oneOf: [{ properties: { detail: {} } }] },
+    ],
+    [
+      'output_format.oneOf[0].required',
+      { ...parent, oneOf: [{ properties: {}, required: ['detail'] }] },
+    ],
+    ...[false, { type: 'string' }].map<[string, Record<string, unknown>]>(additionalProperties => [
+      'output_format.oneOf[0].additionalProperties',
+      { ...parent, oneOf: [{ properties: { status: {} }, additionalProperties }] },
+    ]),
+    ['output_format.oneOf[0].$ref', { ...parent, oneOf: [{ $ref: '#/$defs/Branch' }] }],
+    ['output_format.oneOf[0].anyOf', { ...parent, oneOf: [{ anyOf: [{ properties: {} }] }] }],
+    [
+      'output_format.properties.payload.type',
+      {
+        properties: { payload: { type: 'object', properties: { value: {} } } },
+        anyOf: [{ properties: { payload: { properties: {} } } }],
+      },
+    ],
+    [
+      'output_format.allOf',
+      {
+        type: 'array',
+        items: { properties: { a: {} }, required: ['a'] },
+        allOf: [{ items: { properties: { b: {} }, required: ['b'] } }],
+      },
+    ],
+    ['output_format.allOf', { allOf: [{ properties: { a: {} } }, { properties: { b: {} } }] }],
+    ...['dependencies', 'dependentSchemas'].map<[string, Record<string, unknown>]>(keyword => [
+      `output_format.${keyword}${keyword === 'dependencies' ? '.status' : ''}`,
+      { ...parent, [keyword]: { status: { properties: {} } } },
+    ]),
+    ...['if', 'then', 'else', 'not', 'contains', 'unevaluatedItems'].map<
+      [string, Record<string, unknown>]
+    >(keyword => [`output_format.${keyword}`, { ...parent, [keyword]: { properties: {} } }]),
+    ...['$id', '$anchor', '$dynamicAnchor'].map<[string, Record<string, unknown>]>(keyword => [
+      `output_format.properties.message.${keyword}`,
+      {
+        ...parent,
+        properties: { ...parent.properties, message: { type: 'string', [keyword]: 'name' } },
+        oneOf: [{ properties: {} }],
+      },
+    ]),
+  ];
+  test.each(unsupported)('refuses %s with a supported alternative', (path, schema) => {
+    expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow(path);
+    expect(findPreparedStrictSchemaIssues(schema)).toEqual([
+      expect.objectContaining({
+        kind: 'unsupported-conversion',
+        message: expect.stringContaining('complete inline'),
+      }),
+    ]);
+  });
+
+  test('refuses authored-valid array intersections and overlapping selectors', () => {
+    const left = { properties: { a: { type: 'string' } }, required: ['a'] };
+    const right = { properties: { b: { type: 'string' } }, required: ['b'] };
+    for (const schema of [
+      { type: 'array', items: left, allOf: [{ items: right }] },
+      { type: 'array', items: left, contains: right },
+    ]) {
+      expect(new Ajv({ strict: false }).compile(schema)([{ a: 'a', b: 'b' }])).toBe(true);
+      expect(findPreparedStrictSchemaIssues(schema)).toContainEqual(
+        expect.objectContaining({ kind: 'unsupported-conversion' })
+      );
+    }
+  });
+
+  test('refuses every unsupported composition edge before closure', () => {
+    for (const location of ['parent', 'branch', 'property']) {
+      for (const constraint of [
+        { $ref: '#/resource' },
+        { $dynamicRef: '#/resource' },
+        { $recursiveRef: '#' },
+        { $id: 'resource.json' },
+        { $anchor: 'resource' },
+        { $dynamicAnchor: 'resource' },
+        { patternProperties: { key: {} } },
+        { unevaluatedProperties: false },
+        { items: {} },
+        { prefixItems: [{}] },
+        { additionalItems: {} },
+        { contains: {} },
+        { unevaluatedItems: {} },
+        { dependencies: { status: {} } },
+        { dependentSchemas: { status: {} } },
+        { if: {} },
+        { then: {} },
+        { else: {} },
+        { not: {} },
+      ]) {
+        const branch = { properties: { status: {} } };
+        const schema =
+          location === 'parent'
+            ? { ...parent, ...constraint, oneOf: [branch] }
+            : location === 'branch'
+              ? { ...parent, oneOf: [{ ...branch, ...constraint }] }
+              : {
+                  ...parent,
+                  properties: { ...parent.properties, status: constraint },
+                  oneOf: [branch],
+                };
+        expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow('output_format');
+      }
+    }
+    for (const schema of [
+      { ...parent, oneOf: [{}], anyOf: [{}] },
+      { type: 'object', oneOf: [{ properties: {} }] },
+      { ...parent, oneOf: [{ type: 'object' }] },
+      { ...parent, oneOf: [{ required: ['status'] }] },
+      { ...parent, oneOf: [{ properties: { status: { type: 'object', properties: {} } } }] },
+    ])
+      expect(() => normalizeJsonSchemaForOpenAiStrict(schema)).toThrow('complete inline');
+  });
+
+  test('preserves complete closed branches and independent positional item maps', () => {
+    const schema = { ...parent, oneOf: [{ ...parent, additionalProperties: false }] };
+    expect(normalizeJsonSchemaForOpenAiStrict(schema)).toEqual({
+      ...schema,
+      additionalProperties: false,
+    });
+    const first = { properties: { a: {} }, required: ['a'] };
+    const second = { properties: { b: {} }, required: ['b'] };
+    const prepared = normalizeJsonSchemaForOpenAiStrict({
+      items: [first],
+      additionalItems: second,
+    });
+    const validate = new Ajv({ strict: false }).compile(prepared);
+    expect(validate([{ a: 1 }, { b: 2 }])).toBe(true);
+    expect(validate([{ b: 1 }])).toBe(false);
+  });
+
+  test('ignores annotation data and property names that resemble schema keywords', () => {
+    const schema = {
+      properties: {
+        properties: { type: 'string' },
+        not: { type: 'string' },
+        allOf: { type: 'string' },
+        dependentRequired: { type: 'string' },
+        dependentSchemas: { type: 'string' },
+      },
+      required: ['properties', 'not', 'allOf', 'dependentRequired', 'dependentSchemas'],
+      default: {
+        if: {},
+        allOf: [],
+        dependentRequired: {},
+        dependentSchemas: {},
+        properties: { anyOf: [] },
+      },
+      oneOf: [{ properties: { not: { const: 'value' } } }],
+    };
+    const prepared = normalizeJsonSchemaForOpenAiStrict(schema);
+    expect(prepared.default).toEqual(schema.default);
+    expect(prepared.properties).toEqual(schema.properties);
+    expect(findPreparedStrictSchemaIssues(schema)).toEqual([]);
+  });
+});
+
 describe('normalizeJsonSchemaForOpenAiStrict', () => {
   test('adds additionalProperties:false to a top-level object schema', () => {
     const out = normalizeJsonSchemaForOpenAiStrict({
@@ -221,6 +591,20 @@ describe('normalizeJsonSchemaForOpenAiStrict', () => {
 });
 
 describe('hasOpenAdditionalProperties', () => {
+  test('ignores annotation data and property maps', () => {
+    expect(
+      hasOpenAdditionalProperties({
+        properties: { additionalProperties: { const: true }, properties: {} },
+        default: { properties: {}, additionalProperties: true },
+      })
+    ).toBe(false);
+    expect(
+      hasOpenAdditionalProperties({
+        properties: { properties: { type: 'object', additionalProperties: true } },
+      })
+    ).toBe(true);
+  });
+
   test('true when an object declares an open-record additionalProperties subschema', () => {
     expect(
       hasOpenAdditionalProperties({

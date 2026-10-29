@@ -22,7 +22,8 @@ import { workflowSourceSchema } from './workflow';
  * gives the compiler the only handle it can have on an untyped column: writer and reader
  * now share a symbol instead of agreeing by luck.
  *
- * `parent_node_id` — which node of the parent spawned this child (both 1:1 and fan-out).
+ * `parent_node_id` — creation-only spawning node (both 1:1 and fan-out); null for a
+ *                    child created without a node ID. Its presence survives parent deletion.
  * `child_index`    — the fan-out instance's position in the item list; ABSENT on a 1:1
  *                    child, which is what distinguishes the two on re-entry.
  * `fan_out_item_hash` — hash of the item the child was spawned with, so a resume can warn
@@ -60,6 +61,28 @@ export const SUBRUN_METADATA_KEYS = {
   summaryDeclaredFields: 'summary_declared_fields',
   summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
+
+/** Parent deletion clears the foreign key; this creation-only key preserves child provenance. */
+export function initialRunMetadata(
+  metadata: Record<string, unknown> | undefined,
+  parentRunId: string | undefined
+): Record<string, unknown> {
+  if (parentRunId === undefined) return mutableRunMetadata(metadata);
+  const parentNodeId = metadata?.[SUBRUN_METADATA_KEYS.parentNodeId];
+  return {
+    ...metadata,
+    [SUBRUN_METADATA_KEYS.parentNodeId]: typeof parentNodeId === 'string' ? parentNodeId : null,
+  };
+}
+
+/** Store patches cannot alter child provenance, including on terminal and gate writes. */
+export function mutableRunMetadata(
+  metadata: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  const patch = { ...metadata };
+  delete patch[SUBRUN_METADATA_KEYS.parentNodeId];
+  return patch;
+}
 
 /** Typed view of the sub-run keys on a run's metadata; each is undefined when unset. */
 export function readSubrunMetadata(metadata: Record<string, unknown> | undefined): {

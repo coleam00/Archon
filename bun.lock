@@ -20,7 +20,7 @@
     },
     "packages/adapters": {
       "name": "@archon/adapters",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/core": "workspace:*",
         "@archon/forge": "workspace:*",
@@ -42,7 +42,7 @@
     },
     "packages/chat-contract": {
       "name": "@archon/chat-contract",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/provider-contract": "workspace:*",
         "zod": "^4.4.3",
@@ -53,7 +53,7 @@
     },
     "packages/chat-slack": {
       "name": "@archon/chat-slack",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/chat-contract": "workspace:*",
         "@slack/bolt": "^4.6.0",
@@ -61,7 +61,7 @@
     },
     "packages/cli": {
       "name": "@archon/cli",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "bin": {
         "archon": "./src/cli.ts",
       },
@@ -88,7 +88,7 @@
     },
     "packages/core": {
       "name": "@archon/core",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/chat-contract": "workspace:*",
         "@archon/git": "workspace:*",
@@ -114,7 +114,7 @@
     },
     "packages/docs-web": {
       "name": "@archon/docs-web",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/plugin-manifest": "workspace:*",
         "@astrojs/markdown-remark": "^7.3.1",
@@ -126,7 +126,7 @@
     },
     "packages/forge": {
       "name": "@archon/forge",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/paths": "workspace:*",
         "zod": "^4.4.3",
@@ -137,7 +137,7 @@
     },
     "packages/git": {
       "name": "@archon/git",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/paths": "workspace:*",
       },
@@ -147,7 +147,7 @@
     },
     "packages/isolation": {
       "name": "@archon/isolation",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -160,7 +160,7 @@
     },
     "packages/paths": {
       "name": "@archon/paths",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "dotenv": "^17",
         "pino": "^9",
@@ -173,7 +173,7 @@
     },
     "packages/plugin-manifest": {
       "name": "@archon/plugin-manifest",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/chat-contract": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -186,7 +186,7 @@
     },
     "packages/provider-contract": {
       "name": "@archon/provider-contract",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "zod": "^4.4.3",
       },
@@ -199,7 +199,7 @@
     },
     "packages/providers": {
       "name": "@archon/providers",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.302",
         "@archon/paths": "workspace:*",
@@ -224,7 +224,7 @@
     },
     "packages/server": {
       "name": "@archon/server",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/adapters": "workspace:*",
         "@archon/chat-contract": "workspace:*",
@@ -251,7 +251,7 @@
     },
     "packages/web": {
       "name": "@archon/web",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@dagrejs/dagre": "^2.0.4",
         "@tanstack/react-query": "^5.0.0",
@@ -292,7 +292,7 @@
     },
     "packages/workflows": {
       "name": "@archon/workflows",
-      "version": "0.13.0",
+      "version": "0.13.1",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",

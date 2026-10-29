@@ -238,7 +238,9 @@ const NOT_APPLICABLE = { source: 'unavailable', reason: 'not_applicable' } as co
 type CostMeasurement = NodeExecutionRecord['spend']['costUsd'];
 
 function withCostPartial(cost: CostMeasurement, partial: boolean): CostMeasurement {
-  return partial && cost.source === 'provider' ? { ...cost, partial: true } : cost;
+  if (!partial) return cost;
+  if (cost.source === 'provider') return { ...cost, partial: true };
+  return cost.reason === 'not_applicable' ? { source: 'unavailable', reason: 'incomplete' } : cost;
 }
 
 /** Excludes output bodies and diagnostics from the shared public execution facts. */

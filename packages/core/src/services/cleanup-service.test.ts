@@ -794,8 +794,8 @@ describe('getWorktreeStatusBreakdown', () => {
           id: 'env-1',
           branchName: 'unknown-branch',
           errors: [
-            'Ancestry: ancestry unavailable',
-            'Patch equivalence: patch comparison unavailable',
+            'Ancestry: Operation failed (unstructured diagnostic omitted to protect credentials)',
+            'Patch equivalence: Operation failed (unstructured diagnostic omitted to protect credentials)',
           ],
         },
       ]);
@@ -819,7 +819,7 @@ describe('getWorktreeStatusBreakdown', () => {
           id: 'env-1',
           branchName: 'task-1',
           errors: [
-            check === 'ancestry' ? 'Ancestry: unavailable' : 'Patch equivalence: unavailable',
+            `${check === 'ancestry' ? 'Ancestry' : 'Patch equivalence'}: Operation failed (unstructured diagnostic omitted to protect credentials)`,
           ],
         },
       ]);
@@ -863,24 +863,32 @@ describe('getWorktreeStatusBreakdown', () => {
     );
   });
 
-  // loadRepoConfig throws when `assistants.*` names a setting the provider
-  // cannot honour (#2582). Cleanup must surface that rather than carrying on
-  // with git detection — catching it here would restore the silent drop this
-  // validation exists to close.
-  test('surfaces an invalid assistants config instead of falling back to git detection', async () => {
-    mockListByCodebaseWithAge.mockResolvedValue([makeEnvironmentWithAge()]);
-    mockLoadRepoConfig.mockRejectedValue(
-      new Error(
-        "Invalid assistants config in '/workspace/repo/.archon/config.yaml': " +
-          "'assistants.claude.settingSources.0': expected 'project' or 'user'."
-      )
-    );
+  test.each(['config', 'default branch'])(
+    'preserves the count without classifying when %s resolution fails',
+    async source => {
+      mockListByCodebaseWithAge.mockResolvedValue([
+        makeEnvironmentWithAge({ days_since_activity: 30 }),
+        makeEnvironmentWithAge({ id: 'container', provider: 'container' }),
+      ]);
+      const error = new Error('failed with https://user:secret@example.com/repo?token=secret');
+      if (source === 'config') mockLoadRepoConfig.mockRejectedValueOnce(error);
+      else mockGetDefaultBranch.mockRejectedValueOnce(error);
 
-    await expect(getWorktreeStatusBreakdown('codebase-1', '/workspace/repo')).rejects.toThrow(
-      /assistants\.claude\.settingSources\.0/
-    );
-    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
-  });
+      const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
+
+      expect(breakdown.total).toBe(1);
+      expect(breakdown.classificationUnavailable).toEqual({
+        reason: 'Operation failed (unstructured diagnostic omitted to protect credentials)',
+      });
+      expect(breakdown.merged).toBe(0);
+      expect(breakdown.stale).toBe(0);
+      expect(breakdown.active).toBe(0);
+      expect(breakdown.inspectionFailedEnvs).toEqual([]);
+      expect(mockIsBranchMerged).not.toHaveBeenCalled();
+      expect(mockIsPatchEquivalent).not.toHaveBeenCalled();
+      if (source === 'config') expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('onConversationClosed', () => {

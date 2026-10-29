@@ -9,27 +9,42 @@ import { getRegistration, providerRegistry } from '@archon/providers';
 import type { IAgentProvider } from '@archon/providers';
 import { PluginRemoteError } from '@archon/provider-contract/plugin';
 import { isProviderReceipt } from '@archon/plugin-manifest';
-import { readReceipts } from '@archon/plugin-manifest/store';
+import { scanReceipts } from '@archon/plugin-manifest/store';
 import { getPluginsPath, BUNDLED_VERSION, BUNDLED_IS_BINARY } from '@archon/paths';
 import type { MergedConfig } from '@archon/core';
 import { loadMergedConfig, type CheckResult } from './doctor-check';
 
-export async function checkInstalledProviders(
-  registry: ProviderRegistry = providerRegistry,
-  loadVersions: () => Promise<ReadonlyMap<string, string>> = async () =>
-    new Map(
-      (await readReceipts(getPluginsPath()))
+async function loadInstalledProviderInventory() {
+  const { receipts, broken } = await scanReceipts(getPluginsPath());
+  return {
+    versions: new Map(
+      receipts
         .filter(isProviderReceipt)
         .map(receipt => [receipt.descriptor.id, receipt.descriptor.version])
-    )
+    ),
+    notices: broken.map(entry => entry.message),
+  };
+}
+
+export async function checkInstalledProviders(
+  registry: ProviderRegistry = providerRegistry,
+  loadInventory: () => Promise<{
+    versions: ReadonlyMap<string, string>;
+    notices: readonly string[];
+  }> = loadInstalledProviderInventory
 ): Promise<CheckResult> {
   const label = 'Installed providers';
   try {
-    const versions = await loadVersions();
+    const { versions, notices } = await loadInventory();
     const installed = installedProviders(registry);
-    const unavailable = [...new Set([...MAINTAINED_PROVIDER_IDS, ...versions.keys()])]
-      .map(id => registry.unavailable?.(id))
-      .filter((reason): reason is string => reason !== undefined);
+    const unavailable = [
+      ...new Set([
+        ...notices,
+        ...[...MAINTAINED_PROVIDER_IDS, ...versions.keys()]
+          .map(id => registry.unavailable?.(id))
+          .filter((reason): reason is string => reason !== undefined),
+      ]),
+    ];
     const lines = installed.map(provider => {
       const version =
         !BUNDLED_IS_BINARY && isMaintainedProvider(provider.id)

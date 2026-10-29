@@ -27,12 +27,12 @@ import {
 } from '@archon/isolation/types';
 import { userRowSchema, identityPlatformSchema } from '../schemas/user';
 import { codebaseRowSchema, codebaseUpdateFields, type Codebase } from '../schemas/codebase';
-import { isCheckoutRegistered } from '../services/project-registration-identity';
+import { removeCheckoutUnlessRegistered } from '../services/project-registration-identity';
 import {
   findRemoteOwner,
   assertProjectRegistrationAvailable,
 } from '../services/registration-remote';
-import { assertAbsoluteDefaultCwd } from '../db/codebase-path';
+import { assertAbsoluteDefaultCwd, defaultCwdKey, isSameDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
 import { completedRunWorktreeDeps, createWorkflowDeps } from './store-adapter';
@@ -120,11 +120,16 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       listCodebaseClaims: async () => readPublicCodebases(),
       findCodebaseByDefaultCwd: async cwd =>
         (await readPublicCodebases())
-          .filter(row => row.default_cwd === cwd)
+          .filter(row => isSameDefaultCwd(row.default_cwd, cwd))
           .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())[0] ?? null,
       findCodebaseByPathPrefix: async cwd =>
         (await readPublicCodebases())
-          .filter(row => isPathInside(row.default_cwd, cwd, { includeRoot: true, lexical: true }))
+          .filter(row =>
+            isPathInside(defaultCwdKey(row.default_cwd), defaultCwdKey(cwd), {
+              includeRoot: true,
+              lexical: true,
+            })
+          )
           .sort((a, b) => resolve(b.default_cwd).length - resolve(a.default_cwd).length)[0] ?? null,
       findCodebaseByName: async name =>
         (await readPublicCodebases())
@@ -134,12 +139,13 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
         const rows = await readPublicCodebases();
         return rows.find(row => row.repository_url === url) ?? findRemoteOwner(rows, url);
       },
-      removeUnregisteredCheckout: async (path, remove) => {
-        await commit(root, [], async () => {
-          if (!(await isCheckoutRegistered(path, await codebases()))) await remove();
-          return { result: undefined, changes: {} };
-        });
-      },
+      removeUnregisteredCheckout: (path, remove) =>
+        removeCheckoutUnlessRegistered(path, remove, detachIfUnregistered =>
+          commit(root, [], async () => {
+            await detachIfUnregistered(codebases);
+            return { result: undefined, changes: {} };
+          })
+        ),
       createCodebase: async input => {
         assertAbsoluteDefaultCwd(input.default_cwd, input.name);
         const row = {

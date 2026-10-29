@@ -1,3 +1,4 @@
+import { awaitingTurnSettlement } from '@archon/provider-contract';
 import { DEFAULT_TOOL_CALL_ATTENTION_MS } from '../../../schemas/run-config';
 import type {
   IAgentProvider,
@@ -36,6 +37,7 @@ import {
   type WatchdogReset,
   type structuredOutputPass,
   providerReportedFailure,
+  assertResultBeforeSettlement,
 } from '../../ai-turn';
 
 /** What every stream pass of one agent attempt reads and never changes. */
@@ -75,6 +77,7 @@ export interface AgentAttemptState {
   /** Attempt-wide: some pass ended without a result, or a result without a finite cost, so `costUsd` is at most a floor. */
   costReportMissing: boolean;
   passSawResult: boolean;
+  awaitingSettlement: boolean;
   stopReason: string | undefined;
   numTurns: number | undefined;
   resolvedModel: ResolvedModel | undefined;
@@ -105,6 +108,7 @@ export function createAttemptState(ctx: RunLayersContext, nodeId: string): Agent
     costUsd: undefined,
     costReportMissing: false,
     passSawResult: false,
+    awaitingSettlement: false,
     stopReason: undefined,
     numTurns: undefined,
     resolvedModel: undefined,
@@ -159,11 +163,14 @@ export async function runStreamPass(
         state.watchdogResets.observe(type, resetAt);
       },
       () =>
-        providerEvents.hasOpenTools() ||
-        (pc.capabilities.backgroundWork === 'reported' &&
-          providerEvents.liveSubtaskIds().length > 0),
+        !state.awaitingSettlement &&
+        (providerEvents.hasOpenTools() ||
+          (pc.capabilities.backgroundWork === 'reported' &&
+            providerEvents.liveSubtaskIds().length > 0)),
       shouldStopStream
     )) {
+      state.awaitingSettlement = awaitingTurnSettlement(state.awaitingSettlement, msg);
+      assertResultBeforeSettlement(msg, state.awaitingSettlement, pc.provider);
       const tickNow = Date.now();
 
       if (msg.type === 'result') recordResult(pc, state, pass, msg);
@@ -218,6 +225,7 @@ function resetPass(
   state.batchMessages.length = 0; // else a failed attempt's prose flushes during reask
   state.costUsd = undefined;
   state.passSawResult = false;
+  state.awaitingSettlement = false;
   state.tokens = undefined;
   state.cutOff = undefined;
   state.lastWatchdogReset = undefined;

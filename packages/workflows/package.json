@@ -1,6 +1,6 @@
 {
   "name": "@archon/workflows",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
@@ -26,6 +26,7 @@
     "./terminal-record": "./src/terminal-record.ts",
     "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
     "./run-scratch": "./src/run-scratch.ts",
+    "./workflow-status-read": "./src/workflow-status-read.ts",
     "./terminal-status-write": "./src/terminal-status-write.ts",
     "./deps": "./src/deps.ts",
     "./event-emitter": "./src/event-emitter.ts",

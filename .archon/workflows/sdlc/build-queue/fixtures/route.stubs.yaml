@@ -44,6 +44,7 @@ answer:
   brief: ""
   push: null
   reason: "stub: answered"
+  ask_class: null
   attention: null
 apply:
   decision: ready

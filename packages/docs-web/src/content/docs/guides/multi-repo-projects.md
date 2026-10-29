@@ -17,7 +17,7 @@ From the multi-repo root, run any workflow with `--folder`. The first run regist
 
 ```bash
 cd ~/platform          # contains auth-service/, billing-service/, ... — with or without git at the root
-archon workflow run investigate --folder "How do these services call each other?"
+archon workflow run archon-investigate --folder "How do these services call each other?"
 # → Registered folder project "platform" (~/platform)
 # → Folder project — running in place (no worktree isolation).
 ```
@@ -42,7 +42,7 @@ Folder projects intentionally run in the live checkout — `--branch` and `--fro
 
 ```bash
 cd ~/platform/auth-service       # a real git repo
-archon workflow run implement --branch fix-auth "Fix the token refresh bug"
+archon workflow run archon-implement --branch fix-auth "Fix the token refresh bug"
 # → normal repo project: isolated worktree + branch, no --folder
 ```
 

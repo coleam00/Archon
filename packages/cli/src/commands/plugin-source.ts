@@ -1,7 +1,7 @@
 import { execFileAsync } from '@archon/git';
 import {
   describeIssues,
-  isPluginPathSegment,
+  isPluginId,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
   type PluginManifest,
@@ -47,7 +47,6 @@ function resolved(
   return { kind: manifest.kind, tag, commit, manifest };
 }
 
-const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 
 // Every part becomes a directory under the receipts tree or a URL path segment,
@@ -56,13 +55,13 @@ export function parsePluginRef(input: string): PluginRef {
   const at = input.lastIndexOf('@');
   const tag = at === -1 ? undefined : input.slice(at + 1);
   const [owner = '', repo = '', ...path] = (at === -1 ? input : input.slice(0, at)).split('/');
-  const segmentsValid = [repo, ...path].every(isPluginPathSegment);
-  if (!OWNER.test(owner) || !segmentsValid || (tag !== undefined && !TAG.test(tag))) {
+  const id = [owner, repo, ...path].join('/');
+  if (!isPluginId(id) || (tag !== undefined && !TAG.test(tag))) {
     throw new Error(
       `Invalid plugin "${input}". Expected owner/repo[/path][@tag], for example coleam00/Archon/plugins/forge-github`
     );
   }
-  return { owner, repo, path, id: [owner, repo, ...path].join('/'), tag };
+  return { owner, repo, path, id, tag };
 }
 
 async function latestReleaseTag(ref: PluginRef, githubUrl: string): Promise<string> {

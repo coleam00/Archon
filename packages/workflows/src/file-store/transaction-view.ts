@@ -1,7 +1,10 @@
+import { initialRunMetadata, mutableRunMetadata } from '../schemas/run-metadata';
 import { prepareWorkflowRunFailure } from '../workflow-run-failure';
 import { resumeRun } from './run-resume';
+import { createLogger } from '@archon/paths';
 import {
   createTransactionReads,
+  isConversationResetTarget,
   isResumable,
   listRunEvents,
   newestFirst,
@@ -49,7 +52,11 @@ import {
   pauseCauseOfApproval,
   pauseCauseOfWait,
 } from '../schemas/pause-cause';
-import { buildTerminalRecord, observeRunArtifacts } from '../terminal-record';
+import {
+  buildTerminalRecord,
+  terminalArtifactsFor,
+  type TerminalArtifacts,
+} from '../terminal-record';
 import { isDeepStrictEqual } from 'node:util';
 
 export type TransactionView = Omit<
@@ -75,10 +82,17 @@ export type TransactionView = Omit<
 
 export { TERMINAL_RUN_EVENT_TYPES } from '../schemas/workflow-run';
 
+const log = createLogger('file-store');
+
+/**
+ * `artifacts` holds the manifests the caller walked before taking the store lock; a
+ * terminal write never walks the filesystem itself.
+ */
 export function createTransactionView(
   runs: Map<string, WorkflowRun>,
   events: WorkflowEventRow[],
-  getCodebase: IWorkflowStore['getCodebase']
+  getCodebase: IWorkflowStore['getCodebase'],
+  artifacts: TerminalArtifacts
 ): TransactionView {
   const row = (id: string): WorkflowRun => {
     const run = runs.get(id);
@@ -129,39 +143,41 @@ export function createTransactionView(
     event: WorkflowEventInput;
     precedingEvents?: WorkflowEventInput[];
   }
-  const terminalBatch = async (changes: TerminalChange[]): Promise<void> => {
-    const prepared = await Promise.all(
-      changes.map(async ({ run, event, precedingEvents = [] }) => {
-        run.completed_at = new Date();
-        const terminalRecord = buildTerminalRecord({
-          run,
-          events: [
-            ...listRunEvents(events, run.id),
-            ...precedingEvents.map(event => ({ ...event, data: event.data ?? {} })),
-          ],
-          artifacts: await observeRunArtifacts(run),
-        });
-        return {
-          run,
-          precedingEvents,
-          event: {
-            ...event,
-            data: { ...event.data, terminal_record: terminalRecord },
-          },
-        };
-      })
-    );
+  const terminalBatch = (changes: TerminalChange[]): void => {
+    const prepared = changes.map(({ run, event, precedingEvents = [] }) => {
+      run.completed_at = new Date();
+      const observed = artifacts.get(run.id);
+      const manifest = terminalArtifactsFor(run, observed);
+      if (manifest !== observed)
+        log.warn({ workflowRunId: run.id }, 'file_store.terminal_artifacts_not_observed');
+      const terminalRecord = buildTerminalRecord({
+        run,
+        events: [
+          ...listRunEvents(events, run.id),
+          ...precedingEvents.map(event => ({ ...event, data: event.data ?? {} })),
+        ],
+        artifacts: manifest,
+      });
+      return {
+        run,
+        precedingEvents,
+        event: {
+          ...event,
+          data: { ...event.data, terminal_record: terminalRecord },
+        },
+      };
+    });
     for (const { run, precedingEvents, event } of prepared) {
       runs.set(run.id, run);
       for (const preceding of precedingEvents) record(preceding);
       record(event);
     }
   };
-  const terminal = async (
+  const terminal = (
     run: WorkflowRun,
     event: WorkflowEventInput,
     precedingEvents: WorkflowEventInput[] = []
-  ): Promise<void> => terminalBatch([{ run, event, precedingEvents }]);
+  ): void => terminalBatch([{ run, event, precedingEvents }]);
   const createRun: IWorkflowStore['createWorkflowRun'] = async (
     input
   ): ReturnType<IWorkflowStore['createWorkflowRun']> => {
@@ -178,7 +194,7 @@ export function createTransactionView(
       parent_conversation_id: origin?.parentConversationId ?? null,
       user_id: origin?.userId ?? null,
       user_message: input.user_message,
-      metadata: structuredClone(input.metadata ?? {}),
+      metadata: structuredClone(initialRunMetadata(input.metadata, input.parent_run_id)),
       codebase_id: input.codebase_id ?? null,
       status: 'pending',
       outcome: null,
@@ -265,7 +281,7 @@ export function createTransactionView(
       if (updates.status !== undefined && isTerminalRunStatus(updates.status))
         throw new Error('Terminal workflow status requires a lifecycle writer');
       Object.assign(run, updates, {
-        metadata: { ...run.metadata, ...updates.metadata },
+        metadata: { ...run.metadata, ...mutableRunMetadata(updates.metadata) },
         output_root: run.output_root ?? updates.output_root ?? null,
         working_path: run.working_path ?? updates.working_path ?? null,
       });
@@ -274,7 +290,7 @@ export function createTransactionView(
       validateWorkflowWaitMetadata(metadata);
       const run = runs.get(id);
       if (run?.status !== 'running') return false;
-      Object.assign(run.metadata, structuredClone(metadata));
+      Object.assign(run.metadata, structuredClone(mutableRunMetadata(metadata)));
       return true;
     },
     updateWorkflowActivity: async (id): ReturnType<IWorkflowStore['updateWorkflowActivity']> => {
@@ -298,8 +314,8 @@ export function createTransactionView(
       const run = structuredClone(row(id));
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';
-      Object.assign(run.metadata, metadata);
-      await terminal(run, {
+      Object.assign(run.metadata, mutableRunMetadata(metadata));
+      terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.completed,
         data: completion,
@@ -308,7 +324,7 @@ export function createTransactionView(
     failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
       const run = prepareWorkflowRunFailure(id, runs.get(id), error, options);
       if (!run) return { failed: false };
-      await terminal(run, {
+      terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.failed,
         data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
@@ -324,7 +340,11 @@ export function createTransactionView(
       const run = row(id);
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
       run.status = 'paused';
-      run.metadata = { ...run.metadata, ...metadata, approval: structuredClone(approval) };
+      run.metadata = {
+        ...run.metadata,
+        ...mutableRunMetadata(metadata),
+        approval: structuredClone(approval),
+      };
       run.metadata[PAUSE_CAUSE_METADATA_KEY] = pauseCauseOfApproval(approval);
       // A gate replaces a finished wait's context, exactly as the SQL store does.
       delete run.metadata.wait;
@@ -339,7 +359,7 @@ export function createTransactionView(
       validateWorkflowWaitMetadata(metadata);
       const run = runs.get(id);
       if (!run || !gateOpen(run, expected)) return { resolved: false };
-      Object.assign(run.metadata, structuredClone(metadata));
+      Object.assign(run.metadata, structuredClone(mutableRunMetadata(metadata)));
       for (const event of gateEvents) record({ ...event, workflow_run_id: id });
       return { resolved: true };
     },
@@ -420,7 +440,7 @@ export function createTransactionView(
       if (!run || !gateOpen(run, expected)) return { resolved: false };
       run.status = 'cancelled';
       const { step_name, ...data } = cancellation;
-      await terminal(
+      terminal(
         run,
         {
           workflow_run_id: id,
@@ -434,15 +454,11 @@ export function createTransactionView(
     },
     cancelResumableRunsForConversation: async (id, assertMayCancel) => {
       const targets = newestFirst(
-        [...runs.values()].filter(
-          run =>
-            (run.conversation_id === id || run.parent_conversation_id === id) &&
-            (run.status === 'paused' || run.status === 'failed')
-        )
+        [...runs.values()].filter(run => isConversationResetTarget(run, id))
       );
       const prior = structuredClone(targets);
       assertMayCancel?.(structuredClone(prior));
-      await terminalBatch(
+      terminalBatch(
         targets.map(target => ({
           run: { ...structuredClone(target), status: 'cancelled' },
           event: {
@@ -460,7 +476,7 @@ export function createTransactionView(
         return { cancelled: false };
       run.status = 'cancelled';
       const { step_name, ...data } = details ?? {};
-      await terminal(run, {
+      terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
         step_name,
@@ -474,7 +490,7 @@ export function createTransactionView(
         return { cancelled: false };
       run.status = 'cancelled';
       run.metadata.cancelled_reason = reason;
-      await terminal(run, {
+      terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
         data: { reason, cancel_reason: 'fan_out' },

@@ -1,6 +1,6 @@
 {
   "name": "@archon/providers",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -80,6 +80,9 @@
     ],
     [
       "src/codex/app-server.test.ts"
+    ],
+    [
+      "src/codex/credential-recheck.test.ts"
     ],
     [
       "src/codex/scope.test.ts",

@@ -25,8 +25,8 @@ const real=await import(${view});
 // mock.module rewrites the live namespace, so keep the real factory first.
 const create=real.createTransactionView;
 let wins=0;
-mock.module(${view},()=>({...real,createTransactionView:(runs,events,getCodebase)=>{
-  const inner=create(runs,events,getCodebase);
+mock.module(${view},()=>({...real,createTransactionView:(runs,events,getCodebase,artifacts)=>{
+  const inner=create(runs,events,getCodebase,artifacts);
   return {...inner,${method}:async (id,...args)=>{
     const run=runs.get(id);
     if (run) {${reopen}}

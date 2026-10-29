@@ -209,6 +209,55 @@ describe('validateWorkflowsCommand', () => {
     expect(JSON.stringify(mockConsoleLog.mock.calls)).toContain('@custom');
   });
 
+  test.each([false, true])(
+    'case-only workflow miss suggests without selecting, JSON=%s',
+    async json => {
+      mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+        workflows: [
+          makeTestWorkflowWithSource({
+            name: 'archon-review',
+            nodes: [{ id: 'run', bash: 'true' }],
+          }),
+        ],
+        errors: [],
+      });
+      const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+      try {
+        expect(await validateWorkflowsCommand(validationCwd, 'ARCHON-REVIEW', json)).toBe(1);
+        const output = json
+          ? write.mock.calls[0]?.[0]
+          : JSON.stringify(mockConsoleError.mock.calls);
+        expect(output).toContain("Workflow 'ARCHON-REVIEW' not found");
+        expect(output).toContain('archon-review');
+        if (json)
+          expect(JSON.parse(String(write.mock.calls[0]?.[0])).suggestions).toContain(
+            'archon-review'
+          );
+      } finally {
+        write.mockRestore();
+      }
+    }
+  );
+
+  test('selects only the exact workflow when case variants coexist', async () => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+      workflows: ['archon-review', 'ARCHON-REVIEW'].map(name =>
+        makeTestWorkflowWithSource({ name, nodes: [{ id: 'run', bash: 'true' }] })
+      ),
+      errors: [],
+    });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, 'archon-review', true)).toBe(0);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0]));
+      expect(output.results.map((result: { workflowName: string }) => result.workflowName)).toEqual(
+        ['archon-review']
+      );
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test.each([false, true])('missing workflow output, JSON=%s', async json => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({ workflows: [], errors: [] });
     const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);

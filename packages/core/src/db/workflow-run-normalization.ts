@@ -7,9 +7,11 @@ import {
 } from '@archon/workflows/schemas/checkout-observation';
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
+import { readWorkflowRunStatus } from './workflow-run-status';
 
 /** Columns whose database value differs from the public `WorkflowRun` value. */
 type RawRunColumn =
+  | 'status'
   | 'origin'
   | 'metadata'
   | 'started_at'
@@ -25,6 +27,7 @@ type RawRunColumn =
  * columns are physical and may hold the reserved compatibility anchor.
  */
 export type WorkflowRunRow = Omit<WorkflowRun, RawRunColumn> & {
+  status: string;
   origin: unknown;
   metadata: string | Record<string, unknown> | null;
   started_at: string | Date;
@@ -64,9 +67,11 @@ function getLog(): ReturnType<typeof createLogger> {
 export function normalizeWorkflowRun<T extends WorkflowRunRow>(
   row: T
 ): Omit<T, RawRunColumn | 'conversation_id' | 'parent_conversation_id' | 'user_id'> & WorkflowRun {
+  const status = readWorkflowRunStatus(row.id, row.status);
   const origin = readWorkflowRunOrigin(row);
   return {
     ...row,
+    status,
     metadata: readMetadata(row),
     checkout_baseline: readCheckoutBaseline(row),
     started_at: toHydratedTimestamp(row.started_at),

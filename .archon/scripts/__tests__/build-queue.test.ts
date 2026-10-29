@@ -212,6 +212,7 @@ describe('the build record', () => {
     expect(field('answer', 'decision')?.enum).toEqual([...ANSWER_DECISIONS]);
     expect(field('apply', 'decision')?.enum).toEqual([...APPLY_DECISIONS]);
     expect(field('apply', 'class')?.enum).toEqual(['', ...ASKED_BY]);
+    expect(field('answer', 'ask_class')?.enum as unknown).toEqual([...ASKED_BY.filter(by => by !== 'route'), null]);
     expect(field('ruling', 'decision')?.enum).toEqual([...BUILD_EFFECTS]);
     for (const id of ['route', 'answer']) {
       const attention = field(id, 'attention')?.properties;
@@ -331,19 +332,18 @@ function expectNextRound(calls: string): void {
   expect(launch?.filter(arg => arg.startsWith('number='))).toEqual(['number=7']);
 }
 
-function applyInputs(answer: Record<string, unknown>, atCap = false): Record<string, string> {
+function applyInputs(answer: Record<string, unknown>): Record<string, string> {
   return {
     INPUTS_PATH: 'route',
     INPUTS_ITEM: JSON.stringify(SUBJECT),
     INPUTS_ROUTE: JSON.stringify({ decision: 'launch', brief: 'deliver 7', reason: 'a contract', attention: null }),
     INPUTS_ENDING: JSON.stringify(ENDING),
     INPUTS_ANSWER: JSON.stringify(answer),
-    INPUTS_AT_CAP: String(atCap),
   };
 }
 
-const CONTINUE = { decision: 'continue', brief: 'continue PR 42 on R1', push: null, reason: 'R1 is correctable', attention: null };
-const ASK = { decision: 'ask', brief: 'continue PR 42 under the ruling', push: null, reason: 'the plan asks to relax a constraint', attention: ATTENTION };
+const CONTINUE = { decision: 'continue', brief: 'continue PR 42 on R1', push: null, reason: 'R1 is correctable', ask_class: null, attention: null };
+const ASK = { decision: 'ask', brief: 'continue PR 42 under the ruling', push: null, reason: 'the plan asks to relax a constraint', ask_class: 'stop', attention: ATTENTION };
 
 const HEAD_A = 'a'.repeat(40);
 const HEAD_B = 'b'.repeat(40);
@@ -483,7 +483,6 @@ describe('the build queue scripts', () => {
           INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord({ head_revision: HEAD_A })),
           INPUTS_ENDING: 'null',
           INPUTS_ANSWER: 'null',
-          INPUTS_AT_CAP: 'false',
         }, { source, preload: readyPreload(source, scenario) });
         const observed = JSON.parse(readFileSync(join(result.artifacts, 'ready-state.json'), 'utf8')) as ReadyObservation;
         if (scenario === 'matching') {
@@ -678,7 +677,6 @@ describe('the build queue scripts', () => {
         INPUTS_ROUTE: 'null',
         INPUTS_ENDING: 'null',
         INPUTS_ANSWER: 'null',
-        INPUTS_AT_CAP: 'false',
       })
     );
     expect(applied).toMatchObject({ decision: 'parked', attention: '' });
@@ -754,12 +752,31 @@ describe('the build queue scripts', () => {
     });
   }, 60_000);
 
-  test("at the round cap an answer's question is the scope question", () => {
+  test("an answer's declared scope class is recorded whatever the round count", () => {
     const at = install();
     seed(at, triaged(CLAIMED));
-    const applied = ok(run(at, 'apply', applyInputs({ ...ASK, brief: 'continue PR 42 on R1', reason: 'each review found new defects' }, true)));
+    const applied = ok(run(at, 'apply', applyInputs({ ...ASK, brief: 'continue PR 42 on R1', reason: 'the correction adds a subsystem', ask_class: 'scope' })));
     expect(applied).toMatchObject({ decision: 'asked', class: 'scope', asked: { brief: 'continue PR 42 on R1', by: 'scope' } });
     expect(stored(at).value?.facts.build).toMatchObject({ status: 'asking', decisions: [{ decision: 'ask scope' }] });
+  }, 60_000);
+
+  test('an evidence-only ask at the round cap keeps its declared stop class', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const inputs = { ...applyInputs({ ...ASK, reason: 'only a 50-run Windows loop at the head is left', ask_class: 'stop' }), INPUTS_AT_CAP: 'true' };
+    const applied = ok(run(at, 'apply', inputs));
+    expect(applied).toMatchObject({ decision: 'asked', class: 'stop', asked: { by: 'stop' } });
+    expect(stored(at).value?.facts.build).toMatchObject({ status: 'asking', decisions: [{ decision: 'ask stop' }] });
+  }, 60_000);
+
+  test('an ask without a declared class refuses before any write', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const before = stored(at).revision;
+    const applied = run(at, 'apply', applyInputs({ ...ASK, ask_class: null }));
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain('asks without declaring ask_class');
+    expect(stored(at).revision).toBe(before);
   }, 60_000);
 
   test('an attention item recommending a choice it does not offer refuses before any write', () => {

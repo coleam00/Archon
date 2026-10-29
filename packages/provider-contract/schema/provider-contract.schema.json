@@ -604,6 +604,18 @@
             "type",
             "state"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "heartbeat"
+            }
+          },
+          "required": [
+            "type"
+          ]
         }
       ]
     },
@@ -979,7 +991,7 @@
       "properties": {
         "protocol": {
           "type": "number",
-          "const": 2
+          "const": 3
         },
         "id": {
           "type": "string",
@@ -1413,7 +1425,7 @@
                   "properties": {
                     "protocol": {
                       "type": "number",
-                      "const": 2
+                      "const": 3
                     }
                   },
                   "required": [

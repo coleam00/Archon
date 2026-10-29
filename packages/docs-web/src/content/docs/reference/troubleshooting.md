@@ -18,6 +18,38 @@ For credential checks below, trace the value Archon actually uses rather than ch
 
 Replace `/path/to/env-file` in each command with each applicable file above. A missing key in one file does not mean it is unset in Archon. Shell commands such as the GitHub API test use your current shell's value; set it to the effective credential you traced before testing.
 
+## Codex credential preflight fails while other Codex work succeeds
+
+Multiple Codex processes can try to refresh the same native ChatGPT login. One
+process may keep a rejected refresh token after another has saved a working login,
+causing a credential check to report "no usable login".
+
+Archon rechecks that result once in a fresh Codex process, using the same caller
+deadline and requesting a refresh again. When the second read returns a status,
+it logs `codex.native_login_rechecked` with only the resulting credential state.
+The recheck does not bypass authentication or send a model request. If the recheck errors, times out or returns a malformed
+response, the check is inconclusive: the run starts with a
+`credential_check_inconclusive` warning, as any inconclusive credential check does.
+
+For host execution, run `archon doctor` under the same OS user and environment as
+the server. Doctor checks only the configured host assistant. When that assistant
+is Codex, its Assistant login line must read `codex: usable` to show the native
+login works. A line reading `codex: uses the credential connected in Archon` means
+doctor skipped the native check because an `openai` credential is connected; it
+says nothing about the native login. If the native login remains unavailable, run
+`codex login` under that user and environment and check again. `codex login status`
+alone does not prove that a refresh will succeed.
+
+Codex does not support workflow container execution (`containerExec: false`). Run
+Codex workflows on the host: omit `--container` and disable any effective workflow
+or global/project configuration `container.enabled` setting. See the
+[container selection rules](/reference/configuration/#container-isolation-folder-projects).
+Repairing container credentials does not enable this capability. See
+[container provider support](/guides/container-isolation/#provider-support).
+
+A host credential preflight refusal before run creation leaves no run to resume:
+repeat the original `archon workflow run` command after fixing the login.
+
 ## Project uses an unexpected provider
 
 New projects follow the configured provider when a conversation is created: repository
@@ -375,7 +407,7 @@ ARCHON_CLAUDE_FIRST_EVENT_TIMEOUT_MS=120000 archon workflow run ...
 **Registration refusal:** `Project "<name>" is already registered at <path>` means this is another clone of a registered remote. Two clones of one remote cannot be separate Archon projects. Run from the named registered checkout and use `--branch` or `git worktree add` for parallel checkouts. For a fresh run from the separate clone, bind it to the existing project instead:
 
 ```bash
-archon workflow run investigate --project owner/repo --cwd /other/clone --no-worktree
+archon workflow run archon-investigate --project owner/repo --cwd /other/clone --no-worktree
 ```
 
 Use `archon project list` to find the registered name or ID. `--no-worktree` executes in the clone; isolated execution uses the registered checkout. See [workflow run](/reference/cli/#workflow-run-name-message). Removing a worktree or changing the branch name does not resolve a registration refusal.

@@ -320,6 +320,25 @@ test.each(['restart', 'credentials'] as const)(
   }
 );
 
+test('a preparation failure whose failed-status write is refused does not claim the run failed', async () => {
+  await fixture(async f => {
+    const candidate = await f.paused('approved');
+    f.resume.mockRejectedValueOnce(new Error('restart refused'));
+    watch(spyOn(f.store, 'failWorkflowRun')).mockRejectedValueOnce(
+      new Error('SQLITE_BUSY: database is locked')
+    );
+    const error = await f.command(candidate).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain('restart refused');
+    expect(message).toContain('could not be marked failed');
+    expect(message).toContain('SQLITE_BUSY: database is locked');
+    expect(message).not.toContain('The run is marked failed');
+    expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('running');
+    expect(f.execute).not.toHaveBeenCalled();
+  });
+});
+
 test.each(['restart', 'credentials'] as const)(
   '%s setup failure before the first node permits source-release retry',
   async failure => {
@@ -535,6 +554,28 @@ test('a signal during an admitted container resume fails the run under its claim
     expect(claim).not.toBe(executionClaim(candidate.metadata));
     expect(fail.mock.calls[0]?.[2]).toMatchObject({ exitReason: 'process_terminated' });
     expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('failed');
+  });
+});
+
+test('a held write-back claim with no recorded outcome fails the run and keeps the overlay', async () => {
+  await fixture(async f => {
+    const candidate = await f.paused('approved');
+    // The state a crash between claiming the apply and recording its outcome leaves.
+    expect(await f.store.claimWriteback(candidate.id)).toEqual({ claimed: true });
+    await f.command(candidate).catch((e: unknown) => e);
+    const failed = await f.store.getWorkflowRun(candidate.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.metadata.writeback_resolved).toBeUndefined();
+    expect(failed?.metadata.pending_writeback).toEqual(candidate.metadata.pending_writeback);
+    expect(f.apply).not.toHaveBeenCalled();
+    expect(f.discard).not.toHaveBeenCalled();
+    expect(f.destroy).not.toHaveBeenCalled();
+    expect(f.overlay.contents).toBe('unapplied edits');
+    if (!failed) throw new Error('Missing failed run');
+    await f.command(failed).catch((e: unknown) => e);
+    expect((await f.store.getWorkflowRun(candidate.id))?.status).toBe('failed');
+    expect(f.apply).not.toHaveBeenCalled();
+    expect(f.destroy).not.toHaveBeenCalled();
   });
 });
 

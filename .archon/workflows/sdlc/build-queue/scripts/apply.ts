@@ -1,8 +1,8 @@
 /**
  * Check the run's decision, perform the writes it declared, and read each one back.
  *
- * The decision is the last agent's that ran: answer's over route's. At the round cap an
- * answer that asks is the scope question. A route that launched is answered after its round, so its own decision is
+ * The decision is the last agent's that ran: answer's over route's. An answer that asks
+ * declares its own class (`stop` or `scope`), recorded as declared. A route that launched is answered after its round, so its own decision is
  * recorded only when it asked or found the pull request already Ready; then apply takes it out of draft. A push the answer declared is made whatever the run
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. The push comes first, then the work item, in one conditional
@@ -13,7 +13,7 @@
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
- * node, "null" when it was skipped; INPUTS_AT_CAP and INPUTS_PULL_REQUEST from facts;
+ * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
  * INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
  */
 
@@ -42,6 +42,8 @@ interface AnswerOutput {
   readonly brief: string;
   readonly push: QualifiedPr | null;
   readonly reason: string;
+  /** The agent's own class for an ask; the round count does not decide it. */
+  readonly ask_class: Exclude<AskedBy, 'route'> | null;
   readonly attention: BuildAttention | null;
 }
 
@@ -75,13 +77,15 @@ function asked(by: AskedBy, attention: BuildAttention | null, brief: string, rea
 function decide(
   path: string,
   route: RouteOutput | null,
-  answer: AnswerOutput | null,
-  atCap: boolean
+  answer: AnswerOutput | null
 ): Decision {
   if (path === 'closed') return { kind: 'parked', reason: 'the issue is closed' };
   if (answer !== null) {
     if (answer.decision === 'done') return { kind: 'ready', reason: answer.reason };
-    if (answer.decision === 'ask') return asked(atCap ? 'scope' : 'stop', answer.attention, answer.brief, answer.reason);
+    if (answer.decision === 'ask') {
+      if (answer.ask_class === null) throw new Error('the answer asks without declaring ask_class');
+      return asked(answer.ask_class, answer.attention, answer.brief, answer.reason);
+    }
     if (answer.brief.trim() === '') throw new Error('a continue decision has no brief to launch from');
     return { kind: 'continue', brief: answer.brief, reason: answer.reason };
   }
@@ -201,12 +205,7 @@ function main(): void {
     ending === null ? null : { run_id: runId, at, ...ending, artifacts: artifactsDir() };
   const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
   const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
-  const decision = decide(
-    path,
-    route,
-    answer,
-    text(process.env.INPUTS_AT_CAP) === 'true'
-  );
+  const decision = decide(path, route, answer);
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
   const attention =

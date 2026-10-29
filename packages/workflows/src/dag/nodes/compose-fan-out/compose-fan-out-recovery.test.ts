@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
@@ -18,6 +18,7 @@ import {
   runUsageWrites,
 } from '../../test-utils';
 import {
+  executionMetadata,
   startNodeExecution,
   finishNodeExecution,
   newNodeInvocation,
@@ -25,9 +26,11 @@ import {
 import { serializeNodeStateRecord } from '../../../node-record-serialization';
 import { readNodeRecordEvent } from '../../../node-record-reader';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import * as runLayersModule from '../../run-layers';
+import * as nodeSource from '../../node-source';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { type RunChildWorkflowFn } from '../../child-run';
-import type { WorkflowRun, WorkflowRunStatus } from '../../../schemas';
+import type { LoopNode, WorkflowRun, WorkflowRunStatus } from '../../../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../../../store';
 import { buildInstanceSnapshots, type FanOutInstanceSnapshot } from '../../../fan-out-identity';
 
@@ -63,6 +66,422 @@ describe('composed fan-out resume, claims and pauses (#2512)', () => {
   afterEach(async () => {
     await removeTempTree(testDir);
   });
+
+  it('counts a resumed loop configuration-failure baseline once inside an instance', async () => {
+    await writeBlock(`name: compose-blk
+description: resumed loop
+mutates_checkout: false
+nodes:
+  - id: refine
+    loop:
+      prompt: Refine.
+      until: APPROVED
+      max_iterations: 3
+      fresh_context: false
+`);
+    const runId = 'compose-loop-config-retry';
+    const [instance] = buildInstanceSnapshots(['a']);
+    const path = composeInnerStep(instance.identity, 'refine');
+    const node: LoopNode = {
+      id: `fan__${instance.identity}__refine`,
+      kind: 'loop',
+      loop: { prompt: 'Refine.', until: 'APPROVED', max_iterations: 3, fresh_context: false },
+    };
+    const start = startNodeExecution({
+      runId,
+      path,
+      node,
+      invocation: newNodeInvocation([]),
+      provider: 'claude',
+    });
+    const carried = {
+      costUsd: 0.04,
+      costPartial: true,
+      tokens: { input: 40, output: 4, cacheRead: 10, cacheWrite: 0 },
+    };
+    const execution = executionMetadata(
+      finishNodeExecution(start, { status: 'suspended', point: 'interactive_loop' }, carried)
+    );
+    const store = createMockStore();
+    await store.persistWorkflowEvent(
+      serializeNodeStateRecord(
+        finishNodeExecution(
+          start,
+          { status: 'failed', failureKind: 'config', error: 'Provider initialization failed' },
+          carried
+        )
+      )
+    );
+    store.getDagResumeSnapshot.mockImplementation(async id =>
+      foldDagResumeSnapshot(persistedEvents(store), id)
+    );
+    const snapshot = await store.getDagResumeSnapshot(runId);
+    expect(snapshot.loopConfigFailureBaselines?.has(execution.invocation.id)).toBe(true);
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: '<promise>APPROVED</promise>' };
+      yield {
+        type: 'result',
+        sessionId: 'continued',
+        cost: 0.03,
+        tokens: { input: 30, output: 3, cacheRead: 5, cacheWrite: 0 },
+      };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun(runId, {
+          metadata: {
+            approval: {
+              type: 'interactive_loop',
+              nodeId: node.id,
+              iteration: 1,
+              sessionId: 'prior',
+              message: 'Review.',
+              execution,
+            },
+            loop_user_input: 'again',
+            loop_feedback_given: true,
+          },
+        }),
+        priorUsage: snapshot,
+        priorCompletedNodes: snapshot.completedNodeOutputs,
+        workflow: {
+          name: 'parent',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+            },
+          ],
+        },
+      })
+    );
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    const events = persistedEvents(store);
+    const loop = events.find(e => e.event_type === 'node_completed' && e.step_name === path);
+    expect(loop?.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.07, partial: true },
+    });
+    const terminal = events.find(
+      e => e.event_type === 'node_completed' && e.data?.type === 'compose_fan_out_instance'
+    );
+    expect(terminal?.data?.cost_usd).toBeCloseTo(0.07);
+    expect(terminal?.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', value: 0.07, partial: true },
+    });
+    const wrapper = events.find(e => e.event_type === 'node_completed' && e.step_name === 'fan');
+    expect(wrapper?.data?.spend).toMatchObject({
+      costUsd: { source: 'provider', partial: true },
+    });
+    expect(wrapper?.data?.cost_usd).toBeCloseTo(0.03);
+    expect(terminal?.data?.tokens).toMatchObject({
+      input: 70,
+      output: 7,
+      cacheRead: 15,
+      cacheWrite: 0,
+    });
+    expect((await store.getDagResumeSnapshot(runId)).costUsd).toBeCloseTo(0.07);
+    expect(runUsageWrites(store).at(-1)).toMatchObject({
+      total_cost_usd: 0.07,
+      total_tokens_in: 70,
+      total_tokens_out: 7,
+      total_cache_read_tokens: 15,
+      total_cache_write_tokens: 0,
+    });
+  });
+
+  it.each([
+    { priorCost: 0.02, partial: true, exit: 'completed' },
+    { priorCost: 0.02, partial: false, exit: 'completed' },
+    { priorCost: 0, partial: false, exit: 'completed' },
+    { priorCost: 0.02, partial: true, exit: 'failed' },
+    { priorCost: 0.02, partial: true, exit: 'interrupted' },
+    { priorCost: 0.02, partial: true, exit: 'unreadable' },
+  ] as const)(
+    'carries prior loop cost proof through an instance: %j',
+    async ({ priorCost, partial, exit }) => {
+      await writeBlock(`name: compose-blk
+description: prior loop and new work
+nodes:
+  - id: prior
+    loop:
+      prompt: Already completed.
+      until: DONE
+      max_iterations: 1
+  - id: work
+    prompt: New work.
+    depends_on: [prior]
+${exit === 'interrupted' || exit === 'unreadable' ? '  - id: more\n    script: next\n    runtime: bun\n    depends_on: [work]' : ''}
+`);
+      await mkdir(join(testDir, '.archon', 'scripts'), { recursive: true });
+      await writeFile(join(testDir, '.archon', 'scripts', 'next.ts'), 'console.log("Done")');
+      const runId = 'prior-loop-proof';
+      const [instance] = buildInstanceSnapshots(['a']);
+      const store = createMockStore();
+      await store.persistWorkflowEvent(
+        serializeNodeStateRecord(
+          finishNodeExecution(
+            startNodeExecution({
+              runId,
+              path: composeInnerStep(instance.identity, 'prior'),
+              node: {
+                id: 'prior',
+                kind: 'loop',
+                loop: { prompt: 'Prior', until: 'DONE', max_iterations: 1, fresh_context: false },
+              },
+              invocation: newNodeInvocation(),
+              provider: 'claude',
+            }),
+            { status: 'completed' },
+            { costUsd: priorCost, costPartial: partial, output: { text: 'DONE' } }
+          )
+        )
+      );
+      store.getDagResumeSnapshot.mockImplementation(async id =>
+        foldDagResumeSnapshot(persistedEvents(store), id)
+      );
+      const snapshot = await store.getDagResumeSnapshot(runId);
+      const newCost = priorCost === 0 ? 0 : 0.03;
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'Done' };
+        yield {
+          type: 'result',
+          cost: newCost,
+          ...(exit === 'failed'
+            ? {
+                isError: true,
+                errors: ['Fatal'],
+                failure: { class: 'auth' as const, evidence: 'Fatal' },
+              }
+            : {}),
+        };
+      });
+      let stopped = false;
+      store.getWorkflowRunStatus.mockImplementation(async () =>
+        stopped ? 'cancelled' : 'running'
+      );
+      const realRunLayers = runLayersModule.runLayers;
+      let aggregatePartial: boolean | undefined;
+      const layers = spyOn(runLayersModule, 'runLayers').mockImplementation(async ctx => {
+        await realRunLayers(ctx);
+        if (ctx.stepNamePrefix === '') aggregatePartial = ctx.totalCostPartial;
+      });
+      const source = spyOn(nodeSource, 'assertNodeSourceReadable').mockImplementation(
+        async (_roots, path) => {
+          if (exit === 'unreadable' && path.endsWith('__more')) {
+            throw new nodeSource.RunSourceUnreadableError(path, new Error('Source unavailable'));
+          }
+          return undefined;
+        }
+      );
+      const query = mockSendQueryDag.getMockImplementation();
+      if (!query) throw new Error('missing provider fixture');
+      mockSendQueryDag.mockImplementation(async function* (...args) {
+        yield* query(...args);
+        if (exit === 'interrupted') stopped = true;
+      });
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun(runId),
+            priorUsage: snapshot,
+            priorCompletedNodes: snapshot.completedNodeOutputs,
+            workflow: {
+              name: 'parent',
+              nodes: [
+                {
+                  id: 'fan',
+                  kind: 'compose_fan_out',
+                  include: 'compose-blk',
+                  fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                },
+              ],
+            },
+          })
+        );
+      } finally {
+        layers.mockRestore();
+        source.mockRestore();
+      }
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      const events = persistedEvents(store);
+      const terminal = events.find(
+        e =>
+          e.event_type ===
+            (exit === 'failed' || exit === 'unreadable' ? 'node_failed' : 'node_completed') &&
+          e.data?.type === 'compose_fan_out_instance'
+      );
+      if (exit === 'interrupted') {
+        expect(terminal).toBeUndefined();
+        expect(aggregatePartial).toBe(true);
+        expect(events.filter(e => e.step_name === 'fan').map(e => e.event_type)).toEqual([
+          'node_started',
+        ]);
+        expect((await store.getDagResumeSnapshot(runId)).costUsd).toBeCloseTo(priorCost + newCost);
+        return;
+      }
+      expect(terminal?.data?.spend).toMatchObject({
+        costUsd: {
+          source: 'provider',
+          value: priorCost + newCost,
+          ...(partial ? { partial: true } : {}),
+        },
+      });
+      if (exit === 'unreadable') {
+        expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+        expect((await store.getDagResumeSnapshot(runId)).costUsd).toBeCloseTo(priorCost + newCost);
+        return;
+      }
+      const wrapper = events.find(
+        e =>
+          e.event_type === (exit === 'failed' ? 'node_failed' : 'node_completed') &&
+          e.step_name === 'fan'
+      );
+      const record = wrapper && readNodeRecordEvent({ ...wrapper, data: wrapper.data });
+      expect(record?.metadata?.spend.costUsd).toEqual({
+        source: 'provider',
+        value: newCost,
+        ...(partial ? { partial: true } : {}),
+      });
+      expect((await store.getDagResumeSnapshot(runId)).costUsd).toBeCloseTo(priorCost + newCost);
+    }
+  );
+
+  for (const exit of ['completed', 'unreadable'] as const) {
+    it.each([
+      { costs: [undefined, 0.03], partial: true },
+      { costs: [0.03, undefined], partial: true },
+      { costs: [0.02, 0.03], partial: false },
+      { costs: [0, 0], partial: false },
+    ])(`retains superseded loop contributions on ${exit}: %j`, async ({ costs, partial }) => {
+      await writeBlock(`name: compose-blk
+description: repeated loop recovery
+nodes:
+  - id: prior
+    loop:
+      prompt: Prior work.
+      until: DONE
+      max_iterations: 1
+  - id: work
+    prompt: New work.
+    depends_on: [prior]
+  - id: more
+    script: next
+    runtime: bun
+    depends_on: [work]
+`);
+      await mkdir(join(testDir, '.archon', 'scripts'), { recursive: true });
+      await writeFile(join(testDir, '.archon', 'scripts', 'next.ts'), 'console.log("Done")');
+      const runId = 'superseded-loop-proof';
+      const [instance] = buildInstanceSnapshots(['a']);
+      const store = createMockStore();
+      for (const costUsd of costs) {
+        await store.persistWorkflowEvent(
+          serializeNodeStateRecord(
+            finishNodeExecution(
+              startNodeExecution({
+                runId,
+                path: composeInnerStep(instance.identity, 'prior'),
+                node: {
+                  id: 'prior',
+                  kind: 'loop',
+                  loop: { prompt: 'Prior', until: 'DONE', max_iterations: 1, fresh_context: false },
+                },
+                invocation: newNodeInvocation(),
+                provider: 'claude',
+              }),
+              { status: 'completed' },
+              { costUsd, output: { text: 'DONE' } }
+            )
+          )
+        );
+      }
+      store.getDagResumeSnapshot.mockImplementation(async id =>
+        foldDagResumeSnapshot(persistedEvents(store), id)
+      );
+      const snapshot = await store.getDagResumeSnapshot(runId);
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: 'DONE' };
+        yield { type: 'result', cost: 0.01 };
+      });
+      const realSource = nodeSource.assertNodeSourceReadable;
+      const source = spyOn(nodeSource, 'assertNodeSourceReadable').mockImplementation(
+        async (roots, path, ...args) => {
+          if (exit === 'unreadable' && path.endsWith('__more')) {
+            throw new nodeSource.RunSourceUnreadableError(path, new Error('Source unavailable'));
+          }
+          return realSource(roots, path, ...args);
+        }
+      );
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun(runId),
+            priorUsage: snapshot,
+            priorCompletedNodes: snapshot.completedNodeOutputs,
+            workflow: {
+              name: 'parent',
+              nodes: [
+                {
+                  id: 'fan',
+                  kind: 'compose_fan_out',
+                  include: 'compose-blk',
+                  fan_out: { items: '["a","b"]', as: 'item', max_parallel: 1, join: 'all_success' },
+                },
+              ],
+            },
+          })
+        );
+      } finally {
+        source.mockRestore();
+      }
+      const priorCost = costs.reduce<number>((sum, cost) => sum + (cost ?? 0), 0);
+      const events = persistedEvents(store);
+      const terminal = events.find(
+        e =>
+          e.data?.type === 'compose_fan_out_instance' &&
+          (e.event_type === 'node_completed' || e.event_type === 'node_failed')
+      );
+      expect(terminal?.data?.spend).toMatchObject({
+        costUsd: { source: 'provider', value: priorCost + 0.01 },
+      });
+      const spend =
+        terminal &&
+        readNodeRecordEvent({ ...terminal, data: terminal.data })?.metadata?.spend.costUsd;
+      expect(spend?.source === 'provider' && spend.partial === true).toBe(partial);
+      if (exit === 'unreadable') {
+        expect(store.releaseRunForUnreadableSource).toHaveBeenCalledTimes(1);
+        return;
+      }
+      const wrapper = events.find(e => e.step_name === 'fan' && e.event_type === 'node_completed');
+      const wrapperSpend =
+        wrapper && readNodeRecordEvent({ ...wrapper, data: wrapper.data })?.metadata?.spend.costUsd;
+      expect(wrapperSpend).toEqual({
+        source: 'provider',
+        value: 0.03,
+        ...(partial ? { partial: true } : {}),
+      });
+      const instances = events.filter(
+        e => e.data?.type === 'compose_fan_out_instance' && e.event_type === 'node_completed'
+      );
+      expect(instances).toHaveLength(2);
+      expect(instances[1]?.data?.spend).toMatchObject({
+        costUsd: { source: 'provider', value: 0.02 },
+      });
+      const second = instances[1];
+      const secondSpend =
+        second && readNodeRecordEvent({ ...second, data: second.data })?.metadata?.spend.costUsd;
+      expect(secondSpend?.source === 'provider' && secondSpend.partial === true).toBe(false);
+      expect((await store.getDagResumeSnapshot(runId)).costUsd).toBeCloseTo(priorCost + 0.03);
+    });
+  }
 
   it('refuses unattributed historical usage inside an instance', async () => {
     await writeBlock(`name: compose-blk

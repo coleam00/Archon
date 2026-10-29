@@ -316,7 +316,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow: a run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when no owner answers (abandon it once its process is gone) or the owner cannot be stopped; **400** for a run that is not running |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow. A run started outside the web UI resumes on the server and returns **409** with the reason, leaving the run unchanged, when its resource is full: a paused run that is ready to continue keeps its place and a continuation host continues it, and a failed run stays failed until it is resumed again. A run started from a web conversation reports the same wait in that conversation |
-| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first, attempts to cancel discovered `workflow:` descendants except completed and cancelled runs within the [500-parent expansion bound](/reference/workflow-language/#max_parallel-bounds-concurrency-not-count), and attempts to remove the worktrees those runs created, keeping their branches. Owner warnings retain affected checkouts: inspect them (`lsof` when output is still held), resolve the warning, then abandon the cancelled run again to retry removal. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped or the run cannot be abandoned |
+| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first, attempts to cancel discovered `workflow:` descendants except completed and cancelled runs within the [500-parent expansion bound](/reference/workflow-language/#max_parallel-bounds-concurrency-not-count), and attempts to remove the worktrees those runs created, keeping their branches. Owner warnings retain affected checkouts: inspect them (`lsof` when output is still held), resolve the warning, then abandon the cancelled run again to retry removal. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped or the run cannot be abandoned. A silent descendant also retains its checkout and the selected root's checkout, even if the root's owner stopped; each descendant needs its own owner check. If the selected sub-run has no answering endpoint, cancellation succeeds but its subtree's owned checkouts remain: silence does not prove the enclosing execution stopped. Inspect the owning execution and stop or abandon it only if you intend to stop its whole scope; repeated child-only abandonment may still retain the checkouts. |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — approve the child) |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — reject the child) |
 | POST | `/api/workflows/runs/{runId}/respond` | Resolve a paused gate with one of its declared decisions |
@@ -325,6 +325,11 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
 
 For `/signal`, send `{ "event": "checks.complete", "occurrence": "<metadata.wait.pauseId>", "payload": { "conclusion": "success" } }`. The occurrence identifies the exact wait, including when deadlines repeat. The legacy `resumeAt` selector remains accepted and is required when `occurrence` is omitted; it cannot distinguish two occurrences with the same event and deadline. If both selectors are supplied, both must match. Waits persisted without a `pauseId` can still be signaled using `resumeAt`.
+
+`GET /api/workflows/runs` rejects the entire list if any row it reads has an unsupported
+persisted status. It returns HTTP 500 (`Failed to list workflow runs`), with no partial list;
+it never silently drops the offending row. Server logs record `WorkflowStatusReadError` with
+the offending run ID and exact stored value; the HTTP error does not include those details.
 
 Run responses expose `status` and `outcome` as separate fields. `status` is the execution
 lifecycle. `outcome` is the workflow-authored verdict (`"succeeded"`, `"failed"`, or `null`) and
@@ -505,6 +510,13 @@ Returns `{ commands: [{ name, source: "bundled" | "project" }] }`.
 | GET | `/api/dashboard/conversations` | Active and queued conversation processing in this server process, with acquisition and enqueue times |
 
 Query parameters include status filters, date ranges, and pagination. Used by the Command Center UI.
+
+`GET /api/dashboard/runs` rejects the entire result if a returned row or a status-count group
+contains an unsupported persisted status. Counts cover the filtered set before the status
+filter and pagination, so a bad row can fail the request even when it is outside the selected
+status or page. The response is HTTP 500 (`Failed to list dashboard runs`), with no partial
+list or counts. Server logs record `WorkflowStatusReadError` with an offending run ID and
+exact stored value; the HTTP error does not include those details.
 
 Each run includes `active_nodes`, ordered by unresolved `node_started` event order. Completion,
 failure, and both skip lifecycle events remove a node; `node_suspended` keeps it active; a retrying start adds it again. Concurrent

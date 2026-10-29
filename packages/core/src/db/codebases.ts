@@ -7,7 +7,7 @@ import {
   ActiveWorktreeEnvironmentsError,
 } from './codebase-delete-error';
 import { ACTIVE_CONTAINER_ENVIRONMENT_PREDICATE } from './isolation-environment-predicates';
-import { assertAbsoluteDefaultCwd } from './codebase-path';
+import { assertAbsoluteDefaultCwd, defaultCwdKey, isSameDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDatabase, getDatabaseType, getDialect } from './connection';
 import {
@@ -25,7 +25,7 @@ import {
 } from '@archon/paths';
 import {
   allocateProjectName,
-  isCheckoutRegistered,
+  removeCheckoutUnlessRegistered,
   resolveRegistrationUrl,
 } from '../services/project-registration-identity';
 import {
@@ -123,25 +123,23 @@ async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Prom
 
 export async function removeUnregisteredCheckout(
   path: string,
-  remove: () => Promise<void>
+  remove: (detached: string) => Promise<void>
 ): Promise<void> {
-  // SQLite may retry a transaction after COMMIT; filesystem removal must run only once.
-  let removed = false;
-  await getDatabase().withTransaction(async query => {
-    if (getDatabaseType() === 'postgresql') {
-      await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
-        CODEBASE_IDENTITY_LOCK,
-      ]);
-    } else {
-      // BEGIN is deferred; reserve the SQLite writer before checking filesystem ownership.
-      await query('UPDATE remote_agent_codebases SET id = id WHERE 1 = 0');
-    }
-    const registered = await query<Codebase>('SELECT * FROM remote_agent_codebases');
-    if (!removed && !(await isCheckoutRegistered(path, registered.rows))) {
-      await remove();
-      removed = true;
-    }
-  });
+  await removeCheckoutUnlessRegistered(path, remove, detachIfUnregistered =>
+    getDatabase().withTransaction(async query => {
+      if (getDatabaseType() === 'postgresql') {
+        await query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          CODEBASE_IDENTITY_LOCK,
+        ]);
+      } else {
+        // BEGIN is deferred; reserve the SQLite writer before checking filesystem ownership.
+        await query('UPDATE remote_agent_codebases SET id = id WHERE 1 = 0');
+      }
+      await detachIfUnregistered(
+        async () => (await query<Codebase>('SELECT * FROM remote_agent_codebases')).rows
+      );
+    })
+  );
 }
 
 export async function getCodebase(id: string): Promise<Codebase | null> {
@@ -201,11 +199,11 @@ export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase |
 }
 
 export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Codebase | null> {
+  // Matched in application code: Windows spells one directory several ways (see defaultCwdKey).
   const result = await pool.query<Codebase>(
-    'SELECT * FROM remote_agent_codebases WHERE default_cwd = $1 ORDER BY created_at DESC LIMIT 1',
-    [defaultCwd]
+    'SELECT * FROM remote_agent_codebases ORDER BY created_at DESC'
   );
-  const row = result.rows[0];
+  const row = result.rows.find(row => isSameDefaultCwd(row.default_cwd, defaultCwd));
   return row ? validateCodebase(row) : null;
 }
 
@@ -219,14 +217,16 @@ export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Code
  * which was wrong on two counts: (1) `_`/`%` in a stored path are LIKE
  * wildcards, and (2) a bare `%` suffix has no separator boundary, so a sibling
  * directory sharing a name prefix (`/x/platform` vs `/x/platform-staging`)
- * would match. Returns the most specific (longest `default_cwd`) match.
+ * would match. Both paths are compared by their `defaultCwdKey`. Returns the
+ * most specific (longest `default_cwd`) match.
  */
 export async function findCodebaseByPathPrefix(cwdPath: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases');
   let best: { row: Codebase; rootLength: number } | null = null;
   for (const row of result.rows) {
     if (!isAbsolute(row.default_cwd)) continue;
-    if (!isPathInside(row.default_cwd, cwdPath, { includeRoot: true, lexical: true })) continue;
+    const root = defaultCwdKey(row.default_cwd);
+    if (!isPathInside(root, defaultCwdKey(cwdPath), { includeRoot: true, lexical: true })) continue;
     // Rank on the normalized root: isPathInside matched it, and a stored spelling
     // with trailing separators would otherwise outrank a nested codebase.
     const rootLength = resolve(row.default_cwd).length;

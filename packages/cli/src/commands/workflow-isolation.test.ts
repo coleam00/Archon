@@ -2,7 +2,7 @@ import * as chatScope from '../workflow-scope';
 import {
   mockLogger,
   mockRunLiveOwnerClose,
-  capturedSourceOwnerCalls,
+  recordCapturedSourceCalls,
   mockCanonicalizeProjectPath,
   mockDiscoverWorkflowsWithConfig,
   mockCreateWorkflowRun,
@@ -1018,41 +1018,41 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
     expect(findActiveCallsAfter).toBe(findActiveCallsBefore);
   });
 
-  it('keeps a failed worktree launch queryable and retains its source without executing nodes', async () => {
-    const { executeWorkflow } = await import('@archon/workflows/executor');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDb = await import('@archon/core/db/workflows');
-    const isolation = await import('@archon/isolation');
-    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
-      errors: [],
-    });
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-setup',
-      default_cwd: '/test/path',
-    });
-    const create = mock(async () => {
-      expect(mockCreateWorkflowRun.mock.calls.at(-1)?.[0]).toMatchObject({ id: 'test-run-id' });
-      throw new Error('post-create failed with exit code 7');
-    });
-    (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
-      create,
-      healthCheck: async () => true,
-    });
-    const executeCount = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
-    capturedSourceOwnerCalls.length = 0;
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'go')
-    ).rejects.toThrow('exit code 7');
-    expect((executeWorkflow as ReturnType<typeof mock>).mock.calls).toHaveLength(executeCount);
-    expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
-      'test-run-id',
-      expect.stringContaining('exit code 7'),
-      { exitReason: 'launch_failed' }
-    );
-    expect(capturedSourceOwnerCalls).toContain('adopt');
-    expect(capturedSourceOwnerCalls.some(call => call.startsWith('reclaim:'))).toBe(false);
-  });
+  it('keeps a failed worktree launch queryable and retains its source without executing nodes', () =>
+    recordCapturedSourceCalls(async capturedSourceOwnerCalls => {
+      const { executeWorkflow } = await import('@archon/workflows/executor');
+      const codebaseDb = await import('@archon/core/db/codebases');
+      const workflowDb = await import('@archon/core/db/workflows');
+      const isolation = await import('@archon/isolation');
+      mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+        workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+        errors: [],
+      });
+      (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'cb-setup',
+        default_cwd: '/test/path',
+      });
+      const create = mock(async () => {
+        expect(mockCreateWorkflowRun.mock.calls.at(-1)?.[0]).toMatchObject({ id: 'test-run-id' });
+        throw new Error('post-create failed with exit code 7');
+      });
+      (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
+        create,
+        healthCheck: async () => true,
+      });
+      const executeCount = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
+      await expect(
+        workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'go')
+      ).rejects.toThrow('exit code 7');
+      expect((executeWorkflow as ReturnType<typeof mock>).mock.calls).toHaveLength(executeCount);
+      expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
+        'test-run-id',
+        expect.stringContaining('exit code 7'),
+        { exitReason: 'launch_failed' }
+      );
+      expect(capturedSourceOwnerCalls).toContain('adopt');
+      expect(capturedSourceOwnerCalls.some(call => call.startsWith('reclaim:'))).toBe(false);
+    }));
 
   it('records a preparation failure before releasing its live-owner lock', async () => {
     const isolation = await import('@archon/isolation');

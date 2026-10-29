@@ -3,6 +3,8 @@ import { parseError, parseWorkflow } from './test-utils';
 import { describe, it, expect } from 'bun:test';
 import { evaluateCondition } from '../condition-evaluator';
 import type { ParseResult } from '../loader';
+import { resolveAttentionOptions } from '../dag/references';
+import { validateStructuredOutput } from '../structured-output';
 
 describe('scalar shared session context', () => {
   function parseSessionContext(yaml: string): ParseResult {
@@ -431,6 +433,14 @@ describe('attention wait options from an upstream output_format (#4038)', () => 
       properties: { options: { type: 'array', items } },
       required: ['options'],
     };
+    return parseWithOptionsSchema(outputFormat);
+  }
+
+  function parseWithOptionsSchema(
+    outputFormat: Record<string, unknown>,
+    field = 'options',
+    form: 'select' | 'multi_select' = 'select'
+  ): ParseResult {
     return parseWorkflow(
       `name: referenced-options
 description: Options computed upstream
@@ -442,11 +452,143 @@ nodes:
     depends_on: [plan]
     wait:
       attention: Which one?
-      form: select
-      options: "$plan.output.options"
+      form: ${form}
+      options: "$plan.output.${field}"
 `,
       'referenced-options.yaml'
     );
+  }
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    for (const location of ['root', 'parent', 'options']) {
+      it(`defers ${keyword} options at ${location} to runtime validation`, () => {
+        const optionsSchema = { type: 'array', items: { type: 'string' } };
+        const declaration = { properties: { options: optionsSchema } };
+        const schema =
+          location === 'root'
+            ? { [keyword]: [declaration] }
+            : location === 'parent'
+              ? { properties: { result: { [keyword]: [declaration] } } }
+              : { properties: { options: { [keyword]: [optionsSchema] } } };
+        const field = location === 'parent' ? 'result.options' : 'options';
+        expect(parseWithOptionsSchema(schema, field).error).toBeNull();
+        expect(parseWithOptionsSchema(schema, `${field}.typo`).error?.error).toContain(
+          'not declared'
+        );
+        const options = ['bad'];
+        const value = location === 'parent' ? { result: { options } } : { options };
+        expect(validateStructuredOutput(value, schema)).toEqual({ valid: true });
+        expect(() =>
+          resolveAttentionOptions(
+            'ask',
+            `$plan.output.${field}`,
+            new Map([['plan', { state: 'completed', output: JSON.stringify(value) }]])
+          )
+        ).toThrow('not a valid option list');
+      });
+    }
+  }
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    for (const location of ['items', 'id', 'label']) {
+      it(`defers ${keyword} at options ${location} to runtime validation`, () => {
+        const properties = {
+          id: { type: 'string' },
+          label: { type: 'string' },
+        };
+        const plainItems = { type: 'object', properties, required: ['id'] };
+        const items =
+          location === 'items'
+            ? { [keyword]: [plainItems] }
+            : {
+                ...plainItems,
+                properties: { ...properties, [location]: { [keyword]: [{ type: 'string' }] } },
+              };
+        const schema = { properties: { options: { type: 'array', items } } };
+        const options = [{ id: 'accept', label: 'Accept' }];
+        expect(validateStructuredOutput({ options }, schema)).toEqual({ valid: true });
+        expect(parseWithOptionsSchema(schema).error).toBeNull();
+        const resolve = (value: unknown) =>
+          resolveAttentionOptions(
+            'ask',
+            '$plan.output.options',
+            new Map([['plan', { state: 'completed', output: JSON.stringify({ options: value }) }]])
+          );
+        expect(resolve(options)).toEqual(options);
+        expect(() => resolve(['bad'])).toThrow('not a valid option list');
+      });
+    }
+
+    for (const source of ['tuple', 'additionalItems']) {
+      for (const location of ['item', 'id', 'label']) {
+        it.each(['select', 'multi_select'] as const)(
+          `defers ${keyword} at ${source} ${location} (%s)`,
+          form => {
+            const properties = { id: { type: 'string' }, label: { type: 'string' } };
+            const plain = { type: 'object', properties, required: ['id'] };
+            const item =
+              location === 'item'
+                ? { [keyword]: [plain] }
+                : {
+                    ...plain,
+                    properties: { ...properties, [location]: { [keyword]: [{ type: 'string' }] } },
+                  };
+            const optionsSchema =
+              source === 'tuple'
+                ? { type: 'array', items: [item], additionalItems: false }
+                : { type: 'array', items: [plain], additionalItems: item };
+            const schema = { properties: { options: optionsSchema } };
+            const options = [{ id: 'accept', label: 'Accept' }];
+            if (source === 'additionalItems') options.push({ id: 'decline', label: 'Decline' });
+            expect(validateStructuredOutput({ options }, schema)).toEqual({ valid: true });
+            expect(parseWithOptionsSchema(schema, 'options', form).error).toBeNull();
+            const resolve = (value: unknown) =>
+              resolveAttentionOptions(
+                'ask',
+                '$plan.output.options',
+                new Map([
+                  ['plan', { state: 'completed', output: JSON.stringify({ options: value }) }],
+                ])
+              );
+            expect(resolve(options)).toEqual(options);
+            expect(() => resolve(['bad'])).toThrow('not a valid option list');
+          }
+        );
+      }
+    }
+
+    for (const location of ['root', 'parent', 'sibling']) {
+      it.each(['select', 'multi_select'] as const)(
+        `checks plain options beside unrelated ${keyword} at ${location} (%s)`,
+        form => {
+          for (const valid of [false, true]) {
+            const options = {
+              type: 'array',
+              items: valid
+                ? { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }
+                : { type: 'string' },
+            };
+            const unrelated = { [keyword]: [{ properties: { other: { type: 'string' } } }] };
+            const schema =
+              location === 'root'
+                ? { properties: { options }, ...unrelated }
+                : location === 'parent'
+                  ? { properties: { result: { properties: { options }, ...unrelated } } }
+                  : {
+                      properties: { result: { properties: { options } } },
+                      [keyword]: [{ properties: { result: unrelated } }],
+                    };
+            const result = parseWithOptionsSchema(
+              schema,
+              location === 'root' ? 'options' : 'result.options',
+              form
+            );
+            if (valid) expect(result.error).toBeNull();
+            else expect(result.error?.error).toContain('must be an array of objects');
+          }
+        }
+      );
+    }
   }
 
   it('loads a producer whose items declare { id, label? }', () => {

@@ -299,6 +299,20 @@ describe('validateWorkflowResources — bundled workflow: target check', () => {
     expect(issues.some(i => i.field === 'workflow')).toBe(false);
   });
 
+  test('bundled workflow rejects a near-name workflow: target', async () => {
+    const workflow = makeWorkflow('test', [{ id: 'sub', kind: 'workflow', workflow: 'review' }]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, providerRegistry, {
+      workflowSource: 'bundled',
+    });
+    expect(issues.filter(issue => issue.field === 'workflow')).toEqual([
+      expect.objectContaining({
+        level: 'error',
+        nodeId: 'sub',
+        message: "Node 'sub' targets sub-run 'review', which is not a bundled workflow",
+      }),
+    ]);
+  });
+
   test('bundled workflow with a workflow: node to a non-existent bundled name fails', async () => {
     const workflow = makeWorkflow('test', [
       { id: 'sub', kind: 'workflow', workflow: 'definitely-not-a-bundled-workflow' } as DagNode,
@@ -2130,6 +2144,42 @@ describe('validateWorkflowResources — strict-schema compatibility', () => {
       ...extra,
     } as DagNode;
   }
+
+  test.each(['oneOf', 'anyOf'] as const)(
+    'accepts inherited required fields in %s and reports unsupported conversions',
+    async operator => {
+      const schema = {
+        type: 'object',
+        properties: { status: { type: 'string' }, message: { type: 'string' } },
+        required: ['status', 'message'],
+        [operator]: [{ properties: { status: { enum: ['success', 'blocked'] } } }],
+      };
+      for (const [branch, expected] of [
+        [schema, undefined],
+        [
+          { ...schema, [operator]: [{ properties: { status: {} }, additionalProperties: false }] },
+          'additionalProperties',
+        ],
+        [{ ...schema, not: { properties: { status: { const: 'bad' } } } }, 'output_format.not'],
+      ] as const) {
+        const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: branch })]);
+        const issues = await validateWorkflowResources(
+          workflow,
+          tmpDir,
+          providerRegistry,
+          {},
+          'codex'
+        );
+        const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+        if (expected === undefined) expect(errors).toEqual([]);
+        else {
+          expect(errors).toHaveLength(1);
+          expect(errors[0].message).toContain(expected);
+          expect(errors[0].nodeId).toBe('plan');
+        }
+      }
+    }
+  );
 
   test('Codex-routed agent node with optional-by-omission reports error', async () => {
     const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: looseSchema })]);

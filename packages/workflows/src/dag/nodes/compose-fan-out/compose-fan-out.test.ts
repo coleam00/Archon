@@ -637,6 +637,82 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     }
   );
 
+  it('preserves the first instance deadline through a mixed-reset fan-out join and wait', async () => {
+    await writeBlock(
+      [
+        'name: compose-blk',
+        'description: test block',
+        'mutates_checkout: false',
+        'nodes:',
+        '  - id: reported',
+        "    prompt: 'reported-reset'",
+        '  - id: resetless',
+        "    prompt: 'resetless'",
+      ].join('\n')
+    );
+    const now = Date.parse('2026-10-28T12:00:00Z');
+    const resetAt = new Date(now + 10 * 60_000).toISOString();
+    mockSendQueryDag.mockImplementation(async function* (prompt) {
+      yield {
+        type: 'result',
+        isError: true,
+        failure: {
+          class: 'rate_limited',
+          evidence: 'HTTP 429',
+          ...(prompt.includes('reported-reset') ? { resetAt } : {}),
+        },
+      };
+    });
+    const store = createMockStore();
+    store.createWorkflowEvent.mockImplementation(async event => {
+      if (event.event_type === 'node_failed' && event.data?.type === 'compose_fan_out_instance')
+        Math.random = () => 0.1;
+    });
+    const realNow = Date.now;
+    const realRandom = Math.random;
+    const realSetTimeout = globalThis.setTimeout;
+    Date.now = () => now;
+    Math.random = () => 0.7;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('mixed-reset-compose'),
+          workflow: {
+            name: 'mixed-reset-compose',
+            nodes: [
+              { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a","b"]'` },
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                depends_on: ['list'],
+                fan_out: {
+                  items: '$list.output',
+                  as: 'item',
+                  max_parallel: 1,
+                  join: 'all_success',
+                },
+              },
+            ],
+          },
+        })
+      );
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+        'mixed-reset-compose',
+        expect.objectContaining({ resumeAt: new Date(now + 12 * 60_000).toISOString() }),
+        { kind: 'started', stepName: 'fan' }
+      );
+    } finally {
+      Date.now = realNow;
+      Math.random = realRandom;
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
+
   it('fails a composed instance that failed both on a usage limit and for another reason', async () => {
     await writeBlock(
       [

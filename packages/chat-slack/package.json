@@ -1,6 +1,6 @@
 {
   "name": "@archon/chat-slack",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "private": true,
   "type": "module",
   "scripts": {

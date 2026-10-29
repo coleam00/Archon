@@ -18,6 +18,9 @@ mock.module('./connection', () => ({
 import {
   getWorkflowRun,
   getWorkflowRunStatus,
+  getRunByIsolationEnvId,
+  findWorkflowRunsByIdPrefix,
+  getWorkflowRunByWorkerPlatformId,
   WorkflowStatusReadError,
   getActiveWorkflowRun,
   getActiveWorkflowRunByPath,
@@ -51,6 +54,43 @@ describe('workflow run reads', () => {
 
       expect(result).toBeNull();
     });
+  });
+
+  test.each([
+    ['id', () => getWorkflowRun('bad')],
+    ['isolation', () => getRunByIsolationEnvId('env')],
+    ['prefix', () => findWorkflowRunsByIdPrefix('abc', 'codebase')],
+    ['children', () => findChildRuns('parent')],
+    ['worker', () => getWorkflowRunByWorkerPlatformId('worker')],
+  ] as const)('%s preserves unsupported full-row status errors', async (_name, read) => {
+    mockQuery.mockResolvedValueOnce(
+      createQueryResult(
+        [mockWorkflowRun, { ...mockWorkflowRun, id: 'bad', status: 'unexpected' }].slice(
+          _name === 'prefix' || _name === 'children' ? 0 : 1
+        )
+      )
+    );
+    const result = read();
+    await expect(result).rejects.toBeInstanceOf(WorkflowStatusReadError);
+    await expect(result).rejects.toMatchObject({
+      workflowRunId: 'bad',
+      storedStatus: 'unexpected',
+    });
+  });
+
+  test.each([
+    [
+      () => findWorkflowRunsByIdPrefix('abc', 'project'),
+      'Failed to find workflow runs by id prefix: offline',
+    ],
+    [
+      () => getWorkflowRunByWorkerPlatformId('worker'),
+      'Failed to get workflow run by worker platform ID: offline',
+    ],
+    [() => getRunByIsolationEnvId('env'), 'Failed to look up run for isolation env env: offline'],
+  ] as const)('preserves query failure diagnostics', async (read, message) => {
+    mockQuery.mockRejectedValueOnce(new Error('offline'));
+    await expect(read()).rejects.toThrow(message);
   });
 
   describe('getWorkflowRunStatus', () => {

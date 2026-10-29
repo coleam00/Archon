@@ -58,6 +58,7 @@ export async function runUntilStructuredOutputValid(
     }
 
     if (state.cutOff?.kind === 'operator') return;
+    if (state.passSawResult && state.cutOff?.kind === 'idle_timeout') return;
 
     // When output_format is set and the provider returned structured_output, use
     // it instead of the concatenated assistant text. Each provider normalizes its

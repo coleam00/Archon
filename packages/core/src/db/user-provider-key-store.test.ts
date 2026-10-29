@@ -109,6 +109,13 @@ const UNREADABLE = {
   evidence: 'The stored credential cannot be read.',
 } as const;
 
+const ROTATION_NOT_SAVED = {
+  state: 'unusable',
+  source: 'archon',
+  evidence:
+    'The refreshed credential could not be saved, and the refresh invalidated the stored one.',
+} as const;
+
 describe('user-provider-key-store', () => {
   beforeEach(() => {
     mockQuery.mockClear();
@@ -323,37 +330,65 @@ describe('user-provider-key-store', () => {
         state: 'usable',
         credential: { kind: 'oauth', oauthApiKey: 'minted-after-rotate' },
       });
-      // 1 SELECT (record) + 1 INSERT (resave of the rotated blob).
+      expect(cred).not.toHaveProperty('storedStatus');
+      // 1 SELECT (record) + 1 UPDATE of the rotated blob, leaving the label alone.
       expect(mockQuery).toHaveBeenCalledTimes(2);
-      const insertParams = mockQuery.mock.calls[1]?.[1] as unknown[];
-      expect(insertParams[2]).toBe('oauth');
-      expect(insertParams[4]).not.toContain('ROTATED'); // re-encrypted, not plaintext
+      const [updateSql, updateParams] = mockQuery.mock.calls[1] as [string, unknown[]];
+      expect(updateSql.trim()).toStartWith('UPDATE remote_agent_user_provider_keys');
+      expect(updateSql).not.toContain('label');
+      expect(updateParams.slice(1)).toEqual(['user-1', 'claude']);
+      expect(updateParams[0]).not.toContain('ROTATED'); // re-encrypted, not plaintext
     });
 
-    test.each([1, 2])('returns the rotated token after %i failed save attempts', async failures => {
+    test.each([1, 2])(
+      'returns the rotated token after %i failed save attempts, and flags the stored credential when the rotation is lost',
+      async failures => {
+        mockLogger.error.mockClear();
+        mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+        for (let attempt = 0; attempt < failures; attempt++) {
+          mockQuery.mockRejectedValueOnce(new Error('save unavailable'));
+        }
+        mockMintSubscription.mockResolvedValueOnce({
+          newCredentials: { access: 'ROTATED', refresh: 'r2', expires: 999 },
+          apiKey: 'minted-after-rotate',
+        });
+
+        const cred = await getDecryptedProviderCredential('user-1', 'claude');
+        expect(cred).toMatchObject({
+          state: 'usable',
+          credential: { oauthApiKey: 'minted-after-rotate' },
+        });
+        expect(mockQuery).toHaveBeenCalledTimes(3);
+        if (failures === 2) {
+          expect(cred).toMatchObject({ storedStatus: ROTATION_NOT_SAVED });
+          expect(mockLogger.error).toHaveBeenCalledWith(
+            { err: expect.any(Error), userId: 'user-1', provider: 'claude' },
+            'user_provider_key.oauth_resave_failed'
+          );
+        } else {
+          expect(cred).not.toHaveProperty('storedStatus');
+          expect(mockLogger.error).not.toHaveBeenCalled();
+        }
+      }
+    );
+
+    test('a lost save that kept the refresh token leaves the stored credential usable', async () => {
       mockLogger.error.mockClear();
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
-      for (let attempt = 0; attempt < failures; attempt++) {
-        mockQuery.mockRejectedValueOnce(new Error('save unavailable'));
-      }
+      mockQuery.mockRejectedValueOnce(new Error('save unavailable'));
+      mockQuery.mockRejectedValueOnce(new Error('save unavailable'));
       mockMintSubscription.mockResolvedValueOnce({
-        newCredentials: { access: 'ROTATED', refresh: 'r2', expires: 999 },
+        newCredentials: { access: 'ROTATED', expires: 999 },
         apiKey: 'minted-after-rotate',
       });
 
-      expect(await getDecryptedProviderCredential('user-1', 'claude')).toMatchObject({
-        state: 'usable',
-        credential: { oauthApiKey: 'minted-after-rotate' },
-      });
-      expect(mockQuery).toHaveBeenCalledTimes(3);
-      if (failures === 2) {
-        expect(mockLogger.error).toHaveBeenCalledWith(
-          { err: expect.any(Error), userId: 'user-1', provider: 'claude' },
-          'user_provider_key.oauth_resave_failed'
-        );
-      } else {
-        expect(mockLogger.error).not.toHaveBeenCalled();
-      }
+      const cred = await getDecryptedProviderCredential('user-1', 'claude');
+      expect(cred).toMatchObject({ state: 'usable' });
+      expect(cred).not.toHaveProperty('storedStatus');
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        { err: expect.any(Error), userId: 'user-1', provider: 'claude' },
+        'user_provider_key.oauth_resave_failed'
+      );
     });
 
     test('does not save unchanged OAuth fields when their JSON order changes', async () => {
@@ -466,12 +501,12 @@ describe('user-provider-key-store', () => {
         state: 'usable',
         credential: { kind: 'oauth', oauthApiKey: 'ROTATED' },
       });
-      // 1 SELECT (record) + 1 INSERT (resave). The re-encrypted blob must keep
+      // 1 SELECT (record) + 1 UPDATE (resave). The re-encrypted blob must keep
       // id_token — the exact field a Pi-driven rotation would have dropped.
       expect(mockQuery).toHaveBeenCalledTimes(2);
-      const insertParams = mockQuery.mock.calls[1]?.[1] as unknown[];
+      const updateParams = mockQuery.mock.calls[1]?.[1] as unknown[];
       const resaved = JSON.parse(
-        decryptToken(insertParams[4] as string, getEncryptionKey())
+        decryptToken(updateParams[0] as string, getEncryptionKey())
       ) as Record<string, unknown>;
       expect(resaved.id_token).toBe('idt-rotated');
       expect(resaved.access).toBe('ROTATED');
@@ -580,6 +615,22 @@ describe('user-provider-key-store', () => {
     test('a failing credential reports the store status unchanged', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([apiKeyRow({ api_key_encrypted: null })]));
       expect(await getStoredCredentialStatus('user-1', 'openrouter')).toEqual(UNREADABLE);
+    });
+
+    test('a refresh whose rotation could not be saved reports the stored credential unusable', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+      mockQuery.mockRejectedValueOnce(new Error('save unavailable'));
+      mockQuery.mockRejectedValueOnce(new Error('save unavailable'));
+      mockMintSubscription.mockResolvedValueOnce({
+        newCredentials: { access: 'ROTATED', refresh: 'r2', expires: 999 },
+        apiKey: 'minted-after-rotate',
+      });
+
+      const status = await getStoredCredentialStatus('user-1', 'claude');
+      expect(status).toEqual(ROTATION_NOT_SAVED);
+      for (const secret of ['ROTATED', 'r2', 'minted-after-rotate']) {
+        expect(JSON.stringify(status)).not.toContain(secret);
+      }
     });
   });
 });

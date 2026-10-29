@@ -86,24 +86,35 @@ describe('git utilities', () => {
       execSpy.mockRestore();
     });
 
-    test('parses git worktree list --porcelain output', async () => {
-      const mockOutput = `worktree /path/to/main
-HEAD abc123
-branch refs/heads/main
-
-worktree /path/to/feature
-HEAD def456
-branch refs/heads/feature/auth
-
-`;
+    test('parses NUL-delimited worktree paths and excludes detached checkouts', async () => {
+      const mockOutput = [
+        'worktree /path/to/main',
+        'HEAD abc123',
+        'branch refs/heads/main',
+        '',
+        'worktree /path/to/new\nline',
+        'HEAD def456',
+        'branch refs/heads/feature/auth',
+        '',
+        'worktree /path/to/detached',
+        'HEAD abc123',
+        'detached',
+        '',
+        '',
+      ].join('\0');
       execSpy.mockResolvedValue(output(mockOutput));
 
       const result = await git.listWorktrees(repo('/path/to/main'));
 
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', repo('/path/to/main'), 'worktree', 'list', '--porcelain', '-z'],
+        { timeout: 10000 }
+      );
       expect(result).toHaveLength(2);
       expect(result[0]).toEqual({ path: listed('/path/to/main'), branch: branch('main') });
       expect(result[1]).toEqual({
-        path: listed('/path/to/feature'),
+        path: listed('/path/to/new\nline'),
         branch: branch('feature/auth'),
       });
     });
@@ -134,15 +145,7 @@ branch refs/heads/feature/auth
 
     beforeEach(() => {
       execSpy = spyOn(git, 'execFileAsync');
-      const mockOutput = `worktree /workspace/main
-HEAD abc123
-branch refs/heads/main
-
-worktree /workspace/worktrees/feature-auth
-HEAD def456
-branch refs/heads/feature/auth
-
-`;
+      const mockOutput = `worktree /workspace/main\0HEAD abc123\0branch refs/heads/main\0\0worktree /workspace/worktrees/feature-auth\0HEAD def456\0branch refs/heads/feature/auth\0\0`;
       execSpy.mockResolvedValue(output(mockOutput));
     });
 

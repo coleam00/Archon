@@ -10,6 +10,7 @@ import {
 import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { ParentStatusReadError } from './parent-status-read';
 import { continueBlockedRun } from './parent-resume';
 import { isApprovalContext, type WorkflowRunOrigin } from './schemas/workflow-run';
@@ -57,6 +58,42 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     await removeTempTree(cwd);
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  it('preserves unsupported child status on the initial single-child lookup', async () => {
+    await writeWorkflow(
+      'status-parent',
+      `
+name: status-parent
+description: initial lookup interruption
+mutates_checkout: false
+nodes:
+  - id: work
+    workflow: child
+`
+    );
+    const store = new InMemoryStore();
+    const error = new WorkflowStatusReadError('child', 'unsupported');
+    store.findChildRuns = async () => {
+      throw error;
+    };
+    const execution = executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'test',
+      cwd,
+      await discover('status-parent'),
+      ''
+    );
+    await expect(execution).rejects.toBe(error);
+    expect([...store.runs.values()].map(run => run.status)).toEqual(['running']);
+    expect(
+      store.events.filter(
+        event =>
+          event.event_type === 'node_failed' ||
+          ['workflow_failed', 'workflow_cancelled', 'workflow_completed'].includes(event.event_type)
+      )
+    ).toEqual([]);
   });
 
   async function recoverInterruptedChildren(
@@ -2328,10 +2365,7 @@ nodes:
     }
   );
 
-  it('rejects a CASE-VARIANT self-reference by resolving the name before the cycle check (I3)', async () => {
-    // The node names its own workflow in a different case; resolveWorkflowName resolves
-    // 'SELFIE' → 'selfie', and the cycle check (post-resolution) catches it as a cycle
-    // rather than letting it slip to the depth cap.
+  it('rejects a non-exact child target without starting a child', async () => {
     await writeWorkflow(
       'selfie',
       `
@@ -2357,8 +2391,7 @@ nodes:
     const nodeFailed = store.events.find(
       e => e.event_type === 'node_failed' && e.step_name === 'sub'
     );
-    expect(String(nodeFailed?.data?.error)).toMatch(/cycle/i);
-    // Caught as a cycle → no child run was created.
+    expect(String(nodeFailed?.data?.error)).toContain("Unknown sub-run workflow 'SELFIE'");
     expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
   });
 

@@ -280,6 +280,10 @@ export interface IWorkflowStore
   /** Claim an engine-cancelled fan-out child for immediate in-process recovery. */
   recoverCancelledFanOutRun(id: string): Promise<WorkflowRun>;
   /**
+   * `metadata.parent_node_id` is creation-only: all later metadata writes ignore it,
+   * preserving child provenance after parent deletion. A child created without a
+   * spawning node ID carries null under that key. Top-level creation strips it.
+   *
    * `output_root` (#2200) is write-once: the executor sets it at run start only
    * when the persisted value is null. Re-writing it on resume would re-derive
    * the path from a possibly-renamed codebase and orphan the run's artifacts,
@@ -384,7 +388,9 @@ export interface IWorkflowStore
   /**
    * Atomically CLAIM the container write-back apply before the live root is mutated
    * (retry-safe apply). Sets `metadata.writeback_apply_claimed` only while unset;
-   * returns whether THIS caller won. Apply the overlay only when `claimed`.
+   * returns whether THIS caller won. Apply the overlay only when `claimed`. A held
+   * claim with no recorded `writeback_resolved` means the apply outcome is unknown;
+   * the gate fails the run for operator reconciliation instead of resolving it.
    */
   claimWriteback(id: string): Promise<{ claimed: boolean }>;
 

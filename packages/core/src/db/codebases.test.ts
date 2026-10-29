@@ -1,12 +1,21 @@
 // @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { access, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, sep, resolve } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
 import { quoteCommandArg } from '../utils/command-args';
 import { getArchonWorkspacesPath } from '@archon/paths';
 
 const mockQuery = createMockQuery();
+let transactionOpen = false;
+// SQLite can replay a transaction body after COMMIT; a test sets this to replay it.
+let transactionRuns = 1;
+// Rejects the transaction after its body ran, like a failed COMMIT.
+let transactionFailure: Error | undefined;
+const trackTempRoot = trackTempRoots();
 
 // Mock the connection module before importing the module under test
 mock.module('./connection', () => ({
@@ -14,7 +23,17 @@ mock.module('./connection', () => ({
     query: mockQuery,
   },
   getDatabase: () => ({
-    withTransaction: <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => fn(mockQuery),
+    withTransaction: async <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => {
+      transactionOpen = true;
+      try {
+        let result = await fn(mockQuery);
+        for (let run = 1; run < transactionRuns; run++) result = await fn(mockQuery);
+        if (transactionFailure) throw transactionFailure;
+        return result;
+      } finally {
+        transactionOpen = false;
+      }
+    },
   }),
   getDatabaseType: () => 'postgresql',
   getDialect: () => mockPostgresDialect,
@@ -44,6 +63,8 @@ import {
 describe('codebases', () => {
   beforeEach(() => {
     mockQuery.mockClear();
+    transactionRuns = 1;
+    transactionFailure = undefined;
   });
 
   const mockCodebase: Codebase = {
@@ -194,9 +215,12 @@ describe('codebases', () => {
   });
 
   test.each(['registered', 'unregistered'])(
-    'checkout cleanup shares the registration lock for a %s checkout',
+    'checkout cleanup takes the registration lock and removes a %s checkout only after release',
     async state => {
       const owned = state === 'registered';
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'codebase-cleanup-')));
+      const checkout = join(root, 'checkout');
+      await mkdir(checkout);
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
@@ -206,18 +230,70 @@ describe('codebases', () => {
       mockQuery.mockClear();
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
-        .mockResolvedValueOnce(createQueryResult(owned ? [mockCodebase] : []));
-      const remove = mock(async () => {
-        expect(mockQuery.mock.calls[0]).toEqual(registrationLock);
+        .mockResolvedValueOnce(
+          createQueryResult(owned ? [{ ...mockCodebase, default_cwd: checkout }] : [])
+        );
+      const remove = mock(async (detached: string) => {
+        expect(transactionOpen).toBe(false);
+        expect(detached).not.toBe(checkout);
+        await rm(detached, { recursive: true });
       });
 
-      await removeUnregisteredCheckout(mockCodebase.default_cwd, remove);
+      await removeUnregisteredCheckout(checkout, remove);
 
       expect(registrationLock?.[0]).toContain('pg_advisory_xact_lock');
       expect(mockQuery.mock.calls[0]).toEqual(registrationLock);
       expect(remove).toHaveBeenCalledTimes(owned ? 0 : 1);
+      if (owned) await access(checkout);
+      else await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
     }
   );
+
+  test('checkout cleanup detaches and removes a checkout once when the transaction replays', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'codebase-cleanup-')));
+    const checkout = join(root, 'checkout');
+    await mkdir(checkout);
+    transactionRuns = 2;
+    const remove = mock(async (detached: string) => {
+      await rm(detached, { recursive: true });
+    });
+
+    await removeUnregisteredCheckout(checkout, remove);
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  test('checkout cleanup removes the detached checkout when the transaction fails after the move', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'codebase-cleanup-')));
+    const checkout = join(root, 'checkout');
+    await mkdir(checkout);
+    transactionFailure = new Error('commit failed');
+    const remove = mock(async (detached: string) => {
+      await rm(detached, { recursive: true });
+    });
+
+    await expect(removeUnregisteredCheckout(checkout, remove)).rejects.toBe(transactionFailure);
+
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  test('checkout cleanup keeps the transaction error when removing the detached checkout fails', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'codebase-cleanup-')));
+    const checkout = join(root, 'checkout');
+    await mkdir(checkout);
+    transactionFailure = new Error('commit failed');
+    const removeFailure = new Error('rm failed');
+
+    const failure = await removeUnregisteredCheckout(checkout, async () => {
+      throw removeFailure;
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([transactionFailure, removeFailure]);
+    expect((failure as AggregateError).cause).toBe(transactionFailure);
+  });
 
   describe('getCodebase', () => {
     test('returns existing codebase', async () => {
@@ -473,9 +549,20 @@ describe('codebases', () => {
       expect(result).toBeDefined();
       expect(result?.name).toBe('test-repo');
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_codebases WHERE default_cwd = $1 ORDER BY created_at DESC LIMIT 1',
-        ['/workspace/test-repo']
+        'SELECT * FROM remote_agent_codebases ORDER BY created_at DESC'
       );
+    });
+
+    test('returns the newest row whose default_cwd matches, skipping others', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { ...mockCodebase, id: 'other', default_cwd: '/workspace/other' },
+          { ...mockCodebase, id: 'newer', default_cwd: '/workspace/test-repo' },
+          { ...mockCodebase, id: 'older', default_cwd: '/workspace/test-repo' },
+        ])
+      );
+
+      expect((await findCodebaseByDefaultCwd('/workspace/test-repo'))?.id).toBe('newer');
     });
 
     test('should return null when codebase not found', async () => {

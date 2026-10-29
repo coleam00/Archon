@@ -18,12 +18,14 @@ A worktree separates checkouts. It is not an execution or security sandbox: comm
 | Command | Behavior |
 |---|---|
 | `archon workflow run <name> "..."` | New worktree on a generated branch |
-| `archon workflow run <name> --branch fix/login "..."` | Worktree on that branch, created or reused |
+| `archon workflow run <name> --branch fix/login "..."` | Reuses a healthy Archon registration for the branch, otherwise creates or reuses a worktree at the configured target path |
 | `archon workflow run <name> --no-worktree "..."` | Runs in your current checkout |
 
 Use `--branch` with a descriptive name for work that changes code; it makes worktrees and pull requests easy to identify. Use `--no-worktree` only for read-only work. A workflow can pin the choice with `worktree.enabled` in its YAML. Don't start two runs on the same branch at once: one branch maps to one worktree.
 
 By default, worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/`. Set `worktree.path` in the repository's config for a repo-local location such as `.worktrees`, and add it to `.gitignore`.
+
+With `--branch`, Archon first reuses a healthy active task worktree registered in Archon for that project and branch, even at another path. Without that registration, worktree creation can still reuse a usable checkout at the configured target path. If no healthy active task registration was reused and another path holds the branch, creation fails with `branch_checked_out`, naming the holder, whether or not it is registered in Archon. Check whether a live Archon run still needs that checkout before freeing the branch. Once it is safe, preserve its changes, then detach it with `git -C <holder-path> switch --detach` or remove it before retrying. Archon leaves that checkout untouched. [Exact-branch continuation](/reference/cli/#continuing-an-existing-estate), such as `--adopt`, can reuse a Git-registered holder at another path.
 
 A workflow can also start a child run with its own worktree by writing `isolation: worktree` on a `workflow:` node; see [Launching a separate governed run](/reference/workflow-language/#launching-a-separate-governed-run-with-workflow). Those branches have generated names such as `archon/task-3f9a1c2b-...-child-0`. A paused or failed child run resumes in its original worktree, so leave child worktrees alone until the whole run has finished.
 
@@ -39,7 +41,7 @@ worktree:
   postCreateTimeout: 300000     # per command, in milliseconds
 ```
 
-Commands run in order in the new checkout, after submodules and copied files. A command that exits nonzero, times out or cannot start stops worktree creation, and the error reports the exit code or timeout with the command's output. An existing worktree is reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. See [Configuration](/reference/configuration/) for every `worktree` option.
+Commands run in order in the new checkout, after submodules and copied files. A command that exits nonzero, times out or cannot start stops worktree creation, and the error reports the exit code or timeout with the command's output. Both a healthy Archon-registered worktree and a usable existing checkout at the configured target path are reused without running setup again. Setup should provision the checkout, not leave a server running. Copied `.env` files are not loaded automatically. See [Configuration](/reference/configuration/) for every `worktree` option.
 
 ## Inspect and clean up
 

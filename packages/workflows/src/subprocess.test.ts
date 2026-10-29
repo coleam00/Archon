@@ -1,9 +1,11 @@
 // @archon-test-isolated
 import { describe, expect, it, spyOn, test } from 'bun:test';
 import * as childProcess from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough, Writable } from 'node:stream';
 import * as git from '@archon/git';
 import * as processTools from '@archon/paths/plugin-process';
 import { bashInvocation } from './bash-invocation';
@@ -577,30 +579,70 @@ describe('subprocess input delivery', () => {
     }
   });
 
-  it('keeps command failure primary and rejects unsuccessful delivery in recorded nodes', async () => {
-    const trees = recordNodeProcessTrees();
-    const run = (code: number) =>
-      runSubprocess(
-        { kind: 'host' },
-        process.execPath,
-        [
-          '-e',
-          `require('node:fs').closeSync(0); process.stderr.write('evidence'); setTimeout(() => process.exit(${code}), 100)`,
-        ],
-        {
-          cwd: import.meta.dir,
-          env: {},
-          retention: { standalone: true },
-          input: 'x'.repeat(8_000_000),
+  it.each(['delivery error', 'command error'] as const)(
+    'settles recorded-node input delivery before command completion: %s',
+    async outcome => {
+      const deliveryError = new Error('stdin failed');
+      const stdin = new Writable({
+        write(_chunk, _encoding, callback) {
+          callback(deliveryError);
+        },
+      });
+      const stderr = new PassThrough();
+      const child = Object.defineProperties(new childProcess.ChildProcess(), {
+        stdin: { value: stdin },
+        stdout: { value: null },
+        stderr: { value: stderr },
+      });
+      const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
+      const trees = recordNodeProcessTrees();
+      const delivered = once(stdin, 'error');
+      let closed = false;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        child.emit('exit', outcome === 'command error' ? 7 : 0, null);
+        child.emit('close', outcome === 'command error' ? 7 : 0, null);
+      };
+      const pending = runSubprocess({ kind: 'host' }, 'controlled-node', [], {
+        cwd: import.meta.dir,
+        env: {},
+        retention: { standalone: true },
+        input: 'x',
+      });
+      try {
+        const observed = await delivered;
+        expect(spawn).toHaveBeenCalledTimes(1);
+        expect(observed[0]).toBe(deliveryError);
+        stderr.end('evidence');
+        close();
+        if (outcome === 'command error') {
+          const rejection = await pending.then(
+            () => undefined,
+            (error: unknown) => error
+          );
+          expect(rejection).not.toBe(deliveryError);
+          expect(rejection).toMatchObject({
+            code: 7,
+            stderr: 'evidence',
+            signal: null,
+          });
+        } else {
+          await expect(pending).rejects.toBe(deliveryError);
+          expect(deliveryError).toMatchObject({
+            stderr: 'evidence',
+          });
         }
-      );
-    try {
-      await expect(run(7)).rejects.toMatchObject({ code: 7, stderr: 'evidence' });
-      await expect(run(0)).rejects.toMatchObject({ code: expect.any(String), stderr: 'evidence' });
-    } finally {
-      trees.release();
+      } finally {
+        close();
+        await pending.catch(() => undefined);
+        trees.release();
+        spawn.mockRestore();
+        stdin.destroy();
+        stderr.destroy();
+      }
     }
-  });
+  );
 
   it.each([undefined, '', '€\nexact\n'])(
     'forwards input %j through Docker without putting it in argv',

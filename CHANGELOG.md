@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-29
+
+Workflow names must match exactly, provider plugins move to protocol 3, and a batch of fixes for Postgres boots, Codex runs, cleanup and cost accounting.
+
+### Breaking
+
+- The provider plugin protocol is now 3. After upgrading, run `archon provider add` again for each provider you use. Third-party provider plugins must rebuild against protocol 3. A provider installed by 0.13.0 is reported as unavailable, naming its protocol, this Archon's protocol and the command that fixes it, instead of failing workflow discovery with `Invalid input`. (#5252, #5270)
+- Workflow names resolve by exact name everywhere: `archon workflow run`, the chat `/workflow` command, the run API, `workflow:` children, `include:`, composed fan-outs and resume. `archon workflow run review` no longer selects `archon-review`; the error suggests the closest names instead. A `workflow:` or `include:` target that is not an exact name fails to load, so adding a workflow can no longer change which child runs. Project-name matching is unchanged. (#5259)
+- Output field references accept properties declared through `allOf`, `anyOf` and `oneOf`, including nested compositions and schemas without root properties. A reference to a field that a composition-only schema declares nowhere now fails at load instead of being read schemaless. (#5255)
+
+### Changed
+
+- SDLC build queue: before it continues an item, the answer checks the whole change against the issue's contract and asks when a correction would add machinery the contract does not name, naming the subtractive option. Review proposes removing machinery a change added before extending it. A Ready, green pull request whose only remaining check no round can run is asked about once instead of relaunched. The answer declares its question's class (`stop` or `scope`), and the queue records that class instead of deriving it from the round count. (#5266)
+
+### Fixed
+
+- PostgreSQL: a boot that finds the schema current skips convergence, and so takes no lock and runs no DDL. Deadlock and serialization victims (40P01, 40001) retry, and concurrent boots on a fresh database recover from schema deadlocks, so a status query or timer tick no longer kills a live run with "deadlock detected". (#4543, #5249)
+- A provider turn that stays silent after its result now fails at the node's `idle_timeout` instead of hanging the run indefinitely. (#5252)
+- A usage-limit wait across a fan-out or loop group no longer resumes before the reset a provider reported. (#5250)
+- Codex: a "no usable login" credential check is rechecked once in a fresh process, so concurrent runs sharing one refreshing login are not refused. Schema conversion keeps conditional `oneOf`/`anyOf`/`allOf` output schemas satisfiable, and a shape it cannot express is refused before the run with the keyword and path. (#5245, #5253)
+- Abandoning a run keeps the checkout of a sub-run whose owner may still be live instead of deleting it. A crash before a container write-back apply no longer resumes as applied and discards the overlay. (#5251, #5243)
+- Cleanup of an unregistered checkout, and terminal writes in the file store, no longer hold a lock while they delete files or walk artifacts. (#5238, #5242)
+- A refreshed OAuth credential keeps its label, and a lost token rotation is reported as needing a reconnect instead of healthy. (#5240)
+- When the newest of several servers on one Archon home stops, `server.json` is handed to a server still listening instead of being removed. (#5237)
+- On Windows, a registered repository is no longer refused as "a different clone" when its path differs only in slash direction or drive-letter case. (#5244)
+- A run blocked because another worktree holds its branch names that worktree. (#5258)
+- Resume keeps the setup error when the run cannot be marked failed. Workflow run reads reject an unsupported stored status instead of acting on it. (#5241, #5265)
+- A dropped SSE reconnect during replay keeps its buffered events. (#5239)
+- Loop and fan-out cost totals keep a partial cost marked partial across iterations, resume and retries. (#5262)
+- `/status` keeps its worktree totals when the base branch cannot be resolved. (#5263)
+- A forge plugin file that cannot be inspected is reported instead of aborting discovery or silently disappearing. (#5264)
+- Dry runs keep an explicit `null` stub, and `workflow run --resume` help says it also selects stale running runs. (#5261, #5260)
+
 ## [0.13.0] - 2026-10-28
 
 Slack runs only as a plugin. Declared MCP servers and misplaced node keys fail before any tokens are spent. Completed runs clean up their own worktrees and scratch space. The SDLC merge queue merges clean PRs at once, and queue answers continue without waiting for the next pass.

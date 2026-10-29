@@ -8,6 +8,7 @@
  * (`dag/run-terminal`).
  */
 
+import { createProviderLimitDeadlineResolver } from './executor-shared';
 import { serializeRunUsage } from './schemas/run-usage';
 import { readInterruptedRunUsage } from './dag/interrupted-usage';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
@@ -505,8 +506,11 @@ async function createRunContext(
       : undefined;
   return {
     containerPause: execContext.kind === 'container' && containerCtx ? {} : undefined,
+    providerLimitDeadline: createProviderLimitDeadlineResolver(),
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
+    loopConfigFailureBaselines:
+      priorCompletedNodes === undefined ? undefined : resumeSnapshot?.loopConfigFailureBaselines,
     reportedChildUsage: resumeSnapshot?.reportedChildUsage,
     unattributedChildUsagePaths: resumeSnapshot?.unattributedChildUsagePaths,
     runBudget,

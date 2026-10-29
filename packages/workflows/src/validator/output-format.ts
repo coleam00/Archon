@@ -1,5 +1,5 @@
-import { findStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
-import type { StrictSchemaIssue } from '@archon/provider-contract';
+import { findPreparedStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
+import type { PreparedStrictSchemaIssue } from '@archon/provider-contract';
 import { isExecNode, isOutputFormatEnforced, isWaitNode } from '../schemas';
 import { workflowNodeOutputFormatError } from '../loader/contracts';
 import { compileOutputSchema } from '../structured-output';
@@ -46,7 +46,7 @@ export function validateOutputFormat(
   if (outputSchema === undefined) return;
 
   // --- Strict-schema compatibility (#2945, #3557) ---
-  // A schema with a bare object or incomplete 'required' coverage is rejected
+  // After preparation, a bare object or incomplete 'required' coverage is rejected
   // by a provider that enforces OpenAI strict mode (Codex) at the first turn
   // with HTTP 400 invalid_json_schema. Report it at validation time so `archon
   // validate workflows` catches it before a live run burns setup costs. The
@@ -56,7 +56,7 @@ export function validateOutputFormat(
   // loop; not exec/bash/script, and not a wait's engine-injected schema).
   const strictSchemaIssues =
     !isExecNode(node) && !isWaitNode(node) && capabilities?.requiresAllPropertiesRequired
-      ? findStrictSchemaIssues(outputSchema, 'output_format')
+      ? findPreparedStrictSchemaIssues(outputSchema)
       : [];
   for (const issue of strictSchemaIssues) {
     issues.push({
@@ -86,8 +86,14 @@ export function validateOutputFormat(
 function strictSchemaIssueText(
   nodeId: string,
   provider: string | undefined,
-  issue: StrictSchemaIssue
+  issue: PreparedStrictSchemaIssue
 ): { message: string; hint: string } {
+  if (issue.kind === 'unsupported-conversion') {
+    return {
+      message: `Node '${nodeId}' declares an output_format that provider '${provider}' cannot prepare: ${issue.message}`,
+      hint: 'Use the supported schema alternative described in the preparation error.',
+    };
+  }
   if (issue.kind === 'missing-properties') {
     return {
       message: `Node '${nodeId}' declares an object schema without 'properties' at '${issue.schemaPath}'. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,

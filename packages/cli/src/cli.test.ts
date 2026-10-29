@@ -2605,11 +2605,11 @@ describe('receipt policies in the CLI host', () => {
     try {
       const listed = run(['list']);
       expect(listed.status).toBe(0);
-      expect(listed.stdout).toContain(`${id}  unreadable`);
+      expect(listed.stdout).toContain(`${id}  unavailable  Plugin unavailable:`);
       expect(readFileSync(file, 'utf8')).toBe(contents);
       const removed = run(['remove', id]);
       expect(removed.status).toBe(0);
-      expect(removed.stdout).toContain(`Removed the unreadable receipt of ${id}`);
+      expect(removed.stdout).toContain(`Removed the unavailable receipt of ${id}`);
       expect(existsSync(file)).toBe(false);
     } finally {
       await removeTempTree(root);

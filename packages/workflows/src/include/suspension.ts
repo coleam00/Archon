@@ -8,7 +8,6 @@ import {
   isWaitNode,
   isWorkflowNode,
 } from '../schemas';
-import { resolveWorkflowName } from '../router';
 
 export interface ComposedSuspensionPath {
   id: string;
@@ -40,13 +39,7 @@ export function collectComposedSuspensionPaths(
   };
 
   const visitTarget = (name: string, ownerId: string, kind: 'include' | 'workflow'): void => {
-    let target: SuspensionWorkflow | undefined;
-    try {
-      target = kind === 'workflow' ? resolveWorkflowName(name, definitions) : byName.get(name);
-    } catch (_err) {
-      found.push({ id: ownerId, reason: `${kind} target '${name}' is ambiguous` });
-      return;
-    }
+    const target = byName.get(name);
     if (target === undefined) {
       found.push({ id: ownerId, reason: `${kind} target '${name}' cannot be resolved` });
       return;

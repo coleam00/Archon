@@ -100,8 +100,6 @@ export async function resolveFanOutChildDefinition(
     // is reachable here only by the composition that names it.
     const definitions = [...workflows, ...(support ?? [])].map(w => w.workflow);
     const definition = resolveWorkflowName(targetName, definitions);
-    // resolveWorkflowName returns undefined for an unknown name and THROWS only on
-    // ambiguity, so the undefined branch is ordinary rather than exceptional.
     if (!definition) {
       return unresolvedFanOutTarget(errors, targetName, verifiedFiles);
     }
@@ -236,6 +234,7 @@ export async function executeComposeFanOutNode(
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const execution = beginExecution(ctx, node);
   let tokensUnknown = false;
+  let costPartial = false;
   await recordNodeState({ store: deps.store, logDir: ctx.logDir }, execution);
 
   const failResult = async (
@@ -258,6 +257,7 @@ export async function executeComposeFanOutNode(
         {
           output: { text: '' },
           costUsd,
+          costPartial,
           tokens,
           tokensUnknown,
           diagnostics: { fanOut: true },
@@ -282,6 +282,7 @@ export async function executeComposeFanOutNode(
         {
           output: { text: output, ...(structured !== undefined ? { structured } : {}) },
           costUsd,
+          costPartial,
           tokens,
           tokensUnknown,
           diagnostics: { fanOut: true },
@@ -378,14 +379,27 @@ export async function executeComposeFanOutNode(
 
   const totalCostUsd = sumReportedCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
+  costPartial = outcomes.some(outcome => outcome.costPartial === true);
   tokensUnknown = outcomes.some(outcome => outcome.tokensUnknown === true);
 
   const parent = await readParentStatus(ctx, node);
   if (parent === 'stopped') {
-    return interruptedFanOutResult(execution, totalCostUsd, totalTokens, tokensUnknown);
+    return interruptedFanOutResult(
+      execution,
+      totalCostUsd,
+      totalTokens,
+      tokensUnknown,
+      costPartial
+    );
   }
 
-  const joined = joinComposeOutcomes(node, fanOut.join, snapshots, outcomes);
+  const joined = joinComposeOutcomes(
+    node,
+    fanOut.join,
+    snapshots,
+    outcomes,
+    ctx.providerLimitDeadline
+  );
   if (joined.status === 'failed') {
     await notify(joined.notice);
     return failResult(
@@ -408,11 +422,13 @@ function interruptedFanOutResult(
   execution: NodeExecutionRecord,
   costUsd: number | undefined,
   tokens: TokenUsage | undefined,
-  tokensUnknown: boolean
+  tokensUnknown: boolean,
+  costPartial: boolean
 ): NodeExecutionResult {
   return {
     ...serializeNodeOutput(execution),
     ...(costUsd !== undefined ? { costUsd } : {}),
+    ...(costPartial ? { costPartial: true } : {}),
     ...(tokens !== undefined ? { tokens } : {}),
     ...(tokensUnknown ? { tokensUnknown: true } : {}),
   };

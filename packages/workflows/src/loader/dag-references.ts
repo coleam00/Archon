@@ -24,6 +24,8 @@ import {
   PRIOR_OUTPUT_PATH_SOURCE,
   OUTPUT_REF_SOURCE,
   parseWholeOutputRef,
+  COMPOSITION_KEYWORDS,
+  declaredOutputPathsFromSchema,
 } from '../output-ref';
 import { visitNodeTemplateSlots, type TemplateSurface } from '../template-walker';
 import { z } from 'zod';
@@ -105,16 +107,32 @@ function referencedOptionsShapeError(
   if (producer === undefined || isIncludeDirective(producer)) return undefined;
   let schema: unknown = producer.output_format;
   if (schema === undefined) return undefined;
-  for (const key of ref.field.split('.')) {
+  const path = ref.field.split('.');
+  // Composed options are validated against the actual value when the wait runs.
+  if (hasComposedOptions(schema, path)) return undefined;
+  for (const key of path) {
     const properties: unknown = isRecord(schema) ? schema.properties : undefined;
     schema = isRecord(properties) ? properties[key] : undefined;
   }
+  if (isAttentionOptionsSchema(schema)) return undefined;
+  const { properties: optionProperties = {}, required: optionRequired = [] } =
+    ATTENTION_OPTION_JSON_SCHEMA;
+  const expected = Object.entries(optionProperties)
+    .map(([key, property]) => {
+      const type = isRecord(property) ? String(property.type) : 'unknown';
+      return optionRequired.includes(key) ? `${key}: ${type}` : `${key}?: ${type}`;
+    })
+    .join('; ');
+  return `'${options}' must be an array of objects declaring only { ${expected} } in '${ref.nodeId}'s output_format`;
+}
+
+function isAttentionOptionsSchema(schema: unknown): boolean {
   const items: unknown = isRecord(schema) && schema.type === 'array' ? schema.items : undefined;
   const itemProperties: unknown = isRecord(items) ? items.properties : undefined;
   const itemRequired: unknown = isRecord(items) ? items.required : undefined;
   const { properties: optionProperties = {}, required: optionRequired = [] } =
     ATTENTION_OPTION_JSON_SCHEMA;
-  const fits =
+  return (
     isRecord(items) &&
     items.type === 'object' &&
     isRecord(itemProperties) &&
@@ -126,15 +144,55 @@ function referencedOptionsShapeError(
     }) &&
     optionRequired.every(
       key => key in itemProperties && Array.isArray(itemRequired) && itemRequired.includes(key)
-    );
-  if (fits) return undefined;
-  const expected = Object.entries(optionProperties)
-    .map(([key, property]) => {
-      const type = isRecord(property) ? String(property.type) : 'unknown';
-      return optionRequired.includes(key) ? `${key}: ${type}` : `${key}?: ${type}`;
-    })
-    .join('; ');
-  return `'${options}' must be an array of objects declaring only { ${expected} } in '${ref.nodeId}'s output_format`;
+    )
+  );
+}
+
+function hasComposition(schema: unknown): boolean {
+  return isRecord(schema) && COMPOSITION_KEYWORDS.some(key => Array.isArray(schema[key]));
+}
+
+function hasComposedOptions(schema: unknown, path: readonly string[]): boolean {
+  if (!isRecord(schema)) return false;
+  const [key, ...rest] = path;
+  if (key === undefined) {
+    if (hasComposition(schema)) return true;
+    const items = Array.isArray(schema.items)
+      ? [...schema.items, schema.additionalItems]
+      : [schema.items];
+    return items.some(hasComposedOptionItem);
+  }
+  if (compositionDeclaresPath(schema, path)) return true;
+  return isRecord(schema.properties) && hasComposedOptions(schema.properties[key], rest);
+}
+
+function hasComposedOptionItem(schema: unknown): boolean {
+  if (hasComposition(schema)) return true;
+  const properties: unknown = isRecord(schema) ? schema.properties : undefined;
+  return isRecord(properties) && Object.values(properties).some(hasComposition);
+}
+
+function compositionDeclaresPath(
+  schema: Record<string, unknown>,
+  path: readonly string[]
+): boolean {
+  for (const keyword of COMPOSITION_KEYWORDS) {
+    const branches = schema[keyword];
+    if (!Array.isArray(branches)) continue;
+    for (const branch of branches) {
+      if (!isRecord(branch)) continue;
+      const declarations = declaredOutputPathsFromSchema(branch);
+      if (
+        declarations?.some(
+          declared =>
+            declared.length === path.length &&
+            declared.every((segment, index) => segment === path[index])
+        )
+      )
+        return true;
+    }
+  }
+  return false;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -10,7 +10,7 @@
  *   1. Producer skipped or pending → THROW 'producer-not-run'.
  *   2. Producer failed → THROW 'producer-failed' (#2713). A failed producer's leftover
  *      output is never trusted, however JSON-shaped or non-empty it looks.
- *   3. Producer has `declaredOutputPaths` (an `output_format` with `properties`): every
+ *   3. Producer has `declaredOutputPaths` (explicit properties, including composed schemas): every
  *      prefix of the path must be declared, else THROW 'not-in-schema' naming the first
  *      undeclared segment.
  *   4. Read the object: `structuredOutput` when it is an object, else the output text
@@ -411,61 +411,131 @@ export function similarNodeIds(nodeId: string, knownIds: Iterable<string>): stri
   return findSimilar(nodeId, Array.from(knownIds));
 }
 
-/**
- * Top-level property names of an `output_format` schema, for load-time checks that
- * name one top-level field (`loop.until_field`, `outcome_field`). Returns:
- *   - the property names (possibly `[]` for an explicit empty `properties: {}`) when
- *     the schema declares an object shape;
- *   - `undefined` when there is no schema or it has no `properties` map (a non-object
- *     schema).
- */
 export function declaredFieldsFromSchema(
   outputFormat: Record<string, unknown> | undefined
 ): string[] | undefined {
-  if (!outputFormat) return undefined;
-  const props = outputFormat.properties;
-  if (props === null || typeof props !== 'object' || Array.isArray(props)) return undefined;
-  return Object.keys(props as Record<string, unknown>);
+  const paths = declaredOutputPathsFromSchema(outputFormat);
+  return paths === undefined ? undefined : rootOutputFields(paths);
+}
+
+// allOf adds constraints; an alternative constrains every result only when all
+// its branches do. This checks explicit declarations without branch products.
+function schemaGuarantees(
+  schema: Record<string, unknown>,
+  predicate: (schema: Record<string, unknown>) => boolean
+): boolean {
+  if (predicate(schema)) return true;
+  return COMPOSITION_KEYWORDS.some(keyword => {
+    const branches = schema[keyword];
+    if (!Array.isArray(branches) || branches.length === 0) return false;
+    const guarantees = (raw: unknown): boolean => {
+      if (raw === false) return true;
+      const branch = asPlainObject(raw);
+      return branch !== undefined && schemaGuarantees(branch, predicate);
+    };
+    return keyword === 'allOf' ? branches.some(guarantees) : branches.every(guarantees);
+  });
+}
+
+export function outputFieldConstraints(schema: Record<string, unknown>, field: string) {
+  const propertyIsBoolean = (schema: Record<string, unknown>): boolean => {
+    const property = asPlainObject(asPlainObject(schema.properties)?.[field]);
+    return (
+      property !== undefined && schemaGuarantees(property, schema => schema.type === 'boolean')
+    );
+  };
+  const requiresBooleanType = (schema: Record<string, unknown>, composed: boolean): boolean => {
+    composed ||= COMPOSITION_KEYWORDS.some(keyword => Array.isArray(schema[keyword]));
+    if (typeof schema.type === 'string' && schema.type !== 'boolean') return true;
+    if (composed && Array.isArray(schema.type) && !schema.type.includes('boolean')) return true;
+    return COMPOSITION_KEYWORDS.some(keyword => {
+      const branches = schema[keyword];
+      return (
+        Array.isArray(branches) &&
+        (keyword !== 'allOf' ||
+          branches.some(raw => {
+            const branch = asPlainObject(raw);
+            return branch !== undefined && requiresBooleanType(branch, true);
+          }))
+      );
+    });
+  };
+  const fieldRequiresBooleanType = (schema: Record<string, unknown>, composed = false): boolean => {
+    composed ||= COMPOSITION_KEYWORDS.some(keyword => Array.isArray(schema[keyword]));
+    const property = asPlainObject(asPlainObject(schema.properties)?.[field]);
+    if (property !== undefined && requiresBooleanType(property, composed)) return true;
+    return COMPOSITION_KEYWORDS.some(keyword => {
+      const branches = schema[keyword];
+      return (
+        Array.isArray(branches) &&
+        (keyword !== 'allOf' ||
+          branches.some(raw => {
+            const branch = asPlainObject(raw);
+            return branch !== undefined && fieldRequiresBooleanType(branch, true);
+          }))
+      );
+    });
+  };
+  return {
+    object: schemaGuarantees(schema, schema => schema.type === 'object'),
+    required: schemaGuarantees(
+      schema,
+      schema => Array.isArray(schema.required) && schema.required.includes(field)
+    ),
+    boolean: schemaGuarantees(schema, propertyIsBoolean),
+    requiresBooleanType: fieldRequiresBooleanType(schema),
+  };
 }
 
 /**
  * Every declared object-field path of a producer's output, stored on
  * `NodeOutput.declaredOutputPaths` when it completes. A single-field reference is a
- * depth-1 path. `undefined` means the producer has no object schema and is read
- * schemaless.
+ * depth-1 path. `undefined` means the schema has neither root properties nor root composition
+ * and is read schemaless. An empty array is a strict contract with no declared paths.
  */
 export const declaredOutputPathsSchema = z.array(z.array(z.string()).min(1));
 export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
 
-/**
- * Project an `output_format` schema to its declared paths. A property's children are
- * paths only when it may be an object; a dotted property name stays one segment.
- */
+export const COMPOSITION_KEYWORDS = ['allOf', 'anyOf', 'oneOf'] as const;
+
 export function declaredOutputPathsFromSchema(
   outputFormat: Record<string, unknown> | undefined
 ): DeclaredOutputPaths | undefined {
-  const props = asPlainObject(outputFormat?.properties);
-  if (props === undefined) return undefined;
-  const paths: DeclaredOutputPaths = [];
-  const visit = (properties: Record<string, unknown>, prefix: string[]): void => {
-    for (const [key, raw] of Object.entries(properties)) {
+  if (
+    outputFormat === undefined ||
+    (asPlainObject(outputFormat.properties) === undefined &&
+      !COMPOSITION_KEYWORDS.some(keyword => Array.isArray(outputFormat[keyword])))
+  ) {
+    return undefined;
+  }
+  const paths = new Map<string, string[]>();
+  const visit = (schema: Record<string, unknown>, prefix: string[]): void => {
+    const type = schema.type;
+    if (
+      prefix.length > 0 &&
+      type !== undefined &&
+      type !== 'object' &&
+      !(Array.isArray(type) && type.includes('object'))
+    ) {
+      return;
+    }
+    for (const [key, raw] of Object.entries(asPlainObject(schema.properties) ?? {})) {
       const path = [...prefix, key];
-      paths.push(path);
-      const schema = asPlainObject(raw);
-      const type = schema?.type;
-      const children = asPlainObject(schema?.properties);
-      if (
-        children &&
-        (type === undefined ||
-          type === 'object' ||
-          (Array.isArray(type) && type.includes('object')))
-      ) {
-        visit(children, path);
+      paths.set(JSON.stringify(path), path);
+      const child = asPlainObject(raw);
+      if (child !== undefined) visit(child, path);
+    }
+    for (const keyword of COMPOSITION_KEYWORDS) {
+      const branches = schema[keyword];
+      if (!Array.isArray(branches)) continue;
+      for (const raw of branches) {
+        const branch = asPlainObject(raw);
+        if (branch !== undefined) visit(branch, prefix);
       }
     }
   };
-  visit(props, []);
-  return paths;
+  visit(outputFormat, []);
+  return [...paths.values()];
 }
 
 /**

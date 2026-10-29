@@ -7,6 +7,7 @@ import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import {
   createMockStore,
+  persistedEvents,
   mockClaudeCapabilities,
   mockSendQueryDag,
   mockGetAgentProviderDag,
@@ -649,6 +650,200 @@ describe('loop_group body inputs: included blocks, command files and loop variab
         event => event.event_type === 'node_completed' && event.step_name === 'group.pass__check'
       );
     expect(includedCompletions.map(event => event.data?.iteration)).toEqual([1, 2]);
+  });
+
+  it.each([
+    [undefined, 0.03, true],
+    [0.01, 0.03, false],
+    [0, 0, false],
+  ] as const)(
+    'retains retry cost proof for %s then %s through nested groups',
+    async (first, last, partial) => {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls === 1) {
+          yield {
+            type: 'result',
+            isError: true,
+            errors: ['Retry me'],
+            failure: { class: 'transient', evidence: 'Retry me' },
+            cost: first,
+          };
+        } else {
+          yield { type: 'agent_message_chunk', text: 'DONE' };
+          yield { type: 'result', cost: last };
+        }
+      });
+      const group = (id: string, child: DagNode): DagNode => ({
+        id,
+        kind: 'loop_group',
+        loop_group: { until: 'DONE', max_iterations: 1, fresh_context: false, nodes: [child] },
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('retry-proof'),
+          workflow: {
+            name: 'retry-proof',
+            nodes: [
+              group(
+                'outer',
+                group('inner', {
+                  id: 'work',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Work' },
+                  retry: { max_attempts: 1, delay_ms: 1 },
+                })
+              ),
+            ],
+          },
+        })
+      );
+      expect(calls).toBe(2);
+      for (const path of ['outer.inner', 'outer']) {
+        const row = persistedEvents(store).find(
+          e => e.step_name === path && e.event_type === 'node_completed'
+        );
+        expect(row?.data?.spend).toEqual(
+          expect.objectContaining({
+            costUsd: {
+              source: 'provider',
+              value: (first ?? 0) + last,
+              ...(partial ? { partial: true } : {}),
+            },
+          })
+        );
+      }
+    }
+  );
+
+  it.each([false, true])(
+    'preserves inner loop cost completeness through nested=%s groups',
+    async nested => {
+      let call = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        call++;
+        yield {
+          type: 'agent_message_chunk',
+          text: call === 2 ? '<promise>INNER_DONE</promise> DONE' : 'work',
+        };
+        yield { type: 'result', sessionId: 'inner', ...(call === 2 ? { cost: 0.02 } : {}) };
+      });
+      const inner: DagNode = {
+        id: 'inner',
+        kind: 'loop',
+        loop: {
+          prompt: 'Work',
+          until: 'INNER_DONE',
+          max_iterations: 2,
+          fresh_context: false,
+        },
+      };
+      const group = (id: string, child: DagNode): DagNode => ({
+        id,
+        kind: 'loop_group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          fresh_context: false,
+          nodes: [child],
+        },
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'nested-cost',
+            nodes: [group('outer', nested ? group('middle', inner) : inner)],
+          },
+          workflowRun: makeWorkflowRun('nested-cost'),
+        })
+      );
+      const events = persistedEvents(store);
+      for (const path of nested
+        ? ['outer.middle.inner', 'outer.middle', 'outer']
+        : ['outer.inner', 'outer']) {
+        expect(
+          events.find(e => e.step_name === path && e.event_type === 'node_completed')?.data
+        ).toMatchObject({
+          spend: { costUsd: { source: 'provider', value: 0.02, partial: true } },
+        });
+      }
+    }
+  );
+
+  it('retains an all-unpriced middle group beside a priced outer sibling', async () => {
+    mockSendQueryDag.mockImplementation(async function* (prompt) {
+      yield { type: 'agent_message_chunk', text: 'DONE' };
+      yield {
+        type: 'result',
+        sessionId: 'inner',
+        ...(prompt.includes('Priced') ? { cost: 0.03 } : {}),
+      };
+    });
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('unpriced-nested'),
+        workflow: {
+          name: 'unpriced-nested',
+          nodes: [
+            {
+              id: 'outer',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 1,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'middle',
+                    kind: 'loop_group',
+                    loop_group: {
+                      until: 'DONE',
+                      max_iterations: 1,
+                      fresh_context: false,
+                      nodes: [
+                        {
+                          id: 'inner',
+                          kind: 'loop',
+                          loop: {
+                            prompt: 'Unpriced',
+                            until: 'DONE',
+                            max_iterations: 1,
+                            fresh_context: false,
+                          },
+                        },
+                      ],
+                    },
+                  },
+                  { id: 'priced', kind: 'agent', source: { kind: 'inline', prompt: 'Priced' } },
+                ],
+              },
+            },
+          ],
+        },
+      })
+    );
+    const events = persistedEvents(store);
+    expect(
+      events.find(e => e.step_name === 'outer.middle' && e.event_type === 'node_completed')?.data
+    ).toMatchObject({ spend: { costUsd: { source: 'unavailable', reason: 'incomplete' } } });
+    expect(
+      events.find(e => e.step_name === 'outer' && e.event_type === 'node_completed')?.data
+    ).toMatchObject({
+      cost_usd: 0.03,
+      spend: { costUsd: { source: 'provider', value: 0.03, partial: true } },
+    });
   });
 
   it('runs a command-backed loop node inside a loop_group body with namespaced lifecycle events', async () => {

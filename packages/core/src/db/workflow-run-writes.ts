@@ -4,6 +4,8 @@
  * write-back claim, and deleting terminal runs. Re-exported from the
  * `./workflows` entry.
  */
+
+import { mutableRunMetadata } from '@archon/workflows/schemas/run-metadata';
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 import {
@@ -118,7 +120,7 @@ export async function updateWorkflowRun(
   if (updates.metadata !== undefined) {
     // Use dialect helper for JSON merge - need to calculate the param index
     const paramIndex = values.length + 1;
-    values.push(JSON.stringify(updates.metadata));
+    values.push(JSON.stringify(mutableRunMetadata(updates.metadata)));
     setClauses.push(`metadata = ${dialect.jsonMerge('metadata', paramIndex)}`);
   }
   if (updates.outcome !== undefined) {
@@ -175,7 +177,7 @@ export async function updateWorkflowRunMetadataIfRunning(
     `UPDATE remote_agent_workflow_runs
      SET metadata = ${getDialect().jsonMerge('metadata', 2)}
      WHERE id = $1 AND status = 'running'`,
-    [id, JSON.stringify(metadata)]
+    [id, JSON.stringify(mutableRunMetadata(metadata))]
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -186,8 +188,9 @@ export async function updateWorkflowRunMetadataIfRunning(
  * only while it is unset — so exactly one resume wins the claim. Returns whether
  * THIS caller won. The caller must apply the overlay only on `claimed === true`, and
  * on apply FAILURE release the claim (`releaseWritebackClaim`) so a `workflow resume`
- * can retry; on a crash AFTER a successful apply the claim stays set, so the next
- * resume finds it claimed and does NOT re-apply (no path applies twice).
+ * can retry. A claim that stays set without a recorded resolution (a crash, or a lost
+ * resolution write) makes the next resume refuse to apply and fail the run for
+ * operator reconciliation, so no path applies twice.
  */
 export async function claimWriteback(id: string): Promise<{ claimed: boolean }> {
   const dialect = getDialect();

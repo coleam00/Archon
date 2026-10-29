@@ -422,6 +422,7 @@ function renderTimelineEntry(entry: TimelineEntry): ReactElement {
           durationMs={entry.node.durationMs}
           timestamp={entry.node.startedAt}
           costUsd={entry.node.costUsd}
+          costPartial={entry.node.costPartial}
           costScope={entry.node.costScope}
           numTurns={entry.node.numTurns}
           tokens={entry.node.tokens}

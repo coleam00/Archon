@@ -245,10 +245,6 @@ async function captureChildSource(
   }
 }
 
-// Resolve the child workflow by NAME (static target — constitution guardrail).
-// Resolution runs BEFORE the cycle check so a case-variant / suffix / substring
-// reference to an ancestor (e.g. `workflow: SELFIE` naming its own run) is caught
-// as a cycle by canonical name, not left to the less-informative depth cap.
 async function resolveChildWorkflow(
   { deps, args }: ChildLaunch,
   childSource: PreparedWorkflowSource
@@ -294,6 +290,7 @@ async function guardChildAncestry(
   try {
     ancestry = [args.parentRun, ...(await deps.store.getRunAncestry(args.parentRun.id))];
   } catch (err) {
+    if (isWorkflowExecutionInterruption(err)) throw err;
     return refuse(`Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`);
   }
   if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {

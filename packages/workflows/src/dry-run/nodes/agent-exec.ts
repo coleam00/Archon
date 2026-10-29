@@ -138,7 +138,7 @@ function hydrateStub(
     // then fails the node — so a node added to `toleratedMissingStubs`
     // any earlier would report a gap that never blocked it while that gap is
     // exactly what blocked it, and `checkFixture` would filter the blocker away.
-    const hydrated = completedOutput(node, stub ?? generatedStubFor(node));
+    const hydrated = completedOutput(node, stub === undefined ? generatedStubFor(node) : stub);
     if (tolerated) ctx.toleratedMissingStubs.add(node.id);
     outputs.set(node.id, hydrated);
     ctx.trace.push({

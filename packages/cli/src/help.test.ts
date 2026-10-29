@@ -307,7 +307,9 @@ Options:
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run
   --config-from-run <run-id> Start a fresh run with the run config another run was started with
-  --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
+  --resume                   Resume the newest eligible failed, paused, or stale running run of this workflow
+                             Running is stale when activity is missing or older than one day; verify its owner is gone first.
+                             Mutually exclusive with --branch
   --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
   --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
   --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
@@ -345,12 +347,12 @@ Examples:
   archon chat "What does the orchestrator do?"
   archon workflow list
   archon workflow run investigate-issue "Fix the login bug"
-  archon workflow run plan --cwd /path/to/repo "Add dark mode"
-  archon workflow run implement --branch feature-auth "Implement auth"
+  archon workflow run archon-plan --cwd /path/to/repo "Add dark mode"
+  archon workflow run archon-implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
-  archon workflow run investigate --folder "Explain how the repos under this root fit together"
+  archon workflow run archon-investigate --folder "Explain how the repos under this root fit together"
   archon workflow run archon-investigate --detach "Investigate the flaky test"
-  archon workflow run investigate --dry-run --stubs ./stubs.yaml --json
+  archon workflow run archon-investigate --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
   archon workflow artifacts <run-id> plan.md

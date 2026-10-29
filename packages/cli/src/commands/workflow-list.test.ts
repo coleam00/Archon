@@ -288,7 +288,7 @@ describe('workflowListCommand', () => {
     });
 
     await expect(workflowListCommand('/test/path', { name: 'missing' })).rejects.toThrow(
-      "Workflow 'missing' not found.\n\nAvailable workflows:\n  - acme-assist\n  - archon-plan"
+      "Workflow 'missing' not found.\n\nDid you mean:\n  - acme-assist\n  - archon-plan"
     );
   });
 
@@ -311,7 +311,7 @@ describe('workflowListCommand', () => {
     expect(error).toMatchObject({ loadErrors: [loadError] });
   });
 
-  it('fails when a requested workflow name is ambiguous', async () => {
+  it('fails when a requested workflow name is not exact', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
@@ -321,12 +321,12 @@ describe('workflowListCommand', () => {
       errors: [],
     });
 
-    await expect(workflowListCommand('/test/path', { name: 'review' })).rejects.toThrow(
-      "Ambiguous workflow 'review'"
-    );
+    const query = workflowListCommand('/test/path', { name: 'review' });
+    await expect(query).rejects.toThrow("Workflow 'review' not found");
+    await expect(query).rejects.toThrow('Did you mean:\n  - archon-review\n  - custom-review');
   });
 
-  it('carries discovery errors when a requested workflow name is ambiguous', async () => {
+  it('carries discovery errors when a requested workflow name is not exact', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const loadError = {
       filename: 'bad.yaml',

@@ -31,7 +31,7 @@ export interface ReadNodeRecordEvent {
   eventType: SerializedNodeEvent['event_type'];
   data: SerializedNodeData;
   /** Raw values retained so accounting can diagnose malformed historical usage. */
-  rawUsage: { tokens?: unknown; tokensUnknown?: boolean; costUsd?: unknown };
+  rawUsage: { tokens?: unknown; tokensUnknown?: boolean; costUsd?: unknown; costPartial?: boolean };
   metadata?: NodeExecutionMetadata;
 }
 
@@ -154,6 +154,7 @@ export function readNodeRecordEvent(
         ? { tokensUnknown: true }
         : {}),
       ...(Object.hasOwn(raw, 'cost_usd') ? { costUsd: raw.cost_usd } : {}),
+      ...(data.cost_partial ? { costPartial: true } : {}),
     },
     ...(metadata === undefined ? {} : { metadata }),
   };

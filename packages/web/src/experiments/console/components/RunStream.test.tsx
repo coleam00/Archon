@@ -131,6 +131,7 @@ describe('RunStream tool rendering', () => {
     skipReason: null,
     skipExpr: null,
     costUsd: null,
+    costPartial: false,
     costScope: null,
     stopReason: null,
     numTurns: null,
@@ -503,3 +504,46 @@ describe('RunStream cleanup warnings', () => {
     expect(html).not.toContain('Waiting for first event');
   });
 });
+
+test.each(
+  (['own', 'total'] as const).flatMap(scope =>
+    [
+      { cost: 0.03, formatted: '0.03' },
+      { cost: 0.036, formatted: '0.03' },
+      { cost: 0.00006, formatted: '0.0000' },
+    ].flatMap(({ cost, formatted }) =>
+      [
+        { cost_partial: true },
+        { spend: { costUsd: { source: 'provider', value: cost, partial: true } } },
+      ].map(proof => ({ scope, cost, formatted, proof }))
+    )
+  )
+)(
+  'RunStream labels persisted partial cost as a floor (%j)',
+  ({ scope, cost, formatted, proof }) => {
+    const event = toRunEvent({
+      id: 'cost',
+      workflow_run_id: 'r1',
+      event_type: 'node_completed',
+      step_index: null,
+      step_name: 'grp',
+      cost_scope: scope,
+      data: { cost_usd: cost, ...proof },
+      created_at: '2026-10-02T10:00:00.000Z',
+    });
+    const html = renderToStaticMarkup(
+      <StreamContextProvider value={{ runStartedAt: event.timestamp }}>
+        <RunStream
+          messages={[]}
+          events={[event]}
+          nodes={[{ node_id: 'grp', state: 'completed' }]}
+          providerEvents={new Map()}
+          showToolCalls={false}
+          showSystem={false}
+          selectedNodeId="all"
+        />
+      </StreamContextProvider>
+    );
+    expect(html).toContain(`· ${scope === 'total' ? 'total ' : ''}at least $${formatted}`);
+  }
+);

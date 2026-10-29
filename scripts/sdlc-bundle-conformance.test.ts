@@ -23,11 +23,17 @@ function bundledStrictSchemaViolations(content: string, name: string): string[] 
     providerRegistry,
     parsed.workflow.nodes,
     parsed.workflow.provider ?? 'codex'
-  ).map(issue =>
-    issue.kind === 'missing-properties'
-      ? `${name}:${issue.nodeId} ${issue.schemaPath} missing properties`
-      : `${name}:${issue.nodeId} ${issue.schemaPath} missing required keys ${issue.missing.join(', ')}`
-  );
+  ).map(issue => {
+    const location = `${name}:${issue.nodeId} ${issue.schemaPath}`;
+    switch (issue.kind) {
+      case 'unsupported-conversion':
+        return `${location} ${issue.message}`;
+      case 'missing-properties':
+        return `${location} missing properties`;
+      case 'missing-required':
+        return `${location} missing required keys ${issue.missing.join(', ')}`;
+    }
+  });
 }
 
 describe('bundled workflows', () => {
@@ -99,6 +105,29 @@ nodes:
             required: []
 `;
     expect(bundledStrictSchemaViolations(source, 'fixture')).toEqual(expected);
+  });
+
+  it('preserves unsupported-conversion diagnostics', () => {
+    const source = `
+name: fixture
+description: Unsupported strict schema
+nodes:
+  - id: result
+    prompt: Produce a result
+    output_format:
+      type: object
+      properties:
+        note: { type: string }
+      required: [note]
+      allOf: [{}]
+`;
+    const violations = bundledStrictSchemaViolations(source, 'fixture');
+    expect(violations).toEqual([
+      expect.stringContaining(
+        'fixture:result output_format Codex output schema at output_format.allOf cannot be converted safely'
+      ),
+    ]);
+    expect(violations[0]).toContain('Use complete inline');
   });
 
   // Replaces the deleted scripts/output-format-strict.test.ts, which guarded this

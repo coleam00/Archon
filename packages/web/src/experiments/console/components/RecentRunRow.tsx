@@ -61,8 +61,8 @@ export function RecentRunRow({
 
   // Design v2 row grid: status | body | (project) | id | duration | cost | CLI.
   const gridCols = showProject
-    ? 'grid-cols-[220px_minmax(0,1fr)_140px_84px_70px_64px_auto]'
-    : 'grid-cols-[220px_minmax(0,1fr)_84px_70px_64px_auto]';
+    ? 'grid-cols-[220px_minmax(0,1fr)_140px_84px_70px_auto_auto]'
+    : 'grid-cols-[220px_minmax(0,1fr)_84px_70px_auto_auto]';
 
   const renderStatus = (): ReactElement => (
     <span className="flex items-center gap-[9px]">
@@ -125,9 +125,11 @@ export function RecentRunRow({
       </span>
       <span
         className="text-right font-mono text-[12px] tabular-nums text-text-primary"
-        title={typeof run.costUsd === 'number' ? 'Total agent cost' : undefined}
+        title={typeof run.costUsd === 'number' ? 'Reported agent cost; may be partial' : undefined}
       >
-        {typeof run.costUsd === 'number' ? formatCost(run.costUsd) : ''}
+        {typeof run.costUsd === 'number'
+          ? `Reported cost ${formatCost(run.costUsd)} (may be partial)`
+          : ''}
       </span>
     </>
   );

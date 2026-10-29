@@ -369,7 +369,7 @@ nodes:
 });
 
 describe('installed pack boundaries', () => {
-  test('an incompatible provider receipt is reported without hiding installed workflows', async () => {
+  test('an incompatible provider receipt is excluded from workflow load errors', async () => {
     await install(reviewKit());
     const file = receiptPath(join(home, 'plugins'), 'owner/stale-provider');
     await mkdir(dirname(file), { recursive: true });
@@ -378,6 +378,7 @@ describe('installed pack boundaries', () => {
       JSON.stringify({
         schemaVersion: 1,
         id: 'owner/stale-provider',
+        tag: 'v0.13.0',
         manifest: {
           schemaVersion: 1,
           kind: 'provider',
@@ -388,12 +389,12 @@ describe('installed pack boundaries', () => {
         commit: COMMIT_A,
         installedAt: new Date(0).toISOString(),
         files: [{ path: 'archon-provider-claude', sha256: 'b'.repeat(64) }],
-        descriptor: { ...claudeDescriptor, protocol: 1 },
+        descriptor: { ...claudeDescriptor, protocol: 2 },
       })
     );
     const { workflows, errors } = await discover();
     expect(names(workflows)).toContain(REVIEW);
-    expect(errors.some(error => error.error.includes(file))).toBe(true);
+    expect(errors).toEqual([]);
   });
 
   test('another pack and a project workflow cannot include a support workflow', async () => {
@@ -464,7 +465,7 @@ describe('installed pack boundaries', () => {
     const definitions = (await discover()).workflows.map(entry => entry.workflow);
     expect(resolveWorkflowName('acme/review-kit:rev', definitions)).toBeUndefined();
     expect(resolveWorkflowName('acme/review:review', definitions)).toBeUndefined();
-    expect(resolveWorkflowName('ACME/review-kit:review', definitions)?.name).toBe(REVIEW);
+    expect(resolveWorkflowName('ACME/review-kit:review', definitions)).toBeUndefined();
   });
 
   test('a project workflow cannot shadow an installed name', async () => {

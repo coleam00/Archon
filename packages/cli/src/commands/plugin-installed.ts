@@ -12,7 +12,7 @@ export async function removePlugin(ref: PluginRef, env: PluginEnvironment): Prom
   if (brokenSelf) {
     await rm(brokenSelf.file);
     console.log(
-      `Removed the unreadable receipt of ${ref.id}: ${brokenSelf.file}. The files it named could not be identified and were left in place; look for its executable in ${env.pluginsDir} or its workflow pack under ${join(env.pluginsDir, 'packs', ...ref.id.split('/'))}.`
+      `Removed the ${brokenSelf.unavailableReason ? 'unavailable' : 'unreadable'} receipt of ${ref.id}: ${brokenSelf.file}. File ownership could not be verified, so the files were left in place; look for its executable in ${env.pluginsDir} or its workflow pack under ${join(env.pluginsDir, 'packs', ...ref.id.split('/'))}.`
     );
     return;
   }
@@ -66,5 +66,9 @@ export async function listPlugins(env: PluginEnvironment): Promise<void> {
       `${receipt.id}  ${receipt.manifest.kind}  ${receipt.tag ?? '-'}  ${receipt.commit.slice(0, 12)}  archon ${archon}`
     );
   }
-  for (const entry of broken) console.log(`${entry.id}  unreadable  ${brokenReceiptNote(entry)}`);
+  for (const entry of broken) {
+    console.log(
+      `${entry.id}  ${entry.unavailableReason ? 'unavailable' : 'unreadable'}  ${brokenReceiptNote(entry)}`
+    );
+  }
 }

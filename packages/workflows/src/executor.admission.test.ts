@@ -26,6 +26,7 @@ import type { WorkflowRun } from './schemas';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { IWorkflowStore } from './store';
 import { TerminalStatusWriteError } from './terminal-status-write';
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
 
 /** How a run claims its row and its checkout: the path lock, row stamps and the checkout baseline. */
@@ -61,6 +62,38 @@ describe('concurrent-run guard', () => {
     expect(cancelSpy).toHaveBeenCalledTimes(1);
     // Blocked before the execution window — keep-awake must never have fired.
     expect(keepAwake.activeCount()).toBe(0);
+  });
+
+  it('preserves an unsupported sibling status during shared-checkout admission', async () => {
+    const error = new WorkflowStatusReadError('sibling-run', 'future-status');
+    const store = makeStore({
+      findChildRuns: mock(async () => {
+        throw error;
+      }),
+    });
+    const result = startWorkflow({
+      store,
+      workflow: makeWorkflow({ mutates_checkout: false }),
+      options: {
+        preCreatedRun: makeRun({
+          parent_run_id: 'parent-run',
+          working_path: '/tmp',
+          metadata: { parent_node_id: 'fan', child_index: 0 },
+        }),
+      },
+    });
+    await expect(result).rejects.toBe(error);
+    expect(store.findChildRuns).toHaveBeenCalledWith('parent-run');
+    for (const write of [
+      store.cancelWorkflowRun,
+      store.cancelFanOutRun,
+      store.failWorkflowRun,
+      store.completeWorkflowRun,
+      store.pauseWorkflowRun,
+    ]) {
+      expect(write).not.toHaveBeenCalled();
+    }
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
   it.each([undefined, true])(

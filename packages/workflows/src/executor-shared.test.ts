@@ -17,6 +17,7 @@ import {
   RATE_LIMIT_PAUSE_DELAY_MS,
   rateLimitResumeAt,
   aggregateProviderFailure,
+  createProviderLimitDeadlineResolver,
   rootFailures,
   nodeFailureKindOf,
   retryClassOf,
@@ -428,24 +429,52 @@ describe('aggregateProviderFailure', () => {
     resetAt: '2026-10-16T13:00:00Z',
   };
 
+  it('reuses the selected deadline across nested aggregates within a pass only', () => {
+    const noReset = { class: 'rate_limited' as const, evidence: '429' };
+    const resolve = createProviderLimitDeadlineResolver();
+    const realRandom = Math.random;
+    try {
+      Math.random = () => 0.7;
+      expect(aggregateProviderFailure([sooner, noReset], now, resolve)).toBe(noReset);
+      Math.random = () => 0.1;
+      expect(aggregateProviderFailure([noReset, sooner], now + 60_000, resolve)).toBe(noReset);
+      expect(resolve(noReset, now + 60_000)).toBe(now + 12 * 60_000);
+      expect(createProviderLimitDeadlineResolver()(noReset, now)).toBe(now + 6 * 60_000);
+    } finally {
+      Math.random = realRandom;
+    }
+  });
+
   it('reports a lone failed descendant unchanged, whatever its class', () => {
     const auth = { class: 'auth' as const, evidence: 'bad key' };
-    expect(aggregateProviderFailure([auth], now)).toBe(auth);
-    expect(aggregateProviderFailure([undefined], now)).toBeUndefined();
+    expect(aggregateProviderFailure([auth], now, createProviderLimitDeadlineResolver())).toBe(auth);
+    expect(
+      aggregateProviderFailure([undefined], now, createProviderLimitDeadlineResolver())
+    ).toBeUndefined();
   });
 
   it('reports nothing when a provider limit sits beside any other failure', () => {
-    expect(aggregateProviderFailure([sooner, undefined], now)).toBeUndefined();
     expect(
-      aggregateProviderFailure([later, { class: 'transient', evidence: 'socket hang up' }], now)
+      aggregateProviderFailure([sooner, undefined], now, createProviderLimitDeadlineResolver())
+    ).toBeUndefined();
+    expect(
+      aggregateProviderFailure(
+        [later, { class: 'transient', evidence: 'socket hang up' }],
+        now,
+        createProviderLimitDeadlineResolver()
+      )
     ).toBeUndefined();
   });
 
   it('reports the latest resume deadline among several limits, and a resetless usage limit over any', () => {
     const noReset = { class: 'rate_limited' as const, evidence: '429' };
-    expect(aggregateProviderFailure([noReset, sooner, later], now)).toBe(later);
+    expect(
+      aggregateProviderFailure([noReset, sooner, later], now, createProviderLimitDeadlineResolver())
+    ).toBe(later);
     const unwaitable = { class: 'quota_exhausted' as const, evidence: 'session limit' };
-    expect(aggregateProviderFailure([later, unwaitable], now)).toBe(unwaitable);
+    expect(
+      aggregateProviderFailure([later, unwaitable], now, createProviderLimitDeadlineResolver())
+    ).toBe(unwaitable);
   });
 
   it('ranks a resetless rate limit by its backoff, so an expired usage limit beside it still waits', () => {
@@ -455,8 +484,12 @@ describe('aggregateProviderFailure', () => {
       evidence: 'session limit',
       resetAt: '2026-10-16T11:00:00Z',
     };
-    expect(aggregateProviderFailure([expired, noReset], now)).toBe(noReset);
-    expect(aggregateProviderFailure([noReset, expired], now)).toBe(noReset);
+    expect(
+      aggregateProviderFailure([expired, noReset], now, createProviderLimitDeadlineResolver())
+    ).toBe(noReset);
+    expect(
+      aggregateProviderFailure([noReset, expired], now, createProviderLimitDeadlineResolver())
+    ).toBe(noReset);
   });
 });
 

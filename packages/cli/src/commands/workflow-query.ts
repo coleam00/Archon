@@ -1,3 +1,5 @@
+import { getPluginsPath } from '@archon/paths';
+import { scanReceipts } from '@archon/plugin-manifest/store';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -8,7 +10,7 @@ import { createCliWorkflowHost } from '../utils/workflow-host';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
-import { resolveWorkflowName } from '@archon/workflows/router';
+import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import { workflowSourceConfigFrom } from '@archon/workflows/run-source';
 import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
 import type { WorkflowLoadError, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
@@ -54,6 +56,16 @@ import {
   printRunDetail,
 } from './workflow-inspect';
 
+async function reportUnavailablePlugins(): Promise<void> {
+  // Discovery reports scan failures alongside any independently loaded workflows.
+  const scan = await scanReceipts(getPluginsPath()).catch(() => undefined);
+  if (!scan) return;
+  const { broken } = scan;
+  for (const entry of broken) {
+    if (entry.unavailableReason) await writeStderr(`${entry.message}\n`);
+  }
+}
+
 export interface WorkflowListOptions {
   json?: boolean;
   name?: string;
@@ -85,6 +97,7 @@ export async function workflowTestCommand(
 ): Promise<number> {
   const { resolveDiscoveryCwd } = await import('../utils/project-cwd');
   const cwd = await resolveDiscoveryCwd(invokingCwd);
+  if (options.json) await reportUnavailablePlugins();
   const { workflows, errors } = await loadWorkflows(cwd);
   // The fixture runner freezes this repo's source before executing anything, exactly as
   // `workflow run` does, and this config decides which directories get frozen. A malformed
@@ -169,22 +182,19 @@ function selectWorkflowEntries(
   name: string | undefined
 ): readonly WorkflowWithSource[] {
   if (name !== undefined) {
-    let workflow: WorkflowWithSource['workflow'] | undefined;
-    try {
-      workflow = resolveWorkflowName(
+    const workflow = resolveWorkflowName(
+      name,
+      workflowEntries.map(entry => entry.workflow)
+    );
+    if (workflow === undefined) {
+      const suggestedWorkflows = suggestWorkflowNames(
         name,
         workflowEntries.map(entry => entry.workflow)
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new WorkflowListLookupError(message, errors);
-    }
-    if (workflow === undefined) {
-      const availableWorkflows = workflowEntries
-        .map(entry => `  - ${entry.workflow.name}`)
+      )
+        .map(candidate => `  - ${candidate}`)
         .join('\n');
       throw new WorkflowListLookupError(
-        `Workflow '${name}' not found.\n\nAvailable workflows:\n${availableWorkflows || '  (none)'}`,
+        `Workflow '${name}' not found.\n\nDid you mean:\n${suggestedWorkflows || '  (none)'}`,
         errors
       );
     }
@@ -237,6 +247,7 @@ export async function workflowListCommand(
   cwd: string,
   options: WorkflowListOptions = {}
 ): Promise<void> {
+  if (options.json) await reportUnavailablePlugins();
   const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
   const listedEntries = selectWorkflowEntries(workflowEntries, errors, options.name);
 

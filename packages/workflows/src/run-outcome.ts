@@ -1,3 +1,4 @@
+import { WorkflowStatusReadError } from './workflow-status-read';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { ParentStatusReadError } from './parent-status-read';
 import { createLogger } from '@archon/paths';
@@ -240,6 +241,18 @@ export async function recordUnhandledRunFailure(
       getLog().error(
         { err: error.cause, workflowRunId: workflowRun.id, nodeId: error.nodeId },
         'workflow.parent_status_read_failed'
+      );
+      getWorkflowEventEmitter().unregisterRun(workflowRun.id);
+    }
+    if (error instanceof WorkflowStatusReadError) {
+      getLog().error(
+        {
+          err: error,
+          workflowRunId: workflowRun.id,
+          offendingRunId: error.workflowRunId,
+          storedStatus: error.storedStatus,
+        },
+        'workflow.status_read_failed'
       );
       getWorkflowEventEmitter().unregisterRun(workflowRun.id);
     }

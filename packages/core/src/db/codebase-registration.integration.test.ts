@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { Database } from 'bun:sqlite';
 import { afterAll, afterEach, expect, mock, test } from 'bun:test';
-import { mkdtemp } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -77,28 +77,33 @@ test('concurrent registrations with distinct names cannot claim the same remote'
   expect(rejected?.status === 'rejected' && String(rejected.reason)).toContain('worktrees');
 });
 
-test('checkout cleanup holds the SQLite writer reservation until removal finishes', async () => {
+test('checkout cleanup lets another connection write while it removes the checkout', async () => {
+  const checkout = join(root, 'checkout');
+  await mkdir(checkout);
   const contender = new Database(path);
   try {
     contender.run('PRAGMA busy_timeout = 0');
-    let removed = false;
-    await removeUnregisteredCheckout(join(root, 'checkout'), async () => {
-      const error = (() => {
-        try {
-          contender.run('UPDATE remote_agent_codebases SET name = name WHERE 1 = 0');
-          return undefined;
-        } catch (error) {
-          return error;
-        }
-      })();
-      expect(error).toMatchObject({ code: 'SQLITE_BUSY' });
-      removed = true;
+    const remove = mock(async (detached: string) => {
+      expect(() =>
+        contender.run('UPDATE remote_agent_codebases SET name = name WHERE 1 = 0')
+      ).not.toThrow();
+      expect(detached).not.toBe(checkout);
+      await expect(access(checkout)).rejects.toMatchObject({ code: 'ENOENT' });
+      await rm(detached, { recursive: true });
     });
-    expect(removed).toBe(true);
-    expect(() =>
-      contender.run('UPDATE remote_agent_codebases SET name = name WHERE 1 = 0')
-    ).not.toThrow();
+    await removeUnregisteredCheckout(checkout, remove);
+    expect(remove).toHaveBeenCalledTimes(1);
   } finally {
     contender.close();
   }
+});
+
+test('checkout cleanup leaves a checkout registered on another connection', async () => {
+  const checkout = join(root, 'registered');
+  await mkdir(checkout);
+  await createCodebase({ name: 'owner', kind: 'folder', default_cwd: checkout });
+  const remove = mock(async () => {});
+  await removeUnregisteredCheckout(checkout, remove);
+  expect(remove).not.toHaveBeenCalled();
+  await access(checkout);
 });

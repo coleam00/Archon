@@ -104,7 +104,7 @@ export interface AbandonWorkflowResult {
 }
 
 export interface AbandonAttemptResult extends AbandonWorkflowResult {
-  cancelledRuns: WorkflowRun[];
+  cancelledDescendants: WorkflowRun[];
 }
 
 export function ownerNotStoppedMessage(
@@ -144,11 +144,16 @@ export function ownerNotStoppedMessage(
 export async function cascadeCancelChildren(
   ctx: OperationContext,
   rootId: string
-): Promise<{ failures: number; runs: WorkflowRun[] }> {
+): Promise<{
+  failures: number;
+  cancelledRuns: WorkflowRun[];
+  cancelledDescendants: WorkflowRun[];
+}> {
   const queue: string[] = [rootId];
   const seen = new Set<string>([rootId]);
   let processed = 0;
-  const runs: WorkflowRun[] = [];
+  const cancelledRuns: WorkflowRun[] = [];
+  const cancelledDescendants: WorkflowRun[] = [];
   let failures = 0;
   while (queue.length > 0 && processed < MAX_CASCADE_RUNS) {
     const parentId = queue.shift();
@@ -163,7 +168,8 @@ export async function cascadeCancelChildren(
       continue;
     }
     const batch = await cancelUnseenChildren(ctx, children, seen, queue);
-    runs.push(...batch.cancelled);
+    cancelledRuns.push(...batch.cancelled);
+    cancelledDescendants.push(...batch.cancelledDescendants);
     failures += batch.failures;
   }
   // Queued runs were already considered for cancellation; only their children
@@ -190,7 +196,7 @@ export async function cascadeCancelChildren(
       failures++;
     }
   }
-  return { failures, runs };
+  return { failures, cancelledRuns, cancelledDescendants };
 }
 
 /** Cancel each child not yet seen and queue it for the walk, terminal or not. */
@@ -199,19 +205,26 @@ async function cancelUnseenChildren(
   children: readonly WorkflowRun[],
   seen: Set<string>,
   queue: string[]
-): Promise<{ cancelled: WorkflowRun[]; failures: number }> {
+): Promise<{ cancelled: WorkflowRun[]; cancelledDescendants: WorkflowRun[]; failures: number }> {
   const cancelled: WorkflowRun[] = [];
+  const cancelledDescendants: WorkflowRun[] = [];
   let failures = 0;
   for (const child of children) {
     if (seen.has(child.id)) continue;
     seen.add(child.id);
     queue.push(child.id); // traverse deeper even under an already-terminal child
+    if (child.status === 'cancelled') {
+      cancelledDescendants.push(child);
+      continue;
+    }
     if (CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(child.status)) continue;
-    const outcome = await cancelCascadeChild(ctx, child.id);
-    if (outcome === 'cancelled') cancelled.push(child);
-    else if (outcome === 'failed') failures++;
+    const outcome = await cancelCascadeChild(ctx, child);
+    if (outcome.kind === 'cancelled') {
+      cancelledDescendants.push(outcome.run);
+      if (outcome.won) cancelled.push(outcome.run);
+    } else if (outcome.kind === 'failed') failures++;
   }
-  return { cancelled, failures };
+  return { cancelled, cancelledDescendants, failures };
 }
 
 /**
@@ -220,18 +233,23 @@ async function cancelUnseenChildren(
  */
 async function cancelCascadeChild(
   ctx: OperationContext,
-  childId: string
-): Promise<'cancelled' | 'settled' | 'failed'> {
+  child: WorkflowRun
+): Promise<
+  { kind: 'cancelled'; run: WorkflowRun; won: boolean } | { kind: 'completed' | 'failed' }
+> {
+  const childId = child.id;
   try {
     const result = await cancelByOperator(ctx, childId);
-    if (result.cancelled) return 'cancelled';
+    if (result.cancelled) return { kind: 'cancelled', run: child, won: true };
     const current = await ctx.store.getWorkflowRun(childId);
-    if (current && CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(current.status)) return 'settled';
+    if (current?.status === 'cancelled') return { kind: 'cancelled', run: current, won: false };
+    if (current && CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(current.status))
+      return { kind: 'completed' };
     getLog().warn({ childId }, 'operations.workflow_abandon_cascade_cancel_failed');
   } catch (err) {
     getLog().warn({ err, childId }, 'operations.workflow_abandon_cascade_cancel_failed');
   }
-  return 'failed';
+  return { kind: 'failed' };
 }
 
 /**
@@ -299,11 +317,14 @@ export async function cancelRunAndCleanup(
   }
 
   let cascadeFailures = 0;
-  let cancelledRuns: WorkflowRun[] = [];
+  let cancelledDescendants: WorkflowRun[] = [];
   if (cancelled) {
-    ({ failures: cascadeFailures, runs: cancelledRuns } = await cascadeCancelChildren(ctx, run.id));
+    const cascade = await cascadeCancelChildren(ctx, run.id);
+    cascadeFailures = cascade.failures;
+    cancelledDescendants = cascade.cancelledDescendants;
     // An output holder the stop left running may still write a descendant's scratch.
-    if (!stopWarnings.length) for (const child of cancelledRuns) await releaseRunScratch(child);
+    if (!stopWarnings.length)
+      for (const child of cascade.cancelledRuns) await releaseRunScratch(child);
   }
   const blockedParentRunId = cancelled ? await findParentBlockedOn(ctx, run) : null;
 
@@ -316,7 +337,7 @@ export async function cancelRunAndCleanup(
   return {
     run,
     cancelled,
-    cancelledRuns,
+    cancelledDescendants,
     cascadeFailures,
     blockedParentRunId,
     ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),

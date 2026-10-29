@@ -352,7 +352,7 @@ describe('workflow run transitions', () => {
   });
 
   describe('metadata serialization', () => {
-    test.each(['github_context', 'ai_configuration'])(
+    test.each(['github_context', 'ai_configuration', 'parent_node_id'])(
       'throws when critical %s metadata fails to serialize',
       async key => {
         const circularObj: Record<string, unknown> = { [key]: 'required' };
@@ -363,6 +363,7 @@ describe('workflow run transitions', () => {
             workflow_name: 'test',
             origin: { conversationId: 'conv' },
             user_message: 'test',
+            parent_run_id: key === 'parent_node_id' ? 'parent-run' : undefined,
             metadata: circularObj,
           })
         ).rejects.toThrow('Failed to serialize workflow metadata');

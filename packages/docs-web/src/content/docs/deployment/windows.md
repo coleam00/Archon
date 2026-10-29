@@ -64,7 +64,7 @@ WSL2 provides a full Linux environment that runs seamlessly on Windows.
 
 WSL2 can access your Windows files at `/mnt/c/` (for C: drive):
 ```bash
-archon workflow run investigate --cwd /mnt/c/Users/YourName/Projects/my-repo "Why does the build fail on Windows?"
+archon workflow run archon-investigate --cwd /mnt/c/Users/YourName/Projects/my-repo "Why does the build fail on Windows?"
 ```
 
 For best performance, keep projects inside the WSL2 file system (`~/projects/`) rather than `/mnt/c/`.
