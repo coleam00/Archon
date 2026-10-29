@@ -7,7 +7,9 @@ let statement = async (): Promise<typeof emptyResult> => emptyResult;
 let rollback = async (): Promise<void> => {};
 let releases = 0;
 
+const pg = await import('pg');
 mock.module('pg', () => ({
+  ...pg,
   Pool: class {
     query = () => statement();
     async connect() {
@@ -92,6 +94,7 @@ for (const operation of ['query', 'transaction'] as const) {
 test.each([
   { exhausted: false, code: '08006', expectedCode: '08006' },
   { exhausted: true, code: 'token=private-secret', expectedCode: undefined },
+  { exhausted: false, code: 'ECONNRESET', expectedCode: 'ECONNRESET' },
 ])(
   'failed rollback logs retain only validated identity for $code (exhausted: $exhausted)',
   async ({ exhausted, code, expectedCode }) => {

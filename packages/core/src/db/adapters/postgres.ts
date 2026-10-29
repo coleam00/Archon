@@ -341,8 +341,12 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       try {
         await client.query('ROLLBACK');
       } catch (rollbackError) {
+        const connectionReset =
+          rollbackError instanceof Error &&
+          'code' in rollbackError &&
+          rollbackError.code === 'ECONNRESET';
         getLog().error(
-          { code: sqlState(rollbackError) },
+          { code: connectionReset ? 'ECONNRESET' : sqlState(rollbackError) },
           'db.postgres_transaction_rollback_failed'
         );
       }
