@@ -171,7 +171,7 @@ export function canUpgradeProvider(
     return (
       peer !== undefined &&
       peer.descriptor.protocol < PROVIDER_PLUGIN_PROTOCOL &&
-      !peer.files.some(file => file.path === fileName)
+      !peer.files.some(file => file.path.toLowerCase() === fileName.toLowerCase())
     );
   });
 }

@@ -271,14 +271,45 @@ integration(
   testTimeout(30_000)
 );
 
-integration(
-  'provider add replaces a single same-ID old receipt',
-  async () => {
+integration.each([2, 4])(
+  'provider add preserves sole same-ID broken receipt repair (protocol %s)',
+  async protocol => {
     const env = await environment(['claude']);
+    const self = oldReceipt('claude');
+    await writeReceipt(env, self.id, { ...self, descriptor: { ...self.descriptor, protocol } });
     expect(await providerCommand('add', ['claude'], env)).toBe(0);
     await assertUpgraded(env, 'claude');
   },
   testTimeout(15_000)
+);
+
+integration.each(['provider add', 'plugin update'] as const)(
+  '%s refuses an old peer claiming the target with different case',
+  async command => {
+    const env = { ...(await environment(['claude', 'codex'])), platform: 'win32' as const };
+    const self = oldReceipt('claude');
+    const peer = oldReceipt('codex');
+    const fileName = 'archon-provider-claude.exe';
+    await writeReceipt(env, self.id, {
+      ...self,
+      files: [{ ...self.files[0], path: fileName }],
+    });
+    await writeReceipt(env, peer.id, {
+      ...peer,
+      files: [{ ...peer.files[0], path: fileName.toUpperCase() }],
+    });
+    await fs.writeFile(join(env.pluginsDir, fileName), 'old Windows binary');
+    const before = await snapshot(env);
+    const acquired = acquisitions;
+    const code =
+      command === 'provider add'
+        ? await providerCommand('add', ['claude'], env)
+        : await pluginCommand('update', [`${self.id}@${tag}`], env);
+    expect(code).toBe(1);
+    expect(error.mock.calls.flat().join('\n')).toContain('exists and may belong');
+    expect(acquisitions).toBe(acquired);
+    expect(await snapshot(env)).toEqual(before);
+  }
 );
 
 integration.each([
