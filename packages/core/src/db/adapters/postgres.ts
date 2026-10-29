@@ -340,7 +340,19 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       try {
         await client.query('ROLLBACK');
       } catch (rollbackError) {
-        getLog().error({ err: rollbackError as Error }, 'db.postgres_transaction_rollback_failed');
+        const code =
+          typeof rollbackError === 'object' && rollbackError !== null && 'code' in rollbackError
+            ? rollbackError.code
+            : undefined;
+        getLog().error(
+          {
+            code:
+              typeof code === 'string' && code.length === 5 && !/[^0-9A-Z]/.test(code)
+                ? code
+                : undefined,
+          },
+          'db.postgres_transaction_rollback_failed'
+        );
       }
       throw conflict ?? e;
     } finally {
