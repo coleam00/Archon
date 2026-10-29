@@ -500,10 +500,10 @@ export async function getCurrentBranchStrict(
   try {
     const { stdout } = await execFileAsync(
       'git',
-      ['-C', workingPath, 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+      ['-C', workingPath, 'symbolic-ref', '--quiet', 'HEAD'],
       { timeout: 10000 }
     );
-    const branch = stdout.trim();
+    const branch = stdout.trim().replace(/^refs\/heads\//, '');
     if (!branch) {
       throw new Error(`Git returned no branch for checkout ${workingPath}`);
     }

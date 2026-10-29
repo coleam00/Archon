@@ -195,7 +195,7 @@ describe('workflow run launch config', () => {
 });
 
 describe('registered named-branch reuse', () => {
-  test.each(['other branch', 'detached HEAD'] as const)(
+  test.each(['other branch', 'detached HEAD', 'colliding short ref'] as const)(
     'refuses %s before workflow execution without changing the checkout',
     async state => {
       const root = mkdtempSync(join(tmpdir(), 'archon-branch-reuse-'));
@@ -203,33 +203,41 @@ describe('registered named-branch reuse', () => {
       const archonHome = join(root, 'home');
       mkdirSync(archonHome, { recursive: true });
       const repo = createRepo(root, true);
-      await runForeground(repo, archonHome, 'feature/reuse');
+      const requestedBranch =
+        state === 'colliding short ref' ? 'heads/feature/reuse' : 'feature/reuse';
+      await runForeground(repo, archonHome, requestedBranch);
       const first = latestRun(archonHome);
       const target = first.working_path;
       writeFileSync(join(target, '.archon', 'config.yaml'), '# operator edits\n');
       writeFileSync(join(target, 'untracked.txt'), 'keep me\n');
-      await runForeground(repo, archonHome, 'feature/reuse');
+      if (state !== 'colliding short ref') git(target, 'tag', 'feature/reuse');
+      await runForeground(repo, archonHome, requestedBranch);
       const reused = latestRun(archonHome);
       expect(reused.id).not.toBe(first.id);
       expect(reused.working_path).toBe(target);
       if (state === 'other branch') git(target, 'switch', '-c', 'feature/other');
-      else git(target, 'checkout', '--detach');
+      else if (state === 'colliding short ref') {
+        git(target, 'switch', '-c', 'feature/reuse');
+        git(target, 'tag', 'feature/reuse');
+      } else git(target, 'checkout', '--detach');
       const head = git(target, 'rev-parse', 'HEAD');
-      const branch = git(target, 'rev-parse', '--abbrev-ref', 'HEAD');
+      const branch = git(target, 'rev-parse', '--symbolic-full-name', 'HEAD');
       const status = git(target, 'status', '--porcelain');
 
       const refused = await captureWorkflowCommand(archonHome, async host => {
         await workflowRunCommand(host, repo, 'launch-config', 'go', {
-          branchName: 'feature/reuse',
+          branchName: requestedBranch,
         });
       });
       expect(refused.status).toBe(1);
-      expect(refused.output).toContain('feature/reuse');
-      expect(refused.output).toContain(state === 'other branch' ? 'feature/other' : state);
+      expect(refused.output).toContain(`expected branch '${requestedBranch}'`);
+      expect(refused.output).toContain(
+        `found '${state === 'other branch' ? 'feature/other' : state === 'colliding short ref' ? 'feature/reuse' : state}'`
+      );
       expect(refused.output).toContain(target);
       expect(latestRun(archonHome).id).toBe(reused.id);
       expect(git(target, 'rev-parse', 'HEAD')).toBe(head);
-      expect(git(target, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe(branch);
+      expect(git(target, 'rev-parse', '--symbolic-full-name', 'HEAD')).toBe(branch);
       expect(git(target, 'status', '--porcelain')).toBe(status);
       expect(readFileSync(join(target, '.archon', 'config.yaml'), 'utf8')).toBe(
         '# operator edits\n'
