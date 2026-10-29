@@ -271,6 +271,48 @@ describe('CommandHandler', () => {
         });
       });
 
+      describe('orphans', () => {
+        test.each([true, false])(
+          'lists a secondary checkout when main is included: %s',
+          async includeMain => {
+            spyListWorktrees.mockResolvedValue([
+              ...(includeMain ? [{ path: '/workspace/my-repo', branch: 'main' }] : []),
+              { path: '/workspace/my-repo/worktrees/feat-x', branch: 'feat-x' },
+            ]);
+
+            const result = await handleCommand(
+              conversationWithCodebase,
+              '/worktree orphans',
+              operator
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.message).toContain('All worktrees (from git):');
+            expect(result.message).toMatch(/feat-x → worktrees[\\/]feat-x/);
+            expect(result.message).not.toContain('main →');
+            expect(result.message).not.toContain('No worktrees found');
+          }
+        );
+
+        test.each([true, false])(
+          'reports no secondary checkouts when main is included: %s',
+          async includeMain => {
+            spyListWorktrees.mockResolvedValue(
+              includeMain ? [{ path: '/workspace/my-repo', branch: 'main' }] : []
+            );
+
+            const result = await handleCommand(
+              conversationWithCodebase,
+              '/worktree orphans',
+              operator
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.message).toContain('No worktrees found');
+          }
+        );
+      });
+
       describe('remove', () => {
         const featXEnv = makeIsolationEnvironment({
           id: 'env-uuid-feat-x',

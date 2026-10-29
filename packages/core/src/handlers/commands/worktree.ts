@@ -322,9 +322,11 @@ async function listGitWorktrees(
   mainPath: string
 ): Promise<CommandResult> {
   try {
-    const gitWorktrees = await listWorktrees(toRepoPath(mainPath));
+    const gitWorktrees = (await listWorktrees(toRepoPath(mainPath))).filter(
+      wt => wt.path !== mainPath
+    );
 
-    if (gitWorktrees.length <= 1) {
+    if (gitWorktrees.length === 0) {
       return {
         success: true,
         message:
@@ -337,9 +339,6 @@ async function listGitWorktrees(
 
     let msg = 'All worktrees (from git):\n\n';
     for (const wt of gitWorktrees) {
-      const isMainRepo = wt.path === mainPath;
-      if (isMainRepo) continue;
-
       const shortPath = shortenPath(wt.path, mainPath);
       const isCurrent = activePath && wt.path === activePath;
       const marker = isCurrent ? ' ← current' : '';
