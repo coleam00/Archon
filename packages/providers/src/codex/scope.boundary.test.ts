@@ -53,9 +53,9 @@ const HOOK_SCRIPT = `require('node:fs').appendFileSync(process.argv[3], process.
 const TEMPLATE_DIR = 'template-home';
 /**
  * Codex's scratch directory in a home. Every app-server start syncs the curated plugins
- * there with `git`. The provider stops that fetch if it outlives app-server, leaving
- * unfinished sync state. The template's copies leave scratch out; no case reads it,
- * and the installed plugins live in `plugins/cache`.
+ * there with `git`. After app-server exits, that scratch can still be changing on
+ * Windows or hold interrupted sync state after POSIX cleanup. The template's copies
+ * leave scratch out; no case reads it, and installed plugins live in `plugins/cache`.
  */
 const CODEX_SCRATCH_DIR = '.tmp';
 
