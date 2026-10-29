@@ -4,6 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { setLogSink } from '@archon/paths';
 import * as git from '@archon/git';
 import * as codebases from '../db/codebases';
 import * as sessions from '../db/sessions';
@@ -15,7 +16,6 @@ import {
   makeRun,
   makeSession,
 } from '../test/orchestrator-agent-fixtures';
-import { getLog as getCommandLog } from '../handlers/commands/log';
 import * as config from '../config/config-loader';
 import * as environments from '../db/isolation-environments';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
@@ -38,6 +38,7 @@ const quotedGitFailure =
 
 afterEach(() => {
   mock.restore();
+  setLogSink(undefined);
   clearPlatformPolicies();
 });
 
@@ -103,7 +104,8 @@ test('status reports unavailable inventory without a count and preserves the oth
   spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'main', stderr: '' });
   const failure = new Error('Inventory failed: token=inventory-secret; stored private content');
   const inventory = spyOn(environments, 'listByCodebaseWithAge').mockRejectedValueOnce(failure);
-  const error = spyOn(getCommandLog(), 'error').mockImplementation(() => {});
+  const logLines: string[] = [];
+  setLogSink(line => logLines.push(line));
 
   const result = await handleStatusCommand(makeConversation({ codebase_id: codebase.id }), {
     formatWorkflowCommand: command => command,
@@ -111,10 +113,14 @@ test('status reports unavailable inventory without a count and preserves the oth
 
   expect(result.success).toBe(true);
   expect(inventory).toHaveBeenCalledWith(codebase.id);
-  expect(error).toHaveBeenCalledWith(
-    { err: failure, codebaseId: codebase.id },
-    'cmd.worktree_breakdown_failed'
-  );
+  expect(logLines).toHaveLength(1);
+  expect(JSON.parse(logLines[0]!)).toMatchObject({
+    codebaseId: codebase.id,
+    reason: omitted,
+    msg: 'cmd.worktree_breakdown_failed',
+  });
+  expect(logLines.join('')).not.toContain('inventory-secret');
+  expect(logLines.join('')).not.toContain('stored private content');
   expect(result.message).toEndWith('Worktrees: inventory unavailable (count unknown)');
   expect(result.message).not.toContain(' total');
   expect(result.message).not.toContain('0 active');

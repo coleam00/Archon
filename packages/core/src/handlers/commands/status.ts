@@ -6,6 +6,7 @@ import * as sessionDb from '../../db/sessions';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import { getActiveChatWorkflowRun } from './workflow-runs';
 import { getWorktreeStatusBreakdown } from '../../services/cleanup-service';
+import { statusDiagnostic } from '../../services/cleanup/status-diagnostic';
 import { getLog } from './log';
 
 /**
@@ -259,7 +260,10 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
       if (env.reason) msg += `\n  • ${env.branchName}: ${env.reason}`;
     }
   } catch (error) {
-    getLog().error({ err: error, codebaseId: codebase.id }, 'cmd.worktree_breakdown_failed');
+    getLog().error(
+      { reason: statusDiagnostic(error), codebaseId: codebase.id },
+      'cmd.worktree_breakdown_failed'
+    );
     return '\n\nWorktrees: inventory unavailable (count unknown)';
   }
   return msg;
