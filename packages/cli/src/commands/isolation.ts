@@ -230,7 +230,9 @@ function printContainerCleanupReport(
 export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
   await reportCleanupReconciliation();
 
-  console.log(`Finding environments with no activity for ${String(daysStale)}+ days...`);
+  console.log(
+    `Finding eligible worktrees inactive for ${String(daysStale)}+ days and eligible containers created ${String(daysStale)}+ days ago...`
+  );
 
   const staleEnvs = (await isolationDb.findStaleEnvironments(daysStale)).filter(
     env => env.provider === 'worktree'

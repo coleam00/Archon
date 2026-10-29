@@ -1383,6 +1383,16 @@ describe('isolationCleanupCommand', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it.each([0, 3, 7])('describes the cleanup thresholds for %s days', async days => {
+    await isolationCleanupCommand(days);
+
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      `Finding eligible worktrees inactive for ${days}+ days and eligible containers created ${days}+ days ago...`
+    );
+    expect(mockFindStaleEnvironments).toHaveBeenCalledWith(days);
+    expect(mockCleanupContainerEnvironments).toHaveBeenCalledWith(days);
+  });
+
   it.each([false, true])(
     'runs container cleanup without worktree destruction (stale container: %s)',
     async hasContainer => {

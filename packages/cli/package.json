@@ -1,6 +1,6 @@
 {
   "name": "@archon/cli",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "type": "module",
   "main": "./src/cli.ts",
   "bin": {
@@ -34,6 +34,9 @@
   },
   "testConcurrency": 3,
   "testGroups": [
+    [
+      "src/commands/provider-upgrade.test.ts"
+    ],
     [
       "src/commands/workflow-protocol-receipt.test.ts"
     ],
