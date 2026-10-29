@@ -78,7 +78,7 @@ SELECT
 const RETRYABLE_SQLSTATES = new Set(['40P01', '40001']);
 const RETRY_ATTEMPTS = 4;
 
-function isRetryable(error: unknown): boolean {
+function isRetryable(error: unknown): error is { code: string } {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === 'string' && RETRYABLE_SQLSTATES.has(code);
 }
@@ -96,7 +96,7 @@ async function retryConflicts<T>(operation: () => Promise<T>, event: string): Pr
       return await operation();
     } catch (e) {
       if (!isRetryable(e) || attempt + 1 >= RETRY_ATTEMPTS) throw e;
-      getLog().warn({ err: e as Error, attempt: attempt + 1 }, event);
+      getLog().warn({ code: e.code, attempt: attempt + 1 }, event);
       const ms = 50 * 2 ** attempt + Math.floor(Math.random() * 50);
       await new Promise(resolve => setTimeout(resolve, ms));
     }
