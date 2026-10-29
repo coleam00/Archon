@@ -249,7 +249,9 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     } catch (err: unknown) {
       setError(
         err instanceof HttpError
-          ? err.serverError || err.bodySnippet || err.message
+          ? (err.serverError && [err.serverError, err.serverDetail].filter(Boolean).join(': ')) ||
+              err.bodySnippet ||
+              err.message
           : err instanceof Error
             ? err.message
             : 'Failed to start run.'

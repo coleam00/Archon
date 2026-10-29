@@ -117,9 +117,19 @@ function draft() {
 }
 
 for (const attached of [false, true]) {
-  for (const refusal of ['long', 'empty launch', 'empty conversation', 'proxy'] as const) {
+  for (const refusal of [
+    'long',
+    'detailed launch',
+    'detailed conversation',
+    'empty launch',
+    'empty conversation',
+    'proxy',
+  ] as const) {
     test(`draft displays ${refusal} refusal and stays open (attached: ${String(attached)})`, async () => {
       const message = `Launch refused: ${'credential preflight detail; '.repeat(12)}TAIL-MUST-BE-VISIBLE`;
+      const detail = `No codebase with id missing-project-${'x'.repeat(250)}-DETAIL-TAIL`;
+      const detailed = refusal.startsWith('detailed');
+      const conversationRefused = refusal.endsWith('conversation');
       const html = `<img src=x onerror="alert(1)">${'Bad gateway '.repeat(40)}`;
       const requests: { url: string; body: RequestInit['body'] }[] = [];
       globalThis.window = { location: { origin: 'http://localhost' } } as Window &
@@ -132,8 +142,9 @@ for (const attached of [false, true]) {
         async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = String(input);
           requests.push({ url, body: init?.body });
-          if (url === '/api/conversations' && refusal !== 'empty conversation')
+          if (url === '/api/conversations' && !conversationRefused)
             return Response.json({ conversationId: 'web-test' });
+          if (detailed) return Response.json({ error: message, detail }, { status: 400 });
           return refusal === 'long'
             ? Response.json({ error: message }, { status: 409 })
             : new Response(refusal === 'proxy' ? html : '', { status: 502 });
@@ -149,7 +160,10 @@ for (const attached of [false, true]) {
       expect(rendered).toContain('Cancel draft');
       card.button('Start run');
       if (attached) expect(rendered).toContain('brief.txt');
-      if (refusal === 'long') {
+      if (detailed) {
+        expect(rendered).toContain(`${message}: ${detail}`);
+        expect(rendered).toContain('DETAIL-TAIL');
+      } else if (refusal === 'long') {
         expect(rendered).toContain(message);
         expect(rendered).toContain('TAIL-MUST-BE-VISIBLE');
       } else if (refusal === 'proxy') {
@@ -166,9 +180,8 @@ for (const attached of [false, true]) {
             : '/api/workflows/review-block/run'
         );
       }
-      expect(requests).toHaveLength(refusal === 'empty conversation' ? 1 : 2);
-      if (refusal !== 'empty conversation')
-        expect(requests[1]?.body instanceof FormData).toBe(attached);
+      expect(requests).toHaveLength(conversationRefused ? 1 : 2);
+      if (!conversationRefused) expect(requests[1]?.body instanceof FormData).toBe(attached);
     });
   }
 }
