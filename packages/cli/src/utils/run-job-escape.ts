@@ -2,7 +2,9 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createConnection, createServer, type Socket } from 'node:net';
 import type { Readable, Writable } from 'node:stream';
-import { resolve } from 'node:path';
+import { existsSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'util';
 import { BUNDLED_IS_BINARY } from '@archon/paths';
 import { cliArgOptions } from '../args';
@@ -28,7 +30,16 @@ import { writeStderr, writeStdout } from './stdout';
 
 /** In a Windows run owner and its descendants: the pipe of the owner's broker. */
 export const RUN_JOB_ESCAPE_ENV = 'ARCHON_RUN_JOB_ESCAPE';
-export const RUN_JOB_ESCAPE_BUN_CONFIG_ARG = `--config=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`;
+// Bun before 1.4 panics on Windows when --config names the NUL device ("start index 1 is
+// larger than end index 0"), so every --detach launch from a run failed there. An empty
+// bunfig in the temp directory means the same thing: no project config.
+function emptyBunConfig(): string {
+  if (process.platform !== 'win32') return '/dev/null';
+  const path = join(tmpdir(), 'archon-empty-bunfig.toml');
+  if (!existsSync(path)) writeFileSync(path, '');
+  return path;
+}
+export const RUN_JOB_ESCAPE_BUN_CONFIG_ARG = `--config=${emptyBunConfig()}`;
 /** In the broker process only: the pipe it serves. */
 const BROKER_ENV = 'ARCHON_RUN_JOB_ESCAPE_BROKER';
 const BROKER_READY = 'ready\n';
