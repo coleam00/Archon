@@ -265,6 +265,47 @@ describe('composed instance accounting segments', () => {
   });
 });
 
+describe('interrupted loop accounting', () => {
+  it('counts carried gate spend once across repeated interrupted continuations', async () => {
+    const start = startNodeExecution({
+      runId: 'run',
+      path: 'loop',
+      provider: 'claude',
+      invocation: newNodeInvocation(),
+      node: {
+        id: 'loop',
+        kind: 'loop',
+        loop: { prompt: 'Work', until: 'DONE', max_iterations: 2, fresh_context: false },
+      },
+    });
+    const baseline = finishNodeExecution(
+      start,
+      { status: 'suspended', point: 'interactive_loop' },
+      {
+        costUsd: 0.04,
+        tokens: { input: 40, output: 4, cacheRead: 4, cacheWrite: 2 },
+      }
+    ).spend;
+    const rows = [
+      { costUsd: 0.02, tokens: { input: 20, output: 2, cacheRead: 2, cacheWrite: 1 } },
+      { costUsd: 0.04, tokens: { input: 40, output: 4, cacheRead: 4, cacheWrite: 2 } },
+    ].map(usage => {
+      const event = serializeDeferredNodeUsage(
+        finishNodeExecution(start, { status: 'suspended', point: 'interactive_loop' }, usage),
+        baseline
+      );
+      return { ...event, data: JSON.stringify(event.data) };
+    });
+
+    const snapshot = await foldDagResumeSnapshot(rows, 'run');
+
+    expect(snapshot.costUsd).toBeCloseTo(0.1);
+    expect(snapshot.costPartial).toBe(false);
+    expect(snapshot.tokens).toEqual({ input: 100, output: 10, cacheRead: 10, cacheWrite: 5 });
+    expect(snapshot.loopUsageBaselines).toEqual(new Map([[start.invocation.id, baseline]]));
+  });
+});
+
 describe('loop configuration failure accounting', () => {
   for (const exit of ['completed', 'skipped', 'suspended'] as const) {
     it.each([
@@ -318,7 +359,7 @@ describe('loop configuration failure accounting', () => {
           expected === 0.07 ? { input: 70, output: 7 } : { input: 110, output: 11 }
         );
         if (failureKind === 'config' && sameInvocation)
-          expect(snapshot.loopConfigFailureBaselines?.size).toBe(0);
+          expect(snapshot.loopUsageBaselines?.size).toBe(0);
         expect(snapshot.costUsd).toBeCloseTo(expected, 5);
         expect(snapshot.costPartial).toBe(!(failureKind === 'config' && sameInvocation));
         if (failureKind === 'config' && sameInvocation) {

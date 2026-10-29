@@ -176,7 +176,7 @@ function instanceRunContext(
     providerLimitDeadline: ctx.providerLimitDeadline,
     toolAttention: ctx.toolAttention,
     unfinishedInvocations: resumeSnapshot.unfinishedInvocations,
-    loopConfigFailureBaselines: resumeSnapshot.loopConfigFailureBaselines,
+    loopUsageBaselines: resumeSnapshot.loopUsageBaselines,
     reportedChildUsage: resumeSnapshot.reportedChildUsage,
     unattributedChildUsagePaths: resumeSnapshot.unattributedChildUsagePaths,
     deps: ctx.deps,

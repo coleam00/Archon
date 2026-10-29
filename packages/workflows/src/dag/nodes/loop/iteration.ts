@@ -1,3 +1,4 @@
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { LOOP_COMPLETION_CHANNELS, type LoopCompletionChannel } from '../../../schemas/loop';
 import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
@@ -133,7 +134,11 @@ async function stopBeforeIteration(
   i: number
 ): Promise<NodeExecutionResult | undefined> {
   const { ctx, node } = run;
-  const runStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  const runStatus = await ctx.deps.store
+    .getWorkflowRunStatus(ctx.workflowRun.id)
+    .catch((cause: unknown) => {
+      throw new ParentStatusReadError(ctx.workflowRun.id, node.id, cause);
+    });
   if (shouldContinueStreamingForStatus(runStatus)) return undefined;
   const effectiveStatus = runStatus ?? 'deleted';
   getLog().info(

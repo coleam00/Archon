@@ -632,9 +632,7 @@ async function aggregateLayerResults(
 function addNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult): void {
   const execution = output.execution;
   const prior =
-    execution === undefined
-      ? undefined
-      : ctx.loopConfigFailureBaselines?.get(execution.invocation.id);
+    execution === undefined ? undefined : ctx.loopUsageBaselines?.get(execution.invocation.id);
   const usage = incrementalLoopUsage(output, prior);
   ctx.totalCostPartial ||= output.costPartial;
   if (usage.costUsd !== undefined) {

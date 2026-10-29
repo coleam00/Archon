@@ -1,3 +1,4 @@
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { awaitingTurnSettlement } from '@archon/provider-contract';
 import type { MessageChunk, ProviderFailure, TokenUsage } from '@archon/provider-contract';
 import { sessionPreview } from '@archon/provider-contract';
@@ -144,7 +145,11 @@ export async function runIterationAttempts(
   const retry: IterationRetry = { attempt: 0, sawRateLimit: false };
   for (; ; retry.attempt++) {
     if (retry.attempt > 0) {
-      const status = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+      const status = await ctx.deps.store
+        .getWorkflowRunStatus(ctx.workflowRun.id)
+        .catch((cause: unknown) => {
+          throw new ParentStatusReadError(ctx.workflowRun.id, run.node.id, cause);
+        });
       if (!shouldContinueStreamingForStatus(status)) {
         return failed(
           await failLoopNode(ctx, run.node.id, state, `Workflow ${status ?? 'deleted'}`, {
