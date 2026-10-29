@@ -2,6 +2,7 @@ import { listChildRepos, execFileAsync } from '@archon/git';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { Codebase, CommandResult, Conversation } from '../../types';
 import * as codebaseDb from '../../db/codebases';
+import { sqlState } from '../../db/sql-state';
 import * as sessionDb from '../../db/sessions';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import { getActiveChatWorkflowRun } from './workflow-runs';
@@ -267,12 +268,4 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
     return '\n\nWorktrees: inventory unavailable (count unknown)';
   }
   return msg;
-}
-
-function sqlState(error: unknown): string | undefined {
-  const code =
-    typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
-  return typeof code === 'string' && code.length === 5 && !/[^0-9A-Z]/.test(code)
-    ? code
-    : undefined;
 }

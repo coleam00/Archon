@@ -10,6 +10,7 @@ import { createLogger } from '@archon/paths';
 import { LEGACY_VENDOR_ALIASES } from '@archon/providers/credential-catalog';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION } from '../schema-version';
+import { sqlState } from '../sql-state';
 
 const SCHEMA_LOCK_SQL = 'SELECT pg_advisory_xact_lock(1796)';
 const SCHEMA_CURRENT_SAVEPOINT = 'schema_current';
@@ -340,17 +341,8 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       try {
         await client.query('ROLLBACK');
       } catch (rollbackError) {
-        const code =
-          typeof rollbackError === 'object' && rollbackError !== null && 'code' in rollbackError
-            ? rollbackError.code
-            : undefined;
         getLog().error(
-          {
-            code:
-              typeof code === 'string' && code.length === 5 && !/[^0-9A-Z]/.test(code)
-                ? code
-                : undefined,
-          },
+          { code: sqlState(rollbackError) },
           'db.postgres_transaction_rollback_failed'
         );
       }
