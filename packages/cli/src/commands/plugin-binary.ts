@@ -193,7 +193,20 @@ async function assertTargetClaimable(
     );
   }
   if (owner || !(await pathExists(target))) return;
-  if (canUpgradeProvider(ref.id, fileName, broken)) return;
+  if (canUpgradeProvider(ref.id, fileName, broken)) {
+    const competingOwner = receipts.find(
+      receipt =>
+        receipt.id !== ref.id &&
+        isBinaryReceipt(receipt) &&
+        receipt.files.some(file => file.path.toLowerCase() === fileName.toLowerCase())
+    );
+    if (competingOwner) {
+      throw new Error(
+        `${target} belongs to ${competingOwner.id}. Remove it first: archon plugin remove ${competingOwner.id}`
+      );
+    }
+    return;
+  }
   // Preserve sole broken-self repair when no other receipt could own the target.
   // The target is inside pluginsDir: executable names cannot contain separators.
   const others = broken.filter(entry => entry.id !== ref.id);

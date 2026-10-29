@@ -312,6 +312,63 @@ integration.each(['provider add', 'plugin update'] as const)(
   }
 );
 
+for (const kind of ['provider', 'forge', 'chat'] as const) {
+  for (const exactCase of [false, true]) {
+    integration.each(['provider add', 'plugin update'] as const)(
+      `%s refuses a current ${kind} owner of the Windows target (exact case=${exactCase})`,
+      async command => {
+        const env = { ...(await environment(['claude', 'codex'])), platform: 'win32' as const };
+        const self = oldReceipt('claude');
+        const fileName = 'archon-provider-claude.exe';
+        await writeReceipt(env, self.id, {
+          ...self,
+          files: [{ ...self.files[0], path: fileName }],
+        });
+        const { descriptor, ...base } = oldReceipt('codex');
+        const peers = {
+          provider: { ...base, descriptor: { ...descriptor, protocol: 3 } },
+          forge: {
+            ...base,
+            manifest: { ...base.manifest, kind: 'forge', executable: 'archon-forge-peer' },
+          },
+          chat: {
+            ...base,
+            manifest: { ...base.manifest, kind: 'chat', executable: 'archon-chat-peer' },
+            descriptor: {
+              protocol: 'archon-chat/1',
+              id: 'peer',
+              displayName: 'Peer',
+              version: '1',
+              capabilities: { defaultWorkflowDispatch: 'background' },
+              policy: { workspaceRetention: 'age-based' },
+            },
+          },
+        };
+        const ownerId = 'acme/owner';
+        await writeReceipt(env, ownerId, {
+          ...peers[kind],
+          id: ownerId,
+          files: [{ ...base.files[0], path: exactCase ? fileName : fileName.toUpperCase() }],
+        });
+        expect((await scanReceipts(env.pluginsDir)).receipts).toMatchObject([
+          { id: ownerId, manifest: { kind } },
+        ]);
+        await fs.writeFile(join(env.pluginsDir, fileName), 'old Windows binary');
+        const before = await snapshot(env);
+        const acquired = acquisitions;
+        const code =
+          command === 'provider add'
+            ? await providerCommand('add', ['claude'], env)
+            : await pluginCommand('update', [`${self.id}@${tag}`], env);
+        expect(code).toBe(1);
+        expect(error.mock.calls.flat().join('\n')).toContain(`belongs to ${ownerId}`);
+        expect(acquisitions).toBe(acquired);
+        expect(await snapshot(env)).toEqual(before);
+      }
+    );
+  }
+}
+
 integration.each([
   'malformed self',
   'unreadable self',
