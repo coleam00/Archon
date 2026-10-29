@@ -1555,8 +1555,12 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 
 ### `isolation cleanup [days]`
 
-Remove stale environments: those inactive for more than `[days]` (default 7), or with `--merged`, those whose branch or PR has merged. Worktree cleanup only handles worktree records. Container
-cleanup removes eligible containers and their volumes through the container backend,
+Remove eligible worktrees by inactivity and eligible containers by age since the container
+environment was created. The threshold is `[days]` (default 7). Recent activity does not
+reset a container environment's creation age; containers a running, pending, or paused run
+can claim remain protected. With `--merged`, remove environments whose branch or PR has
+merged instead. Worktree cleanup only handles worktree records. Container cleanup removes
+eligible containers and their volumes through the container backend,
 including when no stale worktrees exist. A missing host folder does not make a container
 destroyed. To clean eligible containers without waiting for the default age threshold,
 run `archon isolation cleanup 0`; containers owned by resumable runs remain protected.
