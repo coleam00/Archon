@@ -4,7 +4,7 @@
  * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
  */
 import { z } from 'zod';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -397,6 +397,7 @@ export class CodexProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    const runId = randomUUID();
     const abortSignal = requestOptions?.abortSignal;
     const run: CodexRun = {
       connection: undefined,
@@ -459,7 +460,8 @@ export class CodexProvider implements IAgentProvider {
           appServerArgs(login, plugins, modelCatalogPath),
           launch.env,
           this.spawner,
-          requestOptions?.protectedEnvKeys
+          requestOptions?.protectedEnvKeys,
+          runId
         );
       run.connection = startAppServer(nodePlugins);
       // An abort while the setup above awaited found no process to stop.
@@ -492,7 +494,10 @@ export class CodexProvider implements IAgentProvider {
       abortSignal?.removeEventListener('abort', onAbort);
       if (run.connection && !(await this.shutDown(run.connection))) call.observationLost = true;
     }
-    if (!call.observationLost) yield { type: 'settled' };
+    if (!call.observationLost) {
+      getLog().debug({ runId }, 'codex.settle');
+      yield { type: 'settled' };
+    }
   }
 
   /**
@@ -563,6 +568,7 @@ export class CodexProvider implements IAgentProvider {
    */
   private async shutDown(connection: AppServerConnection): Promise<boolean> {
     await connection.finishToolCalls();
+    getLog().debug({ runId: connection.runId }, 'codex.host_tool_calls_finished');
     const end = await connection.shutdown();
     if (end?.kind === 'exited' && end.code === 0 && end.signal === null) return true;
     if (end) {

@@ -168,6 +168,32 @@ beforeEach(() => {
 });
 
 describe('CodexProvider', () => {
+  test('post-result diagnostics share a run ID and settle only after shutdown', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      mockLogger.debug.mockClear();
+      const { provider } = providerWith();
+      for await (const chunk of provider.sendQuery('private prompt', '/workspace')) {
+        const calls = mockLogger.debug.mock.calls.filter(([fields]) => 'runId' in fields);
+        if (chunk.type === 'result') expect(calls).toEqual([]);
+        if (chunk.type === 'settled') {
+          expect(calls.map(([, phase]) => phase)).toEqual([
+            'codex.host_tool_calls_finished',
+            'codex.stdin_finished',
+            'codex.child_close',
+            'codex.settle',
+          ]);
+          const runId: unknown = calls[0][0].runId;
+          expect(typeof runId).toBe('string');
+          for (const [fields] of calls) expect(fields).toEqual({ runId });
+          ids.push(String(runId));
+        }
+      }
+    }
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+
   test('getType returns codex', () => {
     expect(new CodexProvider().getType()).toBe('codex');
   });

@@ -190,7 +190,8 @@ export class AppServerConnection {
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
     env: Record<string, string>,
-    protectedEnvKeys?: readonly string[]
+    protectedEnvKeys?: readonly string[],
+    readonly runId?: string
   ) {
     this.credentialValues = collectCredentialValues(env, protectedEnvKeys);
     let buffered = '';
@@ -215,11 +216,18 @@ export class AppServerConnection {
     child.stdin.on('error', error => {
       getLog().debug({ err: error }, 'codex.app_server_stdin_error');
     });
+    child.stdin.once('finish', () => {
+      if (this.runId) getLog().debug({ runId: this.runId }, 'codex.stdin_finished');
+    });
+    child.once('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+      if (this.runId) getLog().debug({ runId: this.runId, code, signal }, 'codex.child_exit');
+    });
     child.once('error', (error: NodeJS.ErrnoException) => {
       this.close({ kind: 'spawn_failed', error });
     });
     // 'close', not 'exit': it fires after stdout drained, so the last frames are read first.
     child.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      if (this.runId) getLog().debug({ runId: this.runId }, 'codex.child_close');
       this.close({ kind: 'exited', code, signal });
     });
   }
@@ -230,7 +238,8 @@ export class AppServerConnection {
     args: string[],
     env: Record<string, string>,
     spawner: Spawner = spawn as unknown as Spawner,
-    protectedEnvKeys?: readonly string[]
+    protectedEnvKeys?: readonly string[],
+    runId?: string
   ): AppServerConnection {
     const childEnv = { ...env };
     if (binary.pathDirs.length > 0) {
@@ -241,7 +250,7 @@ export class AppServerConnection {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return new AppServerConnection(child, childEnv, protectedEnvKeys);
+    return new AppServerConnection(child, childEnv, protectedEnvKeys, runId);
   }
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */

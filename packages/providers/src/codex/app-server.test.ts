@@ -66,6 +66,30 @@ const BINARY = { path: '/bin/codex', pathDirs: ['/vendor/codex-path'] };
 const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
 describe('AppServerConnection', () => {
+  test('phase diagnostics distinguish stdin finish, exit and pipe closure', async () => {
+    log.debug.mockClear();
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner, undefined, 'run-1');
+    let ended = false;
+    void connection.ended.then(() => {
+      ended = true;
+    });
+    const stopping = connection.shutdown();
+    await tick();
+    expect(log.debug.mock.calls.at(-1)).toEqual([{ runId: 'run-1' }, 'codex.stdin_finished']);
+    fake.child.emit('exit', 0, null);
+    await tick();
+    expect(ended).toBe(false);
+    expect(log.debug.mock.calls.at(-1)).toEqual([
+      { runId: 'run-1', code: 0, signal: null },
+      'codex.child_exit',
+    ]);
+    fake.child.emit('close', 0, null);
+    expect(await stopping).toEqual({ kind: 'exited', code: 0, signal: null });
+    expect(log.debug.mock.calls.at(-1)).toEqual([{ runId: 'run-1' }, 'codex.child_close']);
+    expect(log.debug).toHaveBeenCalledTimes(3);
+  });
+
   test('drains accepted tool calls on closure and accepts no later calls', async () => {
     const fake = rawChild();
     const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
