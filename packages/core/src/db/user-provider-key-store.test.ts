@@ -423,7 +423,7 @@ describe('user-provider-key-store', () => {
         state: 'usable',
         credential: { oauthApiKey: 'PLANTED-live-key' },
       });
-      expect(cred).not.toHaveProperty('storedStatus');
+      expect(cred).toMatchObject({ storedStatus: { state: 'check_failed', source: 'archon' } });
       expect(mockQuery).toHaveBeenCalledTimes(2 + failures);
       for (const call of mockQuery.mock.calls.slice(1)) {
         expect(call[1]).toEqual([

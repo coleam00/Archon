@@ -28,6 +28,7 @@ mock.module('../credentials/subscription-oauth', () => ({
 const { persistProviderOAuth } = await import('../credentials/connect-service');
 const {
   getDecryptedProviderCredential,
+  getStoredCredentialStatus,
   getUserProviderKeyRecord,
   listUserProviderKeys,
   saveUserProviderKey,
@@ -77,7 +78,7 @@ for (const replacement of ['reconnect', 'identical reconnect', 'deletion', 'api 
       await release.promise;
       return { newCredentials: rotated, apiKey: 'minted-after-rotate' };
     });
-    const pending = getDecryptedProviderCredential(userId, 'anthropic');
+    const pending = getStoredCredentialStatus(userId, 'anthropic');
     try {
       await entered.promise;
       if (replacement === 'deletion') {
@@ -104,18 +105,21 @@ for (const replacement of ['reconnect', 'identical reconnect', 'deletion', 'api 
         expect(expected?.oauth_creds_encrypted).not.toBe(before?.oauth_creds_encrypted);
       }
       release.resolve();
-      const live = await pending;
-      expect(live).toMatchObject({
-        state: 'usable',
-        credential: { oauthApiKey: 'minted-after-rotate' },
+      expect(await pending).toEqual({
+        state: 'check_failed',
+        source: 'archon',
+        evidence: expect.any(String),
       });
-      expect(live).not.toHaveProperty('storedStatus');
       expect(await getUserProviderKeyRecord(userId, 'anthropic')).toEqual(expected);
       if (replacement === 'reconnect' || replacement === 'identical reconnect') {
         expect(
           JSON.parse(decryptToken(expected?.oauth_creds_encrypted ?? '', getEncryptionKey()))
         ).toEqual(reconnect);
       }
+      expect(await getStoredCredentialStatus(userId, 'anthropic')).toEqual({
+        state: replacement === 'deletion' ? 'not_connected' : 'usable',
+        source: 'archon',
+      });
       if (replacement === 'reconnect') {
         expect(await getDecryptedProviderCredential(userId, 'anthropic')).toMatchObject({
           state: 'usable',
