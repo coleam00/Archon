@@ -981,7 +981,7 @@ inspect the run normally with `workflow get <run-id>`.
 
 List, count, stream or read the [attention queue](/getting-started/operate/): readable paused
 runs that need an answer or inspection, plus observable provider usage- and rate-limit waits.
-Batch reads report unreadable stored rows separately through `degraded` warnings, described below.
+Batch reads report unreadable stored rows and affected paused parents through `degraded` warnings, described below.
 Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_limit`
 continues automatically after reset, and `unreadable` needs inspection. Read-only.
 
@@ -1011,16 +1011,21 @@ is not paused, they report the affected paused parent instead. An absent parent 
 mean its block has cleared. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
 
-Batch list and count reads add an optional `degraded` array when paused rows cannot be read,
-with one `{ "type": "degraded", "reason": "run_unreadable", "runId": "<id>" }` per run.
-`runId` is present only for install-wide reads; project membership is unknown for these rows.
+Batch list and count reads add an optional `degraded` array when a paused row or a descendant
+needed to project its attention item cannot be read. Each entry has the shape
+`{ "type": "degraded", "reason": "run_unreadable", "runId": "<id>" }`.
+`runId` identifies the unreadable paused row, or an affected readable paused parent when
+its unreadable descendant is not paused. It is present only for install-wide reads;
+the unreadable row's project membership cannot be established.
 Warnings survive label and project filters. Readable items remain available, counts cover only
 readable matches, and mixed reads still exit `0`. Text output prints a repair advisory per warning.
 Healthy JSON omits `degraded`. Operator logs retain safe run IDs without stored origin contents;
-repair the stored data and read again.
+use the logged unreadable run ID to locate the data to repair, since a warning may name its
+readable parent instead. Read again after repair.
 
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open
-item in scope and an identifier-free `degraded` warning per unreadable paused row,
+item in scope and an identifier-free `degraded` warning for each batch report of an affected
+paused run (an unreadable row or a readable parent whose descendant cannot be read),
 then `ready`, then follows changes any process commits, as
 `attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
 Every run line carries the run's `workflow` and `parentRunId`, so a consumer can keep

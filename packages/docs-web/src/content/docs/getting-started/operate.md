@@ -204,11 +204,12 @@ Everything above is also JSON, for scripts and agents. The list, the single read
 
 An unreadable stored origin cannot become an item. Batch list and count results instead include
 an optional `degraded` array with one `{ "type": "degraded", "reason": "run_unreadable", "runId": "<id>" }`
-per unreadable paused run. A parent blocked on an unreadable paused descendant can be omitted because the child already has a report. If the unreadable descendant is not paused, the batch reports the affected paused parent instead. An absent parent does not mean its block has cleared. Independent valid work stays available; counts cover readable matching items only.
+per reported paused run. `runId` identifies either the unreadable paused row or an affected readable paused parent whose unreadable descendant is not paused. A parent blocked on an unreadable paused descendant can be omitted because the child already has a report. An absent parent does not mean its block has cleared. Independent valid work stays available; counts cover readable matching items only.
 Healthy results omit the array. Project views omit warning IDs because membership cannot be established;
 label filters retain the warnings too. The console shows repair advisories beside actionable work,
 and CLI text does the same. These diagnostics offer no resume or answer action and change no run state.
-Use safe run IDs from operator logs to investigate, repair the stored data, then reload or read again.
+Use the safe unreadable run ID from operator logs to locate the data to repair; the warning may
+name its readable parent instead. After repair, reload or read again.
 No warning contains the stored origin, messages or credentials.
 
 With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch use the selected project regardless of the working directory. Its ID, name or key is accepted by `--project`; other projects and `--all` are rejected. Without explicit chat scope, the CLI defaults to the working directory's project, `--project` names another project and `--all` covers the install. Every `workflow attention` form runs from any directory, registered or not. Over HTTP there is no working directory, so the default is the install. `--label k=v` is an exact match, and repeated filters must all match. `age` sorts the oldest pause first; `label:<key>` sorts by that label's value as a plain string. A single-run read returns null when the run has no item. The [CLI reference](/reference/cli/#workflow-attention) lists every flag.
@@ -264,7 +265,7 @@ Answer the children in any order. Each child applies its own answer at once. The
 
 `--watch --json` turns the list into JSON lines across every run in scope, including runs that start after the stream does. It replaces polling the list and diffing it. It runs until Ctrl-C, SIGTERM, or its reader closes stdout, then exits 0. On Windows a process kill is not a signal, so it ends the stream without that exit.
 
-A stream starts with one `attention` line per readable open item, with `snapshot: true`, and one identifier-free `degraded` warning per unreadable paused row, then a `ready` line. Startup awaits acceptance of each line before `ready`. Without degradation, the snapshot is the complete open set: an item you held that is absent is gone. With degradation, absence alone cannot establish that work is gone. After `ready`, the stream follows every change the store commits, whichever process made it: a detached run, a trigger, the server, another host on the same database.
+A stream starts with one `attention` line per readable open item, with `snapshot: true`, and one identifier-free `degraded` warning for each batch report of an affected paused run (an unreadable row or a readable parent whose descendant cannot be read), then a `ready` line. Startup awaits acceptance of each line before `ready`. Without degradation, the snapshot is the complete open set: an item you held that is absent is gone. With degradation, absence alone cannot establish that work is gone. After `ready`, the stream follows every change the store commits, whichever process made it: a detached run, a trigger, the server, another host on the same database.
 
 | `type` | When | Fields |
 |---|---|---|
@@ -276,7 +277,7 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 | `owner_lost` | A running run's owner process on this host is gone | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `observedStatus` |
 | `ready` | Initial snapshot delivery finished; coverage may be degraded | `cursor` |
 | `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |
-| `degraded` | An unreadable snapshot row or repeated failure to project a run; coverage may be incomplete. The stream keeps running | `cursor`, `reason: "run_unreadable"` |
+| `degraded` | A snapshot item cannot be read or projected, or repeated failure to project a run; coverage may be incomplete. The stream keeps running | `cursor`, `reason: "run_unreadable"` |
 | `error` | `--after` named a cursor this install did not issue, or the store no longer reads the stream's position. The last line; exit 4 | `error: "cursor_invalid"` |
 
 - **Keep an open set keyed by `runId`.** Each `attention` line replaces that run's item, including when its kind or `resetAt` changes while `revision` stays 1. `resolved` removes it. Its `reason` is `answered`, or `withdrawn` when the run resumed, ended, was deleted or moved to a different pause. For a fan-out child, remove only that child.
