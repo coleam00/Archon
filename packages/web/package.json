@@ -65,6 +65,9 @@
       "src/experiments/AddProjectDialog.test.tsx"
     ],
     [
+      "src/experiments/DraftRunCardInteraction.test.tsx"
+    ],
+    [
       "src/experiments/ApprovalPanelResponse.test.tsx"
     ],
     [
