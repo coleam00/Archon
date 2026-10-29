@@ -91,6 +91,101 @@ export async function makeSqlConformanceHarness(
 export function describeSqlStatusReadConformance(
   makeHarness: () => Promise<WorkflowStoreHarness & { db: IDatabase }>
 ): void {
+  test.each(['direct', 'parent'] as const)(
+    'partial status reads validate %s runs and preserve rejected writes',
+    async association => {
+      const harness = await makeHarness();
+      try {
+        const { db, store } = harness;
+        const { listConversationDetachBlockers } = await import('./workflow-run-reads');
+        const { lockedRunRow } = await import('./workflow-run-shared');
+        const run = await store.createWorkflowRun({
+          workflow_name: 'partial-status-read',
+          user_message: '',
+          origin:
+            association === 'direct'
+              ? { conversationId: CONFORMANCE_CONVERSATION_ID }
+              : { parentConversationId: CONFORMANCE_CONVERSATION_ID },
+          metadata: { keep: 'value' },
+        });
+        const locked = (id: string) => db.withTransaction(query => lockedRunRow(query, id));
+        const blockers = (id: string) =>
+          db.withTransaction(query => listConversationDetachBlockers(query, id));
+        const writes = (id: string) => [
+          { write: () => store.setToolCallAttention(id, 'stream', []), unchanged: false },
+          {
+            write: () =>
+              store.answerAttentionWait(id, {
+                pauseId: 'ask',
+                answer: { decision: 'proceed', text: '' },
+                answeredVia: 'cli',
+                answeredAt: '2026-01-01T00:05:00.000Z',
+              }),
+            unchanged: { answered: false },
+          },
+          {
+            write: () =>
+              store.labelAttentionWait(id, {
+                pauseId: 'ask',
+                set: { priority: 'high' },
+                unset: [],
+                via: 'cli',
+              }),
+            unchanged: { labeled: false },
+          },
+        ];
+        const missing = randomUUID();
+        expect(await locked(missing)).toBeUndefined();
+        expect(await blockers(missing)).toEqual([]);
+        for (const { write, unchanged } of writes(missing)) {
+          expect(await write()).toEqual(unchanged);
+        }
+        for (const status of workflowRunStatusSchema.options) {
+          await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+            status,
+            run.id,
+          ]);
+          expect(await locked(run.id)).toMatchObject({ status });
+          const rows = await blockers(CONFORMANCE_CONVERSATION_ID);
+          expect(rows).toEqual(
+            status === 'completed' || status === 'cancelled' ? [] : [{ id: run.id, status }]
+          );
+          for (const { write, unchanged } of writes(run.id)) {
+            expect(await write()).toEqual(unchanged);
+          }
+        }
+        for (const status of ['unexpected', '']) {
+          await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+            status,
+            run.id,
+          ]);
+          const snapshot = async () => ({
+            rows: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
+            events: await store.listWorkflowEvents(run.id),
+            head: await store.getWorkflowEventHead(),
+            reports: harness.terminalReports(),
+          });
+          const before = await snapshot();
+          for (const read of [
+            () => locked(run.id),
+            () => blockers(CONFORMANCE_CONVERSATION_ID),
+            ...writes(run.id).map(({ write }) => write),
+          ]) {
+            const result = read();
+            await expect(result).rejects.toBeInstanceOf(WorkflowStatusReadError);
+            await expect(result).rejects.toMatchObject({
+              workflowRunId: run.id,
+              storedStatus: status,
+              message: `Unsupported workflow run status for run ${run.id}: ${JSON.stringify(status)}`,
+            });
+          }
+          expect(await snapshot()).toEqual(before);
+        }
+      } finally {
+        await harness.close();
+      }
+    }
+  );
   test('full-row reads validate statuses without lifecycle writes or partial lists', async () => {
     const harness = await makeHarness();
     try {
