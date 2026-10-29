@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'bun:test';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { mkdir } from 'fs/promises';
+import { mkdir, mkdtemp } from 'fs/promises';
 import { providerRegistry, getProviderCapabilities } from '@archon/providers';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type {
@@ -471,6 +471,47 @@ describe('collectStrictSchemaViolations', () => {
 });
 
 describe('executeDagWorkflow -- strict-schema preflight', () => {
+  it.each([undefined, false])(
+    'rejects forbidden required fields before any agent starts (additionalProperties %s)',
+    async additionalProperties => {
+      const cwd = await mkdtemp(join(tmpdir(), 'dag-forbidden-required-'));
+      mockSendQueryDag.mockClear();
+      try {
+        await expect(
+          executeDagWorkflow(
+            dagOptions({
+              deps: createMockDeps(),
+              cwd,
+              workflow: {
+                name: 'forbidden-required',
+                nodes: [
+                  { id: 'first', kind: 'agent', source: { kind: 'inline', prompt: 'Work' } },
+                  {
+                    id: 'bad',
+                    kind: 'agent',
+                    source: { kind: 'inline', prompt: 'Work' },
+                    output_format: {
+                      type: 'object',
+                      properties: { a: { type: 'string' } },
+                      required: ['a', 'b'],
+                      ...(additionalProperties === undefined ? {} : { additionalProperties }),
+                    },
+                  },
+                ],
+              },
+              workflowRun: makeWorkflowRun('forbidden-required'),
+              workflowProvider: 'codex',
+              config: { ...minimalConfig, assistant: 'codex' },
+            })
+          )
+        ).rejects.toThrow(/node 'bad'.*output_format.required.*b.*additionalProperties: false/);
+        expect(mockSendQueryDag).not.toHaveBeenCalled();
+      } finally {
+        await removeTempTree(cwd);
+      }
+    }
+  );
+
   it('rejects a Codex bare object before sending any query', async () => {
     const testDir = join(
       tmpdir(),

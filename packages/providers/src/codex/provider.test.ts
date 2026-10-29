@@ -1407,6 +1407,38 @@ describe('CodexProvider', () => {
       }
     );
 
+    test.each(['explicit', 'workflow', 'split'] as const)(
+      'rejects forbidden required fields before starting Codex through the %s path',
+      async path => {
+        const schema = {
+          type: 'object',
+          properties: { a: { type: 'string' } },
+          required: ['a', 'b'],
+        };
+        const { provider, server } = providerWith();
+        const result = resultOf(
+          await run(provider, {
+            ...(path === 'explicit'
+              ? { outputFormat: { type: 'json_schema', schema } as const }
+              : { nodeConfig: { output_format: schema } }),
+            ...(path === 'split'
+              ? {
+                  assistantConfig: {
+                    model: 'glm-5.3',
+                    toolFreeStructuredOutputModels: ['glm-5.3'],
+                  },
+                }
+              : {}),
+          })
+        );
+        expect(result.isError).toBe(true);
+        expect(result.failure?.evidence).toMatch(
+          /output_format.required.*b.*additionalProperties: false/
+        );
+        expect(server.processes).toHaveLength(0);
+      }
+    );
+
     test('parses the last message onto structuredOutput (workflow output_format path)', async () => {
       const chunks = await streamOf(
         {
