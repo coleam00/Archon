@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-10-29
+
+Upgrading from 0.13.0 with providers installed works in one command again.
+
+### Fixed
+
+- `archon provider add` and `archon plugin update` now replace a maintained provider installed by 0.13.0, whose receipt declares the older plugin protocol, including several providers in one command. On 0.13.1 they refused, saying the executable "may belong to a plugin whose receipt cannot be read", so the documented upgrade step failed and workflows that used that provider stopped loading. A file with an unreadable receipt or a different plugin ID is still refused, and the existing repair for a provider's own malformed receipt is unchanged. (#5287)
+- `archon isolation cleanup` help and the CLI reference describe the container threshold as age since the environment was created, which is what cleanup uses. (#5283)
+- The source-install guide points to the Bun version the repository pins instead of `>= 1.0.0`. (#5275)
+
 ## [0.13.1] - 2026-10-29
 
 Workflow names must match exactly, provider plugins move to protocol 3, and a batch of fixes for Postgres boots, Codex runs, cleanup and cost accounting.
