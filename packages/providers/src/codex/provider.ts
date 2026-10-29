@@ -45,6 +45,7 @@ import {
   JsonRpcError,
   settlesWithin,
   type Spawner,
+  type ProcessGroupOwner,
 } from './app-server';
 import { failureClassOfStop, withModelAccessAdvice } from './turn-error';
 import { codexLaunch, codexLogin, type CodexLogin } from './login';
@@ -275,7 +276,8 @@ export class CodexProvider implements IAgentProvider {
    */
   constructor(
     private readonly spawner?: Spawner,
-    private readonly shutdownGraceMs = SHUTDOWN_GRACE_MS
+    private readonly shutdownGraceMs = SHUTDOWN_GRACE_MS,
+    private readonly processGroupOwner: ProcessGroupOwner = 'connection'
   ) {}
 
   async checkCredential(
@@ -332,7 +334,9 @@ export class CodexProvider implements IAgentProvider {
     aborted: Promise<never>
   ): Promise<CredentialStatus> {
     signal.throwIfAborted();
-    const connection = AppServerConnection.start(binary, [], env, this.spawner);
+    const connection = AppServerConnection.start(binary, [], env, this.spawner, {
+      processGroupOwner: this.processGroupOwner,
+    });
     let response: unknown;
     const errors: string[] = [];
     try {
@@ -472,8 +476,11 @@ export class CodexProvider implements IAgentProvider {
           appServerArgs(login, plugins, modelCatalogPath),
           launch.env,
           this.spawner,
-          requestOptions?.protectedEnvKeys,
-          runId
+          {
+            protectedEnvKeys: requestOptions?.protectedEnvKeys,
+            runId,
+            processGroupOwner: this.processGroupOwner,
+          }
         );
       run.connection = startAppServer(nodePlugins);
       // An abort while the setup above awaited found no process to stop.
@@ -574,8 +581,8 @@ export class CodexProvider implements IAgentProvider {
   }
 
   /**
-   * Finish tool calls and stop the process after its turn; false when it did not exit
-   * cleanly. It waits for the exit after stdin closes without a SIGTERM, which would turn
+   * Finish tool calls and stop the process after its turn; false on abnormal process
+   * exit. It waits for the exit after stdin closes without a SIGTERM, which would turn
    * a slow clean exit into exit code 1.
    */
   private async shutDown(connection: AppServerConnection): Promise<boolean> {
@@ -583,15 +590,17 @@ export class CodexProvider implements IAgentProvider {
     getLog().debug({ runId: connection.runId }, 'codex.host_tool_calls_finished');
     const end = await connection.shutdown();
     if (end.kind === 'exited' && end.code === 0 && end.signal === null) return true;
+    const error = connection.closedError(end);
     getLog().error(
       {
-        err: connection.closedError(end),
+        err: error,
         ...(end.kind === 'exited' && {
           lifecycle: 'process_abnormal_exit' satisfies ProviderLifecycleEvent,
         }),
       },
       'codex.app_server_abnormal_exit'
     );
+    if (end.kind === 'cleanup_failed') throw error;
     return false;
   }
 

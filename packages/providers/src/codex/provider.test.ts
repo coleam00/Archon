@@ -169,28 +169,37 @@ beforeEach(() => {
 });
 
 describe('CodexProvider', () => {
-  test('a descendant cleanup failure after the result does not settle', async () => {
-    const stop = spyOn(processTree, 'stopAppServerDescendants').mockRejectedValue(
-      new Error('cleanup refused')
-    );
-    try {
-      const server = createFakeAppServer();
-      const provider = new CodexProvider((command, args, options) => {
-        const child = server(command, args, options);
-        Object.defineProperty(child, 'pid', { value: 2_147_483_647 });
-        return child;
-      });
-      expect((await run(provider)).map(chunk => chunk.type)).toEqual(['result']);
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({
-          err: expect.objectContaining({ message: expect.stringContaining('cleanup refused') }),
-        }),
-        'codex.app_server_abnormal_exit'
+  test.each([false, true])(
+    'a post-result cleanup failure throws without settling (remote=%s)',
+    async remote => {
+      const stop = spyOn(processTree, 'stopAppServerDescendants').mockRejectedValue(
+        new Error('cleanup refused')
       );
-    } finally {
-      stop.mockRestore();
+      try {
+        const server = createFakeAppServer();
+        const provider = new CodexProvider((command, args, options) => {
+          const child = server(command, args, options);
+          Object.defineProperty(child, 'pid', { value: 2_147_483_647 });
+          return child;
+        });
+        const client = remote ? overStreams(() => provider, descriptor) : provider;
+        const chunks: MessageChunk[] = [];
+        const collect = async (): Promise<void> => {
+          for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+        };
+        await expect(collect()).rejects.toThrow('cleanup refused');
+        expect(chunks.map(chunk => chunk.type)).toEqual(['result']);
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          expect.objectContaining({
+            err: expect.objectContaining({ message: expect.stringContaining('cleanup refused') }),
+          }),
+          'codex.app_server_abnormal_exit'
+        );
+      } finally {
+        stop.mockRestore();
+      }
     }
-  });
+  );
 
   test('post-result diagnostics share a run ID and settle only after shutdown', async () => {
     const ids: string[] = [];

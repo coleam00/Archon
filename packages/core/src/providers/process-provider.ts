@@ -179,7 +179,8 @@ function startProcess(
           clearTimeout(timer);
         }
       } else await kill();
-      if (signal?.aborted) await kill();
+      // A POSIX group can outlive its plugin leader, including after a successful call.
+      if (process.platform !== 'win32' || signal?.aborted) await kill();
       await killing;
       await closed;
       signal?.removeEventListener('abort', abort);

@@ -33,6 +33,8 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+export type ProcessGroupOwner = 'connection' | 'host';
+
 /** Process spawner, injectable so tests drive a fake child instead of a real process. */
 export type Spawner = (
   command: string,
@@ -200,14 +202,15 @@ export class AppServerConnection {
   /** Credential values from the process env, redacted from its stderr. */
   private readonly credentialValues: readonly string[];
   private readonly endSignal = Promise.withResolvers<ConnectionEnd>();
-  /** Resolves after process exit, bounded pipe drainage, and POSIX process-group cleanup. */
+  /** Resolves after process exit, bounded pipe drainage, and connection-owned POSIX cleanup. */
   readonly ended = this.endSignal.promise;
 
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
     env: Record<string, string>,
-    protectedEnvKeys?: readonly string[],
-    readonly runId?: string
+    protectedEnvKeys: readonly string[] | undefined,
+    readonly runId: string | undefined,
+    private readonly processGroupOwner: ProcessGroupOwner
   ) {
     this.credentialValues = collectCredentialValues(env, protectedEnvKeys);
     let buffered = '';
@@ -266,8 +269,15 @@ export class AppServerConnection {
     args: string[],
     env: Record<string, string>,
     spawner: Spawner = spawn as unknown as Spawner,
-    protectedEnvKeys?: readonly string[],
-    runId?: string
+    {
+      protectedEnvKeys,
+      runId,
+      processGroupOwner = 'connection',
+    }: {
+      protectedEnvKeys?: readonly string[];
+      runId?: string;
+      processGroupOwner?: ProcessGroupOwner;
+    } = {}
   ): AppServerConnection {
     const childEnv = { ...env };
     if (binary.pathDirs.length > 0) {
@@ -277,9 +287,9 @@ export class AppServerConnection {
     const child = spawner(binary.path, ['app-server', ...args], {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32',
+      detached: process.platform !== 'win32' && processGroupOwner === 'connection',
     });
-    return new AppServerConnection(child, childEnv, protectedEnvKeys, runId);
+    return new AppServerConnection(child, childEnv, protectedEnvKeys, runId, processGroupOwner);
   }
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */
@@ -319,7 +329,8 @@ export class AppServerConnection {
    * sent SIGTERM. Without it, none is sent: a SIGTERM that lands while Codex is still
    * exiting after stdin closed makes it wait about 40 seconds and exit 1, where it would
    * have exited 0 within seconds. Never SIGKILL a live app-server: SIGTERM lets Codex
-   * clean up its commands. After exit on POSIX, stop the process group before settling.
+   * clean up its commands. Connection-owned POSIX groups stop after exit; hosted processes
+   * stay in the host's group.
    */
   async shutdown(termAfterMs?: number, warnMs = TERM_EXIT_WARN_MS): Promise<ConnectionEnd> {
     if (this.endedWith) return this.endedWith;
@@ -453,7 +464,11 @@ export class AppServerConnection {
     if (this.closing) return;
     this.closing = true;
     clearTimeout(this.drainTimer);
-    if (end.kind === 'exited' && this.child.pid !== undefined) {
+    if (
+      end.kind === 'exited' &&
+      this.child.pid !== undefined &&
+      this.processGroupOwner === 'connection'
+    ) {
       void stopAppServerDescendants(this.child.pid).then(
         () => this.finishClose(end),
         (error: unknown) =>

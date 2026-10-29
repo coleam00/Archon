@@ -200,7 +200,10 @@ describe('AppServerConnection', () => {
     async end => {
       const signals: string[] = [];
       const fake = rawChild((_child, signal) => signals.push(signal));
-      const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+      log.debug.mockClear();
+      const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner, {
+        runId: 'drain-run',
+      });
       const response = connection.request('thread/start', {});
       const missing = connection.request('account/read', {}).catch((error: unknown) => error);
       fake.child.emit('exit', end.code, end.signal);
@@ -211,9 +214,16 @@ describe('AppServerConnection', () => {
       fake.stdout.write(' response"}\n{"method":"turn/completed","params":{}}\n');
       fake.stderr.write('final stderr evidence\n');
       expect(await response).toBe('final response');
-      const ended = await settlesWithin(stopping, 1500);
+      const observed = stopping.then(outcome => {
+        expect(log.debug).toHaveBeenCalledWith(
+          { runId: 'drain-run', drainMs: 250 },
+          'codex.post_exit_drain_expired'
+        );
+        return outcome;
+      });
+      const ended = await settlesWithin(observed, 1500);
       if (!ended) fake.child.emit('close', end.code, end.signal);
-      expect(await stopping).toEqual({ kind: 'exited', ...end });
+      expect(await observed).toEqual({ kind: 'exited', ...end });
       expect(ended).toBe(true);
       expect(signals).toEqual([]);
       expect(fake.stdout.destroyed).toBe(true);
@@ -234,7 +244,7 @@ describe('AppServerConnection', () => {
   test('phase diagnostics distinguish stdin finish, exit and pipe closure', async () => {
     log.debug.mockClear();
     const fake = rawChild();
-    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner, undefined, 'run-1');
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner, { runId: 'run-1' });
     let ended = false;
     void connection.ended.then(() => {
       ended = true;
