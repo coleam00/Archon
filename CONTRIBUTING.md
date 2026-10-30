@@ -22,7 +22,9 @@ discovery fails on a direct call without it.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
 retain Bun's substring-filter meaning and run only matching files, preserving the same
-isolation groups. Test flags are forwarded to each selected group.
+isolation groups. Every requested group runs, and any failed group makes the command
+fail. Test flags apply to each selected group; JUnit output is combined across groups.
+Name filters use private JUnit reports to identify groups with no matching test names.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,

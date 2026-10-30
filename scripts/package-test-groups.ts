@@ -5,7 +5,8 @@ export const TEST_ISOLATION_DIRECTIVE = '// @archon-test-isolated';
 
 export function resolvePackageTestGroups(
   packageDirectory: string,
-  declaration: unknown
+  declaration: unknown,
+  selectedFiles?: readonly string[]
 ): string[][] {
   if (typeof declaration !== 'object' || declaration === null || Array.isArray(declaration)) {
     throw new Error('Package test declaration must be an object');
@@ -28,7 +29,13 @@ export function resolvePackageTestGroups(
     return groups;
   }
 
-  const files = discoverPackageTestFiles(packageDirectory);
+  return groupDiscoveredTestFiles(
+    packageDirectory,
+    selectedFiles ?? discoverPackageTestFiles(packageDirectory)
+  );
+}
+
+function groupDiscoveredTestFiles(packageDirectory: string, files: readonly string[]): string[][] {
   if (files.length === 0) throw new Error('Test discovery found no tests under src');
   const isolated: string[][] = [];
   const shared: string[] = [];

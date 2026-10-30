@@ -1,4 +1,4 @@
-import { relative, isAbsolute } from 'node:path';
+import { relative, isAbsolute, posix } from 'node:path';
 import { parseArgs } from 'node:util';
 import { discoverPackageTestFiles, resolvePackageTestGroups } from './package-test-groups';
 
@@ -28,11 +28,7 @@ const valueOptions = [
   'conditions',
 ];
 
-export function resolveRequestedTestGroups(
-  packageDirectory: string,
-  manifest: unknown,
-  requested: string[]
-) {
+export function parseTestArguments(requested: string[]) {
   const { tokens } = parseArgs({
     args: requested,
     strict: false,
@@ -56,16 +52,31 @@ export function resolveRequestedTestGroups(
       }
       return true;
     });
-  const selectors = positionals.map(({ value }) =>
-    (isAbsolute(value) ? relative(packageDirectory, value) : value)
-      .replaceAll('\\', '/')
-      .replace(/^\.\//, '')
+  return { optionTokens, positionals };
+}
+
+export function normalizeTestSelector(packageDirectory: string, value: string): string {
+  const selector = (isAbsolute(value) ? relative(packageDirectory, value) : value).replaceAll(
+    '\\',
+    '/'
   );
+  return posix.normalize(selector).replace(/^\.\//, '');
+}
+
+export function resolveRequestedTestGroups(
+  packageDirectory: string,
+  manifest: unknown,
+  requested: string[]
+) {
+  const { optionTokens, positionals } = parseTestArguments(requested);
+  const selectors = positionals.map(({ value }) => normalizeTestSelector(packageDirectory, value));
   const inventory = discoverPackageTestFiles(packageDirectory);
   const files = inventory.filter(
     file => selectors.length === 0 || selectors.some(selector => file.includes(selector))
   );
-  const groups = resolvePackageTestGroups(packageDirectory, manifest)
+  const groups = (
+    files.length === 0 ? [] : resolvePackageTestGroups(packageDirectory, manifest, files)
+  )
     .map(group => files.filter(file => group.some(selector => file.includes(selector))))
     .filter(group => group.length > 0);
   const selectorIndices = new Set(
@@ -82,6 +93,9 @@ export function resolveRequestedTestGroups(
         : groups.map(group => [...options, ...group.map(file => `./${file}`)]),
     filtersNames:
       groups.length > 0 && optionTokens.some(token => token.name === 'test-name-pattern'),
-    reporterOutfile: optionTokens.filter(token => token.name === 'reporter-outfile').at(-1)?.value,
+    reporterOutfile:
+      optionTokens.filter(token => token.name === 'reporter').at(-1)?.value === 'junit'
+        ? optionTokens.filter(token => token.name === 'reporter-outfile').at(-1)?.value
+        : undefined,
   };
 }

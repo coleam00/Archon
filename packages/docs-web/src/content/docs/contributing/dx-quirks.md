@@ -103,12 +103,18 @@ bun run test packages/paths/src/skills.test.ts   # from the repo root
 cd packages/paths && bun run test src/skills.test.ts
 ```
 
-From the repo root, an argument naming a path under `packages/<name>/`, `scripts/` or
-`.archon/scripts/` decides where `bun test` runs; flags and substring filters are
-forwarded unchanged. Paths naming several packages run one package at a time and stop at
-the first failure. An argument that names no owner fails instead of running the suite.
+From the repo root, a test selector under `packages/<name>/`, `scripts/` or
+`.archon/scripts/` chooses the working directory. Option values stay unchanged, even
+when they look like test paths. Paths naming several packages run one package at a time
+and stop at the first failed package. An argument that names no owner fails instead of
+running the suite.
 
-A package whose `scripts.test` is still a `bun test ... && bun test ...` chain rather than
-`bun run ../../scripts/package-tests.ts` ignores the argument when you run it from inside
-the package: `bun run` appends arguments to the script, so the whole chain runs and a wrong
-path still reports a pass. Run those from the repo root, which routes the path itself.
+Within a package, substring selectors expand to matching files and retain the package's
+isolation groups. Every selected group runs, even after another group fails; the command
+returns nonzero if any group fails. A full run without arguments still stops admitting
+groups after a failure.
+
+Test options are forwarded to each group. Name filters use private JUnit reports to
+distinguish groups with no matching names from test or load failures. An explicit
+`--reporter=junit --reporter-outfile <path>` receives one combined report containing all
+started groups, including their failures and aggregate counts.

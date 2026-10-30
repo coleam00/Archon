@@ -7,7 +7,7 @@ import {
 } from './package-test-groups';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import { resolveRequestedTestGroups } from './package-test-requests';
-import { runNameFilteredGroup } from './package-test-name-filter';
+import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
 /**
  * Runs one package's tests, from that package's directory.
@@ -71,13 +71,19 @@ if (part !== undefined) {
 }
 
 let emptyNameGroups = 0;
+const reports: Awaited<ReturnType<typeof runReportedGroup>>['report'][] = [];
 
 /** Runs one group and reports how long it took, for `update-test-weights.ts`. */
 const timed = async (group: string[], runGroup: (group: string[]) => Promise<number>) => {
   const startedAt = performance.now();
-  const result = request?.filtersNames
-    ? await runNameFilteredGroup(group, runGroup, request.reporterOutfile)
-    : await runGroup(group);
+  let result: number | 'no-name-match';
+  if (request?.filtersNames || request?.reporterOutfile !== undefined) {
+    const reported = await runReportedGroup(group, runGroup, request.filtersNames);
+    reports.push(reported.report);
+    result = reported.code;
+  } else {
+    result = await runGroup(group);
+  }
   if (result === 'no-name-match') emptyNameGroups++;
   console.log(
     `◀ ${packageName} ${group[0]} ${((performance.now() - startedAt) / 1000).toFixed(1)}s`
@@ -106,20 +112,22 @@ const runBuffered = async (group: string[]): Promise<number> => {
 
 /**
  * Runs the groups `concurrency` at a time and returns the first failure's code. After a
- * failure no new group starts, but the running ones finish so their output is not lost.
+ * failure a full run stops admitting groups; requested runs finish every selected group.
  */
 async function runGroups(): Promise<number> {
   if (concurrency === 1) {
+    let firstFailure = 0;
     for (const group of groups) {
       const code = await timed(group, run);
-      if (code !== 0) return code;
+      if (firstFailure === 0) firstFailure = code;
+      if (code !== 0 && request === undefined) return code;
     }
-    return 0;
+    return firstFailure;
   }
   let next = 0;
   let firstFailure = 0;
   const worker = async (): Promise<void> => {
-    while (firstFailure === 0 && next < groups.length) {
+    while ((request !== undefined || firstFailure === 0) && next < groups.length) {
       const code = await timed(groups[next++], runBuffered);
       if (firstFailure === 0) firstFailure = code;
     }
@@ -130,4 +138,5 @@ async function runGroups(): Promise<number> {
 
 // Not `process.exit`: on a pipe it can cut off the buffered group output written just before.
 const code = await runGroups();
+if (request?.reporterOutfile !== undefined) writeCombinedReport(request.reporterOutfile, reports);
 process.exitCode = code || (request?.filtersNames && emptyNameGroups === groups.length ? 1 : 0);

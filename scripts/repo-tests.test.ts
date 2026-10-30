@@ -262,3 +262,25 @@ describe('repo-tests exit codes', () => {
     expect(exitCode).toBe(0);
   });
 });
+
+for (const option of ['coverage-dir', 'reporter-outfile', 'path-ignore-patterns', 'timings']) {
+  test(`root routing preserves --${option} path values`, () => {
+    for (const value of [
+      'packages/paths/src/skills.test.ts',
+      'scripts/test-inventory.test.ts',
+      '.archon/scripts/',
+    ]) {
+      expect(
+        planRequestedRuns([`--${option}`, value, 'scripts/test-inventory.test.ts']).map(
+          run => run.args
+        )
+      ).toEqual([[`--${option}`, value, './scripts/test-inventory.test.ts']]);
+      expect(planRequestedRuns([`--${option}`, value])).toEqual([]);
+      expect(
+        planRequestedRuns([`--${option}`, value, 'packages/paths/src/skills.test.ts']).map(
+          run => run.args
+        )
+      ).toEqual([[`--${option}`, value, 'src/skills.test.ts']]);
+    }
+  });
+}

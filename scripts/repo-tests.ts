@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
+import { parseTestArguments } from './package-test-requests';
 
 /**
  * Runs the repository's tests, from the repository root.
@@ -189,15 +190,11 @@ export function planShard(requested: readonly string[]): TestShard | undefined {
  * owner means no run: the caller reports that rather than falling back to the full suite.
  */
 export function planRequestedRuns(requested: string[]): RequestedRun[] {
-  let expectsTestName = false;
-  const routes = requested.map(
-    (argument): { argument: string; route: RoutedArgument | undefined } => {
-      const route = expectsTestName ? undefined : routeArgument(argument);
-      expectsTestName =
-        !expectsTestName && (argument === '-t' || argument === '--test-name-pattern');
-      return { argument, route };
-    }
-  );
+  const selectors = new Set(parseTestArguments(requested).positionals.map(token => token.index));
+  const routes = requested.map((argument, index) => ({
+    argument,
+    route: selectors.has(index) ? routeArgument(argument) : undefined,
+  }));
 
   const owners = new Map<string, TestOwner>();
   for (const { route } of routes) {

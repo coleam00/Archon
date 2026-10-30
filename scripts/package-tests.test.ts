@@ -1,5 +1,13 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  unlinkSync,
+  realpathSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
@@ -194,7 +202,10 @@ test(
     expect(readFileSync(join(root, 'selected'), 'utf8')).toBe('yes');
     const report = join(root, 'requested-report.xml');
     expect(await run(root, [...args, '--reporter=junit', '--reporter-outfile', report])).toBe(0);
-    expect(readFileSync(report, 'utf8')).toContain('<testsuites');
+    const xml = readFileSync(report, 'utf8');
+    expect(xml).toContain('name="other"');
+    expect(xml).toContain('name="wanted"');
+    expect(xml).toMatch(/<testsuites[^>]*skipped="1"/);
 
     expect(await run(root, ['src/', '-t', 'absent'])).not.toBe(0);
     expect(await run(root, ['src/', '-t', 'absent', '--pass-with-no-tests'])).toBe(0);
@@ -223,7 +234,7 @@ test(
 );
 
 test(
-  'failure stops execution before later groups',
+  'requested failures run later groups while full runs stop early',
   async () => {
     const root = fixture();
     testFile(
@@ -234,6 +245,8 @@ test(
     );
     testFile(root, 'z-later', `test('later', () => appendFileSync('later', 'ran'));`);
     expect(await run(root, ['src/a-failure.test.ts', 'src/z-later.test.ts'])).not.toBe(0);
+    expect(readFileSync(join(root, 'later'), 'utf8')).toBe('ran');
+    unlinkSync(join(root, 'later'));
     expect(await run(root)).not.toBe(0);
     expect(existsSync(join(root, 'later'))).toBe(false);
   },
@@ -295,4 +308,99 @@ test(
     expect(await run(root, [], '3/2')).not.toBe(0);
   },
   testTimeout(10000)
+);
+
+for (const concurrency of [1, 2]) {
+  for (const nameFilter of [false, true]) {
+    test(
+      `requested JUnit combines every group: concurrency=${concurrency}, filter=${nameFilter}`,
+      async () => {
+        const root = fixture({ testConcurrency: concurrency });
+        testFile(root, 'a', `test('first', () => { throw new Error('expected'); });`, true);
+        testFile(root, 'b', `test('second', () => {});`, true);
+        testFile(root, 'c', `test('third', () => appendFileSync('third', 'ran'));`, true);
+        const report = join(root, 'report.xml');
+        expect(
+          await run(root, [
+            'src/',
+            '--reporter=junit',
+            '--reporter-outfile',
+            report,
+            ...(nameFilter ? ['-t', 'first|second|third'] : []),
+          ])
+        ).not.toBe(0);
+        const xml = readFileSync(report, 'utf8');
+        for (const name of ['first', 'second', 'third']) expect(xml).toContain(`name="${name}"`);
+        expect(xml).toMatch(/<testsuites[^>]*tests="3"/);
+        expect(xml).toMatch(/<testsuites[^>]*failures="1"/);
+        expect(readFileSync(join(root, 'third'), 'utf8')).toBe('ran');
+      },
+      testTimeout(5000)
+    );
+  }
+}
+
+for (const failure of [
+  `throw new Error('top level');`,
+  `import './missing-module';`,
+  `const broken = ;`,
+]) {
+  test(
+    `shared load failures stay red under name filters: ${failure}`,
+    async () => {
+      const root = fixture();
+      testFile(root, 'a-skip', `test('other', () => {});`);
+      testFile(root, 'b-broken', failure);
+      testFile(root, 'c-match', `test('wanted', () => {});`, true);
+      const report = join(root, 'load-failure.xml');
+      expect(
+        await run(root, ['src/', '-t', 'wanted', '--reporter=junit', '--reporter-outfile', report])
+      ).not.toBe(0);
+      const xml = readFileSync(report, 'utf8');
+      expect(xml).toContain('name="other"');
+      expect(xml).toContain('name="wanted"');
+      expect(xml).toMatch(/<testsuites[^>]*errors="1"/);
+    },
+    testTimeout(5000)
+  );
+}
+
+for (const alias of ['src/b.test.ts', 'src/../src/b.test.ts', './src//b.test.ts', 'absolute']) {
+  test(
+    `relative aliases retain isolation: ${alias}`,
+    async () => {
+      const root = fixture();
+      for (const name of ['a', 'b'])
+        testFile(
+          root,
+          name,
+          `test('${name}', () => appendFileSync('pids', process.pid + '\\n'));`,
+          true
+        );
+      expect(
+        await run(root, [
+          'src/a.test.ts',
+          alias === 'absolute' ? join(realpathSync(root), 'src/b.test.ts') : alias,
+        ])
+      ).toBe(0);
+      const pids = readFileSync(join(root, 'pids'), 'utf8').trim().split('\n');
+      expect(pids).toHaveLength(2);
+      expect(new Set(pids).size).toBe(2);
+    },
+    testTimeout(5000)
+  );
+}
+
+test(
+  'requested discovery validates only selected tests',
+  async () => {
+    const root = fixture();
+    testFile(root, 'a', `test('wanted', () => appendFileSync('selected', 'yes'));`);
+    testFile(root, 'invalid', `mock.module('./value', () => ({}));`);
+    expect(await run(root, ['src/a.test.ts'])).toBe(0);
+    expect(readFileSync(join(root, 'selected'), 'utf8')).toBe('yes');
+    expect(await run(root, ['src/invalid.test.ts'])).not.toBe(0);
+    expect(await run(root)).not.toBe(0);
+  },
+  testTimeout(5000)
 );
