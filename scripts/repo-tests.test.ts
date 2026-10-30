@@ -130,6 +130,20 @@ describe('planRequestedRuns', () => {
     );
   }
 
+  test.each(['--changed', '--changed=HEAD', '--parallel=2', '--bail=1'])(
+    '%s preserves the following selector for package and root routing',
+    option => {
+      expect(planRequestedRuns([option, 'packages/paths/src/skills.test.ts'])[0].args).toEqual([
+        option,
+        'src/skills.test.ts',
+      ]);
+      expect(planRequestedRuns([option, 'scripts/package-tests.test.ts'])[0].args).toEqual([
+        option,
+        './scripts/package-tests.test.ts',
+      ]);
+    }
+  );
+
   test('plans no run when no argument names an owner', () => {
     expect(planRequestedRuns(['some/where/nope.test.ts'])).toEqual([]);
     expect(planRequestedRuns(['logger'])).toEqual([]);
@@ -226,6 +240,22 @@ describe('repo-tests exit codes', () => {
     expect(stderr).toContain('No argument named a test path this runner can place');
   });
 
+  for (const options of [['--shard=2/2'], ['--shard', '2/2']]) {
+    test(`rejects sharding across owners before starting children: ${options.join(' ')}`, () => {
+      const { exitCode, stdout, stderr } = invoke([
+        ...options,
+        'packages/paths/src/skills.test.ts',
+        'scripts/bun-test-command.test.ts',
+      ]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain('Sharding requires one test owner');
+      expect(stderr).toContain('packages/paths');
+      expect(stderr).toContain('the repository root');
+      expect(stdout).toBe('');
+      expect(stderr).not.toContain('bun test v');
+    });
+  }
+
   test('exits non-zero with the usage for an unknown plan shard', () => {
     const { exitCode, stderr } = invoke(['--plan', 'nope']);
 
@@ -243,6 +273,12 @@ describe('repo-tests exit codes', () => {
     ]);
 
     expect(exitCode).not.toBe(0);
+  });
+
+  test('single-owner sharding preserves native execution', () => {
+    const { exitCode, stdout } = invoke(['--shard=1/1', 'packages/paths/src/skills.test.ts']);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('◀ @archon/paths --shard=1/1');
   });
 
   test('exits 0 when the routed run passes', () => {

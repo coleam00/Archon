@@ -29,15 +29,21 @@ const damagedReports = {
   'invalid-attribute': '<testsuites><testsuite name="first><testcase /></testsuite></testsuites>',
 };
 
-for (const [damage, damagedXml] of [...Object.entries(damagedReports), ['unreadable', undefined]]) {
+for (const [damage, damagedXml] of [
+  ...Object.entries(damagedReports),
+  ['unreadable', undefined],
+  ['missing', undefined],
+]) {
   for (const childCode of [0, 1, 7]) {
     test(`damaged ${damage} report after exit ${childCode} fails the group and retains later reports`, async () => {
       const root = track(mkdtempSync(join(tmpdir(), 'package-report-')));
       let privatePath = '';
       const damaged = await runReportedGroup(['first.test.ts'], async args => {
         privatePath = reportDestination(args);
-        if (damagedXml === undefined) mkdirSync(privatePath);
-        else writeFileSync(privatePath, damagedXml);
+        if (damage !== 'missing') {
+          if (damagedXml === undefined) mkdirSync(privatePath);
+          else writeFileSync(privatePath, damagedXml);
+        }
         return childCode;
       });
       expect(damaged.code).toBe(childCode || 1);
@@ -85,5 +91,26 @@ for (const content of [
     const combined = join(root, 'combined.xml');
     writeCombinedReport(combined, [result.report]);
     expect(() => parser(true).write(readFileSync(combined, 'utf8')).close()).not.toThrow();
+  });
+}
+
+for (const outcome of ['missing', 'invalid', 'failed'] as const) {
+  test(`runner error labels exclude option values: ${outcome}`, async () => {
+    const secret = 'private-option-value';
+    const result = await runReportedGroup(
+      ['--define', `TOKEN="${secret}"`, '--test-name-pattern', secret, 'selected.test.ts'],
+      async args => {
+        if (outcome !== 'missing')
+          writeFileSync(
+            reportDestination(args),
+            outcome === 'invalid' ? '<broken' : '<testsuites tests="0"></testsuites>'
+          );
+        return outcome === 'failed' ? 7 : 0;
+      }
+    );
+    expect(result.code).not.toBe(0);
+    expect(result.report.suites).toContain('selected.test.ts');
+    expect(result.report.suites).not.toContain(secret);
+    expect(result.report.suites).not.toContain('--define');
   });
 }

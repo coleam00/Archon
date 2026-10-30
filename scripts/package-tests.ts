@@ -71,9 +71,15 @@ if (part !== undefined) {
 }
 
 for (const error of request?.validationErrors ?? []) console.error(error.message);
-if (groups.length > 1 && request?.namePattern !== undefined) {
+const singleGroupOption =
+  request?.namePattern !== undefined
+    ? 'Name filters require'
+    : request?.hasShard
+      ? 'Sharding requires'
+      : undefined;
+if (groups.length > 1 && singleGroupOption !== undefined) {
   throw new Error(
-    `Name filters require one isolation group; selected ${groups.length}:\n${groups.map((group, index) => `  ${index + 1}: ${group.join(' ')}`).join('\n')}\nSelect files from one group or run each group separately.`
+    `${singleGroupOption} one isolation group; selected ${groups.length}:\n${groups.map((group, index) => `  ${index + 1}: ${group.join(' ')}`).join('\n')}\nSelect files from one group or run each group separately.`
   );
 }
 const reports = (request?.validationErrors ?? []).map(error =>

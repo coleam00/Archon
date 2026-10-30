@@ -1,8 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { SaxesParser } from 'saxes';
+import { parseTestArguments } from './package-test-requests';
 
 const countFields = ['tests', 'assertions', 'failures', 'skipped', 'errors', 'time'] as const;
 type Counts = Record<(typeof countFields)[number], number>;
@@ -63,6 +64,10 @@ export async function runReportedGroup(
   args: string[],
   run: (args: string[]) => Promise<number>
 ): Promise<{ code: number; report: TestReport }> {
+  const groupName =
+    parseTestArguments(args)
+      .positionals.map(token => token.value)
+      .join(' ') || 'Test process';
   const root = mkdtempSync(join(tmpdir(), 'archon-test-report-'));
   const reportPath = join(root, 'junit.xml');
   const options = ['--reporter=junit', `--reporter-outfile=${reportPath}`];
@@ -72,22 +77,17 @@ export async function runReportedGroup(
     const code = await run([...args.slice(0, insertion), ...options, ...args.slice(insertion)]);
     let report: TestReport;
     try {
-      report = existsSync(reportPath)
-        ? parseReport(readFileSync(reportPath, 'utf8'))
-        : {
-            counts: { tests: 0, assertions: 0, failures: 0, skipped: 0, errors: 0, time: 0 },
-            suites: '',
-          };
+      report = parseReport(readFileSync(reportPath, 'utf8'));
     } catch (error) {
       const message = `Unable to read Bun JUnit report: ${error instanceof Error ? error.message : String(error)}. Bun exited ${code} (see child output for diagnostics)`;
       console.error(message);
-      return { code: code || 1, report: runnerErrorReport(message, args.join(' ')) };
+      return { code: code || 1, report: runnerErrorReport(message, groupName) };
     }
     if (code !== 0) {
       // Bun can omit load failures even when another test fails. Retain the process outcome.
       const failure = runnerErrorReport(
         `Bun exited ${code} (see child output for diagnostics)`,
-        args.join(' ')
+        groupName
       );
       for (const field of countFields) report.counts[field] += failure.counts[field];
       report.suites += `\n${failure.suites}\n`;

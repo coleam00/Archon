@@ -227,6 +227,12 @@ async function runRequested(requested: string[]): Promise<number> {
   }
 
   const { optionTokens } = parseTestArguments(requested);
+  if (runs.length > 1 && optionTokens.some(token => token.name === 'shard')) {
+    console.error(
+      `Sharding requires one test owner; selected: ${runs.map(({ owner }) => owner.label).join(', ')}. Run each owner separately.`
+    );
+    return 1;
+  }
   const destination = junitDestination(optionTokens);
   const reports = [];
   let code = 0;

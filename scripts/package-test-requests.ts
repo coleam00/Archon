@@ -46,7 +46,6 @@ export function parseTestArguments(requested: string[]) {
     .filter(token => {
       const previous = optionTokens.find(option => option.index === token.index - 1);
       if (previous?.value !== undefined) return true;
-      if (previous?.name === 'changed') return false;
       if (previous?.name === 'bail' || previous?.name === 'parallel') {
         return !Number.isInteger(Number(token.value));
       }
@@ -109,6 +108,7 @@ export function resolveRequestedTestGroups(
           ? []
           : [requested]
         : groups.map(group => [...options, ...group.map(file => `./${file}`)]),
+    hasShard: optionTokens.some(token => token.name === 'shard'),
     namePattern:
       groups.length > 0
         ? optionTokens.filter(token => token.name === 'test-name-pattern').at(-1)?.value

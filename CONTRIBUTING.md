@@ -29,10 +29,12 @@ groups and, from the repository root, across every started owner.
 Name filters (`-t` or `--test-name-pattern`) are supported only when the request selects
 one isolation group, preserving Bun's native exit result. Requests selecting multiple
 groups with a name filter fail before tests load, with a diagnostic naming the groups.
-Select files from one group or run each group separately. Load and hook failures remain
-failures. Selected discovery errors also appear as runner errors in the combined JUnit
-report. An unreadable or invalid private report fails its group and contributes a runner error; later requested groups
-still run.
+Sharding (`--shard`) also requires one isolation group; splitting the shard across
+groups could omit selected files. Root requests with `--shard` must also select one
+test owner. Select files from one group or run each group separately. Load and hook
+failures remain failures. Selected discovery errors also appear as runner errors in the combined JUnit
+report. A missing, unreadable or invalid private report fails its group and contributes
+a runner error; later requested groups still run.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,

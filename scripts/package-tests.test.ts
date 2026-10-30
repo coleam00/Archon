@@ -200,11 +200,11 @@ test(
   testTimeout(5000)
 );
 
-test('optional inline flags leave the following file selector intact', () => {
+test('optional flags leave the following file selector intact', () => {
   const root = fixture();
   testFile(root, 'one', `test('one', () => {});`, true);
   testFile(root, 'two', `test('two', () => {});`, true);
-  for (const option of ['--changed=HEAD', '--parallel=2', '--bail=1']) {
+  for (const option of ['--changed', '--changed=HEAD', '--parallel=2', '--bail=1']) {
     expect(resolveRequestedTestGroups(root, {}, [option, 'one']).groups).toEqual([
       [option, './src/one.test.ts'],
     ]);
@@ -247,6 +247,42 @@ for (const concurrency of [1, 2]) {
           expect(existsSync(join(root, 'loaded'))).toBe(false);
           expect(existsSync(report)).toBe(false);
         }
+      },
+      testTimeout(5000)
+    );
+  }
+}
+
+for (const concurrency of [1, 2]) {
+  for (const declaration of [{}, { testGroups: [['src/a.test.ts'], ['src/b.test.ts']] }]) {
+    test(
+      `cross-group sharding fails before loading tests: ${JSON.stringify(declaration)}, concurrency=${concurrency}`,
+      async () => {
+        const root = fixture({ ...declaration, testConcurrency: concurrency });
+        for (const name of ['a', 'b']) {
+          testFile(root, name, `appendFileSync('loaded', 'yes'); test('wanted', () => {});`, true);
+        }
+        for (const args of [
+          ['src/', '--shard=2/2'],
+          ['src/', '--shard', '2/2'],
+          ['--shard=2/2'],
+          [
+            'src/',
+            '--shard=2/2',
+            '--reporter=junit',
+            '--reporter-outfile',
+            join(root, 'rejected.xml'),
+          ],
+        ]) {
+          const result = await runResult(root, args);
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain('Sharding requires one isolation group');
+          for (const name of ['a', 'b']) expect(result.stderr).toContain(`./src/${name}.test.ts`);
+          expect(existsSync(join(root, 'loaded'))).toBe(false);
+          expect(existsSync(join(root, 'rejected.xml'))).toBe(false);
+        }
+        expect(await run(root, ['a.test', '--shard=1/1'])).toBe(0);
+        expect(readFileSync(join(root, 'loaded'), 'utf8')).toBe('yes');
       },
       testTimeout(5000)
     );

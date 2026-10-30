@@ -118,12 +118,14 @@ discovery error while covered groups still run.
 Test options are forwarded to each group. Name filters (`-t` or `--test-name-pattern`)
 are supported only when the request selects one isolation group, preserving Bun's native
 exit result. Requests selecting multiple groups with a name filter fail before tests load,
-with a diagnostic naming the groups. Select files from one group or run each group
-separately. Load and hook failures still return nonzero. An explicit
+with a diagnostic naming the groups. Sharding (`--shard`) also requires one isolation
+group and one root test owner, so Bun applies the shard to the complete selected
+inventory. Select files from one group or run each group separately. Load and hook
+failures still return nonzero. An explicit
 `--reporter=junit --reporter-outfile <path>` receives one combined report containing all
 started groups and repository-root owners, including their failures and aggregate counts. Each failed child also
 contributes a process error because Bun can omit load failures from its JUnit output;
 the child output contains the diagnostics. Selected discovery failures contribute runner
 errors too, including when no valid child group can start.
-An unreadable or invalid private report fails its group and contributes a runner error
+A missing, unreadable or invalid private report fails its group and contributes a runner error
 without preventing later requested groups from running.
