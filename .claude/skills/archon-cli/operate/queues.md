@@ -127,8 +127,8 @@ A round ends one of three ways, recorded on the item:
   ready without another round.
 - `continue`: the issue already answers what stopped the round, and the correction
   stays inside the issue's shape (one that adds machinery the issue does not name asks
-  instead). A round that changed nothing material since the last reviewed head asks
-  once instead of continuing. The run starts the
+  instead). A round that continued its pull request but changed nothing material
+  never continues; it ends as done or ask. The run starts the
   item's next round at once, as a detached `archon-build-queue --input number=<n>`
   run on the same run config and the same `retriage_as` and `round_limit`.
   If that launch fails, the item waits for the next queue run.

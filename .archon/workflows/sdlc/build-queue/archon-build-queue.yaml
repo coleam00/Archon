@@ -194,7 +194,7 @@ nodes:
 
   - id: answer
     command: answer
-    depends_on: [facts, ship]
+    depends_on: [facts, checkout, ship]
     trigger_rule: none_failed_min_one_success
     when: "$facts.output.path == 'route' && $route.output.decision == 'launch'"
     model: large
@@ -205,6 +205,7 @@ nodes:
       record: { from: "$facts.output.record" }
       rounds: { from: "$facts.output.rounds" }
       ending: { from: "$ship.output", if_skipped: null }
+      round_start: "$checkout.output.head"
       at_cap: "$facts.output.at_cap"
     output_format:
       type: object
