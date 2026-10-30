@@ -41,20 +41,17 @@ export function describeMetricRecordsConformance(getHarness: () => WorkflowStore
         [second.id, 'count-prs-again', 'count', []],
       ]);
       const [row] = rows;
-      expect(row?.runStartedAt.getTime()).toBe(first.started_at.getTime());
       expect(Number.isNaN(Date.parse(row?.completedAt ?? ''))).toBe(false);
       const events = await store.listWorkflowEvents(first.id);
       expect(
         events.filter(event => event.event_type === 'node_completed').map(event => event.id)
       ).toEqual([row?.eventId]);
       expect(Object.keys(row ?? {}).sort()).toEqual([
-        'codebaseId',
         'completedAt',
         'eventId',
         'metrics',
         'nodeId',
         'runId',
-        'runStartedAt',
         'workflowName',
       ]);
     });
@@ -78,9 +75,7 @@ export function describeMetricRecordsConformance(getHarness: () => WorkflowStore
       await complete(scoped.id, { structured_output: { metrics } });
       await complete(other.id, { structured_output: { metrics } });
       const rows = await store.listMetricRecords({ codebaseId: CONFORMANCE_CODEBASE_ID });
-      expect(rows.map(row => [row.runId, row.codebaseId])).toEqual([
-        [scoped.id, CONFORMANCE_CODEBASE_ID],
-      ]);
+      expect(rows.map(row => row.runId)).toEqual([scoped.id]);
     });
   });
 }

@@ -19,9 +19,7 @@ function completion(
   return {
     eventId: `event-${String(sequence)}`,
     runId: options.run ?? `run-${String(sequence)}`,
-    runStartedAt: new Date('2026-10-01T00:00:00Z'),
     workflowName: 'metrics',
-    codebaseId: null,
     nodeId: options.node ?? 'count',
     completedAt: options.at ?? '2026-10-02T12:00:00.000Z',
     metrics,

@@ -95,9 +95,7 @@ export interface IRunTreeStore {
 export interface MetricRecordRow {
   eventId: string;
   runId: string;
-  runStartedAt: Date;
   workflowName: string;
-  codebaseId: string | null;
   /** The event's `step_name`. */
   nodeId: string;
   completedAt: string;

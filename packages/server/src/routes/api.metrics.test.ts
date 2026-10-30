@@ -7,9 +7,7 @@ import { registerMetricsRoute } from './api.metrics';
 const row = {
   eventId: 'event-1',
   runId: 'run-1',
-  runStartedAt: new Date('2026-10-20T00:00:00Z'),
   workflowName: 'count-prs',
-  codebaseId: null,
   nodeId: 'count',
   completedAt: '2026-10-20T01:00:00.000Z',
   metrics: [{ name: 'factory.prs_merged', kind: 'count', unit: 'prs', value: 3, subject: null }],

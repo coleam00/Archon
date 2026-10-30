@@ -153,9 +153,7 @@ export function createTransactionReads(
             {
               eventId: event.id,
               runId: run.id,
-              runStartedAt: new Date(run.started_at),
               workflowName: run.workflow_name,
-              codebaseId: run.codebase_id,
               nodeId: event.step_name,
               completedAt: event.created_at,
               metrics: structuredClone(metrics),
