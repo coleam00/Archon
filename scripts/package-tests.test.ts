@@ -723,3 +723,51 @@ test('single-group name filters preserve caller Bun options for test subprocesse
   );
   expect(await run(root, ['src/', '-t', 'wanted'])).toBe(0);
 });
+
+for (const selection of ['mixed', 'uncovered', 'covered']) {
+  test(`requested manifest coverage is enforced without losing valid groups: ${selection}`, async () => {
+    const declaration = { testGroups: [['src/covered.test.ts']] };
+    const root = fixture(declaration);
+    testFile(root, 'covered', `test('covered', () => appendFileSync('covered', 'ran'));`);
+    testFile(
+      root,
+      'unlisted',
+      `test('unlisted', () => { throw new Error('must not disappear'); });`
+    );
+    const args =
+      selection === 'mixed'
+        ? ['src/']
+        : [selection === 'covered' ? 'covered.test' : 'unlisted.test'];
+    const report = join(root, 'coverage.xml');
+    const request = resolveRequestedTestGroups(root, declaration, args);
+    expect(request.validationErrors.map(error => error.message)).toEqual(
+      selection === 'covered'
+        ? []
+        : ['Requested test is not covered by testGroups: src/unlisted.test.ts']
+    );
+    expect(await run(root, [...args, '--reporter=junit', '--reporter-outfile', report])).toBe(
+      selection === 'covered' ? 0 : 1
+    );
+    expect(existsSync(join(root, 'covered'))).toBe(selection !== 'uncovered');
+    const xml = readFileSync(report, 'utf8');
+    expect(xml).toContain(selection === 'covered' ? 'name="covered"' : 'src/unlisted.test.ts');
+    expect(xml).toContain(`errors="${selection === 'covered' ? 0 : 1}"`);
+  });
+}
+
+test('every explicit package manifest accounts for a newly requested filename', async () => {
+  for (const path of new Bun.Glob('packages/*/package.json').scanSync(
+    join(import.meta.dir, '..')
+  )) {
+    const declaration = await Bun.file(join(import.meta.dir, '..', path)).json();
+    if (declaration.testGroups === undefined) continue;
+    const root = fixture(declaration);
+    testFile(root, 'newly-added', `test('new', () => {});`);
+    const request = resolveRequestedTestGroups(root, declaration, ['newly-added']);
+    const covered = declaration.testGroups.some((group: string[]) =>
+      group.some(selector => 'src/newly-added.test.ts'.includes(selector))
+    );
+    expect(request.validationErrors.length).toBe(covered ? 0 : 1);
+    expect(request.groups.length).toBe(covered ? 1 : 0);
+  }
+});
