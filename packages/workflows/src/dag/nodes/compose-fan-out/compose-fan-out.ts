@@ -23,7 +23,10 @@ import type { ComposeFanOutNode, ResolvedWorkflow, WorkflowRunStatus } from '../
 import type { DagResumeSnapshot } from '../../../store';
 import { type IncludeCommandContent, isIncludeCommandReadError } from '../../../compiled-command';
 import { mapWithLimit } from '../../../utils/map-with-limit';
-import { collectComposedSuspensionPaths } from '../../../include/suspension';
+import {
+  type SuspensionWorkflow,
+  collectComposedSuspensionPaths,
+} from '../../../include/suspension';
 import { composeFanOutScopeSegment } from '../../../fan-out-identity';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
@@ -80,7 +83,7 @@ export async function resolveFanOutChildDefinition(
 ): Promise<
   | {
       definition: ResolvedWorkflow;
-      definitions: ResolvedWorkflow[];
+      definitions: readonly SuspensionWorkflow[];
       commandContents: ReadonlyMap<string, IncludeCommandContent>;
     }
   | { unresolved: string }
@@ -94,7 +97,7 @@ export async function resolveFanOutChildDefinition(
     // Verified first, so a capture this host cannot read throws a typed error rather
     // than surfacing as a discovery error string.
     verifiedFiles = await assertWorkflowSourceIntegrity(sourceRoots);
-    const { workflows, support, errors } = await discoverWorkflowsWithConfig(
+    const { workflows, support, errors, suspensionDefinitions } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
       deps.providers,
@@ -113,7 +116,7 @@ export async function resolveFanOutChildDefinition(
       verifiedFiles
     );
     assertFanOutCommandsReadable(commandContents, verifiedFiles);
-    return { definition, definitions, commandContents };
+    return { definition, definitions: suspensionDefinitions ?? definitions, commandContents };
   } catch (err) {
     if (err instanceof WorkflowSourceIntegrityError || isSourceReadFailure(err)) throw err;
     if (isSourceReadFailure(err, verifiedFiles)) {

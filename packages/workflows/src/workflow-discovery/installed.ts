@@ -1,6 +1,8 @@
+import type { SuspensionWorkflow } from '../include/suspension';
 import type { WorkflowLoadError, WorkflowWithSource } from '../schemas';
 import { qualifyPackReferences } from '../packaged-workflow';
 import { installedWorkflowName, listInstalledPacks, type InstalledPack } from '../workflow-source';
+import { INSTALLED_SCOPE_DIR } from '../workflow-source/roots';
 import { selectedWorkflowUnits } from '../workflow-source/load';
 import type { DiscoveryContext } from './context';
 import { expandScope } from './expand-scope';
@@ -9,6 +11,7 @@ import { loadPackWorkflows, type PackWorkflowFile, type ScopeFile } from './load
 export interface InstalledDiscovery {
   workflows: WorkflowWithSource[];
   support: WorkflowWithSource[];
+  suspensionDefinitions: SuspensionWorkflow[];
   /** Lowercased names no project, global or bundled workflow may take. */
   reservedNames: ReadonlySet<string>;
 }
@@ -30,13 +33,14 @@ interface LoadedInstalledPack {
 export async function discoverInstalled(context: DiscoveryContext): Promise<InstalledDiscovery> {
   const workflows: WorkflowWithSource[] = [];
   const support: WorkflowWithSource[] = [];
+  const suspensionDefinitions: SuspensionWorkflow[] = [];
   const indexed = context.capture?.manifest.version === 3 ? context.capture.manifest : undefined;
   const selected =
     indexed !== undefined && context.workflowName !== undefined
       ? new Set(
           selectedWorkflowUnits(indexed, context.workflowName)
-            .filter(root => root.startsWith('installed/'))
-            .map(root => root.slice('installed/'.length))
+            .filter(root => root.startsWith(`${INSTALLED_SCOPE_DIR}/`))
+            .map(root => root.slice(INSTALLED_SCOPE_DIR.length + 1))
         )
       : undefined;
   const listed = await listInstalledPacks(context.roots.installed, selected);
@@ -77,11 +81,12 @@ export async function discoverInstalled(context: DiscoveryContext): Promise<Inst
     const files = installedScopeFiles(context, loaded, qualifiedByName, catalogEntrypoints);
     const expandedScope = await expandScope(context, files);
     context.allErrors.push(...expandedScope.errors);
+    suspensionDefinitions.push(...expandedScope.suspensionDefinitions);
     for (const expanded of expandedScope.workflows) {
       (entrypoints.has(expanded.workflow.name) ? workflows : support).push(expanded);
     }
   }
-  return { workflows, support, reservedNames };
+  return { workflows, support, suspensionDefinitions, reservedNames };
 }
 
 /**

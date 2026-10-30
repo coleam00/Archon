@@ -14,7 +14,7 @@ export interface ComposedSuspensionPath {
   reason: string;
 }
 
-type SuspensionWorkflow = Pick<WorkflowDefinition, 'name'> & {
+export type SuspensionWorkflow = Pick<WorkflowDefinition, 'name'> & {
   readonly nodes: readonly (DagNode | IncludeDirective)[];
 };
 

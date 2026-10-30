@@ -138,5 +138,5 @@ export function capturedSourceRoots(
 }
 
 export function sourceUnitForOwner(owner: WorkflowResourceOwner): string {
-  return owner.source === 'installed' ? `installed/${owner.pack}` : owner.source;
+  return owner.source === 'installed' ? `${INSTALLED_SCOPE_DIR}/${owner.pack}` : owner.source;
 }

@@ -80,6 +80,7 @@ export const INCLUDE_MAX_DEPTH = 3;
 /** One `expandWorkflowIncludes` call: its inputs and the workflows expanded so far. */
 interface IncludeExpansion {
   rawByName: Map<string, WorkflowDefinition>;
+  suspensionDefinitions: readonly WorkflowDefinition[];
   commandContents: ReadonlyMap<string, IncludeCommandContent>;
   loadErrors: readonly WorkflowLoadError[];
   memo: Map<string, ResolvedWorkflow>;
@@ -117,17 +118,21 @@ interface NodeListExpansion {
  * omits the map may still expand workflows without commands. Included command nodes fail
  * composition; included loop commands fail before a fresh AI turn but remain discoverable
  * so an already-paused loop can resume from its persisted read-once snapshot.
+ * `suspensionDefinitions` also supplies ordinary child declarations for the composed
+ * suspension proof, without expanding or validating their resources before child start.
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,
   commandContents?: ReadonlyMap<string, IncludeCommandContent>,
-  loadErrors: readonly WorkflowLoadError[] = []
+  loadErrors: readonly WorkflowLoadError[] = [],
+  suspensionDefinitions: readonly WorkflowDefinition[] = [...rawByName.values()]
 ): {
   workflows: Map<string, ResolvedWorkflow>;
   errors: WorkflowLoadError[];
 } {
   const expansion: IncludeExpansion = {
     rawByName,
+    suspensionDefinitions,
     commandContents: commandContents ?? new Map(),
     loadErrors,
     memo: new Map(),
@@ -336,7 +341,7 @@ function expandComposeFanOut(
   const child = expandTarget(expansion, node, stack);
   const suspensionPaths = collectComposedSuspensionPaths(
     expansion.rawByName.get(node.include) ?? child,
-    [...expansion.rawByName.values()]
+    expansion.suspensionDefinitions
   );
   if (suspensionPaths.length > 0) {
     const details = suspensionPaths.map(path => `'${path.id}' (${path.reason})`).join(', ');

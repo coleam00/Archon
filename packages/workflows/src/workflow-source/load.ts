@@ -1,4 +1,8 @@
-import { commandNameForRelativePath, getCommandFolderSearchPaths } from '@archon/paths';
+import {
+  commandNameForRelativePath,
+  getCommandFolderSearchPaths,
+  getWorkflowFolderSearchPaths,
+} from '@archon/paths';
 import { getRuntimeForExtension, MAX_SCRIPT_DISCOVERY_DEPTH } from '../script-file';
 import { installedWorkflowName } from './installed-record';
 import { parsePackagedResourceReference } from '../packaged-workflow';
@@ -24,6 +28,10 @@ import {
 } from './manifest';
 import {
   sourceUnitForOwner,
+  PROJECT_SCOPE_DIR,
+  GLOBAL_SCOPE_DIR,
+  BUNDLED_SCOPE_DIR,
+  INSTALLED_SCOPE_DIR,
   type InstalledPacksRoot,
   type WorkflowSourceRoots,
   type WorkflowSourceAnchor,
@@ -320,13 +328,17 @@ export function selectedWorkflowUnits(
     );
   });
   return pack
-    ? [`installed/${pack.key}`]
+    ? [`${INSTALLED_SCOPE_DIR}/${pack.key}`]
     : manifest.units
         .filter(
           unit =>
-            unit.root === 'project' ||
-            (!unit.root.startsWith('installed/') &&
-              unit.files.some(file => file.path.startsWith('workflows/')))
+            !unit.root.startsWith(`${INSTALLED_SCOPE_DIR}/`) &&
+            unit.files.some(file =>
+              (unit.root === PROJECT_SCOPE_DIR
+                ? getWorkflowFolderSearchPaths()
+                : ['workflows']
+              ).some(directory => file.path.startsWith(`${directory}/`))
+            )
         )
         .map(unit => unit.root);
 }
@@ -392,13 +404,13 @@ function sharedResourceUnits(
           : getCommandFolderSearchPaths(manifest.source_config.command_folder)
         ).map(folder => join(project, folder));
   const scopes = [
-    { root: 'project', directories: projectDirectories },
+    { root: PROJECT_SCOPE_DIR, directories: projectDirectories },
     {
-      root: 'global',
+      root: GLOBAL_SCOPE_DIR,
       directories: [kind === 'script' ? roots.globalScripts : roots.globalCommands],
     },
     ...(kind === 'command' && manifest.source_config.load_default_commands
-      ? [{ root: 'bundled', directories: [roots.bundledCommands] }]
+      ? [{ root: BUNDLED_SCOPE_DIR, directories: [roots.bundledCommands] }]
       : []),
   ];
   for (const scope of scopes) {

@@ -182,7 +182,12 @@ async function finishDiscovery(
     },
     'workflows_discovery_completed'
   );
-  return { workflows, support: installed.support, errors: allErrors };
+  return {
+    workflows,
+    support: installed.support,
+    suspensionDefinitions: [...legacy.suspensionDefinitions, ...installed.suspensionDefinitions],
+    errors: allErrors,
+  };
 }
 
 /**

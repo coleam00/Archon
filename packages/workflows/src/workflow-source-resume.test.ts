@@ -809,14 +809,26 @@ for (const mutation of ['entrypoint', 'name', 'missing-entrypoint']) {
 }
 
 for (const scope of ['project', 'global', 'bundled', 'installed'] as const) {
-  test(`selected ${scope} composition retains non-pausing workflow children`, async () => {
+  test(`selected ${scope} composition retains non-pausing workflow children without reading child resources`, async () => {
+    await install('broken', {
+      'run/run.yaml': workflow('run', first),
+      'run/scripts/check.ts': "console.log('child-only');",
+      'run/commands/check.md': 'child-only command',
+    });
     const files = {
       'run/run.yaml': workflow(
         'run',
         '  - id: composed\n    include: body\n    fan_out:\n      items: $input.items\n      as: item\n      join: all_success'
       ),
       'body/body.yaml': workflow('body', '  - id: child\n    workflow: leaf'),
-      'leaf/leaf.yaml': workflow('leaf', '  - id: done\n    bash: echo leaf'),
+      'leaf/leaf.yaml': workflow(
+        'leaf',
+        `  - id: use\n    script: ${packScript('broken')}\n    runtime: bun\n  - id: block\n    include: leaf-block\n    depends_on: [use]`
+      ),
+      'leaf-block/leaf-block.yaml': workflow(
+        'leaf-block',
+        `  - id: done\n    command: ${packScript('broken')}`
+      ),
     };
     if (scope === 'installed')
       await install('healthy', files, { run: 'run/run.yaml', leaf: 'leaf/leaf.yaml' });
@@ -839,29 +851,36 @@ for (const scope of ['project', 'global', 'bundled', 'installed'] as const) {
       const name = scope === 'installed' ? 'acme/healthy:run' : 'run';
       const body = scope === 'installed' ? 'acme/healthy:body' : 'body';
       const roots = capturedSourceRoots(capture.anchor, name);
-      const catalog = await discoverWorkflowsWithConfig(
-        project,
-        loadConfig,
-        providerRegistry,
-        roots
-      );
-      expect(catalog.errors).toEqual([]);
-      expect(catalog.workflows.some(entry => entry.workflow.name === name)).toBe(true);
-      const resolved = await resolveFanOutChildDefinition(
-        {
+      const fault = denyReads(join(capture.anchor.root, 'installed/acme.broken'));
+      try {
+        const catalog = await discoverWorkflowsWithConfig(
+          project,
           loadConfig,
-          providers: providerRegistry,
-          store: await createFileWorkflowStore({ root: join(root, 'compose-store') }),
-          getAgentProvider: () => {
-            throw new Error('No agent expected');
+          providerRegistry,
+          roots
+        );
+        expect(catalog.errors).toEqual([]);
+        expect(catalog.workflows.some(entry => entry.workflow.name === name)).toBe(true);
+        const resolved = await resolveFanOutChildDefinition(
+          {
+            loadConfig,
+            providers: providerRegistry,
+            store: await createFileWorkflowStore({ root: join(root, 'compose-store') }),
+            getAgentProvider: () => {
+              throw new Error('No agent expected');
+            },
           },
-        },
-        project,
-        body,
-        roots
-      );
-      if ('unresolved' in resolved) throw new Error(resolved.unresolved);
-      expect(collectComposedSuspensionPaths(resolved.definition, resolved.definitions)).toEqual([]);
+          project,
+          body,
+          roots
+        );
+        if ('unresolved' in resolved) throw new Error(resolved.unresolved);
+        expect(collectComposedSuspensionPaths(resolved.definition, resolved.definitions)).toEqual(
+          []
+        );
+      } finally {
+        fault.mockRestore();
+      }
     } finally {
       if (scope === 'bundled') {
         spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue([]);
@@ -931,3 +950,163 @@ for (const kind of ['script', 'command'] as const) {
     });
   }
 }
+
+for (const state of ['pending', 'completed'] as const) {
+  for (const dependency of [
+    'script',
+    'command',
+    'loop-command',
+    'recursive-command',
+    'group-command',
+  ] as const) {
+    test(`${state} ordinary child ignores obsolete ${dependency} resources on parent resume`, async () => {
+      await install('broken', {
+        'run/run.yaml': workflow('run', first),
+        'run/scripts/check.ts': "console.log('obsolete');",
+        'run/commands/check.md': 'obsolete command',
+      });
+      await put(
+        join(project, '.archon/workflows/healthy.yaml'),
+        workflow('healthy', `${first}\n  - id: call\n    workflow: child\n    depends_on: [first]`)
+      );
+      const resource = packScript('broken');
+      const body =
+        dependency === 'script'
+          ? `  - id: use\n    script: ${resource}\n    runtime: bun`
+          : dependency === 'loop-command'
+            ? `  - id: use\n    loop:\n      command: ${resource}\n      until: DONE\n      max_iterations: 1`
+            : `  - id: use\n    command: ${resource}`;
+      await put(join(project, '.archon/workflows/block.yaml'), workflow('block', body));
+      await put(
+        join(project, '.archon/workflows/middle.yaml'),
+        workflow('middle', '  - id: inner\n    include: block')
+      );
+      const child =
+        dependency === 'script'
+          ? body
+          : dependency === 'group-command'
+            ? '  - id: group\n    loop_group:\n      until: DONE\n      max_iterations: 1\n      nodes:\n        - id: nested\n          include: middle\n        - id: done\n          depends_on: [nested]\n          bash: echo DONE'
+            : `  - id: nested\n    include: ${dependency === 'recursive-command' ? 'middle' : 'block'}`;
+      await put(join(project, '.archon/workflows/child.yaml'), workflow('child', child));
+      const fixture = await pausedRun();
+      const childCatalog = await discoverWorkflowsWithConfig(
+        project,
+        loadConfig,
+        providerRegistry,
+        capturedSourceRoots(fixture.capture.anchor, 'child')
+      );
+      expect(childCatalog.errors).toEqual([]);
+      expect(childCatalog.workflows.some(entry => entry.workflow.name === 'child')).toBe(true);
+      if (state === 'completed') {
+        await fixture.store.persistWorkflowEvent({
+          workflow_run_id: fixture.run.id,
+          event_type: 'node_completed',
+          step_name: 'call',
+          data: { node_output: 'completed-child' },
+        });
+      }
+      await put(
+        join(project, '.archon/workflows/child.yaml'),
+        workflow(
+          'child',
+          `  - id: repaired\n    bash: ${state === 'pending' ? 'echo repaired-child' : 'exit 96'}`
+        )
+      );
+      const fault = denyReads(join(fixture.capture.anchor.root, 'installed/acme.broken'));
+      try {
+        expect(await fixture.resume()).toMatchObject({ success: true });
+        expect(await fixture.store.getWorkflowRunStatus(fixture.run.id)).toBe('completed');
+        const outputs = (await fixture.store.getDagResumeSnapshot(fixture.run.id))
+          .completedNodeOutputs;
+        expect(outputs.get('call')?.output).toContain(
+          state === 'pending' ? 'repaired-child' : 'completed-child'
+        );
+      } finally {
+        fault.mockRestore();
+      }
+    });
+  }
+}
+
+for (const scope of ['global', 'bundled'] as const) {
+  for (const kind of ['script', 'command'] as const) {
+    test(`${scope} resume ignores an unreadable project with only ${kind}s`, async () => {
+      const filename = kind === 'script' ? 'unused.ts' : 'unused.md';
+      await put(join(project, '.archon', `${kind}s`, filename), 'unused');
+      const directory =
+        scope === 'global' ? join(root, 'home/workflows') : join(bundleRoot, 'namespace');
+      const path = join(directory, 'healthy/healthy.yaml');
+      await put(
+        path,
+        workflow(
+          'healthy',
+          `${first}\n  - id: remaining\n    bash: echo frozen-${scope}\n    depends_on: [first]`
+        )
+      );
+      if (scope === 'bundled')
+        spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['namespace']);
+      try {
+        const fixture = await pausedRun();
+        const fault = denyReads(join(fixture.capture.anchor.root, 'project'));
+        try {
+          expect(await fixture.resume()).toMatchObject({ success: true });
+          expect(await fixture.store.getWorkflowRunStatus(fixture.run.id)).toBe('completed');
+          const roots = capturedSourceRoots(fixture.capture.anchor, 'healthy');
+          const lookup = () =>
+            kind === 'script'
+              ? discoverScriptsForCwd(project, roots, new Set(['unused']))
+              : loadCommandPrompt({ loadConfig }, project, 'unused', undefined, roots);
+          await expect(lookup()).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+        } finally {
+          fault.mockRestore();
+        }
+      } finally {
+        if (scope === 'bundled') {
+          spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue([]);
+          await fs.rm(path);
+        }
+      }
+    });
+  }
+}
+
+test('selected composition still rejects a suspension reached through a child include', async () => {
+  const files = {
+    'run.yaml': workflow(
+      'run',
+      '  - id: fan\n    include: body\n    fan_out:\n      items: $input.items\n      as: item\n      join: all_success'
+    ),
+    'body.yaml': workflow('body', '  - id: call\n    workflow: child'),
+    'child.yaml': workflow('child', '  - id: block\n    include: pausing'),
+    'pausing.yaml': workflow('pausing', '  - id: pause\n    approval:\n      message: Continue?'),
+  };
+  for (const [path, content] of Object.entries(files))
+    await put(join(project, '.archon/workflows', path), content);
+  const capture = await captureWorkflowSource({
+    sourceRoot: project,
+    captureRoot: join(root, 'proof'),
+  });
+  const roots = capturedSourceRoots(capture.anchor, 'run');
+  const catalog = await discoverWorkflowsWithConfig(project, loadConfig, providerRegistry, roots);
+  expect(catalog.workflows.some(entry => entry.workflow.name === 'run')).toBe(false);
+  expect(
+    catalog.errors.some(error => error.error.includes('unsupported suspension-capable path'))
+  ).toBe(true);
+  const resolved = await resolveFanOutChildDefinition(
+    {
+      loadConfig,
+      providers: providerRegistry,
+      store: await createFileWorkflowStore({ root: join(root, 'proof-store') }),
+      getAgentProvider: () => {
+        throw new Error('No agent expected');
+      },
+    },
+    project,
+    'body',
+    roots
+  );
+  if ('unresolved' in resolved) throw new Error(resolved.unresolved);
+  expect(collectComposedSuspensionPaths(resolved.definition, resolved.definitions)).toEqual([
+    { id: 'pause', reason: 'approval gate' },
+  ]);
+});
