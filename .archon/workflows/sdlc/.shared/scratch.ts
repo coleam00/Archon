@@ -37,7 +37,9 @@ export function pruneScratch(scratch: string): string[] {
       real = path;
     }
     if (real !== root && !real.startsWith(root + sep)) continue;
-    const result = Bun.spawnSync(['git', 'worktree', 'remove', '--force', path], {
+    // core.longpaths: a scratch tree with dependencies installed holds paths past Windows'
+    // 260-character limit, which plain git cannot delete (Filename too long).
+    const result = Bun.spawnSync(['git', '-c', 'core.longpaths=true', 'worktree', 'remove', '--force', path], {
       stdout: 'pipe',
       stderr: 'pipe',
     });
