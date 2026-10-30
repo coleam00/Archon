@@ -1996,6 +1996,7 @@ archon metrics factory.prs_merged --since 7d
 archon metrics factory.prs_merged --since 2026-10-01 --until 2026-10-22 --json
 archon metrics sdlc.tests_unprotective --subject https://github.com/acme/widgets/pull/12
 archon metrics --project acme/widgets
+archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
 ```
 
 The window is `[--since, --until)`. `--until` defaults to now and takes an ISO date or a
@@ -2003,18 +2004,27 @@ time with an offset; a date alone is UTC midnight. `--since` takes the same, or 
 (`24h`, `7d`, `2w`) counted back from `--until`, and defaults to 30 days. `--subject` keeps
 records about one subject. `--project <id|name|key>` keeps records from one registered
 codebase. A name's definition is install-wide either way: a record another codebase
-stored first still fixes it.
+stored first still fixes it. `--compare <ISO>` takes an ISO date or a time with an offset
+and splits each instrument's records by when their producing runs started: before the cut,
+or at or after it.
 
 Text output prints one line per metric for its newest instrument: name, kind and unit,
-`value` (the sum for a `count`, the mean for a `score`), `n` and the latest record. Other
-instruments follow as indented lines. `--json` prints one `MetricsReport` document, the
-same shape `GET /api/metrics` returns, with names and instruments in sorted order.
+`value` (the sum for a `count`, the mean for a `score`), `n`, the 95% interval for a score
+of at least two records, and the latest record. An indented line gives the cost and tokens
+of the producing runs, with how many runs recorded no cost, no tokens or no longer exist.
+Other instruments follow with the same lines, indented further. With `--compare`, each
+entry adds the `before` and `after` cohorts with their value, `n` and interval, the delta
+with its 95% interval, whether that interval excludes zero (`separated`), and how many
+records were `straddling` the cut or `unattributed`, and the output ends with a line that
+the comparison is observational. `--json` prints one `MetricsReport` document, the same
+shape `GET /api/metrics` returns, with names and instruments in sorted order.
 
 A record that conflicts with its name's first definition is left out and reported on
 stderr as `error: metric <name> is <definition>; run <id> node <node> offered
 <definition>`, where each `<definition>` is `<kind>/<unit>`, followed by
 ` calibrates <metric>` for a score that calibrates another metric. A stored output the record schema rejects is reported the same way when
-no name is given. Exit codes: `0` success, `1` usage, `4` the report refused a record.
+no name is given. Exit codes: `0` success, `1` usage (including a malformed window or
+`--compare`), `4` the report refused a record.
 
 ### `chat <message>`
 

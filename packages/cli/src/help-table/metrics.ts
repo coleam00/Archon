@@ -13,6 +13,10 @@ export const metricsHelp: HelpGroup = {
         },
         { spec: '--until <ISO>', description: 'Window end, exclusive (default now)' },
         { spec: '--subject <s>', description: 'Only records about this subject' },
+        {
+          spec: '--compare <ISO>',
+          description: 'Compare records from runs started before and after this time',
+        },
         { spec: '--project <id|name|key>', description: 'Only records from this codebase' },
       ],
     },

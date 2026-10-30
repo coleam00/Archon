@@ -17,4 +17,8 @@ export const metricsQuerySchema = z.object({
   name: z.string().optional().openapi({ description: 'Only this metric name.' }),
   subject: z.string().optional().openapi({ description: 'Only records about this subject.' }),
   codebaseId: z.string().optional().openapi({ description: 'Only records from this codebase.' }),
+  compare: z.string().optional().openapi({
+    description:
+      'An ISO date or time. Each group also reports records whose producing runs started before it against those started at or after it.',
+  }),
 });

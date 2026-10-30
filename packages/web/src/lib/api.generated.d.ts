@@ -3258,6 +3258,8 @@ export interface paths {
           subject?: string;
           /** @description Only records from this codebase. */
           codebaseId?: string;
+          /** @description An ISO date or time. Each group also reports records whose producing runs started before it against those started at or after it. */
+          compare?: string;
         };
         header?: never;
         path?: never;
@@ -3274,7 +3276,7 @@ export interface paths {
             'application/json': components['schemas']['MetricsReport'];
           };
         };
-        /** @description Malformed window */
+        /** @description Malformed window or compare cut */
         400: {
           headers: {
             [name: string]: unknown;
@@ -7301,6 +7303,46 @@ export interface components {
           instrument: string | null;
           value: number;
           n: number;
+          interval: {
+            low: number;
+            high: number;
+          } | null;
+          cost: {
+            usd: number | null;
+            input_tokens: number | null;
+            output_tokens: number | null;
+            runs: number;
+            runs_without_cost: number;
+            runs_without_tokens: number;
+            runs_missing: number;
+          };
+          compare?: {
+            at: string;
+            before: {
+              value: number | null;
+              n: number;
+              interval: {
+                low: number;
+                high: number;
+              } | null;
+            };
+            after: {
+              value: number | null;
+              n: number;
+              interval: {
+                low: number;
+                high: number;
+              } | null;
+            };
+            delta: number | null;
+            delta_interval: {
+              low: number;
+              high: number;
+            } | null;
+            separated: boolean;
+            straddling: number;
+            unattributed: number;
+          };
           latest: {
             value: number;
             at: string;
