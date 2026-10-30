@@ -120,50 +120,29 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       input.userMessage,
       hydrated.preCreatedRun.origin ?? undefined,
       { ...context.options, ...hydrated }
-    ).then(
-      async result => {
-        if (
-          !result.success &&
-          !('handedOff' in result) &&
-          (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
-        ) {
-          await requireTerminalStatusWrite(
-            this.deps.store.failWorkflowRun(hydrated.preCreatedRun.id, result.error, {
-              expectedExecutionClaim: executionClaim(hydrated.preCreatedRun.metadata),
-            }),
-            {
-              workflowRunId: hydrated.preCreatedRun.id,
-              site: 'engine.resume_execution_refused',
-              failure: result.error,
-            }
-          );
-        }
-        return result;
-      },
-      async (error: unknown) => {
-        // Hydration already claimed the row. The executor's early setup can throw
-        // before its terminal-write boundary; recovery must work without a server.
-        if (
-          !isWorkflowExecutionInterruption(error) &&
-          !(error instanceof WorkflowExecutionHandoffError) &&
-          (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
-        ) {
-          await requireTerminalStatusWrite(
-            this.deps.store.failWorkflowRun(
-              hydrated.preCreatedRun.id,
-              error instanceof Error ? error.message : String(error),
-              { expectedExecutionClaim: executionClaim(hydrated.preCreatedRun.metadata) }
-            ),
-            {
-              workflowRunId: hydrated.preCreatedRun.id,
-              site: 'engine.resume_execution_failed',
-              failure: error,
-            }
-          );
-        }
-        throw error;
+    ).catch(async (error: unknown) => {
+      // Hydration already claimed the row. The executor's early setup can throw
+      // before its terminal-write boundary; recovery must work without a server.
+      if (
+        !isWorkflowExecutionInterruption(error) &&
+        !(error instanceof WorkflowExecutionHandoffError) &&
+        (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
+      ) {
+        await requireTerminalStatusWrite(
+          this.deps.store.failWorkflowRun(
+            hydrated.preCreatedRun.id,
+            error instanceof Error ? error.message : String(error),
+            { expectedExecutionClaim: executionClaim(hydrated.preCreatedRun.metadata) }
+          ),
+          {
+            workflowRunId: hydrated.preCreatedRun.id,
+            site: 'engine.resume_execution_failed',
+            failure: error,
+          }
+        );
       }
-    );
+      throw error;
+    });
     return { accepted: true, runId: hydrated.preCreatedRun.id, settled };
   }
 

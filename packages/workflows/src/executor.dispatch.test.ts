@@ -146,7 +146,9 @@ describe('container resume guard', () => {
     });
     if (result.success) throw new Error('Expected missing-container-context failure');
     expect(result.error).toMatch(/executed inside an isolation container/);
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).toHaveBeenCalledWith('crun', result.error, {
+      expectedExecutionClaim: null,
+    });
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 

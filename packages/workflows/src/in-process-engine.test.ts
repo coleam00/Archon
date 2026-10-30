@@ -468,7 +468,7 @@ describe('InProcessWorkflowEngine', () => {
   );
 
   it.each(['failed', 'cancelled'] as const)(
-    'returns the original %s resume result without retrying its terminal write',
+    'returns the original %s resume result without another terminal write or required status read',
     async status => {
       const { engine, store } = await makeEngine();
       const run = await store.createWorkflowRun({ workflow_name: parent.name, user_message: '' });
@@ -477,7 +477,12 @@ describe('InProcessWorkflowEngine', () => {
       const failed = await store.getWorkflowRun(run.id);
       if (!failed) throw new Error('expected failed run');
       const cause = new Error('DAG failed');
+      const readStatus = store.getWorkflowRunStatus.bind(store);
+      let statusRead: ReturnType<typeof spyOn> | undefined;
       dagBody = async () => {
+        statusRead = spyOn(store, 'getWorkflowRunStatus')
+          .mockRejectedValue(new Error('post-settlement status read refused'))
+          .mockImplementationOnce(readStatus);
         if (status === 'cancelled') {
           await store.cancelWorkflowRun(run.id);
           return undefined;
@@ -504,12 +509,14 @@ describe('InProcessWorkflowEngine', () => {
           error: status === 'failed' ? cause.message : 'Workflow did not complete successfully',
         });
         expect(failRun).toHaveBeenCalledTimes(status === 'failed' ? 1 : 0);
-        expect(await store.getWorkflowRunStatus(run.id)).toBe(status);
+        expect(statusRead).toHaveBeenCalledTimes(1);
+        expect(await readStatus(run.id)).toBe(status);
         if (status === 'failed')
           expect(await store.getWorkflowRun(run.id)).toMatchObject({
             metadata: { error: cause.message },
           });
       } finally {
+        statusRead?.mockRestore();
         failRun.mockRestore();
       }
     }

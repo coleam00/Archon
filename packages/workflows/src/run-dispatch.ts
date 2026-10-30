@@ -73,6 +73,7 @@ export async function resolveRunDispatch(
     (opts.priorCompletedNodes !== undefined || preCreatedRun.status !== 'pending');
   refuseInvalidDispatch(workflow, opts, isContinuation);
   const containerRefusal = await refuseContainerResumeWithoutBackend(
+    deps,
     platform,
     conversationId,
     opts
@@ -207,6 +208,7 @@ function refuseInvalidDispatch(
 }
 
 async function refuseContainerResumeWithoutBackend(
+  deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
   { preCreatedRun, container }: ExecuteWorkflowOptions
@@ -216,7 +218,7 @@ async function refuseContainerResumeWithoutBackend(
   // reaches here for a container run WITHOUT that context — e.g. approving a
   // --container run from chat/web, which has no docker backend wired — would run
   // host-side and SILENTLY skip the write-back apply, losing the approved changes.
-  // Dispatch also serves unclaimed submissions; the resume owner settles its own claim.
+  // A pending submission owns no execution claim; only a running continuation can settle one.
   if (preCreatedRun && isContainerRun(preCreatedRun) && !container) {
     const msg =
       `Run '${preCreatedRun.id}' executed inside an isolation container. Resume it from the ` +
@@ -224,6 +226,18 @@ async function refuseContainerResumeWithoutBackend(
       'container is rediscovered — chat/web resume cannot rewire it.';
     getLog().warn({ workflowRunId: preCreatedRun.id }, 'workflow.container_resume_without_backend');
     await safeSendMessage(platform, conversationId, `⚠️ ${msg}`);
+    if (preCreatedRun.status === 'running') {
+      await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(preCreatedRun.id, msg, {
+          expectedExecutionClaim: executionClaim(preCreatedRun.metadata),
+        }),
+        {
+          workflowRunId: preCreatedRun.id,
+          site: 'workflow.container_resume_refused',
+          failure: msg,
+        }
+      );
+    }
     return { success: false, workflowRunId: preCreatedRun.id, error: msg };
   }
   return undefined;
