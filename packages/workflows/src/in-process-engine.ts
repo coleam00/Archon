@@ -125,8 +125,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       // before its terminal-write boundary; recovery must work without a server.
       if (
         !isWorkflowExecutionInterruption(error) &&
-        !(error instanceof WorkflowExecutionHandoffError) &&
-        (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
+        !(error instanceof WorkflowExecutionHandoffError)
       ) {
         await requireTerminalStatusWrite(
           this.deps.store.failWorkflowRun(

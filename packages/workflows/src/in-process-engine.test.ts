@@ -420,6 +420,74 @@ describe('InProcessWorkflowEngine', () => {
     }
   );
 
+  describe.each(['stamp', 'workflow'] as const)('%s resume refusal', phase => {
+    it.each(['owned', 'settled', 'replaced'] as const)(
+      'preserves the refusal without a status read for a %s claim',
+      async claim => {
+        const { engine, store } = await makeEngine();
+        const run = await store.createWorkflowRun({
+          workflow_name: parent.name,
+          user_message: '',
+          metadata: phase === 'stamp' ? { continuation: { mode: 'unsupported' } } : {},
+        });
+        await completeNode(store, run.id, 'first');
+        await store.failWorkflowRun(run.id, 'interrupted');
+        const failed = await store.getWorkflowRun(run.id);
+        if (!failed) throw new Error('expected failed run');
+        const statusRead = spyOn(store, 'getWorkflowRunStatus').mockRejectedValue(
+          new Error('status read unavailable')
+        );
+        let before: WorkflowRun | null = null;
+        try {
+          const admission = await engine.resume({
+            platform,
+            conversationId: 'conv-1',
+            cwd: '/tmp/ops',
+            userMessage: '',
+            run: failed,
+            legacyWorkflow:
+              phase === 'stamp'
+                ? parent
+                : resolveWorkflow({
+                    name: parent.name,
+                    description: 'Budgeted parent',
+                    budget: { max_work_units: 5 },
+                    nodes: [{ id: 'child', kind: 'workflow', workflow: 'child' }],
+                  }),
+            prepareExecution: async () => {
+              if (claim === 'settled') await store.cancelWorkflowRun(run.id);
+              if (claim === 'replaced') {
+                await store.failWorkflowRun(run.id, 'replaced');
+                await store.resumeWorkflowRun(run.id);
+              }
+              before = await store.getWorkflowRun(run.id);
+              return { cwd: '/tmp/ops' };
+            },
+          });
+          if (!admission.accepted) throw new Error('expected resume');
+          const refusal =
+            phase === 'stamp' ? 'Invalid recorded continuation metadata' : "node 'child'";
+          await expect(admission.settled).rejects.toThrow(refusal);
+          expect(statusRead).not.toHaveBeenCalled();
+          const after = await store.getWorkflowRun(run.id);
+          if (claim === 'owned') {
+            expect(after).toMatchObject({
+              status: 'failed',
+              metadata: { error: expect.stringContaining(refusal) },
+            });
+          } else {
+            expect(before).toMatchObject({
+              status: claim === 'settled' ? 'cancelled' : 'running',
+            });
+            expect(after).toEqual(before);
+          }
+        } finally {
+          statusRead.mockRestore();
+        }
+      }
+    );
+  });
+
   it.each(['owned', 'replaced'] as const)(
     'container refusal settles only the owned resume claim (%s)',
     async claim => {
