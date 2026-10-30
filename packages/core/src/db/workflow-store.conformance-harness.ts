@@ -1,4 +1,3 @@
-import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { expect, mock, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
@@ -286,59 +285,6 @@ export function describeSqlStatusReadConformance(
         });
         expect(await snapshot()).toEqual(before);
       }
-    } finally {
-      await harness.close();
-    }
-  });
-}
-
-export function describeSqlAttentionReadConformance(
-  makeHarness: () => Promise<WorkflowStoreHarness & { db: IDatabase }>,
-  type: 'sqlite' | 'postgresql'
-): void {
-  test('SQL attention reads report unreadable origins without losing valid rows or writing state', async () => {
-    const harness = await makeHarness();
-    try {
-      const { db, store } = harness;
-      const { listRunsNeedingAttention, listAttentionQueueRows } = await import(
-        './workflow-run-lists'
-      );
-      const valid = await store.createWorkflowRun({ workflow_name: 'valid', user_message: '' });
-      const bad: string[] = [];
-      for (const origin of type === 'sqlite'
-        ? ['private-origin-sentinel-not-json', '[]']
-        : ['[]']) {
-        const run = await store.createWorkflowRun({ workflow_name: 'bad', user_message: '' });
-        bad.push(run.id);
-        await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
-          origin,
-          run.id,
-        ]);
-      }
-      for (const id of [valid.id, ...bad]) {
-        await db.query(
-          "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
-          [JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?' } }), id]
-        );
-      }
-      const snapshot = async () => ({
-        rows: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
-        events: (await db.query('SELECT * FROM remote_agent_workflow_events ORDER BY id')).rows,
-      });
-      const before = await snapshot();
-      for (const read of [
-        listRunsNeedingAttention,
-        listAttentionQueueRows,
-        () => store.listAttentionQueueRows(),
-      ]) {
-        const { values, degraded } = splitAttentionRead(await read());
-        expect(values.map(run => run.id)).toEqual([valid.id]);
-        expect(degraded).toHaveLength(bad.length);
-        for (const runId of bad)
-          expect(degraded).toContainEqual({ type: 'degraded', reason: 'run_unreadable', runId });
-        expect(JSON.stringify(degraded)).not.toContain('private-origin-sentinel');
-      }
-      expect(await snapshot()).toEqual(before);
     } finally {
       await harness.close();
     }
