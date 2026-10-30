@@ -9,7 +9,7 @@
 
 import type { Pickup, WorkItem } from './workitem.ts';
 
-/** What the slice agent judged the item to be; archon-split.yaml declares the same enum. */
+/** What the slice agent judged the item to be; a test proves archon-split.yaml's enum agrees. */
 export const SPLIT_KINDS = ['prd', 'bundle'] as const;
 export type SplitKind = (typeof SPLIT_KINDS)[number];
 
