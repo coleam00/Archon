@@ -1,10 +1,7 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeEach, afterAll, spyOn } from 'bun:test';
 import * as git from '@archon/git';
-import { trackTempRoots } from '@archon/paths/test-utils';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, win32 } from 'node:path';
+import { win32 } from 'node:path';
 import {
   MissingProjectDirectoryError,
   WorktreeRegistrationChangedError,
@@ -39,7 +36,6 @@ import {
   resetCommandHandlerMocks,
 } from './test-harness';
 
-const trackTempRoot = trackTempRoots();
 const sameWorktreePath = git.isSameWorktreePath;
 
 describe('CommandHandler', () => {
@@ -337,24 +333,6 @@ describe('CommandHandler', () => {
       });
 
       describe('orphans', () => {
-        test('fails for a missing registered repository instead of reporting an empty inventory', async () => {
-          restoreSpies();
-          const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-orphans-')));
-          const missing = join(root, 'vanished-repo');
-          mockGetCodebase.mockResolvedValue(makeCodebase({ default_cwd: missing }));
-
-          const result = await handleCommand(
-            conversationWithCodebase,
-            '/worktree orphans',
-            operator
-          );
-
-          expect(result.success).toBe(false);
-          expect(result.message).toContain('Failed to list worktrees:');
-          expect(result.message).toContain(missing);
-          expect(result.message).not.toContain('No secondary');
-        });
-
         test.each([false, true])(
           'shows a secondary local-branch checkout when main is listed=%s',
           async includesMain => {

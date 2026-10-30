@@ -86,49 +86,46 @@ describe('git utilities', () => {
       execSpy.mockRestore();
     });
 
-    test.each([false, true])(
-      'parses local-branch paths (requireRepository=%s)',
-      async requireRepository => {
-        const mockOutput = [
-          'worktree /path/to/main',
-          'HEAD abc123',
-          'branch refs/heads/main',
-          '',
-          'worktree /path/to/new\nline',
-          'HEAD def456',
-          'branch refs/heads/feature/auth',
-          '',
-          'worktree /path/to/detached',
-          'HEAD abc123',
-          'detached',
-          '',
-          'worktree /path/to/local-ref-name',
-          'HEAD abc123',
-          'branch refs/heads/refs/custom/foo',
-          '',
-          '',
-        ].join('\0');
-        execSpy.mockResolvedValue(output(mockOutput));
+    test('parses local-branch paths', async () => {
+      const mockOutput = [
+        'worktree /path/to/main',
+        'HEAD abc123',
+        'branch refs/heads/main',
+        '',
+        'worktree /path/to/new\nline',
+        'HEAD def456',
+        'branch refs/heads/feature/auth',
+        '',
+        'worktree /path/to/detached',
+        'HEAD abc123',
+        'detached',
+        '',
+        'worktree /path/to/local-ref-name',
+        'HEAD abc123',
+        'branch refs/heads/refs/custom/foo',
+        '',
+        '',
+      ].join('\0');
+      execSpy.mockResolvedValue(output(mockOutput));
 
-        const result = await git.listWorktrees(repo('/path/to/main'), { requireRepository });
+      const result = await git.listWorktrees(repo('/path/to/main'));
 
-        expect(execSpy).toHaveBeenCalledWith(
-          'git',
-          ['-C', repo('/path/to/main'), 'worktree', 'list', '--porcelain', '-z'],
-          { timeout: 10000 }
-        );
-        expect(result).toHaveLength(3);
-        expect(result[0]).toEqual({ path: listed('/path/to/main'), branch: branch('main') });
-        expect(result[1]).toEqual({
-          path: listed('/path/to/new\nline'),
-          branch: branch('feature/auth'),
-        });
-        expect(result[2]).toEqual({
-          path: listed('/path/to/local-ref-name'),
-          branch: branch('refs/custom/foo'),
-        });
-      }
-    );
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', repo('/path/to/main'), 'worktree', 'list', '--porcelain', '-z'],
+        { timeout: 10000 }
+      );
+      expect(result).toHaveLength(3);
+      expect(result[0]).toEqual({ path: listed('/path/to/main'), branch: branch('main') });
+      expect(result[1]).toEqual({
+        path: listed('/path/to/new\nline'),
+        branch: branch('feature/auth'),
+      });
+      expect(result[2]).toEqual({
+        path: listed('/path/to/local-ref-name'),
+        branch: branch('refs/custom/foo'),
+      });
+    });
 
     test.each(['refs/custom/foo', 'refs/custom/refs/heads/foo'])(
       'excludes non-local symbolic ref %s without losing local branches',

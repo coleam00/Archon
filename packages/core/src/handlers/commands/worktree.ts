@@ -318,9 +318,9 @@ async function listGitWorktrees(
   mainPath: string
 ): Promise<CommandResult> {
   try {
-    const gitWorktrees = (
-      await listWorktrees(toRepoPath(mainPath), { requireRepository: true })
-    ).filter(wt => !isSameWorktreePath(wt.path, mainPath));
+    const gitWorktrees = (await listWorktrees(toRepoPath(mainPath))).filter(
+      wt => !isSameWorktreePath(wt.path, mainPath)
+    );
 
     if (gitWorktrees.length === 0) {
       return {

@@ -183,13 +183,10 @@ export async function worktreeExists(worktreePath: WorktreePath): Promise<boolea
  * Detached checkouts and symbolic HEAD refs outside refs/heads/ are excluded.
  * Returns array of {path, branch} objects parsed from git worktree list --porcelain
  *
- * Returns [] for a missing repository unless requireRepository is set.
+ * Returns [] for a missing repository.
  * Throws for unexpected errors (permission denied, git not found, etc.)
  */
-export async function listWorktrees(
-  repoPath: RepoPath,
-  options: { requireRepository?: boolean } = {}
-): Promise<WorktreeInfo[]> {
+export async function listWorktrees(repoPath: RepoPath): Promise<WorktreeInfo[]> {
   try {
     const { stdout } = await execFileAsync(
       'git',
@@ -213,12 +210,7 @@ export async function listWorktrees(
 
     return worktrees;
   } catch (error) {
-    if (
-      !options.requireRepository &&
-      error instanceof GitFailure &&
-      error.kind === 'not_repository'
-    )
-      return [];
+    if (error instanceof GitFailure && error.kind === 'not_repository') return [];
     getLog().error({ repoPath, err: error }, 'worktree.list_failed');
     throw error;
   }
