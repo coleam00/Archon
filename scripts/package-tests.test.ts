@@ -621,6 +621,70 @@ for (const suffix of ['test', 'spec']) {
   }
 }
 
+for (const concurrency of [1, 2]) {
+  test(
+    `split name filters match native empty-name and skipped-suite outcomes: concurrency ${concurrency}`,
+    async () => {
+      const root = fixture({ testConcurrency: concurrency });
+      testFile(root, 'unrelated', `test('unrelated', () => {});`, true);
+      const cases: { body: string; patterns: string[] }[] = [];
+      for (const modifier of ['', '.skip', '.todo']) {
+        const body = modifier === '' ? `() => {}` : `() => { throw new Error('skipped body'); }`;
+        const testcase = `test${modifier}('wanted', ${body})`;
+        cases.push(
+          { body: `describe('', () => { ${testcase}; });`, patterns: ['^ wanted$', '^wanted$'] },
+          {
+            body: `describe('outer', () => describe('', () => { ${testcase}; }));`,
+            patterns: ['^outer  wanted$', '^outer wanted$'],
+          },
+          { body: `test${modifier}('', ${body});`, patterns: ['^$'] },
+          { body: `test${modifier}('wanted', ${body});`, patterns: ['^wanted$', 'absent'] },
+          {
+            body: `describe('outer', () => test${modifier}('', ${body}));`,
+            patterns: ['^outer $', '^outer$'],
+          }
+        );
+      }
+      for (const modifier of ['skip', 'todo', 'skipIf(true)', 'todoIf(true)', 'if(false)']) {
+        cases.push({
+          body: `describe.${modifier}('suite', () => test('wanted', () => { throw new Error('skipped body'); }));`,
+          patterns: ['absent'],
+        });
+      }
+      const mismatches: {
+        body: string;
+        pattern: string;
+        reporter: string[];
+        native: number;
+        wrapper: number;
+      }[] = [];
+      for (const scenario of cases) {
+        testFile(root, 'names', `import { describe } from 'bun:test'; ${scenario.body}`, true);
+        for (const pattern of scenario.patterns) {
+          for (const reporter of [
+            [],
+            ['--reporter=junit', '--reporter-outfile', join(root, 'names.xml')],
+          ]) {
+            const args = ['src/', '-t', pattern, ...reporter];
+            const expected = await native(root, args);
+            const actual = await run(root, args);
+            if (actual !== expected)
+              mismatches.push({
+                body: scenario.body,
+                pattern,
+                reporter,
+                native: expected,
+                wrapper: actual,
+              });
+          }
+        }
+      }
+      expect(mismatches).toEqual([]);
+    },
+    testTimeout(30000)
+  );
+}
+
 for (const modifier of ['', '.skip', '.todo']) {
   for (const scenario of [
     {
