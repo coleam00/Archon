@@ -175,16 +175,16 @@ export interface ContinuationMetadata {
   mode: ContinuationMode;
 }
 
-/** Typed view of the continuation stamp; undefined when the run adopted nothing. */
+const continuationMetadataSchema = z.object({ mode: z.enum(Object.values(CONTINUATION_MODES)) });
+
+/** Unstamped legacy runs retain adoption behavior; malformed stamps must not select an estate. */
 export function readContinuationMode(
   metadata: Record<string, unknown> | undefined
 ): ContinuationMode | undefined {
-  const raw = metadata?.[CONTINUATION_METADATA_KEY];
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const mode = (raw as { mode?: unknown }).mode;
-  return mode === CONTINUATION_MODES.adopt || mode === CONTINUATION_MODES.supersede
-    ? mode
-    : undefined;
+  if (!metadata || !Object.hasOwn(metadata, CONTINUATION_METADATA_KEY)) return undefined;
+  const parsed = continuationMetadataSchema.safeParse(metadata[CONTINUATION_METADATA_KEY]);
+  if (!parsed.success) throw new Error('Invalid recorded continuation metadata.');
+  return parsed.data.mode;
 }
 
 /**

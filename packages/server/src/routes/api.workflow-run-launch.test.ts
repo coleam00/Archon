@@ -1171,6 +1171,9 @@ describe('POST /api/workflows/:name/run', () => {
       const response = await run({ supersedes_run_id: 'prefix' });
       expect(response.status).toBe(400);
       const { error } = (await response.json()) as { error: string };
+      if (matches[0]?.status === 'running') {
+        expect(error).toBe("Cannot supersede run 'live-run': it is still running.");
+      }
       for (const id of matches.length > 1
         ? matches.map(row => row.id)
         : [matches[0]?.id ?? 'prefix']) {

@@ -12,6 +12,7 @@ import {
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
   mockFindResumableRunByParentConversation,
+  mockFindWorkflowRunsByIdPrefix,
   mockGetCodebase,
   mockGetOrCreateConversation,
   mockHandleCommand,
@@ -92,6 +93,36 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('direct supersede resolves a project prefix before recording and executing', async () => {
+    const codebase = makeCodebase();
+    const ancestor = makeResumableRun({
+      id: '22222222-2222-4222-8222-222222222222',
+      codebase_id: codebase.id,
+      status: 'completed',
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(codebase);
+    mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
+    mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([ancestor]);
+
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+      workflowSupersedesRunId: '22222222',
+    });
+
+    expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('22222222', codebase.id);
+    expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockCreateWorkflowRun.mock.calls[0][0]).toMatchObject({
+      adopted_from_run_id: ancestor.id,
+      metadata: { continuation: { mode: 'supersede' } },
+    });
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow.mock.calls[0][7]).toMatchObject({
+      adoptedFromRunId: ancestor.id,
+      continuationMode: 'supersede',
+    });
   });
 
   test.each([false, true])('fresh supersede records provenance (force=%s)', async force => {

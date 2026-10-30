@@ -121,6 +121,24 @@ describe('recorded launch AI configuration', () => {
     );
   });
 
+  it('rejects an invalid pre-created continuation before reading ancestor AI configuration', async () => {
+    const deps = makeDeps();
+    const run = makeRun({
+      status: 'pending',
+      adopted_from_run_id: 'ancestor',
+      metadata: { continuation: { mode: 'unsupported' } },
+    });
+    await expect(startWorkflow({ deps, options: { preCreatedRun: run } })).rejects.toThrow(
+      'Invalid recorded continuation metadata.'
+    );
+    expect(deps.store.getWorkflowRun).not.toHaveBeenCalledWith('ancestor');
+    expect(deps.store.failWorkflowRun).toHaveBeenCalledWith(
+      run.id,
+      'Invalid recorded continuation metadata.'
+    );
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
   it('direct adoption rejects explicit AI overrides before dispatch', async () => {
     const deps = makeDeps();
     const workflow = makeWorkflow();
