@@ -378,6 +378,95 @@ describe('InProcessWorkflowEngine', () => {
     }
   );
 
+  it.each(['preparation', 'stamp'] as const)(
+    'public resume records an owned %s failure',
+    async phase => {
+      const { engine, store } = await makeEngine();
+      const run = await store.createWorkflowRun({
+        workflow_name: parent.name,
+        user_message: '',
+        metadata: phase === 'stamp' ? { continuation: { mode: 'unsupported' } } : {},
+      });
+      await completeNode(store, run.id, 'first');
+      await store.failWorkflowRun(run.id, 'interrupted');
+      const failed = await store.getWorkflowRun(run.id);
+      if (!failed) throw new Error('expected failed run');
+      const cause = new Error('preparation refused');
+      const admission = engine.resume({
+        platform,
+        conversationId: 'conv-1',
+        cwd: '/tmp/ops',
+        userMessage: '',
+        run: failed,
+        legacyWorkflow: parent,
+        prepareExecution: async () => {
+          if (phase === 'preparation') throw cause;
+          return { cwd: '/tmp/ops' };
+        },
+      });
+      if (phase === 'preparation') await expect(admission).rejects.toBe(cause);
+      else {
+        const accepted = await admission;
+        if (!accepted.accepted) throw new Error('expected resume');
+        await expect(accepted.settled).rejects.toThrow('Invalid recorded continuation metadata');
+      }
+      expect(await store.getWorkflowRun(run.id)).toMatchObject({
+        status: 'failed',
+        metadata: {
+          error:
+            phase === 'preparation' ? cause.message : 'Invalid recorded continuation metadata.',
+        },
+      });
+    }
+  );
+
+  it.each(['owned', 'replaced'] as const)(
+    'container refusal settles only the owned resume claim (%s)',
+    async claim => {
+      const { engine, store } = await makeEngine();
+      const run = await store.createWorkflowRun({
+        workflow_name: parent.name,
+        user_message: '',
+        metadata: { isolation: 'container', isolation_env_id: 'env-x' },
+      });
+      await completeNode(store, run.id, 'first');
+      await store.failWorkflowRun(run.id, 'interrupted');
+      const failed = await store.getWorkflowRun(run.id);
+      if (!failed) throw new Error('expected failed run');
+      let replacement: WorkflowRun | undefined;
+      const accepted = await engine.resume({
+        platform: {
+          ...platform,
+          sendMessage: async () => {
+            if (claim === 'replaced') {
+              await store.failWorkflowRun(run.id, 'replaced');
+              replacement = await store.resumeWorkflowRun(run.id);
+            }
+          },
+        },
+        conversationId: 'conv-1',
+        cwd: '/tmp/ops',
+        userMessage: '',
+        run: failed,
+        legacyWorkflow: parent,
+      });
+      if (!accepted.accepted) throw new Error('expected resume');
+      const result = await accepted.settled;
+      expect(result).toMatchObject({ success: false, error: expect.stringContaining('CLI') });
+      if (claim === 'replaced') {
+        expect(replacement).toBeDefined();
+        expect(await store.getWorkflowRun(run.id)).toEqual(replacement);
+      } else {
+        if (result.success) throw new Error('expected refusal');
+        expect(await store.getWorkflowRun(run.id)).toMatchObject({
+          status: 'failed',
+          metadata: { error: result.error },
+        });
+        expect((await store.resumeWorkflowRun(run.id)).status).toBe('running');
+      }
+    }
+  );
+
   it('stale container submit preserves another worker claim', async () => {
     const { engine, store } = await makeEngine();
     const pending = await store.createWorkflowRun({

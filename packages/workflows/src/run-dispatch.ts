@@ -216,7 +216,7 @@ async function refuseContainerResumeWithoutBackend(
   // reaches here for a container run WITHOUT that context — e.g. approving a
   // --container run from chat/web, which has no docker backend wired — would run
   // host-side and SILENTLY skip the write-back apply, losing the approved changes.
-  // Refuse without a status write: this dispatch has not established ownership.
+  // Dispatch also serves unclaimed submissions; the resume owner settles its own claim.
   if (preCreatedRun && isContainerRun(preCreatedRun) && !container) {
     const msg =
       `Run '${preCreatedRun.id}' executed inside an isolation container. Resume it from the ` +
