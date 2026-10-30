@@ -362,6 +362,7 @@ async function copyInheritedUnits(
     } catch (error) {
       if (
         !(error instanceof WorkflowSourceIntegrityError) ||
+        (error instanceof WorkflowSourceUnavailableError && error.path === staging) ||
         (error.path !== inherited.anchor.root && error.path !== staging)
       )
         throw error;
