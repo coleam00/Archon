@@ -4,6 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { FAN_OUT_CANCEL_REASONS } from '@archon/workflows/store';
 import { enterRunExecution } from '@archon/workflows/run-scratch';
 import {
   isTerminalRunStatus,
@@ -141,3 +142,44 @@ test('a failed run cannot authorize asynchronous deletion before a concurrent re
   expect(release).not.toHaveBeenCalled();
   expect(deletedDuringExecution).toBe(false);
 });
+
+test.each([...FAN_OUT_CANCEL_REASONS])(
+  'a %s child retains images across same-ID recovery',
+  async reason => {
+    const store = await createFileWorkflowStore({
+      root: trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-image-fan-out-resume-'))),
+    });
+    const run = await store.createWorkflowRun({ workflow_name: 'verification', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.updateWorkflowRun(run.id, {
+      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+    });
+    await store.cancelFanOutRun(run.id, reason);
+    let deletedDuringExecution = false;
+    const release = mock(async () => {
+      await store.recoverCancelledFanOutRun(run.id);
+      deletedDuringExecution = (await store.getWorkflowRun(run.id))?.status === 'running';
+    });
+    await createRunResourceRelease(store, release)(run.id);
+    expect(deletedDuringExecution).toBe(false);
+    expect(release).not.toHaveBeenCalled();
+    expect((await store.recoverCancelledFanOutRun(run.id)).status).toBe('running');
+  }
+);
+
+test.each([...FAN_OUT_CANCEL_REASONS])(
+  'a completed run with stale %s metadata still releases images',
+  async reason => {
+    const run = {
+      ...mockWorkflowRun,
+      status: 'completed' as const,
+      metadata: {
+        execution_owner: { host: hostname(), pid: process.pid },
+        cancelled_reason: reason,
+      },
+    };
+    const release = mock(async (_id: string, _env?: string) => {});
+    await createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id);
+    expect(release.mock.calls).toEqual([[run.id, undefined]]);
+  }
+);

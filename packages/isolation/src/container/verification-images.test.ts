@@ -159,12 +159,61 @@ describe('run verification images', () => {
           throw Object.assign(new Error('spawn failed'), { code: 'ENOENT' });
         return f.runner(args, opts);
       });
-      if (failure === 'missing-docker') await cleanup;
-      else await expect(cleanup).rejects.toThrow('cleanup failed');
+      await expect(cleanup).rejects.toThrow('cleanup failed');
       expect(f.calls.some(args => args[1] === 'rm')).toBe(false);
       expect(f.images.has(id('verification'))).toBe(true);
     }
   );
+
+  test.each(['isolation-container', 'inventory', 'inspect', 'container-lookup', 'removal'])(
+    'missing Docker at %s reports the run and original cause',
+    async boundary => {
+      const f = fixture();
+      f.add('verification');
+      const cause = Object.assign(new Error('spawn docker ENOENT'), { code: 'ENOENT' });
+      const failure = new Error('Docker command failed', { cause });
+      const cleanup = releaseRunVerificationImages(
+        'run-a',
+        boundary === 'isolation-container' ? 'env-a' : undefined,
+        async (args, opts) => {
+          if (
+            (boundary === 'isolation-container' && args[0] === 'container') ||
+            (boundary === 'inventory' && args[0] === 'image' && args[1] === 'ls') ||
+            (boundary === 'inspect' && args[1] === 'inspect') ||
+            (boundary === 'container-lookup' && args[0] === 'container') ||
+            (boundary === 'removal' && args[1] === 'rm')
+          )
+            throw failure;
+          return f.runner(args, opts);
+        }
+      );
+      const error = await cleanup.catch((error: unknown) => error);
+      expect(error).toBeInstanceOf(AggregateError);
+      if (!(error instanceof AggregateError)) throw new Error('Expected cleanup failure');
+      expect(error.message).toContain('run-a');
+      expect(error.errors).toEqual([failure]);
+      expect(f.images.has(id('verification'))).toBe(true);
+    }
+  );
+
+  test('Docker disappearing after inspection errors preserves all failure evidence', async () => {
+    const f = fixture();
+    f.add('unreadable');
+    f.add('verification');
+    f.failures.add(id('unreadable'));
+    const missing = Object.assign(new Error('spawn docker ENOENT'), { code: 'ENOENT' });
+    const error = await releaseRunVerificationImages('run-a', undefined, async (args, opts) => {
+      if (args[0] === 'container') throw missing;
+      return f.runner(args, opts);
+    }).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) throw new Error('Expected cleanup failure');
+    expect(error.errors).toHaveLength(2);
+    expect(String(error.errors[0])).toContain('inspection unavailable');
+    expect(error.errors[1]).toBe(missing);
+    expect(error.message).toContain('run-a');
+    expect(f.images.size).toBe(2);
+  });
 
   test.each([1, 2])(
     'a tag reassigned immediately before deletion is preserved (%s tags)',

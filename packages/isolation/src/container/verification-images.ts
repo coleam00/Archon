@@ -2,8 +2,8 @@ import { createLogger } from '@archon/paths';
 import { CONTAINER_LABELS } from '../types';
 import { dockerCli, type DockerRunner } from './docker-exec';
 
-const RUN_LABEL = 'archon.run_id';
-const INSPECT = `{"id":{{json .Id}},"parent":{{json .Parent}},"owner":{{json (index .Config.Labels ${JSON.stringify(RUN_LABEL)})}}}`;
+export const VERIFICATION_IMAGE_RUN_LABEL = 'archon.run_id';
+const INSPECT = `{"id":{{json .Id}},"parent":{{json .Parent}},"owner":{{json (index .Config.Labels ${JSON.stringify(VERIFICATION_IMAGE_RUN_LABEL)})}}}`;
 
 interface Image {
   id: string;
@@ -26,11 +26,6 @@ function readImage(stdout: string): Image {
   )
     throw new Error('Incomplete Docker image inspection');
   return { id: value.id, parent: value.parent, owner: value.owner };
-}
-
-function missingDocker(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return ('code' in error && error.code === 'ENOENT') || missingDocker(error.cause);
 }
 
 async function output(runner: DockerRunner, args: string[]): Promise<string> {
@@ -61,7 +56,7 @@ async function ownedImages(
         '--quiet',
         '--no-trunc',
         '--filter',
-        `label=${RUN_LABEL}=${runId}`,
+        `label=${VERIFICATION_IMAGE_RUN_LABEL}=${runId}`,
       ])
     )
       .split(/\s+/)
@@ -146,10 +141,6 @@ export async function releaseRunVerificationImages(
       }
     }
   } catch (err) {
-    if (missingDocker(err)) {
-      log.debug({ runId }, 'verification_images.docker_missing');
-      return;
-    }
     errors.push(err);
     log.warn({ err, runId }, 'verification_images.cleanup_failed');
   }

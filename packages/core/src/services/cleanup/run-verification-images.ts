@@ -7,7 +7,7 @@ import {
   isTerminalRunStatus,
   RESUMABLE_WORKFLOW_STATUSES,
 } from '@archon/workflows/schemas/workflow-run';
-import type { IWorkflowStore } from '@archon/workflows/store';
+import { FAN_OUT_CANCEL_REASONS, type IWorkflowStore } from '@archon/workflows/store';
 
 export function createRunResourceRelease(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
@@ -21,9 +21,13 @@ export function createRunResourceRelease(
         log.debug({ runId }, 'verification_images.kept_for_owner');
         return;
       }
-      // A failed run can resume in another process during Docker I/O. Without an
-      // admission lock, only unresumable terminal states authorize deletion.
-      if (RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
+      // Failed runs and fan-out-cancelled children can resume under the same ID
+      // during Docker I/O; writer shutdown alone cannot authorize their deletion.
+      if (
+        RESUMABLE_WORKFLOW_STATUSES.includes(run.status) ||
+        (run.status === 'cancelled' &&
+          FAN_OUT_CANCEL_REASONS.some(reason => reason === run.metadata.cancelled_reason))
+      ) {
         log.debug({ runId }, 'verification_images.kept_for_resumable_run');
         return;
       }
