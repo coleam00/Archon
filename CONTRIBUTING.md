@@ -109,7 +109,7 @@ or other-platform CI results.
 
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 
-**macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Do not compile binaries locally on macOS. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`. One exception: the file-store lock tests compile their probe only under GitHub Actions, on every OS, and skip it everywhere else whatever `ARCHON_TEST_COMPILED_BINARIES` says. The `file-store-primitives-macos` job runs the file-store group and database-free CLI lifecycle on a disposable Mac so the persistence behavior and compiled probe are also proved on macOS.
+**macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Do not compile binaries locally on macOS. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`. One exception: the file-store lock tests compile their probe only under GitHub Actions, on every OS, and skip it everywhere else whatever `ARCHON_TEST_COMPILED_BINARIES` says. The `file-store-primitives-macos` job runs POSIX plugin cleanup, provider and chat inspection diagnostics, process-provider and Codex cleanup, the file-store group, and database-free CLI lifecycle on a disposable Mac so these behaviors and the compiled probe are also proved on macOS.
 
 #### What `bun run validate` deliberately leaves out
 
@@ -125,7 +125,7 @@ drop; never run destructive verification against a configured live database.
 | Linux `test` Slack conformance and smoke | compiled Slack plugin with a stubbed client for conformance, and the unmodified release binary for initialization and missing-token smoke | CI only; source conformance runs in `cd packages/chat-slack && bun run test` |
 | `serve-binary` | compiled CLI and server artifacts; CI runs the build and smoke on Linux and Windows | CI only; no local compilation on macOS |
 | `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
-| `file-store-primitives-macos` | GitHub Actions for the compiled probe, and a macOS runner for filesystem behavior; ordinary tests also run under `validate` | `bun run --cwd packages/workflows test src/file-store` and `bun run --cwd packages/cli test src/commands/workflow-file-store.integration.spec.ts`; the compiled probe skips locally |
+| `file-store-primitives-macos` | GitHub Actions for the compiled probe, and a macOS runner for process-group and filesystem behavior; ordinary tests also run under `validate` | On macOS, run the test commands from this job in [`.github/workflows/test.yml`](.github/workflows/test.yml); the compiled probe skips locally |
 
 The `serve-binary` CI job builds matching CLI and server executables on Linux and
 Windows, then checks `archon serve` against `/api/health` and the console. The
