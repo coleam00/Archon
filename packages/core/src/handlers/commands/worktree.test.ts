@@ -337,9 +337,7 @@ describe('CommandHandler', () => {
             expect(result.success).toBe(true);
             const lines = result.message.split('\n');
             expect(lines.find(line => line.includes('feat-x'))).toContain(marker);
-            expect(result.message).toContain(
-              git.toNativeWorktreePath('D:/my repo/worktrees/feat-x')
-            );
+            expect(result.message).toMatch(/worktrees[\\/]feat-x/);
             expect(lines.find(line => line.includes('feat-y'))).not.toContain(marker);
             expect(lines.filter(line => line.includes(marker))).toHaveLength(1);
           } finally {

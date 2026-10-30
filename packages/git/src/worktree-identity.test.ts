@@ -112,6 +112,38 @@ describe('git utilities', () => {
   });
 
   describe('getCanonicalRepoPath', () => {
+    test('resolves a real linked checkout to exactly the primary checkout path', async () => {
+      const root = await realpath(testDir);
+      const primaryPath = join(root, 'primary repo');
+      const linkedPath = join(root, 'linked checkout');
+      await git.execFileAsync('git', ['init', '-q', '-b', 'main', primaryPath]);
+      await git.execFileAsync('git', [
+        '-C',
+        primaryPath,
+        '-c',
+        'user.name=Test',
+        '-c',
+        'user.email=test@example.com',
+        '-c',
+        'commit.gpgsign=false',
+        'commit',
+        '--allow-empty',
+        '-qm',
+        'Initial commit',
+      ]);
+      await git.execFileAsync('git', [
+        '-C',
+        primaryPath,
+        'worktree',
+        'add',
+        '-b',
+        'linked',
+        linkedPath,
+      ]);
+
+      expect(await git.getCanonicalRepoPath(linkedPath)).toBe(repo(primaryPath));
+    });
+
     test('returns same path for non-worktree', async () => {
       expect(await git.getCanonicalRepoPath(testDir)).toBe(testDir);
     });
