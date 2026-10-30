@@ -99,10 +99,11 @@ export async function terminateWindowsTree(
     await taskkill(pid);
   } catch (error) {
     const liveness = probePidLiveness(pid);
-    if (debug) {
+    const level = liveness.provablyGone ? 'debug' : 'warn';
+    if (log.isLevelEnabled(level)) {
       const failureIdentity = await identity();
       try {
-        log.debug(
+        log[level](
           {
             targetPid: pid,
             phase: 'taskkill_failed',

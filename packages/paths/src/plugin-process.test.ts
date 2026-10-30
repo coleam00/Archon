@@ -124,7 +124,7 @@ describe('Windows stop diagnostics', () => {
       const events = lines.map(line => JSON.parse(line));
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
-        level: 20,
+        level: outcome === 'ESRCH' ? 20 : 40,
         module: 'paths.plugin-process',
         msg: 'process.windows_tree_stop',
         targetPid: pid,
@@ -178,7 +178,7 @@ describe('Windows stop diagnostics', () => {
     );
   }
 
-  test('info-level stopping performs no identity capture or diagnostic emission', async () => {
+  test('info-level rethrow logs at warn with a post-failure identity sample', async () => {
     setLogLevel('info');
     spies.push(spyOn(process, 'kill').mockReturnValue(true));
     const error = failure();
@@ -187,6 +187,31 @@ describe('Windows stop diagnostics', () => {
         throw error;
       })
     ).rejects.toBe(error);
+    expect(identity.mock.calls).toEqual([[pid]]);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0])).toMatchObject({
+      level: 40,
+      module: 'paths.plugin-process',
+      msg: 'process.windows_tree_stop',
+      targetPid: pid,
+      phase: 'taskkill_failed',
+      failureIdentity: entry,
+      liveness: { status: 'returned', value: true, provablyGone: false },
+      taskkill: { code: 128, stderr: 'requested stderr' },
+    });
+    expect(JSON.parse(lines[0])).not.toHaveProperty('entryIdentity');
+    expect(lines.join('')).not.toContain('SECRET');
+
+    lines.length = 0;
+    identity.mockClear();
+    spies.push(
+      spyOn(process, 'kill').mockImplementation(() => {
+        throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+      })
+    );
+    await terminateWindowsTree(pid, async () => {
+      throw error;
+    });
     await terminateWindowsTree(pid, async () => {});
     expect(identity).not.toHaveBeenCalled();
     expect(lines).toEqual([]);
