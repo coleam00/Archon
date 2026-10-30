@@ -34,24 +34,28 @@ function getLog(): ReturnType<typeof createLogger> {
 export class InvalidConfigError extends Error {
   readonly summary: string;
 
-  constructor(label: string, configPath: string, detail: string) {
-    super(`${label} in '${configPath}': ${detail}`);
+  constructor(label: string, configPath: string, detail: string, options?: ErrorOptions) {
+    super(`${label} in '${configPath}': ${detail}`, options);
     this.name = 'InvalidConfigError';
     this.summary = `${label}: ${detail}`;
   }
 }
 
+/** Which config file a parse failure is in, without its path. */
+export type ConfigFileLabel = 'Global config' | 'Project config';
+
 /**
  * A config file that is not valid YAML or whose top level is not a map. Like
- * `InvalidConfigError`, `summary` leaves out the server's filesystem path.
+ * `InvalidConfigError`, `summary` leaves out the server's filesystem path; its
+ * label says which file it is.
  */
 export class ConfigParseError extends Error {
   readonly summary: string;
 
-  constructor(configPath: string, detail: string, options?: ErrorOptions) {
+  constructor(label: ConfigFileLabel, configPath: string, detail: string, options?: ErrorOptions) {
     super(`'${configPath}' ${detail}`, options);
     this.name = 'ConfigParseError';
-    this.summary = `Config file ${detail}`;
+    this.summary = `${label} ${detail}`;
   }
 }
 

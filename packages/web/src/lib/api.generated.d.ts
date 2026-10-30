@@ -3739,7 +3739,7 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
-        /** @description The project config is invalid */
+        /** @description The global or project config file is invalid */
         422: {
           headers: {
             [name: string]: unknown;

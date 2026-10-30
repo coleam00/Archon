@@ -152,12 +152,25 @@ describe('GET /api/codebases/{id}/config', () => {
   });
 
   test.each([
-    ['not valid YAML', 'tiers: [unclosed\n'],
-    ['not a map', '- botName: x\n'],
-  ])('a project config that is %s is 422 and names no server path', async (_, content) => {
+    ['not valid YAML', 'tiers: [unclosed\n', 'Project config is not valid YAML'],
+    ['not a map', '- botName: x\n', 'Project config is not a map'],
+    ['an unregistered assistant', 'assistant: nope\n', 'Invalid assistant'],
+    ['a bad worktree.postCreate', 'worktree:\n  postCreate: [""]\n', 'Invalid worktree config'],
+  ])('a project config with %s is 422 and names no server path', async (_, content, summary) => {
     writeFileSync(join(project, '.archon', 'config.yaml'), content);
     const response = await app().request('/api/codebases/cb-1/config');
     expect(response.status).toBe(422);
-    expect(await response.text()).not.toContain(project);
+    const text = await response.text();
+    expect(text).toContain(summary);
+    expect(text).not.toContain(project);
+  });
+
+  test('a broken global config is 422 and says it is the global file', async () => {
+    writeFileSync(join(home, 'config.yaml'), 'botName: [unclosed\n');
+    const response = await app().request('/api/codebases/cb-1/config');
+    expect(response.status).toBe(422);
+    const text = await response.text();
+    expect(text).toContain('Global config is not valid YAML');
+    expect(text).not.toContain(home);
   });
 });

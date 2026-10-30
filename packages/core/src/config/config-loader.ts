@@ -31,6 +31,7 @@ import type {
 } from './config-types';
 import {
   ConfigParseError,
+  type ConfigFileLabel,
   InvalidConfigError,
   isConfigRecord,
   validateAssistantDefaults,
@@ -147,17 +148,23 @@ function parseYaml(content: string): unknown {
  * Parse a config file into its top-level map of settings; an empty file is `{}`.
  * Bun's YAML error names neither the file nor the line, so the message adds the file.
  */
-function parseConfigMapping(content: string, configPath: string): Record<string, unknown> {
+function parseConfigMapping(
+  content: string,
+  configPath: string,
+  label: ConfigFileLabel
+): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = parseYaml(content);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new ConfigParseError(configPath, `is not valid YAML (${reason}).`, { cause: error });
+    throw new ConfigParseError(label, configPath, `is not valid YAML (${reason}).`, {
+      cause: error,
+    });
   }
   if (parsed === null || parsed === undefined) return {};
   if (!isConfigRecord(parsed)) {
-    throw new ConfigParseError(configPath, 'is not a map of settings at its top level.');
+    throw new ConfigParseError(label, configPath, 'is not a map of settings at its top level.');
   }
   return parsed;
 }
@@ -252,7 +259,7 @@ async function readGlobalConfig(configPath: string, readOnly: boolean): Promise<
     if (!readOnly) await createDefaultConfig(configPath);
     return {};
   }
-  const parsed = parseConfigMapping(content, configPath);
+  const parsed = parseConfigMapping(content, configPath, 'Global config');
   validateGlobalConfigBlocks(parsed, configPath);
   return parsed as GlobalConfig;
 }
@@ -318,7 +325,7 @@ function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[
 async function readRepoConfig(configPath: string): Promise<RepoConfig> {
   const content = await readConfigFileIfPresent(configPath);
   if (content === undefined) return {};
-  const raw = parseConfigMapping(content, configPath);
+  const raw = parseConfigMapping(content, configPath, 'Project config');
   validateWorkflowContinuationConfig(raw, configPath);
   validateModelBindingConfig(raw, configPath);
   const parsed = raw as RepoConfig;
@@ -344,7 +351,12 @@ async function readRepoConfig(configPath: string): Promise<RepoConfig> {
 export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
   const configPath = join(repoPath, '.archon', 'config.yaml');
   const parsed = await readRepoConfig(configPath);
-  validateWorktreePostCreate(parsed.worktree);
+  try {
+    validateWorktreePostCreate(parsed.worktree);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new InvalidConfigError('Invalid worktree config', configPath, detail, { cause: error });
+  }
   validateAssistantDefaults(parsed, configPath);
   return parsed;
 }
@@ -412,7 +424,7 @@ export function logConfig(config: MergedConfig): void {
 async function readGlobalConfigForUpdate(configPath: string): Promise<GlobalConfig> {
   const content = await readConfigFileIfPresent(configPath);
   if (content === undefined) return {};
-  return parseConfigMapping(content, configPath) as GlobalConfig;
+  return parseConfigMapping(content, configPath, 'Global config') as GlobalConfig;
 }
 
 /**

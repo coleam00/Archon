@@ -60,7 +60,7 @@ const getProjectConfigRoute = createRoute({
       description: "The project's merged configuration",
     },
     404: jsonError('Codebase not found'),
-    422: jsonError('The project config is invalid'),
+    422: jsonError('The global or project config file is invalid'),
     500: jsonError('Server error'),
   },
 });
