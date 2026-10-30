@@ -94,13 +94,6 @@ export async function terminateWindowsTree(
       return { pid, status: 'unavailable', code: 'CAPTURE_FAILED' };
     }
   };
-  const emit = (fields: object): void => {
-    try {
-      log.debug({ targetPid: pid, ...fields }, 'process.windows_tree_stop');
-    } catch {
-      // Optional diagnostics must not replace the saved stop result if a sink fails.
-    }
-  };
   const entryIdentity = debug ? await identity() : undefined;
   try {
     await taskkill(pid);
@@ -108,13 +101,21 @@ export async function terminateWindowsTree(
     const liveness = probePidLiveness(pid);
     if (debug) {
       const failureIdentity = await identity();
-      emit({
-        phase: 'taskkill_failed',
-        entryIdentity,
-        failureIdentity,
-        liveness,
-        taskkill: taskkillFailureFields(error),
-      });
+      try {
+        log.debug(
+          {
+            targetPid: pid,
+            phase: 'taskkill_failed',
+            entryIdentity,
+            failureIdentity,
+            liveness,
+            taskkill: taskkillFailureFields(error),
+          },
+          'process.windows_tree_stop'
+        );
+      } catch {
+        // Optional diagnostics must not replace the saved stop result.
+      }
     }
     // Identity samples and taskkill's prose are diagnostic evidence, never stop authorization.
     if (!liveness.provablyGone) throw error;

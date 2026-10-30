@@ -231,6 +231,33 @@ describe('Windows stop diagnostics', () => {
     }
   );
 
+  for (const field of ['code', 'stderr', 'toString'] as const) {
+    test.each(['ESRCH', 'EPERM'])(
+      `throwing taskkill ${field} cannot replace %p result`,
+      async code => {
+        spies.push(
+          spyOn(process, 'kill').mockImplementation(() => {
+            throw Object.assign(new Error('probe'), { code });
+          })
+        );
+        const error = failure();
+        const fail = () => {
+          throw new Error('diagnostic field failed');
+        };
+        if (field === 'toString') error.stderr.toString = fail;
+        else Object.defineProperty(error, field, { get: fail });
+        const result = await terminateWindowsTree(pid, async () => {
+          throw error;
+        }).then(
+          () => 'resolved',
+          caught => caught
+        );
+        expect(result).toBe(code === 'ESRCH' ? 'resolved' : error);
+        expect(lines).toEqual([]);
+      }
+    );
+  }
+
   test.each(['ENOENT', undefined])(
     'logs launch failure %p with explicit unavailable fields',
     async code => {
