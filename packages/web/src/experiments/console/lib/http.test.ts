@@ -39,6 +39,26 @@ describe('requestJson errors', () => {
     expect(error.serverError).toBe(message);
   });
 
+  test('preserves full apiError detail independently of the snippet', async () => {
+    const detail = `No codebase with id ${'x'.repeat(250)}-DETAIL-TAIL`;
+    respond(400, JSON.stringify({ error: 'Codebase not found', detail }));
+
+    const error = await caught();
+
+    expect(error.serverError).toBe('Codebase not found');
+    expect(error.serverDetail).toBe(detail);
+    expect(error.bodySnippet).not.toContain('DETAIL-TAIL');
+  });
+
+  test('ignores a non-string apiError detail', async () => {
+    respond(400, JSON.stringify({ error: 'Refused', detail: { internal: true } }));
+
+    const error = await caught();
+
+    expect(error.serverError).toBe('Refused');
+    expect(error.serverDetail).toBeUndefined();
+  });
+
   test('leaves serverError undefined for a body that is not apiError JSON', async () => {
     respond(502, '<html>Bad gateway</html>');
 
