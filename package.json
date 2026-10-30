@@ -60,6 +60,7 @@
     "@biomejs/biome": "2.5.15",
     "@types/bun": "latest",
     "bun-types": "^1.3.5",
+    "fast-xml-parser": "^5.11.2",
     "husky": "^9.1.7",
     "lint-staged": "^15.2.0",
     "pino-pretty": "^13",
