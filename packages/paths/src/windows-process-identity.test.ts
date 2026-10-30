@@ -91,14 +91,24 @@ test.skipIf(process.platform !== 'win32')(
 );
 
 test.skipIf(process.platform !== 'win32')(
-  'native query observes a reaped fixture as absent',
+  'native absent query round-trips a lookup ArgumentException',
   async () => {
-    const child = Bun.spawn([process.execPath, '-e', '']);
-    await child.exited;
-    expect(await readWindowsProcessIdentity(child.pid)).toEqual({
-      pid: child.pid,
-      status: 'absent',
-    });
+    const result = await readWindowsProcessIdentity(
+      process.pid,
+      async (executable, args, options) => {
+        const script = Buffer.from(args[3], 'base64').toString('utf16le');
+        const lookup = '  $proc = [System.Diagnostics.Process]::GetProcessById($targetPid)';
+        expect(script.split(lookup)).toHaveLength(2);
+        // A reaped fixture's PID can be reused before PowerShell performs the lookup.
+        const failingScript = script.replace(lookup, '  throw [System.ArgumentException]::new()');
+        return promisify(execFile)(
+          executable,
+          [...args.slice(0, 3), Buffer.from(failingScript, 'utf16le').toString('base64')],
+          options
+        );
+      }
+    );
+    expect(result).toEqual({ pid: process.pid, status: 'absent' });
   }
 );
 
