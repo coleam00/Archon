@@ -8,7 +8,7 @@ test('the metrics guide publishes the engine record schema', () => {
   const guide = readFileSync(
     join(import.meta.dir, '../../../docs-web/src/content/docs/guides/metrics.md'),
     'utf8'
-  );
+  ).replaceAll('\r\n', '\n'); // `* text=auto` checks the guide out with CRLF on Windows
   const section = guide.split('## The record schema')[1];
   const block = /```json\n([\s\S]*?)\n```/.exec(section ?? '')?.[1];
   expect(block).toBeDefined();
