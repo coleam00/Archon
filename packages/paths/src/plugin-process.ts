@@ -97,19 +97,18 @@ export async function terminateTree(
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ESRCH') return;
-    if (code === 'EPERM') {
-      // Darwin can refuse signals to zombie-only groups. Failed observation proves nothing.
+    if (code !== 'EPERM') throw error;
+    // Darwin can refuse signals to zombie-only groups. Failed observation proves nothing.
+    try {
+      if (processGroupHasEnded(pid, await listGroups())) return;
+    } catch (inspectionError) {
       try {
-        if (processGroupHasEnded(pid, await listGroups())) return;
-      } catch (inspectionError) {
-        try {
-          createLogger('paths.plugin-process').warn(
-            { err: inspectionError, targetPid: pid },
-            'process_group_inspection_failed'
-          );
-        } catch {
-          // Optional diagnostics must not replace the original signal error.
-        }
+        createLogger('paths.plugin-process').warn(
+          { err: inspectionError, targetPid: pid },
+          'process_group_inspection_failed'
+        );
+      } catch {
+        // Optional diagnostics must not replace the original signal error.
       }
     }
     throw error;
