@@ -1,6 +1,7 @@
 import { mockLogger, createTestWorkflowHost } from '../test-support/workflow-command-harness';
 
 import { providerRegistry } from '@archon/providers';
+import { join } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
@@ -75,7 +76,7 @@ describe('workflowRunCommand', () => {
       '/test/path',
       expect.any(Function),
       providerRegistry,
-      expect.objectContaining({ project: '/test/capture/project' })
+      expect.objectContaining({ project: join('/test/capture', 'project') })
     );
     expect(consoleSpy).toHaveBeenCalledWith(
       'Discovery: root=/repo/source workflows=1 bundled=0 global=0 project=1 installed=0'

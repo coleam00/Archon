@@ -1,5 +1,5 @@
-import { capturedSourceRoots } from '@archon/workflows/run-source';
 // @archon-test-isolated
+import { capturedSourceRoots } from '@archon/workflows/run-source';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath } from 'node:fs/promises';
