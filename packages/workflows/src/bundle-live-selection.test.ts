@@ -140,6 +140,7 @@ test('live validation rejects an unindexed bundled command owner', async () => {
 test('a captured bundle retains formerly indexed resources without reading the live index', async () => {
   selectedPacks = ['shipped', 'excluded'];
   const capture = await captureWorkflowSource({
+    providers: providerRegistry,
     sourceRoot: project,
     captureRoot: join(root, 'capture'),
   });
@@ -174,6 +175,7 @@ test('a capture an older binary took keeps resolving the flat commands it froze'
   let roots: ReturnType<typeof capturedSourceRoots>;
   try {
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(root, 'older-binary-capture'),
     });
@@ -345,6 +347,7 @@ test('a pack-root fixtures directory is not a bundled workflow in live or captur
     expect(live.workflows.some(entry => entry.workflow.name === 'clean.stubs')).toBe(false);
 
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(root, 'fixture-capture'),
     });

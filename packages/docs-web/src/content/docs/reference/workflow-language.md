@@ -1832,7 +1832,9 @@ These are independent signals:
 
 - A deterministic check is an ordinary `bash:` or `script:` node. Exit zero completes the node;
   any other exit fails it and therefore affects lifecycle status. A named script read from captured
-  source is also rejected if the run's full source capture no longer matches its pinned identity.
+  source also requires verification against the run's pinned identity: v3 checks the authenticated
+  index and required source units; legacy v1/v2 check the full capture. An unrelated installed
+  pack fault does not block a v3 named-script attempt.
 - `outcome_field` records the workflow author's schema-declared boolean verdict. It does not control
   lifecycle status. A succeeded outcome can remain on a run that later fails, and a failed outcome can
   coexist with a completed run.

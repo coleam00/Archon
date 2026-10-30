@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -349,6 +350,7 @@ export function registerGateContinuationTests(trackTempRoot: ReturnType<typeof t
       const source = join(root, 'source');
       await writeGateWorkflow(source, 'Captured graph', true);
       const capture = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: source,
         captureRoot: join(root, 'capture'),
       });

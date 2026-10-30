@@ -968,6 +968,7 @@ nodes:
       const { captureWorkflowSource, capturedSourceRoots, DEFAULT_WORKFLOW_SOURCE_CONFIG } =
         await import('./workflow-source');
       const capture = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: testDir,
         captureRoot: join(testDir, 'home', 'staged-source', 'run-1'),
         sourceConfig: { ...DEFAULT_WORKFLOW_SOURCE_CONFIG, env_var_names: ['NAME'] },

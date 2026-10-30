@@ -3,6 +3,7 @@
  * workflow loading and execution (non-schema hand-written discriminated unions).
  */
 import { z } from 'zod';
+import type { SuspensionWorkflow } from '../include/suspension';
 import { WORKFLOW_SOURCES } from '@archon/paths/workflow-source';
 import type { deadlineWaitCursor } from '../store';
 import type { WorkflowRunStatus } from './workflow-run';
@@ -521,5 +522,7 @@ export interface WorkflowLoadResult {
    * Discovery always sets it; a result built by hand without installed packs may omit it.
    */
   readonly support?: readonly WorkflowWithSource[];
+  /** Definitions for suspension proofs only; child resources resolve at child start. */
+  readonly suspensionDefinitions?: readonly SuspensionWorkflow[];
   readonly errors: readonly WorkflowLoadError[];
 }

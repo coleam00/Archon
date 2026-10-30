@@ -1,6 +1,6 @@
+import { openWorkflowSource, assertWorkflowSourceIntegrity, sourceDirectoryHasFiles } from './load';
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
-import { z } from 'zod';
 import {
   describeIssues,
   PLUGIN_MANIFEST_FILE,
@@ -9,19 +9,26 @@ import {
 } from '@archon/plugin-manifest';
 import { packTreePath, scanReceipts } from '@archon/plugin-manifest/store';
 import type { WorkflowResourceOwner } from '../packaged-workflow';
-import { INSTALLED_SCOPE_DIR, type InstalledPacksRoot, type WorkflowSourceRoots } from './roots';
+import {
+  installedSourceUnit,
+  INSTALLED_SCOPE_DIR,
+  sourceUnitForOwner,
+  type InstalledPacksRoot,
+  type WorkflowSourceRoots,
+} from './roots';
 
-/** Where an installed pack came from, as its receipt recorded it. */
-export const installedPluginRecordSchema = z.object({
-  /** {@link InstalledPack.key}: the pack's directory in a capture. */
-  key: z.string(),
-  /** `owner/repo[/path]` */
-  id: z.string(),
-  commit: z.string(),
-  tag: z.string().optional(),
-});
-
-export type InstalledPluginRecord = z.infer<typeof installedPluginRecordSchema>;
+export {
+  installedPackKey,
+  installedPluginRecordSchema,
+  installedWorkflowName,
+  type InstalledPluginRecord,
+} from './installed-record';
+import {
+  installedPackKey,
+  installedWorkflowName,
+  type InstalledPluginRecord,
+} from './installed-record';
+import { verifyIndexedUnits } from './verify-units';
 
 /** One installed workflow pack, read from receipts (live) or from a capture. */
 export interface InstalledPack {
@@ -38,25 +45,13 @@ export interface InstalledPack {
   readonly key: string;
   /** The pack root, holding `archon-plugin.json`. */
   readonly dir: string;
-  /** Read from the tree itself, so a capture and a live listing agree on entrypoints. */
+  /** Live tree manifest or the captured, run-authenticated descriptor. */
   readonly manifest: WorkflowPackManifest;
   /** Present for a live pack; a capture's manifest keeps the records of its packs. */
   readonly record?: InstalledPluginRecord;
 }
 
-export function installedPackKey(owner: string, name: string): string {
-  return `${owner}.${name}`;
-}
-
-/** The public name of a workflow in an installed pack: `owner/plugin:<name>`. */
-export function installedWorkflowName(
-  pack: Pick<InstalledPack, 'owner' | 'name'>,
-  name: string
-): string {
-  return `${pack.owner}/${pack.name}:${name}`;
-}
-
-async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
+export async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
   const file = join(dir, PLUGIN_MANIFEST_FILE);
   let raw: unknown;
   try {
@@ -78,15 +73,44 @@ export interface InstalledPackListError {
 }
 
 /**
- * Every installed workflow pack under `roots`. A pack that cannot be read is reported,
- * not thrown: one broken install must not take the rest of the catalog down with it.
+ * Live install faults are catalog errors. Captured lookups verify the requested packs
+ * and throw typed source errors, so frozen bytes cannot be replaced by a live install.
  */
 export async function listInstalledPacks(
-  root: InstalledPacksRoot
+  root: InstalledPacksRoot,
+  keys?: ReadonlySet<string>
 ): Promise<{ packs: InstalledPack[]; errors: InstalledPackListError[] }> {
+  if (root.kind === 'captured') {
+    const capture = await openWorkflowSource(
+      root.anchor.root,
+      root.anchor.digest,
+      root.anchor.config
+    );
+    if (capture.manifest.version === 3) {
+      const records = capture.manifest.installed_plugins.filter(
+        record => keys === undefined || keys.has(record.key)
+      );
+      await verifyIndexedUnits(
+        root.anchor.root,
+        capture.manifest,
+        records.map(record => installedSourceUnit(record.key))
+      );
+      return {
+        packs: records.map(record => ({
+          owner: record.id.split('/')[0],
+          name: record.manifest.name,
+          key: record.key,
+          dir: join(root.anchor.root, installedSourceUnit(record.key)),
+          manifest: record.manifest,
+          record,
+        })),
+        errors: [],
+      };
+    }
+  }
   return root.kind === 'receipts'
     ? listReceiptPacks(root.pluginsDir)
-    : listCapturedPacks(root.captureRoot);
+    : listCapturedPacks(root.anchor.root, keys);
 }
 
 async function listReceiptPacks(
@@ -145,7 +169,8 @@ async function listReceiptPacks(
 }
 
 async function listCapturedPacks(
-  captureRoot: string
+  captureRoot: string,
+  selectedKeys?: ReadonlySet<string>
 ): Promise<{ packs: InstalledPack[]; errors: InstalledPackListError[] }> {
   const packs: InstalledPack[] = [];
   const errors: InstalledPackListError[] = [];
@@ -158,6 +183,7 @@ async function listCapturedPacks(
     throw error;
   }
   for (const key of keys.sort()) {
+    if (selectedKeys !== undefined && !selectedKeys.has(key)) continue;
     const dir = join(installedDir, key);
     const separator = key.indexOf('.');
     try {
@@ -182,19 +208,24 @@ export async function packagedWorkflowDirectory(
   roots: WorkflowSourceRoots,
   owner: WorkflowResourceOwner
 ): Promise<string | null> {
+  const verifiedFiles = await assertWorkflowSourceIntegrity(roots, {
+    units: [sourceUnitForOwner(owner)],
+  });
+  const available = (directory: string) =>
+    sourceDirectoryHasFiles(verifiedFiles, directory) ? directory : null;
   switch (owner.source) {
     case 'project':
       return roots.project === null
         ? null
-        : join(roots.project, '.archon', 'workflows', owner.pack, owner.workflow);
+        : available(join(roots.project, '.archon', 'workflows', owner.pack, owner.workflow));
     case 'global':
-      return join(roots.globalWorkflows, owner.pack, owner.workflow);
+      return available(join(roots.globalWorkflows, owner.pack, owner.workflow));
     case 'bundled':
-      return join(roots.bundledWorkflows, owner.pack, owner.workflow);
+      return available(join(roots.bundledWorkflows, owner.pack, owner.workflow));
     case 'installed': {
-      const { packs, errors } = await listInstalledPacks(roots.installed);
+      const { packs, errors } = await listInstalledPacks(roots.installed, new Set([owner.pack]));
       if (roots.installed.kind === 'captured') {
-        const packPath = join(roots.installed.captureRoot, INSTALLED_SCOPE_DIR, owner.pack);
+        const packPath = join(roots.installed.anchor.root, installedSourceUnit(owner.pack));
         const failure = errors.find(error => error.path === packPath);
         if (failure) throw failure.cause ?? new Error(failure.message);
       }

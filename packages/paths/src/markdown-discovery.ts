@@ -2,7 +2,7 @@
  * Discovery of command and workflow markdown files under `.archon/` folders.
  */
 
-import { join, basename } from 'path';
+import { join, basename, sep } from 'path';
 import { readdir, realpath, stat } from 'fs/promises';
 
 /**
@@ -58,12 +58,29 @@ export async function findMarkdownFilesRecursive(
   return findMarkdownFilesRecursiveImpl(rootPath, relativePath, options, new Set<string>());
 }
 
+const MAX_COMMAND_DEPTH = 1;
+
+function isSkippedMarkdownName(name: string): boolean {
+  return name.startsWith('.') || name === 'node_modules';
+}
+
+/** Apply command discovery's name and depth rules to an inventory-relative path. */
+export function commandNameForRelativePath(path: string): string | undefined {
+  const segments = path.split(sep);
+  if (segments.length > MAX_COMMAND_DEPTH + 1 || segments.some(isSkippedMarkdownName)) return;
+  const filename = segments.at(-1);
+  return filename?.endsWith('.md') ? basename(filename, '.md') : undefined;
+}
+
 /** Discover executable commands in one scope: one folder deep, first name wins. */
 export async function findCommandFiles(
   rootPath: string,
   onMissing?: (path: string, error: unknown) => void
 ): ReturnType<typeof findMarkdownFilesRecursive> {
-  const entries = await findMarkdownFilesRecursive(rootPath, '', { maxDepth: 1, onMissing });
+  const entries = await findMarkdownFilesRecursive(rootPath, '', {
+    maxDepth: MAX_COMMAND_DEPTH,
+    onMissing,
+  });
   const seen = new Set<string>();
   return entries.filter(({ commandName }) => {
     if (seen.has(commandName)) return false;
@@ -128,7 +145,7 @@ async function findMarkdownFilesRecursiveImpl(
   const entries = await readMarkdownDirectory(fullPath, visitedRealPaths, options?.onMissing);
 
   for (const entry of entries) {
-    if (entry.name.startsWith('.') || entry.name === 'node_modules') {
+    if (isSkippedMarkdownName(entry.name)) {
       continue;
     }
 

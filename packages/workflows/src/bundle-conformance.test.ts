@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { providerRegistry } from '@archon/providers';
 import { afterAll, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -59,12 +60,14 @@ test('source and binary captures contain exactly the same bundled files and byte
   const project = join(root, 'project');
   await mkdir(project);
   const source = await captureWorkflowSource({
+    providers: providerRegistry,
     sourceRoot: project,
     captureRoot: join(root, 'source'),
   });
   binary = true;
   try {
     const binaryCapture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(root, 'binary'),
     });

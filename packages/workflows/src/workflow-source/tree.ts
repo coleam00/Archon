@@ -164,15 +164,9 @@ async function enterableDirectory(
 }
 
 /** Copy a listed tree into `to`. Empty directories are recreated too. */
-export async function copyListing(
-  listing: TreeListing,
-  to: string
-): Promise<{ files: number; bytes: number }> {
+export async function copyListing(listing: TreeListing, to: string): Promise<void> {
   for (const dir of listing.dirs) await mkdir(join(to, dir), { recursive: true });
-  let bytes = 0;
   for (const file of listing.files) {
     await copyFile(file.absPath, join(to, file.relPath));
-    bytes += file.size;
   }
-  return { files: listing.files.length, bytes };
 }

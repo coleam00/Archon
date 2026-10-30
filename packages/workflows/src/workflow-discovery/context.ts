@@ -6,8 +6,9 @@ import type { WorkflowParseContext } from './load-dir';
 /** What one `discoverWorkflows` call shares across its scopes. */
 export interface DiscoveryContext extends WorkflowParseContext {
   cwd: string | null;
+  workflowName?: string;
   roots: WorkflowSourceRoots;
-  /** The verified capture when `roots` are a run's frozen source. */
+  /** Authenticated capture and the payload files verified for this discovery. */
   capture: Awaited<ReturnType<typeof loadWorkflowSource>> | undefined;
   commandScan: CommandScanConfig;
   /**

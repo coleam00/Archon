@@ -2,11 +2,13 @@
 import { expect, test } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { capturedSourceRoots, DEFAULT_WORKFLOW_SOURCE_CONFIG } from './workflow-source';
+import { liveSourceRoots, DEFAULT_WORKFLOW_SOURCE_CONFIG } from './workflow-source';
 import { formatPackagedResourceReference } from './packaged-workflow';
 import { discoverScriptsForCwd, discoverScripts } from './script-discovery';
+
+import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 
 const track = trackTempRoots();
 for (const grouped of [false, true]) {
@@ -46,38 +48,88 @@ for (const grouped of [false, true]) {
   });
 }
 
-for (const source of ['project', 'global', 'bundled', 'installed'] as const) {
-  test(`selected ${source} packaged script ignores a dangling neighbor`, async () => {
+for (const source of ['project', 'global', 'installed'] as const) {
+  test(`selected live ${source} packaged script ignores a dangling neighbor`, async () => {
     const root = track(await mkdtemp(join(tmpdir(), 'packaged-links-')));
     const pack = source === 'installed' ? 'acme.pack' : 'pack';
     const packRoot =
       source === 'project'
         ? join(root, 'project', '.archon', 'workflows', pack)
         : source === 'installed'
-          ? join(root, 'installed', pack)
+          ? packTreePath(join(root, 'plugins'), 'acme/pack', 'a'.repeat(40))
           : join(root, source, 'workflows', pack);
     const dir = join(packRoot, 'deliver', 'scripts');
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'good.ts'), 'console.log("ok")');
+    await writeFile(
+      join(packRoot, 'deliver/workflow.yaml'),
+      'name: deliver\ndescription: Fixture\nnodes:\n  - id: run\n    bash: echo ok\n'
+    );
     await symlink(join(root, 'absent'), join(dir, 'unrelated.ts'));
-    if (source === 'installed')
+    if (source === 'installed') {
+      const manifest = {
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'pack',
+        description: 'Test',
+        entrypoints: { deliver: 'deliver/workflow.yaml' },
+      };
+      await writeFile(join(packRoot, 'archon-plugin.json'), JSON.stringify(manifest));
+      const receipt = receiptPath(join(root, 'plugins'), 'acme/pack');
+      await mkdir(dirname(receipt), { recursive: true });
       await writeFile(
-        join(packRoot, 'archon-plugin.json'),
+        receipt,
         JSON.stringify({
           schemaVersion: 1,
-          kind: 'workflow-pack',
-          name: 'pack',
-          description: 'Test',
-          entrypoints: { deliver: 'deliver/workflow.yaml' },
+          id: 'acme/pack',
+          commit: 'a'.repeat(40),
+          manifest,
+          installedAt: new Date(0).toISOString(),
         })
       );
-    const roots = capturedSourceRoots({
-      root,
-      digest: 'unused by script discovery',
-      config: DEFAULT_WORKFLOW_SOURCE_CONFIG,
-    });
+    }
+    const roots = {
+      ...liveSourceRoots(join(root, 'project'), DEFAULT_WORKFLOW_SOURCE_CONFIG, {
+        kind: 'receipts',
+        pluginsDir: join(root, 'plugins'),
+      }),
+      globalWorkflows: join(root, 'global/workflows'),
+      globalScripts: join(root, 'global/scripts'),
+      bundledWorkflows: join(root, 'bundled/workflows'),
+    };
     const name = formatPackagedResourceReference({ source, pack, workflow: 'deliver' }, 'good');
     const scripts = await discoverScriptsForCwd(root, roots, new Set([name]));
     expect(scripts.get(name)?.path).toBe(join(dir, 'good.ts').replaceAll('\\', '/'));
   });
 }
+
+test('a verified legacy bundled capture still ignores an unrelated dangling neighbor', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'legacy-bundled-links-')));
+  const dir = join(root, 'bundled/workflows/pack/deliver/scripts');
+  await mkdir(dir, { recursive: true });
+  const content = 'console.log("ok")';
+  await writeFile(join(dir, 'good.ts'), content);
+  await symlink(join(root, 'absent'), join(dir, 'unrelated.ts'));
+  const { digestEntries, foldDigest, writeManifest } = await import('./workflow-source/manifest');
+  const { BUNDLED_VERSION } = await import('@archon/paths/bundled-build');
+  const digest = foldDigest(await digestEntries(root));
+  await writeManifest(root, {
+    version: 1,
+    engine_version: BUNDLED_VERSION,
+    origin: root,
+    captured_at: new Date(0).toISOString(),
+    digest,
+    file_count: 1,
+    byte_count: Buffer.byteLength(content),
+    scopes: ['bundled'],
+    source_config: DEFAULT_WORKFLOW_SOURCE_CONFIG,
+  });
+  const { capturedSourceRoots } = await import('./workflow-source');
+  const roots = capturedSourceRoots({ root, digest, config: DEFAULT_WORKFLOW_SOURCE_CONFIG });
+  const name = formatPackagedResourceReference(
+    { source: 'bundled', pack: 'pack', workflow: 'deliver' },
+    'good'
+  );
+  const scripts = await discoverScriptsForCwd(root, roots, new Set([name]));
+  expect(scripts.get(name)?.path).toBe(join(dir, 'good.ts').replaceAll('\\', '/'));
+});

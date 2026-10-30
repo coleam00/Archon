@@ -81,6 +81,7 @@ export {
   getWorkflowFolderSearchPaths,
   findMarkdownFilesRecursive,
   findCommandFiles,
+  commandNameForRelativePath,
 } from './markdown-discovery';
 
 // Detached workflow install identity

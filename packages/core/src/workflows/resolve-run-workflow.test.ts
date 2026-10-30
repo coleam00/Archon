@@ -81,6 +81,7 @@ describe('resolveRunWorkflow', () => {
     const source = join(root, 'source');
     await writeWorkflow(source, 'Captured graph');
     const capture = await captureWorkflowSource({
+      providers: workflowDeps().providers,
       sourceRoot: source,
       captureRoot: join(root, 'capture'),
     });
@@ -104,6 +105,7 @@ describe('resolveRunWorkflow', () => {
     const source = join(root, 'source');
     await writeWorkflow(source, 'Live graph must not substitute');
     const capture = await captureWorkflowSource({
+      providers: workflowDeps().providers,
       sourceRoot: source,
       captureRoot: join(root, 'capture'),
     });

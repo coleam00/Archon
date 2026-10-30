@@ -7,13 +7,24 @@
  * internal keys. Runtime is inferred from the extension: .ts/.js -> bun,
  * .py -> uv.
  */
+import {
+  MAX_SCRIPT_DISCOVERY_DEPTH,
+  getRuntimeForExtension,
+  type ScriptRuntime,
+} from './script-file';
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { createHash, randomUUID } from 'crypto';
 import { join, basename, dirname, extname } from 'path';
 import { createLogger, getArchonHome } from '@archon/paths';
 import { BUNDLED_SCRIPT_PACKS, isBinaryBuild } from './defaults/bundled-defaults';
 import { collectInstalledBundleSources } from './defaults/bundle-inventory';
-import { listInstalledPacks, liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import {
+  listInstalledPacks,
+  liveSourceRoots,
+  verifyWorkflowSourceResources,
+  sourceDirectoryHasFiles,
+  type WorkflowSourceRoots,
+} from './workflow-source';
 import {
   formatPackagedResourceReference,
   isValidWorkflowFolderSegment,
@@ -34,8 +45,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/** Supported script runtime */
-export type ScriptRuntime = 'bun' | 'uv';
+export type { ScriptRuntime } from './script-file';
 
 /** A discovered script with its metadata */
 export interface ScriptDefinition {
@@ -43,32 +53,6 @@ export interface ScriptDefinition {
   path: string;
   runtime: ScriptRuntime;
 }
-
-/** Supported file extensions and their runtimes */
-const EXTENSION_RUNTIME_MAP: Record<string, ScriptRuntime> = {
-  '.ts': 'bun',
-  '.js': 'bun',
-  '.py': 'uv',
-};
-
-/**
- * Derive the runtime from a file extension.
- * Returns undefined for unknown extensions.
- */
-function getRuntimeForExtension(ext: string): ScriptRuntime | undefined {
-  return EXTENSION_RUNTIME_MAP[ext];
-}
-
-/**
- * Maximum subfolder depth we descend into when scanning scripts.
- *
- * `1` matches the workflows/commands convention: allow one level of
- * grouping (e.g. `.archon/scripts/triage/foo.ts`) but no nested folders.
- * We stop at 1 deliberately — deeper nesting has never been part of the
- * documented convention and adds no organizational value, just routing
- * ambiguity when two basenames collide across folders.
- */
-const MAX_SCRIPT_DISCOVERY_DEPTH = 1;
 
 function selectedScriptRuntime(
   entry: string,
@@ -315,7 +299,16 @@ async function discoverInstalledPackScripts(
   onMissing?: (path: string, error: unknown) => void
 ): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
-  const listed = await listInstalledPacks(roots.installed);
+  const keys =
+    requestedNames &&
+    new Set(
+      [...requestedNames].flatMap(name => {
+        const reference = parsePackagedResourceReference(name);
+        return reference?.owner.source === 'installed' ? [reference.owner.pack] : [];
+      })
+    );
+  if (keys?.size === 0) return scripts;
+  const listed = await listInstalledPacks(roots.installed, keys);
   if (roots.installed.kind === 'captured') {
     const failure = listed.errors[0];
     if (failure) throw failure.cause ?? new Error(failure.message);
@@ -440,36 +433,38 @@ export async function discoverScriptsForCwd(
   // from, not the workspace it acts on. Omitting `sourceRoots` reads live off `cwd`,
   // which is both the in-place case and the pre-capture behavior.
   const roots = sourceRoots ?? liveSourceRoots(cwd);
+  const verifiedFiles = await verifyWorkflowSourceResources(
+    roots,
+    requestedNames && [...requestedNames],
+    'script'
+  );
+  const hasFiles = (directory: string) => sourceDirectoryHasFiles(verifiedFiles, directory);
   const sharedNames =
     requestedNames &&
     new Set([...requestedNames].filter(name => !parsePackagedResourceReference(name)));
   const sharedScripts = (dir: string) =>
-    sharedNames?.size === 0
+    sharedNames?.size === 0 || !hasFiles(dir)
       ? Promise.resolve(new Map<string, ScriptDefinition>())
       : discoverScripts(dir, sharedNames, onMissing);
-  const bundledPackagedScripts = await discoverBundledPackagedScripts(
-    roots,
-    requestedNames,
-    onMissing
-  );
+  const bundledPackagedScripts = hasFiles(roots.bundledWorkflows)
+    ? await discoverBundledPackagedScripts(roots, requestedNames, onMissing)
+    : new Map<string, ScriptDefinition>();
   const homeScripts = await sharedScripts(roots.globalScripts);
-  const homePackagedScripts = await discoverPackagedScripts(
-    roots.globalWorkflows,
-    'global',
-    requestedNames,
-    onMissing
-  );
+  const homePackagedScripts = hasFiles(roots.globalWorkflows)
+    ? await discoverPackagedScripts(roots.globalWorkflows, 'global', requestedNames, onMissing)
+    : new Map<string, ScriptDefinition>();
   const repoScripts = roots.project
     ? await sharedScripts(join(roots.project, '.archon', 'scripts'))
     : new Map<string, ScriptDefinition>();
-  const repoPackagedScripts = roots.project
-    ? await discoverPackagedScripts(
-        join(roots.project, '.archon', 'workflows'),
-        'project',
-        requestedNames,
-        onMissing
-      )
-    : new Map<string, ScriptDefinition>();
+  const repoPackagedScripts =
+    roots.project && hasFiles(roots.project)
+      ? await discoverPackagedScripts(
+          join(roots.project, '.archon', 'workflows'),
+          'project',
+          requestedNames,
+          onMissing
+        )
+      : new Map<string, ScriptDefinition>();
 
   // Internal packaged keys include their scope, so included workflows retain
   // exact ownership. Legacy shared scripts keep repo-over-home precedence.

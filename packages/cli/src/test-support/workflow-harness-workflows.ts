@@ -1,3 +1,4 @@
+import { capturedSourceRoots } from '@archon/workflows/run-source';
 /** Fakes for the `@archon/workflows` engine: discovery, source capture, execution and dry runs. */
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { afterAll, mock } from 'bun:test';
@@ -28,24 +29,14 @@ export function recordCapturedSourceCalls<T>(body: (calls: string[]) => Promise<
 /** The full owned roots shape a continuation carries — shared between the prepare and
  *  continuation mocks so the two cannot drift on which fields a `ResolvedContinuation`
  *  promises its consumer. */
-export const CAPTURED_SOURCE_ROOTS: WorkflowRunSource.WorkflowSourceRoots = {
-  project: '/test/capture/project',
-  globalWorkflows: '/test/capture/global/workflows',
-  globalCommands: '/test/capture/global/commands',
-  globalScripts: '/test/capture/global/scripts',
-  bundledWorkflows: '/test/capture/bundled/workflows',
-  bundledCommands: '/test/capture/bundled/commands/defaults',
-  installed: { kind: 'captured', captureRoot: '/test/capture' },
-  kind: 'captured',
-  anchor: {
-    root: '/test/capture',
-    digest: 'test-digest',
-    config: {
-      load_default_workflows: true,
-      load_default_commands: true,
-    },
+export const CAPTURED_SOURCE_ROOTS: WorkflowRunSource.WorkflowSourceRoots = capturedSourceRoots({
+  root: '/test/capture',
+  digest: 'test-digest',
+  config: {
+    load_default_workflows: true,
+    load_default_commands: true,
   },
-};
+});
 export const mockResolveContinuationWorkflow = mock<
   typeof WorkflowRunSource.resolveContinuationWorkflow
 >(
@@ -79,6 +70,7 @@ mock.module('@archon/workflows/run-resume', () => ({
   hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 mock.module('@archon/workflows/run-source', () => ({
+  capturedSourceRoots,
   withCapturedSource: mock((body: Parameters<typeof withObservableCapturedSource>[1]) =>
     withObservableCapturedSource(capturedSourceRecorders.getStore() ?? [], body)
   ),

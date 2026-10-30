@@ -7,6 +7,7 @@ import {
   getWorkflowFolderSearchPaths,
   findMarkdownFilesRecursive,
   findCommandFiles,
+  commandNameForRelativePath,
 } from './markdown-discovery';
 import { usePathEnvSnapshot, removeTempTree } from './test-utils';
 
@@ -42,6 +43,36 @@ describe('markdown-discovery', () => {
       const paths = getWorkflowFolderSearchPaths();
       expect(paths).toEqual(['.archon/workflows']);
     });
+  });
+
+  test('inventory command selection matches disk discovery', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'archon-command-inventory-'));
+    const files = [
+      'root.md',
+      'group/check.md',
+      'group/deeper/hidden.md',
+      '.hidden.md',
+      '.hidden/check.md',
+      'node_modules/check.md',
+      'group/readme.txt',
+    ];
+    try {
+      for (const path of files) {
+        await mkdir(join(root, ...path.split('/').slice(0, -1)), { recursive: true });
+        await writeFile(join(root, path), 'command');
+      }
+      const selected = files.flatMap(file => {
+        const relativePath = join(...file.split('/'));
+        const commandName = commandNameForRelativePath(relativePath);
+        return commandName === undefined ? [] : [{ commandName, relativePath }];
+      });
+      expect(selected.sort((a, b) => a.commandName.localeCompare(b.commandName))).toEqual(
+        (await findCommandFiles(root)).sort((a, b) => a.commandName.localeCompare(b.commandName))
+      );
+      expect(selected.map(file => file.commandName).sort()).toEqual(['check', 'root']);
+    } finally {
+      await removeTempTree(root);
+    }
   });
 
   test('findCommandFiles excludes markdown directly inside node_modules', async () => {

@@ -48,7 +48,7 @@ import type {
   LoopGroupNode,
 } from './schemas';
 import { findWorkflowLoadError } from './schemas/workflow';
-import { isIncludeDirective, isLoopGroupNode, isComposeFanOutNode } from './schemas';
+import { isComposeFanOutNode } from './schemas';
 import { validateDagStructure } from './loader/dag-structure';
 import {
   validateLoopGroupProseCompletion,
@@ -58,6 +58,7 @@ import {
 import { resolveWorkflow } from './graph-plan';
 import type { IncludeCommandContent } from './compiled-command';
 import { IncludeExpansionError } from './include/expansion-error';
+import { classifyStaticNode } from './include/static-nodes';
 import { instantiateResolvedInclude, type ExpandedInclude } from './include/inline';
 import {
   applyOutputRefRename,
@@ -79,6 +80,7 @@ export const INCLUDE_MAX_DEPTH = 3;
 /** One `expandWorkflowIncludes` call: its inputs and the workflows expanded so far. */
 interface IncludeExpansion {
   rawByName: Map<string, WorkflowDefinition>;
+  suspensionDefinitions: readonly WorkflowDefinition[];
   commandContents: ReadonlyMap<string, IncludeCommandContent>;
   loadErrors: readonly WorkflowLoadError[];
   memo: Map<string, ResolvedWorkflow>;
@@ -116,17 +118,21 @@ interface NodeListExpansion {
  * omits the map may still expand workflows without commands. Included command nodes fail
  * composition; included loop commands fail before a fresh AI turn but remain discoverable
  * so an already-paused loop can resume from its persisted read-once snapshot.
+ * `suspensionDefinitions` also supplies ordinary child declarations for the composed
+ * suspension proof, without expanding or validating their resources before child start.
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,
   commandContents?: ReadonlyMap<string, IncludeCommandContent>,
-  loadErrors: readonly WorkflowLoadError[] = []
+  loadErrors: readonly WorkflowLoadError[] = [],
+  suspensionDefinitions: readonly WorkflowDefinition[] = [...rawByName.values()]
 ): {
   workflows: Map<string, ResolvedWorkflow>;
   errors: WorkflowLoadError[];
 } {
   const expansion: IncludeExpansion = {
     rawByName,
+    suspensionDefinitions,
     commandContents: commandContents ?? new Map(),
     loadErrors,
     memo: new Map(),
@@ -285,17 +291,18 @@ function expandNodeList(
   };
 
   for (const node of nodes) {
-    if (isComposeFanOutNode(node)) {
-      expandComposeFanOut(expansion, list, node, [...stack, workflowName]);
-    } else if (isIncludeDirective(node)) {
-      expandIncludeDirective(expansion, list, node, [...stack, workflowName]);
-    } else if (isLoopGroupNode(node)) {
-      expandLoopGroupBody(expansion, list, node, workflowName, stack);
+    const classified = classifyStaticNode(node);
+    if (classified.kind === 'include') {
+      if (isComposeFanOutNode(classified.node)) {
+        expandComposeFanOut(expansion, list, classified.node, [...stack, workflowName]);
+      } else {
+        expandIncludeDirective(expansion, list, classified.node, [...stack, workflowName]);
+      }
+    } else if (classified.kind === 'group') {
+      expandLoopGroupBody(expansion, list, classified.node, workflowName, stack);
     } else {
-      // Already a private clone — `collapseWorkflowScope` cloned every node before
-      // writing this workflow's config onto it, so the second pass below can mutate
-      // it without reaching the raw parsed definition discovery still holds.
-      list.expandedNodes.push(node);
+      // collapseWorkflowScope already cloned these nodes, so reference binding can mutate them.
+      list.expandedNodes.push(classified.node);
     }
   }
   return bindIncludeRefs(list);
@@ -334,7 +341,7 @@ function expandComposeFanOut(
   const child = expandTarget(expansion, node, stack);
   const suspensionPaths = collectComposedSuspensionPaths(
     expansion.rawByName.get(node.include) ?? child,
-    [...expansion.rawByName.values()]
+    expansion.suspensionDefinitions
   );
   if (suspensionPaths.length > 0) {
     const details = suspensionPaths.map(path => `'${path.id}' (${path.reason})`).join(', ');

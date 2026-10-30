@@ -1540,6 +1540,7 @@ nodes:
     await writeFile(join(yamlDir, 'servers.json'), '{"captured":{"command":"example"}}');
     await discoverHome('claude');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: testDir,
       captureRoot: join(testDir, 'capture'),
     });
@@ -1588,6 +1589,7 @@ nodes:
     await writeFile(join(yamlDir, 'servers.json'), '{"home":{"command":"example"}}');
     await discoverHome('claude');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: testDir,
       captureRoot: join(testDir, 'capture'),
     });

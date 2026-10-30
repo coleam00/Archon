@@ -183,11 +183,13 @@ describe('installed packs in the catalog', () => {
       `name: ${REVIEW}\ndescription: Shadow\nnodes:\n  - id: wrong\n    bash: echo wrong\n`
     );
     const parent = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'parent'),
     });
     const installedFrom = await resolveChildInstalledPacks(runWith(parent, 'deploy').metadata);
     const child = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'child'),
       ...(installedFrom ? { installedFrom } : {}),
@@ -296,6 +298,7 @@ nodes:
 
     // Resume: the run captured its source, then the plugin was removed.
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'run-1'),
     });
@@ -311,11 +314,12 @@ nodes:
   test('a run resumes on the bytes it captured after the plugin is updated', async () => {
     await install(reviewKit(COMMIT_A, 'v1'));
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'run-1'),
     });
     expect(capture.manifest).toMatchObject({
-      version: 2,
+      version: 3,
       scopes: expect.arrayContaining(['installed']),
       installed_plugins: [{ key: 'acme.review-kit', id: ID, commit: COMMIT_A }],
     });
@@ -328,42 +332,63 @@ nodes:
     expect(resumed?.workflow.description).toBe('Review a change (v1)');
   });
 
-  test("a workflow: child takes its installed packs from the parent's capture", async () => {
-    await install(reviewKit(COMMIT_A, 'v1'));
-    const parent = await captureWorkflowSource({
-      sourceRoot: project,
-      captureRoot: join(home, 'runs', 'parent'),
-    });
-    await uninstall(ID, COMMIT_A);
-    await install(reviewKit(COMMIT_B, 'v2'));
+  test.each([2, 3] as const)(
+    'a workflow: child takes its installed packs from the parent v%s capture',
+    async version => {
+      await install(reviewKit(COMMIT_A, 'v1'));
+      const parent = await captureWorkflowSource({
+        providers: providerRegistry,
+        sourceRoot: project,
+        captureRoot: join(home, 'runs', 'parent'),
+      });
+      if (version === 2) {
+        const { digestEntries, foldDigest, writeManifest } = await import(
+          './workflow-source/manifest'
+        );
+        if (parent.manifest.version !== 3) throw new Error('Expected new capture');
+        const { units: _units, installed_plugins, ...header } = parent.manifest;
+        parent.manifest = {
+          ...header,
+          version: 2,
+          digest: foldDigest(await digestEntries(parent.anchor.root)),
+          installed_plugins: installed_plugins.map(({ manifest: _manifest, ...record }) => record),
+        };
+        parent.anchor = { ...parent.anchor, digest: parent.manifest.digest };
+        await writeManifest(parent.anchor.root, parent.manifest);
+      }
+      await uninstall(ID, COMMIT_A);
+      await install(reviewKit(COMMIT_B, 'v2'));
 
-    const installedFrom = await resolveChildInstalledPacks(runWith(parent, REVIEW).metadata);
-    const child = await captureWorkflowSource({
-      sourceRoot: project,
-      captureRoot: join(home, 'runs', 'child'),
-      ...(installedFrom ? { installedFrom } : {}),
-    });
-    expect(child.manifest).toMatchObject({
-      version: 2,
-      installed_plugins: [{ id: ID, commit: COMMIT_A }],
-    });
-    const { workflows } = await discoverWorkflowsWithConfig(
-      project,
-      loadConfig,
-      providerRegistry,
-      capturedSourceRoots(child.anchor)
-    );
-    expect(workflows.find(entry => entry.workflow.name === REVIEW)?.workflow.description).toBe(
-      'Review a change (v1)'
-    );
-  });
+      const installedFrom = await resolveChildInstalledPacks(runWith(parent, REVIEW).metadata);
+      const child = await captureWorkflowSource({
+        providers: providerRegistry,
+        sourceRoot: project,
+        captureRoot: join(home, 'runs', 'child'),
+        ...(installedFrom ? { installedFrom } : {}),
+      });
+      expect(child.manifest).toMatchObject({
+        version: 3,
+        installed_plugins: [{ id: ID, commit: COMMIT_A }],
+      });
+      const { workflows } = await discoverWorkflowsWithConfig(
+        project,
+        loadConfig,
+        providerRegistry,
+        capturedSourceRoots(child.anchor)
+      );
+      expect(workflows.find(entry => entry.workflow.name === REVIEW)?.workflow.description).toBe(
+        'Review a change (v1)'
+      );
+    }
+  );
 
-  test('a capture with no installed pack stays manifest version 1', async () => {
+  test('a capture without installed packs uses the authenticated index format', async () => {
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'run-1'),
     });
-    expect(capture.manifest.version).toBe(1);
+    expect(capture.manifest.version).toBe(3);
     expect(capture.manifest.scopes).not.toContain('installed');
   });
 });

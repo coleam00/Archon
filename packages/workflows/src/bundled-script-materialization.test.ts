@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { providerRegistry } from '@archon/providers';
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn, type Mock } from 'bun:test';
 import * as fs from 'fs/promises';
 import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from 'fs/promises';
@@ -141,6 +142,7 @@ describe('pack shared modules across source and binary distributions (#3251)', (
       expect(await execute(script, target)).toBe('shared-ok');
     }
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: join(root, 'capture'),
     });

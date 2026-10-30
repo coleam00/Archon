@@ -1137,6 +1137,7 @@ nodes:
       command_folder: 'team-commands',
     };
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: cwd,
       captureRoot: join(cwd, 'home', 'workflow-source', 'runs', 'legacy'),
       sourceConfig,

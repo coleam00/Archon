@@ -27,7 +27,8 @@ import {
   assertCapturedFilesPresent,
   isSourceReadFailure,
   liveSourceRoots,
-  loadWorkflowSource,
+  verifySelectedWorkflowSource,
+  sourceDirectoryHasFiles,
   workflowSourceConfigForRoots,
   type WorkflowSourceRoots,
 } from './workflow-source';
@@ -76,6 +77,8 @@ export async function discoverWorkflows(
      * is correct for every listing and in-place caller.
      */
     sourceRoots?: WorkflowSourceRoots;
+    /** V3 captured discovery verifies this target's namespace; omitted, the full catalog. */
+    workflowName?: string;
     /**
      * Names (never values) from `.archon/config.yaml`'s `env:` section, threaded from
      * `discoverWorkflowsWithConfig` — live or from a frozen capture's recorded source
@@ -89,9 +92,14 @@ export async function discoverWorkflows(
     cwd,
     roots,
     providers: options.providers,
+    workflowName:
+      options.workflowName ?? (roots.kind === 'captured' ? roots.workflowName : undefined),
     capture:
       roots.kind === 'captured'
-        ? await loadWorkflowSource(roots.anchor.root, roots.anchor.digest, roots.anchor.config)
+        ? await verifySelectedWorkflowSource(
+            roots.anchor,
+            options.workflowName ?? roots.workflowName
+          )
         : undefined,
     // Names the exec env-read checker treats as "supplied": .archon/.env + ~/.archon/.env
     // (read fresh, not from the process's full ambient environment — see
@@ -111,12 +119,21 @@ export async function discoverWorkflows(
   // can never inherit the bundled file's warnings (see ParsedWorkflowFile).
   const workflowsByFile: ScopeFiles = new Map();
 
-  if (options.loadDefaults !== false) await loadBundledScope(context, workflowsByFile);
-  await loadGlobalScope(context, workflowsByFile);
+  if (
+    options.loadDefaults !== false &&
+    sourceDirectoryHasFiles(context.capture?.verifiedFiles, roots.bundledWorkflows)
+  )
+    await loadBundledScope(context, workflowsByFile);
+  if (sourceDirectoryHasFiles(context.capture?.verifiedFiles, roots.globalWorkflows))
+    await loadGlobalScope(context, workflowsByFile);
   // Skipped when cwd is null — surfaces bundled + home scopes only, which is the right answer
   // for callers without a project context (e.g. UI listing workflows before any codebase is registered).
   if (cwd === null) return finishDiscovery(context, workflowsByFile, 'no_project_context');
-  await loadProjectScope(context, cwd, workflowsByFile);
+  if (
+    roots.project !== null &&
+    sourceDirectoryHasFiles(context.capture?.verifiedFiles, roots.project)
+  )
+    await loadProjectScope(context, cwd, workflowsByFile);
   return finishDiscovery(context, workflowsByFile);
 }
 
@@ -165,7 +182,12 @@ async function finishDiscovery(
     },
     'workflows_discovery_completed'
   );
-  return { workflows, support: installed.support, errors: allErrors };
+  return {
+    workflows,
+    support: installed.support,
+    suspensionDefinitions: [...legacy.suspensionDefinitions, ...installed.suspensionDefinitions],
+    errors: allErrors,
+  };
 }
 
 /**
@@ -197,7 +219,9 @@ export async function discoverWorkflowsWithConfig(
    * whether the bundled scope counts at all — and a resume must use the ones in force
    * when the capture was taken, not the target's.
    */
-  sourceRoots?: WorkflowSourceRoots
+  sourceRoots?: WorkflowSourceRoots,
+  /** Optional target for independently verified v3 captured discovery. */
+  workflowName?: string
 ): Promise<WorkflowLoadResult> {
   const sourceConfig = sourceRoots && workflowSourceConfigForRoots(sourceRoots);
   let loadDefaults = sourceConfig?.load_default_workflows ?? true;
@@ -223,5 +247,6 @@ export async function discoverWorkflowsWithConfig(
     loadDefaultCommands,
     envVarNames,
     sourceRoots,
+    workflowName,
   });
 }

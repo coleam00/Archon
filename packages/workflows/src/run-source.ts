@@ -230,7 +230,7 @@ export async function resolveContinuationWorkflow(
   // is what made a repo with a custom `commands.folder` re-discover a different DAG.
   const capture = await resolveRunSourceCapture(run.metadata);
   if (!capture) return undefined; // predates capture — the caller keeps live behavior
-  const roots = capturedSourceRoots(capture.anchor);
+  const roots = capturedSourceRoots(capture.anchor, run.workflow_name);
 
   const { workflows, errors } = await discoverWorkflowsWithConfig(
     cwd,
@@ -316,7 +316,10 @@ export async function finalizeWorkflowSource(
   return {
     ...prepared,
     anchor,
-    roots: capturedSourceRoots(anchor),
+    roots: capturedSourceRoots(
+      anchor,
+      prepared.roots.kind === 'captured' ? prepared.roots.workflowName : undefined
+    ),
   };
 }
 
@@ -353,7 +356,7 @@ export function preparedWorkflowSourceRecord(
  * capture has no established executable source.
  */
 export async function prepareWorkflowSource(
-  deps: Pick<WorkflowDeps, 'loadConfig'>,
+  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>,
   opts: {
     /** Directory to freeze. */
     sourceRoot: string;
@@ -392,6 +395,7 @@ export async function prepareWorkflowSource(
   // to `<workflow-source>/runs/<id>` with a rename once the real path is known. The
   // bytes never change, so the digest taken here still describes the final capture.
   const capture = await captureWorkflowSource({
+    providers: deps.providers,
     sourceRoot: opts.sourceRoot,
     captureRoot: join(archonPaths.getArchonHome(), 'staged-source', runId),
     commandFolder: sourceConfig.command_folder,
@@ -582,7 +586,7 @@ async function restoreRecordedSource(
   if (recordedSource.source_config === undefined) {
     await pinSourceConfig(run, recordedSource, loaded);
   }
-  return { stopped: false, value: capturedSourceRoots(loaded.anchor) };
+  return { stopped: false, value: capturedSourceRoots(loaded.anchor, workflowRun.workflow_name) };
 }
 
 async function releaseUnreadableSource(
@@ -758,5 +762,5 @@ async function adoptPreparedSource(
     },
     'workflow.source_captured'
   );
-  return { stopped: false, value: capturedSourceRoots(sourceAnchor) };
+  return { stopped: false, value: capturedSourceRoots(sourceAnchor, workflowRun.workflow_name) };
 }

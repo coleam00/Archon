@@ -118,9 +118,12 @@ function isolatedSourceRoots(cwd: string): WorkflowSourceRoots {
  * policy, so the wrapper makes that one choice — the standard folders — on their behalf.
  */
 async function runFixtures(
-  options: Omit<RunFixturesOptions, 'sourceConfig'> & { sourceConfig?: WorkflowSourceConfig }
+  options: Omit<RunFixturesOptions, 'sourceConfig' | 'providers'> & {
+    sourceConfig?: WorkflowSourceConfig;
+  }
 ): Promise<FixtureReport> {
   return runFixturesFromSource({
+    providers: providerRegistry,
     ...options,
     sourceConfig: options.sourceConfig ?? DEFAULT_WORKFLOW_SOURCE_CONFIG,
     // Default to empty global/bundled scopes so a test cannot read the real ones; a test

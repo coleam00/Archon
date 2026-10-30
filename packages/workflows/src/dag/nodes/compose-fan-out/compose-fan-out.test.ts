@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { providerRegistry } from '@archon/providers';
 import { readNodeRecordEvent } from '../../../node-record-reader';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { ParentStatusReadError } from '../../../parent-status-read';
@@ -769,7 +770,11 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       'name: compose-blk\ndescription: original block\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo original"'
     );
     const captureRoot = join(testDir, 'capture');
-    const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    const capture = await captureWorkflowSource({
+      providers: providerRegistry,
+      sourceRoot: testDir,
+      captureRoot,
+    });
     const capturedBlock = join(captureRoot, 'project', '.archon', 'workflows', 'compose-blk.yaml');
     const store = createMockStore();
 

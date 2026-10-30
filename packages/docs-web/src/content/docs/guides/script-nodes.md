@@ -212,7 +212,7 @@ Keep output under the supplied `ARTIFACTS_DIR` or `STATE_DIR`, never beside a sc
 
 ### Frozen source integrity
 
-When a run uses captured source, Archon rechecks the full capture against the run's pinned digest and source-resolution settings before each named-script attempt, including retries, and before lookup or subprocess dispatch. Any change to the capture refuses the node before it starts. Inline scripts are already held in the workflow definition and do not read the capture at execution time.
+When a run uses captured source, Archon rechecks the index against the run's pinned digest and source-resolution settings, then verifies the required source units before each named-script attempt, including retries, and before lookup or subprocess dispatch. For v3 captures, a fault in an unrelated installed pack does not block the attempt. Legacy v1/v2 captures require a full-capture check. A fault in required source refuses the node before it starts. Inline scripts are already held in the workflow definition and do not read the capture at execution time.
 
 This is checkpoint detection, not sealing or sandboxing. A process running as the Archon user can change source after the check, and a parallel node that already started is not cancelled.
 

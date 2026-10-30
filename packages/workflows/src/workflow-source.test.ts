@@ -135,6 +135,7 @@ describe('captureWorkflowSource', () => {
     await writeFile(join(source, '.archon', 'scripts', 'check.ts'), 'console.log("ok")');
 
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -159,6 +160,7 @@ describe('captureWorkflowSource', () => {
     await writeFile(join(source, '.archon', 'scripts', 'data', 'fixture.json'), '{"a":1}');
 
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -176,6 +178,7 @@ describe('captureWorkflowSource', () => {
     const { source, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'original');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -202,11 +205,13 @@ describe('captureWorkflowSource', () => {
     const { source, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'v1');
     const first = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts, 'run-1'),
     });
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'v2');
     const second = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts, 'run-2'),
     });
@@ -226,6 +231,7 @@ describe('captureWorkflowSource', () => {
     await symlink(outside, join(source, '.archon', 'commands', 'linked.md'));
 
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -246,6 +252,7 @@ describe('captureWorkflowSource', () => {
     await writeFile(join(source, '.archon', 'scripts', 'node_modules', 'dep', 'i.js'), 'dep();');
 
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -278,6 +285,7 @@ describe('captureWorkflowSource', () => {
     );
 
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -291,6 +299,7 @@ describe('captureWorkflowSource', () => {
     const empty = join(root, 'empty');
     await mkdir(empty, { recursive: true });
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: empty,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -318,6 +327,7 @@ describe('captureWorkflowSource', () => {
     await symlink(realCommands, join(sourceRoot, '.archon', 'commands'), 'dir');
 
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -344,7 +354,7 @@ describe('captureWorkflowSource', () => {
     await writeFile(`${captureRoot}.partial`, 'in the way');
 
     await expect(
-      captureWorkflowSource({ sourceRoot: source, captureRoot })
+      captureWorkflowSource({ providers: providerRegistry, sourceRoot: source, captureRoot })
     ).resolves.not.toBeNull();
     // (rm -f clears the blocker, so this proves the staging path is reclaimed rather
     // than left to poison the next capture.)
@@ -357,13 +367,13 @@ describe('captureWorkflowSource', () => {
     const { source, runArtifacts } = await createSandbox();
     const captureRoot = captureRootIn(runArtifacts);
     await writeFile(join(source, '.archon', 'commands', 'gone.md'), 'old');
-    await captureWorkflowSource({ sourceRoot: source, captureRoot });
+    await captureWorkflowSource({ providers: providerRegistry, sourceRoot: source, captureRoot });
 
     await rm(join(source, '.archon', 'commands', 'gone.md'));
     await writeFile(join(source, '.archon', 'commands', 'new.md'), 'new');
-    await captureWorkflowSource({ sourceRoot: source, captureRoot });
+    await captureWorkflowSource({ providers: providerRegistry, sourceRoot: source, captureRoot });
 
-    expect((await loadWorkflowSource(captureRoot)).manifest.version).toBe(1);
+    expect((await loadWorkflowSource(captureRoot)).manifest.version).toBe(3);
     await expect(
       readFile(join(captureRoot, 'project/.archon/commands/gone.md'), 'utf-8')
     ).rejects.toThrow();
@@ -407,6 +417,7 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
 
     try {
       const before = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: source,
         captureRoot: captureRootIn(runArtifacts, 'before'),
       });
@@ -416,6 +427,7 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       await mkdir(bundledDir, { recursive: true });
       await writeFile(bundledFile, 'name: late-bundled-edit\n');
       const added = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: source,
         captureRoot: captureRootIn(runArtifacts, 'added'),
       });
@@ -425,6 +437,7 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       // An edit in place: same path, new bytes. Size and mtime are what catch this.
       await writeFile(bundledFile, 'name: late-bundled-edit\ndescription: edited\n');
       const edited = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: source,
         captureRoot: captureRootIn(runArtifacts, 'edited'),
       });
@@ -436,11 +449,15 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       // And a removal.
       await removeTempTree(bundledDir);
       const removed = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: source,
         captureRoot: captureRootIn(runArtifacts, 'removed'),
       });
       await expect(readFile(capturedAt(removed), 'utf-8')).rejects.toThrow();
-      expect(removed.manifest.digest).toBe(before.manifest.digest);
+      if (before.manifest.version !== 3 || removed.manifest.version !== 3) {
+        throw new Error('Expected indexed captures');
+      }
+      expect(removed.manifest.units).toEqual(before.manifest.units);
     } finally {
       await removeTempTree(bundledDir);
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
@@ -501,6 +518,7 @@ describe('resolving against a capture instead of the target', () => {
     const { source, target, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'from authoring');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -526,6 +544,7 @@ describe('resolving against a capture instead of the target', () => {
       'packaged body'
     );
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -544,6 +563,7 @@ describe('resolving against a capture instead of the target', () => {
     const { source, target, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'scripts', 'check.ts'), 'console.log(1)');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -569,6 +589,7 @@ describe('resolving against a capture instead of the target', () => {
     await writeFile(join(target, '.archon', 'commands', 'review.md'), 'TARGET VERSION');
 
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -607,6 +628,7 @@ describe("a run's own source versus a child's discovery root", () => {
     const { source, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'c.md'), 'x');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -638,6 +660,7 @@ describe("a run's own source versus a child's discovery root", () => {
     // child workflow and resuming the parent — permanently ineffective.
     await writeFile(join(source, '.archon', 'commands', 'c.md'), 'x');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -706,6 +729,7 @@ describe('the capture is authoritative, not advisory', () => {
       ].join('\n')
     );
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -726,6 +750,7 @@ describe('the capture is authoritative, not advisory', () => {
     const { source, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'original');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -752,6 +777,7 @@ describe('the capture is authoritative, not advisory', () => {
   test('a run whose capture no longer verifies refuses to resolve a source root', async () => {
     const { source, runArtifacts } = await createSandbox();
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -777,10 +803,14 @@ describe('the capture is authoritative, not advisory', () => {
     const { source, runArtifacts } = await createSandbox();
     const captureRoot = captureRootIn(runArtifacts);
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'original');
-    const original = await captureWorkflowSource({ sourceRoot: source, captureRoot });
+    const original = await captureWorkflowSource({
+      providers: providerRegistry,
+      sourceRoot: source,
+      captureRoot,
+    });
 
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'replacement');
-    await captureWorkflowSource({ sourceRoot: source, captureRoot });
+    await captureWorkflowSource({ providers: providerRegistry, sourceRoot: source, captureRoot });
 
     await expect(
       assertWorkflowSourceIntegrity(capturedSourceRoots(original.anchor))
@@ -790,6 +820,7 @@ describe('the capture is authoritative, not advisory', () => {
   test('a new run rejects source config drift even when the tree digest still matches', async () => {
     const { source, runArtifacts } = await createSandbox();
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
       sourceConfig: DEFAULT_WORKFLOW_SOURCE_CONFIG,
@@ -829,6 +860,7 @@ describe('the capture is authoritative, not advisory', () => {
       command_folder: 'team-commands',
     };
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
       sourceConfig,
@@ -867,6 +899,7 @@ describe('the capture is authoritative, not advisory', () => {
     const { source, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'x');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
@@ -887,13 +920,14 @@ describe('the capture is authoritative, not advisory', () => {
     const { source, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'x');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
     });
 
     await recordSelectedWorkflow(capture.anchor.root, 'chosen-flow');
 
-    // The manifest is outside the digest, so naming the selection cannot invalidate it.
+    // The diagnostic selection stamp is outside the header commitment.
     const reloaded = await loadWorkflowSource(capture.anchor.root);
     expect(reloaded.manifest.workflow_name).toBe('chosen-flow');
     expect(reloaded.manifest.digest).toBe(capture.manifest.digest);
@@ -909,6 +943,7 @@ describe("the source's own settings travel with its bytes", () => {
     await writeFile(join(source, 'team-commands', 'shipit.md'), 'ship it');
 
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
       commandFolder: 'team-commands',
@@ -938,6 +973,7 @@ describe("the source's own settings travel with its bytes", () => {
     await mkdir(join(source, 'team-commands'), { recursive: true });
     await writeFile(join(source, 'team-commands', 'shipit.md'), 'ship it');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
       commandFolder: 'team-commands',
@@ -964,6 +1000,7 @@ describe('continuing a run resolves with the settings it froze', () => {
     await mkdir(join(source, 'team-commands'), { recursive: true });
     await writeFile(join(source, 'team-commands', 'shipit.md'), 'ship it');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: source,
       captureRoot: captureRootIn(runArtifacts),
       commandFolder: 'team-commands',
@@ -1076,6 +1113,7 @@ describe('a capture is adopted or reclaimed, whichever way the caller leaves', (
 test('an unreadable capture directory remains a typed read failure with its cause', async () => {
   const { source, runArtifacts } = await createSandbox();
   const capture = await captureWorkflowSource({
+    providers: providerRegistry,
     sourceRoot: source,
     captureRoot: captureRootIn(runArtifacts),
   });
@@ -1099,6 +1137,7 @@ test('an unreadable captured file preserves the structural type and cause', asyn
   const { source, runArtifacts } = await createSandbox();
   await writeFile(join(source, '.archon', 'commands', 'review.md'), 'review');
   const capture = await captureWorkflowSource({
+    providers: providerRegistry,
     sourceRoot: source,
     captureRoot: captureRootIn(runArtifacts),
   });

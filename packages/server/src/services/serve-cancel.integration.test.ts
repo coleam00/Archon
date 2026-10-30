@@ -6,18 +6,29 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileAsync } from '@archon/git';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { z } from 'zod';
+import { workflowEventSchema } from '../routes/schemas/workflow.schemas';
 
 const trackTempRoot = trackTempRoots();
-// Long enough that a cancel reaches the first run before its grandchild would finish.
-const GRANDCHILD_LIFETIME_MS = 8_000;
+const SURVIVOR_OBSERVATION_MS = 8_000;
 // Two in-place runs in one checkout serialize, so each run gets its own project and source.
 const SOURCES = ['first', 'second'] as const;
 
-async function waitFor(check: () => boolean, what: string): Promise<void> {
+async function waitFor(check: () => boolean | Promise<boolean>, what: string): Promise<void> {
   const deadline = Date.now() + 30_000;
-  while (!check()) {
+  while (!(await check())) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${what}`);
     await Bun.sleep(25);
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
+    throw error;
   }
 }
 
@@ -25,15 +36,20 @@ test('cancelling a run under archon serve ends its script node tree and no other
   const root = trackTempRoot(await realpath(mkdtempSync(join(tmpdir(), 'archon-serve-cancel-'))));
   const home = join(root, 'home');
   const markers = join(root, 'markers');
+  const release = join(root, 'release');
   await mkdir(home);
   await mkdir(markers);
   await writeFile(join(home, 'config.yaml'), 'defaultAssistant: claude\n');
   const grandchild = join(root, 'grandchild.js');
   await writeFile(
     grandchild,
-    `const { writeFileSync } = require('node:fs');
-writeFileSync(process.argv[2], '');
-setTimeout(() => writeFileSync(process.argv[3], ''), ${String(GRANDCHILD_LIFETIME_MS)});\n`
+    `const { existsSync, writeFileSync } = require('node:fs');
+writeFileSync(process.argv[2], String(process.pid));
+const waiting = setInterval(() => {
+  if (!existsSync(process.argv[4])) return;
+  clearInterval(waiting);
+  setTimeout(() => writeFileSync(process.argv[3], ''), Number(process.argv[5]));
+}, 25);\n`
   );
   const modulePath = join(root, 'plugin.mjs');
   await writeFile(
@@ -65,7 +81,7 @@ nodes:
       import { spawn } from 'node:child_process';
       import { join } from 'node:path';
       const marker = name => join(${JSON.stringify(markers)}, process.env.WORKFLOW_ID + '.' + name);
-      const child = spawn(process.execPath, [${JSON.stringify(grandchild)}, marker('started'), marker('leaked')], { stdio: 'ignore' });
+      const child = spawn(process.execPath, [${JSON.stringify(grandchild)}, marker('started'), marker('leaked'), ${JSON.stringify(release)}, '${name === 'first' ? '0' : String(SURVIVOR_OBSERVATION_MS)}'], { stdio: 'ignore' });
       await new Promise(resolve => child.once('exit', resolve));
 `
     );
@@ -151,15 +167,27 @@ nodes:
       }, `the ${source} run to start its grandchild`);
       return runId as string;
     };
-    // The cancelled run starts first, so a grandchild that survived its cancel would write
-    // its marker before the other run's grandchild does.
+    // Both grandchildren wait for release so slow source capture cannot finish the
+    // first run before cancellation. A survivor writes immediately on release;
+    // the other run leaves an observation window before writing its own marker.
     const cancelledRun = await startRun('first');
     const otherRun = await startRun('second');
 
     const cancel = await fetch(`${base}/api/workflows/runs/${cancelledRun}/cancel`, {
       method: 'POST',
     });
-    expect(cancel.status).toBe(200);
+    expect({ status: cancel.status, body: await cancel.json() }).toMatchObject({ status: 200 });
+    // Cancellation returns before the executor observes it and terminates the node.
+    await waitFor(async () => {
+      serverAlive();
+      const response = await fetch(`${base}/api/workflows/runs/${cancelledRun}`);
+      expect(response.status).toBe(200);
+      const detail = z
+        .object({ events: workflowEventSchema.pick({ event_type: true }).array() })
+        .parse(await response.json());
+      return detail.events.some(event => event.event_type === 'node_failed');
+    }, 'the cancelled script node to stop');
+    await writeFile(release, '');
 
     await waitFor(() => leaked(otherRun), 'the other run to finish');
     expect(leaked(cancelledRun)).toBe(false);
@@ -168,6 +196,17 @@ nodes:
     server.kill('SIGKILL');
     await exited;
     // A surviving grandchild still writes into the temp tree; let it finish before removal.
-    if (!passed) await Bun.sleep(GRANDCHILD_LIFETIME_MS);
+    if (!passed) {
+      await writeFile(release, '');
+      await waitFor(
+        () =>
+          startedRuns().every(
+            runId =>
+              leaked(runId) ||
+              !processExists(Number(readFileSync(join(markers, `${runId}.started`), 'utf8')))
+          ),
+        'surviving grandchildren to finish writing'
+      );
+    }
   }
 }, 90_000);

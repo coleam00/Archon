@@ -1,3 +1,4 @@
+import { capturedSourceRoots } from '@archon/workflows/run-source';
 import {
   mockGetCurrentBranchStrict,
   createTestWorkflowHost,
@@ -132,17 +133,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       source_config: anchor.config,
     };
     writeFileSync(join(captureRoot, 'manifest.json'), JSON.stringify(manifest));
-    const roots: WorkflowRunSource.WorkflowSourceRoots = {
-      project: join(captureRoot, 'project'),
-      globalWorkflows: join(captureRoot, 'global', 'workflows'),
-      globalCommands: join(captureRoot, 'global', 'commands'),
-      globalScripts: join(captureRoot, 'global', 'scripts'),
-      bundledWorkflows: join(captureRoot, 'bundled', 'workflows'),
-      bundledCommands: join(captureRoot, 'bundled', 'commands', 'defaults'),
-      installed: { kind: 'captured', captureRoot },
-      kind: 'captured',
-      anchor,
-    };
+    const roots = capturedSourceRoots(anchor);
     return { runId, origin: opts.sourceRoot, manifest, anchor, roots };
   }
 

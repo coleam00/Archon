@@ -107,8 +107,8 @@ async function resolveCodeInvocation(
   if (isInlineScript(code)) {
     return scriptInvocation(node.runtime, { kind: 'inline', code }, node.deps);
   }
-  await assertWorkflowSourceIntegrity(ctx.sourceRoots);
-  const script = (await discoverScriptsForCwd(ctx.cwd, ctx.sourceRoots)).get(code);
+  await assertWorkflowSourceIntegrity(ctx.sourceRoots, { resources: [code], kind: 'script' });
+  const script = (await discoverScriptsForCwd(ctx.cwd, ctx.sourceRoots, new Set([code]))).get(code);
   if (!script) throw new Error(`Named script '${code}' was not found`);
   return scriptInvocation(script.runtime, { kind: 'file', path: script.path }, node.deps);
 }

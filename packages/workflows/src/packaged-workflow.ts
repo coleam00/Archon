@@ -1,7 +1,6 @@
 import type { WorkflowDefinition, WorkflowSource } from './schemas';
 import {
   isAgentNode,
-  isComposeFanOutNode,
   isExecNode,
   isIncludeDirective,
   isLoopGroupNode,
@@ -11,6 +10,7 @@ import {
 import { workflowSourceSchema } from './schemas/workflow';
 import { isValidCommandName } from './command-validation';
 import { resolveWorkflowName } from './router';
+import { walkStaticNodes } from './include/static-nodes';
 
 export const PACK_SHARED_DIRECTORY = '.shared';
 
@@ -156,20 +156,15 @@ export function qualifyPackReferences(
     }
     return targets?.[0];
   };
-  const visit = (nodes: WorkflowDefinition['nodes']): void => {
-    for (const node of nodes) {
-      if (isIncludeDirective(node) || isComposeFanOutNode(node)) {
-        node.include = resolve(node.include) ?? node.include;
-        continue;
-      }
-      if (isWorkflowNode(node)) {
-        const target = resolve(node.workflow);
-        if (target !== undefined && !entrypoints.has(target)) supportChildren.push(node.workflow);
-        else if (target !== undefined) node.workflow = target;
-      }
-      if (isLoopGroupNode(node)) visit(node.loop_group.nodes);
+  for (const edge of walkStaticNodes(workflow.nodes)) {
+    if (edge.kind === 'include') {
+      edge.node.include = resolve(edge.node.include) ?? edge.node.include;
+    } else if (isWorkflowNode(edge.node)) {
+      const target = resolve(edge.node.workflow);
+      if (target !== undefined && !entrypoints.has(target))
+        supportChildren.push(edge.node.workflow);
+      else if (target !== undefined) edge.node.workflow = target;
     }
-  };
-  visit(workflow.nodes);
+  }
   return { supportChildren, ambiguousReferences: [...ambiguousReferences] };
 }

@@ -16,7 +16,7 @@ import {
   type BundleSourceFile,
 } from '../defaults/bundle-inventory';
 import { parsePackagedResourceReference } from '../packaged-workflow';
-import type { DigestEntry } from './manifest';
+import type { SizedDigestEntry } from './manifest';
 import { BUNDLED_SCOPE_DIR } from './roots';
 import type { TreeFile, TreeListing } from './tree';
 
@@ -27,7 +27,7 @@ import type { TreeFile, TreeListing } from './tree';
  * scope directory, so the scope can be folded into a capture's digest without a second
  * pass over what was just written.
  */
-interface BundledFile extends DigestEntry {
+interface BundledFile extends SizedDigestEntry {
   readonly content: string | Buffer;
 }
 
@@ -48,7 +48,6 @@ export interface BundledScope {
   /** Capture-relative directories, including ones with no files of their own. */
   readonly dirs: readonly string[];
   readonly files: readonly BundledFile[];
-  readonly byteCount: number;
 }
 
 /** Accumulator shared by both branches that build a {@link BundledScope}. */
@@ -59,7 +58,6 @@ function bundledScopeBuilder(): {
 } {
   const dirs: string[] = [];
   const files: BundledFile[] = [];
-  let byteCount = 0;
 
   const seen = new Set<string>();
   const addDir = (relPath: string): void => {
@@ -77,10 +75,10 @@ function bundledScopeBuilder(): {
         relPath: join(BUNDLED_SCOPE_DIR, relPath),
         content,
         hash: createHash('sha256').update(content).digest('hex'),
+        size: Buffer.byteLength(content),
       });
-      byteCount += Buffer.byteLength(content);
     },
-    result: () => ({ dirs, files, byteCount }),
+    result: () => ({ dirs, files }),
   };
 }
 

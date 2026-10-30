@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { providerRegistry } from '@archon/providers';
 import * as runControl from './run-control';
 import { readNodeRecordEvent } from '../node-record-reader';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
@@ -1209,7 +1210,11 @@ describe('executeDagWorkflow -- authored run outcome (#2618)', () => {
     const captureRoot = join(testDir, 'capture');
     await mkdir(scriptsDir, { recursive: true });
     await writeFile(join(scriptsDir, 'result.ts'), 'console.log(\'{"green":false}\')');
-    const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    const capture = await captureWorkflowSource({
+      providers: providerRegistry,
+      sourceRoot: testDir,
+      captureRoot,
+    });
     await writeFile(
       join(captureRoot, 'project', '.archon', 'scripts', 'result.ts'),
       'console.log(\'{"green":true}\')'

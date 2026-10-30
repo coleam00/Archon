@@ -1,3 +1,4 @@
+import type { SuspensionWorkflow } from '../include/suspension';
 import { dirname } from 'path';
 import type {
   DeclaredWorkflowConfig,
@@ -7,9 +8,10 @@ import type {
   WorkflowLoadError,
   WorkflowWithSource,
 } from '../schemas';
-import { isIncludeDirective, isLoopGroupNode } from '../schemas';
+import { isIncludeDirective, isLoopGroupNode, isWorkflowNode } from '../schemas';
 import { collectLoopGroupSinkWarnings } from '../loader/parse-warnings';
 import { expandWorkflowIncludes } from '../include-expander';
+import { walkStaticNodes } from '../include/static-nodes';
 import { attachHomeMcpDirectory } from '../compiled-command';
 import { resolveIncludeBlockCommandContents } from './command-scan';
 import type { DiscoveryContext } from './context';
@@ -26,10 +28,25 @@ import { validateNamedScripts } from './named-scripts';
 export async function expandScope(
   context: DiscoveryContext,
   files: Map<string, ScopeFile>
-): Promise<{ workflows: WorkflowWithSource[]; errors: WorkflowLoadError[] }> {
+): Promise<{
+  workflows: WorkflowWithSource[];
+  errors: WorkflowLoadError[];
+  suspensionDefinitions: readonly SuspensionWorkflow[];
+}> {
   const errors: ParsedWorkflowLoadError[] = [];
+  let suspensionDefinitions: readonly WorkflowDefinition[] | undefined;
+  let duplicateNames: Set<string> | undefined;
+  if (context.capture?.manifest.version === 3 && context.workflowName !== undefined) {
+    retainSelectedClosure(files, context.workflowName, 'suspension');
+    duplicateNames = reportDuplicateNames(files, errors);
+    const duplicates = duplicateNames;
+    suspensionDefinitions = [...files.values()]
+      .filter(file => !duplicates.has(file.workflow.name))
+      .map(file => file.workflow);
+    retainSelectedClosure(files, context.workflowName, 'execution');
+  }
   await validateNamedScripts(context, files, errors);
-  const duplicateNames = reportDuplicateNames(files, errors);
+  duplicateNames ??= reportDuplicateNames(files, errors);
   attachGlobalMcpDirectories(files);
 
   const rawByName = new Map<string, WorkflowDefinition>();
@@ -52,7 +69,8 @@ export async function expandScope(
   const { workflows: expandedByName, errors: expansionErrors } = expandWorkflowIncludes(
     rawByName,
     commandContents,
-    [...context.allErrors, ...errors]
+    [...context.allErrors, ...errors],
+    suspensionDefinitions
   );
   // Re-key expansion errors from workflow name to the includer's real filename.
   errors.push(
@@ -70,7 +88,39 @@ export async function expandScope(
     if (!expanded) continue; // expansion failed for this workflow — drop it
     result.push(expandedWorkflow(file, expanded));
   }
-  return { workflows: result, errors };
+  return {
+    workflows: result,
+    errors,
+    suspensionDefinitions: suspensionDefinitions ?? result.map(file => file.workflow),
+  };
+}
+
+function retainSelectedClosure(
+  files: Map<string, ScopeFile>,
+  selected: string,
+  purpose: 'execution' | 'suspension'
+): void {
+  const required = new Set<string>();
+  const visit = (name: string): void => {
+    if (required.has(name)) return;
+    required.add(name);
+    for (const { workflow } of files.values()) {
+      if (workflow.name !== name) continue;
+      for (const edge of walkStaticNodes(workflow.nodes)) {
+        if (edge.kind === 'include') visit(edge.node.include);
+        else if (
+          purpose === 'suspension' &&
+          edge.kind === 'executable' &&
+          isWorkflowNode(edge.node)
+        )
+          visit(edge.node.workflow);
+      }
+    }
+  };
+  visit(selected);
+  for (const [filename, { workflow }] of files) {
+    if (!required.has(workflow.name)) files.delete(filename);
+  }
 }
 
 /**

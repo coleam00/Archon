@@ -264,7 +264,8 @@ async function resolveChildWorkflow(
       args.cwd,
       deps.loadConfig,
       deps.providers,
-      childSource.roots
+      childSource.roots,
+      childWorkflowName
     );
     childWorkflow = resolveWorkflowName(
       childWorkflowName,
