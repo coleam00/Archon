@@ -94,7 +94,13 @@ export async function executeOwnedRun(
         registerTerminationPreparation: prepare => lease.registerTerminationPreparation(prepare),
       },
       detachedProcessOwner: request.detachedProcessOwner,
-      teardown: signal => teardownOnSignal(launch, execution, ownedRunId, signal),
+      teardown: signal =>
+        teardownOnSignal(
+          launch,
+          execution,
+          lease.isStopRequested() ? undefined : ownedRunId,
+          signal
+        ),
     });
   };
 
@@ -173,7 +179,7 @@ export async function executeOwnedRun(
 async function teardownOnSignal(
   launch: ForegroundLaunch,
   execution: RunExecution,
-  runId: string,
+  runId: string | undefined,
   signal: string
 ): Promise<void> {
   // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
@@ -182,7 +188,7 @@ async function teardownOnSignal(
   if (container && !execution.containerPreserved) {
     try {
       await container.backend.destroy(container.envId);
-      await releaseRunResources(launch, runId);
+      if (runId) await releaseRunResources(launch, runId);
     } catch (destroyErr) {
       console.error(
         `\nWARNING: could not remove the isolation container on ${signal}: ` +
@@ -191,7 +197,8 @@ async function teardownOnSignal(
       );
     }
   }
-  if (!container && !execution.containerPreserved) await releaseRunResources(launch, runId);
+  if (runId && !container && !execution.containerPreserved)
+    await releaseRunResources(launch, runId);
   // Reclaim the staged capture for the same reason: the ownership `finally` —
   // whose whole premise is "whichever way we leave" — never runs. Ctrl-C during
   // isolation resolution or worktree creation would otherwise strand a complete
