@@ -537,6 +537,32 @@ test('resume reads an included command and global MCP config without scanning un
   }
 });
 
+test('child captures preserve empty directories in inherited installed units', async () => {
+  await put(join(project, '.archon/workflows/healthy.yaml'), workflow('healthy', first));
+  const directories = ['empty', 'run/scripts/output/nested'];
+  for (const directory of directories) {
+    await mkdir(
+      join(packTreePath(join(root, 'home/plugins'), 'acme/broken', 'a'.repeat(40)), directory),
+      { recursive: true }
+    );
+  }
+  const fixture = await pausedRun();
+  const child = await captureWorkflowSource({
+    sourceRoot: project,
+    captureRoot: join(root, 'child-capture'),
+    installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
+  });
+  for (const directory of directories) {
+    expect(await fs.readdir(join(child.anchor.root, 'installed/acme.broken', directory))).toEqual(
+      []
+    );
+  }
+  if (child.manifest.version !== 3 || fixture.capture.manifest.version !== 3)
+    throw new Error('Expected v3 captures');
+  expect(child.manifest.units).toEqual(fixture.capture.manifest.units);
+  await verifyWorkflowSourceUnits(child.anchor, ['installed/acme.broken']);
+});
+
 for (const copyFault of ['unreadable', 'tampered']) {
   test(`an inherited ${copyFault} fault during copying removes payloads and retains the original inventory`, async () => {
     await put(join(project, '.archon/workflows/healthy.yaml'), workflow('healthy', first));

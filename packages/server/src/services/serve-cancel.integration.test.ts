@@ -22,6 +22,16 @@ async function waitFor(check: () => boolean | Promise<boolean>, what: string): P
   }
 }
 
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
+    throw error;
+  }
+}
+
 test('cancelling a run under archon serve ends its script node tree and no other run', async () => {
   const root = trackTempRoot(await realpath(mkdtempSync(join(tmpdir(), 'archon-serve-cancel-'))));
   const home = join(root, 'home');
@@ -34,7 +44,7 @@ test('cancelling a run under archon serve ends its script node tree and no other
   await writeFile(
     grandchild,
     `const { existsSync, writeFileSync } = require('node:fs');
-writeFileSync(process.argv[2], '');
+writeFileSync(process.argv[2], String(process.pid));
 const waiting = setInterval(() => {
   if (!existsSync(process.argv[4])) return;
   clearInterval(waiting);
@@ -188,7 +198,15 @@ nodes:
     // A surviving grandchild still writes into the temp tree; let it finish before removal.
     if (!passed) {
       await writeFile(release, '');
-      await Bun.sleep(SURVIVOR_OBSERVATION_MS);
+      await waitFor(
+        () =>
+          startedRuns().every(
+            runId =>
+              leaked(runId) ||
+              !processExists(Number(readFileSync(join(markers, `${runId}.started`), 'utf8')))
+          ),
+        'surviving grandchildren to finish writing'
+      );
     }
   }
 }, 90_000);

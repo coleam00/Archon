@@ -354,7 +354,10 @@ async function copyInheritedUnits(
     const destination = join(staging, unit.root);
     try {
       await verifyIndexedUnits(inherited.anchor.root, inherited.manifest, [unit.root]);
-      await mkdir(destination, { recursive: true });
+      const listing = await listTree(join(inherited.anchor.root, unit.root)).catch(error => {
+        throw sourceReadError(inherited.anchor.root, error);
+      });
+      await copyListing({ dirs: listing.dirs, files: [] }, destination);
       for (const file of unit.files) {
         let bytes: Buffer;
         try {
