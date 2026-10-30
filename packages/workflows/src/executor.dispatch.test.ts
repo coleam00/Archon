@@ -180,7 +180,16 @@ describe('container resume guard', () => {
           expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
           expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
           expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
-          expect(store.failWorkflowRun).not.toHaveBeenCalled();
+          if (phase === 'resumed') {
+            expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+            expect(store.failWorkflowRun).toHaveBeenCalledWith(
+              run.id,
+              'Container backend requires a container execution context',
+              { expectedExecutionClaim: null }
+            );
+          } else {
+            expect(store.failWorkflowRun).not.toHaveBeenCalled();
+          }
           expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
         }
       );
@@ -221,7 +230,12 @@ describe('container resume guard', () => {
         expect(store.updateWorkflowRun).not.toHaveBeenCalled();
         expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
         expect(container.backend.prepareSuspend).not.toHaveBeenCalled();
-        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(store.failWorkflowRun).toHaveBeenCalledWith(
+          'run-123',
+          'Execution context does not match the recorded run isolation',
+          { expectedExecutionClaim: null }
+        );
         expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
       } finally {
         source.mockRestore();
