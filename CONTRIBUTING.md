@@ -27,11 +27,10 @@ fail. Files selected outside explicit `testGroups` fail discovery while covered 
 still run. Test flags apply to each selected group; JUnit output is combined across
 groups and, from the repository root, across every started owner.
 A single selected group's name filter keeps Bun's native exit result. Split runs use
-Bun's `--pass-with-no-tests` per child and collect native test statuses through
-Bun's inspector to detect an empty result across all groups. This preserves Bun's
-empty-name and skipped/todo-suite outcomes without reconstructing test names. Load
-and hook failures remain failures. Selected discovery errors also appear as runner
-errors in the combined JUnit report.
+Bun's `--pass-with-no-tests` per child and match the names in private JUnit reports
+to detect an empty result across all groups. Matching skipped or todo tests
+count as matches. Load and hook failures remain failures. Selected discovery errors
+also appear as runner errors in the combined JUnit report.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,

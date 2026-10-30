@@ -7,7 +7,6 @@ import {
 } from './package-test-groups';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import { resolveRequestedTestGroups } from './package-test-requests';
-import { runNameFilteredGroup, type GroupRunner } from './package-test-results';
 import { runnerErrorReport, runReportedGroup, writeCombinedReport } from './package-test-reports';
 
 /**
@@ -38,13 +37,13 @@ const packageDir = process.cwd();
 const manifestPath = join(packageDir, 'package.json');
 const manifest: unknown = await Bun.file(manifestPath).json();
 
-const run: GroupRunner = async (args, env) => {
+const run = async (args: string[]): Promise<number> => {
   const child = Bun.spawn(bunTestCommand(args), {
     cwd: packageDir,
-    env: bunTestEnv(env),
+    env: bunTestEnv(),
     stdio: ['inherit', 'inherit', 'inherit'],
   });
-  return { code: await child.exited, pid: child.pid };
+  return await child.exited;
 };
 
 const requested = Bun.argv.slice(2);
@@ -73,50 +72,38 @@ if (part !== undefined) {
 
 for (const error of request?.validationErrors ?? []) console.error(error.message);
 // A single group's native exit already decides the whole request.
-const observeNames = groups.length > 1 && request?.hasNameFilter === true && !request.allowsNoTests;
-let filteredTests = 0;
-let matchedTests = 0;
+const splitNamePattern = groups.length > 1 ? request?.namePattern : undefined;
+let emptyNameGroups = 0;
 const reports = (request?.validationErrors ?? []).map(error =>
   runnerErrorReport(error.message, 'Test discovery')
 );
 
 /** Runs one group and reports how long it took, for `update-test-weights.ts`. */
-const timed = async (group: string[], runGroup: GroupRunner) => {
+const timed = async (group: string[], runGroup: (group: string[]) => Promise<number>) => {
   const startedAt = performance.now();
-  let observedTests = 0;
-  const execute = async (args: string[]) => {
-    if (!observeNames) return (await runGroup(args)).code;
-    const result = await runNameFilteredGroup(args, runGroup, bunTestEnv());
-    observedTests = result.filtered + result.matched;
-    filteredTests += result.filtered;
-    matchedTests += result.matched;
-    return result.code;
-  };
-  let code: number;
-  if (observeNames || request?.reporterOutfile !== undefined) {
-    const reported = await runReportedGroup(group, execute);
+  let result: number | 'no-name-match';
+  if (
+    request !== undefined &&
+    (splitNamePattern !== undefined || request.reporterOutfile !== undefined)
+  ) {
+    const reported = await runReportedGroup(group, runGroup, splitNamePattern);
     reports.push(reported.report);
-    code = reported.code;
-    if (observeNames && code === 0 && reported.report.counts.tests !== observedTests) {
-      const message = `Native test results incomplete: received ${observedTests} of ${reported.report.counts.tests} outcomes`;
-      console.error(message);
-      reports.push(runnerErrorReport(message, 'Native test observer'));
-      code = 1;
-    }
+    result = reported.code;
   } else {
-    code = await execute(group);
+    result = await runGroup(group);
   }
+  if (result === 'no-name-match') emptyNameGroups++;
   console.log(
     `◀ ${packageName} ${group[0]} ${((performance.now() - startedAt) / 1000).toFixed(1)}s`
   );
-  return code;
+  return result === 'no-name-match' ? 0 : result;
 };
 
-const runBuffered: GroupRunner = async (group, env) => {
+const runBuffered = async (group: string[]): Promise<number> => {
   console.log(`▶ ${group[0]}`);
   const child = Bun.spawn(bunTestCommand(group), {
     cwd: packageDir,
-    env: bunTestEnv(env),
+    env: bunTestEnv(),
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -128,7 +115,7 @@ const runBuffered: GroupRunner = async (group, env) => {
   ]);
   process.stdout.write(stdout);
   process.stderr.write(stderr);
-  return { code, pid: child.pid };
+  return code;
 };
 
 /**
@@ -163,4 +150,6 @@ if (request?.reporterOutfile !== undefined) writeCombinedReport(request.reporter
 process.exitCode =
   code ||
   (request?.validationErrors.length ? 1 : 0) ||
-  (observeNames && filteredTests > 0 && matchedTests === 0 ? 1 : 0);
+  (request?.namePattern !== undefined && !request.allowsNoTests && emptyNameGroups === groups.length
+    ? 1
+    : 0);

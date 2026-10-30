@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
-import { junitDestination, parseTestArguments } from './package-test-requests';
+import { parseTestArguments } from './package-test-requests';
 import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
 /**
@@ -227,7 +227,10 @@ async function runRequested(requested: string[]): Promise<number> {
   }
 
   const { optionTokens } = parseTestArguments(requested);
-  const destination = junitDestination(optionTokens);
+  const destination =
+    optionTokens.filter(token => token.name === 'reporter').at(-1)?.value === 'junit'
+      ? optionTokens.filter(token => token.name === 'reporter-outfile').at(-1)?.value
+      : undefined;
   const reports = [];
   let code = 0;
   for (const { owner, args } of runs) {
@@ -239,9 +242,9 @@ async function runRequested(requested: string[]): Promise<number> {
     if (destination === undefined) {
       code = await runOwner(args);
     } else {
-      const result = await runReportedGroup(args, runOwner);
+      const result = await runReportedGroup(args, runOwner, undefined);
       reports.push(result.report);
-      code = result.code;
+      code = result.code === 'no-name-match' ? 0 : result.code;
     }
     if (code !== 0) break;
   }
