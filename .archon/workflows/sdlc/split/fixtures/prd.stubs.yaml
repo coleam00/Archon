@@ -1,0 +1,27 @@
+# Dry-run fixture: a PRD triage routed `split`. The slice agent lists two issues,
+# the first measuring the signal, and publish files them. The facts and publish
+# scripts reach the state store and the forge, so they are stubbed here and proved
+# by .archon/scripts/__tests__/split.test.ts.
+facts:
+  path: slice
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  url: "https://github.com/example/repo/issues/7"
+  filed: []
+slice:
+  split: { kind: prd, signal_command: "bun run signal", window_days: 14 }
+  issues:
+    - { key: measure, title: "Measure the signal", body: "stub: the measurement contract", size: s, depends_on: [] }
+    - { key: feature, title: "Ship the feature", body: "stub: the feature contract", size: m, depends_on: [measure] }
+  summary: "stub: measure first, then ship"
+publish:
+  path: slice
+  item: 7
+  kind: prd
+  issues:
+    - { key: measure, number: 8, url: "https://github.com/example/repo/issues/8" }
+    - { key: feature, number: 9, url: "https://github.com/example/repo/issues/9" }
+  summary: "stub: Issue 7: split as a prd into 2 issues"
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }
+  expect: completed
+  reached: [facts, slice, publish]

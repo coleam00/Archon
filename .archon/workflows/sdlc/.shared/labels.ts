@@ -26,6 +26,10 @@ export const PACK_LABELS = {
     color: 'BFDADC',
     description: 'Triage: ready; a PRD or a bundle of tasks to split into issues',
   },
+  'archon-prd': {
+    color: '006B75',
+    description: 'Split: a PRD split into issues; open until its hypothesis has a verdict',
+  },
   'archon-needs-contract': {
     color: 'D93F0B',
     description: "Triage: one of the contract's six elements is missing",

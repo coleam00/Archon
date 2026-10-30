@@ -11,7 +11,7 @@ Archon bundles one workflow pack, `sdlc`. It covers the software lifecycle from 
 
 ## How the factory runs
 
-`archon-intake` triages each new issue, `archon-build-queue` works it to a reviewed pull request, `archon-merge-queue` merges it, and `archon-discoveries` files what runs noticed on the way. Anything unclear pauses as one attention item with a recommendation. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs them on your repository; the pack binds no trigger by default.
+`archon-intake` triages each new issue, `archon-split` files the issues a PRD or a bundle of tasks splits into, `archon-build-queue` works it to a reviewed pull request, `archon-merge-queue` merges it, and `archon-discoveries` files what runs noticed on the way. Anything unclear pauses as one attention item with a recommendation. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs them on your repository; the pack binds no trigger by default.
 
 `archon-ship` itself is a graph of the stage workflows below. Triage picks a route; investigate or plan runs when the route needs it; then the delivery rounds implement, open a draft pull request, review it through specialist lenses, fix the findings and wait for CI. Stages hand each other files in `$ARTIFACTS_DIR`, such as `triage.md`, `plan.md` and `implementation.md`, not conversation history.
 
@@ -92,6 +92,14 @@ Drains the discoveries finished runs recorded outside their own scope. One agent
 **When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
 
 **What it produces**: Filed issues and evidence comments, and one state document per drained run (`archon state list --prefix discoveries/runs/`) recording which of its records were decided and any question asked with its answer, so a record is decided once.
+
+#### `archon-split`
+
+Files the issues a PRD or a bundle of tasks splits into, when triage routed the item `split`. Triage passes a PRD only when it states a hypothesis, the signal that proves or disproves it with the command that measures it, and a threshold and window; otherwise it asks for that contract work. One agent lists at most twelve issues, each a contract of its own: a PRD's first issue puts its hypothesis in front of real data, adding the measurement when none exists, and a bundle is split as written. A script files each issue once, with `Depends on` links, and comments the list on the item. A PRD is labelled `archon-prd` and stays open; a bundle is closed.
+
+**When to use it**: Your issues include PRDs or lists of tasks that should become separate issues. Add the binding the SDLC pack README's "Split queue" section shows; the pack installs none. By hand: `archon workflow run archon-split --input repo_host=github.com --input repo_path=acme/widgets --input number=42`.
+
+**What it produces**: The filed issues, which come back through intake, a comment on the item listing them, and the queue's record on its work item (`facts.split`: status, kind, filed issues, and a PRD's signal command and window).
 
 #### `archon-worktree-cleanup`
 
@@ -220,6 +228,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
 | `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | No |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
+| `archon-split` | File the issues a PRD or a bundle of tasks splits into (trigger-started) | No | No |
 | `archon-worktree-cleanup` | Remove merged worktrees on a schedule | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |

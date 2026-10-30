@@ -7,7 +7,7 @@ sidebar:
   order: 4
 ---
 
-The bundled `sdlc` pack is a software factory made of four queues. You write an issue; intake triages it, the build queue works it to a reviewed pull request, and the merge queue merges it. When a run reaches a decision it can't make, it pauses as one attention item for you to answer. This page sets that up on one GitHub repository, runs it by hand once, and then shows how to let it run on its own.
+The bundled `sdlc` pack is a software factory made of five queues. You write an issue; intake triages it, the split queue files the issues a PRD or a bundle of tasks splits into, the build queue works it to a reviewed pull request, and the merge queue merges it. When a run reaches a decision it can't make, it pauses as one attention item for you to answer. This page sets that up on one GitHub repository, runs it by hand once, and then shows how to let it run on its own.
 
 | Queue | What it does |
 |---|---|
@@ -15,6 +15,7 @@ The bundled `sdlc` pack is a software factory made of four queues. You write an 
 | `archon-build-queue` | Takes one triaged issue through `archon-ship` rounds until its pull request is reviewed Ready, or a maintainer's `ready` answer hands it to the merge queue |
 | `archon-merge-queue` | Merges the Ready, green pull requests the build queue finished, and sends back what it can't merge |
 | `archon-discoveries` | Files, tracks or drops what runs noticed outside their own task |
+| `archon-split` | Files the issues a PRD or a bundle of tasks splits into, and sends them back through intake |
 
 Every workflow in the pack is described in [SDLC pack workflows](/reference/sdlc-workflows/).
 
@@ -154,7 +155,7 @@ The pack installs no trigger. Nothing starts until you start it, by hand as abov
   On Linux or Windows, run the same `trigger fire` command from cron, systemd or Task Scheduler.
 - **Intake** starts on GitHub issue and label events, through the GitHub source plugin on a running server. It needs a webhook, so it is the last piece most people add. Until then, run intake by hand for each new issue.
 
-The pack's README has a binding for each queue: [Intake](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#intake), [Build queue](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#build-queue), [Merge queue](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#merge-queue) and [Discoveries](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#discoveries). [Workflow triggers](/guides/workflow-triggers/) covers schedules, webhooks, capacity and overlap.
+The pack's README has a binding for each queue: [Intake](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#intake), [Build queue](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#build-queue), [Merge queue](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#merge-queue), [Split queue](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#split-queue) and [Discoveries](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#discoveries). [Workflow triggers](/guides/workflow-triggers/) covers schedules, webhooks, capacity and overlap.
 
 ## What the pack writes
 

@@ -17,7 +17,6 @@ import {
   BUILD_PICKUP,
   type BuildRound,
   buildBranch,
-  claimNamed,
   countedRounds,
   itemPullRequest,
 } from '../../.shared/build.ts';
@@ -26,7 +25,7 @@ import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { viewPr } from '../../.shared/pr.ts';
-import { claimNext, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
+import { claimNamed, claimNext, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
 
 function positive(name: string, value: string): number {
   const parsed = Number(value);
@@ -106,7 +105,7 @@ function main(): void {
   const doc =
     number === ''
       ? claimNext(new Date().toISOString(), runId, BUILD_PICKUP)
-      : claimNamed(positive('number', number), new Date().toISOString(), runId);
+      : claimNamed(positive('number', number), new Date().toISOString(), runId, BUILD_PICKUP);
   if (doc === null) {
     emit({
       path: 'idle',

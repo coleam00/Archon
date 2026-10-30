@@ -630,6 +630,75 @@ To start a run as soon as intake routes an item, add a label binding on the same
 resource, with intake's label selector narrowed to the route labels intake writes
 (`archon-ready`, `archon-plan`, `archon-investigate`) and the same launch.
 
+## Split queue
+
+[`archon-split`](split/archon-split.yaml) files the issues a PRD or a bundle of tasks
+splits into. Triage routes an item `split` when it asks for more than one run's work;
+the default triage policy, [`.shared/policy/triage.md`](.shared/policy/triage.md), says
+how triage tells a PRD (a release that tests a hypothesis) from a bundle of tasks and
+from a single work item, and holds a PRD to its hypothesis, its signal with the command
+that measures it, and its threshold and window. A PRD missing any of them gets
+`archon-needs-contract`, naming the gap.
+
+- **Pickup.** A run claims one item with intake's claim and order. An item waits for
+  the split queue when its stage is `split` and no split finished on it, or a
+  re-triage came after the last one. The `number` input claims that issue instead,
+  and refuses the run with why when it cannot, as the build queue's does. The claim
+  takes none of the item's intake requests.
+- **Slice.** One agent reads the issue (written to `split/prd.md`), the project's
+  direction and current code, and lists at most twelve issues, each a contract of its
+  own with a key, a size and the keys it depends on. A PRD's first issue puts its
+  hypothesis in front of real data, adding the measurement when the signal has no
+  source or its command does not exist yet. In a product that already runs, no issue
+  rebuilds or sets up what exists. A bundle is split as written, one issue per task.
+  For a PRD the agent also declares the signal command and the window in days.
+- **Publish.** The `publish` script files each issue with a hidden first line,
+  `<!-- archon-split: <item> <key> -->`, and a `Depends on: #n` line per dependency.
+  Each filed issue is recorded on the work item before the next is filed, and a key
+  already recorded is never filed again; a key whose issue was filed but not recorded
+  is recovered by its marker. So a run that stops part way, or a split repeated after
+  a re-triage, files no issue twice. The item then gets one marked comment listing its
+  issues. A PRD is labelled `archon-prd` and stays open until its hypothesis has a
+  verdict; a bundle is closed as completed. The last write records the split done and
+  releases the claim. An issue closed before its split finishes is recorded and
+  files nothing more.
+- **Record.** The work item's `facts.split` holds the status (`filing`, `done` or
+  `closed`), whether the item is a `prd` or a `bundle`, every issue filed from it by
+  key, and a PRD's signal command and window.
+- **The filed issues** come back through intake like any other issue. They are opened
+  by the install's own identity, so intake trusts them only when that login is on the
+  maintainer list.
+
+The pack installs no binding. A schedule keeps items moving, as for the build queue.
+The run reads the checkout and writes only to the tracker and the state store, so it
+needs no worktree:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-split-queue",
+  "binding": {
+    "bindingId": "split-queue",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "forge:github.com/acme/widgets:split",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-split",
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
+}
+```
+
+To split an item as soon as intake routes it, add a label binding on the same
+resource, with intake's label selector narrowed to `archon-split` and the same launch.
+
 ## Merge queue
 
 [`archon-merge-queue`](merge-queue/archon-merge-queue.yaml) merges the pull requests
