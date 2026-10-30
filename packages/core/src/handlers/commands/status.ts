@@ -2,10 +2,12 @@ import { listChildRepos, execFileAsync } from '@archon/git';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { Codebase, CommandResult, Conversation } from '../../types';
 import * as codebaseDb from '../../db/codebases';
+import { sqlState } from '../../db/sql-state';
 import * as sessionDb from '../../db/sessions';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import { getActiveChatWorkflowRun } from './workflow-runs';
 import { getWorktreeStatusBreakdown } from '../../services/cleanup-service';
+import { statusDiagnostic } from '../../services/cleanup/status-diagnostic';
 import { getLog } from './log';
 
 /**
@@ -259,9 +261,11 @@ async function worktreeSection(codebase: Codebase): Promise<string> {
       if (env.reason) msg += `\n  • ${env.branchName}: ${env.reason}`;
     }
   } catch (error) {
-    // Don't fail status if breakdown fails
-    const err = error as Error;
-    getLog().error({ err, codebaseId: codebase.id }, 'cmd.worktree_breakdown_failed');
+    getLog().error(
+      { reason: statusDiagnostic(error), code: sqlState(error), codebaseId: codebase.id },
+      'cmd.worktree_breakdown_failed'
+    );
+    return '\n\nWorktrees: inventory unavailable (count unknown)';
   }
   return msg;
 }

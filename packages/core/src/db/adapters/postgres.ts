@@ -10,6 +10,7 @@ import { createLogger } from '@archon/paths';
 import { LEGACY_VENDOR_ALIASES } from '@archon/providers/credential-catalog';
 import { getSchemaSQL } from '../bundled-schema';
 import { APP_VERSION } from '../schema-version';
+import { sqlState } from '../sql-state';
 
 const SCHEMA_LOCK_SQL = 'SELECT pg_advisory_xact_lock(1796)';
 const SCHEMA_CURRENT_SAVEPOINT = 'schema_current';
@@ -78,7 +79,7 @@ SELECT
 const RETRYABLE_SQLSTATES = new Set(['40P01', '40001']);
 const RETRY_ATTEMPTS = 4;
 
-function isRetryable(error: unknown): boolean {
+function isRetryable(error: unknown): error is { code: string } {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === 'string' && RETRYABLE_SQLSTATES.has(code);
 }
@@ -96,7 +97,7 @@ async function retryConflicts<T>(operation: () => Promise<T>, event: string): Pr
       return await operation();
     } catch (e) {
       if (!isRetryable(e) || attempt + 1 >= RETRY_ATTEMPTS) throw e;
-      getLog().warn({ err: e as Error, attempt: attempt + 1 }, event);
+      getLog().warn({ code: e.code, attempt: attempt + 1 }, event);
       const ms = 50 * 2 ** attempt + Math.floor(Math.random() * 50);
       await new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -340,7 +341,14 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
       try {
         await client.query('ROLLBACK');
       } catch (rollbackError) {
-        getLog().error({ err: rollbackError as Error }, 'db.postgres_transaction_rollback_failed');
+        const connectionReset =
+          rollbackError instanceof Error &&
+          'code' in rollbackError &&
+          rollbackError.code === 'ECONNRESET';
+        getLog().error(
+          { code: connectionReset ? 'ECONNRESET' : sqlState(rollbackError) },
+          'db.postgres_transaction_rollback_failed'
+        );
       }
       throw conflict ?? e;
     } finally {
