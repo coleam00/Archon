@@ -96,19 +96,24 @@ export interface MetricRecordRow {
   eventId: string;
   runId: string;
   workflowName: string;
+  /** The run's codebase. */
+  codebaseId: string | null;
   /** The event's `step_name`. */
   nodeId: string;
+  /** The event's `data.type`: the kind of node that completed, when the row records it. */
+  nodeType: string | null;
   completedAt: string;
   /** The raw `structured_output.metrics` value; the engine parses it. */
   metrics: unknown;
 }
 
 /**
- * Metric completions in the order they were recorded, across runs. Rows are raw: which completions count, and what a record means, is
+ * Every metric completion on the install, in the order it was recorded, across runs. Rows
+ * are raw: which completions count, for which codebase, and what a record means, is
  * decided once in `queryMetrics`.
  */
 export interface IMetricRecordStore {
-  listMetricRecords(query: { codebaseId?: string }): Promise<MetricRecordRow[]>;
+  listMetricRecords(): Promise<MetricRecordRow[]>;
 }
 
 export interface IWorkflowRunNodeSessionStore {

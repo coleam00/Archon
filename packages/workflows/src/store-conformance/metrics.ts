@@ -35,7 +35,7 @@ export function describeMetricRecordsConformance(getHarness: () => WorkflowStore
       await Bun.sleep(2);
       await complete(second.id, { structured_output: { metrics: [] }, node_output: 'secret' });
 
-      const rows = await store.listMetricRecords({});
+      const rows = await store.listMetricRecords();
       expect(rows.map(row => [row.runId, row.workflowName, row.nodeId, row.metrics])).toEqual([
         [first.id, 'count-prs', 'count', metrics],
         [second.id, 'count-prs-again', 'count', []],
@@ -47,10 +47,12 @@ export function describeMetricRecordsConformance(getHarness: () => WorkflowStore
         events.filter(event => event.event_type === 'node_completed').map(event => event.id)
       ).toEqual([row?.eventId]);
       expect(Object.keys(row ?? {}).sort()).toEqual([
+        'codebaseId',
         'completedAt',
         'eventId',
         'metrics',
         'nodeId',
+        'nodeType',
         'runId',
         'workflowName',
       ]);
@@ -66,16 +68,20 @@ export function describeMetricRecordsConformance(getHarness: () => WorkflowStore
         step_name: 'count',
         data: { structured_output: { metrics } },
       });
-      expect(await store.listMetricRecords({})).toEqual([]);
+      expect(await store.listMetricRecords()).toEqual([]);
     });
 
-    test('codebaseId filters by the run codebase', async () => {
+    test('carries the run codebase and the completed node type', async () => {
       const scoped = await create(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
       const other = await create(store);
-      await complete(scoped.id, { structured_output: { metrics } });
+      await complete(scoped.id, { type: 'loop_group', structured_output: { metrics } });
+      await Bun.sleep(2);
       await complete(other.id, { structured_output: { metrics } });
-      const rows = await store.listMetricRecords({ codebaseId: CONFORMANCE_CODEBASE_ID });
-      expect(rows.map(row => row.runId)).toEqual([scoped.id]);
+      const rows = await store.listMetricRecords();
+      expect(rows.map(row => [row.runId, row.codebaseId, row.nodeType])).toEqual([
+        [scoped.id, CONFORMANCE_CODEBASE_ID, 'loop_group'],
+        [other.id, null, null],
+      ]);
     });
   });
 }

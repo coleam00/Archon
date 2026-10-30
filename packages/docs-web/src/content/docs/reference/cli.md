@@ -2002,7 +2002,8 @@ The window is `[--since, --until)`. `--until` defaults to now and takes an ISO d
 time with an offset; a date alone is UTC midnight. `--since` takes the same, or a duration
 (`24h`, `7d`, `2w`) counted back from `--until`, and defaults to 30 days. `--subject` keeps
 records about one subject. `--project <id|name|key>` keeps records from one registered
-codebase; without it, names are install-wide.
+codebase. A name's definition is install-wide either way: a record another codebase
+stored first still fixes it.
 
 Text output prints one line per metric for its newest instrument: name, kind and unit,
 `value` (the sum for a `count`, the mean for a `score`), `n` and the latest record. Other

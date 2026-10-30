@@ -15,10 +15,10 @@ interface MetricCompletionRow {
   created_at: string | Date;
   data: string | Record<string, unknown> | null;
   workflow_name: string;
+  codebase_id: string | null;
 }
 
-/** Unreadable data yields `undefined`, which `queryMetrics` reports as an invalid record. */
-function readMetrics(data: MetricCompletionRow['data']): unknown {
+function readData(data: MetricCompletionRow['data']): Record<string, unknown> | undefined {
   let parsed: unknown = data;
   if (typeof data === 'string') {
     try {
@@ -27,8 +27,14 @@ function readMetrics(data: MetricCompletionRow['data']): unknown {
       return undefined;
     }
   }
-  if (typeof parsed !== 'object' || parsed === null) return undefined;
-  const structured = (parsed as { structured_output?: unknown }).structured_output;
+  return typeof parsed === 'object' && parsed !== null
+    ? (parsed as Record<string, unknown>)
+    : undefined;
+}
+
+/** Unreadable data yields `undefined`, which `queryMetrics` reports as an invalid record. */
+function readMetrics(data: Record<string, unknown> | undefined): unknown {
+  const structured = data?.structured_output;
   if (typeof structured !== 'object' || structured === null) return undefined;
   return (structured as { metrics?: unknown }).metrics;
 }
@@ -38,30 +44,27 @@ function readMetrics(data: MetricCompletionRow['data']): unknown {
  * type as a literal: a partial index serves only a query whose WHERE clause contains the
  * index's own terms, and SQLite's `INDEXED BY` fails the query outright when it can't.
  */
-export function metricRecordsSql(dialect: SqlDialect, byCodebase: boolean): string {
-  return `SELECT e.id, e.workflow_run_id, e.step_name, e.created_at, e.data, r.workflow_name
+export const metricRecordsSql = (dialect: SqlDialect): string =>
+  `SELECT e.id, e.workflow_run_id, e.step_name, e.created_at, e.data, r.workflow_name, r.codebase_id
      FROM remote_agent_workflow_events e${dialect.indexedBy('idx_workflow_events_metrics')}
      JOIN remote_agent_workflow_runs r ON r.id = e.workflow_run_id
      WHERE e.event_type = 'node_completed'
        AND ${dialect.jsonText('e.data', 'structured_output.metrics')} IS NOT NULL
-       ${byCodebase ? 'AND r.codebase_id = $1' : ''}
      ORDER BY COALESCE(e.event_order, 0) ASC, e.created_at ASC, e.id ASC`;
-}
 
-export async function listMetricRecords(query: {
-  codebaseId?: string;
-}): Promise<MetricRecordRow[]> {
-  const byCodebase = query.codebaseId !== undefined;
-  const result = await pool.query<MetricCompletionRow>(
-    metricRecordsSql(getDialect(), byCodebase),
-    byCodebase ? [query.codebaseId] : []
-  );
-  return result.rows.map(row => ({
-    eventId: row.id,
-    runId: row.workflow_run_id,
-    workflowName: row.workflow_name,
-    nodeId: row.step_name,
-    completedAt: toHydratedTimestamp(row.created_at).toISOString(),
-    metrics: readMetrics(row.data),
-  }));
+export async function listMetricRecords(): Promise<MetricRecordRow[]> {
+  const result = await pool.query<MetricCompletionRow>(metricRecordsSql(getDialect()));
+  return result.rows.map(row => {
+    const data = readData(row.data);
+    return {
+      eventId: row.id,
+      runId: row.workflow_run_id,
+      workflowName: row.workflow_name,
+      codebaseId: row.codebase_id,
+      nodeId: row.step_name,
+      nodeType: typeof data?.type === 'string' ? data.type : null,
+      completedAt: toHydratedTimestamp(row.created_at).toISOString(),
+      metrics: readMetrics(data),
+    };
+  });
 }

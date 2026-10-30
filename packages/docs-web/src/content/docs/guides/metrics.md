@@ -254,7 +254,8 @@ cannot carry credentials, prompt contents or messages beyond its bounded `subjec
   the node that returned it.
 - **Only a node's final result counts.** When a node runs again in the same run, or its
   completion is later marked failed, only its last result counts, and a failed one
-  counts nothing.
+  counts nothing. A `workflow:` node, a `loop_group` or a fan-out include that passes on
+  another node's output does not count its records again.
 - **Windows use `at`.** A record falls in a window by `at`, or by its completion time when
   it has none. The window includes its start and excludes its end.
 - **Instruments are kept apart.** A name reports one entry per `instrument`, so a new
@@ -264,7 +265,7 @@ cannot carry credentials, prompt contents or messages beyond its bounded `subjec
   `archon workflow cleanup`, deletes its records.
 
 Metric names are shared by every project on the install. Pass `--project` to read one
-codebase.
+codebase's records; their names keep the install's definitions.
 
 ## Reading metrics
 

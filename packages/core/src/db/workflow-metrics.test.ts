@@ -13,8 +13,6 @@ test('the PostgreSQL metric records query carries the partial index predicate ve
     );
   expect(index).not.toBeNull();
   const predicate = normalize(index?.[1] ?? '');
-  for (const byCodebase of [false, true]) {
-    const query = normalize(metricRecordsSql(postgresDialect, byCodebase)).replace(/\be\./g, '');
-    expect(query).toContain(`WHERE ${predicate}`);
-  }
+  const query = normalize(metricRecordsSql(postgresDialect)).replace(/\be\./g, '');
+  expect(query).toContain(`WHERE ${predicate}`);
 });

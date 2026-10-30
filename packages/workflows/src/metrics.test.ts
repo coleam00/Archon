@@ -10,17 +10,19 @@ const window: MetricsQuery = {
 
 let sequence = 0;
 
-/** One stored completion; `run` and `node` default to a fresh run and `count`. */
+/** One stored completion; `run` and `node` default to a fresh run and a bash node `count`. */
 function completion(
   metrics: unknown,
-  options: { run?: string; node?: string; at?: string } = {}
+  options: { run?: string; node?: string; type?: string; codebase?: string; at?: string } = {}
 ): MetricRecordRow {
   sequence += 1;
   return {
     eventId: `event-${String(sequence)}`,
     runId: options.run ?? `run-${String(sequence)}`,
     workflowName: 'metrics',
+    codebaseId: options.codebase ?? null,
     nodeId: options.node ?? 'count',
+    nodeType: options.type ?? 'bash',
     completedAt: options.at ?? '2026-10-02T12:00:00.000Z',
     metrics,
   };
@@ -82,6 +84,59 @@ describe('queryMetrics', () => {
         offered: { kind: 'count', unit: 'pull_requests', calibrates: null },
       }),
     ]);
+  });
+
+  test('refuses a record whose kind conflicts with the name definition', async () => {
+    const report = await queryMetrics(
+      store([
+        completion([count(3)]),
+        completion([count(1, { kind: 'score' })], { node: 'recount' }),
+      ]),
+      window
+    );
+    expect(report.metrics.map(m => [m.name, m.kind, m.instruments[0]?.value])).toEqual([
+      ['factory.prs_merged', 'count', 3],
+    ]);
+    expect(report.refused).toEqual([
+      expect.objectContaining({
+        reason: 'definition_conflict',
+        node_id: 'recount',
+        definition: { kind: 'count', unit: 'prs', calibrates: null },
+        offered: { kind: 'score', unit: 'prs', calibrates: null },
+      }),
+    ]);
+  });
+
+  test('a codebase filter keeps the install-wide definition of a name', async () => {
+    const rows = [
+      completion([count(3)], { codebase: 'a' }),
+      completion([count(1, { kind: 'score' })], { codebase: 'b' }),
+      completion([count(2)], { codebase: 'b' }),
+    ];
+    const report = await queryMetrics(store(rows), { ...window, codebaseId: 'b' });
+    expect(report.metrics.map(m => [m.kind, m.instruments[0]?.value, m.instruments[0]?.n])).toEqual(
+      [['count', 2, 1]]
+    );
+    expect(report.refused).toEqual([
+      expect.objectContaining({ reason: 'definition_conflict', run_id: rows[1]?.runId }),
+    ]);
+    const other = await queryMetrics(store(rows), { ...window, codebaseId: 'a' });
+    expect(other.refused).toEqual([]);
+  });
+
+  test('a node that relays another node output does not count its records again', async () => {
+    const report = await queryMetrics(
+      store([
+        completion([count(1)], { run: 'child', node: 'count' }),
+        completion([count(1)], { run: 'parent', node: 'child', type: 'workflow' }),
+        completion([count(1)], { run: 'group', node: 'grp.count' }),
+        completion([count(1)], { run: 'group', node: 'grp', type: 'loop_group' }),
+        completion([count(1)], { run: 'fan', node: 'inc__count' }),
+        completion([count(1)], { run: 'fan', node: 'inc', type: 'compose_fan_out_instance' }),
+      ]),
+      window
+    );
+    expect(report.metrics[0]?.instruments[0]).toMatchObject({ value: 3, n: 3 });
   });
 
   test('a definition fixed before the window still refuses a conflicting record inside it', async () => {

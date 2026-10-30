@@ -14,6 +14,7 @@ import {
   type MetricReport,
   type MetricsReport,
 } from './schemas/metric';
+import type { NodeDescriptor } from './schemas/node-execution';
 import type { IWorkflowStore, MetricRecordRow } from './store';
 
 export type MetricsStore = Pick<IWorkflowStore, 'listMetricRecords' | 'listEventsForRuns'>;
@@ -85,6 +86,17 @@ interface CountedRecord {
 }
 
 const RUN_CHUNK = 500;
+
+/**
+ * Nodes whose completion restates another node's structured output: a child workflow's
+ * `returns:` value, a loop group's last body node, a fan-out instance's `returns:` node.
+ * That node's own completion already carries the records.
+ */
+const RELAYING_NODE_TYPES: ReadonlySet<string> = new Set([
+  'workflow',
+  'loop_group',
+  'compose_fan_out_instance',
+] satisfies NodeDescriptor['kind'][]);
 
 /**
  * Ids of the events that are their node's latest terminal event in their run. A
@@ -173,10 +185,12 @@ const byInstrument = (a: string | null, b: string | null): number =>
 /**
  * Aggregate stored metric records over `[since, until)`.
  *
- * 1. Only a node's latest terminal event in its run counts.
- * 2. A name's earliest stored record, in recorded order, fixes its definition
- *    (`kind`, `unit`, `calibrates`). A later record that disagrees is refused and
- *    reported with both definitions, so a name keeps one meaning.
+ * 1. Only a node's latest terminal event in its run counts, and only from the node that
+ *    produced the output, not from a node that relays it.
+ * 2. A name's earliest stored record on the install, in recorded order, fixes its
+ *    definition (`kind`, `unit`, `calibrates`), whatever codebase is queried. A later
+ *    record that disagrees is refused and reported with both definitions, so a name keeps
+ *    one meaning.
  * 3. The latest record per `(name, subject, instrument)` replaces earlier ones for a
  *    non-null subject, so a re-measurement never double-counts. A `subject: null`
  *    record counts once per run and node, by rule 1.
@@ -192,14 +206,17 @@ export async function queryMetrics(
   store: MetricsStore,
   query: MetricsQuery
 ): Promise<MetricsReport> {
-  const rows = await store.listMetricRecords(
-    query.codebaseId === undefined ? {} : { codebaseId: query.codebaseId }
+  const rows = (await store.listMetricRecords()).filter(
+    row => row.nodeType === null || !RELAYING_NODE_TYPES.has(row.nodeType)
   );
   const counted = await latestTerminalEventIds(store, [...new Set(rows.map(row => row.runId))]);
   const since = query.since.getTime();
   const until = query.until.getTime();
   const inWindow = (time: number): boolean => time >= since && time < until;
-  const { records, refused } = collectRecords(rows.filter(row => counted.has(row.eventId)));
+  const { records, refused } = collectRecords(
+    rows.filter(row => counted.has(row.eventId)),
+    row => query.codebaseId === undefined || row.codebaseId === query.codebaseId
+  );
 
   const byName = new Map<string, CountedRecord[]>();
   for (const entry of records) {
@@ -257,46 +274,63 @@ function admitDefinition(
 }
 
 /**
- * Apply the definition rule and the latest-per-subject rule over counted rows in recorded
- * order, returning every surviving record and every refusal, at any time.
+ * Apply the definition rule over every counted row in recorded order, then the
+ * latest-per-subject rule over the `selected` ones. Returns every surviving record and
+ * every refusal among the selected rows, at any time.
  */
-function collectRecords(rows: readonly MetricRecordRow[]): {
+function collectRecords(
+  rows: readonly MetricRecordRow[],
+  selected: (row: MetricRecordRow) => boolean
+): {
   records: CountedRecord[];
   refused: Refused[];
 } {
   const definitions = new Map<string, MetricDefinition>();
   const refused: Refused[] = [];
-  const bySubject = new Map<string, CountedRecord>();
-  const unkeyed: CountedRecord[] = [];
-
+  const admitted: CountedRecord[] = [];
   for (const row of rows) {
-    const parsed = z.array(metricRecordSchema).safeParse(row.metrics);
-    if (!parsed.success) {
-      refused.push(invalidRefusal(row, parsed.error));
-      continue;
-    }
-    for (const record of parsed.data) {
-      const time = Date.parse(record.at ?? row.completedAt);
-      const conflict = admitDefinition(definitions, record);
-      if (conflict) {
-        refused.push({
-          time,
-          refusal: {
-            reason: 'definition_conflict',
-            ...source(row),
-            name: record.name,
-            ...conflict,
-          },
-        });
-      } else if (record.subject === null) {
-        unkeyed.push({ record, time });
-      } else {
-        const key = JSON.stringify([record.name, record.subject, record.instrument ?? null]);
-        bySubject.set(key, { record, time });
-      }
+    // An unselected row still fixes the definitions of the names it carries.
+    const result = admitRow(definitions, row);
+    if (!selected(row)) continue;
+    refused.push(...result.refused);
+    admitted.push(...result.admitted);
+  }
+  return { records: latestPerSubject(admitted), refused };
+}
+
+function admitRow(
+  definitions: Map<string, MetricDefinition>,
+  row: MetricRecordRow
+): { admitted: CountedRecord[]; refused: Refused[] } {
+  const parsed = z.array(metricRecordSchema).safeParse(row.metrics);
+  if (!parsed.success) return { admitted: [], refused: [invalidRefusal(row, parsed.error)] };
+  const admitted: CountedRecord[] = [];
+  const refused: Refused[] = [];
+  for (const record of parsed.data) {
+    const time = Date.parse(record.at ?? row.completedAt);
+    const conflict = admitDefinition(definitions, record);
+    if (conflict === null) {
+      admitted.push({ record, time });
+    } else {
+      refused.push({
+        time,
+        refusal: { reason: 'definition_conflict', ...source(row), name: record.name, ...conflict },
+      });
     }
   }
-  return { records: [...unkeyed, ...bySubject.values()], refused };
+  return { admitted, refused };
+}
+
+/** Records in recorded order, keeping only the latest per non-null subject. */
+function latestPerSubject(records: readonly CountedRecord[]): CountedRecord[] {
+  const bySubject = new Map<string, CountedRecord>();
+  const unkeyed: CountedRecord[] = [];
+  for (const entry of records) {
+    const { name, subject, instrument } = entry.record;
+    if (subject === null) unkeyed.push(entry);
+    else bySubject.set(JSON.stringify([name, subject, instrument ?? null]), entry);
+  }
+  return [...unkeyed, ...bySubject.values()];
 }
 
 const newestOf = (records: readonly CountedRecord[]): CountedRecord =>

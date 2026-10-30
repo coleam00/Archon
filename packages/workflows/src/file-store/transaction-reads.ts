@@ -129,7 +129,7 @@ export function createTransactionReads(
           listEvents(id).filter(event => types.some(type => type === event.event_type)),
         ])
       ),
-    listMetricRecords: async ({ codebaseId }) =>
+    listMetricRecords: async () =>
       // event_order counts within one run's log here, so only time orders across runs.
       [...events]
         .sort(
@@ -145,8 +145,7 @@ export function createTransactionReads(
             metrics === undefined ||
             event.event_type !== 'node_completed' ||
             event.step_name === null ||
-            !run ||
-            (codebaseId !== undefined && run.codebase_id !== codebaseId)
+            !run
           )
             return [];
           return [
@@ -154,7 +153,9 @@ export function createTransactionReads(
               eventId: event.id,
               runId: run.id,
               workflowName: run.workflow_name,
+              codebaseId: run.codebase_id,
               nodeId: event.step_name,
+              nodeType: typeof event.data.type === 'string' ? event.data.type : null,
               completedAt: event.created_at,
               metrics: structuredClone(metrics),
             },

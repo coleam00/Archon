@@ -533,10 +533,9 @@ describe('idx_workflow_events_metrics', () => {
     await new SqliteAdapter(path).close();
 
     expect(raw_indexes(path)).toContain('idx_workflow_events_metrics');
-    const plan = raw_query(
-      path,
-      `EXPLAIN QUERY PLAN ${metricRecordsSql(sqliteDialect, false)}`
-    ) as { detail: string }[];
+    const plan = raw_query(path, `EXPLAIN QUERY PLAN ${metricRecordsSql(sqliteDialect)}`) as {
+      detail: string;
+    }[];
     expect(plan.map(row => row.detail).join('\n')).toContain('idx_workflow_events_metrics');
   });
 });
