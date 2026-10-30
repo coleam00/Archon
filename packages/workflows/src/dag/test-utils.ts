@@ -1,3 +1,4 @@
+import type { Logger } from '@archon/paths';
 import { inMemoryEventRows } from '../test-utils';
 import { afterEach, expect, mock, spyOn, type Mock } from 'bun:test';
 import { readFile } from 'fs/promises';
@@ -38,8 +39,10 @@ import { CONTAINER_MARKER_PROBE } from '../checkout-observation';
  * providers, so an importing test file must start with `// @archon-test-isolated`.
  */
 
+const actualPaths = await import('@archon/paths');
+
 export const mockLogFn = mock((_data: unknown, _message?: string): void => undefined);
-export const mockLogger = {
+export const mockLogger: Logger = Object.assign(actualPaths.createLogger('test.dag'), {
   level: 'info',
   info: mockLogFn,
   warn: mockLogFn,
@@ -48,7 +51,7 @@ export const mockLogger = {
   trace: mockLogFn,
   fatal: mockLogFn,
   child: mock(() => mockLogger),
-};
+});
 /**
  * The Archon home the artifact-pointer gate (#2453) resolves run artifact roots under.
  * Mutable so the pointer suite can point it at its own temp tree; every other suite
@@ -62,8 +65,6 @@ export function setMockArtifactHome(home: string): void {
 export function setMockWorkflowHome(home: string): void {
   mockWorkflowHome = home;
 }
-// Captured before the module mock below replaces it.
-const actualPaths = await import('@archon/paths');
 const { isPathInside } = actualPaths;
 mock.module('@archon/paths', () => ({
   ...actualPaths,
