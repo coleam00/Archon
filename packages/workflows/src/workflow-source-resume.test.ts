@@ -23,6 +23,8 @@ import { resolveCommandContentForScan } from './workflow-discovery/command-scan'
 import { loadCommandPrompt } from './load-command-prompt';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
+import { resolveFanOutChildDefinition } from './dag/nodes/compose-fan-out/compose-fan-out';
+import { collectComposedSuspensionPaths } from './include/suspension';
 import { formatPackagedResourceReference } from './packaged-workflow';
 import { WORKFLOW_SOURCE_METADATA_KEY, type WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowDeps, IWorkflowPlatform } from './deps';
@@ -73,7 +75,11 @@ function workflow(name: string, nodes: string): string {
 const first = '  - id: first\n    bash: exit 99';
 const remaining = '  - id: remaining\n    script: check\n    runtime: bun\n    depends_on: [first]';
 
-async function install(name: string, files: Record<string, string>): Promise<void> {
+async function install(
+  name: string,
+  files: Record<string, string>,
+  entrypoints: Record<string, string> = { run: 'run/run.yaml' }
+): Promise<void> {
   const plugins = join(root, 'home/plugins');
   const id = `acme/${name}`;
   const commit = 'a'.repeat(40);
@@ -82,7 +88,7 @@ async function install(name: string, files: Record<string, string>): Promise<voi
     kind: 'workflow-pack',
     name,
     description: 'Fixture',
-    entrypoints: { run: 'run/run.yaml' },
+    entrypoints,
   };
   const tree = packTreePath(plugins, id, commit);
   for (const [path, content] of Object.entries({
@@ -800,4 +806,128 @@ for (const mutation of ['entrypoint', 'name', 'missing-entrypoint']) {
       fault.mockRestore();
     }
   });
+}
+
+for (const scope of ['project', 'global', 'bundled', 'installed'] as const) {
+  test(`selected ${scope} composition retains non-pausing workflow children`, async () => {
+    const files = {
+      'run/run.yaml': workflow(
+        'run',
+        '  - id: composed\n    include: body\n    fan_out:\n      items: $input.items\n      as: item\n      join: all_success'
+      ),
+      'body/body.yaml': workflow('body', '  - id: child\n    workflow: leaf'),
+      'leaf/leaf.yaml': workflow('leaf', '  - id: done\n    bash: echo leaf'),
+    };
+    if (scope === 'installed')
+      await install('healthy', files, { run: 'run/run.yaml', leaf: 'leaf/leaf.yaml' });
+    else {
+      const directory = {
+        project: join(project, '.archon/workflows'),
+        global: join(root, 'home/workflows'),
+        bundled: join(bundleRoot, 'fixture'),
+      }[scope];
+      for (const [path, content] of Object.entries(files))
+        await put(join(directory, path), content);
+    }
+    if (scope === 'bundled')
+      spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['fixture']);
+    try {
+      const capture = await captureWorkflowSource({
+        sourceRoot: project,
+        captureRoot: join(root, 'composition'),
+      });
+      const name = scope === 'installed' ? 'acme/healthy:run' : 'run';
+      const body = scope === 'installed' ? 'acme/healthy:body' : 'body';
+      const roots = capturedSourceRoots(capture.anchor, name);
+      const catalog = await discoverWorkflowsWithConfig(
+        project,
+        loadConfig,
+        providerRegistry,
+        roots
+      );
+      expect(catalog.errors).toEqual([]);
+      expect(catalog.workflows.some(entry => entry.workflow.name === name)).toBe(true);
+      const resolved = await resolveFanOutChildDefinition(
+        {
+          loadConfig,
+          providers: providerRegistry,
+          store: await createFileWorkflowStore({ root: join(root, 'compose-store') }),
+          getAgentProvider: () => {
+            throw new Error('No agent expected');
+          },
+        },
+        project,
+        body,
+        roots
+      );
+      if ('unresolved' in resolved) throw new Error(resolved.unresolved);
+      expect(collectComposedSuspensionPaths(resolved.definition, resolved.definitions)).toEqual([]);
+    } finally {
+      if (scope === 'bundled') {
+        spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue([]);
+        for (const path of Object.keys(files)) await fs.rm(join(bundleRoot, 'fixture', path));
+      }
+    }
+  });
+}
+
+test('resume resolves a bare project script despite an unreadable global script unit', async () => {
+  await put(
+    join(project, '.archon/workflows/healthy.yaml'),
+    workflow('healthy', `${first}\n${remaining}`)
+  );
+  await put(join(project, '.archon/scripts/check.ts'), "console.log('frozen-local');");
+  await put(join(root, 'home/scripts/check.ts'), "throw new Error('shadowed');");
+  const fixture = await pausedRun();
+  await put(join(project, '.archon/scripts/check.ts'), "throw new Error('live');");
+  const fault = denyReads(join(fixture.capture.anchor.root, 'global'));
+  try {
+    expect(await fixture.resume()).toMatchObject({ success: true });
+    expect(
+      (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs.get(
+        'remaining'
+      )?.output
+    ).toContain('frozen-local');
+  } finally {
+    fault.mockRestore();
+  }
+});
+
+for (const kind of ['script', 'command'] as const) {
+  for (const owner of ['project', 'global'] as const) {
+    test(`bare ${kind} selects authenticated ${owner} precedence and refuses its read fault`, async () => {
+      const filename = kind === 'script' ? 'check.ts' : 'check.md';
+      const content = kind === 'script' ? "console.log('frozen');" : 'frozen command';
+      await put(join(root, 'home', `${kind}s`, 'group', filename), content);
+      if (owner === 'project')
+        await put(join(project, '.archon', `${kind}s`, 'group', filename), content);
+      const capture = await captureWorkflowSource({
+        sourceRoot: project,
+        captureRoot: join(root, 'lookup'),
+      });
+      const roots = capturedSourceRoots(capture.anchor);
+      const lookup = () =>
+        kind === 'script'
+          ? discoverScriptsForCwd(project, roots, new Set(['check']))
+          : loadCommandPrompt({ loadConfig }, project, 'check', undefined, roots);
+      const unrelated = denyReads(
+        join(capture.anchor.root, owner === 'project' ? 'global' : 'installed')
+      );
+      try {
+        const result = await lookup();
+        if (result instanceof Map) expect(result.get('check')?.path).toContain(`/${owner}/`);
+        else expect(result).toEqual({ success: true, content });
+        if (kind === 'command')
+          expect(await resolveCommandContentForScan(roots, 'check', {})).toBe(content);
+      } finally {
+        unrelated.mockRestore();
+      }
+      const required = denyReads(join(capture.anchor.root, owner));
+      try {
+        await expect(lookup()).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+      } finally {
+        required.mockRestore();
+      }
+    });
+  }
 }

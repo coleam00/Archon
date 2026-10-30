@@ -20,3 +20,7 @@ export function installedWorkflowName(
 ): string {
   return `${pack.owner}/${pack.name}:${name}`;
 }
+
+export function installedPackKey(owner: string, name: string): string {
+  return `${owner}.${name}`;
+}

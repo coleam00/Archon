@@ -7,7 +7,7 @@ import type {
   WorkflowLoadError,
   WorkflowWithSource,
 } from '../schemas';
-import { isIncludeDirective, isLoopGroupNode } from '../schemas';
+import { isIncludeDirective, isLoopGroupNode, isWorkflowNode } from '../schemas';
 import { collectLoopGroupSinkWarnings } from '../loader/parse-warnings';
 import { expandWorkflowIncludes } from '../include-expander';
 import { walkStaticNodes } from '../include/static-nodes';
@@ -85,6 +85,7 @@ function retainSelectedClosure(files: Map<string, ScopeFile>, selected: string):
       if (workflow.name !== name) continue;
       for (const edge of walkStaticNodes(workflow.nodes)) {
         if (edge.kind === 'include') visit(edge.node.include);
+        else if (edge.kind === 'executable' && isWorkflowNode(edge.node)) visit(edge.node.workflow);
       }
     }
   };

@@ -7,6 +7,11 @@
  * internal keys. Runtime is inferred from the extension: .ts/.js -> bun,
  * .py -> uv.
  */
+import {
+  MAX_SCRIPT_DISCOVERY_DEPTH,
+  getRuntimeForExtension,
+  type ScriptRuntime,
+} from './script-file';
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { createHash, randomUUID } from 'crypto';
 import { join, basename, dirname, extname } from 'path';
@@ -40,8 +45,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/** Supported script runtime */
-export type ScriptRuntime = 'bun' | 'uv';
+export type { ScriptRuntime } from './script-file';
 
 /** A discovered script with its metadata */
 export interface ScriptDefinition {
@@ -49,32 +53,6 @@ export interface ScriptDefinition {
   path: string;
   runtime: ScriptRuntime;
 }
-
-/** Supported file extensions and their runtimes */
-const EXTENSION_RUNTIME_MAP: Record<string, ScriptRuntime> = {
-  '.ts': 'bun',
-  '.js': 'bun',
-  '.py': 'uv',
-};
-
-/**
- * Derive the runtime from a file extension.
- * Returns undefined for unknown extensions.
- */
-function getRuntimeForExtension(ext: string): ScriptRuntime | undefined {
-  return EXTENSION_RUNTIME_MAP[ext];
-}
-
-/**
- * Maximum subfolder depth we descend into when scanning scripts.
- *
- * `1` matches the workflows/commands convention: allow one level of
- * grouping (e.g. `.archon/scripts/triage/foo.ts`) but no nested folders.
- * We stop at 1 deliberately — deeper nesting has never been part of the
- * documented convention and adds no organizational value, just routing
- * ambiguity when two basenames collide across folders.
- */
-const MAX_SCRIPT_DISCOVERY_DEPTH = 1;
 
 function selectedScriptRuntime(
   entry: string,
@@ -457,7 +435,8 @@ export async function discoverScriptsForCwd(
   const roots = sourceRoots ?? liveSourceRoots(cwd);
   const verifiedFiles = await verifyWorkflowSourceResources(
     roots,
-    requestedNames && [...requestedNames]
+    requestedNames && [...requestedNames],
+    'script'
   );
   const hasFiles = (directory: string) => sourceDirectoryHasFiles(verifiedFiles, directory);
   const sharedNames =

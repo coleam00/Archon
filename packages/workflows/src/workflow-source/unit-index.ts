@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { workflowPackManifestSchema } from '@archon/plugin-manifest';
-import { installedPluginRecordSchema } from './installed-record';
+import { installedPackKey, installedPluginRecordSchema } from './installed-record';
+
+import {
+  PROJECT_SCOPE_DIR,
+  GLOBAL_SCOPE_DIR,
+  BUNDLED_SCOPE_DIR,
+  INSTALLED_SCOPE_DIR,
+} from './roots';
 
 const relativePath = z
   .string()
@@ -54,8 +61,11 @@ function installedRoots(index: UnitIndex, ctx: z.RefinementCtx): Set<string> {
   const roots = new Set<string>();
   for (const plugin of index.installed_plugins) {
     const owner = plugin.id.split('/')[0];
-    const root = `installed/${plugin.key}`;
-    if (!/^[a-zA-Z0-9_-]+$/.test(owner) || plugin.key !== `${owner}.${plugin.manifest.name}`) {
+    const root = `${INSTALLED_SCOPE_DIR}/${plugin.key}`;
+    if (
+      !/^[a-zA-Z0-9_-]+$/.test(owner) ||
+      plugin.key !== installedPackKey(owner, plugin.manifest.name)
+    ) {
       ctx.addIssue({
         code: 'custom',
         message: 'Installed key must agree with its id and manifest name',
@@ -70,7 +80,7 @@ function installedRoots(index: UnitIndex, ctx: z.RefinementCtx): Set<string> {
 
 export function validateUnitIndex(index: UnitIndex, ctx: z.RefinementCtx): void {
   const roots = installedRoots(index, ctx);
-  const allowed = new Set(['project', 'global', 'bundled', ...roots]);
+  const allowed = new Set([PROJECT_SCOPE_DIR, GLOBAL_SCOPE_DIR, BUNDLED_SCOPE_DIR, ...roots]);
   for (const unit of index.units) {
     if (!allowed.has(unit.root))
       ctx.addIssue({ code: 'custom', message: `Unknown unit root: ${unit.root}` });

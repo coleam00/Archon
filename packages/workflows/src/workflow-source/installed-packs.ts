@@ -17,11 +17,16 @@ import {
 } from './roots';
 
 export {
+  installedPackKey,
   installedPluginRecordSchema,
   installedWorkflowName,
   type InstalledPluginRecord,
 } from './installed-record';
-import { installedWorkflowName, type InstalledPluginRecord } from './installed-record';
+import {
+  installedPackKey,
+  installedWorkflowName,
+  type InstalledPluginRecord,
+} from './installed-record';
 import { verifyIndexedUnits } from './verify-units';
 
 /** One installed workflow pack, read from receipts (live) or from a capture. */
@@ -43,10 +48,6 @@ export interface InstalledPack {
   readonly manifest: WorkflowPackManifest;
   /** Present for a live pack; a capture's manifest keeps the records of its packs. */
   readonly record?: InstalledPluginRecord;
-}
-
-export function installedPackKey(owner: string, name: string): string {
-  return `${owner}.${name}`;
 }
 
 export async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {

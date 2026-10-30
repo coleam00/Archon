@@ -1,7 +1,9 @@
+import { commandNameForRelativePath, getCommandFolderSearchPaths } from '@archon/paths';
+import { getRuntimeForExtension, MAX_SCRIPT_DISCOVERY_DEPTH } from '../script-file';
 import { installedWorkflowName } from './installed-record';
 import { parsePackagedResourceReference } from '../packaged-workflow';
 import { isDeepStrictEqual } from 'node:util';
-import { join, sep } from 'path';
+import { basename, extname, join, relative, sep } from 'path';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
 import {
   readWorkflowSourceState,
@@ -182,11 +184,13 @@ function definedSourceConfig(config: WorkflowSourceConfig): Record<string, unkno
 /** Returned paths are files covered by the verified digest; live roots have no inventory. */
 export async function assertWorkflowSourceIntegrity(
   roots: WorkflowSourceRoots,
-  read?: { resources: readonly string[] } | { units: readonly string[] }
+  read?:
+    | { resources: readonly string[]; kind?: 'command' | 'script' }
+    | { units: readonly string[] }
 ): Promise<ReadonlySet<string> | undefined> {
   if (roots.kind === 'live') return;
   if (read !== undefined && 'resources' in read)
-    return verifyWorkflowSourceResources(roots, read.resources);
+    return verifyWorkflowSourceResources(roots, read.resources, read.kind);
   if (read !== undefined) {
     const opened = await openWorkflowSource(
       roots.anchor.root,
@@ -317,7 +321,14 @@ export function selectedWorkflowUnits(
   });
   return pack
     ? [`installed/${pack.key}`]
-    : manifest.units.filter(unit => !unit.root.startsWith('installed/')).map(unit => unit.root);
+    : manifest.units
+        .filter(
+          unit =>
+            unit.root === 'project' ||
+            (!unit.root.startsWith('installed/') &&
+              unit.files.some(file => file.path.startsWith('workflows/')))
+        )
+        .map(unit => unit.root);
 }
 
 export async function verifySelectedWorkflowSource(
@@ -340,7 +351,8 @@ export async function verifySelectedWorkflowSource(
 /** A resource lookup verifies its actual owners, after runtime substitution. */
 export async function verifyWorkflowSourceResources(
   roots: WorkflowSourceRoots,
-  names?: readonly string[]
+  names?: readonly string[],
+  kind: 'command' | 'script' = 'command'
 ): Promise<ReadonlySet<string> | undefined> {
   if (roots.kind === 'live') return;
   if (names === undefined)
@@ -354,7 +366,7 @@ export async function verifyWorkflowSourceResources(
   if (capture.verifiedFiles !== undefined) return capture.verifiedFiles;
   const requested = names.flatMap(name => {
     const reference = parsePackagedResourceReference(name);
-    if (reference === null) return ['project', 'global', 'bundled'];
+    if (reference === null) return sharedResourceUnits(roots, capture.manifest, name, kind);
     return [sourceUnitForOwner(reference.owner)];
   });
   const available = new Set(capture.manifest.units.map(unit => unit.root));
@@ -363,6 +375,55 @@ export async function verifyWorkflowSourceResources(
     capture.manifest,
     requested.filter(root => available.has(root))
   );
+}
+
+function sharedResourceUnits(
+  roots: Extract<WorkflowSourceRoots, { kind: 'captured' }>,
+  manifest: IndexedWorkflowSourceManifest,
+  name: string,
+  kind: 'command' | 'script'
+): string[] {
+  const project = roots.project;
+  const projectDirectories =
+    project === null
+      ? []
+      : (kind === 'script'
+          ? ['.archon/scripts']
+          : getCommandFolderSearchPaths(manifest.source_config.command_folder)
+        ).map(folder => join(project, folder));
+  const scopes = [
+    { root: 'project', directories: projectDirectories },
+    {
+      root: 'global',
+      directories: [kind === 'script' ? roots.globalScripts : roots.globalCommands],
+    },
+    ...(kind === 'command' && manifest.source_config.load_default_commands
+      ? [{ root: 'bundled', directories: [roots.bundledCommands] }]
+      : []),
+  ];
+  for (const scope of scopes) {
+    const unit = manifest.units.find(unit => unit.root === scope.root);
+    if (
+      unit?.files.some(file =>
+        scope.directories.some(directory => {
+          const path = relative(directory, join(roots.anchor.root, unit.root, file.path));
+          const segments = path.split(sep);
+          if (
+            segments.some(segment => segment === '..') ||
+            (kind === 'script' && segments.length > MAX_SCRIPT_DISCOVERY_DEPTH + 1)
+          )
+            return false;
+          if (kind === 'command') return commandNameForRelativePath(path) === name;
+          const extension = extname(path);
+          return (
+            basename(path, extension) === name && getRuntimeForExtension(extension) !== undefined
+          );
+        })
+      )
+    )
+      return [scope.root];
+  }
+  return [];
 }
 
 /** Empty or absent scopes have no readable resources; never inspect injected directories. */
