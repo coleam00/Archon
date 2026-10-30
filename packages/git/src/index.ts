@@ -23,7 +23,6 @@ export {
   isProjectScopedWorktreeBase,
   worktreeExists,
   listWorktrees,
-  readGitWorktreeInventory,
   findWorktreeByBranch,
   isWorktreePath,
   removeWorktree,
@@ -40,7 +39,6 @@ export {
   toNativeWorktreePath,
 } from './worktree';
 export type {
-  GitWorktreeRecord,
   WorktreeLayout,
   WorktreeBaseOverride,
   GitCheckoutIdentity,

@@ -1,10 +1,5 @@
 import { relative } from 'path';
-import {
-  isSameWorktreePath,
-  readGitWorktreeInventory,
-  toRepoPath,
-  type GitWorktreeRecord,
-} from '@archon/git';
+import { listWorktrees, execFileAsync, toRepoPath } from '@archon/git';
 import {
   getIsolationProvider,
   readWorktreeCreationId,
@@ -186,40 +181,33 @@ async function createWorktree(
   }
 }
 
-function formatInventoryPath(path: string, mainPath: string): string {
-  const shortPath = shortenPath(path, mainPath);
-  return /[\p{Cc}\p{Zl}\p{Zp}]/u.test(shortPath)
-    ? JSON.stringify(shortPath)
-        .slice(1, -1)
-        .replace(
-          /[\u007f-\u009f\u2028\u2029]/g,
-          char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
-        )
-    : shortPath;
-}
-
-function formatGitWorktree(wt: GitWorktreeRecord, mainPath: string): string {
-  const shortPath = formatInventoryPath(wt.path, mainPath);
-  const branch = wt.ref?.startsWith('refs/heads/') ? wt.ref.slice('refs/heads/'.length) : wt.ref;
-  const status = wt.bare ? '(bare)' : branch ? `[${branch}]` : '(detached HEAD)';
-  const head = wt.head ? ` ${wt.head.slice(0, 7)}` : '';
-  const flags = `${wt.lockReason !== null ? ' locked' : ''}${wt.prunable ? ' prunable' : ''}`;
-  return `${shortPath}${head} ${status}${flags}`;
-}
-
 async function listConversationWorktrees(
   conversation: Conversation,
   mainPath: string
 ): Promise<CommandResult> {
   try {
-    const worktrees = await readGitWorktreeInventory(toRepoPath(mainPath));
+    const { stdout } = await execFileAsync('git', ['-C', mainPath, 'worktree', 'list']);
+
+    // Resolve the current worktree's working path from the DB (isolation_env_id is a UUID)
     const activePath = await currentWorktreePath(conversation);
+
+    // Parse output and mark current
+    const lines = stdout.trim().split('\n');
     let msg = 'Worktrees:\n\n';
 
-    for (const wt of worktrees) {
-      const isActive = activePath && isSameWorktreePath(wt.path, activePath);
+    for (const line of lines) {
+      // Extract the path (first part before whitespace)
+      const parts = line.split(/\s+/);
+      const fullPath = parts[0];
+      const shortPath = shortenPath(fullPath, mainPath);
+
+      // Reconstruct line with shortened path
+      const restOfLine = parts.slice(1).join(' ');
+      const shortenedLine = restOfLine ? `${shortPath} ${restOfLine}` : shortPath;
+
+      const isActive = activePath && fullPath === activePath;
       const marker = isActive ? ' <- active' : '';
-      msg += `${formatGitWorktree(wt, mainPath)}${marker}\n`;
+      msg += `${shortenedLine}${marker}\n`;
     }
 
     return { success: true, message: msg };
@@ -325,39 +313,41 @@ async function removeWorktree(
   }
 }
 
+/**
+ * Show all worktrees from git's perspective (the source of truth). Useful for
+ * discovering skill-created worktrees or stale entries.
+ */
 async function listGitWorktrees(
   conversation: Conversation,
   mainPath: string
 ): Promise<CommandResult> {
   try {
-    const gitWorktrees = (await readGitWorktreeInventory(toRepoPath(mainPath))).flatMap(wt =>
-      wt.ref?.startsWith('refs/heads/') && !isSameWorktreePath(wt.path, mainPath)
-        ? [{ path: wt.path, branch: wt.ref.slice('refs/heads/'.length) }]
-        : []
-    );
+    const gitWorktrees = await listWorktrees(toRepoPath(mainPath));
 
-    if (gitWorktrees.length === 0) {
+    if (gitWorktrees.length <= 1) {
       return {
         success: true,
         message:
-          'No secondary worktrees on local branches found.\n\nUse `/worktree create <branch>` to create one, or `git worktree list` for every Git-registered checkout.',
+          'No worktrees found (only main repo).\n\nUse `/worktree create <branch>` to create one.',
       };
     }
 
     // Resolve working path from UUID for current marker
     const activePath = await currentWorktreePath(conversation);
 
-    let msg = 'Secondary worktrees on local branches (from git):\n\n';
+    let msg = 'All worktrees (from git):\n\n';
     for (const wt of gitWorktrees) {
-      const shortPath = formatInventoryPath(wt.path, mainPath);
-      const isCurrent = activePath && isSameWorktreePath(wt.path, activePath);
+      const isMainRepo = wt.path === mainPath;
+      if (isMainRepo) continue;
+
+      const shortPath = shortenPath(wt.path, mainPath);
+      const isCurrent = activePath && wt.path === activePath;
       const marker = isCurrent ? ' ← current' : '';
       msg += `  ${wt.branch} → ${shortPath}${marker}\n`;
     }
 
-    msg += '\nIncludes worktrees created by external tools when attached to local branches.\n';
-    msg +=
-      'Use `git worktree list` for every Git-registered checkout, including detached HEADs and nonlocal symbolic HEADs.';
+    msg += '\nNote: This shows ALL worktrees including those created by external tools.\n';
+    msg += 'Git (`git worktree list`) is the source of truth.';
 
     return { success: true, message: msg };
   } catch (error) {

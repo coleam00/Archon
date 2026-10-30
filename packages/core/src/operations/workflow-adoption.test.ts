@@ -4,7 +4,8 @@
  *
  * The resolver's whole contract is fail-loud: every refusal names the operator's
  * next action and NONE of them degrade to a fresh start. The database boundary
- * is mocked; filesystem/Git seams are injected.
+ * is mocked and the filesystem/git seams are injected; the lane decision logic
+ * is what is under test.
  */
 import { describe, expect, test } from 'bun:test';
 import type { IsolationEnvironmentRow } from '@archon/isolation';

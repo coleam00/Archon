@@ -75,58 +75,6 @@ describe('git utilities', () => {
     });
   });
 
-  describe('readGitWorktreeInventory', () => {
-    test('preserves complete records and lock reasons while normalizing paths', async () => {
-      const execSpy = spyOn(git, 'execFileAsync').mockResolvedValue(
-        output(
-          'worktree /path/to/new\nline\0HEAD abc123\0branch refs/heads/feature\0locked setup\nreason\0\0' +
-            'worktree /path/to/detached\0HEAD def456\0detached\0locked\0prunable missing checkout\0\0' +
-            'worktree /path/to/bare\0bare\0\0'
-        )
-      );
-      try {
-        expect(await git.readGitWorktreeInventory(repo('/path/to/main'))).toEqual([
-          {
-            path: listed('/path/to/new\nline'),
-            head: 'abc123',
-            ref: 'refs/heads/feature',
-            bare: false,
-            lockReason: 'setup\nreason',
-            prunable: false,
-          },
-          {
-            path: listed('/path/to/detached'),
-            head: 'def456',
-            ref: undefined,
-            bare: false,
-            lockReason: '',
-            prunable: true,
-          },
-          {
-            path: listed('/path/to/bare'),
-            head: '',
-            ref: undefined,
-            bare: true,
-            lockReason: null,
-            prunable: false,
-          },
-        ]);
-      } finally {
-        execSpy.mockRestore();
-      }
-    });
-
-    test('propagates even a typed non-repository failure', async () => {
-      const error = new git.GitFailure('not_repository', 'missing repository');
-      const execSpy = spyOn(git, 'execFileAsync').mockRejectedValue(error);
-      try {
-        await expect(git.readGitWorktreeInventory(repo('/missing'))).rejects.toBe(error);
-      } finally {
-        execSpy.mockRestore();
-      }
-    });
-  });
-
   describe('listWorktrees', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
 
@@ -307,16 +255,10 @@ describe('git utilities', () => {
 
     test('an unlocked worktree reads as no lock at all', async () => {
       expect(await git.readWorktreeLock(worktreePath)).toBeNull();
-      expect(await git.readWorktreeRegistration(repoPath, worktreePath)).toEqual({
-        lockReason: null,
-      });
     });
 
     test('round-trips the reason a lock was taken with', async () => {
       await lock('archon: worktree setup in progress');
-      expect(await git.readWorktreeRegistration(repoPath, worktreePath)).toEqual({
-        lockReason: 'archon: worktree setup in progress',
-      });
 
       expect(await git.readWorktreeLock(worktreePath)).toEqual({
         reason: 'archon: worktree setup in progress',
@@ -325,27 +267,18 @@ describe('git utilities', () => {
       await git.unlockWorktree(repoPath, worktreePath);
 
       expect(await git.readWorktreeLock(worktreePath)).toBeNull();
-      expect(await git.readWorktreeRegistration(repoPath, worktreePath)).toEqual({
-        lockReason: null,
-      });
     });
 
     test('a lock taken without a reason is still a lock', async () => {
       // `null` means unlocked and nothing else, so a caller can tell the two
       // apart without inspecting the reason text.
       await run('worktree', 'lock', worktreePath);
-      expect(await git.readWorktreeRegistration(repoPath, worktreePath)).toEqual({
-        lockReason: '',
-      });
 
       expect(await git.readWorktreeLock(worktreePath)).toEqual({ reason: '' });
     });
 
     test('git refuses to remove a locked worktree unless forced twice', async () => {
       await lock('archon: worktree setup in progress');
-      expect(await git.readWorktreeRegistration(repoPath, worktreePath)).toEqual({
-        lockReason: 'archon: worktree setup in progress',
-      });
 
       // The lock is only a usable marker because git itself enforces it.
       await expect(git.removeWorktree(repoPath, worktreePath)).rejects.toThrow(/locked/);
