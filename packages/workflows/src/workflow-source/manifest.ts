@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { readdir, readFile, writeFile } from 'fs/promises';
 import { join, sep } from 'path';
 import { z } from 'zod';
+import { sourceUnitSchema, indexedInstalledPluginSchema, validateUnitIndex } from './unit-index';
 import { workflowSourceConfigSchema } from '../schemas/workflow-run';
 import { installedPluginRecordSchema } from './installed-packs';
 import { WorkflowSourceIntegrityError, isSystemError, sourceReadError } from './integrity';
@@ -53,11 +54,7 @@ const manifestFields = {
   unavailable_installed_workflows: z.array(z.string()).optional(),
 };
 
-/**
- * Version 2 is written only when installed packs were captured, and records the plugin
- * and commit each came from. A capture without packs stays version 1, so an older
- * Archon can still resume it.
- */
+/** Legacy captures authenticate the aggregate payload; v3 authenticates a unit index. */
 export const workflowSourceManifestSchema = z.discriminatedUnion('version', [
   z.object({ version: z.literal(1), ...manifestFields }),
   z.object({
@@ -65,9 +62,45 @@ export const workflowSourceManifestSchema = z.discriminatedUnion('version', [
     ...manifestFields,
     installed_plugins: z.array(installedPluginRecordSchema).min(1),
   }),
+  z
+    .object({
+      version: z.literal(3),
+      ...manifestFields,
+      digest: z.string().regex(/^[a-f0-9]{64}$/),
+      file_count: z.number().int().nonnegative().safe(),
+      byte_count: z.number().int().nonnegative().safe(),
+      source_config: workflowSourceConfigSchema.strict(),
+      installed_plugins: z.array(indexedInstalledPluginSchema),
+      units: z.array(sourceUnitSchema),
+    })
+    .strict()
+    .superRefine(validateUnitIndex),
 ]);
 
 export type WorkflowSourceManifest = z.infer<typeof workflowSourceManifestSchema>;
+export type IndexedWorkflowSourceManifest = Extract<WorkflowSourceManifest, { version: 3 }>;
+
+function canonicalJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJsonValue);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([key, entry]) => [key, canonicalJsonValue(entry)])
+    );
+  }
+  return value;
+}
+
+/** workflow_name is a diagnostic stamp; every other header field is authenticated. */
+export function indexedSourceDigest(manifest: IndexedWorkflowSourceManifest): string {
+  const { digest: _digest, workflow_name: _workflowName, ...immutable } = manifest;
+  return createHash('sha256')
+    .update('archon-workflow-source-v3\0')
+    .update(JSON.stringify(canonicalJsonValue(immutable)))
+    .digest('hex');
+}
 
 /** Where a run's executable source came from, and what was frozen. */
 export interface WorkflowSourceCapture {
@@ -84,6 +117,10 @@ export interface DigestEntry {
   readonly relPath: string;
   /** sha256 of the file's bytes, hex. */
   readonly hash: string;
+}
+
+export interface SizedDigestEntry extends DigestEntry {
+  readonly size: number;
 }
 
 /**
@@ -116,8 +153,8 @@ export function foldDigest(entries: readonly DigestEntry[]): string {
  * holds — the bundled scope, written from bytes this process is still holding. Everything
  * else is read here, which is what makes the digest a statement about bytes, not paths.
  */
-export async function digestEntries(root: string, skipScope?: string): Promise<DigestEntry[]> {
-  const entries: DigestEntry[] = [];
+export async function digestEntries(root: string, skipScope?: string): Promise<SizedDigestEntry[]> {
+  const entries: SizedDigestEntry[] = [];
 
   const walk = async (dir: string, rel: string): Promise<void> => {
     const dirEntries = await readdir(dir, { withFileTypes: true });
@@ -129,7 +166,11 @@ export async function digestEntries(root: string, skipScope?: string): Promise<D
       } else if (entry.isFile()) {
         if (relPath === MANIFEST_FILE) continue;
         const content = await readFile(join(dir, entry.name));
-        entries.push({ relPath, hash: createHash('sha256').update(content).digest('hex') });
+        entries.push({
+          relPath,
+          hash: createHash('sha256').update(content).digest('hex'),
+          size: content.length,
+        });
       }
     }
   };

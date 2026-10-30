@@ -315,7 +315,7 @@ nodes:
       captureRoot: join(home, 'runs', 'run-1'),
     });
     expect(capture.manifest).toMatchObject({
-      version: 2,
+      version: 3,
       scopes: expect.arrayContaining(['installed']),
       installed_plugins: [{ key: 'acme.review-kit', id: ID, commit: COMMIT_A }],
     });
@@ -344,7 +344,7 @@ nodes:
       ...(installedFrom ? { installedFrom } : {}),
     });
     expect(child.manifest).toMatchObject({
-      version: 2,
+      version: 3,
       installed_plugins: [{ id: ID, commit: COMMIT_A }],
     });
     const { workflows } = await discoverWorkflowsWithConfig(
@@ -358,12 +358,12 @@ nodes:
     );
   });
 
-  test('a capture with no installed pack stays manifest version 1', async () => {
+  test('a capture without installed packs uses the authenticated index format', async () => {
     const capture = await captureWorkflowSource({
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'run-1'),
     });
-    expect(capture.manifest.version).toBe(1);
+    expect(capture.manifest.version).toBe(3);
     expect(capture.manifest.scopes).not.toContain('installed');
   });
 });

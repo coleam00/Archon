@@ -363,7 +363,7 @@ describe('captureWorkflowSource', () => {
     await writeFile(join(source, '.archon', 'commands', 'new.md'), 'new');
     await captureWorkflowSource({ sourceRoot: source, captureRoot });
 
-    expect((await loadWorkflowSource(captureRoot)).manifest.version).toBe(1);
+    expect((await loadWorkflowSource(captureRoot)).manifest.version).toBe(3);
     await expect(
       readFile(join(captureRoot, 'project/.archon/commands/gone.md'), 'utf-8')
     ).rejects.toThrow();
@@ -440,7 +440,10 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
         captureRoot: captureRootIn(runArtifacts, 'removed'),
       });
       await expect(readFile(capturedAt(removed), 'utf-8')).rejects.toThrow();
-      expect(removed.manifest.digest).toBe(before.manifest.digest);
+      if (before.manifest.version !== 3 || removed.manifest.version !== 3) {
+        throw new Error('Expected indexed captures');
+      }
+      expect(removed.manifest.units).toEqual(before.manifest.units);
     } finally {
       await removeTempTree(bundledDir);
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
@@ -893,7 +896,7 @@ describe('the capture is authoritative, not advisory', () => {
 
     await recordSelectedWorkflow(capture.anchor.root, 'chosen-flow');
 
-    // The manifest is outside the digest, so naming the selection cannot invalidate it.
+    // The diagnostic selection stamp is outside the header commitment.
     const reloaded = await loadWorkflowSource(capture.anchor.root);
     expect(reloaded.manifest.workflow_name).toBe('chosen-flow');
     expect(reloaded.manifest.digest).toBe(capture.manifest.digest);

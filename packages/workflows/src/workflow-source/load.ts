@@ -11,16 +11,29 @@ import { sourceReadError, WorkflowSourceIntegrityError } from './integrity';
 import {
   digestEntries,
   foldDigest,
+  indexedSourceDigest,
   readManifest,
   type DigestEntry,
   type WorkflowSourceCapture,
+  type WorkflowSourceManifest,
+  type IndexedWorkflowSourceManifest,
 } from './manifest';
-import type { InstalledPacksRoot, WorkflowSourceRoots } from './roots';
+import type { InstalledPacksRoot, WorkflowSourceRoots, WorkflowSourceAnchor } from './roots';
 import { isDirectory } from './tree';
 import { getLog } from './log';
+import { assertIndexedLayout, verifyIndexedUnits } from './verify-units';
+
+type SourceVerification =
+  | { manifest: IndexedWorkflowSourceManifest; verifiedFiles: undefined }
+  | {
+      manifest: Exclude<WorkflowSourceManifest, IndexedWorkflowSourceManifest>;
+      verifiedFiles: ReadonlySet<string>;
+    };
+type OpenedWorkflowSource = WorkflowSourceCapture & SourceVerification;
 
 /**
- * Load a capture and prove its bytes are the ones that were frozen.
+ * Authenticate a capture's index without certifying v3 payload bytes.
+ * Legacy formats have no independent index and require full aggregate verification.
  *
  * Throws {@link WorkflowSourceUnavailableError} for missing or inaccessible source,
  * including the manifest, so an admitted run can resume on a readable host.
@@ -28,7 +41,7 @@ import { getLog } from './log';
  * shape, or a digest or resolution-settings mismatch; these invalidate the frozen source.
  * Other I/O errors propagate unchanged.
  */
-export async function loadWorkflowSource(
+export async function openWorkflowSource(
   captureRoot: string,
   /**
    * The digest the RUN recorded, when the caller has it.
@@ -41,7 +54,7 @@ export async function loadWorkflowSource(
   expectedDigest?: string,
   /** The source resolution config the RUN recorded, when new enough to have one. */
   expectedConfig?: WorkflowSourceConfig
-): Promise<WorkflowSourceCapture & { verifiedFiles: ReadonlySet<string> }> {
+): Promise<OpenedWorkflowSource> {
   const manifest = await readManifest(captureRoot);
   if (expectedDigest !== undefined && manifest.digest !== expectedDigest) {
     throw new WorkflowSourceIntegrityError(
@@ -64,20 +77,20 @@ export async function loadWorkflowSource(
       captureRoot
     );
   }
-  let entries: DigestEntry[];
-  try {
-    entries = await digestEntries(captureRoot);
-  } catch (error) {
-    throw sourceReadError(captureRoot, error);
-  }
-  const digest = foldDigest(entries);
-  if (digest !== manifest.digest) {
-    throw new WorkflowSourceIntegrityError(
-      `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
-        `(expected ${manifest.digest.slice(0, 12)}…, found ${digest.slice(0, 12)}…). ` +
-        'The captured source has changed since the run started.',
-      captureRoot
-    );
+  let verification: SourceVerification;
+  if (manifest.version === 3) {
+    if (indexedSourceDigest(manifest) !== manifest.digest) {
+      throw new WorkflowSourceIntegrityError(
+        `Workflow source index at ${captureRoot} does not match its recorded digest`,
+        captureRoot
+      );
+    }
+    verification = { manifest, verifiedFiles: undefined };
+  } else {
+    verification = {
+      manifest,
+      verifiedFiles: await verifyLegacyCapture(captureRoot, manifest.digest),
+    };
   }
   if (manifest.engine_version !== BUNDLED_VERSION) {
     // Recorded, never enforced: the verified captured bytes remain authoritative across
@@ -88,15 +101,71 @@ export async function loadWorkflowSource(
     );
   }
   return {
-    verifiedFiles: new Set(entries.map(entry => join(captureRoot, entry.relPath))),
+    ...verification,
     origin: manifest.origin,
-    manifest,
     anchor: {
       root: captureRoot,
       digest: expectedDigest ?? manifest.digest,
       config: expectedConfig ?? manifest.source_config,
     },
   };
+}
+
+async function verifyLegacyCapture(
+  captureRoot: string,
+  expectedDigest: string
+): Promise<ReadonlySet<string>> {
+  let entries: DigestEntry[];
+  try {
+    entries = await digestEntries(captureRoot);
+  } catch (error) {
+    const failure = sourceReadError(captureRoot, error);
+    if (failure instanceof Error) {
+      failure.message +=
+        ' Legacy v1/v2 captures require the entire aggregate; an unrelated pack read fault cannot be isolated.';
+    }
+    throw failure;
+  }
+  const digest = foldDigest(entries);
+  if (digest !== expectedDigest) {
+    throw new WorkflowSourceIntegrityError(
+      `Workflow source capture at ${captureRoot} does not match its recorded digest ` +
+        `(expected ${expectedDigest.slice(0, 12)}…, found ${digest.slice(0, 12)}…). ` +
+        'The captured source has changed since the run started.',
+      captureRoot
+    );
+  }
+  return new Set(entries.map(entry => join(captureRoot, entry.relPath)));
+}
+
+/** Full verification of all payloads, including the legacy aggregate formats. */
+export async function loadWorkflowSource(
+  captureRoot: string,
+  expectedDigest?: string,
+  expectedConfig?: WorkflowSourceConfig
+): Promise<WorkflowSourceCapture & { verifiedFiles: ReadonlySet<string> }> {
+  const capture = await openWorkflowSource(captureRoot, expectedDigest, expectedConfig);
+  if (capture.verifiedFiles !== undefined)
+    return { ...capture, verifiedFiles: capture.verifiedFiles };
+  await assertIndexedLayout(captureRoot, capture.manifest);
+  const verifiedFiles = await verifyIndexedUnits(
+    captureRoot,
+    capture.manifest,
+    capture.manifest.units.map(unit => unit.root)
+  );
+  return { ...capture, verifiedFiles };
+}
+
+/** Reauthenticate the run's commitment and verify only the requested v3 units. */
+export async function verifyWorkflowSourceUnits(
+  anchor: WorkflowSourceAnchor,
+  roots: readonly string[]
+): Promise<WorkflowSourceCapture & { verifiedFiles: ReadonlySet<string> }> {
+  const capture = await openWorkflowSource(anchor.root, anchor.digest, anchor.config);
+  if (capture.verifiedFiles !== undefined)
+    return { ...capture, verifiedFiles: capture.verifiedFiles };
+  const verifiedFiles = await verifyIndexedUnits(anchor.root, capture.manifest, roots);
+  return { ...capture, verifiedFiles };
 }
 
 function definedSourceConfig(config: WorkflowSourceConfig): Record<string, unknown> {
