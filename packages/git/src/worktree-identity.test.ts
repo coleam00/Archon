@@ -128,9 +128,11 @@ describe('git utilities', () => {
           output('/workspace/my-repo/.git/worktrees/issue-42\n/workspace/my-repo/.git\n')
         )
         .mockResolvedValueOnce(
-          output('worktree /workspace/my-repo\nHEAD abc123\nbranch refs/heads/main\n')
+          output('worktree /workspace/my-repo\0HEAD abc123\0branch refs/heads/main\0\0')
         );
-      expect(await git.getCanonicalRepoPath(testDir)).toBe(repo('/workspace/my-repo'));
+      expect(await git.getCanonicalRepoPath(testDir)).toBe(
+        repo(git.toNativeWorktreePath('/workspace/my-repo'))
+      );
     });
 
     test('handles worktree path with nested directories', async () => {
@@ -144,8 +146,10 @@ describe('git utilities', () => {
             '/home/user/projects/my-app/.git/worktrees/feature-branch\n/home/user/projects/my-app/.git\n'
           )
         )
-        .mockResolvedValueOnce(output('worktree /home/user/projects/my-app\nHEAD abc123\n'));
-      expect(await git.getCanonicalRepoPath(testDir)).toBe(repo('/home/user/projects/my-app'));
+        .mockResolvedValueOnce(output('worktree /home/user/projects/my-app\0HEAD abc123\0\0'));
+      expect(await git.getCanonicalRepoPath(testDir)).toBe(
+        repo(git.toNativeWorktreePath('/home/user/projects/my-app'))
+      );
     });
 
     test('resolves a relative worktree pointer from the worktree root', async () => {
@@ -153,7 +157,7 @@ describe('git utilities', () => {
       const primary = resolve(testDir, '../primary');
       execSpy
         .mockResolvedValueOnce(output(`${primary}/.git/worktrees/linked\n${primary}/.git\n`))
-        .mockResolvedValueOnce(output(`worktree ${primary}\nHEAD abc123\n`));
+        .mockResolvedValueOnce(output(`worktree ${primary}\0HEAD abc123\0\0`));
       expect(await git.getCanonicalRepoPath(testDir)).toBe(repo(primary));
     });
 
@@ -198,7 +202,7 @@ describe('git utilities', () => {
       const primaryCheckout = resolve(commonGitDir, '../../../../vendor/module');
       execSpy
         .mockResolvedValueOnce(output(`${linkedGitDir}\n${commonGitDir}\n`))
-        .mockResolvedValueOnce(output(`worktree ${commonGitDir}\nHEAD abc123\n`))
+        .mockResolvedValueOnce(output(`worktree ${commonGitDir}\0HEAD abc123\0\0`))
         .mockResolvedValueOnce(output('../../../../vendor/module\n'));
 
       const result = await git.getCanonicalRepoPath(testDir);
@@ -229,7 +233,7 @@ describe('git utilities', () => {
       await writeFile(join(testDir, '.git'), `gitdir: ${linkedGitDir}`);
       execSpy
         .mockResolvedValueOnce(output(`${linkedGitDir}\n${commonGitDir}\n`))
-        .mockResolvedValueOnce(output(`worktree ${commonGitDir}\nHEAD abc123\n`))
+        .mockResolvedValueOnce(output(`worktree ${commonGitDir}\0HEAD abc123\0\0`))
         .mockResolvedValueOnce(output(`${primaryCheckout}\n`));
       await expect(git.getCanonicalRepoPath(testDir)).resolves.toBe(repo(primaryCheckout));
     });
@@ -247,7 +251,7 @@ describe('git utilities', () => {
       await writeFile(join(testDir, '.git'), `gitdir: ${linkedGitDir}`);
       execSpy
         .mockResolvedValueOnce(output(`${linkedGitDir}\n${commonGitDir}\n`))
-        .mockResolvedValueOnce(output(`worktree ${commonGitDir}\nHEAD abc123\n`))
+        .mockResolvedValueOnce(output(`worktree ${commonGitDir}\0HEAD abc123\0\0`))
         .mockRejectedValueOnce(new Error('core.worktree is unset'));
       await expect(git.getCanonicalRepoPath(testDir)).rejects.toBeInstanceOf(
         git.CanonicalRepoPathUnavailableError

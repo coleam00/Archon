@@ -337,7 +337,9 @@ describe('CommandHandler', () => {
             expect(result.success).toBe(true);
             const lines = result.message.split('\n');
             expect(lines.find(line => line.includes('feat-x'))).toContain(marker);
-            expect(result.message).toContain('D:/my repo/worktrees/feat-x');
+            expect(result.message).toContain(
+              git.toNativeWorktreePath('D:/my repo/worktrees/feat-x')
+            );
             expect(lines.find(line => line.includes('feat-y'))).not.toContain(marker);
             expect(lines.filter(line => line.includes(marker))).toHaveLength(1);
           } finally {
@@ -345,6 +347,30 @@ describe('CommandHandler', () => {
           }
         }
       );
+
+      test.each([
+        ['list', ' <- active'],
+        ['orphans', ' ← current'],
+      ])('keeps control characters within one displayed %s row', async (route, marker) => {
+        const workingPath = '/workspace/my-repo/worktrees/new\nline\twith\rcontrols\x1b';
+        setWorktreeInventory([{ path: workingPath, branch: 'feat-x' }]);
+        const env = makeIsolationEnvironment({ working_path: workingPath });
+        mockIsolationEnvDbGet.mockResolvedValue(env);
+
+        const result = await handleCommand(
+          makeConversation({ ...conversationWithCodebase, isolation_env_id: env.id }),
+          `/worktree ${route}`,
+          operator
+        );
+
+        expect(result.success).toBe(true);
+        const rows = result.message.split('\n').filter(line => line.includes('feat-x'));
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toContain('new\\nline\\twith\\rcontrols\\u001b');
+        expect(rows[0]).toContain(marker);
+        expect(result.message).not.toContain('new\nline');
+        expect(result.message).not.toMatch(/[\r\t\x1b]/);
+      });
 
       test('keeps a real Git checkout path containing spaces and marks it active', async () => {
         const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-inventory-')));

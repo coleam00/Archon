@@ -178,6 +178,45 @@ export async function worktreeExists(worktreePath: WorktreePath): Promise<boolea
   }
 }
 
+export interface GitWorktreeRecord {
+  path: WorktreePath;
+  head: string;
+  ref: string | undefined;
+  bare: boolean;
+  lockReason: string | null;
+  prunable: boolean;
+}
+
+function parseWorktreeInventory(stdout: string): GitWorktreeRecord[] {
+  // -z terminates fields with NUL and records with an extra NUL; paths stay unquoted.
+  return stdout.split('\0\0').flatMap(record => {
+    const fields = record.split('\0');
+    const path = fields.find(field => field.startsWith('worktree '))?.slice('worktree '.length);
+    if (path === undefined) return [];
+    const locked = fields.find(field => field === 'locked' || field.startsWith('locked '));
+    return [
+      {
+        path: toWorktreePath(toNativeWorktreePath(path)),
+        head: fields.find(field => field.startsWith('HEAD '))?.slice('HEAD '.length) ?? '',
+        ref: fields.find(field => field.startsWith('branch '))?.slice('branch '.length),
+        bare: fields.includes('bare'),
+        lockReason: locked === undefined ? null : locked.slice('locked '.length),
+        prunable: fields.some(field => field === 'prunable' || field.startsWith('prunable ')),
+      },
+    ];
+  });
+}
+
+/** Read every Git registration, including detached and bare checkouts. Git failures propagate. */
+export async function readGitWorktreeInventory(repoPath: RepoPath): Promise<GitWorktreeRecord[]> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
+    { timeout: 10000 }
+  );
+  return parseWorktreeInventory(stdout);
+}
+
 /**
  * List worktrees on local branches for a repository.
  * Detached checkouts and symbolic HEAD refs outside refs/heads/ are excluded.
@@ -188,29 +227,11 @@ export async function worktreeExists(worktreePath: WorktreePath): Promise<boolea
  */
 export async function listWorktrees(repoPath: RepoPath): Promise<WorktreeInfo[]> {
   try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
-      { timeout: 10000 }
+    return (await readGitWorktreeInventory(repoPath)).flatMap(wt =>
+      wt.ref?.startsWith('refs/heads/')
+        ? [{ path: wt.path, branch: toBranchName(wt.ref.slice('refs/heads/'.length)) }]
+        : []
     );
-
-    const worktrees: WorktreeInfo[] = [];
-    let currentPath = '';
-
-    for (const line of stdout.split('\0')) {
-      if (line.startsWith('worktree ')) {
-        currentPath = toNativeWorktreePath(line.substring(9));
-      } else if (line.startsWith('branch ')) {
-        const ref = line.slice('branch '.length);
-        if (!ref.startsWith('refs/heads/')) continue;
-        const branch = ref.slice('refs/heads/'.length);
-        if (currentPath) {
-          worktrees.push({ path: toWorktreePath(currentPath), branch: toBranchName(branch) });
-        }
-      }
-    }
-
-    return worktrees;
   } catch (error) {
     if (error instanceof GitFailure && error.kind === 'not_repository') return [];
     getLog().error({ repoPath, err: error }, 'worktree.list_failed');
@@ -407,8 +428,9 @@ async function resolvePrimaryCheckout(
     'worktree',
     'list',
     '--porcelain',
+    '-z',
   ]);
-  const firstWorktree = /^worktree (.+)$/m.exec(worktreeList)?.[1];
+  const firstWorktree = parseWorktreeInventory(worktreeList)[0]?.path;
   if (firstWorktree && resolve(firstWorktree) !== resolve(identity.commonGitDir)) {
     return toRepoPath(firstWorktree);
   }
@@ -600,21 +622,12 @@ export async function readWorktreeRegistration(
   repoPath: RepoPath,
   worktreePath: string
 ): Promise<{ lockReason: string | null } | null> {
-  const { stdout } = await execFileAsync(
-    'git',
-    ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
-    { timeout: 10000 }
-  );
+  const inventory = await readGitWorktreeInventory(repoPath);
   const target = await resolveThroughExistingAncestor(worktreePath);
-  // -z ends each field with NUL and each record with an extra NUL.
-  for (const record of stdout.split('\0\0')) {
-    const fields = record.split('\0');
-    const listedPath = fields.find(field => field.startsWith('worktree '));
-    if (!listedPath) continue;
-    const listed = await resolveThroughExistingAncestor(listedPath.slice('worktree '.length));
+  for (const record of inventory) {
+    const listed = await resolveThroughExistingAncestor(record.path);
     if (!isSameWorktreePath(listed, target)) continue;
-    const locked = fields.find(field => field === 'locked' || field.startsWith('locked '));
-    return { lockReason: locked === undefined ? null : locked.slice('locked '.length) };
+    return { lockReason: record.lockReason };
   }
   return null;
 }
