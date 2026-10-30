@@ -1,6 +1,11 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
-import { spawn } from 'node:child_process';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { DEFAULT_TEST_TIMEOUT_MS, trackTempRoots } from './test-utils';
 import { getLogLevel, setLogLevel, setLogSink } from './logger';
 import * as identities from './windows-process-identity';
 import type { WindowsProcessIdentity } from './windows-process-identity';
@@ -8,6 +13,7 @@ import {
   confirmProcessGroupsGone,
   inspectProcessGroups,
   terminateWindowsTree,
+  terminateTree,
 } from './plugin-process';
 
 describe('inspectProcessGroups', () => {
@@ -339,3 +345,143 @@ describe('Windows capture ordering', () => {
     }
   });
 });
+
+describe.skipIf(process.platform === 'win32')('terminateTree POSIX', () => {
+  let kill: ReturnType<typeof spyOn<typeof process, 'kill'>>;
+  const refused = Object.assign(new Error('signal refused'), { code: 'EPERM' });
+  const originalLevel = getLogLevel();
+  let lines: string[];
+  beforeEach(() => {
+    lines = [];
+    setLogLevel('info');
+    setLogSink(line => {
+      lines.push(line);
+    });
+    kill = spyOn(process, 'kill').mockImplementation(() => {
+      throw refused;
+    });
+  });
+  afterEach(() => {
+    kill.mockRestore();
+    setLogSink(undefined);
+    setLogLevel(originalLevel);
+  });
+
+  test.each(['', '120 R\n', '12 Z\n12 ZN\n120 R\n', '012 Z+\n'])(
+    'accepts ended group %p',
+    async listing => {
+      await terminateTree(12, 'SIGTERM', async () => listing);
+      expect(kill.mock.calls).toEqual([[-12, 'SIGTERM']]);
+    }
+  );
+
+  test.each([
+    '12 R\n',
+    '12 Z\n12 S\n',
+    '12 T\n',
+    '12 ?\n',
+    '12 Z\n120 R\n12 S\n',
+    '12',
+    'invalid',
+    '12 Z extra',
+    '99999999999999999 Z',
+    '12 Z\ninvalid',
+  ])('retains original EPERM for live or ambiguous listing %p', async listing => {
+    await expect(terminateTree(12, undefined, async () => listing)).rejects.toBe(refused);
+    expect(kill.mock.calls).toEqual([[-12, 'SIGKILL']]);
+  });
+
+  test.each(['command', 'listing'])(
+    'logs failed %s inspection and retains EPERM',
+    async failure => {
+      const inspectionError = Object.assign(new Error('ps failed'), { code: 'ETIMEDOUT' });
+      await expect(
+        terminateTree(12, undefined, async () => {
+          if (failure === 'command') throw inspectionError;
+          return 'invalid';
+        })
+      ).rejects.toBe(refused);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0])).toMatchObject({
+        level: 40,
+        module: 'paths.plugin-process',
+        msg: 'process_group_inspection_failed',
+        targetPid: 12,
+        err:
+          failure === 'command'
+            ? { message: 'ps failed', code: 'ETIMEDOUT' }
+            : { message: 'Invalid POSIX process listing' },
+      });
+    }
+  );
+
+  test('retains EPERM when inspection and logging both fail', async () => {
+    setLogSink(() => {
+      throw new Error('sink failed');
+    });
+    await expect(
+      terminateTree(12, undefined, async () => {
+        throw new Error('ps failed');
+      })
+    ).rejects.toBe(refused);
+  });
+
+  test.each(['success', 'ESRCH', 'EIO'])('never inspects after %s', async code => {
+    const error = Object.assign(new Error('kill failed'), { code });
+    kill.mockImplementation(() => {
+      if (code === 'success') return true;
+      throw error;
+    });
+    const list = mock(async () => '');
+    const result = await terminateTree(12, undefined, list).then(
+      () => 'resolved',
+      caught => caught
+    );
+    expect(result).toBe(code === 'EIO' ? error : 'resolved');
+    expect(list).not.toHaveBeenCalled();
+  });
+});
+
+const trackTempRoot = trackTempRoots();
+test.skipIf(process.platform !== 'darwin')(
+  'stops a real unreaped zombie-only group on macOS',
+  async () => {
+    const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-zombie-')));
+    const executable = join(root, 'zombie');
+    const exec = promisify(execFile);
+    await exec('cc', [
+      '-Wall',
+      '-Wextra',
+      join(import.meta.dir, 'fixtures/zombie-process-group.c'),
+      '-o',
+      executable,
+    ]);
+    const parent = spawn(executable, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const exited = once(parent, 'exit');
+    try {
+      const [data] = await once(parent.stdout, 'data', {
+        signal: AbortSignal.timeout(DEFAULT_TEST_TIMEOUT_MS - 1000),
+      });
+      const pgid = Number(String(data).trim());
+      expect(Number.isSafeInteger(pgid) && pgid > 0).toBe(true);
+      const states = async () => {
+        const { stdout } = await exec('/bin/ps', ['-A', '-o', 'pgid=,stat=']);
+        return stdout
+          .trim()
+          .split('\n')
+          .map(line => line.trim().split(/\s+/))
+          .filter(([group]) => Number(group) === pgid)
+          .map(([, state]) => state);
+      };
+      expect(await states()).toEqual([expect.stringMatching(/^Z/)]);
+      expect(() => process.kill(-pgid, 'SIGKILL')).toThrow(
+        expect.objectContaining({ code: 'EPERM' })
+      );
+      await terminateTree(pgid);
+      expect(await states()).toEqual([expect.stringMatching(/^Z/)]);
+    } finally {
+      parent.stdin.end();
+      expect(await exited).toEqual([0, null]);
+    }
+  }
+);

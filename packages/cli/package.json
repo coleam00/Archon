@@ -53,6 +53,9 @@
       "src/commands/inspect-chat-plugin.test.ts"
     ],
     [
+      "src/commands/inspect-chat-plugin.integration.test.ts"
+    ],
+    [
       "src/commands/publish-plugin.test.ts"
     ],
     [
