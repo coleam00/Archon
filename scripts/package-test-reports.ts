@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { XMLValidator } from 'fast-xml-parser';
+import { SaxesParser } from 'saxes';
 
 const countFields = ['tests', 'assertions', 'failures', 'skipped', 'errors', 'time'] as const;
 type Counts = Record<(typeof countFields)[number], number>;
@@ -16,8 +16,7 @@ function attributes(tag: string): Map<string, string> {
 }
 
 function parseReport(xml: string): TestReport {
-  const valid = XMLValidator.validate(xml);
-  if (valid !== true) throw new Error(`Invalid JUnit XML: ${valid.err.msg}`);
+  new SaxesParser().write(xml).close();
   // Bun owns this XML envelope. Keep suite bodies intact, including escaped failure text.
   const envelope =
     /^\s*(?:<\?xml[^?]*\?>\s*)?<testsuites\b([^>]*)>([\s\S]*)<\/testsuites>\s*$/.exec(xml);
