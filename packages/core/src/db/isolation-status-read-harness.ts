@@ -42,7 +42,7 @@ export function isolationStatusReadTests(
     }
   });
 
-  test('environment lookup returns the newest run', async () => {
+  test('environment lookup returns the newest run and inventory returns all matching runs', async () => {
     const db = getDb();
     const { getRunByIsolationEnvId, getRunIdsByIsolationEnvId } = await import(
       './workflow-run-reads'
@@ -51,6 +51,8 @@ export function isolationStatusReadTests(
     expect(await getRunIdsByIsolationEnvId(env.id)).toEqual([]);
     const failed = await seedRun(env.id, 'failed');
     const completed = await seedRun(env.id, 'completed');
+    const otherEnv = await createEnv(randomUUID());
+    await seedRun(otherEnv.id, 'completed');
     for (const [id, date] of [
       [failed, '2020-01-02'],
       [completed, '2020-01-03'],
