@@ -826,11 +826,23 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
   });
 
-  test('fresh background supersede persists provenance on the pre-created row', async () => {
+  test('fresh background supersede records launch AI configuration and provenance', async () => {
     await dispatchBackgroundWorkflow(
       makeRoutingCtx({
         declaredContinuation: {
-          run: makeRun({ id: 'replaced-run', status: 'failed' }),
+          run: makeRun({
+            id: 'replaced-run',
+            status: 'failed',
+            metadata: {
+              ai_configuration: {
+                version: 1,
+                assistant: 'codex',
+                assistants: { codex: { model: 'replaced-model' } },
+                baseAiProfile: buildAiProfile('codex'),
+                modelOverrides: {},
+              },
+            },
+          }),
           stamp: { mode: 'supersede' },
         },
       }),
@@ -840,9 +852,18 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
     expect(mockCreateWorkflowRun.mock.calls[0][0]).toMatchObject({
       adopted_from_run_id: 'replaced-run',
-      metadata: { continuation: { mode: 'supersede' } },
+      metadata: {
+        continuation: { mode: 'supersede' },
+        ai_configuration: { assistant: 'claude', assistants: { claude: {} } },
+      },
     });
     await flushBackgroundExecution();
+    const prepared = mockExecuteWorkflow.mock.calls[0]?.[7]?.preparedAiConfiguration;
+    expect(prepared?.config.assistant).toBe('claude');
+    expect(prepared?.config.assistants.claude.model).toBeUndefined();
+    expect(mockCreateWorkflowRun.mock.calls[0][0].metadata?.ai_configuration).toEqual(
+      prepared?.aiConfigurationSnapshot
+    );
   });
 
   test('writes no inputs key on the pre-created row when none are supplied', async () => {
