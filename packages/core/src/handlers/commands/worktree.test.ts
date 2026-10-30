@@ -1,6 +1,10 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeEach, afterAll, spyOn } from 'bun:test';
-import { win32 } from 'node:path';
+import { join, win32 } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, realpath } from 'node:fs/promises';
+import { removeTempTree } from '@archon/paths/test-utils';
 import * as git from '@archon/git';
 import {
   MissingProjectDirectoryError,
@@ -19,7 +23,6 @@ import {
   mockGetActiveSession,
   mockDeactivateSession,
   spyExecFileAsync,
-  spyListWorktrees,
   mockIsolationEnvDbCreate,
   mockIsolationEnvDbGet,
   mockMarkWorktreeDestroyed,
@@ -35,6 +38,17 @@ import {
   baseConversation,
   resetCommandHandlerMocks,
 } from './test-harness';
+
+const realExecFileAsync = git.execFileAsync;
+
+function setWorktreeInventory(entries: { path: string; branch: string }[]): void {
+  spyExecFileAsync.mockResolvedValue({
+    stdout: entries
+      .map(({ path, branch }) => `worktree ${path}\0HEAD abc1234\0branch refs/heads/${branch}\0\0`)
+      .join(''),
+    stderr: '',
+  });
+}
 
 describe('CommandHandler', () => {
   beforeEach(resetCommandHandlerMocks);
@@ -253,12 +267,7 @@ describe('CommandHandler', () => {
 
       describe('list', () => {
         test('should list worktrees', async () => {
-          spyExecFileAsync.mockResolvedValue({
-            stdout:
-              '/workspace/my-repo  abc1234 [main]\n/workspace/my-repo/worktrees/feat-x  def5678 [feat-x]\n',
-            stderr: '',
-          });
-          spyListWorktrees.mockResolvedValue([
+          setWorktreeInventory([
             { path: '/workspace/my-repo', branch: 'main' },
             { path: '/workspace/my-repo/worktrees/feat-x', branch: 'feat-x' },
           ]);
@@ -273,6 +282,29 @@ describe('CommandHandler', () => {
         });
       });
 
+      test('lists complete paths for detached, bare and nonlocal symbolic checkouts', async () => {
+        spyExecFileAsync.mockResolvedValue({
+          stdout:
+            'worktree /workspace/my-repo/detached checkout\0HEAD def5678\0detached\0locked reason with spaces\0prunable missing directory\0\0' +
+            'worktree /workspace/my-repo/bare repo\0bare\0\0' +
+            'worktree /workspace/my-repo/remote checkout\0HEAD fed9876\0branch refs/remotes/origin/main\0\0',
+          stderr: '',
+        });
+        const result = await handleCommand(conversationWithCodebase, '/worktree list', operator);
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain(
+          'detached checkout def5678 (detached HEAD) locked prunable'
+        );
+        expect(result.message).toContain('bare repo (bare)');
+        expect(result.message).toContain('remote checkout fed9876 [refs/remotes/origin/main]');
+        expect(spyExecFileAsync).toHaveBeenCalledWith(
+          'git',
+          ['-C', '/workspace/my-repo', 'worktree', 'list', '--porcelain', '-z'],
+          { timeout: 10000 }
+        );
+      });
+
       test.each([
         ['list', ' <- active'],
         ['orphans', ' ← current'],
@@ -280,21 +312,16 @@ describe('CommandHandler', () => {
         'marks the active checkout with alternate Windows spelling in %s',
         async (route, marker) => {
           mockGetCodebase.mockResolvedValue(
-            makeCodebase({ default_cwd: 'D:\\repo', kind: 'repo' })
+            makeCodebase({ default_cwd: 'D:\\my repo', kind: 'repo' })
           );
           const env = makeIsolationEnvironment({
-            working_path: 'd:\\repo\\worktrees\\feat-x\\',
+            working_path: 'd:\\my repo\\worktrees\\feat-x\\',
           });
           mockIsolationEnvDbGet.mockResolvedValue(env);
-          spyExecFileAsync.mockResolvedValue({
-            stdout:
-              'D:/repo abc1234 [main]\nD:/repo/worktrees/feat-x def5678 [feat-x]\nD:/repo/worktrees/feat-y fed9876 [feat-y]\n',
-            stderr: '',
-          });
-          spyListWorktrees.mockResolvedValue([
-            { path: 'D:/repo', branch: 'main' },
-            { path: 'D:/repo/worktrees/feat-x', branch: 'feat-x' },
-            { path: 'D:/repo/worktrees/feat-y', branch: 'feat-y' },
+          setWorktreeInventory([
+            { path: 'D:/my repo', branch: 'main' },
+            { path: 'D:/my repo/worktrees/feat-x', branch: 'feat-x' },
+            { path: 'D:/my repo/worktrees/feat-y', branch: 'feat-y' },
           ]);
           const comparePaths = git.isSameWorktreePath;
           const pathSpy = spyOn(git, 'isSameWorktreePath').mockImplementation((a, b) =>
@@ -310,6 +337,7 @@ describe('CommandHandler', () => {
             expect(result.success).toBe(true);
             const lines = result.message.split('\n');
             expect(lines.find(line => line.includes('feat-x'))).toContain(marker);
+            expect(result.message).toContain('D:/my repo/worktrees/feat-x');
             expect(lines.find(line => line.includes('feat-y'))).not.toContain(marker);
             expect(lines.filter(line => line.includes(marker))).toHaveLength(1);
           } finally {
@@ -318,12 +346,102 @@ describe('CommandHandler', () => {
         }
       );
 
+      test('keeps a real Git checkout path containing spaces and marks it active', async () => {
+        const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-inventory-')));
+        try {
+          const mainPath = join(root, 'main repo');
+          const workingPath = join(root, 'active checkout');
+          await realExecFileAsync('git', ['init', '-b', 'main', mainPath]);
+          await realExecFileAsync('git', [
+            '-C',
+            mainPath,
+            '-c',
+            'user.name=Test',
+            '-c',
+            'user.email=test@example.com',
+            '-c',
+            'commit.gpgsign=false',
+            'commit',
+            '--allow-empty',
+            '-m',
+            'Initial commit',
+          ]);
+          await realExecFileAsync('git', [
+            '-C',
+            mainPath,
+            'worktree',
+            'add',
+            '-b',
+            'feat-x',
+            workingPath,
+          ]);
+          mockGetCodebase.mockResolvedValue(makeCodebase({ default_cwd: mainPath, kind: 'repo' }));
+          const env = makeIsolationEnvironment({ working_path: workingPath });
+          mockIsolationEnvDbGet.mockResolvedValue(env);
+          spyExecFileAsync.mockImplementation(realExecFileAsync);
+
+          for (const [route, marker] of [
+            ['list', ' <- active'],
+            ['orphans', ' ← current'],
+          ]) {
+            const result = await handleCommand(
+              makeConversation({ ...conversationWithCodebase, isolation_env_id: env.id }),
+              `/worktree ${route}`,
+              operator
+            );
+            expect(result.success).toBe(true);
+            expect(result.message).toContain('active checkout');
+            expect(
+              result.message.split('\n').find(line => line.includes('active checkout'))
+            ).toContain(marker);
+          }
+        } finally {
+          await removeTempTree(root);
+        }
+      });
+
+      test('excludes detached and nonlocal symbolic checkouts from local-branch inventory', async () => {
+        spyExecFileAsync.mockResolvedValue({
+          stdout:
+            'worktree /workspace/my-repo/worktrees/feat-x\0HEAD abc1234\0branch refs/heads/feat-x\0\0' +
+            'worktree /workspace/my-repo/detached checkout\0HEAD def5678\0detached\0\0' +
+            'worktree /workspace/my-repo/bare repo\0bare\0\0' +
+            'worktree /workspace/my-repo/remote checkout\0HEAD fed9876\0branch refs/remotes/origin/main\0\0',
+          stderr: '',
+        });
+
+        const result = await handleCommand(conversationWithCodebase, '/worktree orphans', operator);
+
+        expect(result.success).toBe(true);
+        expect(result.message).toMatch(/feat-x → worktrees[\\/]feat-x/);
+        expect(result.message).not.toContain('detached checkout');
+        expect(result.message).not.toContain('bare repo');
+        expect(result.message).not.toContain('remote checkout');
+      });
+
+      test.each(['list', 'orphans'])('reports a missing repository in %s', async route => {
+        const missingPath = join(tmpdir(), `archon-missing-${randomUUID()}`);
+        mockGetCodebase.mockResolvedValue(makeCodebase({ default_cwd: missingPath, kind: 'repo' }));
+        spyExecFileAsync.mockImplementation(realExecFileAsync);
+
+        const result = await handleCommand(
+          conversationWithCodebase,
+          `/worktree ${route}`,
+          operator
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Failed to list worktrees:');
+        expect(result.message).toContain(missingPath);
+        expect(result.message).not.toContain('No secondary worktrees');
+      });
+
       describe('orphans', () => {
         test('excludes alternate Windows spellings of the main checkout', async () => {
           mockGetCodebase.mockResolvedValue(
-            makeCodebase({ default_cwd: 'd:\\repo', kind: 'repo' })
+            makeCodebase({ default_cwd: 'd:\\my repo', kind: 'repo' })
           );
-          spyListWorktrees.mockResolvedValue([{ path: 'D:\\repo', branch: 'main' }]);
+          setWorktreeInventory([{ path: 'D:\\my repo', branch: 'main' }]);
           const comparePaths = git.isSameWorktreePath;
           const pathSpy = spyOn(git, 'isSameWorktreePath').mockImplementation((a, b) =>
             comparePaths(a, b, win32)
@@ -346,7 +464,7 @@ describe('CommandHandler', () => {
         test.each([true, false])(
           'lists a secondary checkout when main is included: %s',
           async includeMain => {
-            spyListWorktrees.mockResolvedValue([
+            setWorktreeInventory([
               ...(includeMain ? [{ path: '/workspace/my-repo', branch: 'main' }] : []),
               { path: '/workspace/my-repo/worktrees/feat-x', branch: 'feat-x' },
             ]);
@@ -371,7 +489,7 @@ describe('CommandHandler', () => {
         test.each([true, false])(
           'reports no secondary checkouts when main is included: %s',
           async includeMain => {
-            spyListWorktrees.mockResolvedValue(
+            setWorktreeInventory(
               includeMain ? [{ path: '/workspace/my-repo', branch: 'main' }] : []
             );
 

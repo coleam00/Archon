@@ -1,5 +1,5 @@
 import { relative } from 'path';
-import { listWorktrees, isSameWorktreePath, execFileAsync, toRepoPath } from '@archon/git';
+import { isSameWorktreePath, execFileAsync, toRepoPath } from '@archon/git';
 import {
   getIsolationProvider,
   readWorktreeCreationId,
@@ -181,33 +181,54 @@ async function createWorktree(
   }
 }
 
+async function readGitWorktreeInventory(mainPath: string) {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', mainPath, 'worktree', 'list', '--porcelain', '-z'],
+    { timeout: 10000 }
+  );
+  return stdout.split('\0\0').flatMap(record => {
+    const fields = record.split('\0');
+    const path = fields.find(field => field.startsWith('worktree '))?.slice('worktree '.length);
+    if (path === undefined) return [];
+    return [
+      {
+        path,
+        head: fields.find(field => field.startsWith('HEAD '))?.slice('HEAD '.length) ?? '',
+        ref: fields.find(field => field.startsWith('branch '))?.slice('branch '.length),
+        bare: fields.includes('bare'),
+        locked: fields.some(field => field === 'locked' || field.startsWith('locked ')),
+        prunable: fields.some(field => field === 'prunable' || field.startsWith('prunable ')),
+      },
+    ];
+  });
+}
+
+function formatGitWorktree(
+  wt: Awaited<ReturnType<typeof readGitWorktreeInventory>>[number],
+  mainPath: string
+): string {
+  const shortPath = shortenPath(wt.path, mainPath);
+  const branch = wt.ref?.startsWith('refs/heads/') ? wt.ref.slice('refs/heads/'.length) : wt.ref;
+  const status = wt.bare ? '(bare)' : branch ? `[${branch}]` : '(detached HEAD)';
+  const head = wt.head ? ` ${wt.head.slice(0, 7)}` : '';
+  const flags = `${wt.locked ? ' locked' : ''}${wt.prunable ? ' prunable' : ''}`;
+  return `${shortPath}${head} ${status}${flags}`;
+}
+
 async function listConversationWorktrees(
   conversation: Conversation,
   mainPath: string
 ): Promise<CommandResult> {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', mainPath, 'worktree', 'list']);
-
-    // Resolve the current worktree's working path from the DB (isolation_env_id is a UUID)
+    const worktrees = await readGitWorktreeInventory(mainPath);
     const activePath = await currentWorktreePath(conversation);
-
-    // Parse output and mark current
-    const lines = stdout.trim().split('\n');
     let msg = 'Worktrees:\n\n';
 
-    for (const line of lines) {
-      // Extract the path (first part before whitespace)
-      const parts = line.split(/\s+/);
-      const fullPath = parts[0];
-      const shortPath = shortenPath(fullPath, mainPath);
-
-      // Reconstruct line with shortened path
-      const restOfLine = parts.slice(1).join(' ');
-      const shortenedLine = restOfLine ? `${shortPath} ${restOfLine}` : shortPath;
-
-      const isActive = activePath && isSameWorktreePath(fullPath, activePath);
+    for (const wt of worktrees) {
+      const isActive = activePath && isSameWorktreePath(wt.path, activePath);
       const marker = isActive ? ' <- active' : '';
-      msg += `${shortenedLine}${marker}\n`;
+      msg += `${formatGitWorktree(wt, mainPath)}${marker}\n`;
     }
 
     return { success: true, message: msg };
@@ -318,8 +339,10 @@ async function listGitWorktrees(
   mainPath: string
 ): Promise<CommandResult> {
   try {
-    const gitWorktrees = (await listWorktrees(toRepoPath(mainPath))).filter(
-      wt => !isSameWorktreePath(wt.path, mainPath)
+    const gitWorktrees = (await readGitWorktreeInventory(mainPath)).flatMap(wt =>
+      wt.ref?.startsWith('refs/heads/') && !isSameWorktreePath(wt.path, mainPath)
+        ? [{ path: wt.path, branch: wt.ref.slice('refs/heads/'.length) }]
+        : []
     );
 
     if (gitWorktrees.length === 0) {
