@@ -133,7 +133,9 @@ export interface BlockedItem {
 }
 
 // A scheduled queue would otherwise judge the same blocked items on every run.
-const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
+// Six hours by default. A fast operator can shorten it: a merged dependency otherwise leaves
+// the items behind it blocked until their next revisit, which stalls a dependency chain.
+const REVISIT_EVERY_MS = (Number(process.env.ARCHON_SDLC_REVISIT_MINUTES) || 360) * 60 * 1000;
 const REVISITED = 'revisited';
 
 /** The unclaimed blocked items the queue has not revisited in the last few hours. */
