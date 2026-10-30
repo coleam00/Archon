@@ -5,11 +5,7 @@ import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
 import type { WorkflowSourceConfig } from '../schemas/workflow-run';
 import { resolveBundledScope, writeBundledScope } from './bundled-scope';
 import { installedPackKey, listInstalledPacks, readPackManifest } from './installed-packs';
-import {
-  WorkflowSourceIntegrityError,
-  WorkflowSourceUnavailableError,
-  sourceReadError,
-} from './integrity';
+import { WorkflowSourceIntegrityError, WorkflowSourceUnavailableError } from './integrity';
 import { openWorkflowSource } from './load';
 import { verifyIndexedUnits } from './verify-units';
 import type { WorkflowSourceAnchor } from './roots';
@@ -240,11 +236,7 @@ async function stageCapture(
   const allEntries = [...entries, ...(bundled?.files ?? [])];
   const records = installed.inherited
     ? installed.records
-    : await stagedInstalledRecords(
-        staging,
-        installed.records,
-        new Set(entries.map(entry => entry.relPath.split('\\').join('/')))
-      );
+    : await stagedInstalledRecords(staging, installed.records);
   const unitRoots = [
     ...[...scopesCaptured].filter(scope => scope !== 'installed'),
     ...installed.records.map(record => `installed/${record.key}`),
@@ -293,8 +285,7 @@ async function stageCapture(
 
 async function stagedInstalledRecords(
   staging: string,
-  records: readonly IndexedInstalledPlugin[],
-  files: ReadonlySet<string>
+  records: readonly IndexedInstalledPlugin[]
 ): Promise<IndexedInstalledPlugin[]> {
   const staged: IndexedInstalledPlugin[] = [];
   for (const record of records) {
@@ -304,10 +295,6 @@ async function stagedInstalledRecords(
       throw new Error(
         `Captured pack ${record.key} does not match its staged manifest name ${manifest.name}`
       );
-    for (const path of Object.values(manifest.entrypoints)) {
-      if (!files.has(`${root}/${path}`))
-        throw new Error(`Captured pack ${record.key} is missing entrypoint ${path}`);
-    }
     staged.push({ ...record, manifest });
   }
   return staged;
@@ -353,18 +340,20 @@ async function copyInheritedUnits(
   for (const unit of inherited.manifest.units.filter(unit => unit.root.startsWith('installed/'))) {
     const destination = join(staging, unit.root);
     try {
-      await verifyIndexedUnits(inherited.anchor.root, inherited.manifest, [unit.root]);
-      const listing = await listTree(join(inherited.anchor.root, unit.root)).catch(error => {
-        throw sourceReadError(inherited.anchor.root, error);
-      });
+      await readInheritedSource(
+        inherited.anchor.root,
+        verifyIndexedUnits(inherited.anchor.root, inherited.manifest, [unit.root])
+      );
+      const listing = await readInheritedSource(
+        inherited.anchor.root,
+        listTree(join(inherited.anchor.root, unit.root))
+      );
       await copyListing({ dirs: listing.dirs, files: [] }, destination);
       for (const file of unit.files) {
-        let bytes: Buffer;
-        try {
-          bytes = await readFile(join(inherited.anchor.root, unit.root, file.path));
-        } catch (error) {
-          throw sourceReadError(inherited.anchor.root, error);
-        }
+        const bytes = await readInheritedSource(
+          inherited.anchor.root,
+          readFile(join(inherited.anchor.root, unit.root, file.path))
+        );
         const target = join(destination, file.path);
         await mkdir(dirname(target), { recursive: true });
         await writeFile(target, bytes);
@@ -382,5 +371,14 @@ async function copyInheritedUnits(
         'workflow.source_inherited_unit_unavailable'
       );
     }
+  }
+}
+
+async function readInheritedSource<T>(captureRoot: string, read: Promise<T>): Promise<T> {
+  try {
+    return await read;
+  } catch (error) {
+    if (error instanceof WorkflowSourceIntegrityError) throw error;
+    throw new WorkflowSourceUnavailableError(captureRoot, error);
   }
 }

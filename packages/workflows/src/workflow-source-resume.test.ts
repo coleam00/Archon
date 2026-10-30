@@ -172,10 +172,10 @@ async function pausedRun(name = 'healthy', firstOutput = 'already-done') {
   return { capture, store, run, resume, deps };
 }
 const originalRead = fs.readFile;
-function denyReads(path: string | string[]) {
+function denyReads(path: string | string[], code = 'EACCES') {
   const read = originalRead;
   const cause = Object.assign(new Error('persistent read fault'), {
-    code: 'EACCES',
+    code,
     syscall: 'open',
     path,
   });
@@ -292,7 +292,7 @@ test('a runtime-substituted script verifies its installed owner and recovers aft
   }
 });
 
-for (const faultKind of ['unreadable', 'tampered']) {
+for (const faultKind of ['unreadable', 'EIO', 'tampered']) {
   test(`a resumed parent launches a child while retaining an ${faultKind} inherited pack commitment`, async () => {
     await put(
       join(project, '.archon/workflows/healthy.yaml'),
@@ -327,8 +327,11 @@ for (const faultKind of ['unreadable', 'tampered']) {
       ).rejects.toBeInstanceOf(WorkflowSourceIntegrityError);
     }
     const fault =
-      faultKind === 'unreadable'
-        ? denyReads(join(fixture.capture.anchor.root, 'installed/acme.broken'))
+      faultKind !== 'tampered'
+        ? denyReads(
+            join(fixture.capture.anchor.root, 'installed/acme.broken'),
+            faultKind === 'EIO' ? 'EIO' : 'EACCES'
+          )
         : undefined;
     try {
       const result = await fixture.resume();
@@ -569,7 +572,7 @@ test('child captures preserve empty directories in inherited installed units', a
   await verifyWorkflowSourceUnits(child.anchor, ['installed/acme.broken']);
 });
 
-for (const copyFault of ['unreadable', 'tampered']) {
+for (const copyFault of ['unreadable', 'EIO', 'tampered']) {
   test(`an inherited ${copyFault} fault during copying removes payloads and retains the original inventory`, async () => {
     await put(join(project, '.archon/workflows/healthy.yaml'), workflow('healthy', first));
     const fixture = await pausedRun();
@@ -586,7 +589,7 @@ for (const copyFault of ['unreadable', 'tampered']) {
             }
             return Promise.reject(
               Object.assign(new Error('read failed during copy'), {
-                code: 'EACCES',
+                code: copyFault === 'EIO' ? 'EIO' : 'EACCES',
                 syscall: 'open',
                 path: brokenFile,
               })
@@ -783,13 +786,13 @@ for (const mutation of ['entrypoint', 'name', 'missing-entrypoint']) {
         sourceRoot: project,
         captureRoot: join(root, 'capture'),
       });
-      if (mutation !== 'entrypoint') {
+      if (mutation === 'name') {
         await expect(capture).rejects.toThrow();
       } else {
         const result = await capture;
         if (result.manifest.version !== 3) throw new Error('Expected v3');
         expect(result.manifest.installed_plugins[0].manifest.entrypoints).toEqual({
-          changed: 'run/run.yaml',
+          changed: mutation === 'missing-entrypoint' ? 'missing/missing.yaml' : 'run/run.yaml',
         });
         const catalog = await discoverWorkflowsWithConfig(
           project,
@@ -797,9 +800,21 @@ for (const mutation of ['entrypoint', 'name', 'missing-entrypoint']) {
           providerRegistry,
           capturedSourceRoots(result.anchor, 'acme/broken:changed')
         );
-        expect(catalog.workflows.map(entry => entry.workflow.name)).toEqual([
-          'acme/broken:changed',
-        ]);
+        if (mutation === 'missing-entrypoint') {
+          expect(catalog.workflows).toEqual([]);
+          expect(catalog.errors).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                workflowName: 'acme/broken:changed',
+                errorType: 'validation_error',
+              }),
+            ])
+          );
+        } else {
+          expect(catalog.workflows.map(entry => entry.workflow.name)).toEqual([
+            'acme/broken:changed',
+          ]);
+        }
       }
       expect(changed).toBe(true);
     } finally {
@@ -1199,4 +1214,96 @@ for (const scope of ['project', 'global', 'bundled'] as const) {
       }
     });
   }
+}
+
+test('a missing installed entrypoint stays local to its workflow after capture', async () => {
+  await fs.rm(
+    join(packTreePath(join(root, 'home/plugins'), 'acme/broken', 'a'.repeat(40)), 'run/run.yaml')
+  );
+  await put(join(project, '.archon/workflows/healthy.yaml'), workflow('healthy', first));
+  const fixture = await pausedRun();
+  const catalog = await discoverWorkflowsWithConfig(
+    project,
+    loadConfig,
+    providerRegistry,
+    capturedSourceRoots(fixture.capture.anchor)
+  );
+  expect(catalog.workflows.map(entry => entry.workflow.name)).toContain('healthy');
+  expect(catalog.workflows.map(entry => entry.workflow.name)).not.toContain('acme/broken:run');
+  expect(catalog.errors).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ workflowName: 'acme/broken:run', errorType: 'validation_error' }),
+    ])
+  );
+  expect(await fixture.resume()).toMatchObject({ success: true });
+});
+
+test('an inherited EIO during directory copying retains the authenticated commitment', async () => {
+  const fixture = await pausedRun();
+  const broken = join(fixture.capture.anchor.root, 'installed/acme.broken');
+  const original = fs.readdir;
+  let reads = 0;
+  const fault = spyOn(fs, 'readdir').mockImplementation(
+    new Proxy(original, {
+      apply(target, receiver, args: Parameters<typeof original>) {
+        if (String(args[0]) === broken && ++reads === 2) {
+          return Promise.reject(
+            Object.assign(new Error('directory read failed'), {
+              code: 'EIO',
+              syscall: 'scandir',
+              path: broken,
+            })
+          );
+        }
+        return Reflect.apply(target, receiver, args);
+      },
+    })
+  );
+  try {
+    const child = await captureWorkflowSource({
+      sourceRoot: project,
+      captureRoot: join(root, 'child-capture'),
+      installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
+    });
+    expect(reads).toBe(2);
+    if (child.manifest.version !== 3 || fixture.capture.manifest.version !== 3)
+      throw new Error('Expected v3 captures');
+    expect(child.manifest.units).toEqual(fixture.capture.manifest.units);
+    await expect(
+      verifyWorkflowSourceUnits(child.anchor, ['installed/acme.broken'])
+    ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+  } finally {
+    fault.mockRestore();
+  }
+});
+
+for (const operation of ['mkdir', 'writeFile', 'readFile'] as const) {
+  test(`an inherited unit staging ${operation} failure aborts child capture`, async () => {
+    const fixture = await pausedRun();
+    const captureRoot = join(root, 'child-capture');
+    const destination = join(`${captureRoot}.partial`, 'installed/acme.broken');
+    const cause = Object.assign(new Error('staging failed'), { code: 'EIO', syscall: operation });
+    const original = fs[operation];
+    const fault = spyOn(fs, operation).mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver, args) {
+          if (String(args[0]).startsWith(destination)) return Promise.reject(cause);
+          return Reflect.apply(target, receiver, args);
+        },
+      })
+    );
+    try {
+      await expect(
+        captureWorkflowSource({
+          sourceRoot: project,
+          captureRoot,
+          installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
+        })
+      ).rejects.toBe(cause);
+      await expect(fs.stat(captureRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.stat(`${captureRoot}.partial`)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      fault.mockRestore();
+    }
+  });
 }
