@@ -2010,8 +2010,9 @@ instruments follow as indented lines. `--json` prints one `MetricsReport` docume
 same shape `GET /api/metrics` returns, with names and instruments in sorted order.
 
 A record that conflicts with its name's first definition is left out and reported on
-stderr as `error: metric <name> is <kind>/<unit>; run <id> node <node> offered
-<kind>/<unit>`. A stored output the record schema rejects is reported the same way when
+stderr as `error: metric <name> is <definition>; run <id> node <node> offered
+<definition>`, where each `<definition>` is `<kind>/<unit>`, followed by
+` calibrates <metric>` for a score that calibrates another metric. A stored output the record schema rejects is reported the same way when
 no name is given. Exit codes: `0` success, `1` usage, `4` the report refused a record.
 
 ### `chat <message>`

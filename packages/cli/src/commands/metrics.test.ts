@@ -10,11 +10,11 @@ import {
 
 const now = new Date('2026-10-30T12:00:00Z');
 
-/** One run per unit, recording that unit for the subject at the same position, else null. */
-async function fixture(units: string[], subjects: string[] = []) {
+/** One run per entry, each recording a `prs` count for no subject, overridden by the entry. */
+async function fixture(overrides: Record<string, unknown>[]) {
   const records = createInMemoryWorkflowHostStore();
   const store = createInMemoryWorkflowStore(records);
-  for (const [i, unit] of units.entries()) {
+  for (const override of overrides) {
     const run = await store.createWorkflowRun({ workflow_name: 'count-prs', user_message: '' });
     await store.persistWorkflowEvent({
       workflow_run_id: run.id,
@@ -26,10 +26,11 @@ async function fixture(units: string[], subjects: string[] = []) {
             {
               name: 'factory.prs_merged',
               kind: 'count',
-              unit,
+              unit: 'prs',
               value: 2,
-              subject: subjects[i] ?? null,
+              subject: null,
               at: '2026-10-29T00:00:00Z',
+              ...override,
             },
           ],
         },
@@ -63,7 +64,7 @@ async function fixture(units: string[], subjects: string[] = []) {
 }
 
 test('--since 7d ends the window now and starts it seven days earlier', async () => {
-  const { invoke, stdout } = await fixture(['prs']);
+  const { invoke, stdout } = await fixture([{}]);
   expect(await invoke({ since: '7d', json: true })).toBe(0);
   const report = metricsReportSchema.parse(JSON.parse(stdout.join('')));
   expect(report.window).toEqual({
@@ -76,7 +77,7 @@ test('--since 7d ends the window now and starts it seven days earlier', async ()
 });
 
 test('--json emits exactly one parseable document', async () => {
-  const { invoke, stdout } = await fixture(['prs', 'prs']);
+  const { invoke, stdout } = await fixture([{}, {}]);
   expect(await invoke({ json: true }, 'factory.prs_merged')).toBe(0);
   expect(stdout).toHaveLength(1);
   expect(metricsReportSchema.parse(JSON.parse(stdout[0] ?? '')).metrics[0]?.instruments[0]?.n).toBe(
@@ -85,12 +86,24 @@ test('--json emits exactly one parseable document', async () => {
 });
 
 test('a refused record exits 4 with an error naming both definitions', async () => {
-  const { invoke, stdout, stderr } = await fixture(['prs', 'pull_requests']);
+  const { invoke, stdout, stderr } = await fixture([{}, { unit: 'pull_requests' }]);
   expect(await invoke({})).toBe(4);
   expect(stdout.join('')).toContain('factory.prs_merged  count/prs  value 2  n 1');
   expect(stderr).toHaveLength(1);
   expect(stderr[0]).toMatch(
     /^error: metric factory\.prs_merged is count\/prs; run \S+ node count offered count\/pull_requests\n$/
+  );
+});
+
+test('a refusal names the metric a score calibrates', async () => {
+  const score = { kind: 'score', unit: 'agreement', value: 0.8 };
+  const { invoke, stderr } = await fixture([
+    { ...score, calibrates: 'factory.review_quality' },
+    score,
+  ]);
+  expect(await invoke({})).toBe(4);
+  expect(stderr[0]).toMatch(
+    /^error: metric factory\.prs_merged is score\/agreement calibrates factory\.review_quality; run \S+ node count offered score\/agreement\n$/
   );
 });
 
@@ -107,7 +120,7 @@ test('a duration reaching past the earliest date is a usage error, not a crash',
 });
 
 test('--subject reports only that subject', async () => {
-  const { invoke, stdout } = await fixture(['prs', 'prs'], ['pr-1', 'pr-2']);
+  const { invoke, stdout } = await fixture([{ subject: 'pr-1' }, { subject: 'pr-2' }]);
   expect(await invoke({ subject: 'pr-1', json: true })).toBe(0);
   const [instrument] =
     metricsReportSchema.parse(JSON.parse(stdout.join(''))).metrics[0]?.instruments ?? [];
