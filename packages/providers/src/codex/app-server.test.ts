@@ -182,6 +182,34 @@ describe('AppServerConnection', () => {
     10_000
   );
 
+  test.skipIf(process.platform === 'win32')(
+    'zombie-only EPERM cleanup preserves a completed exit',
+    async () => {
+      const pid = 2_147_483_647;
+      const realStop = pluginProcess.terminateTree;
+      const refused = Object.assign(new Error('signal refused'), { code: 'EPERM' });
+      const kill = spyOn(process, 'kill').mockImplementation(() => {
+        throw refused;
+      });
+      const stop = spyOn(pluginProcess, 'terminateTree').mockImplementation((target, signal) =>
+        realStop(target, signal, async () => `${pid} ZN\n`)
+      );
+      try {
+        const fake = rawChild();
+        Object.defineProperty(fake.child, 'pid', { value: pid });
+        const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+        fake.child.emit('exit', 0, null);
+        fake.child.emit('close', 0, null);
+        expect(await connection.shutdown()).toEqual({ kind: 'exited', code: 0, signal: null });
+        expect(stop.mock.calls).toEqual([[pid]]);
+        expect(kill.mock.calls).toEqual([[-pid, 'SIGKILL']]);
+      } finally {
+        stop.mockRestore();
+        kill.mockRestore();
+      }
+    }
+  );
+
   test('a descendant cleanup failure fails pending work and cannot report a clean exit', async () => {
     const originalPlatform = process.platform;
     const stop = spyOn(pluginProcess, 'terminateTree').mockRejectedValue(
