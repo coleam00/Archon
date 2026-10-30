@@ -8,6 +8,7 @@ import { resolveWorkflowCommandContents } from '../../../workflow-discovery/comm
 import { findWorkflowLoadError, type WorkflowLoadError } from '../../../schemas/workflow';
 import {
   assertWorkflowSourceIntegrity,
+  capturedSourceRoots,
   isSourceReadFailure,
   liveSourceRoots,
   WorkflowSourceIntegrityError,
@@ -84,7 +85,10 @@ export async function resolveFanOutChildDefinition(
     }
   | { unresolved: string }
 > {
-  const sourceRoots = source ?? liveSourceRoots(cwd);
+  const sourceRoots =
+    source?.kind === 'captured'
+      ? capturedSourceRoots(source.anchor, targetName)
+      : (source ?? liveSourceRoots(cwd));
   let verifiedFiles: ReadonlySet<string> | undefined;
   try {
     // Verified first, so a capture this host cannot read throws a typed error rather

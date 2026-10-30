@@ -1,3 +1,4 @@
+import { capturedSourceRoots } from '@archon/workflows/run-source';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 /** Shared handleMessage mocks and fixtures; importing registers the suites' module mocks. */
 import type { RunActor } from '../operations/run-authorization';
@@ -263,24 +264,17 @@ export const mockInspectResumableRun = mock<typeof WorkflowRunResume.inspectResu
     priorUsage: { costUsd: 0 },
   })
 );
-export const CAPTURED_SOURCE_ROOTS = {
-  project: '/capture/project',
-  globalWorkflows: '/capture/global/workflows',
-  globalCommands: '/capture/global/commands',
-  globalScripts: '/capture/global/scripts',
-  bundledWorkflows: '/capture/bundled/workflows',
-  bundledCommands: '/capture/bundled/commands/defaults',
-  installed: { kind: 'captured', captureRoot: '/capture' },
-  kind: 'captured',
-  anchor: {
-    root: '/capture',
-    digest: 'test-digest',
-    config: {
-      load_default_workflows: true,
-      load_default_commands: true,
-    },
+export const CAPTURED_SOURCE_ROOTS: Extract<
+  WorkflowRunSource.WorkflowSourceRoots,
+  { kind: 'captured' }
+> = capturedSourceRoots({
+  root: '/capture',
+  digest: 'test-digest',
+  config: {
+    load_default_workflows: true,
+    load_default_commands: true,
   },
-} satisfies WorkflowRunSource.WorkflowSourceRoots;
+});
 export const mockPrepareWorkflowSource = mock<typeof WorkflowRunSource.prepareWorkflowSource>(() =>
   Promise.resolve({
     runId: 'prepared-run-id',
@@ -319,6 +313,7 @@ mock.module('@archon/workflows/run-resume', () => ({
   inspectResumableRun: mockInspectResumableRun,
 }));
 mock.module('@archon/workflows/run-source', () => ({
+  capturedSourceRoots,
   finalizeWorkflowSource: mock(
     async (_deps: unknown, source: WorkflowRunSource.PreparedWorkflowSource) => source
   ),

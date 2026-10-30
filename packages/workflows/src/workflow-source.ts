@@ -77,6 +77,11 @@ export { captureWorkflowSource, recordSelectedWorkflow } from './workflow-source
 export {
   assertWorkflowSourceIntegrity,
   loadWorkflowSource,
+  openWorkflowSource,
+  verifyWorkflowSourceUnits,
+  verifySelectedWorkflowSource,
+  verifyWorkflowSourceResources,
+  sourceDirectoryHasFiles,
   resolveChildDiscoveryRoot,
   resolveChildInstalledPacks,
   resolveRunSourceCapture,

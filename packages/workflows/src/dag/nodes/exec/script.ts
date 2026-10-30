@@ -123,7 +123,9 @@ async function captureScriptSource(
 ): Promise<ScriptSource> {
   if (isInlineScript(finalScript))
     return { verifiedScriptFiles: undefined, namedScripts: undefined };
-  const verifiedScriptFiles = await assertNodeSourceReadable(ctx.workflowSourceRoots, stepName);
+  const verifiedScriptFiles = await assertNodeSourceReadable(ctx.workflowSourceRoots, stepName, {
+    resources: [finalScript],
+  });
   const namedScripts = await discoverScriptsForCwd(
     ctx.cwd,
     ctx.workflowSourceRoots,

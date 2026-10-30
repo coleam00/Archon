@@ -45,10 +45,11 @@ export class RunSourceUnreadableError extends Error {
 /** Verify the run's frozen source before a node reads it; a read failure releases the run. */
 export async function assertNodeSourceReadable(
   roots: WorkflowSourceRoots,
-  stepName: string
+  stepName: string,
+  read?: Parameters<typeof assertWorkflowSourceIntegrity>[1]
 ): Promise<ReadonlySet<string> | undefined> {
   try {
-    return await assertWorkflowSourceIntegrity(roots);
+    return await assertWorkflowSourceIntegrity(roots, read);
   } catch (error) {
     if (isSourceReadFailure(error)) throw new RunSourceUnreadableError(stepName, error);
     throw error;
@@ -60,7 +61,9 @@ export async function loadNodeCommandPrompt(
   command: string,
   stepName: string
 ): Promise<Awaited<ReturnType<typeof loadCommandPrompt>>> {
-  const verifiedFiles = await assertNodeSourceReadable(ctx.workflowSourceRoots, stepName);
+  const verifiedFiles = await assertNodeSourceReadable(ctx.workflowSourceRoots, stepName, {
+    resources: [command],
+  });
   try {
     const result = await loadCommandPrompt(
       ctx.deps,

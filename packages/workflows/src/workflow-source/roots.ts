@@ -1,3 +1,4 @@
+import type { WorkflowResourceOwner } from '../packaged-workflow';
 import { join } from 'path';
 import * as archonPaths from '@archon/paths';
 import type { WorkflowSourceConfig } from '../schemas/workflow-run';
@@ -36,7 +37,7 @@ interface WorkflowSourceRootPaths {
  */
 export type InstalledPacksRoot =
   | { readonly kind: 'receipts'; readonly pluginsDir: string }
-  | { readonly kind: 'captured'; readonly captureRoot: string };
+  | { readonly kind: 'captured'; readonly anchor: WorkflowSourceAnchor };
 
 /** Out-of-band identity that every late read from a captured source must recheck. */
 export interface WorkflowSourceAnchor {
@@ -53,6 +54,7 @@ export interface LiveWorkflowSourceRoots extends WorkflowSourceRootPaths {
 export interface CapturedWorkflowSourceRoots extends WorkflowSourceRootPaths {
   readonly kind: 'captured';
   readonly anchor: WorkflowSourceAnchor;
+  readonly workflowName?: string;
   /** Flat bundled commands an older build froze. Current builds bundle only packaged
    * commands, so only a capture can hold these. */
   readonly bundledCommands: string;
@@ -113,7 +115,10 @@ export function liveSourceRoots(
  * Bundled defaults use the same captured paths in every build. A compiled binary
  * materializes its embedded constants into this tree when the capture is created.
  */
-export function capturedSourceRoots(anchor: WorkflowSourceAnchor): CapturedWorkflowSourceRoots {
+export function capturedSourceRoots(
+  anchor: WorkflowSourceAnchor,
+  workflowName?: string
+): CapturedWorkflowSourceRoots {
   const captureRoot = anchor.root;
   return {
     project: join(captureRoot, PROJECT_SCOPE_DIR),
@@ -125,8 +130,13 @@ export function capturedSourceRoots(anchor: WorkflowSourceAnchor): CapturedWorkf
     // instead of failing because its bundled bytes could not be verified.
     bundledWorkflows: join(captureRoot, BUNDLED_SCOPE_DIR, 'workflows'),
     bundledCommands: join(captureRoot, BUNDLED_SCOPE_DIR, 'commands', 'defaults'),
-    installed: { kind: 'captured', captureRoot },
+    installed: { kind: 'captured', anchor },
     kind: 'captured',
     anchor,
+    workflowName,
   };
+}
+
+export function sourceUnitForOwner(owner: WorkflowResourceOwner): string {
+  return owner.source === 'installed' ? `installed/${owner.pack}` : owner.source;
 }

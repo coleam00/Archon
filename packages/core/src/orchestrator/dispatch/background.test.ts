@@ -1,3 +1,4 @@
+import { capturedSourceRoots } from '@archon/workflows/run-source';
 // @archon-test-isolated
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
@@ -323,24 +324,14 @@ const mockPrepareWorkflowSource = mock<typeof WorkflowRunSource.prepareWorkflowS
           load_default_commands: true,
         },
       },
-      roots: {
-        project: '/capture/project',
-        globalWorkflows: '/capture/global/workflows',
-        globalCommands: '/capture/global/commands',
-        globalScripts: '/capture/global/scripts',
-        bundledWorkflows: '/capture/bundled/workflows',
-        bundledCommands: '/capture/bundled/commands/defaults',
-        installed: { kind: 'captured', captureRoot: '/capture' },
-        kind: 'captured',
-        anchor: {
-          root: '/capture',
-          digest: 'test-digest',
-          config: {
-            load_default_workflows: true,
-            load_default_commands: true,
-          },
+      roots: capturedSourceRoots({
+        root: '/capture',
+        digest: 'test-digest',
+        config: {
+          load_default_workflows: true,
+          load_default_commands: true,
         },
-      },
+      }),
     })
 );
 const mockRecordSelectedWorkflow = mock<typeof WorkflowRunSource.recordSelectedWorkflow>(() =>
@@ -355,6 +346,7 @@ mock.module('@archon/workflows/run-resume', () => ({
   hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 mock.module('@archon/workflows/run-source', () => ({
+  capturedSourceRoots,
   finalizeWorkflowSource: mock(
     async (_deps: unknown, source: WorkflowRunSource.PreparedWorkflowSource) => source
   ),

@@ -8,9 +8,13 @@ import { bundlesPackagedResources } from '../defaults/bundle-inventory';
 import { isValidCommandName } from '../command-validation';
 import { collectFileBackedCommandNames } from '../command-file';
 import { parsePackagedResourceReference } from '../packaged-workflow';
+import { sourceReadError } from '../workflow-source/integrity';
 import type { IncludeCommandContent } from '../compiled-command';
 import {
   assertCapturedFilesPresent,
+  verifyWorkflowSourceResources,
+  sourceDirectoryHasFiles,
+  capturedSourceReadGuard,
   packagedWorkflowDirectory,
   workflowSourceConfigForRoots,
   type WorkflowSourceRoots,
@@ -44,6 +48,22 @@ export async function resolveCommandContentForScan(
 ): Promise<IncludeCommandContent> {
   if (!isValidCommandName(commandName)) return null;
 
+  const verifiedFiles = await verifyWorkflowSourceResources(roots, [commandName]);
+  const result = await scanCommandContent(roots, commandName, config, verifiedFiles);
+  try {
+    await assertCapturedFilesPresent(verifiedFiles);
+  } catch (error) {
+    throw roots.kind === 'captured' ? sourceReadError(roots.anchor.root, error) : error;
+  }
+  return result;
+}
+
+async function scanCommandContent(
+  roots: WorkflowSourceRoots,
+  commandName: string,
+  config: CommandScanConfig,
+  verifiedFiles: ReadonlySet<string> | undefined
+): Promise<IncludeCommandContent> {
   const packaged = parsePackagedResourceReference(commandName);
   if (packaged !== null) return resolvePackagedCommand(roots, commandName, packaged, config);
 
@@ -58,16 +78,21 @@ export async function resolveCommandContentForScan(
   }
   dirs.push(roots.globalCommands);
 
-  for (const dir of dirs) {
-    const content = await readCommandFromDir(dir, commandName);
+  for (const dir of dirs.filter(dir => sourceDirectoryHasFiles(verifiedFiles, dir))) {
+    const content = await readCommandFromDir(dir, commandName, verifiedFiles);
     if (content !== undefined) return content;
   }
 
   // Every bundled command a build ships now is packaged and resolved above. A run captured
   // by an older build may have frozen flat bundled commands and keeps the basename walk
   // over them — unless the repo opted out (loadDefaultCommands: false), matching discovery.
-  if (config.loadDefaultCommands === false || roots.kind !== 'captured') return null;
-  return (await readCommandFromDir(roots.bundledCommands, commandName)) ?? null;
+  if (
+    config.loadDefaultCommands === false ||
+    roots.kind !== 'captured' ||
+    !sourceDirectoryHasFiles(verifiedFiles, roots.bundledCommands)
+  )
+    return null;
+  return (await readCommandFromDir(roots.bundledCommands, commandName, verifiedFiles)) ?? null;
 }
 
 async function resolvePackagedCommand(
@@ -100,11 +125,12 @@ async function resolvePackagedCommand(
 /** A command's content from one search directory; `undefined` when the directory lacks it. */
 async function readCommandFromDir(
   dir: string,
-  commandName: string
+  commandName: string,
+  verifiedFiles: ReadonlySet<string> | undefined
 ): Promise<IncludeCommandContent | undefined> {
   let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
   try {
-    entries = await archonPaths.findCommandFiles(dir);
+    entries = await archonPaths.findCommandFiles(dir, capturedSourceReadGuard(verifiedFiles));
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return undefined;

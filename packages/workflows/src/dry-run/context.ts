@@ -121,7 +121,7 @@ export async function loadDryRunCommand(
   node: DagNode,
   command: string
 ): Promise<string> {
-  await assertWorkflowSourceIntegrity(ctx.sourceRoots);
+  await assertWorkflowSourceIntegrity(ctx.sourceRoots, { resources: [command] });
   const result = await loadCommandPrompt(
     {
       // Unreachable: `loadCommandPrompt` consults `loadConfig` only when its source roots

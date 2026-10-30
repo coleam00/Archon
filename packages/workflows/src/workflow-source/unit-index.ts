@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { workflowPackManifestSchema } from '@archon/plugin-manifest';
-import { installedPluginRecordSchema } from './installed-packs';
+import { installedPluginRecordSchema } from './installed-record';
 
 const relativePath = z
   .string()

@@ -1,11 +1,14 @@
-import { mkdir, rename, rm } from 'fs/promises';
+import { mkdir, rename, rm, readFile, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
 import type { WorkflowSourceConfig } from '../schemas/workflow-run';
 import { resolveBundledScope, writeBundledScope } from './bundled-scope';
 import { listInstalledPacks } from './installed-packs';
-import { WorkflowSourceUnavailableError } from './integrity';
+import { WorkflowSourceUnavailableError, sourceReadError } from './integrity';
+import { openWorkflowSource } from './load';
+import { verifyIndexedUnits } from './verify-units';
+import type { WorkflowSourceAnchor } from './roots';
 import {
   digestEntries,
   indexedSourceDigest,
@@ -51,6 +54,7 @@ interface InstalledCapture {
   jobs: CaptureJob[];
   records: IndexedInstalledPlugin[];
   unavailableWorkflows: string[];
+  inherited?: { anchor: WorkflowSourceAnchor; manifest: IndexedWorkflowSourceManifest };
 }
 
 /**
@@ -142,6 +146,20 @@ async function mutableScopeJobs(
 }
 
 async function installedCapture(installedFrom: InstalledPacksRoot): Promise<InstalledCapture> {
+  if (installedFrom.kind === 'captured') {
+    const parent = await openWorkflowSource(
+      installedFrom.anchor.root,
+      installedFrom.anchor.digest,
+      installedFrom.anchor.config
+    );
+    if (parent.manifest.version === 3)
+      return {
+        jobs: [],
+        records: parent.manifest.installed_plugins,
+        unavailableWorkflows: parent.manifest.unavailable_installed_workflows ?? [],
+        inherited: { anchor: parent.anchor, manifest: parent.manifest },
+      };
+  }
   const { packs, errors } = await listInstalledPacks(installedFrom);
   const jobs: CaptureJob[] = packs.map(pack => ({
     dest: join(INSTALLED_SCOPE_DIR, pack.key),
@@ -162,13 +180,13 @@ async function installedCapture(installedFrom: InstalledPacksRoot): Promise<Inst
 
   // A child copies its parent's frozen packs; one it cannot read is this host's fault.
   if (errors.length > 0) throw errors[0].cause ?? new Error(errors[0].message);
-  const parent = await readManifest(installedFrom.captureRoot);
+  const parent = await readManifest(installedFrom.anchor.root);
   const keys = new Set(packs.map(pack => pack.key));
   const records = parent.version !== 1 ? parent.installed_plugins : [];
   for (const record of records) {
     if (!keys.has(record.key)) {
       throw new WorkflowSourceUnavailableError(
-        join(installedFrom.captureRoot, INSTALLED_SCOPE_DIR, record.key),
+        join(installedFrom.anchor.root, INSTALLED_SCOPE_DIR, record.key),
         new Error('Installed pack recorded by the parent capture could not be listed')
       );
     }
@@ -193,12 +211,15 @@ async function stageCapture(
   source: { origin: string; sourceConfig: WorkflowSourceConfig }
 ): Promise<WorkflowSourceManifest> {
   const scopesCaptured = new Set<CapturedScope>(jobs.map(j => j.scope));
+  if (installed.records.length > 0) scopesCaptured.add('installed');
   await mkdir(staging, { recursive: true });
   for (const job of jobs) {
     const target = join(staging, job.dest);
     await mkdir(dirname(target), { recursive: true });
     await copyListing(await listTree(job.from), target);
   }
+
+  if (installed.inherited !== undefined) await copyInheritedUnits(staging, installed.inherited);
 
   // The run's own bundled bytes, written from what this process already holds. They have
   // to be present, not referenced: that is what lets a run that statically included a
@@ -217,18 +238,23 @@ async function stageCapture(
     ...[...scopesCaptured].filter(scope => scope !== 'installed'),
     ...installed.records.map(record => `installed/${record.key}`),
   ].sort();
-  const units: SourceUnit[] = unitRoots.map(root => ({
-    root,
-    files: allEntries
-      .map(entry => ({ ...entry, relPath: entry.relPath.split('\\').join('/') }))
-      .filter(entry => entry.relPath.startsWith(`${root}/`))
-      .map(entry => ({
-        path: entry.relPath.slice(root.length + 1),
-        hash: entry.hash,
-        size: entry.size,
-      }))
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
-  }));
+  const units: SourceUnit[] = unitRoots.map(
+    root =>
+      installed.inherited?.manifest.units.find(
+        unit => unit.root.startsWith('installed/') && unit.root === root
+      ) ?? {
+        root,
+        files: allEntries
+          .map(entry => ({ ...entry, relPath: entry.relPath.split('\\').join('/') }))
+          .filter(entry => entry.relPath.startsWith(`${root}/`))
+          .map(entry => ({
+            path: entry.relPath.slice(root.length + 1),
+            hash: entry.hash,
+            size: entry.size,
+          }))
+          .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
+      }
+  );
   const manifest: IndexedWorkflowSourceManifest = {
     engine_version: BUNDLED_VERSION,
     origin: source.origin,
@@ -237,8 +263,11 @@ async function stageCapture(
     units,
     installed_plugins: installed.records,
     digest: '0'.repeat(64),
-    file_count: allEntries.length,
-    byte_count: allEntries.reduce((sum, entry) => sum + entry.size, 0),
+    file_count: units.reduce((sum, unit) => sum + unit.files.length, 0),
+    byte_count: units.reduce(
+      (sum, unit) => sum + unit.files.reduce((bytes, file) => bytes + file.size, 0),
+      0
+    ),
     scopes: [...scopesCaptured],
     source_config: source.sourceConfig,
     ...(installed.unavailableWorkflows.length > 0
@@ -282,4 +311,40 @@ export async function recordSelectedWorkflow(
 ): Promise<void> {
   const manifest = await readManifest(captureRoot);
   await writeManifest(captureRoot, { ...manifest, workflow_name: workflowName });
+}
+
+async function copyInheritedUnits(
+  staging: string,
+  inherited: NonNullable<InstalledCapture['inherited']>
+): Promise<void> {
+  for (const unit of inherited.manifest.units.filter(unit => unit.root.startsWith('installed/'))) {
+    const destination = join(staging, unit.root);
+    try {
+      await verifyIndexedUnits(inherited.anchor.root, inherited.manifest, [unit.root]);
+      await mkdir(destination, { recursive: true });
+      for (const file of unit.files) {
+        let bytes: Buffer;
+        try {
+          bytes = await readFile(join(inherited.anchor.root, unit.root, file.path));
+        } catch (error) {
+          throw sourceReadError(inherited.anchor.root, error);
+        }
+        const target = join(destination, file.path);
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, bytes);
+      }
+      await verifyIndexedUnits(staging, inherited.manifest, [unit.root]);
+    } catch (error) {
+      if (
+        !(error instanceof WorkflowSourceUnavailableError) ||
+        error.path !== inherited.anchor.root
+      )
+        throw error;
+      await rm(destination, { recursive: true, force: true });
+      getLog().warn(
+        { captureRoot: inherited.anchor.root, unit: unit.root },
+        'workflow.source_inherited_unit_unavailable'
+      );
+    }
+  }
 }

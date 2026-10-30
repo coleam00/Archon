@@ -1,5 +1,7 @@
+import { installedWorkflowName } from './installed-record';
+import { parsePackagedResourceReference } from '../packaged-workflow';
 import { isDeepStrictEqual } from 'node:util';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
 import {
   readWorkflowSourceState,
@@ -18,7 +20,12 @@ import {
   type WorkflowSourceManifest,
   type IndexedWorkflowSourceManifest,
 } from './manifest';
-import type { InstalledPacksRoot, WorkflowSourceRoots, WorkflowSourceAnchor } from './roots';
+import {
+  sourceUnitForOwner,
+  type InstalledPacksRoot,
+  type WorkflowSourceRoots,
+  type WorkflowSourceAnchor,
+} from './roots';
 import { isDirectory } from './tree';
 import { getLog } from './log';
 import { assertIndexedLayout, verifyIndexedUnits } from './verify-units';
@@ -174,26 +181,40 @@ function definedSourceConfig(config: WorkflowSourceConfig): Record<string, unkno
 
 /** Returned paths are files covered by the verified digest; live roots have no inventory. */
 export async function assertWorkflowSourceIntegrity(
-  roots: WorkflowSourceRoots
+  roots: WorkflowSourceRoots,
+  read?: { resources: readonly string[] } | { units: readonly string[] }
 ): Promise<ReadonlySet<string> | undefined> {
   if (roots.kind === 'live') return;
-  const capture = await loadWorkflowSource(
-    roots.anchor.root,
-    roots.anchor.digest,
-    roots.anchor.config
-  );
+  if (read !== undefined && 'resources' in read)
+    return verifyWorkflowSourceResources(roots, read.resources);
+  if (read !== undefined) {
+    const opened = await openWorkflowSource(
+      roots.anchor.root,
+      roots.anchor.digest,
+      roots.anchor.config
+    );
+    if (opened.verifiedFiles !== undefined) return opened.verifiedFiles;
+    return (
+      await verifyWorkflowSourceUnits(
+        roots.anchor,
+        read.units.filter(root => opened.manifest.units.some(unit => unit.root === root))
+      )
+    ).verifiedFiles;
+  }
+  const capture = await verifySelectedWorkflowSource(roots.anchor, roots.workflowName);
   return capture.verifiedFiles;
 }
 
 /**
- * The verified capture a run recorded at start, manifest included.
+ * Authenticate the capture a run recorded at start. V3 payloads are verified at selection
+ * and resource lookup; legacy captures require full aggregate verification here.
  *
  * Returns the CAPTURE rather than its path because every caller needs the manifest too —
  * its `source_config` decides how those bytes resolve, and a caller handed only the path
  * rebuilt the roots from defaults, which is how a resume re-discovered a different DAG.
  *
  * Throws {@link WorkflowSourceIntegrityError} when the run HAS a record but the capture
- * cannot be verified. Returns `undefined` only when the run has no record at all — a run
+ * cannot be authenticated. Returns `undefined` only when the run has no record at all — a run
  * created before captures existed, which resumes against live source because its original
  * bytes were never stored and cannot be reconstructed.
  */
@@ -213,7 +234,7 @@ export async function resolveRunSourceCapture(
     );
   }
   if (state.kind === 'absent') return undefined;
-  const capture = await loadWorkflowSource(
+  const capture = await openWorkflowSource(
     state.record.root,
     state.record.digest,
     state.record.source_config
@@ -233,7 +254,7 @@ export async function resolveRunSourceCapture(
 }
 
 /**
- * The installed packs a not-yet-started `workflow:` child reads: its parent's verified
+ * The installed packs a not-yet-started `workflow:` child reads: its parent's authenticated
  * capture, so the child cannot run a pack at a different revision from its parent after
  * `archon plugin update` or `remove`. Undefined for a parent with no source record,
  * which reads the live installs. Unlike project source (see
@@ -244,7 +265,7 @@ export async function resolveChildInstalledPacks(
   metadata: Record<string, unknown> | undefined
 ): Promise<InstalledPacksRoot | undefined> {
   const capture = await resolveRunSourceCapture(metadata);
-  return capture ? { kind: 'captured', captureRoot: capture.anchor.root } : undefined;
+  return capture ? { kind: 'captured', anchor: capture.anchor } : undefined;
 }
 
 /**
@@ -282,4 +303,69 @@ export async function resolveChildDiscoveryRoot(
     );
   }
   return state.record.origin;
+}
+
+/** Select a namespace using only the run-authenticated catalog. */
+export function selectedWorkflowUnits(
+  manifest: IndexedWorkflowSourceManifest,
+  workflowName: string
+): string[] {
+  const pack = manifest.installed_plugins.find(record => {
+    const owner = record.id.split('/')[0];
+    return workflowName.startsWith(
+      installedWorkflowName({ owner, name: record.manifest.name }, '')
+    );
+  });
+  return pack
+    ? [`installed/${pack.key}`]
+    : manifest.units.filter(unit => !unit.root.startsWith('installed/')).map(unit => unit.root);
+}
+
+export async function verifySelectedWorkflowSource(
+  anchor: WorkflowSourceAnchor,
+  workflowName?: string
+) {
+  if (workflowName === undefined)
+    return loadWorkflowSource(anchor.root, anchor.digest, anchor.config);
+  const capture = await openWorkflowSource(anchor.root, anchor.digest, anchor.config);
+  if (capture.verifiedFiles !== undefined)
+    return { ...capture, verifiedFiles: capture.verifiedFiles };
+  return verifyWorkflowSourceUnits(anchor, selectedWorkflowUnits(capture.manifest, workflowName));
+}
+
+/** A resource lookup verifies its actual owners, after runtime substitution. */
+export async function verifyWorkflowSourceResources(
+  roots: WorkflowSourceRoots,
+  names?: readonly string[]
+): Promise<ReadonlySet<string> | undefined> {
+  if (roots.kind === 'live') return;
+  if (names === undefined)
+    return (await loadWorkflowSource(roots.anchor.root, roots.anchor.digest, roots.anchor.config))
+      .verifiedFiles;
+  const capture = await openWorkflowSource(
+    roots.anchor.root,
+    roots.anchor.digest,
+    roots.anchor.config
+  );
+  if (capture.verifiedFiles !== undefined) return capture.verifiedFiles;
+  const requested = names.flatMap(name => {
+    const reference = parsePackagedResourceReference(name);
+    if (reference === null) return ['project', 'global', 'bundled'];
+    return [sourceUnitForOwner(reference.owner)];
+  });
+  const available = new Set(capture.manifest.units.map(unit => unit.root));
+  return (
+    await verifyWorkflowSourceUnits(
+      roots.anchor,
+      requested.filter(root => available.has(root))
+    )
+  ).verifiedFiles;
+}
+
+/** Empty or absent scopes have no readable resources; never inspect injected directories. */
+export function sourceDirectoryHasFiles(
+  files: ReadonlySet<string> | undefined,
+  directory: string
+): boolean {
+  return files === undefined || [...files].some(file => file.startsWith(`${directory}${sep}`));
 }

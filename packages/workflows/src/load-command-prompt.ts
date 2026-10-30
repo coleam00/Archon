@@ -5,6 +5,8 @@ import { createLogger } from '@archon/paths';
 import type { WorkflowDeps } from './deps';
 import {
   liveSourceRoots,
+  verifyWorkflowSourceResources,
+  sourceDirectoryHasFiles,
   capturedSourceReadGuard,
   assertCapturedFilesPresent,
   packagedWorkflowDirectory,
@@ -71,6 +73,7 @@ export async function loadCommandPrompt(
   const loadDefaultCommands =
     sourceConfig?.load_default_commands ?? (await configuredLoadDefaultCommands(deps, cwd));
 
+  verifiedFiles = (await verifyWorkflowSourceResources(roots, [commandName])) ?? verifiedFiles;
   const packaged = parsePackagedResourceReference(commandName);
   if (packaged !== null) {
     return loadPackagedCommand(commandName, packaged, roots, loadDefaultCommands, verifiedFiles);
@@ -91,13 +94,21 @@ export async function loadCommandPrompt(
     ...(projectRoot !== null ? searchPaths.map(folder => join(projectRoot, folder)) : []),
     roots.globalCommands,
   ];
-  const searched = await loadSearchedCommand(commandName, resolvedSearchPaths, verifiedFiles);
+  const searched = await loadSearchedCommand(
+    commandName,
+    resolvedSearchPaths.filter(dir => sourceDirectoryHasFiles(verifiedFiles, dir)),
+    verifiedFiles
+  );
   if (searched !== undefined) return searched;
 
   // Every bundled command a build ships now is packaged and resolved above. A run captured
   // by an older build may have frozen flat bundled commands; it keeps reading those bytes,
   // with the basename walk, so it can resume across the upgrade.
-  if (loadDefaultCommands && roots.kind === 'captured') {
+  if (
+    loadDefaultCommands &&
+    roots.kind === 'captured' &&
+    sourceDirectoryHasFiles(verifiedFiles, roots.bundledCommands)
+  ) {
     const frozen = await loadFrozenDefaultCommand(
       commandName,
       roots.bundledCommands,

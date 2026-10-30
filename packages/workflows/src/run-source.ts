@@ -230,7 +230,7 @@ export async function resolveContinuationWorkflow(
   // is what made a repo with a custom `commands.folder` re-discover a different DAG.
   const capture = await resolveRunSourceCapture(run.metadata);
   if (!capture) return undefined; // predates capture — the caller keeps live behavior
-  const roots = capturedSourceRoots(capture.anchor);
+  const roots = capturedSourceRoots(capture.anchor, run.workflow_name);
 
   const { workflows, errors } = await discoverWorkflowsWithConfig(
     cwd,
@@ -316,7 +316,10 @@ export async function finalizeWorkflowSource(
   return {
     ...prepared,
     anchor,
-    roots: capturedSourceRoots(anchor),
+    roots: capturedSourceRoots(
+      anchor,
+      prepared.roots.kind === 'captured' ? prepared.roots.workflowName : undefined
+    ),
   };
 }
 
@@ -582,7 +585,7 @@ async function restoreRecordedSource(
   if (recordedSource.source_config === undefined) {
     await pinSourceConfig(run, recordedSource, loaded);
   }
-  return { stopped: false, value: capturedSourceRoots(loaded.anchor) };
+  return { stopped: false, value: capturedSourceRoots(loaded.anchor, workflowRun.workflow_name) };
 }
 
 async function releaseUnreadableSource(
@@ -758,5 +761,5 @@ async function adoptPreparedSource(
     },
     'workflow.source_captured'
   );
-  return { stopped: false, value: capturedSourceRoots(sourceAnchor) };
+  return { stopped: false, value: capturedSourceRoots(sourceAnchor, workflowRun.workflow_name) };
 }

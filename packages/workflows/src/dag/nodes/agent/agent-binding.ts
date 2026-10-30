@@ -57,7 +57,7 @@ export async function bindAgentNode(
   const homeMcpDirectory = readHomeMcpDirectory(node);
   const verifiedMcpFiles =
     homeMcpDirectory !== undefined
-      ? await assertNodeSourceReadable(workflowSourceRoots, stepName)
+      ? await assertNodeSourceReadable(workflowSourceRoots, stepName, { units: ['global'] })
       : undefined;
   const capabilities = requireProvider(deps.providers, provider).capabilities;
   const nodeMcp = await resolveNodeMcp(

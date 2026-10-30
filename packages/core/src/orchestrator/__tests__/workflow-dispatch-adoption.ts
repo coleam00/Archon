@@ -1,3 +1,4 @@
+import { capturedSourceRoots } from '@archon/workflows/run-source';
 import { beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { makeTestResolvedWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -520,24 +521,14 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
             load_default_commands: true,
           },
         },
-        roots: {
-          project: '/capture-branch/project',
-          globalWorkflows: '/capture-branch/global/workflows',
-          globalCommands: '/capture-branch/global/commands',
-          globalScripts: '/capture-branch/global/scripts',
-          bundledWorkflows: '/capture-branch/bundled/workflows',
-          bundledCommands: '/capture-branch/bundled/commands/defaults',
-          installed: { kind: 'captured', captureRoot: '/capture-branch' },
-          kind: 'captured',
-          anchor: {
-            root: '/capture-branch',
-            digest: 'branch-digest',
-            config: {
-              load_default_workflows: true,
-              load_default_commands: true,
-            },
+        roots: capturedSourceRoots({
+          root: '/capture-branch',
+          digest: 'branch-digest',
+          config: {
+            load_default_workflows: true,
+            load_default_commands: true,
           },
-        },
+        }),
       })
     );
     // Discovery off the branch capture resolves a definition that requires an input

@@ -1,6 +1,7 @@
 import type { WorkflowLoadError, WorkflowWithSource } from '../schemas';
 import { qualifyPackReferences } from '../packaged-workflow';
 import { installedWorkflowName, listInstalledPacks, type InstalledPack } from '../workflow-source';
+import { selectedWorkflowUnits } from '../workflow-source/load';
 import type { DiscoveryContext } from './context';
 import { expandScope } from './expand-scope';
 import { loadPackWorkflows, type PackWorkflowFile, type ScopeFile } from './load-dir';
@@ -29,7 +30,16 @@ interface LoadedInstalledPack {
 export async function discoverInstalled(context: DiscoveryContext): Promise<InstalledDiscovery> {
   const workflows: WorkflowWithSource[] = [];
   const support: WorkflowWithSource[] = [];
-  const listed = await listInstalledPacks(context.roots.installed);
+  const indexed = context.capture?.manifest.version === 3 ? context.capture.manifest : undefined;
+  const selected =
+    indexed !== undefined && context.workflowName !== undefined
+      ? new Set(
+          selectedWorkflowUnits(indexed, context.workflowName)
+            .filter(root => root.startsWith('installed/'))
+            .map(root => root.slice('installed/'.length))
+        )
+      : undefined;
+  const listed = await listInstalledPacks(context.roots.installed, selected);
   for (const { path, message, cause, workflowName } of listed.errors) {
     context.allErrors.push({
       filename: path,
@@ -49,6 +59,11 @@ export async function discoverInstalled(context: DiscoveryContext): Promise<Inst
     });
   }
   const catalogEntrypoints = new Set([
+    ...(indexed?.installed_plugins.flatMap(record =>
+      Object.keys(record.manifest.entrypoints).map(entry =>
+        installedWorkflowName({ owner: record.id.split('/')[0], name: record.manifest.name }, entry)
+      )
+    ) ?? []),
     ...listed.packs.flatMap(pack =>
       Object.keys(pack.manifest.entrypoints).map(entry => installedWorkflowName(pack, entry))
     ),
