@@ -445,9 +445,16 @@ describe('terminal status writes in executor setup', () => {
   });
 
   it('replaces a rethrown setup error with the marker when its record write fails', async () => {
-    // The run-config guard rethrows its own error after recording it. A failed record has
-    // to win: the caller must learn the status is unwritten, not just that config sealing
-    // was unavailable. No `sealRunConfig` on the test deps, so the guard throws.
+    const run = makeRun({
+      metadata: {
+        run_config: {
+          version: 1,
+          ciphertext: 'opaque-ciphertext',
+          source: { kind: 'cli', label: 'x' },
+          keys: [],
+        },
+      },
+    });
     const store = makeStore({
       failWorkflowRun: mock(async () => {
         throw new Error('recovery write failed');
@@ -456,9 +463,28 @@ describe('terminal status writes in executor setup', () => {
     await expect(
       startWorkflow({
         store,
-        options: { ...pending(), runConfig: { layer: {}, source: { kind: 'cli', label: 'x' } } },
+        options: resumeOf(run),
       })
     ).rejects.toThrow('Failed to persist terminal workflow status');
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      run.id,
+      'This Archon build cannot restore persisted workflow run config.',
+      { expectedExecutionClaim: null }
+    );
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('preserves a pending run when config preparation fails before claiming it', async () => {
+    const store = makeStore();
+    await expect(
+      startWorkflow({
+        store,
+        options: { ...pending(), runConfig: { layer: {}, source: { kind: 'cli', label: 'x' } } },
+      })
+    ).rejects.toThrow('This Archon build cannot persist workflow run config.');
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
   it('does not let the finally backstop mask a failed catch-path write, and still unregisters the run', async () => {
