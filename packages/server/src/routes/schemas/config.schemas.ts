@@ -1,7 +1,11 @@
 /**
  * Zod schemas for configuration API endpoints.
  */
-import { platformStreamingSchema, type SafeConfig } from '@archon/core/config';
+import {
+  platformStreamingSchema,
+  type SafeConfig,
+  type SafeProjectConfig,
+} from '@archon/core/config';
 import { z } from '@hono/zod-openapi';
 import {
   modelAliasPresetSchema,
@@ -80,6 +84,14 @@ export const configResponseSchema = z
     database: z.string(),
   })
   .openapi('ConfigResponse');
+
+/** Response for GET /api/codebases/{id}/config: one project's merged safe config. */
+export const projectConfigResponseSchema = z
+  .object({
+    config: safeConfigSchema,
+    envKeys: z.array(z.string()),
+  } satisfies Record<keyof SafeProjectConfig, z.ZodType>)
+  .openapi('ProjectConfigResponse');
 
 /** @deprecated Use configResponseSchema instead. */
 export const updateAssistantConfigResponseSchema = configResponseSchema;

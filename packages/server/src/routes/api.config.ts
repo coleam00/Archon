@@ -3,7 +3,8 @@ import type { Context } from 'hono';
 import type { GlobalConfig, TiersPatch } from '@archon/core';
 import { getDatabaseType, loadConfig, toSafeConfig, updateGlobalConfig } from '@archon/core';
 import type { AliasesPatch } from '@archon/core';
-import { InvalidConfigError } from '@archon/core/config';
+import { InvalidConfigError, toSafeProjectConfig } from '@archon/core/config';
+import * as codebaseDb from '@archon/core/db/codebases';
 import { missingProviderMessage } from '@archon/provider-contract';
 import { isRegisteredProvider, providerRegistry } from '@archon/providers';
 import { TIER_NAMES } from '@archon/workflows/model-validation';
@@ -20,9 +21,11 @@ import {
   updateAssistantConfigBodySchema,
   updateAssistantConfigResponseSchema,
   configResponseSchema,
+  projectConfigResponseSchema,
   updateTiersBodySchema,
   updateAliasesBodySchema,
 } from './schemas/config.schemas';
+import { codebaseIdParamsSchema } from './schemas/codebase.schemas';
 
 const getConfigRoute = createRoute({
   method: 'get',
@@ -38,6 +41,26 @@ const getConfigRoute = createRoute({
       },
       description: 'Configuration',
     },
+    500: jsonError('Server error'),
+  },
+});
+
+const getProjectConfigRoute = createRoute({
+  method: 'get',
+  path: '/api/codebases/{id}/config',
+  tags: ['Codebases'],
+  summary: "Get a project's merged configuration (safe subset)",
+  description:
+    "Defaults, ~/.archon/config.yaml and the project's .archon/config.yaml, merged and " +
+    'with secrets removed. `envKeys` names the keys of the `env:` block; values are never returned.',
+  request: { params: codebaseIdParamsSchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: projectConfigResponseSchema } },
+      description: "The project's merged configuration",
+    },
+    404: jsonError('Codebase not found'),
+    422: jsonError('The project config is invalid'),
     500: jsonError('Server error'),
   },
 });
@@ -144,6 +167,21 @@ export function registerConfigRoutes(app: OpenAPIHono): void {
     } catch (error) {
       getLog().error({ err: error }, 'get_config_failed');
       return apiError(c, 500, 'Failed to get config');
+    }
+  });
+
+  // GET /api/codebases/:id/config - One project's merged config; the server reads the file
+  registerOpenApiRoute(getProjectConfigRoute, async c => {
+    const id = c.req.param('id') ?? '';
+    try {
+      const codebase = await codebaseDb.getCodebase(id);
+      if (!codebase) return apiError(c, 404, 'Codebase not found');
+      return c.json(toSafeProjectConfig(await loadConfig(codebase.default_cwd)));
+    } catch (error) {
+      // `summary` names the refused key without the server-side file path.
+      if (error instanceof InvalidConfigError) return apiError(c, 422, error.summary);
+      getLog().error({ err: error, codebaseId: id }, 'config.project_read_failed');
+      return apiError(c, 500, 'Failed to read project config');
     }
   });
 

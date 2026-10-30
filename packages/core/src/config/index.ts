@@ -4,5 +4,6 @@
 
 export * from './config-types';
 export * from './config-loader';
+export { toSafeProjectConfig } from './safe-project-config';
 export { InvalidConfigError } from './config-validation';
 export * from './run-config';
