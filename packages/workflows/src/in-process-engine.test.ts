@@ -122,6 +122,7 @@ import { resolveWorkflow } from './graph-plan';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import type { WorkflowRunDelivery } from './engine-port';
 import { executionClaim, type IWorkflowStore } from './store';
+import type { WorkflowRun } from './schemas/workflow-run';
 
 runWorkflowEngineContractTests(providerRegistry, deps => new InProcessWorkflowEngine(deps), {
   executedWorkflow: () => executedWorkflow,
@@ -328,6 +329,75 @@ describe('InProcessWorkflowEngine', () => {
       step_name: step,
       data: { node_output: step },
     });
+
+  it.each(['preparation', 'configuration', 'stamp'] as const)(
+    'public resume failure preserves a replaced claim during %s',
+    async phase => {
+      const { engine, store } = await makeEngine();
+      const run = await store.createWorkflowRun({
+        workflow_name: parent.name,
+        user_message: '',
+        metadata:
+          phase === 'configuration'
+            ? { ai_configuration: { version: 2 } }
+            : phase === 'stamp'
+              ? { continuation: { mode: 'unsupported' } }
+              : {},
+      });
+      await completeNode(store, run.id, 'first');
+      await store.failWorkflowRun(run.id, 'interrupted');
+      const failed = await store.getWorkflowRun(run.id);
+      if (!failed) throw new Error('expected failed run');
+      let replacement: WorkflowRun | undefined;
+      const admission = engine.resume({
+        platform,
+        conversationId: 'conv-1',
+        cwd: '/tmp/ops',
+        userMessage: '',
+        run: failed,
+        legacyWorkflow: parent,
+        prepareExecution: async () => {
+          await store.failWorkflowRun(run.id, 'replaced');
+          replacement = await store.resumeWorkflowRun(run.id);
+          if (phase === 'preparation') throw new Error('preparation refused');
+          return { cwd: '/tmp/ops' };
+        },
+      });
+      if (phase === 'preparation') await expect(admission).rejects.toThrow('preparation refused');
+      else {
+        const accepted = await admission;
+        if (!accepted.accepted) throw new Error('expected resume');
+        await expect(accepted.settled).rejects.toThrow(
+          phase === 'configuration'
+            ? 'Invalid recorded run AI configuration'
+            : 'Invalid recorded continuation metadata'
+        );
+      }
+      if (!replacement) throw new Error('expected replacement claim');
+      expect(await store.getWorkflowRun(run.id)).toEqual(replacement);
+    }
+  );
+
+  it('stale container submit preserves another worker claim', async () => {
+    const { engine, store } = await makeEngine();
+    const pending = await store.createWorkflowRun({
+      workflow_name: parent.name,
+      user_message: '',
+      metadata: { isolation: 'container', isolation_env_id: 'env-x' },
+    });
+    await store.claimPendingWorkflowRun(pending.id, '/other-worker');
+    const before = await store.getWorkflowRun(pending.id);
+    const result = await engine.submit({
+      platform,
+      conversationId: 'conv-1',
+      cwd: '/tmp/ops',
+      workflow: parent,
+      userMessage: '',
+      options: { preCreatedRun: pending },
+    });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('CLI') });
+    expect(await store.getWorkflowRun(pending.id)).toEqual(before);
+  });
 
   const lifecycle = (deliveries: WorkflowRunDelivery[]): string[] =>
     deliveries

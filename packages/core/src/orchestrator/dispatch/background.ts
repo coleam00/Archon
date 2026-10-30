@@ -236,7 +236,6 @@ async function dispatchBackgroundWorkflowOwned(
     const backgroundExecution = runInBackground({
       ctx,
       workflow,
-      workflowDeps,
       engine,
       workerPlatformId,
       workerConv,

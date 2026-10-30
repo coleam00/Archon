@@ -26,6 +26,7 @@ import type { WorkflowDeps } from './deps';
 import type { WorkflowExecutionResult } from './schemas';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { resolveRunExecutionMode } from './container-context';
+import { executionClaim } from './store';
 
 function rejectOptions(
   options: ExecuteWorkflowOptions | undefined,
@@ -97,7 +98,8 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
         await requireTerminalStatusWrite(
           this.deps.store.failWorkflowRun(
             hydrated.preCreatedRun.id,
-            error instanceof Error ? error.message : String(error)
+            error instanceof Error ? error.message : String(error),
+            { expectedExecutionClaim: executionClaim(hydrated.preCreatedRun.metadata) }
           ),
           {
             workflowRunId: hydrated.preCreatedRun.id,
@@ -129,7 +131,8 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
         await requireTerminalStatusWrite(
           this.deps.store.failWorkflowRun(
             hydrated.preCreatedRun.id,
-            error instanceof Error ? error.message : String(error)
+            error instanceof Error ? error.message : String(error),
+            { expectedExecutionClaim: executionClaim(hydrated.preCreatedRun.metadata) }
           ),
           {
             workflowRunId: hydrated.preCreatedRun.id,

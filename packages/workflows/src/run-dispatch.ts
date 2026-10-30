@@ -73,7 +73,6 @@ export async function resolveRunDispatch(
     (opts.priorCompletedNodes !== undefined || preCreatedRun.status !== 'pending');
   refuseInvalidDispatch(workflow, opts, isContinuation);
   const containerRefusal = await refuseContainerResumeWithoutBackend(
-    deps,
     platform,
     conversationId,
     opts
@@ -208,7 +207,6 @@ function refuseInvalidDispatch(
 }
 
 async function refuseContainerResumeWithoutBackend(
-  deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
   { preCreatedRun, container }: ExecuteWorkflowOptions
@@ -218,8 +216,7 @@ async function refuseContainerResumeWithoutBackend(
   // reaches here for a container run WITHOUT that context — e.g. approving a
   // --container run from chat/web, which has no docker backend wired — would run
   // host-side and SILENTLY skip the write-back apply, losing the approved changes.
-  // Fail loudly and point at the CLI instead; the run stays resumable (failed) so
-  // the CLI can rediscover the container and apply.
+  // Refuse without a status write: this dispatch has not established ownership.
   if (preCreatedRun && isContainerRun(preCreatedRun) && !container) {
     const msg =
       `Run '${preCreatedRun.id}' executed inside an isolation container. Resume it from the ` +
@@ -227,10 +224,6 @@ async function refuseContainerResumeWithoutBackend(
       'container is rediscovered — chat/web resume cannot rewire it.';
     getLog().warn({ workflowRunId: preCreatedRun.id }, 'workflow.container_resume_without_backend');
     await safeSendMessage(platform, conversationId, `⚠️ ${msg}`);
-    await requireTerminalStatusWrite(deps.store.failWorkflowRun(preCreatedRun.id, msg), {
-      workflowRunId: preCreatedRun.id,
-      site: 'workflow.container_resume_guard_fail_failed',
-    });
     return { success: false, workflowRunId: preCreatedRun.id, error: msg };
   }
   return undefined;

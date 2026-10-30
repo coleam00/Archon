@@ -49,6 +49,7 @@ import type * as RunLiveOwnerModule from '../../services/run-live-owner';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import type { ResolvedWorkflow, WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { IWorkflowStore } from '@archon/workflows/store';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import {
   makeTestComposedWorkflow,
   makeTestResolvedWorkflow,
@@ -714,28 +715,51 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   );
 
-  // #2910: a rejected terminal write means the row still says 'running' and the run's
-  // real outcome is unknown. Both sides of the branch are asserted — an ordinary
-  // rejection keeps its compensating write and its "failed" card; a terminal-write
-  // rejection gets neither, because a second write over the channel that just failed
-  // would either fail again or bury the real error.
-  test('marks the run failed and says so when execution rejects with an ordinary error', async () => {
+  test('reports execution rejection without an unowned terminal write', async () => {
     const workflow = makeWorkflow({ worktree: { enabled: false } });
     mockExecuteWorkflow.mockRejectedValueOnce(new Error('exec boom'));
-    mockFailWorkflowRun.mockImplementationOnce(async () => {
-      runLiveOwnerCalls.push('fail');
-      return { failed: true };
-    });
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
     await flushBackgroundExecution();
 
-    expect(mockFailWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(mockFailWorkflowRun.mock.calls[0]?.[0]).toBe('run-1');
+    expect(mockFailWorkflowRun).not.toHaveBeenCalled();
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
-    expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'fail', 'close']);
+    expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'close']);
     const sent = platform.sendMessage.mock.calls.map(c => c[1]);
     expect(sent.some(m => m.includes('failed: exec boom'))).toBe(true);
+  });
+
+  test('background submit refusal preserves another worker running row', async () => {
+    const store = await createFileWorkflowStore({
+      root: track(await mkdtemp(join(tmpdir(), 'archon-background-claim-'))),
+    });
+    const workflow = makeWorkflow({ worktree: { enabled: false } });
+    const pending = await store.createWorkflowRun({
+      workflow_name: workflow.name,
+      user_message: '',
+    });
+    await store.claimPendingWorkflowRun(pending.id, '/other-worker');
+    const before = await store.getWorkflowRun(pending.id);
+    mockCreateWorkflowRun.mockResolvedValueOnce(pending);
+    mockFailWorkflowRun.mockImplementation(store.failWorkflowRun.bind(store));
+    mockExecuteWorkflow.mockRejectedValueOnce(
+      new Error('Caller mode conflicts with recorded continuation mode.')
+    );
+    const reported = Promise.withResolvers<void>();
+    platform.sendMessage.mockImplementation(async (_conversationId, message) => {
+      if (message.includes('conflicts with recorded')) reported.resolve();
+    });
+    try {
+      await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
+      await reported.promise;
+      expect(await store.getWorkflowRun(pending.id)).toEqual(before);
+      expect(mockFailWorkflowRun).not.toHaveBeenCalled();
+      expect(
+        platform.sendMessage.mock.calls.some(call => call[1].includes('conflicts with recorded'))
+      ).toBe(true);
+    } finally {
+      mockFailWorkflowRun.mockImplementation(async () => ({ failed: true }));
+    }
   });
 
   test('does not compensate or claim failure when the terminal write rejects', async () => {
@@ -984,16 +1008,14 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(opts?.runConfig).toEqual(runConfig);
   });
 
-  test('terminalizes a pre-created row when executor setup rejects the run config', async () => {
+  test('preserves a pre-created row when executor setup rejects the run config', async () => {
     const workflow = makeWorkflow({ worktree: { enabled: false } });
     mockExecuteWorkflow.mockRejectedValueOnce(new Error('invalid run config provider'));
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
     await flushBackgroundExecution();
 
-    expect(mockFailWorkflowRun).toHaveBeenCalledWith('run-1', 'invalid run config provider', {
-      exitReason: 'unhandled_error',
-    });
+    expect(mockFailWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('default policy still resolves isolation for the worker', async () => {

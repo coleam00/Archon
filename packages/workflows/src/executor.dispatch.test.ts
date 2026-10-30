@@ -137,7 +137,7 @@ describe('container resume guard', () => {
     container: { envId: 'env-x', writeBack: 'approve', backend: containerBackend() },
   });
 
-  it('fails a container run resumed without a container context, pointing at the CLI', async () => {
+  it('refuses a container run resumed without a container context, pointing at the CLI', async () => {
     const store = makeStore();
     const result = await startWorkflow({
       store,
@@ -146,7 +146,7 @@ describe('container resume guard', () => {
     });
     if (result.success) throw new Error('Expected missing-container-context failure');
     expect(result.error).toMatch(/executed inside an isolation container/);
-    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 

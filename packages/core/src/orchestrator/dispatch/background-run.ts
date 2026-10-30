@@ -34,7 +34,6 @@ export interface WorkerCheckout {
 export interface BackgroundRun {
   ctx: WorkflowRoutingContext;
   workflow: ResolvedWorkflow;
-  workflowDeps: WorkflowDeps;
   engine: InProcessWorkflowEngine;
   workerPlatformId: string;
   workerConv: Conversation;
@@ -154,19 +153,6 @@ async function reportFailure(run: BackgroundRun, error: unknown): Promise<void> 
   const { ctx, workflow, preCreatedRun } = run;
   const err = toError(error);
   const terminalWriteFailed = error instanceof TerminalStatusWriteError;
-  // A rejected terminal write leaves the row saying `running`. Do not compensate
-  // with a second failWorkflowRun over the write channel that just failed, and do
-  // not tell the user the workflow "failed" — its real outcome is unknown.
-  if (!terminalWriteFailed) {
-    await run.workflowDeps.store
-      .failWorkflowRun(preCreatedRun.id, err.message, { exitReason: 'unhandled_error' })
-      .catch(dbError => {
-        getLog().error(
-          { err: toError(dbError), workflowRunId: preCreatedRun.id },
-          'background_workflow_fail_db_record_failed'
-        );
-      });
-  }
   getLog().error(
     {
       err,
