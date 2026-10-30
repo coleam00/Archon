@@ -91,6 +91,30 @@ export interface IRunTreeStore {
   getRunAncestry(runId: string): Promise<WorkflowRun[]>;
 }
 
+/** A `node_completed` row whose `structured_output` carries a `metrics` key. */
+export interface MetricRecordRow {
+  eventId: string;
+  runId: string;
+  runStartedAt: Date;
+  workflowName: string;
+  codebaseId: string | null;
+  /** The event's `step_name`. */
+  nodeId: string;
+  completedAt: string;
+  eventOrder: number | null;
+  /** The raw `structured_output.metrics` value; the engine parses it. */
+  metrics: unknown;
+}
+
+/**
+ * Metric completions in durable event order (legacy unsequenced rows first, then by
+ * time and id). Rows are raw: which completions count, and what a record means, is
+ * decided once in `queryMetrics`.
+ */
+export interface IMetricRecordStore {
+  listMetricRecords(query: { codebaseId?: string }): Promise<MetricRecordRow[]>;
+}
+
 export interface IWorkflowRunNodeSessionStore {
   listWorkflowRunNodeSessions(workflowRunId: string): Promise<readonly WorkflowRunNodeSession[]>;
   upsertWorkflowRunNodeSession(params: {
@@ -103,6 +127,7 @@ export interface IWorkflowRunNodeSessionStore {
 
 export interface IWorkflowStore
   extends IRunTreeStore,
+    IMetricRecordStore,
     IWorkflowRunNodeSessionStore,
     IResourceStartStore,
     IStateDocumentStore,

@@ -20,6 +20,7 @@ import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
+import { listMetricRecords } from '../db/workflow-metrics';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import {
   listWorkflowRunNodeSessions,
@@ -165,6 +166,7 @@ export function createWorkflowStore(): IWorkflowStore {
           rows.map(hydrateWorkflowEventRow),
         ])
       ),
+    listMetricRecords,
     findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     createWorkflowRun: workflowDb.createWorkflowRun,
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,

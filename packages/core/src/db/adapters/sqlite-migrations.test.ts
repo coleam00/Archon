@@ -8,7 +8,8 @@ import { mkdtemp } from 'fs/promises';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { LEGACY_VENDOR_ALIASES } from '@archon/providers/credential-catalog';
 import { getSchemaSQL } from '../bundled-schema';
-import { SqliteAdapter } from './sqlite';
+import { metricRecordsSql } from '../workflow-metrics';
+import { SqliteAdapter, sqliteDialect } from './sqlite';
 import { isSqliteSchemaCurrent } from './sqlite-schema-state';
 import { prepareAll, prepareGet } from './sqlite-statements';
 import { raw_indexes, raw_pragma, raw_query } from './sqlite-test-harness';
@@ -514,5 +515,28 @@ describe('migrateColumns on an existing database', () => {
         }
       }
     );
+  });
+});
+
+describe('idx_workflow_events_metrics', () => {
+  test('is created on an existing database and serves the metric records query', async () => {
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
+    try {
+      raw.run('DROP INDEX idx_workflow_events_metrics');
+    } finally {
+      raw.close();
+    }
+    expect(raw_indexes(path)).not.toContain('idx_workflow_events_metrics');
+
+    await new SqliteAdapter(path).close();
+
+    expect(raw_indexes(path)).toContain('idx_workflow_events_metrics');
+    const plan = raw_query(
+      path,
+      `EXPLAIN QUERY PLAN ${metricRecordsSql(sqliteDialect, false)}`
+    ) as { detail: string }[];
+    expect(plan.map(row => row.detail).join('\n')).toContain('idx_workflow_events_metrics');
   });
 });

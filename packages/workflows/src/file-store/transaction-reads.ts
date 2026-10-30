@@ -25,6 +25,7 @@ type TransactionReads = Pick<
   | 'getWorkflowRunStatus'
   | 'listWorkflowEvents'
   | 'listEventsForRuns'
+  | 'listMetricRecords'
   | 'getDagResumeSnapshot'
   | 'findChildRuns'
   | 'getRunAncestry'
@@ -71,6 +72,13 @@ function continuationTime(run: WorkflowRun): number {
           ? schedule.resumeAt
           : undefined;
   return at === undefined ? Number.POSITIVE_INFINITY : Date.parse(at);
+}
+
+/** `structured_output.metrics` when present and not null, matching the SQL stores' predicate. */
+function readMetrics(event: WorkflowEventRow): unknown {
+  const structured = event.data.structured_output;
+  if (typeof structured !== 'object' || structured === null) return undefined;
+  return (structured as { metrics?: unknown }).metrics ?? undefined;
 }
 
 /** The read side of a transaction view: queries over the transaction's runs and events. */
@@ -121,6 +129,39 @@ export function createTransactionReads(
           listEvents(id).filter(event => types.some(type => type === event.event_type)),
         ])
       ),
+    listMetricRecords: async ({ codebaseId }) =>
+      events
+        .flatMap(event => {
+          const run = runs.get(event.workflow_run_id);
+          const metrics = readMetrics(event);
+          if (
+            metrics === undefined ||
+            event.event_type !== 'node_completed' ||
+            event.step_name === null ||
+            !run ||
+            (codebaseId !== undefined && run.codebase_id !== codebaseId)
+          )
+            return [];
+          return [
+            {
+              eventId: event.id,
+              runId: run.id,
+              runStartedAt: new Date(run.started_at),
+              workflowName: run.workflow_name,
+              codebaseId: run.codebase_id,
+              nodeId: event.step_name,
+              completedAt: event.created_at,
+              eventOrder: event.event_order ?? null,
+              metrics: structuredClone(metrics),
+            },
+          ];
+        })
+        .sort(
+          (a, b) =>
+            (a.eventOrder ?? 0) - (b.eventOrder ?? 0) ||
+            a.completedAt.localeCompare(b.completedAt) ||
+            a.eventId.localeCompare(b.eventId)
+        ),
     getDagResumeSnapshot: async id => foldDagResumeSnapshot(listEvents(id), id),
     findChildRuns: async id =>
       structuredClone(

@@ -199,6 +199,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     deleteOldWorkflowRuns: mock(unexpected('deleteOldWorkflowRuns')),
     listWorkflowEvents: mock(unexpected('listWorkflowEvents')),
     listEventsForRuns: mock(unexpected('listEventsForRuns')),
+    listMetricRecords: mock(unexpected('listMetricRecords')),
     findWorkflowRunsByIdPrefix: mock(async () => []),
     listWorkflowRuns: mock(unexpected('listWorkflowRuns')),
     getActiveWorkflowRunByPath: mock(async () => null),
