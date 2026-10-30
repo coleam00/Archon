@@ -235,8 +235,14 @@ test.each([false, true])(
       const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
       expect(probe).toHaveBeenCalledWith(
         ['version', '--format', '{{.Server.Version}}'],
-        expect.objectContaining({ timeout: 10_000, env: expect.objectContaining({ PATH: root }) })
+        expect.objectContaining({ timeout: 10_000 })
       );
+      const probeEnv = probe.mock.calls[0]?.[1]?.env ?? {};
+      expect(
+        Object.entries(probeEnv)
+          .filter(([key]) => key.toUpperCase() === 'PATH')
+          .map(([, value]) => value)
+      ).toEqual([root]);
       await unlink(executable);
       await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');
     } finally {
