@@ -7,7 +7,7 @@ import { parseTestArguments } from './package-test-requests';
 
 const countFields = ['tests', 'assertions', 'failures', 'skipped', 'errors', 'time'] as const;
 type Counts = Record<(typeof countFields)[number], number>;
-interface TestReport {
+export interface TestReport {
   counts: Counts;
   suites: string;
 }

@@ -7,7 +7,7 @@ import {
 } from './package-test-groups';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import { resolveRequestedTestGroups } from './package-test-requests';
-import { runnerErrorReport, runReportedGroup, writeCombinedReport } from './package-test-reports';
+import { runReportedGroup, writeCombinedReport, type TestReport } from './package-test-reports';
 
 /**
  * Runs one package's tests, from that package's directory.
@@ -70,7 +70,6 @@ if (part !== undefined) {
   console.log(`Part ${String(part.index)}/${String(part.count)}: ${String(groups.length)} groups`);
 }
 
-for (const error of request?.validationErrors ?? []) console.error(error.message);
 const singleGroupOption =
   request?.namePattern !== undefined
     ? 'Name filters require'
@@ -82,9 +81,7 @@ if (groups.length > 1 && singleGroupOption !== undefined) {
     `${singleGroupOption} one isolation group; selected ${groups.length}:\n${groups.map((group, index) => `  ${index + 1}: ${group.join(' ')}`).join('\n')}\nSelect files from one group or run each group separately.`
   );
 }
-const reports = (request?.validationErrors ?? []).map(error =>
-  runnerErrorReport(error.message, 'Test discovery')
-);
+const reports: TestReport[] = [];
 
 /** Runs one group and reports how long it took, for `update-test-weights.ts`. */
 const timed = async (group: string[], runGroup: (group: string[]) => Promise<number>) => {
@@ -151,4 +148,4 @@ async function runGroups(): Promise<number> {
 // Not `process.exit`: on a pipe it can cut off the buffered group output written just before.
 const code = await runGroups();
 if (request?.reporterOutfile !== undefined) writeCombinedReport(request.reporterOutfile, reports);
-process.exitCode = code || (request?.validationErrors.length ? 1 : 0);
+process.exitCode = code;

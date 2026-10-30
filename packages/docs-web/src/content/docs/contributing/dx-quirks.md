@@ -112,8 +112,8 @@ running the suite.
 Within a package, substring selectors expand to matching files and retain the package's
 isolation groups. Every selected group runs, even after another group fails; the command
 returns nonzero if any group fails. A full run without arguments still stops admitting
-groups after a failure. A selected file outside explicit `testGroups` contributes a
-discovery error while covered groups still run.
+groups after a failure. Discovery errors, including selected files outside explicit
+`testGroups`, stop the request before any group starts.
 
 Test options are forwarded to each group. Name filters (`-t` or `--test-name-pattern`)
 are supported only when the request selects one isolation group, preserving Bun's native
@@ -125,8 +125,7 @@ failures still return nonzero. An explicit
 `--reporter=junit --reporter-outfile <path>` receives one combined report containing all
 started groups and repository-root owners, including their failures and aggregate counts. Each failed child also
 contributes a process error because Bun can omit load failures from its JUnit output;
-the child output contains the diagnostics. Selected discovery failures contribute runner
-errors too, including when no valid child group can start.
+the child output contains the diagnostics.
 An unreadable or invalid private report fails its group and contributes a runner error
 without preventing later requested groups from running. Bun can omit JUnit output on
 successful zero-file runs. An absent report after exit 0 emits a diagnostic and contributes

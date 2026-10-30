@@ -81,32 +81,24 @@ export function resolveRequestedTestGroups(
   const files = inventory.filter(
     file => selectors.length === 0 || selectors.some(selector => file.includes(selector))
   );
-  const validationErrors: Error[] = [];
   const groups = (
-    files.length === 0
-      ? []
-      : resolvePackageTestGroups(packageDirectory, manifest, files, error =>
-          validationErrors.push(error)
-        )
+    files.length === 0 ? [] : resolvePackageTestGroups(packageDirectory, manifest, files)
   ).filter(group => group.length > 0);
   const groupedFiles = new Set(groups.flat());
   if (typeof manifest === 'object' && manifest !== null && 'testGroups' in manifest) {
     for (const file of files) {
       if (!groupedFiles.has(file)) {
-        validationErrors.push(new Error(`Requested test is not covered by testGroups: ${file}`));
+        throw new Error(`Requested test is not covered by testGroups: ${file}`);
       }
     }
   }
   const selectorIndices = new Set(positionals.map(token => token.index));
   const options = requested.filter((_, index) => !selectorIndices.has(index));
   return {
-    validationErrors,
     // Let Bun own no-match errors and flags such as --help or --pass-with-no-tests.
     groups:
       groups.length === 0
-        ? validationErrors.length > 0
-          ? []
-          : [requested]
+        ? [requested]
         : groups.map(group => [...options, ...group.map(file => `./${file}`)]),
     hasShard: optionTokens.some(token => token.name === 'shard'),
     namePattern:

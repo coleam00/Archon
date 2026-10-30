@@ -459,8 +459,8 @@ test(
     );
     unlinkSync(join(root, 'selected'));
     expect(await run(root, ['src/'])).not.toBe(0);
-    expect(readFileSync(join(root, 'selected'), 'utf8')).toBe('yes');
-    expect(readFileSync(join(root, 'isolated'), 'utf8')).toBe('yes');
+    expect(existsSync(join(root, 'selected'))).toBe(false);
+    expect(existsSync(join(root, 'isolated'))).toBe(false);
     expect(await run(root)).not.toBe(0);
   },
   testTimeout(5000)
@@ -521,7 +521,7 @@ for (const owner of ['test', 'describe']) {
 }
 
 test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-  'requested read and directive failures retain valid siblings and JUnit errors',
+  'requested read failures stop before executing groups or writing reports',
   async () => {
     const root = fixture();
     testFile(root, 'unreadable', `test('unreadable', () => {});`);
@@ -537,14 +537,9 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
       expect(await run(root, ['src/', '--reporter=junit', '--reporter-outfile', report])).not.toBe(
         0
       );
-      expect(readFileSync(join(root, 'shared'), 'utf8')).toBe('yes');
-      expect(readFileSync(join(root, 'isolated'), 'utf8')).toBe('yes');
-      const xml = readFileSync(report, 'utf8');
-      expect(xml).toMatch(/<testsuites[^>]*errors="2"/);
-      expect(xml).toContain('unreadable.test.ts');
-      expect(xml).toContain('unmarked.test.ts');
-      expect(xml).toContain('EACCES');
-      unlinkSync(join(root, 'shared'));
+      expect(existsSync(join(root, 'shared'))).toBe(false);
+      expect(existsSync(join(root, 'isolated'))).toBe(false);
+      expect(existsSync(report)).toBe(false);
       expect(await run(root)).not.toBe(0);
       expect(existsSync(join(root, 'shared'))).toBe(false);
     } finally {
@@ -554,13 +549,16 @@ test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
   testTimeout(5000)
 );
 
-test('discovery-only failures produce a failing JUnit report', async () => {
+test('directive failures stop before executing groups or writing reports', async () => {
   const root = fixture();
   testFile(root, 'unmarked', `mock.module('./value', () => ({}));`);
+  testFile(root, 'valid', `appendFileSync('loaded', 'yes'); test('valid', () => {});`, true);
   const report = join(root, 'discovery.xml');
-  expect(await run(root, ['src/', '--reporter=junit', '--reporter-outfile', report])).not.toBe(0);
-  expect(readFileSync(report, 'utf8')).toMatch(/<testsuites[^>]*errors="1"/);
-  expect(readFileSync(report, 'utf8')).toContain('unmarked.test.ts');
+  const result = await runResult(root, ['src/', '--reporter=junit', '--reporter-outfile', report]);
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('unmarked.test.ts');
+  expect(existsSync(join(root, 'loaded'))).toBe(false);
+  expect(existsSync(report)).toBe(false);
 });
 
 for (const suffix of ['test', 'spec']) {
@@ -758,7 +756,7 @@ test('single-group name filters preserve caller Bun options for test subprocesse
 });
 
 for (const selection of ['mixed', 'uncovered', 'covered']) {
-  test(`requested manifest coverage is enforced without losing valid groups: ${selection}`, async () => {
+  test(`requested manifest coverage is enforced before execution: ${selection}`, async () => {
     const declaration = { testGroups: [['src/covered.test.ts']] };
     const root = fixture(declaration);
     testFile(root, 'covered', `test('covered', () => appendFileSync('covered', 'ran'));`);
@@ -772,19 +770,26 @@ for (const selection of ['mixed', 'uncovered', 'covered']) {
         ? ['src/']
         : [selection === 'covered' ? 'covered.test' : 'unlisted.test'];
     const report = join(root, 'coverage.xml');
-    const request = resolveRequestedTestGroups(root, declaration, args);
-    expect(request.validationErrors.map(error => error.message)).toEqual(
-      selection === 'covered'
-        ? []
-        : ['Requested test is not covered by testGroups: src/unlisted.test.ts']
-    );
-    expect(await run(root, [...args, '--reporter=junit', '--reporter-outfile', report])).toBe(
-      selection === 'covered' ? 0 : 1
-    );
-    expect(existsSync(join(root, 'covered'))).toBe(selection !== 'uncovered');
-    const xml = readFileSync(report, 'utf8');
-    expect(xml).toContain(selection === 'covered' ? 'name="covered"' : 'src/unlisted.test.ts');
-    expect(xml).toContain(`errors="${selection === 'covered' ? 0 : 1}"`);
+    if (selection === 'covered') {
+      expect(resolveRequestedTestGroups(root, declaration, args).groups).toEqual([
+        ['./src/covered.test.ts'],
+      ]);
+    } else {
+      expect(() => resolveRequestedTestGroups(root, declaration, args)).toThrow(
+        'Requested test is not covered by testGroups: src/unlisted.test.ts'
+      );
+    }
+    const result = await runResult(root, [
+      ...args,
+      '--reporter=junit',
+      '--reporter-outfile',
+      report,
+    ]);
+    expect(result.status).toBe(selection === 'covered' ? 0 : 1);
+    expect(existsSync(join(root, 'covered'))).toBe(selection === 'covered');
+    expect(existsSync(report)).toBe(selection === 'covered');
+    if (selection === 'covered') expect(readFileSync(report, 'utf8')).toContain('name="covered"');
+    else expect(result.stderr).toContain('src/unlisted.test.ts');
   });
 }
 
@@ -796,12 +801,12 @@ test('every explicit package manifest accounts for a newly requested filename', 
     if (declaration.testGroups === undefined) continue;
     const root = fixture(declaration);
     testFile(root, 'newly-added', `test('new', () => {});`);
-    const request = resolveRequestedTestGroups(root, declaration, ['newly-added']);
     const covered = declaration.testGroups.some((group: string[]) =>
       group.some(selector => 'src/newly-added.test.ts'.includes(selector))
     );
-    expect(request.validationErrors.length).toBe(covered ? 0 : 1);
-    expect(request.groups.length).toBe(covered ? 1 : 0);
+    const resolve = () => resolveRequestedTestGroups(root, declaration, ['newly-added']);
+    if (covered) expect(resolve().groups).toHaveLength(1);
+    else expect(resolve).toThrow('Requested test is not covered by testGroups');
   }
 });
 
