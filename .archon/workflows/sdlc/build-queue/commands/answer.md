@@ -47,6 +47,6 @@ Only on ask; null otherwise. A maintainer reads it without opening the run, so e
 - `if_unanswered`: whether the item waits, blocks other work, or goes stale as the base moves.
 - `links`: the pull request, the review report and the run.
 
-On ask, declare `ask_class`. Use `scope` when the question is about the contract's shape, such as the check before you continue or the rounds' trend at the cap. Use `stop` for any other question, including asking for a check no round can run. It is null on done and continue.
+On ask, declare `ask_class`. Use `scope` when the question is about the contract's shape, such as the check before you continue or the rounds' trend at the cap. Use `stop` for any other question, including asking for a check no round can run. On done and continue the queue ignores it; declare `stop`.
 
 Declare `reason`: one line a maintainer can check.
