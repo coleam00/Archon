@@ -73,13 +73,35 @@ export function isOwnerProvablyGone(
   return isPidProvablyGone(owner.pid);
 }
 
+export type PidLivenessObservation =
+  | { status: 'returned'; value: boolean; provablyGone: false }
+  | { status: 'threw'; code: string | null; errno: number | null; provablyGone: boolean };
+
+/** Retains the evidence from the same signal-0 call that decides proof of death. */
+export function probePidLiveness(pid: number): PidLivenessObservation {
+  try {
+    return { status: 'returned', value: process.kill(pid, 0), provablyGone: false };
+  } catch (error) {
+    const code =
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      typeof error.code === 'string'
+        ? error.code
+        : null;
+    const errno =
+      typeof error === 'object' &&
+      error !== null &&
+      'errno' in error &&
+      typeof error.errno === 'number'
+        ? error.errno
+        : null;
+    // EPERM means the pid exists under another user; only ESRCH proves it is gone.
+    return { status: 'threw', code, errno, provablyGone: code === 'ESRCH' };
+  }
+}
+
 /** True only when no process with this pid exists on this host. */
 export function isPidProvablyGone(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    // EPERM means the pid exists under another user; only ESRCH proves it is gone.
-    return (error as NodeJS.ErrnoException).code === 'ESRCH';
-  }
+  return probePidLiveness(pid).provablyGone;
 }

@@ -1,7 +1,12 @@
 import { execFile } from 'node:child_process';
 import { extname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
-import { isPidProvablyGone } from './process-owner';
+import { createLogger } from './logger';
+import { probePidLiveness } from './process-owner';
+import {
+  readWindowsProcessIdentity,
+  type WindowsProcessIdentity,
+} from './windows-process-identity';
 
 const execFileAsync = promisify(execFile);
 
@@ -80,14 +85,57 @@ export async function terminateWindowsTree(
   pid: number,
   taskkill: (pid: number) => Promise<unknown> = runTaskkill
 ): Promise<void> {
+  const log = createLogger('paths.plugin-process');
+  const debug = log.isLevelEnabled('debug');
+  const identity = async (): Promise<WindowsProcessIdentity> => {
+    try {
+      return await readWindowsProcessIdentity(pid);
+    } catch {
+      return { pid, status: 'unavailable', code: 'CAPTURE_FAILED' };
+    }
+  };
+  const emit = (fields: object): void => {
+    try {
+      log.debug({ targetPid: pid, ...fields }, 'process.windows_tree_stop');
+    } catch {
+      // Optional diagnostics must not replace the saved stop result if a sink fails.
+    }
+  };
+  const entryIdentity = debug ? await identity() : undefined;
+  if (debug) emit({ phase: 'stop_entry', identity: entryIdentity });
   try {
     await taskkill(pid);
   } catch (error) {
-    // taskkill's exit code does not say whether the tree survived: 128 means the root was
-    // already gone, and 255 can mean the root exited while its children were being ended.
-    // A root that no longer exists is the only proof that is not taskkill's prose.
-    if (!isPidProvablyGone(pid)) throw error;
+    const liveness = probePidLiveness(pid);
+    if (debug) {
+      const failureIdentity = await identity();
+      emit({
+        phase: 'taskkill_failed',
+        entryIdentity,
+        failureIdentity,
+        liveness,
+        taskkill: taskkillFailureFields(error),
+      });
+    }
+    // Identity samples and taskkill's prose are diagnostic evidence, never stop authorization.
+    if (!liveness.provablyGone) throw error;
   }
+}
+
+function taskkillFailureFields(error: unknown): {
+  code: string | number | null;
+  stderr: string | null;
+} {
+  if (typeof error !== 'object' || error === null) return { code: null, stderr: null };
+  const code =
+    'code' in error && (typeof error.code === 'number' || typeof error.code === 'string')
+      ? error.code
+      : null;
+  const stderr =
+    'stderr' in error && (typeof error.stderr === 'string' || Buffer.isBuffer(error.stderr))
+      ? error.stderr.toString()
+      : null;
+  return { code, stderr };
 }
 
 function runTaskkill(pid: number): Promise<unknown> {
