@@ -19,6 +19,7 @@ import {
   WorkflowSourceIntegrityError,
   type WorkflowSourceCapture,
 } from './workflow-source';
+import { sourceReadError } from './workflow-source/integrity';
 import { resolveCommandContentForScan } from './workflow-discovery/command-scan';
 import { loadCommandPrompt } from './load-command-prompt';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -1309,67 +1310,75 @@ for (const operation of ['mkdir', 'writeFile', 'readFile'] as const) {
 }
 
 for (const operation of ['lstat', 'readdir', 'readFile', 'missing-enumeration'] as const) {
-  for (const code of ['EACCES', 'ENOENT', 'ENOTDIR', 'EISDIR', 'EPERM', 'ELOOP']) {
-    test(`inherited staging ${operation} ${code} aborts child capture`, async () => {
-      const fixture = await pausedRun();
-      const captureRoot = join(root, 'child-capture');
-      const staging = `${captureRoot}.partial`;
-      const destination = join(staging, 'installed/acme.broken');
-      const readOperation = operation === 'missing-enumeration' ? 'readFile' : operation;
-      const cause = Object.assign(new Error('staging read failed'), {
-        code,
-        syscall: readOperation,
-      });
-      const original = fs[readOperation];
-      const originalReaddir = fs.readdir;
-      const listingFault =
-        operation === 'missing-enumeration'
-          ? spyOn(fs, 'readdir').mockImplementation(
-              new Proxy(originalReaddir, {
-                async apply(target, receiver, args: Parameters<typeof originalReaddir>) {
-                  const entries = await Reflect.apply(target, receiver, args);
-                  return String(args[0]) === join(destination, 'run') ? [] : entries;
-                },
-              })
-            )
-          : undefined;
-      let failedReads = 0;
-      const fault = spyOn(fs, readOperation).mockImplementation(
-        new Proxy(original, {
-          apply(target, receiver, args) {
-            const path = String(args[0]);
-            if (
-              operation === 'missing-enumeration'
-                ? path === join(destination, 'run/run.yaml')
-                : path.startsWith(destination)
-            ) {
-              failedReads++;
-              return Promise.reject(cause);
-            }
-            return Reflect.apply(target, receiver, args);
-          },
-        })
-      );
-      try {
-        await expect(
-          captureWorkflowSource({
-            sourceRoot: project,
-            captureRoot,
-            installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
-          })
-        ).rejects.toMatchObject({
-          name: 'WorkflowSourceUnavailableError',
-          path: staging,
-          cause,
-        });
-        expect(failedReads).toBe(1);
-        await expect(fs.stat(captureRoot)).rejects.toMatchObject({ code: 'ENOENT' });
-        await expect(fs.stat(staging)).rejects.toMatchObject({ code: 'ENOENT' });
-        await verifyWorkflowSourceUnits(fixture.capture.anchor, ['installed/acme.broken']);
-      } finally {
-        fault.mockRestore();
-        listingFault?.mockRestore();
-      }
+  test(`inherited staging ${operation} EACCES aborts child capture`, async () => {
+    const fixture = await pausedRun();
+    const captureRoot = join(root, 'child-capture');
+    const staging = `${captureRoot}.partial`;
+    const destination = join(staging, 'installed/acme.broken');
+    const readOperation = operation === 'missing-enumeration' ? 'readFile' : operation;
+    const cause = Object.assign(new Error('staging read failed'), {
+      code: 'EACCES',
+      syscall: readOperation,
     });
-  }
+    const original = fs[readOperation];
+    const originalReaddir = fs.readdir;
+    const listingFault =
+      operation === 'missing-enumeration'
+        ? spyOn(fs, 'readdir').mockImplementation(
+            new Proxy(originalReaddir, {
+              async apply(target, receiver, args: Parameters<typeof originalReaddir>) {
+                const entries = await Reflect.apply(target, receiver, args);
+                return String(args[0]) === join(destination, 'run') ? [] : entries;
+              },
+            })
+          )
+        : undefined;
+    let failedReads = 0;
+    const fault = spyOn(fs, readOperation).mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver, args) {
+          const path = String(args[0]);
+          if (
+            operation === 'missing-enumeration'
+              ? path === join(destination, 'run/run.yaml')
+              : path.startsWith(destination)
+          ) {
+            failedReads++;
+            return Promise.reject(cause);
+          }
+          return Reflect.apply(target, receiver, args);
+        },
+      })
+    );
+    try {
+      await expect(
+        captureWorkflowSource({
+          sourceRoot: project,
+          captureRoot,
+          installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
+        })
+      ).rejects.toMatchObject({
+        name: 'WorkflowSourceUnavailableError',
+        path: staging,
+        cause,
+      });
+      expect(failedReads).toBe(1);
+      await expect(fs.stat(captureRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.stat(staging)).rejects.toMatchObject({ code: 'ENOENT' });
+      await verifyWorkflowSourceUnits(fixture.capture.anchor, ['installed/acme.broken']);
+    } finally {
+      fault.mockRestore();
+      listingFault?.mockRestore();
+    }
+  });
+}
+
+for (const code of ['EACCES', 'ENOENT', 'ENOTDIR', 'EISDIR', 'EPERM', 'ELOOP']) {
+  test(`source read translation preserves ${code} cause and capture path`, () => {
+    const path = join(root, 'capture');
+    const cause = Object.assign(new Error('source read failed'), { code });
+    const error = sourceReadError(path, cause);
+    expect(error).toBeInstanceOf(WorkflowSourceUnavailableError);
+    expect(error).toMatchObject({ path, cause });
+  });
 }
