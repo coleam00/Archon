@@ -3,6 +3,7 @@ import { join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import { parseTestArguments } from './package-test-requests';
+import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
 /**
  * Runs the repository's tests, from the repository root.
@@ -225,14 +226,30 @@ async function runRequested(requested: string[]): Promise<number> {
     return 1;
   }
 
+  const { optionTokens } = parseTestArguments(requested);
+  const destination =
+    optionTokens.filter(token => token.name === 'reporter').at(-1)?.value === 'junit'
+      ? optionTokens.filter(token => token.name === 'reporter-outfile').at(-1)?.value
+      : undefined;
+  const reports = [];
+  let code = 0;
   for (const { owner, args } of runs) {
-    const command =
-      owner.cwd === REPO_ROOT ? bunTestCommand(args) : ['bun', 'run', 'test', ...args];
-    const code = await run(command, owner.cwd);
-    if (code !== 0) return code;
+    const runOwner = (ownerArgs: string[]) =>
+      run(
+        owner.cwd === REPO_ROOT ? bunTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
+        owner.cwd
+      );
+    if (destination === undefined) {
+      code = await runOwner(args);
+    } else {
+      const result = await runReportedGroup(args, runOwner, undefined);
+      reports.push(result.report);
+      code = result.code === 'no-name-match' ? 0 : result.code;
+    }
+    if (code !== 0) break;
   }
-
-  return 0;
+  if (destination !== undefined) writeCombinedReport(resolve(REPO_ROOT, destination), reports);
+  return code;
 }
 
 async function main(requested: string[]): Promise<number> {

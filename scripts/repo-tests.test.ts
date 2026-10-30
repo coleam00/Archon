@@ -5,6 +5,9 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import {
   planRequestedRuns,
@@ -284,3 +287,64 @@ for (const option of ['coverage-dir', 'reporter-outfile', 'path-ignore-patterns'
     }
   });
 }
+
+const track = trackTempRoots();
+for (const second of ['package', 'root']) {
+  test(`root JUnit retains earlier owners before a ${second} owner`, () => {
+    const root = track(mkdtempSync(join(tmpdir(), 'root-junit-')));
+    const report = join(root, 'combined.xml');
+    const secondFile =
+      second === 'package'
+        ? 'packages/plugin-manifest/src/index.test.ts'
+        : 'scripts/bun-test-command.test.ts';
+    const result = Bun.spawnSync(
+      [
+        'bun',
+        fromRoot('scripts/repo-tests.ts'),
+        'packages/paths/src/skills.test.ts',
+        secondFile,
+        '-t',
+        'returns empty paths and missing for undefined input|accepts comparator ranges on full versions|sets the default per-test budget',
+        '--reporter=junit',
+        '--reporter-outfile',
+        second === 'root' ? relative(REPO_ROOT, report) : report,
+      ],
+      { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' }
+    );
+    expect(result.exitCode).toBe(0);
+    const xml = readFileSync(report, 'utf8');
+    expect(xml).toContain('<testcase name="returns empty paths and missing for undefined input"');
+    expect(xml).toContain(
+      second === 'package'
+        ? 'accepts comparator ranges on full versions'
+        : 'sets the default per-test budget'
+    );
+    expect(xml.match(/<\?xml/g)).toHaveLength(1);
+    expect(xml).toMatch(/<testsuites[^>]*failures="0"[^>]*errors="0"/);
+  });
+}
+
+test('root JUnit includes a failing owner and stops before unstarted owners', () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'root-junit-')));
+  const report = join(root, 'failure.xml');
+  const result = Bun.spawnSync(
+    [
+      'bun',
+      fromRoot('scripts/repo-tests.ts'),
+      'packages/paths/src/skills.test.ts',
+      'packages/plugin-manifest/src/index.test.ts',
+      'scripts/bun-test-command.test.ts',
+      '-t',
+      'returns empty paths and missing for undefined input|sets the default per-test budget',
+      '--reporter=junit',
+      `--reporter-outfile=${report}`,
+    ],
+    { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' }
+  );
+  expect(result.exitCode).not.toBe(0);
+  const xml = readFileSync(report, 'utf8');
+  expect(xml).toContain('<testcase name="returns empty paths and missing for undefined input"');
+  expect(xml).toContain('index.test.ts');
+  expect(xml).toContain('<error');
+  expect(xml).not.toContain('bun-test-command.test.ts');
+});

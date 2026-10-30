@@ -23,7 +23,9 @@ Use the same directive for any other test requiring a fresh process. Unmarked te
 share one process. Run package test scripts to preserve isolation; requested selectors
 retain Bun's substring-filter meaning and run only matching files, preserving the same
 isolation groups. Every requested group runs, and any failed group makes the command
-fail. Test flags apply to each selected group; JUnit output is combined across groups.
+fail. Files selected outside explicit `testGroups` fail discovery while covered groups
+still run. Test flags apply to each selected group; JUnit output is combined across
+groups and, from the repository root, across every started owner.
 A single selected group's name filter keeps Bun's native exit result. Split runs use
 Bun's `--pass-with-no-tests` per child and match the names in private JUnit reports
 to detect an empty result across all groups. Matching skipped or todo tests
