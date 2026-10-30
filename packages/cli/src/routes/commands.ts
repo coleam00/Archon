@@ -98,6 +98,28 @@ export async function runState({
   );
 }
 
+export async function runMetrics({ positionals, values }: CliRouteContext): Promise<number> {
+  const { metricsCommand } = await loadRoute(() => import('../commands/metrics'), {
+    database: await usesDatabaseStore(),
+  });
+  const { createCliWorkflowHost } = await import('../utils/workflow-host');
+  if (positionals[2] !== undefined) {
+    return await fail(
+      values.json === true,
+      'Usage: archon metrics [name] [--since <7d|24h|2w|ISO>] [--until <ISO>] [--subject <s>] [--project <id|name|key>] [--json]'
+    );
+  }
+  const option = (key: string): string | undefined =>
+    typeof values[key] === 'string' ? values[key] : undefined;
+  return await metricsCommand(await createCliWorkflowHost(), positionals[1], {
+    since: option('since'),
+    until: option('until'),
+    subject: option('subject'),
+    project: option('project'),
+    json: values.json === true,
+  });
+}
+
 export async function runTrigger({
   subcommand,
   positionals,

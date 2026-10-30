@@ -1985,6 +1985,35 @@ and `--install` selects install scope. The writer is recorded as
 revision, retains the latest tombstone of deleted documents, and reports both counts.
 See [Durable state documents](/reference/workflow-language/#durable-state-documents).
 
+### `metrics [name]`
+
+Aggregate the metric records nodes returned under their reserved `metrics` output key.
+See the [metrics guide](/guides/metrics/) for how to emit them.
+
+```bash
+archon metrics
+archon metrics factory.prs_merged --since 7d
+archon metrics factory.prs_merged --since 2026-10-01 --until 2026-10-22 --json
+archon metrics sdlc.tests_unprotective --subject https://github.com/acme/widgets/pull/12
+archon metrics --project acme/widgets
+```
+
+The window is `[--since, --until)`. `--until` defaults to now and takes an ISO date or a
+time with an offset; a date alone is UTC midnight. `--since` takes the same, or a duration
+(`24h`, `7d`, `2w`) counted back from `--until`, and defaults to 30 days. `--subject` keeps
+records about one subject. `--project <id|name|key>` keeps records from one registered
+codebase; without it, names are install-wide.
+
+Text output prints one line per metric for its newest instrument: name, kind and unit,
+`value` (the sum for a `count`, the mean for a `score`), `n` and the latest record. Other
+instruments follow as indented lines. `--json` prints one `MetricsReport` document, the
+same shape `GET /api/metrics` returns, with names and instruments in sorted order.
+
+A record that conflicts with its name's first definition is left out and reported on
+stderr as `error: metric <name> is <kind>/<unit>; run <id> node <node> offered
+<kind>/<unit>`. A stored output the record schema rejects is reported the same way when
+no name is given. Exit codes: `0` success, `1` usage, `4` the report refused a record.
+
 ### `chat <message>`
 
 Send one message to the orchestrator, print its response and exit. Each invocation creates a new conversation. Multi-turn conversations and project selection through `/setproject <name>` are available in the Web UI and chat adapters. Projectless chat can answer questions; use `archon workflow run <name> --project <owner/repo>` to launch work for a registered repository from the CLI.
