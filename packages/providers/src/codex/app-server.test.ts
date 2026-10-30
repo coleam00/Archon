@@ -1,8 +1,9 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
-import type { ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { createMockLogger } from '../test/mocks/logger';
+import * as pluginProcess from '@archon/paths/plugin-process';
 
 const log = createMockLogger();
 mock.module('@archon/paths', () => ({
@@ -13,6 +14,7 @@ import {
   AppServerConnection,
   ConnectionClosedError,
   JsonRpcError,
+  settlesWithin,
   type Spawner,
 } from './app-server';
 
@@ -33,7 +35,6 @@ function rawChild(onKill: (child: EventEmitter, signal: string) => void = () => 
     stdin,
     stdout,
     stderr,
-    pid: 7,
     kill: (signal: string) => {
       onKill(child, signal);
       return true;
@@ -65,7 +66,220 @@ function rawChild(onKill: (child: EventEmitter, signal: string) => void = () => 
 const BINARY = { path: '/bin/codex', pathDirs: ['/vendor/codex-path'] };
 const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve));
 
+function killIfRunning(pid: number): void {
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
+async function expectProcessStopped(pid: number): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  expect(() => process.kill(pid, 0)).toThrow();
+}
+
 describe('AppServerConnection', () => {
+  for (const processGroupOwner of ['connection', 'host'] as const) {
+    test.each(['win32', 'linux', 'darwin'] as const)(
+      `post-exit cleanup respects platform and ${processGroupOwner} group ownership (%s)`,
+      async platform => {
+        const originalPlatform = process.platform;
+        const stop = spyOn(pluginProcess, 'terminateTree').mockResolvedValue(undefined);
+        try {
+          Object.defineProperty(process, 'platform', { value: platform });
+          const fake = rawChild();
+          Object.defineProperty(fake.child, 'pid', { value: 12345 });
+          const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner, {
+            processGroupOwner,
+          });
+          fake.child.emit('exit', 0, null);
+          fake.child.emit('close', 0, null);
+          expect(await connection.shutdown()).toEqual({ kind: 'exited', code: 0, signal: null });
+          expect(stop.mock.calls).toEqual(
+            platform !== 'win32' && processGroupOwner === 'connection' ? [[12345]] : []
+          );
+        } finally {
+          Object.defineProperty(process, 'platform', { value: originalPlatform });
+          stop.mockRestore();
+        }
+      }
+    );
+  }
+
+  test.skipIf(process.platform === 'win32')(
+    'stops POSIX descendants holding inherited pipes after exit and leaves other processes alone',
+    async () => {
+      const childScript = `
+      const { spawn } = require('node:child_process');
+      const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        stdio: ['ignore', 'inherit', 'inherit']
+      });
+      process.stdout.write(String(grandchild.pid));
+      setInterval(() => {}, 1000);
+    `;
+      const script = `
+      const { spawn } = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], {
+        stdio: ['ignore', 'pipe', 'inherit']
+      });
+      const ready = new Promise(resolve => child.stdout.once('data', data => resolve(Number(data))));
+      process.stdin.on('data', async () => process.stdout.write(JSON.stringify({
+        id: 1, result: [child.pid, await ready]
+      }) + '\\n'));
+      process.stdin.on('end', () => process.stdout.write(
+        JSON.stringify({ method: 'turn/completed', params: {} }) + '\\n', () => process.exit(0)
+      ));
+    `;
+      const other = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        stdio: 'ignore',
+      });
+      let root: ChildProcessWithoutNullStreams | undefined;
+      const descendants: number[] = [];
+      const connection = AppServerConnection.start(
+        BINARY,
+        [],
+        process.env as Record<string, string>,
+        (_command, _args, options) => {
+          root = spawn(process.execPath, ['-e', script], options);
+          return root;
+        }
+      );
+      try {
+        const response = await connection.request('thread/start', {});
+        if (
+          !Array.isArray(response) ||
+          response.length !== 2 ||
+          !response.every((pid: unknown) => typeof pid === 'number')
+        ) {
+          throw new Error('Missing child and grandchild PIDs');
+        }
+        for (const pid of response) {
+          descendants.push(pid);
+          expect(process.kill(pid, 0)).toBe(true);
+        }
+        expect(await connection.shutdown()).toEqual({ kind: 'exited', code: 0, signal: null });
+        for (const pid of descendants) await expectProcessStopped(pid);
+        if (other.pid === undefined) throw new Error('Missing unrelated process PID');
+        expect(process.kill(other.pid, 0)).toBe(true);
+        const frames = [];
+        for await (const frame of connection.notifications()) frames.push(frame.method);
+        expect(frames).toEqual(['turn/completed']);
+      } finally {
+        other.kill();
+        if (root?.pid !== undefined) await pluginProcess.terminateTree(root.pid);
+        for (const pid of descendants) killIfRunning(pid);
+      }
+    },
+    10_000
+  );
+
+  test('a descendant cleanup failure fails pending work and cannot report a clean exit', async () => {
+    const originalPlatform = process.platform;
+    const stop = spyOn(pluginProcess, 'terminateTree').mockRejectedValue(
+      new Error('cleanup refused')
+    );
+    try {
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      const fake = rawChild();
+      Object.defineProperty(fake.child, 'pid', { value: 2_147_483_647 });
+      const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+      const pending = connection.request('thread/start', {}).catch((error: unknown) => error);
+      fake.child.emit('exit', 0, null);
+      fake.child.emit('close', 0, null);
+      expect(await connection.shutdown()).toMatchObject({ kind: 'cleanup_failed' });
+      expect(await pending).toBeInstanceOf(ConnectionClosedError);
+      expect(((await pending) as ConnectionClosedError).message).toContain('cleanup refused');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+      stop.mockRestore();
+    }
+  });
+
+  test.each([
+    { code: 0, signal: null },
+    { code: 1, signal: null },
+    { code: null, signal: 'SIGTERM' as const },
+  ])(
+    'bounds pipe drainage after exit code $code signal $signal and keeps final frames',
+    async end => {
+      const signals: string[] = [];
+      const fake = rawChild((_child, signal) => signals.push(signal));
+      log.debug.mockClear();
+      const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner, {
+        runId: 'drain-run',
+      });
+      const response = connection.request('thread/start', {});
+      const missing = connection.request('account/read', {}).catch((error: unknown) => error);
+      fake.child.emit('exit', end.code, end.signal);
+      const stopping = connection.shutdown(1);
+      await tick();
+      fake.stdout.write('{"id":1,"result":"final');
+      await tick();
+      fake.stdout.write(' response"}\n{"method":"turn/completed","params":{}}\n');
+      fake.stderr.write('final stderr evidence\n');
+      expect(await response).toBe('final response');
+      const observed = stopping.then(outcome => {
+        expect(log.debug).toHaveBeenCalledWith(
+          { runId: 'drain-run', drainMs: 250 },
+          'codex.post_exit_drain_expired'
+        );
+        return outcome;
+      });
+      const ended = await settlesWithin(observed, 1500);
+      if (!ended) fake.child.emit('close', end.code, end.signal);
+      expect(await observed).toEqual({ kind: 'exited', ...end });
+      expect(ended).toBe(true);
+      expect(signals).toEqual([]);
+      expect(fake.stdout.destroyed).toBe(true);
+      expect(fake.stderr.destroyed).toBe(true);
+      expect(fake.child.stdin.destroyed).toBe(true);
+      expect(await missing).toBeInstanceOf(ConnectionClosedError);
+      expect(((await missing) as ConnectionClosedError).evidence).toContain(
+        'final stderr evidence'
+      );
+      const frames = [];
+      for await (const frame of connection.notifications()) frames.push(frame.method);
+      expect(frames).toEqual(['turn/completed']);
+      fake.child.emit('close', 99, null);
+      expect(await connection.ended).toEqual({ kind: 'exited', ...end });
+    }
+  );
+
+  test('phase diagnostics distinguish stdin finish, exit and pipe closure', async () => {
+    log.debug.mockClear();
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner, { runId: 'run-1' });
+    let ended = false;
+    void connection.ended.then(() => {
+      ended = true;
+    });
+    const stopping = connection.shutdown();
+    await tick();
+    expect(log.debug.mock.calls.at(-1)).toEqual([{ runId: 'run-1' }, 'codex.stdin_finished']);
+    fake.child.emit('exit', 0, null);
+    await tick();
+    expect(ended).toBe(false);
+    expect(log.debug.mock.calls.at(-1)).toEqual([
+      { runId: 'run-1', code: 0, signal: null },
+      'codex.child_exit',
+    ]);
+    fake.child.emit('close', 0, null);
+    expect(await stopping).toEqual({ kind: 'exited', code: 0, signal: null });
+    expect(log.debug.mock.calls.at(-1)).toEqual([{ runId: 'run-1' }, 'codex.child_close']);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    expect(fake.stdout.destroyed).toBe(false);
+    expect(log.debug).toHaveBeenCalledTimes(3);
+  });
+
   test('drains accepted tool calls on closure and accepts no later calls', async () => {
     const fake = rawChild();
     const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);

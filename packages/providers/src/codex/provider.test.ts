@@ -48,6 +48,7 @@ import {
   type FakeTurnScript,
 } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
+import * as pluginProcess from '@archon/paths/plugin-process';
 import { TOOL_FREE_THREAD_CONFIG } from './turn-params';
 import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
 import type { ServerNotification } from './protocol/ServerNotification';
@@ -168,6 +169,67 @@ beforeEach(() => {
 });
 
 describe('CodexProvider', () => {
+  test.each([false, true])(
+    'a post-result cleanup failure throws without settling (remote=%s)',
+    async remote => {
+      const originalPlatform = process.platform;
+      const stop = spyOn(pluginProcess, 'terminateTree').mockRejectedValue(
+        new Error('cleanup refused')
+      );
+      try {
+        const server = createFakeAppServer();
+        const provider = new CodexProvider((command, args, options) => {
+          Object.defineProperty(process, 'platform', { value: 'linux' });
+          const child = server(command, args, options);
+          Object.defineProperty(child, 'pid', { value: 2_147_483_647 });
+          return child;
+        });
+        const client = remote ? overStreams(() => provider, descriptor) : provider;
+        const chunks: MessageChunk[] = [];
+        const collect = async (): Promise<void> => {
+          for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+        };
+        await expect(collect()).rejects.toThrow('cleanup refused');
+        expect(chunks.map(chunk => chunk.type)).toEqual(['result']);
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          expect.objectContaining({
+            err: expect.objectContaining({ message: expect.stringContaining('cleanup refused') }),
+          }),
+          'codex.app_server_abnormal_exit'
+        );
+      } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform });
+        stop.mockRestore();
+      }
+    }
+  );
+
+  test('post-result diagnostics share a run ID and settle only after shutdown', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      mockLogger.debug.mockClear();
+      const { provider } = providerWith();
+      for await (const chunk of provider.sendQuery('private prompt', '/workspace')) {
+        const calls = mockLogger.debug.mock.calls.filter(([fields]) => 'runId' in fields);
+        if (chunk.type === 'result') expect(calls).toEqual([]);
+        if (chunk.type === 'settled') {
+          const runId: unknown = calls[0][0].runId;
+          expect(typeof runId).toBe('string');
+          expect(calls).toEqual([
+            [{ runId }, 'codex.host_tool_calls_finished'],
+            [{ runId }, 'codex.stdin_finished'],
+            [{ runId, code: 0, signal: null }, 'codex.child_exit'],
+            [{ runId }, 'codex.child_close'],
+            [{ runId }, 'codex.settle'],
+          ]);
+          ids.push(String(runId));
+        }
+      }
+    }
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+
   test('getType returns codex', () => {
     expect(new CodexProvider().getType()).toBe('codex');
   });

@@ -134,11 +134,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
   const processes: FakeProcess[] = [];
   // Across processes, as Codex's thread ids are: every fork gets a thread id of its own.
   let forks = 0;
-  const spawner = ((
-    command: string,
-    args: string[],
-    options: { env: Record<string, string> }
-  ): ChildProcessWithoutNullStreams => {
+  const spawner: Spawner = (command, args, options) => {
     const turn = script();
     const child = new EventEmitter() as ChildProcessWithoutNullStreams;
     const stdin = new PassThrough();
@@ -169,13 +165,15 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       closed = true;
       stdout.end();
       stderr.end();
-      setImmediate(() => child.emit('close', code, signal));
+      setImmediate(() => {
+        child.emit('exit', code, signal);
+        child.emit('close', code, signal);
+      });
     };
     Object.assign(child, {
       stdin,
       stdout,
       stderr,
-      pid: 4242,
       kill: (signal: string = 'SIGTERM') => {
         record.signals.push(signal);
         if (turn.exitsAfterStdinCloseMs === undefined) close(null, signal);
@@ -376,9 +374,8 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       else if (!turn.ignoreStdinClose) close(turn.stdinCloseExitCode ?? 0, null);
     });
     return child;
-  }) as unknown as Spawner & { processes: FakeProcess[] };
-  spawner.processes = processes;
-  return spawner;
+  };
+  return Object.assign(spawner, { processes });
 }
 
 function initializeResponse(): InitializeResponse {
