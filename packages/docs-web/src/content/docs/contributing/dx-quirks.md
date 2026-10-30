@@ -117,7 +117,9 @@ discovery error while covered groups still run.
 
 Test options are forwarded to each group. A single selected group's name filter keeps
 Bun's native exit result. Split runs use Bun's `--pass-with-no-tests` per child and
-testcase names in private JUnit reports to detect an empty result across all groups. Matching skipped or todo tests count as matches.
+native inspector test statuses to detect an empty result across all groups. Empty
+names and skipped/todo suites retain Bun's native outcomes; JUnit names do not decide
+the exit code.
 Load and hook failures still return nonzero. An explicit
 `--reporter=junit --reporter-outfile <path>` receives one combined report containing all
 started groups and repository-root owners, including their failures and aggregate counts. Each failed child also

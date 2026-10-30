@@ -13,7 +13,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
 import { TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
-import { resolveRequestedTestGroups } from './package-test-requests';
+import {
+  junitDestination,
+  parseTestArguments,
+  resolveRequestedTestGroups,
+} from './package-test-requests';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 const track = trackTempRoots();
@@ -513,38 +517,49 @@ test(
   testTimeout(5000)
 );
 
-for (const owner of ['test', 'describe']) {
-  for (const modifier of ['skip', 'todo', 'skipIf(true)', 'todoIf(true)', 'if(false)']) {
-    test(
-      `matching ${owner}.${modifier} names succeed without executing skipped bodies`,
-      async () => {
-        const root = fixture();
-        const body = `() => { throw new Error('must remain skipped'); }`;
-        testFile(
-          root,
-          'skipped',
-          owner === 'test'
-            ? `test.${modifier}('wanted & "quoted"', ${body});`
-            : `import { describe } from 'bun:test';
+for (const concurrency of [1, 2]) {
+  for (const owner of ['test', 'describe']) {
+    for (const modifier of ['skip', 'todo', 'skipIf(true)', 'todoIf(true)', 'if(false)']) {
+      test(
+        `matching concurrency=${concurrency} ${owner}.${modifier} names succeed without executing skipped bodies`,
+        async () => {
+          const root = fixture({ testConcurrency: concurrency });
+          testFile(root, 'other', `test('other', () => {});`, true);
+          const body = `() => { throw new Error('must remain skipped'); }`;
+          testFile(
+            root,
+            'skipped',
+            owner === 'test'
+              ? `test.${modifier}('wanted & "quoted"', ${body});`
+              : `import { describe } from 'bun:test';
              describe.${modifier}('outer & "quoted" > segment', () => {
                describe('inner', () => { test('wanted', ${body}); });
              });`,
-          true
-        );
-        const pattern =
-          owner === 'test' ? '^wanted & "quoted"$' : '^outer & "quoted" > segment inner wanted$';
-        for (const [filter, expected] of [
-          [pattern, 0],
-          ['absent', owner === 'describe' ? 0 : 1],
-        ] as const) {
-          const args = ['src/', '-t', filter];
-          const code = await native(root, args);
-          expect(code).toBe(expected);
-          expect(await run(root, args)).toBe(code);
-        }
-      },
-      testTimeout(5000)
-    );
+            true
+          );
+          const pattern =
+            owner === 'test' ? '^wanted & "quoted"$' : '^outer & "quoted" > segment inner wanted$';
+          for (const [filter, expected] of [
+            [pattern, 0],
+            ['absent', owner === 'describe' ? 0 : 1],
+          ] as const) {
+            const args = ['src/', '-t', filter];
+            const code = await native(root, args);
+            expect(code).toBe(expected);
+            expect(await run(root, args)).toBe(code);
+            expect(
+              await run(root, [
+                ...args,
+                '--reporter=junit',
+                '--reporter-outfile',
+                join(root, 'skip.xml'),
+              ])
+            ).toBe(code);
+          }
+        },
+        testTimeout(5000)
+      );
+    }
   }
 }
 
@@ -617,72 +632,84 @@ for (const suffix of ['test', 'spec']) {
   }
 }
 
-for (const modifier of ['', '.skip', '.todo']) {
-  for (const scenario of [
-    {
-      name: 'empty outer suite',
-      body: (test: string) => `describe('', () => { ${test} });`,
-      matching: '^ wanted$',
-      absent: '^wanted$',
-    },
-    {
-      name: 'empty nested suite',
-      body: (test: string) => `describe('outer', () => describe('', () => { ${test} }));`,
-      matching: '^outer  wanted$',
-      absent: '^outer wanted$',
-    },
-    {
-      name: 'empty testcase',
-      body: (test: string) => `describe('outer', () => { ${test.replace("'wanted'", "''")} });`,
-      matching: '^outer $',
-      absent: '^outer$',
-    },
-  ]) {
-    test(
-      `native name-filter outcomes survive ${scenario.name}: test${modifier}`,
-      async () => {
-        const root = fixture();
-        testFile(
-          root,
-          'names',
-          `import { describe } from 'bun:test';
+for (const concurrency of [1, 2]) {
+  for (const modifier of ['', '.skip', '.todo']) {
+    for (const scenario of [
+      {
+        name: 'empty outer suite',
+        body: (test: string) => `describe('', () => { ${test} });`,
+        matching: '^ wanted$',
+        absent: '^wanted$',
+      },
+      {
+        name: 'empty nested suite',
+        body: (test: string) => `describe('outer', () => describe('', () => { ${test} }));`,
+        matching: '^outer  wanted$',
+        absent: '^outer wanted$',
+      },
+      {
+        name: 'empty testcase',
+        body: (test: string) => `describe('outer', () => { ${test.replace("'wanted'", "''")} });`,
+        matching: '^outer $',
+        absent: '^outer$',
+      },
+    ]) {
+      test(
+        `native name-filter outcomes concurrency=${concurrency} survive ${scenario.name}: test${modifier}`,
+        async () => {
+          const root = fixture({ testConcurrency: concurrency });
+          testFile(root, 'other', `test('other', () => {});`, true);
+          testFile(
+            root,
+            'names',
+            `import { describe } from 'bun:test';
 ${scenario.body(`test${modifier}('wanted', () => appendFileSync('executed', 'yes'));`)}`,
-          true
-        );
-        for (const [pattern, expected] of [
-          [scenario.matching, 0],
-          [scenario.absent, 1],
-        ] as const) {
-          const args = ['src/', '-t', pattern];
-          const code = await native(root, args);
-          expect(code).toBe(expected);
-          expect(await run(root, args)).toBe(code);
-          const report = join(root, 'names.xml');
-          expect(await run(root, [...args, '--reporter=junit', '--reporter-outfile', report])).toBe(
-            code
+            true
           );
-          expect(existsSync(report)).toBe(true);
-        }
-        expect(existsSync(join(root, 'executed'))).toBe(modifier === '');
+          for (const [pattern, expected] of [
+            [scenario.matching, 0],
+            [scenario.absent, 1],
+          ] as const) {
+            const args = ['src/', '-t', pattern];
+            const code = await native(root, args);
+            expect(code).toBe(expected);
+            expect(await run(root, args)).toBe(code);
+            const report = join(root, 'names.xml');
+            expect(
+              await run(root, [...args, '--reporter=junit', '--reporter-outfile', report])
+            ).toBe(code);
+            expect(existsSync(report)).toBe(true);
+          }
+          expect(existsSync(join(root, 'executed'))).toBe(modifier === '');
+        },
+        testTimeout(5000)
+      );
+    }
+  }
+
+  for (const modifier of ['', '.skip', '.todo']) {
+    test(
+      `native empty root testcase concurrency=${concurrency} remains unmatched: test${modifier}`,
+      async () => {
+        const root = fixture({ testConcurrency: concurrency });
+        testFile(root, 'other', `test('other', () => {});`, true);
+        testFile(root, 'names', `test${modifier}('', () => {});`, true);
+        const args = ['src/', '-t', '^$'];
+        const code = await native(root, args);
+        expect(code).toBe(1);
+        expect(await run(root, args)).toBe(code);
+        expect(
+          await run(root, [
+            ...args,
+            '--reporter=junit',
+            '--reporter-outfile',
+            join(root, 'root.xml'),
+          ])
+        ).toBe(code);
       },
       testTimeout(5000)
     );
   }
-}
-
-for (const modifier of ['', '.skip', '.todo']) {
-  test(
-    `native empty root testcase remains unmatched: test${modifier}`,
-    async () => {
-      const root = fixture();
-      testFile(root, 'names', `test${modifier}('', () => {});`, true);
-      const args = ['src/', '-t', '^$'];
-      const code = await native(root, args);
-      expect(code).toBe(1);
-      expect(await run(root, args)).toBe(code);
-    },
-    testTimeout(5000)
-  );
 }
 
 for (const mode of ['shared parallel workers', 'concurrent isolation groups']) {
@@ -710,19 +737,22 @@ for (const mode of ['shared parallel workers', 'concurrent isolation groups']) {
   );
 }
 
-test('single-group name filters preserve caller Bun options for test subprocesses', async () => {
-  const root = fixture();
-  testFile(
-    root,
-    'options',
-    `test('wanted', async () => {
+for (const split of [false, true]) {
+  test(`name filters preserve caller Bun options for test subprocesses: split=${split}`, async () => {
+    const root = fixture();
+    if (split) testFile(root, 'isolated', `test('other', () => {});`, true);
+    testFile(
+      root,
+      'options',
+      `test('wanted', async () => {
     const child = Bun.spawn([process.execPath, '-e', 'console.log(process.env.BUN_OPTIONS ?? "unset")'], { stdout: 'pipe' });
     expect(await new Response(child.stdout).text()).toBe(${JSON.stringify((process.env.BUN_OPTIONS ?? 'unset') + '\n')});
     expect(await child.exited).toBe(0);
   });`
-  );
-  expect(await run(root, ['src/', '-t', 'wanted'])).toBe(0);
-});
+    );
+    expect(await run(root, ['src/', '-t', 'wanted'])).toBe(0);
+  });
+}
 
 for (const selection of ['mixed', 'uncovered', 'covered']) {
   test(`requested manifest coverage is enforced without losing valid groups: ${selection}`, async () => {
@@ -771,3 +801,97 @@ test('every explicit package manifest accounts for a newly requested filename', 
     expect(request.groups.length).toBe(covered ? 1 : 0);
   }
 });
+
+for (const pattern of ['wanted', 'absent']) {
+  test(
+    `split name filters retain results after parallel worker reuse: ${pattern}`,
+    async () => {
+      const root = fixture({ testConcurrency: 2 });
+      testFile(root, 'isolated', `test('other', () => {});`, true);
+      for (const name of ['a', 'b', 'c', 'd']) {
+        testFile(root, name, `test('other', () => { throw new Error('filtered'); });`);
+      }
+      testFile(root, 'z-match', `test('wanted', () => appendFileSync('executed', 'yes'));`);
+      const args = ['src/', '--parallel=2', '-t', pattern];
+      const expected = await native(root, args);
+      expect(expected).toBe(pattern === 'wanted' ? 0 : 1);
+      expect(await run(root, args)).toBe(expected);
+      expect(
+        await run(root, [
+          ...args,
+          '--reporter=junit',
+          '--reporter-outfile',
+          join(root, 'results.xml'),
+        ])
+      ).toBe(expected);
+      if (pattern === 'wanted')
+        expect(readFileSync(join(root, 'executed'), 'utf8')).toBe('yesyesyes');
+      else expect(existsSync(join(root, 'executed'))).toBe(false);
+    },
+    testTimeout(10000)
+  );
+}
+
+test('JUnit destination follows the final reporter and outfile options', () => {
+  for (const [args, expected] of [
+    [[], undefined],
+    [['--reporter=junit'], undefined],
+    [['--reporter-outfile=ignored.xml'], undefined],
+    [
+      ['--reporter=junit', '--reporter-outfile=first.xml', '--reporter-outfile', 'last.xml'],
+      'last.xml',
+    ],
+    [['--reporter=junit', '--reporter-outfile=result.xml', '--reporter=dots'], undefined],
+    [['--reporter=dots', '--reporter=junit', '--reporter-outfile=result.xml'], 'result.xml'],
+  ] satisfies [string[], string | undefined][]) {
+    expect(junitDestination(parseTestArguments(args).optionTokens)).toBe(expected);
+  }
+});
+
+test('a test subprocess cannot supply a match for its parent group', async () => {
+  const root = fixture();
+  writeFileSync(
+    join(root, 'nested.test.ts'),
+    `import { test } from 'bun:test'; test('wanted', () => {});`
+  );
+  testFile(
+    root,
+    'nested',
+    `
+    const child = Bun.spawn([process.execPath, 'test', './nested.test.ts'], {stdout:'ignore', stderr:'ignore'});
+    if (await child.exited !== 0) throw new Error('nested test failed');
+    test('other', () => {});
+  `
+  );
+  testFile(root, 'isolated', `test('other', () => {});`, true);
+  const args = ['src/', '-t', 'wanted', '--parallel=2'];
+  expect(await native(root, args)).toBe(1);
+  expect(await run(root, args)).toBe(1);
+});
+
+for (const option of ['--rerun-each=2', '--retry=1', '--only', '--todo', '--concurrent']) {
+  test(
+    `native result completeness preserves ${option}`,
+    async () => {
+      const root = fixture({ testConcurrency: 2 });
+      testFile(root, 'isolated', `test('other', () => {});`, true);
+      testFile(
+        root,
+        'options',
+        `
+      let attempts = 0;
+      test.only('wanted', () => {
+        if (${JSON.stringify(option)} === '--retry=1' && attempts++ === 0) throw new Error('retry');
+      });
+      test.todo('wanted todo', () => {});
+      test.skip('wanted skip', () => { throw new Error('skipped'); });
+    `
+      );
+      const args = ['src/', '-t', 'wanted', option];
+      const expected = await native(root, args);
+      expect(expected).toBe(0);
+      expect(await run(root, args)).toBe(expected);
+    },
+    testTimeout(5000)
+  );
+}

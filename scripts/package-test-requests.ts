@@ -55,6 +55,14 @@ export function parseTestArguments(requested: string[]) {
   return { optionTokens, positionals };
 }
 
+export function junitDestination(
+  optionTokens: ReturnType<typeof parseTestArguments>['optionTokens']
+) {
+  return optionTokens.filter(token => token.name === 'reporter').at(-1)?.value === 'junit'
+    ? optionTokens.filter(token => token.name === 'reporter-outfile').at(-1)?.value
+    : undefined;
+}
+
 export function normalizeTestSelector(packageDirectory: string, value: string): string {
   const selector = (isAbsolute(value) ? relative(packageDirectory, value) : value).replaceAll(
     '\\',
@@ -102,13 +110,8 @@ export function resolveRequestedTestGroups(
           ? []
           : [requested]
         : groups.map(group => [...options, ...group.map(file => `./${file}`)]),
-    namePattern:
-      groups.length > 0
-        ? optionTokens.filter(token => token.name === 'test-name-pattern').at(-1)?.value
-        : undefined,
-    reporterOutfile:
-      optionTokens.filter(token => token.name === 'reporter').at(-1)?.value === 'junit'
-        ? optionTokens.filter(token => token.name === 'reporter-outfile').at(-1)?.value
-        : undefined,
+    hasNameFilter:
+      groups.length > 0 && optionTokens.some(token => token.name === 'test-name-pattern'),
+    reporterOutfile: junitDestination(optionTokens),
   };
 }
