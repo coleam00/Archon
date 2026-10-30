@@ -130,6 +130,7 @@ export async function deleteUserProviderKey(userId: string, provider: string): P
 }
 
 type UnusableStatus = Extract<CredentialStatus, { state: 'unusable' }>;
+type StoredStatusWarning = Extract<CredentialStatus, { state: 'unusable' | 'check_failed' }>;
 
 /**
  * A stored credential as a run would meet it. The decrypted credential exists only in the
@@ -140,9 +141,8 @@ export type StoredCredential =
       state: 'usable';
       source: 'archon';
       credential: ResolvedCredential;
-      /** Set when this read refreshed the credential but could not save the rotation: the
-       *  live credential works for this run, the stored one must be reconnected. */
-      storedStatus?: UnusableStatus;
+      /** The live credential works for this run; persistence failed or was superseded. */
+      storedStatus?: StoredStatusWarning;
     }
   | Exclude<CredentialStatus, { state: 'usable' | 'not_checked' }>;
 
@@ -163,6 +163,13 @@ const ROTATION_NOT_SAVED: UnusableStatus = {
     'The refreshed credential could not be saved, and the refresh invalidated the stored one.',
 };
 
+const ROTATION_SUPERSEDED: StoredStatusWarning = {
+  state: 'check_failed',
+  source: 'archon',
+  evidence:
+    'The stored credential changed during refresh. Check it again to verify the replacement.',
+};
+
 /**
  * Serializes concurrent OAuth reads per `(userId, provider)` so a burst of
  * inject calls in one run never triggers (or races) more than one token
@@ -180,9 +187,10 @@ const inflightOAuthReads = new Map<string, Promise<StoredCredential>>();
  * For `oauth` rows: decrypt the stored blob → mint/refresh a bearer → re-save
  * rotated creds → return it. When the rotation could not be saved and the refresh
  * superseded the stored refresh token, the live credential is still returned, with
- * `storedStatus` saying the stored one must be reconnected. Throws only when the
- * encryption key itself cannot be loaded: that is install misconfiguration, not a
- * credential state.
+ * `storedStatus` saying the stored one must be reconnected. If a concurrent write
+ * superseded the rotation, `storedStatus` reports `check_failed`: this refresh did
+ * not verify the winning stored credential. Throws only when the encryption key
+ * itself cannot be loaded: that is install misconfiguration, not a credential state.
  */
 export async function getDecryptedProviderCredential(
   userId: string,
@@ -230,9 +238,10 @@ export async function getDecryptedProviderCredential(
 /**
  * The status of the user's stored credential for a vendor, without the secret.
  * Runs the same decrypt and refresh a run would, so the answer is the one the
- * run would meet (a needed refresh happens here and its rotation is saved). A
- * refresh whose rotation could not be saved reports `unusable`: the stored
- * credential can no longer refresh.
+ * run would meet. A needed refresh saves its rotation only while the original
+ * credential remains stored. Exhausted save attempts after changing the refresh
+ * token report `unusable`; a superseded rotation reports `check_failed` because
+ * the winning stored credential has not been verified.
  */
 export async function getStoredCredentialStatus(
   userId: string,
@@ -281,12 +290,19 @@ async function resolveOAuthCredential(
     };
   }
   const rawCreds = result.newCredentials;
-  const storedLost = await saveRotatedOAuthCredentials(userId, provider, creds, rawCreds, key);
+  const storedStatus = await saveRotatedOAuthCredentials(
+    userId,
+    provider,
+    creds,
+    rawCreds,
+    key,
+    ciphertext
+  );
   return {
     state: 'usable',
     source: 'archon',
     credential: { kind: 'oauth', oauthApiKey: result.apiKey, rawCreds },
-    ...(storedLost && { storedStatus: ROTATION_NOT_SAVED }),
+    ...(storedStatus && { storedStatus }),
   };
 }
 
@@ -349,38 +365,41 @@ function oauthRefreshFailure(userId: string, provider: string, err: unknown): St
 
 /**
  * Write only the rotated blob, so the row's label and other columns survive a
- * refresh. A row the user removed or replaced with an API key meanwhile matches
- * nothing and stays as the user left it.
+ * refresh. The original ciphertext identifies this grant: even reconnecting the
+ * same plaintext encrypts with a fresh IV and must supersede the in-flight refresh.
  */
 async function saveRotatedOAuthBlob(
   userId: string,
   provider: string,
   oauthCreds: OAuthCredentials,
-  key: Buffer
-): Promise<void> {
-  await pool.query(
+  key: Buffer,
+  originalCiphertext: string
+): Promise<boolean> {
+  const result = await pool.query(
     `UPDATE remote_agent_user_provider_keys
        SET oauth_creds_encrypted = $1, updated_at = ${getDialect().now()}
-     WHERE user_id = $2 AND provider = $3 AND kind = 'oauth'`,
-    [encryptToken(JSON.stringify(oauthCreds), key), userId, provider]
+     WHERE user_id = $2 AND provider = $3 AND kind = 'oauth'
+       AND oauth_creds_encrypted = $4`,
+    [encryptToken(JSON.stringify(oauthCreds), key), userId, provider, originalCiphertext]
   );
+  return result.rowCount === 1;
 }
 
-/** Returns true when the stored credential was lost: it can no longer refresh. */
 async function saveRotatedOAuthCredentials(
   userId: string,
   provider: string,
   creds: OAuthCredentials,
   rawCreds: OAuthCredentials,
-  key: Buffer
-): Promise<boolean> {
+  key: Buffer,
+  originalCiphertext: string
+): Promise<StoredStatusWarning | undefined> {
   // Compare the meaningful fields (not JSON, which is key-order-sensitive → needless
   // writes on a reordered-but-equal blob).
   const rotated =
     rawCreds.access !== creds.access ||
     rawCreds.refresh !== creds.refresh ||
     rawCreds.expires !== creds.expires;
-  if (!rotated) return false;
+  if (!rotated) return undefined;
   // IMPORTANT: Anthropic/Codex INVALIDATE the old refresh token on rotation. If
   // this resave fails and the refresh token changed, the DB keeps a now-dead token
   // → every future refresh fails and the credential must be reconnected, so the
@@ -390,9 +409,13 @@ async function saveRotatedOAuthCredentials(
   // credential is returned either way: it works for this run.
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      await saveRotatedOAuthBlob(userId, provider, rawCreds, key);
+      const saved = await saveRotatedOAuthBlob(userId, provider, rawCreds, key, originalCiphertext);
+      if (!saved) {
+        getLog().info({ userId, provider, attempt }, 'user_provider_key.oauth_rotation_superseded');
+        return ROTATION_SUPERSEDED;
+      }
       getLog().debug({ userId, provider, attempt }, 'user_provider_key.oauth_rotated_resaved');
-      return false;
+      return undefined;
     } catch (err) {
       if (attempt === 2) {
         getLog().error(
@@ -402,5 +425,5 @@ async function saveRotatedOAuthCredentials(
       }
     }
   }
-  return rawCreds.refresh !== creds.refresh;
+  return rawCreds.refresh !== creds.refresh ? ROTATION_NOT_SAVED : undefined;
 }
