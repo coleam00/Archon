@@ -130,7 +130,14 @@ export function createTransactionReads(
         ])
       ),
     listMetricRecords: async ({ codebaseId }) =>
-      events
+      // event_order counts within one run's log here, so only time orders across runs.
+      [...events]
+        .sort(
+          (a, b) =>
+            a.created_at.localeCompare(b.created_at) ||
+            (a.event_order ?? 0) - (b.event_order ?? 0) ||
+            a.id.localeCompare(b.id)
+        )
         .flatMap(event => {
           const run = runs.get(event.workflow_run_id);
           const metrics = readMetrics(event);
@@ -151,17 +158,10 @@ export function createTransactionReads(
               codebaseId: run.codebase_id,
               nodeId: event.step_name,
               completedAt: event.created_at,
-              eventOrder: event.event_order ?? null,
               metrics: structuredClone(metrics),
             },
           ];
-        })
-        .sort(
-          (a, b) =>
-            (a.eventOrder ?? 0) - (b.eventOrder ?? 0) ||
-            a.completedAt.localeCompare(b.completedAt) ||
-            a.eventId.localeCompare(b.eventId)
-        ),
+        }),
     getDagResumeSnapshot: async id => foldDagResumeSnapshot(listEvents(id), id),
     findChildRuns: async id =>
       structuredClone(

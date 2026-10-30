@@ -13,7 +13,6 @@ interface MetricCompletionRow {
   workflow_run_id: string;
   step_name: string;
   created_at: string | Date;
-  event_order: number | string | null;
   data: string | Record<string, unknown> | null;
   started_at: string | Date;
   workflow_name: string;
@@ -42,7 +41,7 @@ function readMetrics(data: MetricCompletionRow['data']): unknown {
  * index's own terms, and SQLite's `INDEXED BY` fails the query outright when it can't.
  */
 export function metricRecordsSql(dialect: SqlDialect, byCodebase: boolean): string {
-  return `SELECT e.id, e.workflow_run_id, e.step_name, e.created_at, e.event_order, e.data,
+  return `SELECT e.id, e.workflow_run_id, e.step_name, e.created_at, e.data,
             r.started_at, r.workflow_name, r.codebase_id
      FROM remote_agent_workflow_events e${dialect.indexedBy('idx_workflow_events_metrics')}
      JOIN remote_agent_workflow_runs r ON r.id = e.workflow_run_id
@@ -68,7 +67,6 @@ export async function listMetricRecords(query: {
     codebaseId: row.codebase_id,
     nodeId: row.step_name,
     completedAt: toHydratedTimestamp(row.created_at).toISOString(),
-    eventOrder: row.event_order === null ? null : Number(row.event_order),
     metrics: readMetrics(row.data),
   }));
 }

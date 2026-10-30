@@ -101,14 +101,12 @@ export interface MetricRecordRow {
   /** The event's `step_name`. */
   nodeId: string;
   completedAt: string;
-  eventOrder: number | null;
   /** The raw `structured_output.metrics` value; the engine parses it. */
   metrics: unknown;
 }
 
 /**
- * Metric completions in durable event order (legacy unsequenced rows first, then by
- * time and id). Rows are raw: which completions count, and what a record means, is
+ * Metric completions in the order they were recorded, across runs. Rows are raw: which completions count, and what a record means, is
  * decided once in `queryMetrics`.
  */
 export interface IMetricRecordStore {

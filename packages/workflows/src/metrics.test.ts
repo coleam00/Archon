@@ -24,7 +24,6 @@ function completion(
     codebaseId: null,
     nodeId: options.node ?? 'count',
     completedAt: options.at ?? '2026-10-02T12:00:00.000Z',
-    eventOrder: sequence,
     metrics,
   };
 }
@@ -84,6 +83,38 @@ describe('queryMetrics', () => {
         definition: { kind: 'count', unit: 'prs', calibrates: null },
         offered: { kind: 'count', unit: 'pull_requests', calibrates: null },
       }),
+    ]);
+  });
+
+  test('a definition fixed before the window still refuses a conflicting record inside it', async () => {
+    const report = await queryMetrics(
+      store([
+        completion([count(3)], { at: '2026-09-15T00:00:00.000Z' }),
+        completion([count(5, { unit: 'pull_requests' })], { at: '2026-10-02T00:00:00.000Z' }),
+      ]),
+      window
+    );
+    expect(report.metrics).toEqual([]);
+    expect(report.refused).toEqual([
+      expect.objectContaining({
+        reason: 'definition_conflict',
+        name: 'factory.prs_merged',
+        definition: { kind: 'count', unit: 'prs', calibrates: null },
+        offered: { kind: 'count', unit: 'pull_requests', calibrates: null },
+      }),
+    ]);
+  });
+
+  test('subject narrows a name to that subject', async () => {
+    const report = await queryMetrics(
+      store([
+        completion([count(2, { subject: 'pr-1' })]),
+        completion([count(7, { subject: 'pr-2' })]),
+      ]),
+      { ...window, subject: 'pr-1' }
+    );
+    expect(report.metrics[0]?.instruments.map(i => [i.value, i.n, i.latest.subject])).toEqual([
+      [2, 1, 'pr-1'],
     ]);
   });
 

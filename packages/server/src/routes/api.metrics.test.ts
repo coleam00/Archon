@@ -12,7 +12,6 @@ const row = {
   codebaseId: null,
   nodeId: 'count',
   completedAt: '2026-10-20T01:00:00.000Z',
-  eventOrder: 1,
   metrics: [{ name: 'factory.prs_merged', kind: 'count', unit: 'prs', value: 3, subject: null }],
 };
 
@@ -55,6 +54,14 @@ describe('GET /api/metrics', () => {
     expect(report.metrics.map(m => [m.name, m.instruments[0]?.value])).toEqual([
       ['factory.prs_merged', 3],
     ]);
+  });
+
+  test('subject narrows the report to that subject', async () => {
+    const response = await app().request(
+      '/api/metrics?since=2026-10-01&until=2026-10-30&subject=pr-1'
+    );
+    expect(response.status).toBe(200);
+    expect(metricsReportSchema.parse(await response.json()).metrics).toEqual([]);
   });
 
   test('a malformed since returns 400', async () => {
