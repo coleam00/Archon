@@ -2,7 +2,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import * as archonPaths from '@archon/paths';
 import type { DagNode, IncludeDirective, WorkflowDefinition } from '../schemas';
-import { isComposeFanOutNode, isIncludeDirective, isLoopGroupNode } from '../schemas';
+import { walkStaticNodes } from '../include/static-nodes';
 import { BUNDLED_COMMANDS, isBinaryBuild } from '../defaults/bundled-defaults';
 import { bundlesPackagedResources } from '../defaults/bundle-inventory';
 import { isValidCommandName } from '../command-validation';
@@ -159,19 +159,15 @@ export async function resolveIncludeBlockCommandContents(
   config: CommandScanConfig
 ): Promise<Map<string, IncludeCommandContent>> {
   const targetNames = new Set<string>();
-  const visitNodes = (nodes: readonly (DagNode | IncludeDirective)[]): void => {
-    for (const node of nodes) {
-      if (!isIncludeDirective(node) && isLoopGroupNode(node)) visitNodes(node.loop_group.nodes);
-      const targetName =
-        isIncludeDirective(node) || isComposeFanOutNode(node) ? node.include : undefined;
-      if (targetName === undefined || targetNames.has(targetName)) continue;
+  const visit = (workflow: WorkflowDefinition): void => {
+    for (const edge of walkStaticNodes(workflow.nodes)) {
+      if (edge.kind !== 'include') continue;
+      const targetName = edge.node.include;
+      if (targetNames.has(targetName)) continue;
       targetNames.add(targetName);
       const target = byName.get(targetName);
       if (target) visit(target);
     }
-  };
-  const visit = (workflow: WorkflowDefinition): void => {
-    visitNodes(workflow.nodes);
   };
   for (const workflow of byName.values()) visit(workflow);
 

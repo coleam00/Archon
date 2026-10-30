@@ -48,7 +48,7 @@ import type {
   LoopGroupNode,
 } from './schemas';
 import { findWorkflowLoadError } from './schemas/workflow';
-import { isIncludeDirective, isLoopGroupNode, isComposeFanOutNode } from './schemas';
+import { isComposeFanOutNode } from './schemas';
 import { validateDagStructure } from './loader/dag-structure';
 import {
   validateLoopGroupProseCompletion,
@@ -58,6 +58,7 @@ import {
 import { resolveWorkflow } from './graph-plan';
 import type { IncludeCommandContent } from './compiled-command';
 import { IncludeExpansionError } from './include/expansion-error';
+import { classifyStaticNode } from './include/static-nodes';
 import { instantiateResolvedInclude, type ExpandedInclude } from './include/inline';
 import {
   applyOutputRefRename,
@@ -285,17 +286,18 @@ function expandNodeList(
   };
 
   for (const node of nodes) {
-    if (isComposeFanOutNode(node)) {
-      expandComposeFanOut(expansion, list, node, [...stack, workflowName]);
-    } else if (isIncludeDirective(node)) {
-      expandIncludeDirective(expansion, list, node, [...stack, workflowName]);
-    } else if (isLoopGroupNode(node)) {
-      expandLoopGroupBody(expansion, list, node, workflowName, stack);
+    const classified = classifyStaticNode(node);
+    if (classified.kind === 'include') {
+      if (isComposeFanOutNode(classified.node)) {
+        expandComposeFanOut(expansion, list, classified.node, [...stack, workflowName]);
+      } else {
+        expandIncludeDirective(expansion, list, classified.node, [...stack, workflowName]);
+      }
+    } else if (classified.kind === 'group') {
+      expandLoopGroupBody(expansion, list, classified.node, workflowName, stack);
     } else {
-      // Already a private clone — `collapseWorkflowScope` cloned every node before
-      // writing this workflow's config onto it, so the second pass below can mutate
-      // it without reaching the raw parsed definition discovery still holds.
-      list.expandedNodes.push(node);
+      // collapseWorkflowScope already cloned these nodes, so reference binding can mutate them.
+      list.expandedNodes.push(classified.node);
     }
   }
   return bindIncludeRefs(list);

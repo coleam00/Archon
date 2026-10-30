@@ -7,9 +7,10 @@ import type {
   WorkflowLoadError,
   WorkflowWithSource,
 } from '../schemas';
-import { isComposeFanOutNode, isIncludeDirective, isLoopGroupNode } from '../schemas';
+import { isIncludeDirective, isLoopGroupNode } from '../schemas';
 import { collectLoopGroupSinkWarnings } from '../loader/parse-warnings';
 import { expandWorkflowIncludes } from '../include-expander';
+import { walkStaticNodes } from '../include/static-nodes';
 import { attachHomeMcpDirectory } from '../compiled-command';
 import { resolveIncludeBlockCommandContents } from './command-scan';
 import type { DiscoveryContext } from './context';
@@ -81,13 +82,10 @@ function retainSelectedClosure(files: Map<string, ScopeFile>, selected: string):
     if (required.has(name)) return;
     required.add(name);
     for (const { workflow } of files.values()) {
-      if (workflow.name === name) visitNodes(workflow.nodes);
-    }
-  };
-  const visitNodes = (nodes: WorkflowDefinition['nodes']): void => {
-    for (const node of nodes) {
-      if (isIncludeDirective(node) || isComposeFanOutNode(node)) visit(node.include);
-      else if (isLoopGroupNode(node)) visitNodes(node.loop_group.nodes);
+      if (workflow.name !== name) continue;
+      for (const edge of walkStaticNodes(workflow.nodes)) {
+        if (edge.kind === 'include') visit(edge.node.include);
+      }
     }
   };
   visit(selected);
