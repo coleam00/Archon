@@ -171,9 +171,8 @@ export const CONTINUATION_METADATA_KEY = 'continuation';
 
 export const CONTINUATION_MODES = { adopt: 'adopt', supersede: 'supersede' } as const;
 export type ContinuationMode = (typeof CONTINUATION_MODES)[keyof typeof CONTINUATION_MODES];
-export interface ContinuationMetadata {
-  mode: ContinuationMode;
-}
+const continuationMetadataSchema = z.object({ mode: z.enum(Object.values(CONTINUATION_MODES)) });
+export type ContinuationMetadata = z.infer<typeof continuationMetadataSchema>;
 
 export function continuationInheritsEstate(mode: ContinuationMode): boolean {
   switch (mode) {
@@ -184,8 +183,6 @@ export function continuationInheritsEstate(mode: ContinuationMode): boolean {
   }
   return mode satisfies never;
 }
-
-const continuationMetadataSchema = z.object({ mode: z.enum(Object.values(CONTINUATION_MODES)) });
 
 /** Unstamped legacy runs retain adoption behavior; malformed stamps must not select an estate. */
 export function readContinuationMode(
