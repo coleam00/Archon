@@ -275,11 +275,12 @@ is 0 or 1, so the score is a rate, and otherwise the mean ± t(0.975, n−1) · 
 `count` has no interval.
 
 Each entry also reports the `cost` of its producing runs: `usd`, `input_tokens` and
-`output_tokens` summed over the distinct runs its records name, each run once. Codex and Pi
-report tokens but no cost, so the sum is a floor, never a total. `runs_without_cost`,
-`runs_without_tokens` and `runs_missing` count the runs that added nothing to it: runs that
-recorded no cost, no tokens, or no longer exist. `usd` is `null`, not `0`, when no run
-recorded a cost. Tokens of differently priced models do not compare as spend.
+`output_tokens` summed over the distinct runs its records name, each run once. Providers
+that report no cost, such as Codex, add tokens but no cost, so the sum is a floor, never a
+total. `runs_without_cost`, `runs_without_tokens` and `runs_missing` count the runs that
+added nothing to it: runs that recorded no cost, no tokens, or no longer exist. `usd` is
+`null`, not `0`, when no run recorded a cost. Tokens of differently priced models do not compare as
+spend.
 
 ## Comparing before and after a change
 
