@@ -13,6 +13,7 @@ import { DetachedRunOwnerUnavailableError } from '../../services/run-owner-stop'
 import {
   operator,
   mockGetWorkflowRun,
+  mockReleaseRunResources,
   mockCancelWorkflowRun,
   mockFindChildRuns,
   mockGetRunAncestry,
@@ -294,8 +295,10 @@ describe('cancelWorkflow', () => {
       })
     );
 
+    mockReleaseRunResources.mockClear();
     await cancelWorkflow(run.id, operator);
 
+    expect(mockReleaseRunResources.mock.calls).toEqual(kept ? [] : [[run.id]]);
     expect(existsSync(checkout)).toBe(kept);
   });
 

@@ -48,3 +48,7 @@ Write `$ARTIFACTS_DIR/review/code.md`: each in-scope finding begins with `source
 A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding, even when the contract never named it. A proved defect you meet that does not touch the change — unrelated or pre-existing — is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/review-code.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`code`). Write no file for no discovery; never append to another lens's file or record suspicion.
 
 Verify the file exists and every `file:line` in it is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/code.md` and the findings count.
+
+## Docker verification builds
+
+Label every disposable verification build with `--label "archon.run_id=$WORKFLOW_ID"` (`docker build`, or `docker buildx build --load`) and use run-unique tags in the same Docker context as the Archon host. Remove test containers when finished. Terminal host cleanup removes labelled images only after writers stop; container-used images and ambiguous/live owners retain them. Never prune shared cache: Docker cannot scope it to this image label. See the pack README's Docker verification section.

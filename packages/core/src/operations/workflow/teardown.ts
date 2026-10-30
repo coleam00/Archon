@@ -12,7 +12,7 @@ import {
   DetachedRunOwnerUnavailableError,
   type DetachedRunStopTarget,
 } from '../../services/run-owner-stop';
-import { getLog, type OperationContext } from './context';
+import { getLog, releaseRunResources, type OperationContext } from './context';
 
 /** Maximum parent expansions in the abandon tree walks. */
 export const MAX_CASCADE_RUNS = 500;
@@ -324,7 +324,10 @@ export async function cancelRunAndCleanup(
     cancelledDescendants = cascade.cancelledDescendants;
     // An output holder the stop left running may still write a descendant's scratch.
     if (!stopWarnings.length)
-      for (const child of cascade.cancelledRuns) await releaseRunScratch(child);
+      for (const child of cascade.cancelledRuns) {
+        await releaseRunScratch(child);
+        await releaseRunResources(ctx, child.id);
+      }
   }
   const blockedParentRunId = cancelled ? await findParentBlockedOn(ctx, run) : null;
 

@@ -1,3 +1,4 @@
+import type { WorkflowDeps } from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowStore } from '@archon/workflows/store';
@@ -50,6 +51,7 @@ export interface WorkflowOperationsDeps {
   isRunOwnerAnswering: typeof isRunOwnerAnswering;
   reclaimContainerEnv: (envId: string, store: IIsolationStore) => Promise<void>;
   reclaimRunWorktree: typeof ReclaimRunWorktree;
+  releaseRunResources?: WorkflowDeps['releaseRunResources'];
 }
 
 /** The supplied effects plus the lookup and authorization every operation starts with. */
@@ -100,4 +102,12 @@ export function createOperationContext(deps: WorkflowOperationsDeps): OperationC
   }
 
   return { ...deps, assertAuthorized, assertMayAct, getRunOrThrow };
+}
+
+export async function releaseRunResources(ctx: OperationContext, runId: string): Promise<void> {
+  try {
+    await ctx.releaseRunResources?.(runId);
+  } catch (err) {
+    getLog().warn({ err, runId }, 'operations.resource_release_failed');
+  }
 }

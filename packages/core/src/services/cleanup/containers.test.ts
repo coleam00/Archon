@@ -1,10 +1,15 @@
 // @archon-test-isolated
+import { hostname } from 'node:os';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import type { IIsolationStore } from '@archon/isolation';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { WorkflowStatusReadError } from '../../db/workflow-run-status';
 import { mockWorkflowRun } from '../../test/mocks/workflow-run';
-import { listContainerEnvironments, reclaimContainerEnv } from './containers';
+import {
+  listContainerEnvironments,
+  reclaimContainerEnv,
+  reapContainerEnvironments,
+} from './containers';
 import {
   UNKNOWN_PLATFORM,
   makeContainerEnvironment,
@@ -13,6 +18,8 @@ import {
   mockContainerOptions,
   mockListActiveContainerEnvironments,
   mockGetRunByIsolationEnvId,
+  mockGetWorkflowRun,
+  mockReleaseVerificationImages,
   resetCleanupMocks,
 } from './test-harness';
 
@@ -79,5 +86,42 @@ describe('listContainerEnvironments', () => {
       'container_env_list_lookup_failed'
     );
     expect(mockContainerDestroy).not.toHaveBeenCalled();
+  });
+});
+
+describe('verification images after reaping', () => {
+  test.each([
+    'completed',
+    'paused',
+    'unknown-owner',
+    'missing',
+    'destroy-failed',
+    'lookup-failed',
+  ] as const)('rechecks the owning run after container teardown: %s', async mode => {
+    mockListActiveContainerEnvironments.mockResolvedValue([makeContainerEnvironment()]);
+    const run = {
+      ...mockWorkflowRun,
+      status: mode === 'paused' ? ('paused' as const) : ('completed' as const),
+      metadata:
+        mode === 'unknown-owner'
+          ? {}
+          : {
+              execution_owner: { host: hostname(), pid: process.pid },
+              isolation: 'container',
+              isolation_env_id: 'env-1',
+            },
+    };
+    mockGetRunByIsolationEnvId.mockResolvedValue(mode === 'missing' ? null : run);
+    mockGetWorkflowRun.mockResolvedValue(run);
+    if (mode === 'destroy-failed')
+      mockContainerDestroy.mockRejectedValueOnce(new Error('Docker unavailable'));
+    if (mode === 'lookup-failed')
+      mockGetRunByIsolationEnvId.mockRejectedValueOnce(new Error('store unavailable'));
+    const report = await reapContainerEnvironments(1);
+    expect(report.removed).toEqual(mode === 'destroy-failed' ? [] : ['env-1']);
+    if (mode === 'completed') {
+      expect(mockReleaseVerificationImages).toHaveBeenCalledWith(run.id, 'env-1');
+      expect(mockContainerDestroy).toHaveBeenCalledWith('env-1');
+    } else expect(mockReleaseVerificationImages).not.toHaveBeenCalled();
   });
 });

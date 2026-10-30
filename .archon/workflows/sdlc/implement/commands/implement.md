@@ -104,3 +104,7 @@ Judge completion and green only on implement’s work and its focused checks on 
 `inherited` and `environment` let delivery continue on red, so neither is the comfortable answer — declaring one commits you to evidence. Name the exact failing check and the concrete reason your change cannot have caused it: that check already red at the starting commit, a failure inside a subsystem your diff never touches, a resource another process holds. Put that evidence in `summary` and in your report. Without it the cause is `introduced`. Never relabel a red check to get past a gate; the pull request's real CI checks the same thing again, so a false claim buys nothing and costs a round.
 
 Before declaring `green: true`, verify it: re-read the full diff of this run (`git status`, `git diff`, and `git log` back to the run's starting commit), confirm the work is fully covered with nothing unrelated included, confirm your report is current, and confirm the checks you cite ran on the current `HEAD` and a clean tree.
+
+## Docker verification builds
+
+Label every disposable verification build with `--label "archon.run_id=$WORKFLOW_ID"` (`docker build`, or `docker buildx build --load`) and use run-unique tags in the same Docker context as the Archon host. Remove test containers when finished. Terminal host cleanup removes labelled images only after writers stop; container-used images and ambiguous/live owners retain them. Never prune shared cache: Docker cannot scope it to this image label. See the pack README's Docker verification section.

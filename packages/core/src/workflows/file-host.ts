@@ -387,6 +387,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
       ownerLoss: runOwnerLossWatch(store),
     }),
     operations: createWorkflowOperations({
+      releaseRunResources: deps.releaseRunResources,
       store,
       hostStore: records,
       getUserRole: async () => undefined,

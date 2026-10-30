@@ -371,6 +371,7 @@ export async function executeWorkflow(
     if (!exit.terminalStatusWriteFailed) {
       if (!exit.executionStopped) await failRunLeftRunning(deps, workflowRun.id);
       await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
+      await releaseResourcesOnExit(deps, workflowRun.id);
     }
   }
 }
@@ -629,4 +630,14 @@ async function releaseScratchOnExit(
   };
   if (deferCleanup) deferCleanup(cleanup);
   else await cleanup();
+}
+
+async function releaseResourcesOnExit(deps: WorkflowDeps, runId: string): Promise<void> {
+  if (!deps.releaseRunResources) return;
+  try {
+    const run = await deps.store.getWorkflowRun(runId);
+    if (run && isTerminalRunStatus(run.status)) await deps.releaseRunResources(runId);
+  } catch (err) {
+    getLog().warn({ err, runId }, 'executor.exit_resource_release_failed');
+  }
 }

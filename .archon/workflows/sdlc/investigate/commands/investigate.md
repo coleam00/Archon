@@ -91,3 +91,7 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
   `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, no unresolved gap was disguised by extra breadth, and `git status` matches what you started with.
+
+## Docker verification builds
+
+Label every disposable verification build with `--label "archon.run_id=$WORKFLOW_ID"` (`docker build`, or `docker buildx build --load`) and use run-unique tags in the same Docker context as the Archon host. Remove test containers when finished. Terminal host cleanup removes labelled images only after writers stop; container-used images and ambiguous/live owners retain them. Never prune shared cache: Docker cannot scope it to this image label. See the pack README's Docker verification section.

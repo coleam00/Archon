@@ -3,7 +3,7 @@ import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-c
 import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
-import type { OperationContext } from './context';
+import { releaseRunResources, type OperationContext } from './context';
 import {
   cancelByOperator,
   describeAbandonOwner,
@@ -130,7 +130,10 @@ export async function cancelWorkflow(
     );
   }
   // An output holder the stop left running may still write scratch.
-  if (!owner.cleanupWarnings?.length) await releaseRunScratch(run);
+  if (!owner.cleanupWarnings?.length) {
+    await releaseRunScratch(run);
+    await releaseRunResources(ctx, run.id);
+  }
   return { kind: 'stopped', pid: owner.pid, ...recorded };
 }
 

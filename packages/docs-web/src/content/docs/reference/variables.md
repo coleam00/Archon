@@ -108,6 +108,17 @@ only state belonging to this directory into the new `$STATE_DIR`; legacy state m
 been shared by unrelated directories. New runs do not read or copy legacy state.
 Runs with an already recorded output root keep using it when resumed.
 
+### Disposable Docker verification images
+
+Use the current run's identity to opt disposable images into terminal cleanup:
+
+```bash
+docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
+```
+
+Use run-unique tags and the Archon host's Docker context. Buildx builds use the same label with `--load`. Remove test containers when finished. The host removes labelled images once the run is terminal and no executor or container can use them. Running, paused and ambiguously owned runs retain their images. Unlabelled images and shared build cache are never pruned by this cleanup.
+
+
 ## Positional Arguments (not supported)
 
 Archon does **not** support positional arguments (`$1`, `$2`, `$3`, … `$9`).

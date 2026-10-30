@@ -1,0 +1,169 @@
+import { describe, expect, test } from 'bun:test';
+import { releaseRunVerificationImages } from './verification-images';
+import type { DockerRunner } from './docker-exec';
+
+const id = (name: string): string => `sha256:${name}`;
+function fixture() {
+  const images = new Map<string, { id: string; parent: string; owner: string; tags: string[] }>();
+  const used = new Set<string>();
+  const failures = new Set<string>();
+  const calls: string[][] = [];
+  let containerPresent = false;
+  const add = (name: string, owner = 'run-a', tags = [`${name}:test`], parent = '') => {
+    const image = { id: id(name), parent, owner, tags };
+    images.set(image.id, image);
+    return image;
+  };
+  const find = (ref: string) => {
+    const image = images.get(ref) ?? [...images.values()].find(image => image.tags.includes(ref));
+    if (!image) throw new Error('missing image');
+    return image;
+  };
+  const inspect = (ref: string): string => {
+    if (failures.has(ref) && ref.startsWith('sha256:')) throw new Error('inspection unavailable');
+    return JSON.stringify(find(ref));
+  };
+  const remove = (ref: string): string => {
+    if (failures.has(ref)) throw new Error('removal failed');
+    const image = find(ref);
+    image.tags = image.tags.filter(tag => tag !== ref);
+    if (!image.tags.length) images.delete(image.id);
+    return '';
+  };
+  const containerList = (args: string[]): string => {
+    const ancestor = args.find(arg => arg.startsWith('ancestor='));
+    const present = ancestor ? used.has(ancestor.slice(9)) : containerPresent;
+    return present ? 'container' : '';
+  };
+  const runner: DockerRunner = async args => {
+    calls.push(args);
+    let stdout: string;
+    if (args[0] === 'container') stdout = containerList(args);
+    else if (args[1] === 'ls') {
+      // Include unexpected candidates to exercise inspection's independent ownership check.
+      stdout = [...images.keys(), ...images.keys()].join('\n');
+    } else if (args[1] === 'inspect') stdout = inspect(args.at(-1)!);
+    else if (args[1] === 'rm') stdout = remove(args.at(-1)!);
+    else throw new Error(`Unexpected Docker command: ${args.join(' ')}`);
+    return { stdout, stderr: '' };
+  };
+  return {
+    add,
+    images,
+    used,
+    failures,
+    calls,
+    runner,
+    container: () => {
+      containerPresent = true;
+    },
+  };
+}
+
+describe('run verification images', () => {
+  test('exact label selection, all tags, dangling images and child-before-parent deletion', async () => {
+    const f = fixture();
+    const parent = f.add('owned-parent');
+    f.add('child', 'run-a', ['child:a', 'child:b'], parent.id);
+    f.add('dangling', 'run-a', []);
+    f.add('base', '', ['alpine:latest']);
+    f.add('bun', '', ['oven/bun:latest']);
+    f.add('other', 'run-b');
+    await releaseRunVerificationImages('run-a', undefined, f.runner);
+    expect([...f.images.keys()].sort()).toEqual([id('base'), id('bun'), id('other')]);
+    expect(f.calls[0]).toEqual([
+      'image',
+      'ls',
+      '--all',
+      '--quiet',
+      '--no-trunc',
+      '--filter',
+      'label=archon.run_id=run-a',
+    ]);
+    const removals = f.calls.filter(args => args[1] === 'rm');
+    expect(removals.every(args => args[2] === '--no-prune' && !args.includes('--force'))).toBe(
+      true
+    );
+    expect(removals.findIndex(args => args.at(-1) === 'child:b')).toBeLessThan(
+      removals.findIndex(args => args.at(-1) === 'owned-parent:test')
+    );
+    expect(f.calls.some(args => args.includes('prune'))).toBe(false);
+  });
+
+  test.each(['running', 'stopped'])('retains images used by a %s container', async () => {
+    const f = fixture();
+    f.used.add(f.add('used').id);
+    await releaseRunVerificationImages('run-a', undefined, f.runner);
+    expect(f.calls.filter(args => args[1] === 'rm')).toEqual([]);
+    expect(f.calls.find(args => args[0] === 'container')).toContain('--all');
+  });
+
+  test('retains all images until the isolation container has gone', async () => {
+    const f = fixture();
+    f.add('verification');
+    f.container();
+    await releaseRunVerificationImages('run-a', 'env-a', f.runner);
+    expect(f.calls).toHaveLength(1);
+    expect(f.calls[0]).toContain('label=diy.archon.env-id=env-a');
+  });
+
+  test('failed inspections and removals retain candidates and allow independent cleanup', async () => {
+    const f = fixture();
+    f.add('unreadable');
+    f.add('blocked');
+    f.add('independent');
+    f.failures.add(id('unreadable'));
+    f.failures.add('blocked:test');
+    await releaseRunVerificationImages('run-a', undefined, f.runner);
+    expect([...f.images.keys()].sort()).toEqual([id('blocked'), id('unreadable')]);
+  });
+
+  test('malformed inspections cannot authorize removal', async () => {
+    const calls: string[][] = [];
+    await releaseRunVerificationImages('run-a', undefined, async args => {
+      calls.push(args);
+      return { stdout: args[1] === 'ls' ? id('broken') : '{}', stderr: '' };
+    });
+    expect(calls.some(args => args[1] === 'rm')).toBe(false);
+  });
+
+  test.each(['inventory', 'container-lookup', 'missing-docker'] as const)(
+    '%s failure retains images',
+    async failure => {
+      const f = fixture();
+      f.add('verification');
+      await releaseRunVerificationImages('run-a', undefined, async (args, opts) => {
+        if (
+          (failure === 'inventory' && args[1] === 'ls') ||
+          (failure === 'container-lookup' && args[0] === 'container')
+        )
+          throw new Error('Docker unavailable');
+        if (failure === 'missing-docker')
+          throw Object.assign(new Error('spawn failed'), { code: 'ENOENT' });
+        return f.runner(args, opts);
+      });
+      expect(f.calls.some(args => args[1] === 'rm')).toBe(false);
+      expect(f.images.has(id('verification'))).toBe(true);
+    }
+  );
+
+  test('a tag reassigned after inventory is preserved', async () => {
+    const f = fixture();
+    const image = f.add('old');
+    const runner: DockerRunner = async (args, opts) => {
+      if (args.at(-1) === 'old:test') {
+        image.tags = [];
+        f.add('new', 'run-b', ['old:test']);
+      }
+      return f.runner(args, opts);
+    };
+    await releaseRunVerificationImages('run-a', undefined, runner);
+    expect(f.calls.some(args => args[1] === 'rm')).toBe(false);
+  });
+
+  test('empty identity is rejected before Docker is called', async () => {
+    const f = fixture();
+    await expect(releaseRunVerificationImages('', undefined, f.runner)).rejects.toThrow('run ID');
+    expect(f.calls).toEqual([]);
+  });
+});

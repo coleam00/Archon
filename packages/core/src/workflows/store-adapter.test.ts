@@ -425,6 +425,12 @@ describe('createWorkflowDeps', () => {
     });
     expect(mockGetUserGithubAuthor).toHaveBeenCalledWith('user-1');
   });
+  test('SQL and file dependency composition both supply external resource cleanup', () => {
+    expect(createWorkflowDeps().releaseRunResources).toEqual(expect.any(Function));
+    expect(createWorkflowDeps(createWorkflowStore(), 'files').releaseRunResources).toEqual(
+      expect.any(Function)
+    );
+  });
   test('only the SQL host gets the SQL completed-run worktree release', () => {
     expect(createWorkflowDeps().completedRunWorktree).toEqual({
       assess: expect.any(Function),

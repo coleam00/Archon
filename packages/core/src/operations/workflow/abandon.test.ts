@@ -17,6 +17,7 @@ import {
   operator,
   EMPTY_COUNTS,
   mockGetWorkflowRun,
+  mockReleaseRunResources,
   mockPersistWorkflowEvent,
   mockListWorkflowRuns,
   mockLogger,
@@ -613,8 +614,10 @@ describe('abandonWorkflow', () => {
         })
       );
 
+      mockReleaseRunResources.mockClear();
       await abandonWorkflow(root.id, operator);
 
+      expect(mockReleaseRunResources.mock.calls.some(([id]) => id === child.id)).toBe(!kept);
       expect(existsSync(checkout)).toBe(kept);
     }
   );
@@ -742,8 +745,11 @@ describe('abandonResumableRunsForConversation', () => {
     });
     mockCancelResumableRunsForConversation.mockResolvedValueOnce([run]);
 
+    mockReleaseRunResources.mockClear();
     await abandonResumableRunsForConversation('conv-1', operator);
 
+    // The host effect independently checks the fresh owner before touching Docker.
+    expect(mockReleaseRunResources).toHaveBeenCalledWith(run.id);
     expect(existsSync(checkout)).toBe(kept);
   });
 

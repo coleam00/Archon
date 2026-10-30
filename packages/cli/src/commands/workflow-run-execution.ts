@@ -525,7 +525,22 @@ async function settleRun(
     warnPreservedContainer(container.envId, result?.workflowRunId);
   }
   if (container && !execution.containerPreserved) {
-    return destroyRunContainer(store, container.backend, container.envId, result?.workflowRunId);
+    const error = await destroyRunContainer(
+      store,
+      container.backend,
+      container.envId,
+      result?.workflowRunId
+    );
+    if (!error) await releaseRunResources(launch, runId);
+    return error;
   }
   return undefined;
+}
+
+async function releaseRunResources(launch: ForegroundLaunch, runId: string): Promise<void> {
+  try {
+    await launch.request.host.deps.releaseRunResources?.(runId);
+  } catch (err) {
+    getLog().warn({ err, runId }, 'cli.resource_release_failed');
+  }
 }

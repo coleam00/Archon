@@ -673,7 +673,8 @@ describe('workflowRunCommand — progress rendering', () => {
     handoffStatus?: WorkflowRunStatus | null,
     rejection?: 'published' | 'pre-publication',
     signal: 'SIGINT' | 'SIGTERM' = 'SIGTERM',
-    settledStatus: 'completed' | 'failed' | 'cancelled' = 'completed'
+    settledStatus: 'completed' | 'failed' | 'cancelled' = 'completed',
+    destroyError?: Error
   ): Promise<number> {
     const { discoverWorkflowsWithConfig } = require('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -728,8 +729,16 @@ describe('workflowRunCommand — progress rendering', () => {
     });
     const exitSpy = spyOn(process, 'exit').mockImplementation((() => exited()) as never);
     mockFolderBackendDestroy.mockClear();
+    mockFolderBackendDestroy.mockImplementation(async () => {
+      if (destroyError) throw destroyError;
+    });
     const signalBefore = process.listeners(signal);
     const host = createTestWorkflowHost();
+    const releaseRunResources = mock(async (id: string) => {
+      expect(id).toBe(OWNED_RUN);
+      expect(mockFolderBackendDestroy.mock.calls.length).toBeGreaterThan(0);
+    });
+    host.deps.releaseRunResources = releaseRunResources;
     const initialStatus =
       handoffStatus !== undefined
         ? handoffStatus
@@ -812,9 +821,24 @@ describe('workflowRunCommand — progress rendering', () => {
     } finally {
       exitSpy.mockRestore();
     }
+    expect(releaseRunResources.mock.calls.length).toBe(
+      Math.min(mockFolderBackendDestroy.mock.calls.length, Number(!destroyError))
+    );
     if (!rejection && handoffStatus === undefined) expect(fail).not.toHaveBeenCalled();
     return destroyedAtSignal;
   }
+
+  it('retains images when container teardown fails after an execution error', async () => {
+    await signalDuringContainerDrain(
+      'settled',
+      'drain',
+      undefined,
+      'pre-publication',
+      'SIGTERM',
+      'completed',
+      new Error('container still present')
+    );
+  });
 
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     it.each(['published', 'handoff', 'paused'] as const)(

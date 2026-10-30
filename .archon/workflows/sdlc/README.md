@@ -922,3 +922,9 @@ pass every few hours:
   "schedule": { "intervalSeconds": 21600, "runAtLoad": false }
 }
 ```
+
+## Docker verification
+
+For disposable verification images, use `docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .` (or the same `--label` with `docker buildx build --load`). Give each run unique tags and use the same Docker context as the Archon host. A child run uses its own `$WORKFLOW_ID`. Remove verification containers when the check finishes, including stopped containers.
+
+The host removes labelled images after the run becomes terminal and its executor has stopped. Images stay while any container uses them, while the run is running or paused, or when writer ownership cannot be proved. Unlabelled images and other runs' images are left alone. Shared build cache is retained: Docker cannot filter it by this image label. Never prune shared images or cache to clean up a verification build.
