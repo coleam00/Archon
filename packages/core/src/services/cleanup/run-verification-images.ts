@@ -13,11 +13,9 @@ import {
 import { FAN_OUT_CANCEL_REASONS, type IWorkflowStore } from '@archon/workflows/store';
 
 async function hostDockerAvailable(): Promise<boolean> {
-  if (!Bun.which('docker', { PATH: process.env.PATH ?? '' })) return false;
   try {
     await dockerCli(['version', '--format', '{{.Server.Version}}'], {
       timeout: 10_000,
-      env: { ...process.env },
     });
     return true;
   } catch (err) {

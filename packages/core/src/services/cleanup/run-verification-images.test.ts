@@ -231,18 +231,15 @@ test.each([false, true])(
         : docker(args, options)
     );
     try {
-      expect(Bun.which('docker', { PATH: root })).toBe(executable);
+      await expect(docker(['version', '--format', '{{.Server.Version}}'])).resolves.toEqual({
+        stdout: '',
+        stderr: '',
+      });
       const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
       expect(probe).toHaveBeenCalledWith(
         ['version', '--format', '{{.Server.Version}}'],
         expect.objectContaining({ timeout: 10_000 })
       );
-      const probeEnv = probe.mock.calls[0]?.[1]?.env ?? {};
-      expect(
-        Object.entries(probeEnv)
-          .filter(([key]) => key.toUpperCase() === 'PATH')
-          .map(([, value]) => value)
-      ).toEqual([root]);
       await unlink(executable);
       await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');
     } finally {
