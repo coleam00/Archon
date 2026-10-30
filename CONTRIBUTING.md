@@ -21,7 +21,8 @@ or through a helper, must start with the exact line `// @archon-test-isolated`;
 discovery fails on a direct call without it.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
-are forwarded to Bun verbatim and bypass default grouping.
+retain Bun's substring-filter meaning and run only matching files, preserving the same
+isolation groups. Test flags are forwarded to each selected group.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,

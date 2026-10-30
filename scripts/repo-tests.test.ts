@@ -203,13 +203,17 @@ describe('planStepCommand', () => {
  */
 describe('repo-tests exit codes', () => {
   const SCRIPT = fromRoot('scripts/repo-tests.ts');
-  const invoke = (args: string[]): { exitCode: number | null; stderr: string } => {
+  const invoke = (args: string[]): { exitCode: number | null; stderr: string; stdout: string } => {
     const result = Bun.spawnSync(['bun', SCRIPT, ...args], {
       cwd: REPO_ROOT,
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+    return {
+      exitCode: result.exitCode,
+      stderr: result.stderr.toString(),
+      stdout: result.stdout.toString(),
+    };
   };
 
   test('exits non-zero and names what it accepts when no argument routes', () => {
@@ -239,9 +243,10 @@ describe('repo-tests exit codes', () => {
   });
 
   test('exits 0 when the routed run passes', () => {
-    const { exitCode } = invoke([fromRoot('packages/paths/src/skills.test.ts')]);
+    const { exitCode, stdout } = invoke([fromRoot('packages/paths/src/skills.test.ts')]);
 
     expect(exitCode).toBe(0);
+    expect(stdout).toContain('◀ @archon/paths ./src/skills.test.ts');
   });
 
   test('bun run test .archon/scripts/ executes the directory tests', () => {

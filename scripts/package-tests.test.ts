@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
 import { TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
+import { resolveRequestedTestGroups } from './package-test-requests';
 
 const track = trackTempRoots();
 const runner = join(import.meta.dir, 'package-tests.ts');
@@ -81,7 +82,7 @@ test(
 );
 
 test(
-  'requested substring selectors and name flags bypass groups verbatim',
+  'requested substring selectors and name flags select only matching tests',
   async () => {
     const root = fixture();
     testFile(
@@ -90,11 +91,133 @@ test(
       `test('wanted', () => appendFileSync('selected', 'yes')); test('excluded', () => { throw new Error('not selected'); });`
     );
     testFile(root, 'other', `test('wanted', () => { throw new Error('not selected'); });`);
-    // Fails default discovery, so the selected run must not resolve groups.
-    testFile(root, 'unmarked', `mock.module('./value', () => ({}));`);
     expect(await run(root, ['logger', '--test-name-pattern', 'wanted'])).toBe(0);
     expect(readFileSync(join(root, 'selected'), 'utf8')).toBe('yes');
     expect(await run(root, ['no-matching-selector'])).not.toBe(0);
+    expect(await run(root, ['no-matching-selector', '--pass-with-no-tests'])).toBe(0);
+  },
+  testTimeout(5000)
+);
+
+for (const declaration of [
+  {},
+  { testGroups: [['src/a-mock.test.ts'], ['src/b-real.test.ts', 'src/other.test.ts']] },
+]) {
+  test(
+    `requested files preserve isolation: ${JSON.stringify(declaration)}`,
+    async () => {
+      const root = fixture(declaration);
+      writeFileSync(join(root, 'src', 'value.ts'), 'export const value = "real";');
+      testFile(
+        root,
+        'a-mock',
+        `mock.module('./value', () => ({ value: 'mock' }));
+        test('wanted', async () => {
+          expect((await import('./value')).value).toBe('mock');
+          appendFileSync('pids', String(process.pid) + '\\n');
+        });`,
+        true
+      );
+      testFile(
+        root,
+        'b-real',
+        `import { value } from './value';
+        test('wanted', () => {
+          expect(value).toBe('real');
+          appendFileSync('pids', String(process.pid) + '\\n');
+        });`,
+        true
+      );
+      testFile(root, 'other', `test('wanted', () => { throw new Error('not requested'); });`);
+      expect(await run(root, ['a-mock', 'b-real', '-t', 'wanted'])).toBe(0);
+      const pids = readFileSync(join(root, 'pids'), 'utf8').trim().split('\n');
+      expect(pids).toHaveLength(2);
+      expect(new Set(pids).size).toBe(2);
+    },
+    testTimeout(5000)
+  );
+}
+
+test(
+  'requested directory and overlapping selectors preserve shared groups and option values',
+  async () => {
+    const root = fixture({ testGroups: [['src/']] });
+    for (const name of ['one', 'two']) {
+      testFile(
+        root,
+        name,
+        `test('two', () => appendFileSync('pids', String(process.pid) + '\\n'));
+         test('excluded', () => { throw new Error('not selected'); });`
+      );
+    }
+    expect(
+      await run(root, [
+        'src/',
+        'one',
+        '--test-name-pattern',
+        'two',
+        '--timeout',
+        '1000',
+        '--bail',
+        '2',
+      ])
+    ).toBe(0);
+    const pids = readFileSync(join(root, 'pids'), 'utf8').trim().split('\n');
+    expect(pids).toHaveLength(2);
+    expect(new Set(pids).size).toBe(1);
+  },
+  testTimeout(5000)
+);
+
+test('optional inline flags leave the following file selector intact', () => {
+  const root = fixture();
+  testFile(root, 'one', `test('one', () => {});`, true);
+  testFile(root, 'two', `test('two', () => {});`, true);
+  for (const option of ['--changed=HEAD', '--parallel=2', '--bail=1']) {
+    expect(resolveRequestedTestGroups(root, {}, [option, 'one']).groups).toEqual([
+      [option, './src/one.test.ts'],
+    ]);
+  }
+  expect(resolveRequestedTestGroups(root, {}, ['one', '-t', 'two']).groups).toEqual([
+    ['-t', 'two', './src/one.test.ts'],
+  ]);
+});
+
+test(
+  'name filters may match one isolation group, while real failures and zero matches stay red',
+  async () => {
+    const root = fixture({ testConcurrency: 2 });
+    testFile(root, 'a', `test('other', () => { throw new Error('not selected'); });`, true);
+    testFile(root, 'b', `test('wanted', () => appendFileSync('selected', 'yes'));`, true);
+    const args = ['src/', '-t', 'wanted'];
+    expect(await run(root, args)).toBe(0);
+    expect(readFileSync(join(root, 'selected'), 'utf8')).toBe('yes');
+    const report = join(root, 'requested-report.xml');
+    expect(await run(root, [...args, '--reporter=junit', '--reporter-outfile', report])).toBe(0);
+    expect(readFileSync(report, 'utf8')).toContain('<testsuites');
+
+    expect(await run(root, ['src/', '-t', 'absent'])).not.toBe(0);
+    expect(await run(root, ['src/', '-t', 'absent', '--pass-with-no-tests'])).toBe(0);
+    testFile(root, 'a', `test('wanted', () => { throw new Error('real failure'); });`, true);
+    expect(await run(root, args)).not.toBe(0);
+    testFile(root, 'a', `test('other', () => {}); throw new Error('load failure');`, true);
+    expect(await run(root, args)).not.toBe(0);
+    testFile(
+      root,
+      'a',
+      `import { beforeAll } from 'bun:test';
+      beforeAll(() => { throw new Error('hook failure'); }); test('wanted', () => {});`,
+      true
+    );
+    expect(await run(root, args)).not.toBe(0);
+    testFile(
+      root,
+      'a',
+      `import { afterAll } from 'bun:test';
+      afterAll(() => { throw new Error('cleanup failure'); }); test('wanted', () => {});`,
+      true
+    );
+    expect(await run(root, args)).not.toBe(0);
   },
   testTimeout(5000)
 );
@@ -110,7 +233,7 @@ test(
       true
     );
     testFile(root, 'z-later', `test('later', () => appendFileSync('later', 'ran'));`);
-    expect(await run(root, ['src/a-failure.test.ts'])).not.toBe(0);
+    expect(await run(root, ['src/a-failure.test.ts', 'src/z-later.test.ts'])).not.toBe(0);
     expect(await run(root)).not.toBe(0);
     expect(existsSync(join(root, 'later'))).toBe(false);
   },

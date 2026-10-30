@@ -6,6 +6,8 @@ import {
   resolvePackageTestGroups,
 } from './package-test-groups';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
+import { resolveRequestedTestGroups } from './package-test-requests';
+import { runNameFilteredGroup } from './package-test-name-filter';
 
 /**
  * Runs one package's tests, from that package's directory.
@@ -46,14 +48,7 @@ const run = async (args: string[]): Promise<number> => {
 
 const requested = Bun.argv.slice(2);
 
-// Requested arguments go through verbatim. Do not add a path-existence check here:
-// `bun test` already exits 1 when a selector matches no test file, and its selectors are
-// substring filters rather than paths, so `bun run test logger` is a valid run that any
-// such check would refuse. The exit-0-on-a-bad-path this runner was written to fix came
-// from `bun run` appending the argument to a chain whose other selectors still matched.
-if (requested.length > 0) process.exit(await run(requested));
-
-const part = parseTestPart(process.env.ARCHON_TEST_PART);
+const part = requested.length === 0 ? parseTestPart(process.env.ARCHON_TEST_PART) : undefined;
 const packageName =
   typeof manifest === 'object' && manifest !== null && 'name' in manifest
     ? String(manifest.name)
@@ -61,24 +56,33 @@ const packageName =
 const weights: Record<string, Record<string, number>> = await Bun.file(
   join(import.meta.dir, 'test-weights.json')
 ).json();
-const groups = partitionTestGroups(
-  resolvePackageTestGroups(packageDir, manifest),
-  weights[packageName] ?? {},
-  part?.count ?? 1
-)[(part?.index ?? 1) - 1];
+const request =
+  requested.length > 0 ? resolveRequestedTestGroups(packageDir, manifest, requested) : undefined;
+const groups =
+  request?.groups ??
+  partitionTestGroups(
+    resolvePackageTestGroups(packageDir, manifest),
+    weights[packageName] ?? {},
+    part?.count ?? 1
+  )[(part?.index ?? 1) - 1];
 const concurrency = resolvePackageTestConcurrency(manifest);
 if (part !== undefined) {
   console.log(`Part ${String(part.index)}/${String(part.count)}: ${String(groups.length)} groups`);
 }
 
+let emptyNameGroups = 0;
+
 /** Runs one group and reports how long it took, for `update-test-weights.ts`. */
 const timed = async (group: string[], runGroup: (group: string[]) => Promise<number>) => {
   const startedAt = performance.now();
-  const code = await runGroup(group);
+  const result = request?.filtersNames
+    ? await runNameFilteredGroup(group, runGroup, request.reporterOutfile)
+    : await runGroup(group);
+  if (result === 'no-name-match') emptyNameGroups++;
   console.log(
     `◀ ${packageName} ${group[0]} ${((performance.now() - startedAt) / 1000).toFixed(1)}s`
   );
-  return code;
+  return result === 'no-name-match' ? 0 : result;
 };
 
 const runBuffered = async (group: string[]): Promise<number> => {
@@ -125,4 +129,5 @@ async function runGroups(): Promise<number> {
 }
 
 // Not `process.exit`: on a pipe it can cut off the buffered group output written just before.
-process.exitCode = await runGroups();
+const code = await runGroups();
+process.exitCode = code || (request?.filtersNames && emptyNameGroups === groups.length ? 1 : 0);

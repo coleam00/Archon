@@ -28,17 +28,7 @@ export function resolvePackageTestGroups(
     return groups;
   }
 
-  const files = [
-    ...new Set(
-      new Bun.Glob('src/**/*.{test,spec}.{ts,tsx}').scanSync({
-        cwd: packageDirectory,
-        onlyFiles: true,
-        dot: true,
-      })
-    ),
-  ]
-    .map(path => path.replaceAll('\\', '/'))
-    .sort();
+  const files = discoverPackageTestFiles(packageDirectory);
   if (files.length === 0) throw new Error('Test discovery found no tests under src');
   const isolated: string[][] = [];
   const shared: string[] = [];
@@ -58,6 +48,20 @@ export function resolvePackageTestGroups(
     );
   }
   return shared.length > 0 ? [...isolated, shared] : isolated;
+}
+
+export function discoverPackageTestFiles(packageDirectory: string): string[] {
+  return [
+    ...new Set(
+      new Bun.Glob('src/**/*.{test,spec}.{ts,tsx}').scanSync({
+        cwd: packageDirectory,
+        onlyFiles: true,
+        dot: true,
+      })
+    ),
+  ]
+    .map(path => path.replaceAll('\\', '/'))
+    .sort();
 }
 
 /** How many of a package's test groups may run at once; 1 when the manifest does not say. */

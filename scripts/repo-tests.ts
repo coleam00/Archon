@@ -229,7 +229,9 @@ async function runRequested(requested: string[]): Promise<number> {
   }
 
   for (const { owner, args } of runs) {
-    const code = await run(bunTestCommand(args), owner.cwd);
+    const command =
+      owner.cwd === REPO_ROOT ? bunTestCommand(args) : ['bun', 'run', 'test', ...args];
+    const code = await run(command, owner.cwd);
     if (code !== 0) return code;
   }
 
