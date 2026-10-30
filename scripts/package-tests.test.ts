@@ -568,3 +568,29 @@ test('discovery-only failures produce a failing JUnit report', async () => {
   expect(readFileSync(report, 'utf8')).toMatch(/<testsuites[^>]*errors="1"/);
   expect(readFileSync(report, 'utf8')).toContain('unmarked.test.ts');
 });
+
+for (const suffix of ['test', 'spec']) {
+  for (const grouping of ['isolated', 'shared', 'legacy']) {
+    test(`colliding ${suffix} filenames execute once: ${grouping}`, async () => {
+      const declaration = grouping === 'legacy' ? { testGroups: [['src/']] } : {};
+      const root = fixture(declaration);
+      for (const extension of ['ts', 'tsx']) {
+        writeFileSync(
+          join(root, 'src', `a.${suffix}.${extension}`),
+          `${grouping === 'shared' ? '' : TEST_ISOLATION_DIRECTIVE}\nimport { test } from 'bun:test';
+          import { appendFileSync } from 'node:fs';
+          test('${extension}', () => appendFileSync('ran', '${extension}:' + process.pid + '\\n'));`
+        );
+      }
+      expect(await run(root, [`src/a.${suffix}.ts`])).toBe(0);
+      const lines = readFileSync(join(root, 'ran'), 'utf8').trim().split('\n');
+      expect(lines.map(line => line.split(':')[0]).sort()).toEqual(['ts', 'tsx']);
+      expect(new Set(lines.map(line => line.split(':')[1])).size).toBe(
+        grouping === 'isolated' ? 2 : 1
+      );
+      unlinkSync(join(root, 'ran'));
+      expect(await run(root, [`src/a.${suffix}.tsx`])).toBe(0);
+      expect(readFileSync(join(root, 'ran'), 'utf8').trim().split('\n')).toHaveLength(1);
+    });
+  }
+}

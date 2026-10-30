@@ -27,7 +27,11 @@ export function resolvePackageTestGroups(
       )
     )
       throw new Error('testGroups must contain nonempty arrays of string selectors');
-    return groups;
+    return selectedFiles === undefined
+      ? groups
+      : groups.map(group =>
+          selectedFiles.filter(file => group.some(selector => file.includes(selector)))
+        );
   }
 
   return groupDiscoveredTestFiles(

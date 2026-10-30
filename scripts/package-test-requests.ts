@@ -81,9 +81,7 @@ export function resolveRequestedTestGroups(
       : resolvePackageTestGroups(packageDirectory, manifest, files, error =>
           validationErrors.push(error)
         )
-  )
-    .map(group => files.filter(file => group.some(selector => file.includes(selector))))
-    .filter(group => group.length > 0);
+  ).filter(group => group.length > 0);
   const selectorIndices = new Set(positionals.map(token => token.index));
   const options = requested.filter((_, index) => !selectorIndices.has(index));
   return {
