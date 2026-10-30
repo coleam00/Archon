@@ -313,41 +313,37 @@ async function removeWorktree(
   }
 }
 
-/**
- * Show all worktrees from git's perspective (the source of truth). Useful for
- * discovering skill-created worktrees or stale entries.
- */
 async function listGitWorktrees(
   conversation: Conversation,
   mainPath: string
 ): Promise<CommandResult> {
   try {
-    const gitWorktrees = await listWorktrees(toRepoPath(mainPath));
+    const gitWorktrees = (await listWorktrees(toRepoPath(mainPath))).filter(
+      wt => wt.path !== mainPath
+    );
 
-    if (gitWorktrees.length <= 1) {
+    if (gitWorktrees.length === 0) {
       return {
         success: true,
         message:
-          'No worktrees found (only main repo).\n\nUse `/worktree create <branch>` to create one.',
+          'No secondary local-branch worktrees found.\n\nUse `git worktree list` for the full inventory, including detached checkouts and non-local refs.',
       };
     }
 
     // Resolve working path from UUID for current marker
     const activePath = await currentWorktreePath(conversation);
 
-    let msg = 'All worktrees (from git):\n\n';
+    let msg = 'Local-branch worktrees (from git):\n\n';
     for (const wt of gitWorktrees) {
-      const isMainRepo = wt.path === mainPath;
-      if (isMainRepo) continue;
-
       const shortPath = shortenPath(wt.path, mainPath);
       const isCurrent = activePath && wt.path === activePath;
       const marker = isCurrent ? ' ← current' : '';
       msg += `  ${wt.branch} → ${shortPath}${marker}\n`;
     }
 
-    msg += '\nNote: This shows ALL worktrees including those created by external tools.\n';
-    msg += 'Git (`git worktree list`) is the source of truth.';
+    msg += '\nIncludes local-branch worktrees created by external tools.\n';
+    msg +=
+      'Use `git worktree list` for the full inventory, including detached checkouts and non-local refs.';
 
     return { success: true, message: msg };
   } catch (error) {

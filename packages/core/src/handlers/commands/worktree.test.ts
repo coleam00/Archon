@@ -271,6 +271,52 @@ describe('CommandHandler', () => {
         });
       });
 
+      describe('orphans', () => {
+        test.each([false, true])(
+          'shows a secondary local-branch checkout when main is listed=%s',
+          async includesMain => {
+            spyListWorktrees.mockResolvedValue([
+              ...(includesMain ? [{ path: '/workspace/my-repo', branch: 'main' }] : []),
+              { path: '/workspace/my-repo/worktrees/feat-x', branch: 'feat-x' },
+            ]);
+
+            const result = await handleCommand(
+              conversationWithCodebase,
+              '/worktree orphans',
+              operator
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.message).toContain('Local-branch worktrees');
+            expect(result.message).toContain('feat-x');
+            expect(result.message).toMatch(/worktrees[\\\/]feat-x/);
+            expect(result.message).toContain('git worktree list');
+            expect(result.message).not.toContain('No ');
+            expect(result.message).not.toContain('main →');
+          }
+        );
+
+        test.each([false, true])(
+          'reports no secondary local-branch checkouts when main is listed=%s',
+          async includesMain => {
+            spyListWorktrees.mockResolvedValue(
+              includesMain ? [{ path: '/workspace/my-repo', branch: 'main' }] : []
+            );
+
+            const result = await handleCommand(
+              conversationWithCodebase,
+              '/worktree orphans',
+              operator
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.message).toContain('No secondary local-branch worktrees found');
+            expect(result.message).toContain('git worktree list');
+            expect(result.message).not.toContain('only main repo');
+          }
+        );
+      });
+
       describe('remove', () => {
         const featXEnv = makeIsolationEnvironment({
           id: 'env-uuid-feat-x',
