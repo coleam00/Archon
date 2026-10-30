@@ -1,5 +1,5 @@
 import { relative } from 'path';
-import { listWorktrees, execFileAsync, toRepoPath } from '@archon/git';
+import { listWorktrees, isSameWorktreePath, execFileAsync, toRepoPath } from '@archon/git';
 import {
   getIsolationProvider,
   readWorktreeCreationId,
@@ -205,7 +205,7 @@ async function listConversationWorktrees(
       const restOfLine = parts.slice(1).join(' ');
       const shortenedLine = restOfLine ? `${shortPath} ${restOfLine}` : shortPath;
 
-      const isActive = activePath && fullPath === activePath;
+      const isActive = activePath && isSameWorktreePath(fullPath, activePath);
       const marker = isActive ? ' <- active' : '';
       msg += `${shortenedLine}${marker}\n`;
     }
@@ -318,9 +318,9 @@ async function listGitWorktrees(
   mainPath: string
 ): Promise<CommandResult> {
   try {
-    const gitWorktrees = (await listWorktrees(toRepoPath(mainPath))).filter(
-      wt => wt.path !== mainPath
-    );
+    const gitWorktrees = (
+      await listWorktrees(toRepoPath(mainPath), { requireRepository: true })
+    ).filter(wt => !isSameWorktreePath(wt.path, mainPath));
 
     if (gitWorktrees.length === 0) {
       return {
@@ -336,7 +336,7 @@ async function listGitWorktrees(
     let msg = 'Local-branch worktrees (from git):\n\n';
     for (const wt of gitWorktrees) {
       const shortPath = shortenPath(wt.path, mainPath);
-      const isCurrent = activePath && wt.path === activePath;
+      const isCurrent = activePath && isSameWorktreePath(wt.path, activePath);
       const marker = isCurrent ? ' ← current' : '';
       msg += `  ${wt.branch} → ${shortPath}${marker}\n`;
     }

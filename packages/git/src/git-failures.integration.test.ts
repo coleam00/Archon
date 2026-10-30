@@ -38,6 +38,11 @@ describe('git utilities', () => {
       expect(await git.isAncestorOf(worktree(missing), 'main')).toBe(false);
       expect(await git.isPatchEquivalent(worktree(missing), branch('topic'), 'main')).toBe(false);
       expect(await git.listWorktrees(repo(missing))).toEqual([]);
+      await expect(
+        git.listWorktrees(repo(missing), { requireRepository: true })
+      ).rejects.toMatchObject({
+        kind: 'not_repository',
+      });
       expect(await git.hasUncommittedChanges(worktree(missing))).toBe(false);
     });
 
