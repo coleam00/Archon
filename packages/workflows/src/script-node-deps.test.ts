@@ -223,6 +223,7 @@ function createMockStore(): IWorkflowStore {
       async (_id: string, baseline: CheckoutObservation) => baseline
     ),
     getWorkflowRun: mock(() => Promise.resolve(null)),
+    getWorkflowRunsByIds: mock(() => Promise.resolve([])),
     findChildRuns: mock(() => Promise.resolve([])),
     getRunAncestry: mock(() => Promise.resolve([])),
     getActiveWorkflowRunByPath: mock(() => Promise.resolve(null)),
