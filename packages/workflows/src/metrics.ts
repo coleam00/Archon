@@ -185,7 +185,8 @@ const byInstrument = (a: string | null, b: string | null): number =>
  *
  * Refusals are reported for the queried name and window. A stored output the record
  * schema rejects (written before the schema, or unreadable) has no trusted name, so it
- * is reported only when no name is queried.
+ * is reported only when no name is queried. The stores skip a `metrics: null` output, which
+ * holds no record; only an output written before the key was reserved can carry one.
  */
 export async function queryMetrics(
   store: MetricsStore,

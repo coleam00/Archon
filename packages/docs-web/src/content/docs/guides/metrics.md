@@ -28,6 +28,7 @@ nodes:
     runtime: bun
     script: |
       const log = Bun.spawnSync(['git', 'log', '--since=30 days ago', '--format=%H %cI']);
+      if (log.exitCode !== 0) throw new Error(log.stderr.toString());
       const metrics = log.stdout.toString().trim().split('\n').filter(Boolean).map(line => {
         const [sha, at] = line.split(' ');
         return { name: 'repo.commits', kind: 'count', unit: 'commits', value: 1, subject: sha, at };

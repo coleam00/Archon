@@ -2,6 +2,7 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { resolveAttentionProject } from '@archon/core/operations/attention-queue';
 import { MetricsWindowError, queryMetrics, resolveMetricsWindow } from '@archon/workflows/metrics';
 import type {
+  MetricDefinition,
   MetricInstrumentReport,
   MetricRefusal,
   MetricReport,
@@ -51,13 +52,18 @@ function metricLines(metric: MetricReport): string[] {
   ];
 }
 
+function definitionText(definition: MetricDefinition): string {
+  const calibrates = definition.calibrates === null ? '' : ` calibrates ${definition.calibrates}`;
+  return `${definition.kind}/${definition.unit}${calibrates}`;
+}
+
 function refusalLine(refusal: MetricRefusal): string {
   const where = `run ${refusal.run_id} node ${refusal.node_id}`;
   if (refusal.reason === 'invalid') {
     return `error: ${where} stored invalid metrics: ${refusal.errors.join('; ')}`;
   }
   const { definition, offered } = refusal;
-  return `error: metric ${refusal.name} is ${definition.kind}/${definition.unit}; ${where} offered ${offered.kind}/${offered.unit}`;
+  return `error: metric ${refusal.name} is ${definitionText(definition)}; ${where} offered ${definitionText(offered)}`;
 }
 
 function reportText(report: MetricsReport): string {
