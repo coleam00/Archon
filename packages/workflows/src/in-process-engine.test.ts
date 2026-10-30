@@ -454,7 +454,7 @@ describe('InProcessWorkflowEngine', () => {
       const result = await accepted.settled;
       expect(result).toMatchObject({ success: false, error: expect.stringContaining('CLI') });
       if (claim === 'replaced') {
-        expect(replacement).toBeDefined();
+        if (!replacement) throw new Error('expected replacement claim');
         expect(await store.getWorkflowRun(run.id)).toEqual(replacement);
       } else {
         if (result.success) throw new Error('expected refusal');
