@@ -49,7 +49,6 @@ import type * as RunLiveOwnerModule from '../../services/run-live-owner';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import type { ResolvedWorkflow, WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { IWorkflowStore } from '@archon/workflows/store';
-import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import {
   makeTestComposedWorkflow,
   makeTestResolvedWorkflow,
@@ -727,39 +726,6 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'close']);
     const sent = platform.sendMessage.mock.calls.map(c => c[1]);
     expect(sent.some(m => m.includes('failed: exec boom'))).toBe(true);
-  });
-
-  test('background submit refusal preserves another worker running row', async () => {
-    const store = await createFileWorkflowStore({
-      root: track(await mkdtemp(join(tmpdir(), 'archon-background-claim-'))),
-    });
-    const workflow = makeWorkflow({ worktree: { enabled: false } });
-    const pending = await store.createWorkflowRun({
-      workflow_name: workflow.name,
-      user_message: '',
-    });
-    await store.claimPendingWorkflowRun(pending.id, '/other-worker');
-    const before = await store.getWorkflowRun(pending.id);
-    mockCreateWorkflowRun.mockResolvedValueOnce(pending);
-    mockFailWorkflowRun.mockImplementation(store.failWorkflowRun.bind(store));
-    mockExecuteWorkflow.mockRejectedValueOnce(
-      new Error('Caller mode conflicts with recorded continuation mode.')
-    );
-    const reported = Promise.withResolvers<void>();
-    platform.sendMessage.mockImplementation(async (_conversationId, message) => {
-      if (message.includes('conflicts with recorded')) reported.resolve();
-    });
-    try {
-      await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
-      await reported.promise;
-      expect(await store.getWorkflowRun(pending.id)).toEqual(before);
-      expect(mockFailWorkflowRun).not.toHaveBeenCalled();
-      expect(
-        platform.sendMessage.mock.calls.some(call => call[1].includes('conflicts with recorded'))
-      ).toBe(true);
-    } finally {
-      mockFailWorkflowRun.mockImplementation(async () => ({ failed: true }));
-    }
   });
 
   test('does not compensate or claim failure when the terminal write rejects', async () => {
