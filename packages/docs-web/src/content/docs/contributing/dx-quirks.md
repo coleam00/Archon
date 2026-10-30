@@ -124,3 +124,5 @@ started groups and repository-root owners, including their failures and aggregat
 contributes a process error because Bun can omit load failures from its JUnit output;
 the child output contains the diagnostics. Selected discovery failures contribute runner
 errors too, including when no valid child group can start.
+An unreadable or invalid private report fails its group and contributes a runner error
+without preventing later requested groups from running.

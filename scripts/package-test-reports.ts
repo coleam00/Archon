@@ -100,12 +100,19 @@ export async function runReportedGroup(
   const insertion = terminator < 0 ? args.length : terminator;
   try {
     const code = await run([...args.slice(0, insertion), ...options, ...args.slice(insertion)]);
-    const report = existsSync(reportPath)
-      ? parseReport(readFileSync(reportPath, 'utf8'))
-      : {
-          counts: { tests: 0, assertions: 0, failures: 0, skipped: 0, errors: 0, time: 0 },
-          suites: '',
-        };
+    let report: TestReport;
+    try {
+      report = existsSync(reportPath)
+        ? parseReport(readFileSync(reportPath, 'utf8'))
+        : {
+            counts: { tests: 0, assertions: 0, failures: 0, skipped: 0, errors: 0, time: 0 },
+            suites: '',
+          };
+    } catch (error) {
+      const message = `Unable to read Bun JUnit report: ${error instanceof Error ? error.message : String(error)}. Bun exited ${code} (see child output for diagnostics)`;
+      console.error(message);
+      return { code: code || 1, report: runnerErrorReport(message, args.join(' ')) };
+    }
     if (
       namePattern !== undefined &&
       code === 0 &&

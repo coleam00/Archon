@@ -30,7 +30,9 @@ A single selected group's name filter keeps Bun's native exit result. Split runs
 Bun's `--pass-with-no-tests` per child and match the names in private JUnit reports
 to detect an empty result across all groups. Matching skipped or todo tests
 count as matches. Load and hook failures remain failures. Selected discovery errors
-also appear as runner errors in the combined JUnit report.
+also appear as runner errors in the combined JUnit report. An unreadable or invalid
+private report fails its group and contributes a runner error; later requested groups
+still run.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,
