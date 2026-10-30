@@ -293,6 +293,7 @@ export function createMockStore(): MockWorkflowStore {
     listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
+    listMetricRecords: mock<IWorkflowStore['listMetricRecords']>(async () => []),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
       throw new Error('Unexpected listWorkflowRuns');

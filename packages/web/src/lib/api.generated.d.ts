@@ -3237,6 +3237,71 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/metrics': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Aggregate stored metric records by name, window and instrument */
+    get: {
+      parameters: {
+        query?: {
+          /** @description Window start: a duration before `until` (`24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days. */
+          since?: string;
+          /** @description Exclusive window end: an ISO date or time. Defaults to now. */
+          until?: string;
+          /** @description Only this metric name. */
+          name?: string;
+          /** @description Only records about this subject. */
+          subject?: string;
+          /** @description Only records from this codebase. */
+          codebaseId?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['MetricsReport'];
+          };
+        };
+        /** @description Malformed window */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/workflows/validate': {
     parameters: {
       query?: never;
@@ -7219,6 +7284,67 @@ export interface components {
           };
       runId: string;
       stepName: string;
+    };
+    MetricsReport: {
+      window: {
+        since: string;
+        until: string;
+      };
+      metrics: {
+        name: string;
+        /** @enum {string} */
+        kind: 'count' | 'score';
+        unit: string;
+        calibrates: string | null;
+        headline_instrument: string | null;
+        instruments: {
+          instrument: string | null;
+          value: number;
+          n: number;
+          latest: {
+            value: number;
+            at: string;
+            subject: string | null;
+          };
+          series: {
+            day: string;
+            value: number;
+            n: number;
+          }[];
+        }[];
+      }[];
+      refused: (
+        | {
+            /** @enum {string} */
+            reason: 'invalid';
+            run_id: string;
+            workflow_name: string;
+            node_id: string;
+            completed_at: string;
+            errors: string[];
+          }
+        | {
+            /** @enum {string} */
+            reason: 'definition_conflict';
+            run_id: string;
+            workflow_name: string;
+            node_id: string;
+            completed_at: string;
+            name: string;
+            definition: {
+              /** @enum {string} */
+              kind: 'count' | 'score';
+              unit: string;
+              calibrates: string | null;
+            };
+            offered: {
+              /** @enum {string} */
+              kind: 'count' | 'score';
+              unit: string;
+              calibrates: string | null;
+            };
+          }
+      )[];
     };
     ValidateWorkflowResponse: {
       valid: boolean;

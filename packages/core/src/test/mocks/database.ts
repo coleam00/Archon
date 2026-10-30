@@ -59,4 +59,5 @@ export const mockPostgresDialect: SqlDialect = {
   jsonText: postgresDialect.jsonText,
   jsonRemove: postgresDialect.jsonRemove,
   rowLock: postgresDialect.rowLock,
+  indexedBy: postgresDialect.indexedBy,
 };

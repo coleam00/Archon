@@ -1,5 +1,6 @@
 // ajv MUST resolve to ^8 — a transitive ajv@6 has a different API/draft.
 import Ajv, { type ErrorObject, type ValidateFunction } from 'ajv';
+import { metricOutputSchema } from './schemas/metric';
 
 // ─── Schema validation (ajv) ─────────────────────────────────────────────────
 
@@ -111,8 +112,28 @@ export function validateStructuredOutput(
     }
   }
 
-  if (validate(value)) return { valid: true };
-  return { valid: false, errors: formatSchemaErrors(validate.errors) };
+  if (!validate(value)) return { valid: false, errors: formatSchemaErrors(validate.errors) };
+  return validateMetricRecords(value);
+}
+
+/**
+ * `metrics` is a reserved top-level output key: whatever the author's schema declares,
+ * its records must match the engine's metric record shape, so no node can store a
+ * record `queryMetrics` would have to guess about. Errors use ajv's `path: message`
+ * form, rooted at `/metrics`.
+ */
+function validateMetricRecords(value: unknown): StructuredValidationResult {
+  if (typeof value !== 'object' || value === null || !Object.hasOwn(value, 'metrics')) {
+    return { valid: true };
+  }
+  const parsed = metricOutputSchema.safeParse(value);
+  if (parsed.success) return { valid: true };
+  return {
+    valid: false,
+    errors: parsed.error.issues.map(
+      issue => `/${issue.path.map(String).join('/')}: ${issue.message}`
+    ),
+  };
 }
 
 /**

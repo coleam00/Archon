@@ -857,6 +857,11 @@ CREATE INDEX IF NOT EXISTS idx_workflow_events_type
 -- because shipped schema is additive-only.
 CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at
   ON remote_agent_workflow_events(created_at);
+-- Metric completions (listMetricRecords). Its predicate must equal the query's.
+CREATE INDEX IF NOT EXISTS idx_workflow_events_metrics
+  ON remote_agent_workflow_events(created_at)
+  WHERE event_type = 'node_completed'
+    AND data->'structured_output'->>'metrics' IS NOT NULL;
 -- Tie-breaker order within a run; NULL for rows written before event_order
 -- existed, which the partial predicate keeps out of the unique constraint.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_events_run_order

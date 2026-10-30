@@ -452,4 +452,8 @@ export const postgresDialect: SqlDialect = {
   rowLock(table?: string): string {
     return table === undefined ? ' FOR UPDATE' : ` FOR UPDATE OF ${table}`;
   },
+
+  indexedBy(): string {
+    return '';
+  },
 };
