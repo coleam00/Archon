@@ -1917,6 +1917,17 @@ archon project list --json   # { "projects": [ { ...project row, "key" } ] }
 
 `key` is the value `workflow attention --project` and `archon state --project` accept. The list is read-only; register and remove projects through the Web UI or chat.
 
+### `project config`
+
+`archon project config <id|name>` shows one registered project's merged config: defaults, `~/.archon/config.yaml` and the project's own `.archon/config.yaml`, in that order of precedence. It is the same view `GET /api/codebases/{id}/config` serves. Secrets are removed: assistant settings are limited to their safe fields, paths are left out, and `envKeys` lists the keys of the project's `env:` block without their values. The command reads only and needs no server.
+
+```bash
+archon project config acme/widget          # YAML
+archon project config <project-id> --json  # { "project": { "id", "name" }, "config": { ... }, "envKeys": [ ... ] }
+```
+
+The project is matched by ID, then by exact name; a name shared by several projects is refused with their IDs. An unknown project, an ambiguous name and an invalid config file exit 1.
+
 ### state
 
 Durable, audited JSON documents. A document lives in a project or in install scope.

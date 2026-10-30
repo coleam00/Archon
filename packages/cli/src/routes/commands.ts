@@ -228,7 +228,9 @@ export async function runSetup({
 
 export async function runProject({ positionals, json }: CliRouteContext): Promise<number> {
   const { projectCommand } = await loadRoute(() => import('../commands/project'), {
-    providers: false,
+    // `project config` validates assistant settings and resolves tier defaults
+    // against the provider registry, as the server does.
+    ...(positionals[1] === 'config' ? {} : { providers: false as const }),
     database: await usesDatabaseStore(),
   });
   return await projectCommand(positionals.slice(1), json);
