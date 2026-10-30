@@ -70,7 +70,11 @@ function resolveSince(since: string | undefined, until: Date): Date {
     return parseInstant('since', since, `a duration such as 24h, 7d or 2w, or ${INSTANT_FORMS}`);
   }
   const unit = duration[2] as keyof typeof DURATION_UNIT_MS;
-  return new Date(until.getTime() - Number(duration[1]) * DURATION_UNIT_MS[unit]);
+  const start = new Date(until.getTime() - Number(duration[1]) * DURATION_UNIT_MS[unit]);
+  if (Number.isNaN(start.getTime())) {
+    throw new MetricsWindowError(`since "${since}" reaches before the earliest representable date`);
+  }
+  return start;
 }
 
 /** One parsed record that counts. */
@@ -170,7 +174,7 @@ const byInstrument = (a: string | null, b: string | null): number =>
  * Aggregate stored metric records over `[since, until)`.
  *
  * 1. Only a node's latest terminal event in its run counts.
- * 2. A name's earliest stored record, in durable event order, fixes its definition
+ * 2. A name's earliest stored record, in recorded order, fixes its definition
  *    (`kind`, `unit`, `calibrates`). A later record that disagrees is refused and
  *    reported with both definitions, so a name keeps one meaning.
  * 3. The latest record per `(name, subject, instrument)` replaces earlier ones for a
@@ -252,7 +256,7 @@ function admitDefinition(
 }
 
 /**
- * Apply the definition rule and the latest-per-subject rule over counted rows in durable
+ * Apply the definition rule and the latest-per-subject rule over counted rows in recorded
  * order, returning every surviving record and every refusal, at any time.
  */
 function collectRecords(rows: readonly MetricRecordRow[]): {

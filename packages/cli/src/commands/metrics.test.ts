@@ -10,10 +10,11 @@ import {
 
 const now = new Date('2026-10-30T12:00:00Z');
 
-async function fixture(units: string[]) {
+/** One run per unit, recording that unit for the subject at the same position, else null. */
+async function fixture(units: string[], subjects: string[] = []) {
   const records = createInMemoryWorkflowHostStore();
   const store = createInMemoryWorkflowStore(records);
-  for (const unit of units) {
+  for (const [i, unit] of units.entries()) {
     const run = await store.createWorkflowRun({ workflow_name: 'count-prs', user_message: '' });
     await store.persistWorkflowEvent({
       workflow_run_id: run.id,
@@ -27,7 +28,7 @@ async function fixture(units: string[]) {
               kind: 'count',
               unit,
               value: 2,
-              subject: null,
+              subject: subjects[i] ?? null,
               at: '2026-10-29T00:00:00Z',
             },
           ],
@@ -97,4 +98,18 @@ test('a malformed window is a usage error', async () => {
   const { invoke, stderr } = await fixture([]);
   expect(await invoke({ since: 'last week' })).toBe(1);
   expect(stderr.join('')).toContain('since must be a duration');
+});
+
+test('a duration reaching past the earliest date is a usage error, not a crash', async () => {
+  const { invoke, stderr } = await fixture([]);
+  expect(await invoke({ since: '99999999w' })).toBe(1);
+  expect(stderr.join('')).toContain('earliest representable date');
+});
+
+test('--subject reports only that subject', async () => {
+  const { invoke, stdout } = await fixture(['prs', 'prs'], ['pr-1', 'pr-2']);
+  expect(await invoke({ subject: 'pr-1', json: true })).toBe(0);
+  const [instrument] =
+    metricsReportSchema.parse(JSON.parse(stdout.join(''))).metrics[0]?.instruments ?? [];
+  expect([instrument?.n, instrument?.latest.subject]).toEqual([1, 'pr-1']);
 });
