@@ -366,9 +366,11 @@ function trustedReview(comments: readonly Comment[], maintainers: ReadonlySet<st
   return { state, reviewed: review.stamp.reviewed, url: review.url, contract: review.stamp.contract };
 }
 
-/** The commit the pull request's trusted review comment names, or null when it has none or more than one. */
+/** The commit the pull request's trusted review comment names, or null when it has none. */
 export function reviewedHead(pr: QualifiedPr, maintainers: ReadonlySet<string>): string | null {
-  return trustedReview(forgeSource() === 'forge' ? readForgeComments(pr) : ghIssueComments(pr), maintainers).reviewed;
+  const verdict = trustedReview(forgeSource() === 'forge' ? readForgeComments(pr) : ghIssueComments(pr), maintainers);
+  if (verdict.state === 'duplicate') throw new Error(`pull request ${String(pr.number)} has more than one trusted review comment`);
+  return verdict.reviewed;
 }
 
 const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {

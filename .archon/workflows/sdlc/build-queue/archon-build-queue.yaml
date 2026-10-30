@@ -174,7 +174,8 @@ nodes:
       properties:
         head: { type: [string, 'null'] }
         # The commit the continued pull request's review comment names at the round's
-        # start; null on a fresh round or when no single trusted review exists.
+        # start; null on a fresh round or when it has no trusted review. Checkout refuses
+        # a pull request with more than one.
         reviewed: { type: [string, 'null'] }
         # What ship continues: the number, `none` when the item has a pull request
         # the round does not continue, or null when it has none and ship's triage

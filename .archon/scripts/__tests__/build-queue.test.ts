@@ -967,6 +967,13 @@ describe('the build queue checkout', () => {
       { pr: { headRefOid: head }, comments: [{ id: 1, author: 'Maintainer', body: reviewCommentBody(reviewed, false, 'open', '# Review report') }] }
     );
     expect(ok(result)).toEqual({ head, reviewed, pull_request: 42 });
+    const inputs = { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) };
+    // A pull request never reviewed has no baseline, and is not mistaken for one reviewed at its head.
+    expect(ok(run(at, 'checkout', inputs, { pr: { headRefOid: head } }))).toEqual({ head, reviewed: null, pull_request: 42 });
+    const review = { id: 1, author: 'Maintainer', body: reviewCommentBody(reviewed, false, 'open', '# Review report') };
+    const duplicate = run(at, 'checkout', inputs, { pr: { headRefOid: head }, comments: [review, { ...review, id: 2 }] });
+    expect(duplicate.code).not.toBe(0);
+    expect(duplicate.stderr).toContain('more than one trusted review comment');
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
   }, 60_000);
