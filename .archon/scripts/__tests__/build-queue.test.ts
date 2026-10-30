@@ -342,7 +342,7 @@ function applyInputs(answer: Record<string, unknown>): Record<string, string> {
   };
 }
 
-const CONTINUE = { decision: 'continue', brief: 'continue PR 42 on R1', push: null, reason: 'R1 is correctable', ask_class: 'stop', attention: null };
+const CONTINUE = { decision: 'continue', brief: 'continue PR 42 on R1', push: null, reason: 'R1 is correctable', ask_class: 'scope', attention: null };
 const ASK = { decision: 'ask', brief: 'continue PR 42 under the ruling', push: null, reason: 'the plan asks to relax a constraint', ask_class: 'stop', attention: ATTENTION };
 
 const HEAD_A = 'a'.repeat(40);
