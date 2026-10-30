@@ -606,6 +606,15 @@ async function provisionWorktree(
 
   const existingEnv = launch.existingBranchEnv;
   if (existingEnv && (await getIsolationProvider().healthCheck(existingEnv.working_path))) {
+    const actualBranch = await git.getCurrentBranchStrict(
+      git.toWorktreePath(existingEnv.working_path)
+    );
+    if (actualBranch !== branchIdentifier) {
+      throw new Error(
+        `Cannot reuse worktree at '${existingEnv.working_path}': expected branch ` +
+          `'${branchIdentifier}', found '${actualBranch ?? 'detached HEAD'}'.`
+      );
+    }
     await warnOnReusedWorktree(
       existingEnv,
       codebase,

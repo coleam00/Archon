@@ -322,6 +322,7 @@ With `--branch <name>`:
 
 - Archon first looks for a healthy active task worktree registered for that project and branch. It reuses the registered path without advancing it, even if it differs from the configured target.
 - Without a healthy registration, worktree creation uses `~/.archon/workspaces/<owner>/<repo>/worktrees/<name>/` (or the repo-local path `worktree.path` configures). A usable existing checkout at that target path is reused without advancing it.
+- Before either reuse path, Archon verifies the checkout is on the requested branch. A different branch or detached HEAD fails with the requested branch, actual branch, and checkout path, leaving the checkout unchanged.
 - If no healthy active task registration was reused and another path holds the branch, the run fails with `branch_checked_out`, naming the holder, whether or not it is registered in Archon. Check whether a live Archon run still needs that checkout before freeing the branch. Once it is safe, preserve its changes, then detach it with `git -C <holder-path> switch --detach` or remove it before retrying.
 - If the branch already exists but no worktree holds it, checks it out at its current head: the local branch, or `<remote>/<branch>` when that contains the local branch (the local branch is fast-forwarded to it). It never resets an existing branch to the base.
 - Fails before any work if the local branch and `<remote>/<branch>` have diverged. Reconcile them, or delete the local branch to start from the remote one.

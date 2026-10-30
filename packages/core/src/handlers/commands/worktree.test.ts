@@ -1,5 +1,7 @@
 // @archon-test-isolated
-import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { describe, test, expect, beforeEach, afterAll, spyOn } from 'bun:test';
+import * as git from '@archon/git';
+import { win32 } from 'node:path';
 import {
   MissingProjectDirectoryError,
   WorktreeRegistrationChangedError,
@@ -33,6 +35,8 @@ import {
   baseConversation,
   resetCommandHandlerMocks,
 } from './test-harness';
+
+const sameWorktreePath = git.isSameWorktreePath;
 
 describe('CommandHandler', () => {
   beforeEach(resetCommandHandlerMocks);
@@ -269,6 +273,109 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('abc1234 [main]');
           expect(result.message).toMatch(/worktrees[\\\/]feat-x/);
         });
+      });
+
+      describe('Windows path spelling', () => {
+        test.each(['list', 'orphans'])('marks the current checkout in %s', async command => {
+          const compare = spyOn(git, 'isSameWorktreePath').mockImplementation((a, b) =>
+            sameWorktreePath(a, b, win32)
+          );
+          try {
+            mockGetCodebase.mockResolvedValue(makeCodebase({ default_cwd: 'd:\\a\\archon' }));
+            mockIsolationEnvDbGet.mockResolvedValue(
+              makeIsolationEnvironment({ working_path: 'd:\\a\\archon\\worktrees\\task-x\\' })
+            );
+            spyListWorktrees.mockResolvedValue([
+              { path: 'D:/a/Archon', branch: 'main' },
+              { path: 'D:/a/Archon/worktrees/task-x', branch: 'task-x' },
+              { path: 'D:/a/Archon/worktrees/task-y', branch: 'task-y' },
+            ]);
+            spyExecFileAsync.mockResolvedValue({
+              stdout:
+                'D:/a/Archon abc123 [main]\nD:/a/Archon/worktrees/task-x def456 [task-x]\nD:/a/Archon/worktrees/task-y def456 [task-y]\n',
+              stderr: '',
+            });
+            const result = await handleCommand(
+              makeConversation({ ...conversationWithCodebase, isolation_env_id: 'env-x' }),
+              `/worktree ${command}`,
+              operator
+            );
+            expect(result.success).toBe(true);
+            const lines = result.message.split('\n');
+            expect(lines.find(line => line.includes('task-x'))).toContain(
+              command === 'orphans' ? '← current' : '<- active'
+            );
+            expect(lines.find(line => line.includes('task-y'))).not.toMatch(/current|active/);
+            if (command === 'orphans') expect(result.message).not.toContain('main →');
+          } finally {
+            compare.mockRestore();
+          }
+        });
+
+        test('excludes the main checkout under equivalent Windows spelling', async () => {
+          const compare = spyOn(git, 'isSameWorktreePath').mockImplementation((a, b) =>
+            sameWorktreePath(a, b, win32)
+          );
+          try {
+            mockGetCodebase.mockResolvedValue(makeCodebase({ default_cwd: 'd:\\a\\archon\\' }));
+            spyListWorktrees.mockResolvedValue([{ path: 'D:/a/Archon', branch: 'main' }]);
+            const result = await handleCommand(
+              conversationWithCodebase,
+              '/worktree orphans',
+              operator
+            );
+            expect(result.success).toBe(true);
+            expect(result.message).toContain('No secondary local-branch worktrees found');
+          } finally {
+            compare.mockRestore();
+          }
+        });
+      });
+
+      describe('orphans', () => {
+        test.each([false, true])(
+          'shows a secondary local-branch checkout when main is listed=%s',
+          async includesMain => {
+            spyListWorktrees.mockResolvedValue([
+              ...(includesMain ? [{ path: '/workspace/my-repo', branch: 'main' }] : []),
+              { path: '/workspace/my-repo/worktrees/feat-x', branch: 'feat-x' },
+            ]);
+
+            const result = await handleCommand(
+              conversationWithCodebase,
+              '/worktree orphans',
+              operator
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.message).toContain('Local-branch worktrees');
+            expect(result.message).toContain('feat-x');
+            expect(result.message).toMatch(/worktrees[\\\/]feat-x/);
+            expect(result.message).toContain('git worktree list');
+            expect(result.message).not.toContain('No ');
+            expect(result.message).not.toContain('main →');
+          }
+        );
+
+        test.each([false, true])(
+          'reports no secondary local-branch checkouts when main is listed=%s',
+          async includesMain => {
+            spyListWorktrees.mockResolvedValue(
+              includesMain ? [{ path: '/workspace/my-repo', branch: 'main' }] : []
+            );
+
+            const result = await handleCommand(
+              conversationWithCodebase,
+              '/worktree orphans',
+              operator
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.message).toContain('No secondary local-branch worktrees found');
+            expect(result.message).toContain('git worktree list');
+            expect(result.message).not.toContain('only main repo');
+          }
+        );
       });
 
       describe('remove', () => {
