@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { providerRegistry } from '@archon/providers';
 /**
  * A compiled binary's capture has to stand on its own.
  *
@@ -68,6 +69,7 @@ beforeAll(async () => {
   await mkdir(target, { recursive: true });
   // The readers share one immutable capture; the tamper case copies it below.
   capture = await captureWorkflowSource({
+    providers: providerRegistry,
     sourceRoot: source,
     captureRoot: join(root, 'capture'),
   });

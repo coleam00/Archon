@@ -183,11 +183,13 @@ describe('installed packs in the catalog', () => {
       `name: ${REVIEW}\ndescription: Shadow\nnodes:\n  - id: wrong\n    bash: echo wrong\n`
     );
     const parent = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'parent'),
     });
     const installedFrom = await resolveChildInstalledPacks(runWith(parent, 'deploy').metadata);
     const child = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'child'),
       ...(installedFrom ? { installedFrom } : {}),
@@ -296,6 +298,7 @@ nodes:
 
     // Resume: the run captured its source, then the plugin was removed.
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'run-1'),
     });
@@ -311,6 +314,7 @@ nodes:
   test('a run resumes on the bytes it captured after the plugin is updated', async () => {
     await install(reviewKit(COMMIT_A, 'v1'));
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'run-1'),
     });
@@ -333,6 +337,7 @@ nodes:
     async version => {
       await install(reviewKit(COMMIT_A, 'v1'));
       const parent = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: project,
         captureRoot: join(home, 'runs', 'parent'),
       });
@@ -356,6 +361,7 @@ nodes:
 
       const installedFrom = await resolveChildInstalledPacks(runWith(parent, REVIEW).metadata);
       const child = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: project,
         captureRoot: join(home, 'runs', 'child'),
         ...(installedFrom ? { installedFrom } : {}),
@@ -378,6 +384,7 @@ nodes:
 
   test('a capture without installed packs uses the authenticated index format', async () => {
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(home, 'runs', 'run-1'),
     });

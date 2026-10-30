@@ -133,6 +133,7 @@ async function pausedRun(
   sourceConfig?: WorkflowSourceConfig
 ) {
   const capture = await captureWorkflowSource({
+    providers: providerRegistry,
     sourceRoot: project,
     captureRoot: join(root, 'capture'),
     sourceConfig,
@@ -567,6 +568,7 @@ test('child captures preserve empty directories in inherited installed units', a
   }
   const fixture = await pausedRun();
   const child = await captureWorkflowSource({
+    providers: providerRegistry,
     sourceRoot: project,
     captureRoot: join(root, 'child-capture'),
     installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
@@ -611,6 +613,7 @@ for (const copyFault of ['unreadable', 'EIO', 'tampered']) {
     );
     try {
       const child = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: project,
         captureRoot: join(root, 'child-capture'),
         installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
@@ -793,6 +796,7 @@ for (const mutation of ['entrypoint', 'name', 'missing-entrypoint']) {
     });
     try {
       const capture = captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: project,
         captureRoot: join(root, 'capture'),
       });
@@ -870,6 +874,7 @@ for (const scope of ['project', 'global', 'bundled', 'installed'] as const) {
       spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['fixture']);
     try {
       const capture = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: project,
         captureRoot: join(root, 'composition'),
       });
@@ -946,6 +951,7 @@ for (const kind of ['script', 'command'] as const) {
       if (owner === 'project')
         await put(join(project, '.archon', `${kind}s`, 'group', filename), content);
       const capture = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: project,
         captureRoot: join(root, 'lookup'),
       });
@@ -1108,6 +1114,7 @@ test('selected composition still rejects a suspension reached through a child in
   for (const [path, content] of Object.entries(files))
     await put(join(project, '.archon/workflows', path), content);
   const capture = await captureWorkflowSource({
+    providers: providerRegistry,
     sourceRoot: project,
     captureRoot: join(root, 'proof'),
   });
@@ -1271,6 +1278,7 @@ test('an inherited EIO during directory copying retains the authenticated commit
   );
   try {
     const child = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: project,
       captureRoot: join(root, 'child-capture'),
       installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
@@ -1305,6 +1313,7 @@ for (const operation of ['mkdir', 'writeFile', 'readFile'] as const) {
     try {
       await expect(
         captureWorkflowSource({
+          providers: providerRegistry,
           sourceRoot: project,
           captureRoot,
           installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
@@ -1362,6 +1371,7 @@ for (const operation of ['lstat', 'readdir', 'readFile', 'missing-enumeration'] 
     try {
       await expect(
         captureWorkflowSource({
+          providers: providerRegistry,
           sourceRoot: project,
           captureRoot,
           installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
@@ -1586,4 +1596,96 @@ test('an installed entrypoint alias does not reserve its authored name', async (
   } finally {
     fault.mockRestore();
   }
+});
+
+const rejectedOverrides = [
+  ['missing description', 'name: rejected\nnodes:\n  - id: unused\n    bash: echo unused\n'],
+  ['invalid node', workflow('rejected', '  - id: unused\n    bash: []')],
+  [
+    'invalid graph',
+    workflow('rejected', '  - id: unused\n    bash: echo unused\n    depends_on: [missing]'),
+  ],
+  [
+    'invalid workflow field',
+    `budget: invalid\n${workflow('rejected', '  - id: unused\n    bash: echo unused')}`,
+  ],
+  [
+    'invalid contract',
+    `outcome_field: passed\n${workflow('rejected', '  - id: unused\n    bash: echo unused')}`,
+  ],
+  ['flat/packaged collision', workflow('rejected', '  - id: unused\n    bash: echo unused')],
+  ['cross-pack collision', workflow('rejected', '  - id: unused\n    bash: echo unused')],
+  ['multiple packaged YAML files', workflow('rejected', '  - id: unused\n    bash: echo unused')],
+] as const;
+
+for (const [kind, content] of rejectedOverrides) {
+  test(`resume ignores a same-filename rejected override: ${kind}`, async () => {
+    await put(
+      join(root, 'home/workflows/healthy.yaml'),
+      workflow(
+        'healthy',
+        `${first}\n  - id: remaining\n    bash: echo frozen-lower-scope\n    depends_on: [first]`
+      )
+    );
+    const directory = join(project, '.archon/workflows');
+    const packaged = kind === 'cross-pack collision' || kind === 'multiple packaged YAML files';
+    await put(join(directory, packaged ? 'one/run/healthy.yaml' : 'healthy.yaml'), content);
+    if (kind === 'flat/packaged collision' || kind === 'cross-pack collision')
+      await put(join(directory, 'two/run/healthy.yaml'), content);
+    if (kind === 'multiple packaged YAML files')
+      await put(join(directory, 'one/run/extra.yml'), content);
+    const fixture = await pausedRun();
+    const catalog = await discoverWorkflowsWithConfig(
+      project,
+      loadConfig,
+      providerRegistry,
+      capturedSourceRoots(fixture.capture.anchor)
+    );
+    expect(catalog.workflows.some(file => file.workflow.name === 'healthy')).toBe(true);
+    const fault = denyReads(join(fixture.capture.anchor.root, 'project'));
+    try {
+      expect(await fixture.resume()).toMatchObject({ success: true });
+      expect(
+        (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs.get(
+          'remaining'
+        )?.output
+      ).toContain('frozen-lower-scope');
+    } finally {
+      fault.mockRestore();
+    }
+  });
+}
+
+test('resume admits a required global child before advancing the paused parent', async () => {
+  await put(
+    join(project, '.archon/workflows/healthy.yaml'),
+    workflow(
+      'healthy',
+      `${first}\n  - id: before-child\n    bash: echo parent-advanced\n    depends_on: [first]\n  - id: child\n    workflow: global-child\n    depends_on: [before-child]`
+    )
+  );
+  await put(
+    join(root, 'home/workflows/child.yaml'),
+    workflow('global-child', '  - id: remaining\n    bash: echo frozen-child')
+  );
+  const fixture = await pausedRun();
+  const fault = denyReads(join(fixture.capture.anchor.root, 'global'));
+  try {
+    await expect(fixture.resume()).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+    expect(await fixture.store.getWorkflowRunStatus(fixture.run.id)).toBe('paused');
+    expect(
+      (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs.has(
+        'before-child'
+      )
+    ).toBe(false);
+  } finally {
+    fault.mockRestore();
+  }
+  expect(await fixture.resume()).toMatchObject({ success: true });
+  const children = await fixture.store.findChildRuns(fixture.run.id);
+  expect(children).toHaveLength(1);
+  expect(
+    (await fixture.store.getDagResumeSnapshot(children[0].id)).completedNodeOutputs.get('remaining')
+      ?.output
+  ).toContain('frozen-child');
 });

@@ -356,7 +356,7 @@ export function preparedWorkflowSourceRecord(
  * capture has no established executable source.
  */
 export async function prepareWorkflowSource(
-  deps: Pick<WorkflowDeps, 'loadConfig'>,
+  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>,
   opts: {
     /** Directory to freeze. */
     sourceRoot: string;
@@ -395,6 +395,7 @@ export async function prepareWorkflowSource(
   // to `<workflow-source>/runs/<id>` with a rename once the real path is known. The
   // bytes never change, so the digest taken here still describes the final capture.
   const capture = await captureWorkflowSource({
+    providers: deps.providers,
     sourceRoot: opts.sourceRoot,
     captureRoot: join(archonPaths.getArchonHome(), 'staged-source', runId),
     commandFolder: sourceConfig.command_folder,

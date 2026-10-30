@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { providerRegistry } from '@archon/providers';
 import { describe, expect, spyOn, test } from 'bun:test';
 import * as archonPaths from '@archon/paths';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -12,14 +13,16 @@ const { temporaryDirectory, commandFiles } = useDryRunFiles();
 
 // These fixtures read only project files. Avoid copying the repository's bundled
 // defaults into every capture; the materialization suite covers bundled content.
-async function captureProjectSource(options: Parameters<typeof captureWorkflowSource>[0]) {
+async function captureProjectSource(
+  options: Omit<Parameters<typeof captureWorkflowSource>[0], 'providers'>
+) {
   const bundled = join(options.sourceRoot, 'empty-bundled');
   for (const pack of await readBundleIndex()) {
     mkdirSync(join(bundled, pack), { recursive: true });
   }
   const workflows = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(bundled);
   try {
-    return await captureWorkflowSource(options);
+    return await captureWorkflowSource({ ...options, providers: providerRegistry });
   } finally {
     workflows.mockRestore();
   }

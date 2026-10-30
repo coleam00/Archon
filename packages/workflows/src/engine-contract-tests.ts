@@ -379,6 +379,7 @@ export function runWorkflowEngineContractTests(
 
     it('executes the captured graph when the supplied same-name graph conflicts', async () => {
       const run = await capturedRun(
+        providers,
         trackTempRoot,
         `
 name: test-workflow

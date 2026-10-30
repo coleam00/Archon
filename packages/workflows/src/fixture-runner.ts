@@ -1,3 +1,4 @@
+import type { ProviderRegistry } from '@archon/provider-contract';
 /**
  * Declared-data dry-run fixtures (#2772).
  *
@@ -302,6 +303,7 @@ export interface FixtureReport {
 }
 
 export interface RunFixturesOptions {
+  providers: ProviderRegistry;
   workflows: readonly WorkflowWithSource[];
   cwd: string;
   /** Directory from which a relative fixture path target is interpreted; defaults to `cwd`. */
@@ -363,6 +365,7 @@ function isCallerRelativePathTarget(target: string): boolean {
  */
 async function withCapturedFixtureSource<T>(
   cwd: string,
+  providers: ProviderRegistry,
   sourceConfig: WorkflowSourceConfig,
   fn: (roots: WorkflowSourceRoots) => Promise<T>
 ): Promise<T> {
@@ -370,6 +373,7 @@ async function withCapturedFixtureSource<T>(
   let capture;
   try {
     capture = await captureWorkflowSource({
+      providers,
       sourceRoot: cwd,
       captureRoot,
       ...(sourceConfig.command_folder !== undefined
@@ -483,6 +487,7 @@ export async function runFixtures(options: RunFixturesOptions): Promise<FixtureR
 
   const results = await withCapturedFixtureSource(
     options.cwd,
+    options.providers,
     options.sourceConfig,
     async captured => {
       const collected: FixtureCheckResult[] = [];

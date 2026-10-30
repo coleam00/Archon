@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { getPluginsPath } from '@archon/paths';
 import { scanReceipts } from '@archon/plugin-manifest/store';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
@@ -111,6 +112,7 @@ export async function workflowTestCommand(
   let report: Awaited<ReturnType<typeof runFixtures>>;
   try {
     report = await runFixtures({
+      providers: providerRegistry,
       workflows,
       cwd,
       targetCwd: invokingCwd,

@@ -1,3 +1,4 @@
+import type { ProviderRegistry } from '@archon/provider-contract';
 import { indexWorkflowFiles } from './workflow-index';
 import { mkdir, rename, rm, readFile, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
@@ -71,6 +72,7 @@ interface InstalledCapture {
  * would treat as authoritative.
  */
 export async function captureWorkflowSource(opts: {
+  providers: ProviderRegistry;
   sourceRoot: string;
   captureRoot: string;
   commandFolder?: string;
@@ -103,6 +105,7 @@ export async function captureWorkflowSource(opts: {
     const manifest = await stageCapture(staging, jobs, installed, {
       origin: sourceRoot,
       sourceConfig,
+      providers: opts.providers,
     });
 
     // Replace rather than merge: a stale capture at this path would silently mix two
@@ -210,7 +213,7 @@ async function stageCapture(
   staging: string,
   jobs: readonly CaptureJob[],
   installed: InstalledCapture,
-  source: { origin: string; sourceConfig: WorkflowSourceConfig }
+  source: { origin: string; sourceConfig: WorkflowSourceConfig; providers: ProviderRegistry }
 ): Promise<WorkflowSourceManifest> {
   const scopesCaptured = new Set<CapturedScope>(jobs.map(j => j.scope));
   if (installed.records.length > 0) scopesCaptured.add('installed');
@@ -261,7 +264,8 @@ async function stageCapture(
   );
   await indexWorkflowFiles(
     staging,
-    units.filter(unit => !installed.inherited || !isInstalledSourceUnit(unit.root))
+    units.filter(unit => !installed.inherited || !isInstalledSourceUnit(unit.root)),
+    { providers: source.providers, configuredEnvNames: new Set(source.sourceConfig.env_var_names) }
   );
   const manifest: IndexedWorkflowSourceManifest = {
     engine_version: BUNDLED_VERSION,

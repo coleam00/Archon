@@ -192,6 +192,7 @@ export function resumableStore(overrides: Partial<IWorkflowStore> = {}): IWorkfl
 }
 
 export async function capturedRun(
+  providers: ProviderRegistry,
   trackTempRoot: (root: string) => string,
   workflowYaml: string,
   overrides: Partial<WorkflowRun> = {}
@@ -201,6 +202,7 @@ export async function capturedRun(
   await mkdir(join(source, '.archon', 'workflows'), { recursive: true });
   await writeFile(join(source, '.archon', 'workflows', 'test.yaml'), workflowYaml);
   const capture = await captureWorkflowSource({
+    providers: providers,
     sourceRoot: source,
     captureRoot: join(root, 'capture'),
   });

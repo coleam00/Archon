@@ -436,7 +436,10 @@ for (const scope of ['project', 'global', 'bundled'] as const) {
         join(scopeRoot, directory),
         scope
       );
-      await indexWorkflowFiles(disk, manifest.units);
+      await indexWorkflowFiles(disk, manifest.units, {
+        providers: providerRegistry,
+        configuredEnvNames: new Set(),
+      });
       expect(parsed.workflows.size > 0).toBe(expected);
       expect(selectedWorkflowUnits(manifest, 'run')).toEqual(expected ? [scope] : []);
     });
@@ -488,3 +491,140 @@ test('workflow selection metadata is authenticated by the run digest', async () 
     openWorkflowSource(anchor.root, anchor.digest, anchor.config)
   ).rejects.toBeInstanceOf(WorkflowSourceIntegrityError);
 });
+
+const rejectedWorkflowDocuments = [
+  ['missing description', 'name: rejected\nnodes: [{ id: unused, bash: echo unused }]'],
+  ['invalid node', 'name: rejected\ndescription: Fixture\nnodes: [{ id: unused, bash: [] }]'],
+  [
+    'invalid graph',
+    'name: rejected\ndescription: Fixture\nnodes: [{ id: unused, bash: echo unused, depends_on: [missing] }]',
+  ],
+  [
+    'invalid workflow field',
+    'name: rejected\ndescription: Fixture\nbudget: invalid\nnodes: [{ id: unused, bash: echo unused }]',
+  ],
+  [
+    'invalid contract',
+    'name: rejected\ndescription: Fixture\noutcome_field: passed\nnodes: [{ id: unused, bash: echo unused }]',
+  ],
+  [
+    'unknown provider',
+    'name: rejected\ndescription: Fixture\nprovider: missing-provider\nnodes: [{ id: unused, prompt: unused }]',
+  ],
+] as const;
+
+for (const scope of ['project', 'global', 'bundled', 'installed/acme.other'] as const) {
+  for (const [kind, content] of rejectedWorkflowDocuments) {
+    test(`${scope} index rejects ${kind} through full workflow parsing`, async () => {
+      const { root } = await fixture();
+      const path = scope.startsWith('installed/')
+        ? 'run/run.yaml'
+        : scope === 'project'
+          ? '.archon/workflows/pack/run/run.yaml'
+          : 'workflows/pack/run/run.yaml';
+      await mkdir(dirname(join(root, scope, path)), { recursive: true });
+      await writeFile(join(root, scope, path), content);
+      const units = [
+        {
+          root: scope,
+          files: [{ path, hash: hash(content), size: content.length, workflow: undefined }],
+        },
+      ];
+      await indexWorkflowFiles(root, units, {
+        providers: providerRegistry,
+        configuredEnvNames: new Set(),
+      });
+      expect(units[0].files[0].workflow).toBeUndefined();
+    });
+  }
+  test(`${scope} index rejects a packaged folder with multiple YAML files`, async () => {
+    const { root } = await fixture();
+    const directory = scope.startsWith('installed/')
+      ? 'run'
+      : scope === 'project'
+        ? '.archon/workflows/pack/run'
+        : 'workflows/pack/run';
+    const content =
+      'name: rejected\ndescription: Fixture\nnodes: [{ id: unused, bash: echo unused }]';
+    const files = ['one.yaml', 'two.yml'].map(name => ({
+      path: `${directory}/${name}`,
+      hash: hash(content),
+      size: content.length,
+      workflow: undefined,
+    }));
+    await mkdir(join(root, scope, directory), { recursive: true });
+    for (const file of files) await writeFile(join(root, scope, file.path), content);
+    await indexWorkflowFiles(root, [{ root: scope, files }], {
+      providers: providerRegistry,
+      configuredEnvNames: new Set(),
+    });
+    expect(files.every(file => file.workflow === undefined)).toBe(true);
+  });
+}
+
+for (const scope of ['project', 'global', 'bundled'] as const) {
+  for (const kind of ['flat/packaged', 'cross-pack'] as const) {
+    test(`${scope} index removes ${kind} filename collisions`, async () => {
+      const { root } = await fixture();
+      const directory = scope === 'project' ? '.archon/workflows' : 'workflows';
+      const content =
+        'name: rejected\ndescription: Fixture\nnodes: [{ id: unused, bash: echo unused }]';
+      const paths = [
+        `${directory}/one/run/same.yaml`,
+        kind === 'cross-pack'
+          ? `${directory}/two/run/same.yaml`
+          : `${directory}/${scope === 'bundled' ? 'defaults/' : ''}same.yaml`,
+      ];
+      const files = paths.map(path => ({
+        path,
+        hash: hash(content),
+        size: content.length,
+        workflow: undefined,
+      }));
+      for (const file of files) {
+        await mkdir(dirname(join(root, scope, file.path)), { recursive: true });
+        await writeFile(join(root, scope, file.path), content);
+      }
+      await indexWorkflowFiles(root, [{ root: scope, files }], {
+        providers: providerRegistry,
+        configuredEnvNames: new Set(),
+      });
+      expect(files.every(file => file.workflow === undefined)).toBe(true);
+    });
+  }
+}
+
+for (const scope of ['project', 'installed/acme.other'] as const) {
+  for (const operation of ['readFile', 'stat', 'readdir'] as const) {
+    test(`${scope} indexing propagates ${operation} faults instead of omitting workflows`, async () => {
+      const { root } = await fixture();
+      const directory = scope === 'project' ? '.archon/workflows/pack/run' : 'run';
+      const path = `${directory}/run.yaml`;
+      const content = 'name: run\ndescription: Fixture\nnodes: [{ id: unused, bash: echo unused }]';
+      await mkdir(join(root, scope, directory), { recursive: true });
+      await writeFile(join(root, scope, path), content);
+      const original = fs[operation];
+      const cause = Object.assign(new Error('staging source denied'), { code: 'EACCES' });
+      const blocked = join(root, scope, operation === 'readFile' ? path : directory);
+      const fault = spyOn(fs, operation).mockImplementation(
+        new Proxy(original, {
+          apply(target, receiver, args: [unknown, ...unknown[]]) {
+            if (String(args[0]) === blocked) return Promise.reject(cause);
+            return Reflect.apply(target, receiver, args);
+          },
+        })
+      );
+      try {
+        await expect(
+          indexWorkflowFiles(
+            root,
+            [{ root: scope, files: [{ path, hash: hash(content), size: content.length }] }],
+            { providers: providerRegistry, configuredEnvNames: new Set() }
+          )
+        ).rejects.toBe(cause);
+      } finally {
+        fault.mockRestore();
+      }
+    });
+  }
+}

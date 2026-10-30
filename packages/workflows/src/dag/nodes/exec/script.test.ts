@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { providerRegistry } from '@archon/providers';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { chmod, mkdir, writeFile, readFile } from 'fs/promises';
@@ -504,6 +505,7 @@ describe('executeDagWorkflow -- script nodes', () => {
         `await Bun.write(${JSON.stringify(marker)}, 'ran')`
       );
       const capture = await captureWorkflowSource({
+        providers: providerRegistry,
         sourceRoot: testDir,
         captureRoot: join(testDir, 'capture'),
       });
@@ -603,7 +605,11 @@ describe('executeDagWorkflow -- script nodes', () => {
           join(scriptsDir, 'check.ts'),
           `await Bun.write(${JSON.stringify(marker)}, "ran")`
         );
-        const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+        const capture = await captureWorkflowSource({
+          providers: providerRegistry,
+          sourceRoot: testDir,
+          captureRoot,
+        });
         const capturedScripts = join(captureRoot, 'project', '.archon', 'scripts');
         return {
           roots: capturedSourceRoots(capture.anchor),
@@ -757,7 +763,11 @@ describe('executeDagWorkflow -- script nodes', () => {
     const marker = join(testDir, 'changed-script-ran');
     await mkdir(scriptsDir, { recursive: true });
     await writeFile(join(scriptsDir, 'check.ts'), 'console.log("original")');
-    const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    const capture = await captureWorkflowSource({
+      providers: providerRegistry,
+      sourceRoot: testDir,
+      captureRoot,
+    });
     const capturedScript = join(captureRoot, 'project', '.archon', 'scripts', 'check.ts');
 
     const nodes: DagNode[] = [
@@ -819,9 +829,13 @@ describe('executeDagWorkflow -- script nodes', () => {
     const marker = join(testDir, 'replacement-script-ran');
     await mkdir(scriptsDir, { recursive: true });
     await writeFile(join(scriptsDir, 'check.ts'), 'console.log("original")');
-    const original = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    const original = await captureWorkflowSource({
+      providers: providerRegistry,
+      sourceRoot: testDir,
+      captureRoot,
+    });
     await writeFile(join(scriptsDir, 'check.ts'), `Bun.write(${JSON.stringify(marker)}, "ran")`);
-    await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    await captureWorkflowSource({ providers: providerRegistry, sourceRoot: testDir, captureRoot });
 
     await executeDagWorkflow(
       dagOptions({
@@ -853,7 +867,11 @@ describe('executeDagWorkflow -- script nodes', () => {
     const captureRoot = join(testDir, 'capture');
     await mkdir(commandsDir, { recursive: true });
     await writeFile(join(commandsDir, 'review.md'), 'original prompt');
-    const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    const capture = await captureWorkflowSource({
+      providers: providerRegistry,
+      sourceRoot: testDir,
+      captureRoot,
+    });
     const capturedCommand = join(captureRoot, 'project', '.archon', 'commands', 'review.md');
 
     await executeDagWorkflow(
@@ -899,7 +917,11 @@ describe('executeDagWorkflow -- script nodes', () => {
     const captureRoot = join(testDir, 'capture');
     await mkdir(commandsDir, { recursive: true });
     await writeFile(join(commandsDir, 'iterate.md'), 'original loop prompt');
-    const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    const capture = await captureWorkflowSource({
+      providers: providerRegistry,
+      sourceRoot: testDir,
+      captureRoot,
+    });
     const capturedCommand = join(captureRoot, 'project', '.archon', 'commands', 'iterate.md');
 
     await executeDagWorkflow(
@@ -950,7 +972,11 @@ describe('executeDagWorkflow -- script nodes', () => {
     const captureRoot = join(testDir, 'capture');
     await mkdir(scriptsDir, { recursive: true });
     await writeFile(join(scriptsDir, 'check.ts'), 'console.log("original")');
-    const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    const capture = await captureWorkflowSource({
+      providers: providerRegistry,
+      sourceRoot: testDir,
+      captureRoot,
+    });
     await writeFile(
       join(captureRoot, 'project', '.archon', 'scripts', 'check.ts'),
       'console.log("changed")'
@@ -1011,7 +1037,11 @@ describe('executeDagWorkflow -- script nodes', () => {
     const marker = join(testDir, 'inline-script-ran');
     await mkdir(scriptsDir, { recursive: true });
     await writeFile(join(scriptsDir, 'unused.ts'), 'console.log("original")');
-    const capture = await captureWorkflowSource({ sourceRoot: testDir, captureRoot });
+    const capture = await captureWorkflowSource({
+      providers: providerRegistry,
+      sourceRoot: testDir,
+      captureRoot,
+    });
     await writeFile(
       join(captureRoot, 'project', '.archon', 'scripts', 'unused.ts'),
       'console.log("changed")'

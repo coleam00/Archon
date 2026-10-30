@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { providerRegistry } from '@archon/providers';
 import { WorkflowExecutionHandoffError } from '../engine-port';
 import * as nodeEventWrite from '../node-event-write';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -247,6 +248,7 @@ describe('executeDagWorkflow -- container write-back gate', () => {
     await mkdir(scripts, { recursive: true });
     await writeFile(join(scripts, 'check.ts'), 'console.log("ok")');
     const capture = await captureWorkflowSource({
+      providers: providerRegistry,
       sourceRoot: wbTestDir,
       captureRoot: join(wbTestDir, 'capture'),
     });
