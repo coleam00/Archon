@@ -84,61 +84,68 @@ describe('recorded launch AI configuration', () => {
   );
 
   it.each([
-    [undefined, false],
-    ['adopt', false],
-    ['supersede', false],
-    [undefined, true],
-    ['adopt', true],
-    ['supersede', true],
-  ] as const)('%s uses the correct AI owner (pre-created: %s)', async (mode, preCreated) => {
-    const deps = makeDeps();
-    const workflow = makeWorkflow();
-    deps.loadConfig = configWith({
-      assistant: 'codex',
-      assistants: { claude: {}, codex: { model: 'launch-model' } },
-    });
-    const launch = await prepareRunAiConfiguration(deps, workflow, '/tmp');
-    const ancestor = makeRun({
-      id: 'ancestor',
-      status: 'completed',
-      user_id: 'old-actor',
-      output_root: join(WS, 'workspaces', 'acme', 'widget'),
-      metadata: { ai_configuration: launch.aiConfigurationSnapshot },
-    });
-    deps.store.getWorkflowRun = mock(async id =>
-      id === 'ancestor' ? ancestor : makeRun({ status: 'completed' })
-    );
-    deps.loadConfig = configWith({ assistants: { claude: { model: 'opus' }, codex: {} } });
-    const different = await prepareRunAiConfiguration(deps, workflow, '/tmp');
-    const result = await startWorkflow({
-      deps,
-      workflow,
-      origin: { conversationId: 'db-conv-1', userId: 'new-actor' },
-      options: {
-        ...(preCreated
-          ? {
-              preCreatedRun: makeRun({
-                status: 'pending',
-                adopted_from_run_id: 'ancestor',
-                metadata: mode ? { continuation: { mode } } : {},
-              }),
-            }
-          : { adoptedFromRunId: 'ancestor', continuationMode: mode }),
-        preparedAiConfiguration: different,
-      },
-    });
-    expect(result.success).toBe(true);
-    expect(dagCall()?.workflowProvider).toBe(mode === 'supersede' ? 'claude' : 'codex');
-    expect(dagCall()?.workflowModel).toBe(mode === 'supersede' ? 'opus' : 'launch-model');
-    if (!preCreated) {
-      expect(deps.store.createWorkflowRun).toHaveBeenCalledWith(
-        expect.objectContaining({
-          origin: expect.objectContaining({ userId: 'new-actor' }),
-          metadata: expect.objectContaining({ continuation: { mode: mode ?? 'adopt' } }),
-        })
+    [undefined, false, false],
+    ['adopt', false, false],
+    ['supersede', false, false],
+    [undefined, true, false],
+    ['adopt', true, false],
+    ['supersede', true, false],
+    [undefined, true, true],
+    ['adopt', true, true],
+    ['supersede', true, true],
+  ] as const)(
+    '%s uses the correct AI owner (pre-created: %s, repeated: %s)',
+    async (mode, preCreated, repeated) => {
+      const deps = makeDeps();
+      const workflow = makeWorkflow();
+      deps.loadConfig = configWith({
+        assistant: 'codex',
+        assistants: { claude: {}, codex: { model: 'launch-model' } },
+      });
+      const launch = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      const ancestor = makeRun({
+        id: 'ancestor',
+        status: 'completed',
+        user_id: 'old-actor',
+        output_root: join(WS, 'workspaces', 'acme', 'widget'),
+        metadata: { ai_configuration: launch.aiConfigurationSnapshot },
+      });
+      deps.store.getWorkflowRun = mock(async id =>
+        id === 'ancestor' ? ancestor : makeRun({ status: 'completed' })
       );
+      deps.loadConfig = configWith({ assistants: { claude: { model: 'opus' }, codex: {} } });
+      const different = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      const result = await startWorkflow({
+        deps,
+        workflow,
+        origin: { conversationId: 'db-conv-1', userId: 'new-actor' },
+        options: {
+          ...(preCreated
+            ? {
+                preCreatedRun: makeRun({
+                  status: 'pending',
+                  adopted_from_run_id: 'ancestor',
+                  metadata: mode ? { continuation: { mode } } : {},
+                }),
+                ...(repeated ? { adoptedFromRunId: 'ancestor', continuationMode: mode } : {}),
+              }
+            : { adoptedFromRunId: 'ancestor', continuationMode: mode }),
+          preparedAiConfiguration: different,
+        },
+      });
+      expect(result.success).toBe(true);
+      expect(dagCall()?.workflowProvider).toBe(mode === 'supersede' ? 'claude' : 'codex');
+      expect(dagCall()?.workflowModel).toBe(mode === 'supersede' ? 'opus' : 'launch-model');
+      if (!preCreated) {
+        expect(deps.store.createWorkflowRun).toHaveBeenCalledWith(
+          expect.objectContaining({
+            origin: expect.objectContaining({ userId: 'new-actor' }),
+            metadata: expect.objectContaining({ continuation: { mode: mode ?? 'adopt' } }),
+          })
+        );
+      }
     }
-  });
+  );
 
   it('rejects an invalid pre-created continuation before reading ancestor AI configuration', async () => {
     const deps = makeDeps();

@@ -242,11 +242,22 @@ async function findAdoptedAiRun(
   recorded: boolean
 ) {
   const { preCreatedRun } = opts;
-  const aiAncestorId = opts.adoptedFromRunId ?? preCreatedRun?.adopted_from_run_id;
-  const aiContinuationMode =
-    opts.continuationMode ??
-    readContinuationMode(preCreatedRun?.metadata) ??
-    CONTINUATION_MODES.adopt;
+  const recordedMode = readContinuationMode(preCreatedRun?.metadata) ?? CONTINUATION_MODES.adopt;
+  if (preCreatedRun) {
+    if (
+      opts.adoptedFromRunId !== undefined &&
+      opts.adoptedFromRunId !== preCreatedRun.adopted_from_run_id
+    ) {
+      throw new Error('Caller ancestor conflicts with recorded continuation ancestor.');
+    }
+    if (opts.continuationMode !== undefined && opts.continuationMode !== recordedMode) {
+      throw new Error('Caller mode conflicts with recorded continuation mode.');
+    }
+  }
+  const aiAncestorId = preCreatedRun ? preCreatedRun.adopted_from_run_id : opts.adoptedFromRunId;
+  const aiContinuationMode = preCreatedRun
+    ? recordedMode
+    : (opts.continuationMode ?? CONTINUATION_MODES.adopt);
   return !isContinuation &&
     !recorded &&
     aiAncestorId &&

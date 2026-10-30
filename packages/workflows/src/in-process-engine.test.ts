@@ -175,6 +175,83 @@ describe('InProcessWorkflowEngine', () => {
     return { engine: new InProcessWorkflowEngine(deps), store };
   }
 
+  it.each([
+    [
+      'mode',
+      { mode: 'supersede' },
+      'ancestor',
+      'ancestor',
+      'adopt',
+      'conflicts with recorded continuation mode',
+    ],
+    [
+      'ancestor',
+      { mode: 'adopt' },
+      'ancestor',
+      'other',
+      'adopt',
+      'conflicts with recorded continuation ancestor',
+    ],
+    [
+      'malformed stamp',
+      { mode: 'unsupported' },
+      'ancestor',
+      'ancestor',
+      'adopt',
+      'Invalid recorded continuation metadata.',
+    ],
+    [
+      'legacy mode',
+      undefined,
+      'ancestor',
+      'ancestor',
+      'supersede',
+      'conflicts with recorded continuation mode',
+    ],
+    [
+      'absent ancestor',
+      undefined,
+      undefined,
+      'ancestor',
+      'adopt',
+      'conflicts with recorded continuation ancestor',
+    ],
+  ] as const)(
+    'submit refuses a pending row with conflicting %s before inheritance',
+    async (_label, stamp, recordedId, callerId, callerMode, message) => {
+      const { engine, store } = await makeEngine();
+      const pending = await store.createWorkflowRun({
+        workflow_name: parent.name,
+        user_message: '',
+        adopted_from_run_id: recordedId,
+        metadata: stamp ? { continuation: stamp } : {},
+      });
+      const read = spyOn(store, 'getWorkflowRun');
+      let executed = false;
+      dagBody = async () => {
+        executed = true;
+        return undefined;
+      };
+      await expect(
+        engine.submit({
+          platform,
+          conversationId: 'conv-1',
+          cwd: '/tmp/ops',
+          workflow: parent,
+          userMessage: '',
+          options: {
+            preCreatedRun: pending,
+            adoptedFromRunId: callerId,
+            continuationMode: callerMode,
+          },
+        })
+      ).rejects.toThrow(message);
+      expect(read).not.toHaveBeenCalledWith(callerId);
+      expect(executed).toBe(false);
+      read.mockRestore();
+    }
+  );
+
   const completeNode = (store: IWorkflowStore, runId: string, step: string): Promise<void> =>
     store.persistWorkflowEvent({
       workflow_run_id: runId,

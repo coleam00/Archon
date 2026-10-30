@@ -1,4 +1,7 @@
-import { CONTINUATION_MODES } from '@archon/workflows/schemas/workflow-run';
+import {
+  CONTINUATION_MODES,
+  continuationInheritsEstate,
+} from '@archon/workflows/schemas/workflow-run';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as sqlWorkflow from '@archon/core/db/workflows';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -53,7 +56,7 @@ export async function resolveDispatchAdoption(
   // cross-codebase id, or a missing estate refuses here, before any worktree is
   // cut; the resolved lane then drives where the run actually executes.
   const adoption =
-    declaredContinuation?.stamp.mode === CONTINUATION_MODES.adopt
+    declaredContinuation && continuationInheritsEstate(declaredContinuation.stamp.mode)
       ? await resolveWorkflowAdoption({
           deps: {
             getRun: sqlWorkflow.getWorkflowRun,
@@ -66,19 +69,17 @@ export async function resolveDispatchAdoption(
           codebaseKind: codebase.kind,
         })
       : undefined;
-  const adoptionLane = adoption?.lane;
 
   // A lane other than in-place inherits a worktree or branch estate; a workflow
   // that opted out of worktrees runs in the parent checkout and has nothing to
   // inherit, so honoring the adoption would mean silently dropping the lane.
   if (
-    declaredContinuation?.stamp.mode === CONTINUATION_MODES.adopt &&
-    adoptionLane !== undefined &&
-    adoptionLane.kind !== 'in-place' &&
+    adoption !== undefined &&
+    adoption.lane.kind !== 'in-place' &&
     workflow.worktree?.enabled === false
   ) {
     throw new WorkflowAdoptionError(
-      `Cannot adopt run '${declaredContinuation.run.id}': workflow '${workflow.name}' disables ` +
+      `Cannot adopt run '${adoption.adoptedRun.id}': workflow '${workflow.name}' disables ` +
         'worktrees, so there is no worktree or branch estate to inherit. ' +
         'Drop the adoption or run a worktree-isolated workflow.'
     );

@@ -421,14 +421,17 @@ export async function resolveAdoptedRunDir(
   {
     adoptedFromRunId,
     continuationMode,
-  }: Pick<ExecuteWorkflowOptions, 'adoptedFromRunId' | 'continuationMode'>,
+    preCreatedRun,
+  }: Pick<ExecuteWorkflowOptions, 'adoptedFromRunId' | 'continuationMode' | 'preCreatedRun'>,
   isContinuation: boolean
 ): Promise<string | undefined> {
-  const effectiveAdoptedFromRunId = adoptedFromRunId ?? workflowRun.adopted_from_run_id;
-  // On a fresh invocation the caller supplies the mode alongside the id. On
-  // resume neither is in opts — the executor reads the row's metadata stamp.
-  const effectiveContinuationMode =
-    continuationMode ?? readContinuationMode(workflowRun.metadata) ?? CONTINUATION_MODES.adopt;
+  let effectiveAdoptedFromRunId = workflowRun.adopted_from_run_id;
+  let effectiveContinuationMode =
+    readContinuationMode(workflowRun.metadata) ?? CONTINUATION_MODES.adopt;
+  if (!preCreatedRun) {
+    effectiveAdoptedFromRunId = adoptedFromRunId ?? effectiveAdoptedFromRunId;
+    effectiveContinuationMode = continuationMode ?? effectiveContinuationMode;
+  }
   if (!effectiveAdoptedFromRunId) return undefined;
   let adoptedRunDir: string | undefined;
   // Supersession is metadata-only (#3064): no estate, so skip the output_root
