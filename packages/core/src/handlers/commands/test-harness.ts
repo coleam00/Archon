@@ -329,6 +329,7 @@ mock.module('../../db/sessions', () => ({
 }));
 
 mock.module('../../db/workflows', () => ({
+  getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getActiveWorkflowRun: mockGetActiveWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
@@ -423,6 +424,7 @@ export const mockIsolationDestroy = mock(
 );
 
 mock.module('@archon/isolation', () => ({
+  releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,

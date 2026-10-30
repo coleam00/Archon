@@ -484,6 +484,7 @@ mock.module('../workflows/store-adapter', () => ({
 }));
 
 mock.module('../db/workflows', () => ({
+  getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
   getWorkflowRun: mockGetWorkflowRunDb,
   getWorkflowRunForAttention: mockGetWorkflowRunDb,
@@ -557,6 +558,7 @@ mock.module('../db/messages', () => ({
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
 mock.module('@archon/isolation', () => ({
+  releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,

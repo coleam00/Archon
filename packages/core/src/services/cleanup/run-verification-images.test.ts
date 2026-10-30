@@ -207,7 +207,12 @@ test.each([false, true])(
   'Docker disappearing after host setup remains a failure (container=%s)',
   async container => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-docker-capability-')));
-    await writeFile(join(root, 'docker'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const executable = join(root, process.platform === 'win32' ? 'docker.cmd' : 'docker');
+    await writeFile(
+      executable,
+      process.platform === 'win32' ? '@exit /b 0\r\n' : '#!/bin/sh\nexit 0\n',
+      { mode: 0o755 }
+    );
     const run = {
       ...mockWorkflowRun,
       status: 'completed' as const,
@@ -219,6 +224,7 @@ test.each([false, true])(
     const previousPath = process.env.PATH;
     process.env.PATH = root;
     try {
+      expect(Bun.which('docker', { PATH: root })).toBe(executable);
       const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
       process.env.PATH = '';
       await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');

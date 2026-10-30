@@ -26,6 +26,7 @@ export const mockResolveFolderBackend = mock(() => ({
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
 const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,

@@ -94,6 +94,7 @@ export const mockCancelWorkflowRunCommand = mock<
 >(async () => ({ cancelled: true }));
 
 mock.module('@archon/core/db/workflows', () => ({
+  getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   insertWorkflowRun: async (): Promise<never> => {
     throw new Error('Unexpected admission run insert');
   },
