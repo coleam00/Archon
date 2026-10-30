@@ -64,7 +64,11 @@ export function setupRoutingTests() {
 
   beforeEach(() => {
     resetDispatchMocks();
-    for (const id of ['prior-run', 'replaced-run']) makeResumableRun({ id, status: 'completed' });
+    for (const id of [
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
+    ])
+      makeResumableRun({ id, status: 'completed' });
   });
 
   /** Drive a refused resume (a lost race by default) with an optional supplied-input map. */
@@ -155,7 +159,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'reuse-worktree',
           environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
@@ -166,7 +173,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowAdoptRunId: 'prior-run',
+      workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -187,7 +194,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
       adoptedFromRunId?: string;
       continuationMode?: string;
     };
-    expect(opts.adoptedFromRunId).toBe('prior-run');
+    expect(opts.adoptedFromRunId).toBe('11111111-1111-4111-8111-111111111111');
     expect(opts.continuationMode).toBe('adopt');
     expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
       cwd: '/wt/adopted',
@@ -204,7 +211,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
       environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
     };
     mockResolveWorkflowAdoption.mockResolvedValueOnce({
-      adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+      adoptedRun: makeResumableRun({
+        id: '11111111-1111-4111-8111-111111111111',
+        status: 'completed',
+      }),
       lane,
     });
     mockAdoptionMetadata.mockClear();
@@ -223,7 +233,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     });
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowAdoptRunId: 'prior-run',
+      workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
     });
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledTimes(1);
     expect(recordedByDispatcher).toBe(true);
@@ -269,7 +279,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
       mockGetCodebase.mockResolvedValueOnce(makeCodebase());
       mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
       mockResolveWorkflowAdoption.mockResolvedValueOnce({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'reuse-worktree',
           environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
@@ -283,7 +296,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
       const platform = makeForegroundPlatform();
       await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
         actor: operator,
-        workflowAdoptRunId: 'prior-run',
+        workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
       });
       expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining(message));
       expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
@@ -303,7 +316,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'checkout-branch',
           taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
@@ -314,7 +330,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowAdoptRunId: 'prior-run',
+      workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
@@ -327,7 +343,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     expect(hints.taskBranch).toEqual({ kind: 'existing', branch: 'feature/adopted' });
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     const opts = callArgs[callArgs.length - 1] as { adoptedFromRunId?: string };
-    expect(opts.adoptedFromRunId).toBe('prior-run');
+    expect(opts.adoptedFromRunId).toBe('11111111-1111-4111-8111-111111111111');
   });
 
   // R7: the resolver short-circuits on `existingEnvId` before hints are read, so a
@@ -343,7 +359,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'checkout-branch',
           taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
@@ -354,7 +373,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowAdoptRunId: 'prior-run',
+      workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(mockValidateAndResolveIsolation).toHaveBeenCalled();
@@ -381,7 +400,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'reuse-worktree',
           environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
@@ -392,7 +414,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowAdoptRunId: 'prior-run',
+      workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(mockPrepareWorkflowSource).toHaveBeenCalled();
@@ -422,7 +444,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'checkout-branch',
           taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
@@ -433,7 +458,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowAdoptRunId: 'prior-run',
+      workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(mockPrepareWorkflowSource).toHaveBeenCalled();
@@ -470,7 +495,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'checkout-branch',
           taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
@@ -480,7 +508,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     try {
       await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
         actor: operator,
-        workflowAdoptRunId: 'prior-run',
+        workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
       });
       const recorded = updates
         .map(metadata => metadata[WORKFLOW_SOURCE_METADATA_KEY] as { origin?: string } | undefined)
@@ -570,7 +598,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'checkout-branch',
           taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
@@ -581,7 +612,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowAdoptRunId: 'prior-run',
+      workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('diff'));
@@ -599,7 +630,10 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     );
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'reuse-worktree',
           environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
@@ -610,7 +644,7 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowAdoptRunId: 'prior-run',
+      workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     // handleMessage funnels dispatch refusals into its user-facing error notice.
