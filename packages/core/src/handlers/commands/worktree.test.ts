@@ -1,5 +1,7 @@
 // @archon-test-isolated
-import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import { describe, test, expect, beforeEach, afterAll, spyOn } from 'bun:test';
+import { win32 } from 'node:path';
+import * as git from '@archon/git';
 import {
   MissingProjectDirectoryError,
   WorktreeRegistrationChangedError,
@@ -272,6 +274,30 @@ describe('CommandHandler', () => {
       });
 
       describe('orphans', () => {
+        test('excludes alternate Windows spellings of the main checkout', async () => {
+          mockGetCodebase.mockResolvedValue(
+            makeCodebase({ default_cwd: 'd:\\repo', kind: 'repo' })
+          );
+          spyListWorktrees.mockResolvedValue([{ path: 'D:\\repo', branch: 'main' }]);
+          const comparePaths = git.isSameWorktreePath;
+          const pathSpy = spyOn(git, 'isSameWorktreePath').mockImplementation((a, b) =>
+            comparePaths(a, b, win32)
+          );
+          try {
+            const result = await handleCommand(
+              conversationWithCodebase,
+              '/worktree orphans',
+              operator
+            );
+
+            expect(result.success).toBe(true);
+            expect(result.message).toContain('No secondary worktrees');
+            expect(result.message).not.toContain('main →');
+          } finally {
+            pathSpy.mockRestore();
+          }
+        });
+
         test.each([true, false])(
           'lists a secondary checkout when main is included: %s',
           async includeMain => {
@@ -287,10 +313,13 @@ describe('CommandHandler', () => {
             );
 
             expect(result.success).toBe(true);
-            expect(result.message).toContain('All worktrees (from git):');
+            expect(result.message).toContain('Secondary worktrees on local branches (from git):');
+            expect(result.message).toContain(
+              '`git worktree list` for every Git-registered checkout'
+            );
             expect(result.message).toMatch(/feat-x → worktrees[\\/]feat-x/);
             expect(result.message).not.toContain('main →');
-            expect(result.message).not.toContain('No worktrees found');
+            expect(result.message).not.toContain('No secondary worktrees');
           }
         );
 
@@ -308,7 +337,10 @@ describe('CommandHandler', () => {
             );
 
             expect(result.success).toBe(true);
-            expect(result.message).toContain('No worktrees found');
+            expect(result.message).toContain('No secondary worktrees on local branches found.');
+            expect(result.message).toContain(
+              '`git worktree list` for every Git-registered checkout'
+            );
           }
         );
       });

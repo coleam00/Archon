@@ -1,5 +1,5 @@
 import { relative } from 'path';
-import { listWorktrees, execFileAsync, toRepoPath } from '@archon/git';
+import { listWorktrees, isSameWorktreePath, execFileAsync, toRepoPath } from '@archon/git';
 import {
   getIsolationProvider,
   readWorktreeCreationId,
@@ -313,31 +313,27 @@ async function removeWorktree(
   }
 }
 
-/**
- * Show all worktrees from git's perspective (the source of truth). Useful for
- * discovering skill-created worktrees or stale entries.
- */
 async function listGitWorktrees(
   conversation: Conversation,
   mainPath: string
 ): Promise<CommandResult> {
   try {
     const gitWorktrees = (await listWorktrees(toRepoPath(mainPath))).filter(
-      wt => wt.path !== mainPath
+      wt => !isSameWorktreePath(wt.path, mainPath)
     );
 
     if (gitWorktrees.length === 0) {
       return {
         success: true,
         message:
-          'No worktrees found (only main repo).\n\nUse `/worktree create <branch>` to create one.',
+          'No secondary worktrees on local branches found.\n\nUse `/worktree create <branch>` to create one, or `git worktree list` for every Git-registered checkout.',
       };
     }
 
     // Resolve working path from UUID for current marker
     const activePath = await currentWorktreePath(conversation);
 
-    let msg = 'All worktrees (from git):\n\n';
+    let msg = 'Secondary worktrees on local branches (from git):\n\n';
     for (const wt of gitWorktrees) {
       const shortPath = shortenPath(wt.path, mainPath);
       const isCurrent = activePath && wt.path === activePath;
@@ -345,8 +341,9 @@ async function listGitWorktrees(
       msg += `  ${wt.branch} → ${shortPath}${marker}\n`;
     }
 
-    msg += '\nNote: This shows ALL worktrees including those created by external tools.\n';
-    msg += 'Git (`git worktree list`) is the source of truth.';
+    msg += '\nIncludes worktrees created by external tools when attached to local branches.\n';
+    msg +=
+      'Use `git worktree list` for every Git-registered checkout, including detached HEADs and nonlocal symbolic HEADs.';
 
     return { success: true, message: msg };
   } catch (error) {
