@@ -173,6 +173,9 @@ nodes:
       type: object
       properties:
         head: { type: [string, 'null'] }
+        # The commit the continued pull request's review comment names at the round's
+        # start; null on a fresh round or when no single trusted review exists.
+        reviewed: { type: [string, 'null'] }
         # What ship continues: the number, `none` when the item has a pull request
         # the round does not continue, or null when it has none and ship's triage
         # decides.
@@ -181,7 +184,7 @@ nodes:
             - { type: integer, minimum: 1 }
             - { type: string, enum: [none] }
             - { type: 'null' }
-      required: [head, pull_request]
+      required: [head, reviewed, pull_request]
 
   - id: ship
     include: archon-ship-block
@@ -205,7 +208,7 @@ nodes:
       record: { from: "$facts.output.record" }
       rounds: { from: "$facts.output.rounds" }
       ending: { from: "$ship.output", if_skipped: null }
-      round_start: "$checkout.output.head"
+      reviewed: "$checkout.output.reviewed"
       at_cap: "$facts.output.at_cap"
     output_format:
       type: object

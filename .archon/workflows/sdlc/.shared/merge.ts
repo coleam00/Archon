@@ -366,6 +366,11 @@ function trustedReview(comments: readonly Comment[], maintainers: ReadonlySet<st
   return { state, reviewed: review.stamp.reviewed, url: review.url, contract: review.stamp.contract };
 }
 
+/** The commit the pull request's trusted review comment names, or null when it has none or more than one. */
+export function reviewedHead(pr: QualifiedPr, maintainers: ReadonlySet<string>): string | null {
+  return trustedReview(forgeSource() === 'forge' ? readForgeComments(pr) : ghIssueComments(pr), maintainers).reviewed;
+}
+
 const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {
   defaultBranchRef { name }
   pullRequest(number: $number) {

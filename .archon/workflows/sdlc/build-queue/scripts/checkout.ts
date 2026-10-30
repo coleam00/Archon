@@ -19,7 +19,9 @@
  * INPUTS_CONTINUES, the number route declared the round continues, else empty or `null`.
  * Route may decline the candidate, never name another pull request.
  *
- * It emits the pull request the round's `archon-ship` continues: the number, `none`
+ * It emits the commit the continued pull request's review last named, or null, so the
+ * answer can tell whether the round changed anything since that review, and the pull
+ * request the round's `archon-ship` continues: the number, `none`
  * when the forge knows a pull request for the item that the round does not continue
  * (one route declined, or a closed, merged or fork one facts never offered), so ship's
  * triage cannot route the round back onto it, or null when the item has no pull
@@ -31,6 +33,8 @@ import type { PrRecord, QualifiedPr } from '../../.shared/forge.ts';
 import { forgeSource } from '../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
 import { emit, nullableJson, refuse } from '../../.shared/io.ts';
+import { readMaintainers } from '../../.shared/maintainers.ts';
+import { reviewedHead } from '../../.shared/merge.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 
@@ -40,7 +44,7 @@ function fresh(known: PrRecord | null): void {
   const base = fetchDefaultBranch(item.repo);
   if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
     throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
-  emit({ head: null, pull_request: known === null ? null : 'none' });
+  emit({ head: null, reviewed: null, pull_request: known === null ? null : 'none' });
 }
 
 function main(): void {
@@ -68,7 +72,8 @@ function main(): void {
     throw new Error(`${pr.url} reports head ${pr.head_revision}, but its branch is at ${head}`);
   const branch = gitOrThrow('branch', '--show-current');
   gitOrThrow('checkout', '-q', ...(branch === '' ? ['--detach'] : ['-B', branch]), head);
-  emit({ head, pull_request: continues });
+  const ref = { repo: pr.repo, number: continues };
+  emit({ head, reviewed: reviewedHead(ref, readMaintainers(pr.repo)), pull_request: continues });
 }
 
 try {
