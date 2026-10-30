@@ -69,7 +69,6 @@ export type ContinuationDeclaration = {
  */
 export async function resolveContinuationDeclaration(
   host: WorkflowHost,
-  _cwd: string,
   options: Pick<WorkflowRunOptions, 'adoptRunId' | 'supersedesRunId' | 'container'>,
   codebase: Codebase | null | undefined
 ): Promise<ContinuationDeclaration | undefined> {

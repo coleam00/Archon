@@ -104,7 +104,7 @@ export async function launchDetachedOwnedRun(
   assertNoWorktreeOptionsForFolder(detachIsFolder, options);
 
   // Adoption resolution is read-only; the child re-resolves against the live checkout.
-  const declaration = await resolveContinuationDeclaration(host, cwd, options, detachCodebase);
+  const declaration = await resolveContinuationDeclaration(host, options, detachCodebase);
   if (declaration && 'lane' in declaration) admission.aiConfigurationRun = declaration.adoptedRun;
   const adoptionLane = declaration && 'lane' in declaration ? declaration.lane : undefined;
   if (
@@ -346,8 +346,8 @@ async function bindContinuationLane(
   codebase: Codebase | null,
   workspace: RunWorkspace
 ): Promise<LaunchContinuation> {
-  const { host, cwd, options } = request;
-  const declaration = await resolveContinuationDeclaration(host, cwd, options, codebase);
+  const { host, options } = request;
+  const declaration = await resolveContinuationDeclaration(host, options, codebase);
   const continuation: LaunchContinuation = {
     declaration,
     adoptedTaskBranch: undefined,

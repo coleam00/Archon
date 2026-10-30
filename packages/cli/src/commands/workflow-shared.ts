@@ -2,7 +2,11 @@
  * Helpers shared by the `archon workflow` command modules: the logger, run options,
  * run destination, run-id resolution and the CLI's refusal spelling.
  */
-import { findProjectRunsByReference, isFullRunId } from '@archon/core/workflows/run-id';
+import {
+  findProjectRunsByReference,
+  isFullRunId,
+  uniqueRunReferenceMatch,
+} from '@archon/core/workflows/run-id';
 import { readChatProjectScope } from '../workflow-scope';
 
 import type { Conversation } from '@archon/core/schemas/conversation';
@@ -359,16 +363,12 @@ async function resolveProjectScopedRunId(
   codebaseId: string
 ): Promise<string> {
   if (!codebaseId) throw new Error(`--chat-project-id must name a registered project.`);
-  const fullId = isFullRunId(runId);
   const matches = await findProjectRunsByReference(host.deps.store, runId, codebaseId);
-  if (
-    matches.length !== 1 ||
-    (fullId &&
-      matches[0]?.id.replaceAll('-', '').toLowerCase() !== runId.replaceAll('-', '').toLowerCase())
-  ) {
+  const run = uniqueRunReferenceMatch(matches, runId);
+  if (!run) {
     throw new Error(`Run id '${runId}' does not identify exactly one run in the selected project.`);
   }
-  return matches[0].id;
+  return run.id;
 }
 
 export async function resolveDiscoveryCwdForCodebase(

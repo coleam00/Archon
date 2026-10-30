@@ -21,3 +21,18 @@ export function isFullRunId(reference: string): boolean {
     reference
   );
 }
+
+export function uniqueRunReferenceMatch(
+  matches: readonly WorkflowRun[],
+  reference: string
+): WorkflowRun | null {
+  const run = matches.length === 1 ? matches[0] : undefined;
+  if (
+    !run ||
+    (isFullRunId(reference) &&
+      run.id.replaceAll('-', '').toLowerCase() !== reference.replaceAll('-', '').toLowerCase())
+  ) {
+    return null;
+  }
+  return run;
+}

@@ -161,7 +161,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       );
       for (const options of [{ adoptRunId: FULL_ID }, { supersedesRunId: FULL_ID }]) {
         await expect(
-          resolveContinuationDeclaration(host, '/repo', options, {
+          resolveContinuationDeclaration(host, options, {
             ...CODEBASE,
             kind: 'repo',
             repository_url: null,

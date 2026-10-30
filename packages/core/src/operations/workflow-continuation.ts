@@ -5,7 +5,11 @@ import {
   type ContinuationMetadata,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
-import { findProjectRunsByReference, isFullRunId } from '../workflows/run-id';
+import {
+  findProjectRunsByReference,
+  isFullRunId,
+  uniqueRunReferenceMatch,
+} from '../workflows/run-id';
 
 export class WorkflowContinuationError extends Error {}
 
@@ -65,25 +69,19 @@ async function resolveRunReference(
     );
   }
   const matches = await findProjectRunsByReference(store, reference, codebaseId);
-  if (restrictToProject) return requireSelectedProjectMatch(matches, reference);
+  if (restrictToProject) {
+    const run = uniqueRunReferenceMatch(matches, reference);
+    if (!run) {
+      throw new WorkflowContinuationError(
+        `Run id '${reference}' does not identify exactly one run in the selected project.`
+      );
+    }
+    return run;
+  }
   if (matches.length > 1) {
     throw new WorkflowContinuationError(
       `Run id '${reference}' matches more than one run in this project:\n${matches.map(match => `  ${match.id}`).join('\n')}\nUse more characters or the full id.`
     );
   }
   return matches[0] ?? null;
-}
-
-function requireSelectedProjectMatch(matches: WorkflowRun[], reference: string): WorkflowRun {
-  const run = matches.length === 1 ? matches[0] : undefined;
-  if (
-    !run ||
-    (isFullRunId(reference) &&
-      run.id.replaceAll('-', '').toLowerCase() !== reference.replaceAll('-', '').toLowerCase())
-  ) {
-    throw new WorkflowContinuationError(
-      `Run id '${reference}' does not identify exactly one run in the selected project.`
-    );
-  }
-  return run;
 }
