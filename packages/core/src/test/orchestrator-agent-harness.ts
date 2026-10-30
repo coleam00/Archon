@@ -461,6 +461,8 @@ mock.module('../workflows/store-adapter', () => ({
     providers: providerRegistry,
     store: {
       getCodebaseEnvVars: async () => ({}),
+      getWorkflowRun: mockGetWorkflowRunDb,
+      findWorkflowRunsByIdPrefix: mockFindWorkflowRunsByIdPrefix,
       createWorkflowRun: mockCreateWorkflowRun,
       updateWorkflowRun: async () => {},
       failWorkflowRun: mockFailPreparedRun,

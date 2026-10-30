@@ -26,7 +26,6 @@ import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import {
   CONTINUATION_METADATA_KEY,
   SUBRUN_METADATA_KEYS,
-  type ContinuationMode,
   type OwnedWorktree,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -205,8 +204,7 @@ export interface RunWorkspace {
 
 /** The between-run continuation (#2747) this launch records and the lane it chose. */
 interface LaunchContinuation {
-  adoptedFromRunId: string | undefined;
-  continuationMode: ContinuationMode | undefined;
+  declaration: ContinuationDeclaration | undefined;
   adoptedTaskBranch: Extract<TaskBranchSelection, { kind: 'existing' }> | undefined;
   /**
    * Set when the adopt lane executes inside a checkout whose `.archon` may differ from
@@ -346,17 +344,12 @@ async function bindContinuationLane(
   workspace: RunWorkspace
 ): Promise<LaunchContinuation> {
   const { host, cwd, options } = request;
+  const declaration = await resolveContinuationDeclaration(host, cwd, options, codebase);
   const continuation: LaunchContinuation = {
-    adoptedFromRunId: undefined,
-    continuationMode: undefined,
+    declaration,
     adoptedTaskBranch: undefined,
     runsIsolatedCheckout: false,
   };
-  const declaration = await resolveContinuationDeclaration(host, cwd, options, codebase);
-  if (declaration !== undefined) {
-    continuation.continuationMode = declaration.mode;
-    continuation.adoptedFromRunId = declaration.runId;
-  }
   if (declaration?.mode === 'adopt' && codebase) {
     admission.aiConfigurationRun = declaration.adoptedRun;
     await bindAdoptionLane(request, admission, declaration, codebase, workspace, continuation);
@@ -700,7 +693,7 @@ function createSetupRun(
   runId: string
 ): Promise<WorkflowRun> {
   const { request, admission, conversation, preparedAiConfiguration, continuation } = launch;
-  const { adoptedFromRunId } = continuation;
+  const { declaration } = continuation;
   return request.host.deps.store.createWorkflowRun({
     id: runId,
     workflow_name: admission.workflow.name,
@@ -718,11 +711,9 @@ function createSetupRun(
       ...(admission.resolvedInputs
         ? { [SUBRUN_METADATA_KEYS.inputs]: admission.resolvedInputs }
         : {}),
-      ...(adoptedFromRunId
-        ? { [CONTINUATION_METADATA_KEY]: { mode: continuation.continuationMode } }
-        : {}),
+      ...(declaration ? { [CONTINUATION_METADATA_KEY]: declaration.stamp } : {}),
     },
-    ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
+    ...(declaration ? { adopted_from_run_id: declaration.runId } : {}),
   });
 }
 

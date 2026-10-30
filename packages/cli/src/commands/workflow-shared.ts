@@ -2,7 +2,7 @@
  * Helpers shared by the `archon workflow` command modules: the logger, run options,
  * run destination, run-id resolution and the CLI's refusal spelling.
  */
-import { findProjectRunsByReference } from '@archon/core/workflows/run-id';
+import { findProjectRunsByReference, isFullRunId } from '@archon/core/workflows/run-id';
 import { readChatProjectScope } from '../workflow-scope';
 
 import type { Conversation } from '@archon/core/schemas/conversation';
@@ -274,14 +274,6 @@ export function printJsonWriteError(runId: string, action: string, error: unknow
   return writeJsonLine({ ok: false, runId, action, error: cliRefusalText(error) });
 }
 
-/**
- * Matches a full run id: a dashed UUID (Postgres `gen_random_uuid()`) or 32
- * undashed hex chars (SQLite `hex(randomblob(16))`). Anything shorter is
- * treated as a prefix.
- */
-const FULL_RUN_ID_RE =
-  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
-
 export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {
   const scope = readChatProjectScope();
   if (scope === undefined) return undefined;
@@ -327,7 +319,7 @@ export async function resolveRunIdArg(
 ): Promise<string> {
   const scope = readChatProjectScope();
   if (scope !== undefined) return resolveProjectScopedRunId(host, runId, scope);
-  if (FULL_RUN_ID_RE.test(runId)) return runId;
+  if (isFullRunId(runId)) return runId;
   if (cwd === undefined && codebaseId === undefined) {
     if (requirePrefixMatch) {
       throw new Error(`Cannot resolve run id prefix '${runId}' without a project directory.`);
@@ -367,7 +359,7 @@ async function resolveProjectScopedRunId(
   codebaseId: string
 ): Promise<string> {
   if (!codebaseId) throw new Error(`--chat-project-id must name a registered project.`);
-  const fullId = FULL_RUN_ID_RE.test(runId);
+  const fullId = isFullRunId(runId);
   const matches = await findProjectRunsByReference(host.deps.store, runId, codebaseId);
   if (
     matches.length !== 1 ||

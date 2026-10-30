@@ -1,3 +1,4 @@
+import { resolveRunContinuation } from '../../operations/workflow-continuation';
 import { assertRunCredentials } from '@archon/workflows/run-preflight';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import * as db from '../../db/conversations';
@@ -25,7 +26,15 @@ import { prepareExecutableSource, prepareLaunchAiConfiguration } from './source'
  * from the orchestrator (currently coupled to SSE bridging infrastructure).
  */
 export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget): Promise<void> {
-  const scope = createDispatchScope(target);
+  const declaredContinuation = await resolveRunContinuation({
+    store: createWorkflowDeps().store,
+    ...target.options,
+    codebaseId: target.codebase.id,
+  });
+  const scope = {
+    ...createDispatchScope(target),
+    declaredContinuation,
+  };
   const { platform, conversationId, conversation, codebase, options } = scope;
 
   const requested = await resolveRequestedWorkflow(scope, target.request);
@@ -98,8 +107,7 @@ export async function dispatchOrchestratorWorkflowOwned(target: DispatchTarget):
         inputs: resolvedInputs,
         modelOverrides: options?.modelOverrides,
         runConfig: options?.runConfig,
-        adoptRunId: options?.adoptRunId,
-        supersedesRunId: options?.supersedesRunId,
+        declaredContinuation,
         adoptionLane,
       },
       workflow

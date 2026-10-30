@@ -104,14 +104,12 @@ function submitRun(run: BackgroundRun): Promise<SubmitResult> {
       ...(checkout.cutFromCommit !== undefined ? { cutFromCommit: checkout.cutFromCommit } : {}),
       ownedWorktree: checkout.ownedWorktree,
       inputs: ctx.inputs,
-      ...(ctx.adoptRunId
-        ? { adoptedFromRunId: ctx.adoptRunId, continuationMode: 'adopt' as const }
-        : ctx.supersedesRunId
-          ? {
-              adoptedFromRunId: ctx.supersedesRunId,
-              continuationMode: 'supersede' as const,
-            }
-          : {}),
+      ...(ctx.declaredContinuation
+        ? {
+            adoptedFromRunId: ctx.declaredContinuation.run.id,
+            continuationMode: ctx.declaredContinuation.stamp.mode,
+          }
+        : {}),
       ...(ctx.modelOverrides
         ? { modelOverrideLayer: { kind: 'raw' as const, overrides: ctx.modelOverrides } }
         : {}),

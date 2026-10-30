@@ -115,6 +115,30 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     });
   });
 
+  test.each([false, true])(
+    'a target resumed after admission refuses before execution (background=%s)',
+    async background => {
+      makeResumableRun({ id: 'replaced-run', status: 'running' });
+      mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
+      mockPrepareWorkflowSource.mockClear();
+      const platform = background ? makePlatform() : makeForegroundPlatform();
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+        workflowSupersedesRunId: 'replaced-run',
+      });
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining("Cannot supersede run 'replaced-run': it is still running.")
+      );
+      expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    }
+  );
+
   test('fresh background supersede forwards provenance to dispatch', async () => {
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
     mockGetCodebase.mockResolvedValueOnce(makeCodebase());
@@ -124,7 +148,12 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
       workflowSupersedesRunId: 'replaced-run',
     });
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
-      expect.objectContaining({ supersedesRunId: 'replaced-run' }),
+      expect.objectContaining({
+        declaredContinuation: {
+          run: expect.objectContaining({ id: 'replaced-run' }),
+          stamp: { mode: 'supersede' },
+        },
+      }),
       expect.objectContaining({ name: 'test-workflow' })
     );
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();

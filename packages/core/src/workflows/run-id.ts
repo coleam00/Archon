@@ -15,3 +15,9 @@ export async function findProjectRunsByReference(
   }
   return matches;
 }
+
+export function isFullRunId(reference: string): boolean {
+  return /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i.test(
+    reference
+  );
+}

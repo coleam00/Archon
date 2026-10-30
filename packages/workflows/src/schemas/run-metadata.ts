@@ -165,12 +165,15 @@ export const RUN_METADATA_KEYS = {
  * Between-run continuation (#2747). Written once at run creation alongside
  * `adopted_from_run_id`: `{mode: 'adopt'}` when this run took over a terminal
  * run's estate, `{mode: 'supersede'}` when a fresh-lane rerun replaces its open
- * item (NO lane inheritance). Lives in metadata, not a column — nothing queries
- * it except display.
+ * item (NO lane inheritance). Execution uses the stamp to select inheritance.
  */
 export const CONTINUATION_METADATA_KEY = 'continuation';
 
-export type ContinuationMode = 'adopt' | 'supersede';
+export const CONTINUATION_MODES = { adopt: 'adopt', supersede: 'supersede' } as const;
+export type ContinuationMode = (typeof CONTINUATION_MODES)[keyof typeof CONTINUATION_MODES];
+export interface ContinuationMetadata {
+  mode: ContinuationMode;
+}
 
 /** Typed view of the continuation stamp; undefined when the run adopted nothing. */
 export function readContinuationMode(
@@ -179,7 +182,9 @@ export function readContinuationMode(
   const raw = metadata?.[CONTINUATION_METADATA_KEY];
   if (typeof raw !== 'object' || raw === null) return undefined;
   const mode = (raw as { mode?: unknown }).mode;
-  return mode === 'adopt' || mode === 'supersede' ? mode : undefined;
+  return mode === CONTINUATION_MODES.adopt || mode === CONTINUATION_MODES.supersede
+    ? mode
+    : undefined;
 }
 
 /**

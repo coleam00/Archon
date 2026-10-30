@@ -1,3 +1,4 @@
+import type { ResolvedRunContinuation } from '../../operations/workflow-continuation';
 // Background dispatch: run a workflow in a hidden worker conversation, bridged to the
 // parent, and return once the run is submitted. Its phases, in order: estate, source and
 // AI configuration, worker conversation, pre-created run, worker checkout, announcement,
@@ -115,8 +116,7 @@ export interface WorkflowRoutingContext {
   /** Validated sparse config content supplied by this fresh invocation. */
   readonly runConfig?: WorkflowRunConfigInput;
   /** Between-run continuation (#2747): adopt/supersede target, if declared. */
-  readonly adoptRunId?: string;
-  readonly supersedesRunId?: string;
+  readonly declaredContinuation?: ResolvedRunContinuation;
   /**
    * Adoption lane resolved by `resolveWorkflowAdoption` upstream — the adopting
    * run executes in the adopted run's worktree (reuse) or in one cut from its
@@ -320,9 +320,8 @@ async function prepareLaunch(
     {
       codebaseId: ctx.codebaseId,
       userId: ctx.userId,
-      aiConfigurationRun: ctx.adoptRunId
-        ? ((await workflowDeps.store.getWorkflowRun(ctx.adoptRunId)) ?? undefined)
-        : undefined,
+      aiConfigurationRun:
+        ctx.declaredContinuation?.stamp.mode === 'adopt' ? ctx.declaredContinuation.run : undefined,
       runConfig: ctx.runConfig,
       ...(ctx.modelOverrides
         ? { modelOverrideLayer: { kind: 'raw', overrides: ctx.modelOverrides } }
@@ -445,18 +444,11 @@ function preCreateRun(
       ...(ctx.inputs && Object.keys(ctx.inputs).length > 0
         ? { [SUBRUN_METADATA_KEYS.inputs]: { ...ctx.inputs } }
         : {}),
-      // Between-run continuation (#2747) — write-once with the column below.
-      ...(ctx.adoptRunId || ctx.supersedesRunId
-        ? {
-            [CONTINUATION_METADATA_KEY]: {
-              mode: ctx.adoptRunId ? 'adopt' : 'supersede',
-            },
-          }
+      ...(ctx.declaredContinuation
+        ? { [CONTINUATION_METADATA_KEY]: ctx.declaredContinuation.stamp }
         : {}),
     },
-    ...(ctx.adoptRunId || ctx.supersedesRunId
-      ? { adopted_from_run_id: ctx.adoptRunId ?? ctx.supersedesRunId }
-      : {}),
+    ...(ctx.declaredContinuation ? { adopted_from_run_id: ctx.declaredContinuation.run.id } : {}),
   });
 }
 

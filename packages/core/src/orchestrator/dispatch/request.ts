@@ -46,42 +46,38 @@ export async function resolveDispatchAdoption(
   scope: DispatchScope,
   workflow: ResolvedWorkflow
 ): Promise<DispatchAdoption | undefined> {
-  const { codebase, options } = scope;
-  if (options?.adoptRunId !== undefined && options.supersedesRunId !== undefined) {
-    throw new WorkflowAdoptionError(
-      'adoptRunId and supersedesRunId are mutually exclusive. Choose adoption or supersede.'
-    );
-  }
+  const { codebase, declaredContinuation } = scope;
   // Between-run continuation (#2747): adoption is validated by the ONE resolver,
   // whatever surface declared it — CLI, API, or chat. A non-terminal target, a
   // cross-codebase id, or a missing estate refuses here, before any worktree is
   // cut; the resolved lane then drives where the run actually executes.
-  const adoption = options?.adoptRunId
-    ? await resolveWorkflowAdoption({
-        deps: {
-          getRun: sqlWorkflow.getWorkflowRun,
-          getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
-          findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
-        },
-        adoptedRunId: options.adoptRunId,
-        codebaseId: codebase.id,
-        codebasePath: codebase.default_cwd,
-        codebaseKind: codebase.kind,
-      })
-    : undefined;
+  const adoption =
+    declaredContinuation?.stamp.mode === 'adopt'
+      ? await resolveWorkflowAdoption({
+          deps: {
+            getRun: sqlWorkflow.getWorkflowRun,
+            getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+            findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
+          },
+          adoptedRunId: declaredContinuation.run.id,
+          codebaseId: codebase.id,
+          codebasePath: codebase.default_cwd,
+          codebaseKind: codebase.kind,
+        })
+      : undefined;
   const adoptionLane = adoption?.lane;
 
   // A lane other than in-place inherits a worktree or branch estate; a workflow
   // that opted out of worktrees runs in the parent checkout and has nothing to
   // inherit, so honoring the adoption would mean silently dropping the lane.
   if (
-    options?.adoptRunId !== undefined &&
+    declaredContinuation?.stamp.mode === 'adopt' &&
     adoptionLane !== undefined &&
     adoptionLane.kind !== 'in-place' &&
     workflow.worktree?.enabled === false
   ) {
     throw new WorkflowAdoptionError(
-      `Cannot adopt run '${options.adoptRunId}': workflow '${workflow.name}' disables ` +
+      `Cannot adopt run '${declaredContinuation.run.id}': workflow '${workflow.name}' disables ` +
         'worktrees, so there is no worktree or branch estate to inherit. ' +
         'Drop the adoption or run a worktree-isolated workflow.'
     );
@@ -101,7 +97,7 @@ export async function detectContinuation(
   request: WorkflowRequest,
   workflow: ResolvedWorkflow
 ): Promise<Continuation | undefined> {
-  const { platform, conversationId, actor, options } = scope;
+  const { platform, conversationId, actor, declaredContinuation } = scope;
   // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
   //
   // This function continues an existing run in TWO ways: an explicit
@@ -147,16 +143,16 @@ export async function detectContinuation(
   // executes and which estate it inherits, and every continuation path forwards
   // only the resume context — an adopted id would be validated above and then silently
   // dropped. Refuse the combination up front, mirroring the CLI's adopt/resume guard.
-  if (options?.adoptRunId !== undefined && willContinueExistingRun && resumableRun) {
+  if (declaredContinuation?.stamp.mode === 'adopt' && willContinueExistingRun && resumableRun) {
     throw new WorkflowAdoptionError(
-      `Cannot adopt run '${options.adoptRunId}': this conversation already continues ` +
+      `Cannot adopt run '${declaredContinuation.run.id}': this conversation already continues ` +
         `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
         'first, or declare the adoption from a conversation with no open run.'
     );
   }
-  if (options?.supersedesRunId !== undefined && willContinueExistingRun && resumableRun) {
+  if (declaredContinuation?.stamp.mode === 'supersede' && willContinueExistingRun && resumableRun) {
     throw new WorkflowAdoptionError(
-      `Cannot supersede run '${options.supersedesRunId}': this conversation already continues ` +
+      `Cannot supersede run '${declaredContinuation.run.id}': this conversation already continues ` +
         `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
         'first, or declare the supersede from a conversation with no open run.'
     );

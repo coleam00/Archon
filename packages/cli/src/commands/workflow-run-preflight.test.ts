@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import {
   mockCreateWorkflowRun,
   firstDetachedSpawnOptions,
@@ -464,12 +465,8 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     const workflowDb = await import('@archon/core/db/workflows');
     setupSupersedesMocks();
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: supersededRunId },
+      makeContinuationRun({ id: supersededRunId }),
     ]);
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: supersededRunId,
-      status: 'completed',
-    });
 
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
       supersedesRunId: '0b1ee8da',
@@ -477,8 +474,7 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     });
 
     expect(workflowDb.findWorkflowRunsByIdPrefix).toHaveBeenCalledWith('0b1ee8da', 'cb-sup');
-    // The terminality check sees the resolved full id, not the typed prefix.
-    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(supersededRunId);
+    expect(workflowDb.getWorkflowRun).not.toHaveBeenCalledWith('0b1ee8da');
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining(`Superseding run ${supersededRunId}`)
     );
@@ -509,10 +505,9 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
     const workflowDb = await import('@archon/core/db/workflows');
     setupSupersedesMocks();
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: supersededRunId,
-      status: 'completed',
-    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(
+      makeContinuationRun({ id: supersededRunId })
+    );
 
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
       supersedesRunId: supersededRunId,
@@ -539,12 +534,8 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     const workflowDb = await import('@archon/core/db/workflows');
     setupSupersedesMocks();
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: supersededRunId },
+      makeContinuationRun({ id: supersededRunId, status: 'running' }),
     ]);
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: supersededRunId,
-      status: 'running',
-    });
 
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
@@ -574,12 +565,8 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
       kind: 'folder',
     });
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: supersededRunId },
+      makeContinuationRun({ id: supersededRunId }),
     ]);
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: supersededRunId,
-      status: 'completed',
-    });
 
     const child = createDetachedChildFixture();
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
@@ -634,13 +621,8 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
       kind: 'folder',
     });
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: supersededRunId },
+      makeContinuationRun({ id: supersededRunId, status: 'running' }),
     ]);
-    // Argument-aware on purpose: the queued-value mocks are argument-blind, which
-    // would let terminality pass here even if it ran on the raw prefix.
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockImplementation(async (id: string) =>
-      id === supersededRunId ? { id: supersededRunId, status: 'running' } : null
-    );
 
     const spawnSpy = spyOn(Bun, 'spawn');
     try {

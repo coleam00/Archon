@@ -62,7 +62,10 @@ export function setupRoutingTests() {
     };
   }
 
-  beforeEach(resetDispatchMocks);
+  beforeEach(() => {
+    resetDispatchMocks();
+    for (const id of ['prior-run', 'replaced-run']) makeResumableRun({ id, status: 'completed' });
+  });
 
   /** Drive a refused resume (a lost race by default) with an optional supplied-input map. */
   async function dispatchLosingResumeRace(

@@ -25,9 +25,11 @@ import type {
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import { resolveRunContinuation } from '@archon/core/operations/workflow-continuation';
+import type { ContinuationMetadata } from '@archon/workflows/schemas/workflow-run';
+import { readChatProjectScope } from '../workflow-scope';
 import { resolveCliUserId } from '../utils/cli-user';
-import { getLog, resolveRunIdArg, type WorkflowRunOptions } from './workflow-shared';
+import { getLog, type WorkflowRunOptions } from './workflow-shared';
 
 /** The refusal when `--resume` finds nothing to continue. */
 export function buildNoResumableRunError(workflowName: string, cwd: string): Error {
@@ -43,31 +45,16 @@ export function buildResumeLookupFailureError(error: Error): Error {
   );
 }
 
-/**
- * Validate a `--supersedes` declaration (#2747): the run must exist and be terminal.
- * Supersede inherits nothing, so existence and terminality are the whole contract.
- *
- * The `--detach` pre-flight, which refuses before forking (#2872), and the run path that
- * records the provenance both reach it through `resolveContinuationDeclaration`.
- */
-export async function resolveSupersededRun(
-  host: WorkflowHost,
-  runId: string
-): Promise<WorkflowRun> {
-  const superseded = await host.deps.store.getWorkflowRun(runId);
-  if (!superseded) {
-    throw new Error(`Cannot supersede: no workflow run '${runId}' exists.`);
-  }
-  if (!TERMINAL_WORKFLOW_STATUSES.includes(superseded.status)) {
-    throw new Error(`Cannot supersede run '${superseded.id}': it is still ${superseded.status}.`);
-  }
-  return superseded;
-}
-
 /** A resolved between-run continuation declaration (#2747): `--adopt` or `--supersedes`. */
 export type ContinuationDeclaration =
-  | { mode: 'adopt'; runId: string; adoptedRun: WorkflowRun; lane: AdoptionLane }
-  | { mode: 'supersede'; runId: string; superseded: WorkflowRun };
+  | {
+      mode: 'adopt';
+      runId: string;
+      adoptedRun: WorkflowRun;
+      lane: AdoptionLane;
+      stamp: ContinuationMetadata;
+    }
+  | { mode: 'supersede'; runId: string; superseded: WorkflowRun; stamp: ContinuationMetadata };
 
 /**
  * Resolve `--adopt` or `--supersedes` to the run it names, or `undefined` when neither is
@@ -77,24 +64,27 @@ export type ContinuationDeclaration =
  */
 export async function resolveContinuationDeclaration(
   host: WorkflowHost,
-  cwd: string,
+  _cwd: string,
   options: Pick<WorkflowRunOptions, 'adoptRunId' | 'supersedesRunId' | 'container'>,
   codebase: Codebase | null | undefined
 ): Promise<ContinuationDeclaration | undefined> {
-  const declared =
-    options.adoptRunId !== undefined
-      ? { mode: 'adopt' as const, ref: options.adoptRunId }
-      : options.supersedesRunId !== undefined
-        ? { mode: 'supersede' as const, ref: options.supersedesRunId }
-        : undefined;
-  if (!declared) return undefined;
+  if (options.adoptRunId === undefined && options.supersedesRunId === undefined) return undefined;
   if (!codebase) {
     throw new Error(
       'Cannot resolve the project for --adopt/--supersedes. Run from the project checkout and try again.'
     );
   }
-  const runId = await resolveRunIdArg(host, declared.ref, cwd, false, codebase.id);
-  if (declared.mode === 'adopt') {
+  const selectedProject = readChatProjectScope();
+  const resolved = await resolveRunContinuation({
+    store: host.deps.store,
+    ...options,
+    codebaseId: selectedProject ?? codebase.id,
+    restrictToProject: selectedProject !== undefined,
+  });
+  if (!resolved) return undefined;
+  const { run, stamp } = resolved;
+  const runId = run.id;
+  if (stamp.mode === 'adopt') {
     const { adoptedRun, lane } = await resolveWorkflowAdoption({
       deps: {
         getRun: id => host.deps.store.getWorkflowRun(id),
@@ -108,9 +98,9 @@ export async function resolveContinuationDeclaration(
       codebaseKind: codebase.kind,
       containerRequested: options.container === true,
     });
-    return { mode: 'adopt', runId, adoptedRun, lane };
+    return { mode: stamp.mode, runId, adoptedRun, lane, stamp };
   }
-  return { mode: 'supersede', runId, superseded: await resolveSupersededRun(host, runId) };
+  return { mode: stamp.mode, runId, superseded: run, stamp };
 }
 
 /**

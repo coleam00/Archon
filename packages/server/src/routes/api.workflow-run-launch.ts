@@ -1,8 +1,12 @@
+import {
+  resolveRunContinuation,
+  WorkflowContinuationError,
+} from '@archon/core/operations/workflow-continuation';
 import { unlink } from 'fs/promises';
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import type { AttachedFile, Conversation, HandleMessageContext, RunActor } from '@archon/core';
-import { generateTitleForUser, resolveTitleRequest } from '@archon/core';
+import { generateTitleForUser, resolveTitleRequest, createWorkflowDeps } from '@archon/core';
 import { parseWorkflowRunConfig } from '@archon/core/config';
 import * as messageDb from '@archon/core/db/messages';
 import { getArchonWorkspacesPath } from '@archon/paths';
@@ -35,8 +39,11 @@ const runWorkflowRoute = createRoute({
     'cost, so a missing required input or an undeclared key is refused up front. `config` ' +
     'supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. ' +
     'Caller-supplied filesystem config paths are rejected. JSON requests may supply ' +
-    '`adopt_run_id` or `supersedes_run_id`, but not both. If dispatch would continue an ' +
+    '`adopt_run_id` or `supersedes_run_id`, but not both. Unique prefixes resolve in the conversation selected project; ' +
+    'full IDs select the exact run. Missing project scope for a prefix, unknown or ambiguous IDs, and non-terminal targets ' +
+    'return HTTP 400 before queuing; ambiguity errors list candidates. Execution rechecks targets after queuing. If dispatch would continue an ' +
     'existing run, either declaration is refused before continuation or its fresh fallback. ' +
+    'Execution-time refusals arrive on conversation SSE after an HTTP 200 accepted response. ' +
     'The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it ' +
     'with `/workflow abandon <id>` before retrying, or use a conversation with no open run. ' +
     'An accepted fresh supersede records `adopted_from_run_id` and ' +
@@ -462,6 +469,26 @@ async function launchWorkflowRun(
   // once it is known that the caller may reach this conversation.
   const access = await authorizeDispatchConversation(c, request.conversationId);
   if ('error' in access) return access.error;
+
+  try {
+    const resolved = await resolveRunContinuation({
+      store: createWorkflowDeps().store,
+      adoptRunId: request.adoptRunId,
+      supersedesRunId: request.supersedesRunId,
+      codebaseId: access.conversation?.codebase_id,
+    });
+    if (resolved) {
+      request = {
+        ...request,
+        adoptRunId: resolved.stamp.mode === 'adopt' ? resolved.run.id : undefined,
+        supersedesRunId: resolved.stamp.mode === 'supersede' ? resolved.run.id : undefined,
+      };
+    }
+  } catch (error) {
+    if (error instanceof WorkflowContinuationError) return apiError(c, 400, error.message);
+    getLog().error({ err: error }, 'run_continuation_resolution_failed');
+    return apiError(c, 500, 'Failed to resolve workflow continuation');
+  }
 
   const uploaded = await persistLaunchFiles(request, workflowName);
   if (!uploaded.ok) return apiError(c, uploaded.status, uploaded.error);

@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import {
   mockGetCurrentBranchStrict,
   createTestWorkflowHost,
@@ -98,6 +99,9 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
         ...lane.environment,
       });
     }
+    (
+      require('@archon/core/db/workflows').getWorkflowRun as ReturnType<typeof mock>
+    ).mockImplementation(async (id: string) => makeContinuationRun({ id }));
     const adoption = require('@archon/core/operations/workflow-adoption');
     (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
       adoptedRun: { id: 'run-old' },
@@ -164,7 +168,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       kind: 'folder',
     });
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: adoptedRunId },
+      makeContinuationRun({ id: adoptedRunId }),
     ]);
 
     await workflowRunCommand(createTestWorkflowHost(), '/test/path/subdir', 'assist', 'hello', {

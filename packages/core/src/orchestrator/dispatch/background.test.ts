@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { makeRun } from '../../test/orchestrator-agent-fixtures';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath } from 'node:fs/promises';
@@ -827,7 +828,12 @@ describe('dispatchBackgroundWorkflow', () => {
 
   test('fresh background supersede persists provenance on the pre-created row', async () => {
     await dispatchBackgroundWorkflow(
-      makeRoutingCtx({ supersedesRunId: 'replaced-run' }),
+      makeRoutingCtx({
+        declaredContinuation: {
+          run: makeRun({ id: 'replaced-run', status: 'failed' }),
+          stamp: { mode: 'supersede' },
+        },
+      }),
       makeWorkflow({ worktree: { enabled: false } })
     );
 
@@ -878,7 +884,10 @@ describe('dispatchBackgroundWorkflow', () => {
     }));
     try {
       await dispatchBackgroundWorkflow(
-        makeRoutingCtx({ adoptRunId: 'ancestor', userId: 'new-actor' }),
+        makeRoutingCtx({
+          declaredContinuation: { run: ancestor, stamp: { mode: 'adopt' } },
+          userId: 'new-actor',
+        }),
         makeWorkflow({ worktree: { enabled: false } })
       );
       await flushBackgroundExecution();
