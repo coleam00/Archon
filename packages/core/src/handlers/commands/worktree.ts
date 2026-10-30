@@ -205,7 +205,7 @@ async function listConversationWorktrees(
       const restOfLine = parts.slice(1).join(' ');
       const shortenedLine = restOfLine ? `${shortPath} ${restOfLine}` : shortPath;
 
-      const isActive = activePath && fullPath === activePath;
+      const isActive = activePath && isSameWorktreePath(fullPath, activePath);
       const marker = isActive ? ' <- active' : '';
       msg += `${shortenedLine}${marker}\n`;
     }
@@ -336,7 +336,7 @@ async function listGitWorktrees(
     let msg = 'Secondary worktrees on local branches (from git):\n\n';
     for (const wt of gitWorktrees) {
       const shortPath = shortenPath(wt.path, mainPath);
-      const isCurrent = activePath && wt.path === activePath;
+      const isCurrent = activePath && isSameWorktreePath(wt.path, activePath);
       const marker = isCurrent ? ' ← current' : '';
       msg += `  ${wt.branch} → ${shortPath}${marker}\n`;
     }

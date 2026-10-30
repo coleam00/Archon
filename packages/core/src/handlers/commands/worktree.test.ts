@@ -273,6 +273,51 @@ describe('CommandHandler', () => {
         });
       });
 
+      test.each([
+        ['list', ' <- active'],
+        ['orphans', ' ← current'],
+      ])(
+        'marks the active checkout with alternate Windows spelling in %s',
+        async (route, marker) => {
+          mockGetCodebase.mockResolvedValue(
+            makeCodebase({ default_cwd: 'D:\\repo', kind: 'repo' })
+          );
+          const env = makeIsolationEnvironment({
+            working_path: 'd:\\repo\\worktrees\\feat-x\\',
+          });
+          mockIsolationEnvDbGet.mockResolvedValue(env);
+          spyExecFileAsync.mockResolvedValue({
+            stdout:
+              'D:/repo abc1234 [main]\nD:/repo/worktrees/feat-x def5678 [feat-x]\nD:/repo/worktrees/feat-y fed9876 [feat-y]\n',
+            stderr: '',
+          });
+          spyListWorktrees.mockResolvedValue([
+            { path: 'D:/repo', branch: 'main' },
+            { path: 'D:/repo/worktrees/feat-x', branch: 'feat-x' },
+            { path: 'D:/repo/worktrees/feat-y', branch: 'feat-y' },
+          ]);
+          const comparePaths = git.isSameWorktreePath;
+          const pathSpy = spyOn(git, 'isSameWorktreePath').mockImplementation((a, b) =>
+            comparePaths(a, b, win32)
+          );
+          try {
+            const result = await handleCommand(
+              makeConversation({ ...conversationWithCodebase, isolation_env_id: env.id }),
+              `/worktree ${route}`,
+              operator
+            );
+
+            expect(result.success).toBe(true);
+            const lines = result.message.split('\n');
+            expect(lines.find(line => line.includes('feat-x'))).toContain(marker);
+            expect(lines.find(line => line.includes('feat-y'))).not.toContain(marker);
+            expect(lines.filter(line => line.includes(marker))).toHaveLength(1);
+          } finally {
+            pathSpy.mockRestore();
+          }
+        }
+      );
+
       describe('orphans', () => {
         test('excludes alternate Windows spellings of the main checkout', async () => {
           mockGetCodebase.mockResolvedValue(
