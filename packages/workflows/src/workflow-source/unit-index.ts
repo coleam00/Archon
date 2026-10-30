@@ -3,10 +3,10 @@ import { workflowPackManifestSchema } from '@archon/plugin-manifest';
 import { installedPackKey, installedPluginRecordSchema } from './installed-record';
 
 import {
+  installedSourceUnit,
   PROJECT_SCOPE_DIR,
   GLOBAL_SCOPE_DIR,
   BUNDLED_SCOPE_DIR,
-  INSTALLED_SCOPE_DIR,
 } from './roots';
 
 const relativePath = z
@@ -30,6 +30,13 @@ export const sourceUnitSchema = z
           path: relativePath,
           hash: z.string().regex(/^[a-f0-9]{64}$/),
           size: z.number().int().nonnegative().safe(),
+          workflow: z
+            .object({
+              name: z.string(),
+              references: z.array(z.string()),
+            })
+            .strict()
+            .optional(),
         })
         .strict()
     ),
@@ -61,7 +68,7 @@ function installedRoots(index: UnitIndex, ctx: z.RefinementCtx): Set<string> {
   const roots = new Set<string>();
   for (const plugin of index.installed_plugins) {
     const owner = plugin.id.split('/')[0];
-    const root = `${INSTALLED_SCOPE_DIR}/${plugin.key}`;
+    const root = installedSourceUnit(plugin.key);
     if (
       !/^[a-zA-Z0-9_-]+$/.test(owner) ||
       plugin.key !== installedPackKey(owner, plugin.manifest.name)

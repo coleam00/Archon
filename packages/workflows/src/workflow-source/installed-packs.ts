@@ -10,6 +10,7 @@ import {
 import { packTreePath, scanReceipts } from '@archon/plugin-manifest/store';
 import type { WorkflowResourceOwner } from '../packaged-workflow';
 import {
+  installedSourceUnit,
   INSTALLED_SCOPE_DIR,
   sourceUnitForOwner,
   type InstalledPacksRoot,
@@ -92,14 +93,14 @@ export async function listInstalledPacks(
       await verifyIndexedUnits(
         root.anchor.root,
         capture.manifest,
-        records.map(record => `installed/${record.key}`)
+        records.map(record => installedSourceUnit(record.key))
       );
       return {
         packs: records.map(record => ({
           owner: record.id.split('/')[0],
           name: record.manifest.name,
           key: record.key,
-          dir: join(root.anchor.root, INSTALLED_SCOPE_DIR, record.key),
+          dir: join(root.anchor.root, installedSourceUnit(record.key)),
           manifest: record.manifest,
           record,
         })),
@@ -224,7 +225,7 @@ export async function packagedWorkflowDirectory(
     case 'installed': {
       const { packs, errors } = await listInstalledPacks(roots.installed, new Set([owner.pack]));
       if (roots.installed.kind === 'captured') {
-        const packPath = join(roots.installed.anchor.root, INSTALLED_SCOPE_DIR, owner.pack);
+        const packPath = join(roots.installed.anchor.root, installedSourceUnit(owner.pack));
         const failure = errors.find(error => error.path === packPath);
         if (failure) throw failure.cause ?? new Error(failure.message);
       }

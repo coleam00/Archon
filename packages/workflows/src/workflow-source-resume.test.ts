@@ -27,7 +27,11 @@ import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { resolveFanOutChildDefinition } from './dag/nodes/compose-fan-out/compose-fan-out';
 import { collectComposedSuspensionPaths } from './include/suspension';
 import { formatPackagedResourceReference } from './packaged-workflow';
-import { WORKFLOW_SOURCE_METADATA_KEY, type WorkflowRun } from './schemas/workflow-run';
+import {
+  WORKFLOW_SOURCE_METADATA_KEY,
+  type WorkflowRun,
+  type WorkflowSourceConfig,
+} from './schemas/workflow-run';
 import type { WorkflowDeps, IWorkflowPlatform } from './deps';
 
 const bundleRoot = await mkdtemp(join(tmpdir(), 'resume-bundle-'));
@@ -123,10 +127,15 @@ function metadata(capture: WorkflowSourceCapture) {
     },
   };
 }
-async function pausedRun(name = 'healthy', firstOutput = 'already-done') {
+async function pausedRun(
+  name = 'healthy',
+  firstOutput = 'already-done',
+  sourceConfig?: WorkflowSourceConfig
+) {
   const capture = await captureWorkflowSource({
     sourceRoot: project,
     captureRoot: join(root, 'capture'),
+    sourceConfig,
   });
   const store = await createFileWorkflowStore({ root: join(root, 'store') });
   const created = await store.createWorkflowRun({
@@ -1382,3 +1391,199 @@ for (const code of ['EACCES', 'ENOENT', 'ENOTDIR', 'EISDIR', 'EPERM', 'ELOOP']) 
     expect(error).toMatchObject({ path, cause });
   });
 }
+
+for (const selected of ['project', 'global', 'bundled'] as const) {
+  test(`${selected} resumes with an unrelated shared workflow unit unreadable`, async () => {
+    const other = selected === 'project' ? 'global' : 'project';
+    const directory =
+      selected === 'project'
+        ? join(project, '.archon/workflows')
+        : selected === 'global'
+          ? join(root, 'home/workflows')
+          : join(bundleRoot, 'selection');
+    const selectedPath = join(directory, 'healthy/healthy.yaml');
+    await put(
+      selectedPath,
+      workflow(
+        'healthy',
+        `${first}\n  - id: remaining\n    bash: echo frozen-selected\n    depends_on: [first]`
+      )
+    );
+    await put(
+      join(
+        other === 'project' ? join(project, '.archon/workflows') : join(root, 'home/workflows'),
+        selected === 'project' ? 'healthy.yaml' : 'unrelated.yaml'
+      ),
+      workflow('unrelated', '  - id: unused\n    bash: exit 99')
+    );
+    if (selected === 'bundled')
+      spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['selection']);
+    try {
+      const fixture = await pausedRun();
+      await put(selectedPath, workflow('healthy', '  - id: wrong\n    bash: exit 99'));
+      const fault = denyReads(join(fixture.capture.anchor.root, other));
+      try {
+        expect(await fixture.resume()).toMatchObject({ success: true });
+        expect(
+          (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs.get(
+            'remaining'
+          )?.output
+        ).toContain('frozen-selected');
+      } finally {
+        fault.mockRestore();
+      }
+    } finally {
+      if (selected === 'bundled') {
+        spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue([]);
+        await removeTempTree(join(bundleRoot, 'selection'));
+      }
+    }
+  });
+}
+
+for (const loadDefaults of [false, true]) {
+  test(`resume ignores unrelated bundled YAML with defaults ${loadDefaults} under a persistent read fault`, async () => {
+    await put(
+      join(project, '.archon/workflows/healthy.yaml'),
+      workflow(
+        'healthy',
+        `${first}\n  - id: remaining\n    bash: echo frozen-selected\n    depends_on: [first]`
+      )
+    );
+    await put(
+      join(bundleRoot, 'disabled/unused/unused.yaml'),
+      workflow('unused', '  - id: unused\n    bash: exit 99')
+    );
+    spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['disabled']);
+    try {
+      const fixture = await pausedRun('healthy', 'already-done', {
+        load_default_workflows: loadDefaults,
+        load_default_commands: true,
+      });
+      const fault = denyReads(join(fixture.capture.anchor.root, 'bundled'));
+      try {
+        expect(await fixture.resume()).toMatchObject({ success: true });
+        expect(
+          (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs.get(
+            'remaining'
+          )?.output
+        ).toContain('frozen-selected');
+      } finally {
+        fault.mockRestore();
+      }
+    } finally {
+      spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue([]);
+      await removeTempTree(join(bundleRoot, 'disabled'));
+    }
+  });
+}
+
+for (const scope of ['project', 'global', 'bundled'] as const) {
+  test(`${scope} workflow with an installed namespace prefix resumes`, async () => {
+    const directory =
+      scope === 'project'
+        ? join(project, '.archon/workflows')
+        : scope === 'global'
+          ? join(root, 'home/workflows')
+          : join(bundleRoot, 'prefixed');
+    await put(
+      join(directory, 'custom/custom.yaml'),
+      workflow(
+        'acme/broken:custom',
+        `${first}\n  - id: remaining\n    bash: echo frozen-prefixed\n    depends_on: [first]`
+      )
+    );
+    if (scope === 'bundled')
+      spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['prefixed']);
+    try {
+      const fixture = await pausedRun('acme/broken:custom');
+      const catalog = await discoverWorkflowsWithConfig(
+        project,
+        loadConfig,
+        providerRegistry,
+        capturedSourceRoots(fixture.capture.anchor)
+      );
+      expect(catalog.workflows.some(file => file.workflow.name === 'acme/broken:custom')).toBe(
+        true
+      );
+      const fault = denyReads(join(fixture.capture.anchor.root, 'installed/acme.broken'));
+      try {
+        expect(await fixture.resume()).toMatchObject({ success: true });
+        expect(
+          (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs.get(
+            'remaining'
+          )?.output
+        ).toContain('frozen-prefixed');
+      } finally {
+        fault.mockRestore();
+      }
+    } finally {
+      if (scope === 'bundled') {
+        spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue([]);
+        await removeTempTree(join(bundleRoot, 'prefixed'));
+      }
+    }
+  });
+}
+
+test('resume verifies an included global workflow and rejects its unreadable unit', async () => {
+  await put(
+    join(project, '.archon/workflows/healthy.yaml'),
+    workflow(
+      'healthy',
+      `${first}\n  - id: included\n    include: global-block\n    depends_on: [first]`
+    )
+  );
+  await put(
+    join(root, 'home/workflows/block.yaml'),
+    workflow('global-block', '  - id: remaining\n    bash: echo frozen-dependency')
+  );
+  const fixture = await pausedRun();
+  const fault = denyReads(join(fixture.capture.anchor.root, 'global'));
+  try {
+    await expect(fixture.resume()).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+    expect(await fixture.store.getWorkflowRunStatus(fixture.run.id)).toBe('paused');
+  } finally {
+    fault.mockRestore();
+  }
+  expect(await fixture.resume()).toMatchObject({ success: true });
+  expect(
+    (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs.get(
+      'included__remaining'
+    )?.output
+  ).toContain('frozen-dependency');
+});
+
+test('an installed entrypoint alias does not reserve its authored name', async () => {
+  await install(
+    'broken',
+    { 'run/run.yaml': workflow('run', '  - id: unused\n    bash: exit 99') },
+    { public: 'run/run.yaml' }
+  );
+  await put(
+    join(project, '.archon/workflows/custom.yaml'),
+    workflow(
+      'acme/broken:run',
+      `${first}\n  - id: remaining\n    bash: echo frozen-alias\n    depends_on: [first]`
+    )
+  );
+  const fixture = await pausedRun('acme/broken:run');
+  const catalog = await discoverWorkflowsWithConfig(
+    project,
+    loadConfig,
+    providerRegistry,
+    capturedSourceRoots(fixture.capture.anchor)
+  );
+  expect(catalog.workflows.some(file => file.workflow.name === 'acme/broken:run')).toBe(true);
+  const fault = denyReads(join(fixture.capture.anchor.root, 'installed/acme.broken'));
+  try {
+    expect(await fixture.resume()).toMatchObject({ success: true });
+    expect(
+      (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs.get(
+        'remaining'
+      )?.output
+    ).toContain('frozen-alias');
+  } finally {
+    fault.mockRestore();
+  }
+});

@@ -2,7 +2,7 @@ import type { SuspensionWorkflow } from '../include/suspension';
 import type { WorkflowLoadError, WorkflowWithSource } from '../schemas';
 import { qualifyPackReferences } from '../packaged-workflow';
 import { installedWorkflowName, listInstalledPacks, type InstalledPack } from '../workflow-source';
-import { INSTALLED_SCOPE_DIR } from '../workflow-source/roots';
+import { INSTALLED_SCOPE_DIR, isInstalledSourceUnit } from '../workflow-source/roots';
 import { selectedWorkflowUnits } from '../workflow-source/load';
 import type { DiscoveryContext } from './context';
 import { expandScope } from './expand-scope';
@@ -39,7 +39,7 @@ export async function discoverInstalled(context: DiscoveryContext): Promise<Inst
     indexed !== undefined && context.workflowName !== undefined
       ? new Set(
           selectedWorkflowUnits(indexed, context.workflowName)
-            .filter(root => root.startsWith(`${INSTALLED_SCOPE_DIR}/`))
+            .filter(isInstalledSourceUnit)
             .map(root => root.slice(INSTALLED_SCOPE_DIR.length + 1))
         )
       : undefined;

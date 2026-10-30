@@ -1,3 +1,4 @@
+import { INSTALLED_SCOPE_DIR, installedSourceUnit } from './roots';
 import { createHash } from 'node:crypto';
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -100,7 +101,7 @@ export async function assertIndexedLayout(
       if (!entry.isDirectory() || !manifest.scopes.some(scope => scope === entry.name)) {
         throw new WorkflowSourceIntegrityError(`Unindexed source root: ${entry.name}`, captureRoot);
       }
-      if (entry.name === 'installed') await assertInstalledLayout(captureRoot, manifest);
+      if (entry.name === INSTALLED_SCOPE_DIR) await assertInstalledLayout(captureRoot, manifest);
     }
   } catch (error) {
     throw sourceReadError(captureRoot, error);
@@ -112,8 +113,10 @@ async function assertInstalledLayout(
   manifest: IndexedWorkflowSourceManifest
 ): Promise<void> {
   const roots = new Set(manifest.units.map(unit => unit.root));
-  for (const pack of await readdir(join(captureRoot, 'installed'), { withFileTypes: true })) {
-    if (!pack.isDirectory() || !roots.has(`installed/${pack.name}`)) {
+  for (const pack of await readdir(join(captureRoot, INSTALLED_SCOPE_DIR), {
+    withFileTypes: true,
+  })) {
+    if (!pack.isDirectory() || !roots.has(installedSourceUnit(pack.name))) {
       throw new WorkflowSourceIntegrityError(
         `Unindexed installed source: ${pack.name}`,
         captureRoot

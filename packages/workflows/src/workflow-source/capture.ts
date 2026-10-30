@@ -1,3 +1,4 @@
+import { indexWorkflowFiles } from './workflow-index';
 import { mkdir, rename, rm, readFile, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import * as archonPaths from '@archon/paths';
@@ -20,10 +21,11 @@ import {
   type WorkflowSourceManifest,
 } from './manifest';
 import {
+  installedSourceUnit,
+  isInstalledSourceUnit,
   BUNDLED_SCOPE_DIR,
   DEFAULT_WORKFLOW_SOURCE_CONFIG,
   GLOBAL_SCOPE_DIR,
-  INSTALLED_SCOPE_DIR,
   PROJECT_SCOPE_DIR,
   liveSourceRoots,
   type InstalledPacksRoot,
@@ -162,7 +164,7 @@ async function installedCapture(installedFrom: InstalledPacksRoot): Promise<Inst
   }
   const { packs, errors } = await listInstalledPacks(installedFrom);
   const jobs: CaptureJob[] = packs.map(pack => ({
-    dest: join(INSTALLED_SCOPE_DIR, pack.key),
+    dest: installedSourceUnit(pack.key),
     from: pack.dir,
     scope: 'installed',
   }));
@@ -186,7 +188,7 @@ async function installedCapture(installedFrom: InstalledPacksRoot): Promise<Inst
   for (const record of records) {
     if (!keys.has(record.key)) {
       throw new WorkflowSourceUnavailableError(
-        join(installedFrom.anchor.root, INSTALLED_SCOPE_DIR, record.key),
+        join(installedFrom.anchor.root, installedSourceUnit(record.key)),
         new Error('Installed pack recorded by the parent capture could not be listed')
       );
     }
@@ -230,8 +232,7 @@ async function stageCapture(
     scopesCaptured.add('bundled');
   }
 
-  // The bundled files were written from bytes whose hashes are already known, so reading
-  // them back would restate what the scope already carries. Everything else is read.
+  // Bundled hashes cover the exact bytes written above; mutable scopes need staging hashes.
   const entries = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
   const allEntries = [...entries, ...(bundled?.files ?? [])];
   const records = installed.inherited
@@ -239,12 +240,12 @@ async function stageCapture(
     : await stagedInstalledRecords(staging, installed.records);
   const unitRoots = [
     ...[...scopesCaptured].filter(scope => scope !== 'installed'),
-    ...installed.records.map(record => `installed/${record.key}`),
+    ...installed.records.map(record => installedSourceUnit(record.key)),
   ].sort();
   const units: SourceUnit[] = unitRoots.map(
     root =>
       installed.inherited?.manifest.units.find(
-        unit => unit.root.startsWith('installed/') && unit.root === root
+        unit => isInstalledSourceUnit(unit.root) && unit.root === root
       ) ?? {
         root,
         files: allEntries
@@ -257,6 +258,10 @@ async function stageCapture(
           }))
           .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
       }
+  );
+  await indexWorkflowFiles(
+    staging,
+    units.filter(unit => !installed.inherited || !isInstalledSourceUnit(unit.root))
   );
   const manifest: IndexedWorkflowSourceManifest = {
     engine_version: BUNDLED_VERSION,
@@ -289,7 +294,7 @@ async function stagedInstalledRecords(
 ): Promise<IndexedInstalledPlugin[]> {
   const staged: IndexedInstalledPlugin[] = [];
   for (const record of records) {
-    const root = `installed/${record.key}`;
+    const root = installedSourceUnit(record.key);
     const manifest = await readPackManifest(join(staging, root));
     if (installedPackKey(record.id.split('/')[0], manifest.name) !== record.key)
       throw new Error(
@@ -337,7 +342,7 @@ async function copyInheritedUnits(
   staging: string,
   inherited: NonNullable<InstalledCapture['inherited']>
 ): Promise<void> {
-  for (const unit of inherited.manifest.units.filter(unit => unit.root.startsWith('installed/'))) {
+  for (const unit of inherited.manifest.units.filter(unit => isInstalledSourceUnit(unit.root))) {
     const destination = join(staging, unit.root);
     try {
       await readInheritedSource(

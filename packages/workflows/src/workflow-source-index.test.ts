@@ -1,3 +1,4 @@
+import { indexWorkflowFiles } from './workflow-source/workflow-index';
 import { expect, test, spyOn } from 'bun:test';
 import * as fs from 'node:fs/promises';
 import { mkdir, mkdtemp, writeFile, readFile, rm, symlink } from 'node:fs/promises';
@@ -420,20 +421,22 @@ for (const scope of ['project', 'global', 'bundled'] as const) {
         { root: scope, files: inventory.map(path => ({ path, hash: hash(''), size: 0 })) },
       ];
       const disk = join(root, 'admission');
+      const scopeRoot = join(disk, scope);
       if (markerDirectory)
-        await mkdir(join(disk, directory, scopePath(markerDirectory)), { recursive: true });
+        await mkdir(join(scopeRoot, directory, scopePath(markerDirectory)), { recursive: true });
       const content =
         'name: run\ndescription: Fixture\nnodes:\n  - id: check\n    bash: echo done\n';
       for (const path of inventory) {
-        await mkdir(dirname(join(disk, path)), { recursive: true });
-        await writeFile(join(disk, path), content);
+        await mkdir(dirname(join(scopeRoot, path)), { recursive: true });
+        await writeFile(join(scopeRoot, path), content);
       }
       const parsed = await loadScopeDirectory(
         { providers: providerRegistry, configuredEnvNames: new Set() },
-        join(disk, directory, ...(scope === 'bundled' ? ['defaults'] : [])),
-        join(disk, directory),
+        join(scopeRoot, directory, ...(scope === 'bundled' ? ['defaults'] : [])),
+        join(scopeRoot, directory),
         scope
       );
+      await indexWorkflowFiles(disk, manifest.units);
       expect(parsed.workflows.size > 0).toBe(expected);
       expect(selectedWorkflowUnits(manifest, 'run')).toEqual(expected ? [scope] : []);
     });
@@ -474,4 +477,14 @@ test('a manifest stat failure remains an observable workflow read error', async 
   } finally {
     fault.mockRestore();
   }
+});
+
+test('workflow selection metadata is authenticated by the run digest', async () => {
+  const source = await fixture();
+  const anchor = anchorFor(source);
+  source.manifest.units[1].files[0].workflow = { name: 'replacement', references: [] };
+  await writeManifest(source.root, source.manifest);
+  await expect(
+    openWorkflowSource(anchor.root, anchor.digest, anchor.config)
+  ).rejects.toBeInstanceOf(WorkflowSourceIntegrityError);
 });

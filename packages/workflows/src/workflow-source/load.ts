@@ -1,10 +1,5 @@
-import {
-  commandNameForRelativePath,
-  getCommandFolderSearchPaths,
-  getWorkflowFolderSearchPaths,
-} from '@archon/paths';
+import { commandNameForRelativePath, getCommandFolderSearchPaths } from '@archon/paths';
 import { getRuntimeForExtension, MAX_SCRIPT_DISCOVERY_DEPTH } from '../script-file';
-import { hasWorkflowFiles } from '../workflow-discovery/load-dir';
 import { installedWorkflowName } from './installed-record';
 import { parsePackagedResourceReference } from '../packaged-workflow';
 import { isDeepStrictEqual } from 'node:util';
@@ -28,11 +23,11 @@ import {
   type IndexedWorkflowSourceManifest,
 } from './manifest';
 import {
+  installedSourceUnit,
   sourceUnitForOwner,
   PROJECT_SCOPE_DIR,
   GLOBAL_SCOPE_DIR,
   BUNDLED_SCOPE_DIR,
-  INSTALLED_SCOPE_DIR,
   type InstalledPacksRoot,
   type WorkflowSourceRoots,
   type WorkflowSourceAnchor,
@@ -317,33 +312,68 @@ export async function resolveChildDiscoveryRoot(
   return state.record.origin;
 }
 
-/** Select a namespace using only the run-authenticated catalog. */
+/** Resolve shared filename precedence and dependency ownership from the authenticated index. */
 export function selectedWorkflowUnits(
   manifest: IndexedWorkflowSourceManifest,
   workflowName: string
 ): string[] {
-  const pack = manifest.installed_plugins.find(record => {
-    const owner = record.id.split('/')[0];
-    return workflowName.startsWith(
-      installedWorkflowName({ owner, name: record.manifest.name }, '')
+  const files = new Map<string, { root: string; name: string; references: string[] }>();
+  for (const scope of [BUNDLED_SCOPE_DIR, GLOBAL_SCOPE_DIR, PROJECT_SCOPE_DIR]) {
+    if (scope === BUNDLED_SCOPE_DIR && !manifest.source_config.load_default_workflows) continue;
+    for (const file of manifest.units.find(unit => unit.root === scope)?.files ?? []) {
+      if (file.workflow !== undefined)
+        files.set(basename(file.path), { root: scope, ...file.workflow });
+    }
+  }
+  const selected = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (name: string): void => {
+    if (visited.has(name)) return;
+    visited.add(name);
+    const entrypoint = manifest.installed_plugins.find(record =>
+      Object.keys(record.manifest.entrypoints).some(
+        entry =>
+          name ===
+          installedWorkflowName(
+            { owner: record.id.split('/')[0], name: record.manifest.name },
+            entry
+          )
+      )
     );
-  });
-  return pack
-    ? [`${INSTALLED_SCOPE_DIR}/${pack.key}`]
-    : manifest.units
-        .filter(
-          unit =>
-            !unit.root.startsWith(`${INSTALLED_SCOPE_DIR}/`) &&
-            (unit.root === PROJECT_SCOPE_DIR ? getWorkflowFolderSearchPaths() : ['workflows']).some(
-              directory =>
-                hasWorkflowFiles(
-                  new Set(unit.files.map(file => file.path)),
-                  unit.root === BUNDLED_SCOPE_DIR ? `${directory}/defaults` : directory,
-                  directory
+    if (entrypoint !== undefined) {
+      selected.add(installedSourceUnit(entrypoint.key));
+      return;
+    }
+    const shared = [...files.values()].filter(file => file.name === name);
+    if (shared.length > 0) {
+      for (const file of shared) {
+        selected.add(file.root);
+        for (const reference of file.references) visit(reference);
+      }
+      return;
+    }
+    for (const record of manifest.installed_plugins) {
+      const root = installedSourceUnit(record.key);
+      const entrypointPaths = new Set(Object.values(record.manifest.entrypoints));
+      if (
+        manifest.units
+          .find(unit => unit.root === root)
+          ?.files.some(
+            file =>
+              file.workflow !== undefined &&
+              !entrypointPaths.has(file.path) &&
+              name ===
+                installedWorkflowName(
+                  { owner: record.id.split('/')[0], name: record.manifest.name },
+                  file.workflow.name
                 )
-            )
-        )
-        .map(unit => unit.root);
+          )
+      )
+        selected.add(root);
+    }
+  };
+  visit(workflowName);
+  return [...selected];
 }
 
 export async function verifySelectedWorkflowSource(

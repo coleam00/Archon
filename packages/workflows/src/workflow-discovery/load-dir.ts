@@ -61,43 +61,51 @@ export function isYamlFile(entry: string): boolean {
   return entry.endsWith('.yaml') || entry.endsWith('.yml');
 }
 
-/** Match the scope loader against an authenticated, slash-separated file inventory. */
-export function hasWorkflowFiles(
+/** Match one file against discovery's authenticated, slash-separated inventory. */
+export function isWorkflowFile(
+  path: string,
   files: ReadonlySet<string>,
   flatDirectory: string,
   packagedRoot: string
 ): boolean {
-  return [...files].some(path => {
-    if (!isYamlFile(path)) return false;
-    if (path.startsWith(`${flatDirectory}/`)) {
-      const directories = path
-        .slice(flatDirectory.length + 1)
-        .split('/')
-        .slice(0, -1);
-      if (
-        directories.length <= MAX_DISCOVERY_DEPTH &&
-        directories.every(
-          (entry, depth) =>
-            entry !== FIXTURES_DIR &&
-            !files.has(
-              `${flatDirectory}/${directories.slice(0, depth + 1).join('/')}/${PLUGIN_MANIFEST_FILE}`
-            )
-        )
+  if (!isYamlFile(path)) return false;
+  if (path.startsWith(`${flatDirectory}/`)) {
+    const directories = path
+      .slice(flatDirectory.length + 1)
+      .split('/')
+      .slice(0, -1);
+    if (
+      directories.length <= MAX_DISCOVERY_DEPTH &&
+      directories.every(
+        (entry, depth) =>
+          entry !== FIXTURES_DIR &&
+          !files.has(
+            `${flatDirectory}/${directories.slice(0, depth + 1).join('/')}/${PLUGIN_MANIFEST_FILE}`
+          )
       )
-        return true;
-    }
-    if (!path.startsWith(`${packagedRoot}/`)) return false;
-    const segments = path.slice(packagedRoot.length + 1).split('/');
-    const [pack, folder] = segments;
-    return (
-      segments.length === 3 &&
-      pack !== 'defaults' &&
-      pack !== FIXTURES_DIR &&
-      isValidWorkflowFolderSegment(pack) &&
-      folder !== FIXTURES_DIR &&
-      isValidWorkflowFolderSegment(folder)
-    );
-  });
+    )
+      return true;
+  }
+  if (!path.startsWith(`${packagedRoot}/`)) return false;
+  const segments = path.slice(packagedRoot.length + 1).split('/');
+  const [pack] = segments;
+  return (
+    segments.length === 3 &&
+    pack !== 'defaults' &&
+    pack !== FIXTURES_DIR &&
+    isValidWorkflowFolderSegment(pack) &&
+    isPackWorkflowFile(segments.slice(1).join('/'))
+  );
+}
+
+export function isPackWorkflowFile(path: string): boolean {
+  const segments = path.split('/');
+  return (
+    segments.length === 2 &&
+    segments[0] !== FIXTURES_DIR &&
+    isValidWorkflowFolderSegment(segments[0]) &&
+    isYamlFile(segments[1])
+  );
 }
 
 /** A filesystem failure as a load error: `<operation> error: <message> (<code>)`. */
