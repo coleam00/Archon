@@ -1689,3 +1689,75 @@ test('resume admits a required global child before advancing the paused parent',
       ?.output
   ).toContain('frozen-child');
 });
+
+const dotenvReads = {
+  shell: '    bash: echo "$INPUTS_DOTENV_ONLY" "$INPUTS_CONFIG_ONLY"',
+  bun: '    script: console.log(process.env.INPUTS_DOTENV_ONLY, process.env.INPUTS_CONFIG_ONLY)\n    runtime: bun',
+  python:
+    '    script: print(os.environ["INPUTS_DOTENV_ONLY"], os.environ["INPUTS_CONFIG_ONLY"])\n    runtime: uv',
+};
+
+for (const origin of ['project', 'home'] as const) {
+  for (const [runtime, read] of Object.entries(dotenvReads)) {
+    for (const scope of ['project', 'global', 'bundled', 'installed'] as const) {
+      test(`resume indexes ${scope} ${runtime} reads supplied only by ${origin} dotenv`, async () => {
+        await put(
+          join(origin === 'project' ? join(project, '.archon') : join(root, 'home'), '.env'),
+          'INPUTS_DOTENV_ONLY=dotenv-private-value\n'
+        );
+        const content = `inputs:\n  declared: {}\n${workflow(
+          'healthy',
+          `  - id: first\n${read}\n  - id: remaining\n    bash: echo frozen-dotenv\n    depends_on: [first]`
+        )}`;
+        const sourceConfig: WorkflowSourceConfig = {
+          load_default_workflows: true,
+          load_default_commands: true,
+          env_var_names: ['INPUTS_CONFIG_ONLY'],
+        };
+        const name = scope === 'installed' ? 'acme/healthy:run' : 'healthy';
+        if (scope === 'installed') await install('healthy', { 'run/run.yaml': content });
+        else {
+          const directory =
+            scope === 'project'
+              ? join(project, '.archon/workflows')
+              : scope === 'global'
+                ? join(root, 'home/workflows')
+                : join(bundleRoot, 'dotenv');
+          await put(join(directory, 'healthy/healthy.yaml'), content);
+        }
+        if (scope === 'bundled')
+          spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['dotenv']);
+        try {
+          const catalog = await discoverWorkflowsWithConfig(
+            project,
+            async () => ({
+              ...(await loadConfig(project)),
+              envVars: { INPUTS_CONFIG_ONLY: 'config-private-value' },
+            }),
+            providerRegistry
+          );
+          expect(catalog.workflows.some(file => file.workflow.name === name)).toBe(true);
+          const fixture = await pausedRun(name, 'already-done', sourceConfig);
+          expect(JSON.stringify(fixture.capture.manifest)).not.toContain('dotenv-private-value');
+          const fault = denyReads(join(fixture.capture.anchor.root, 'installed/acme.broken'));
+          try {
+            expect(await fixture.resume()).toMatchObject({ success: true });
+            expect(await fixture.store.getWorkflowRunStatus(fixture.run.id)).toBe('completed');
+            const snapshot = await fixture.store.getDagResumeSnapshot(fixture.run.id);
+            expect(snapshot.completedNodeOutputs.get('first')?.output).toBe('already-done');
+            expect(snapshot.completedNodeOutputs.get('remaining')?.output).toContain(
+              'frozen-dotenv'
+            );
+          } finally {
+            fault.mockRestore();
+          }
+        } finally {
+          if (scope === 'bundled') {
+            spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue([]);
+            await removeTempTree(join(bundleRoot, 'dotenv'));
+          }
+        }
+      });
+    }
+  }
+}

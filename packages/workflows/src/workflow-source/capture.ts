@@ -265,7 +265,13 @@ async function stageCapture(
   await indexWorkflowFiles(
     staging,
     units.filter(unit => !installed.inherited || !isInstalledSourceUnit(unit.root)),
-    { providers: source.providers, configuredEnvNames: new Set(source.sourceConfig.env_var_names) }
+    {
+      providers: source.providers,
+      configuredEnvNames: new Set([
+        ...archonPaths.getArchonEnvNames(source.origin),
+        ...(source.sourceConfig.env_var_names ?? []),
+      ]),
+    }
   );
   const manifest: IndexedWorkflowSourceManifest = {
     engine_version: BUNDLED_VERSION,
