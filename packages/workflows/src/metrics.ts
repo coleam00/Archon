@@ -191,79 +191,99 @@ export async function queryMetrics(
     query.codebaseId === undefined ? {} : { codebaseId: query.codebaseId }
   );
   const counted = await latestTerminalEventIds(store, [...new Set(rows.map(row => row.runId))]);
-  const window = { since: query.since.getTime(), until: query.until.getTime() };
-  const { records, refused } = collectRecords(
-    rows.filter(row => counted.has(row.eventId)),
-    query,
-    window
-  );
+  const since = query.since.getTime();
+  const until = query.until.getTime();
+  const inWindow = (time: number): boolean => time >= since && time < until;
+  const { records, refused } = collectRecords(rows.filter(row => counted.has(row.eventId)));
 
   const byName = new Map<string, CountedRecord[]>();
   for (const entry of records) {
     const { record, time } = entry;
-    if (time < window.since || time >= window.until) continue;
+    if (!inWindow(time)) continue;
     if (query.name !== undefined && record.name !== query.name) continue;
     if (query.subject !== undefined && record.subject !== query.subject) continue;
     byName.set(record.name, [...(byName.get(record.name) ?? []), entry]);
   }
+  const queried = (refusal: MetricRefusal): boolean =>
+    query.name === undefined ||
+    (refusal.reason === 'definition_conflict' && refusal.name === query.name);
 
   return {
     window: { since: query.since.toISOString(), until: query.until.toISOString() },
     metrics: [...byName]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, named]) => nameReport(name, named)),
-    refused,
+    refused: refused
+      .filter(({ refusal, time }) => inWindow(time) && queried(refusal))
+      .map(({ refusal }) => refusal),
   };
+}
+
+/** A refusal with the time it is placed in a window by. */
+interface Refused {
+  refusal: MetricRefusal;
+  time: number;
+}
+
+function invalidRefusal(row: MetricRecordRow, error: z.ZodError): Refused {
+  return {
+    time: Date.parse(row.completedAt),
+    refusal: {
+      reason: 'invalid',
+      ...source(row),
+      errors: error.issues.map(
+        issue => `/metrics/${issue.path.map(String).join('/')}: ${issue.message}`
+      ),
+    },
+  };
+}
+
+/** Fix a name's definition on its first record; return the conflict a later one makes. */
+function admitDefinition(
+  definitions: Map<string, MetricDefinition>,
+  record: MetricRecord
+): { definition: MetricDefinition; offered: MetricDefinition } | null {
+  const offered = definitionOf(record);
+  const definition = definitions.get(record.name);
+  if (definition === undefined) definitions.set(record.name, offered);
+  return definition === undefined || sameDefinition(definition, offered)
+    ? null
+    : { definition, offered };
 }
 
 /**
  * Apply the definition rule and the latest-per-subject rule over counted rows in durable
- * order, returning every surviving record (any time) and the refusals in the window.
+ * order, returning every surviving record and every refusal, at any time.
  */
-function collectRecords(
-  rows: readonly MetricRecordRow[],
-  query: Pick<MetricsQuery, 'name'>,
-  window: { since: number; until: number }
-): { records: CountedRecord[]; refused: MetricRefusal[] } {
-  const inWindow = (time: number): boolean => time >= window.since && time < window.until;
+function collectRecords(rows: readonly MetricRecordRow[]): {
+  records: CountedRecord[];
+  refused: Refused[];
+} {
   const definitions = new Map<string, MetricDefinition>();
-  const refused: MetricRefusal[] = [];
+  const refused: Refused[] = [];
   const bySubject = new Map<string, CountedRecord>();
   const unkeyed: CountedRecord[] = [];
 
   for (const row of rows) {
     const parsed = z.array(metricRecordSchema).safeParse(row.metrics);
     if (!parsed.success) {
-      if (query.name === undefined && inWindow(Date.parse(row.completedAt))) {
-        refused.push({
-          reason: 'invalid',
-          ...source(row),
-          errors: parsed.error.issues.map(
-            issue => `/metrics/${issue.path.map(String).join('/')}: ${issue.message}`
-          ),
-        });
-      }
+      refused.push(invalidRefusal(row, parsed.error));
       continue;
     }
     for (const record of parsed.data) {
       const time = Date.parse(record.at ?? row.completedAt);
-      const offered = definitionOf(record);
-      const definition = definitions.get(record.name);
-      if (definition === undefined) {
-        definitions.set(record.name, offered);
-      } else if (!sameDefinition(definition, offered)) {
-        if ((query.name === undefined || query.name === record.name) && inWindow(time)) {
-          refused.push({
+      const conflict = admitDefinition(definitions, record);
+      if (conflict) {
+        refused.push({
+          time,
+          refusal: {
             reason: 'definition_conflict',
             ...source(row),
             name: record.name,
-            definition,
-            offered,
-          });
-        }
-        continue;
-      }
-      if (record.subject === null) {
+            ...conflict,
+          },
+        });
+      } else if (record.subject === null) {
         unkeyed.push({ record, time });
       } else {
         const key = JSON.stringify([record.name, record.subject, record.instrument ?? null]);
