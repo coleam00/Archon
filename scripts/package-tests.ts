@@ -70,6 +70,7 @@ if (part !== undefined) {
   console.log(`Part ${String(part.index)}/${String(part.count)}: ${String(groups.length)} groups`);
 }
 
+for (const error of request?.validationErrors ?? []) console.error(error.message);
 let emptyNameGroups = 0;
 const reports: Awaited<ReturnType<typeof runReportedGroup>>['report'][] = [];
 
@@ -139,4 +140,7 @@ async function runGroups(): Promise<number> {
 // Not `process.exit`: on a pipe it can cut off the buffered group output written just before.
 const code = await runGroups();
 if (request?.reporterOutfile !== undefined) writeCombinedReport(request.reporterOutfile, reports);
-process.exitCode = code || (request?.filtersNames && emptyNameGroups === groups.length ? 1 : 0);
+process.exitCode =
+  code ||
+  (request?.validationErrors.length ? 1 : 0) ||
+  (request?.filtersNames && !request.allowsNoTests && emptyNameGroups === groups.length ? 1 : 0);

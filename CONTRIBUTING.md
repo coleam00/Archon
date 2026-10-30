@@ -24,7 +24,8 @@ share one process. Run package test scripts to preserve isolation; requested sel
 retain Bun's substring-filter meaning and run only matching files, preserving the same
 isolation groups. Every requested group runs, and any failed group makes the command
 fail. Test flags apply to each selected group; JUnit output is combined across groups.
-Name filters use private JUnit reports to identify groups with no matching test names.
+Name filters use Bun's `--pass-with-no-tests` per child and private JUnit counts
+to detect an empty result across all groups. Load and hook failures remain failures.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,

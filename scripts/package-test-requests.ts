@@ -74,22 +74,27 @@ export function resolveRequestedTestGroups(
   const files = inventory.filter(
     file => selectors.length === 0 || selectors.some(selector => file.includes(selector))
   );
+  const validationErrors: Error[] = [];
   const groups = (
-    files.length === 0 ? [] : resolvePackageTestGroups(packageDirectory, manifest, files)
+    files.length === 0
+      ? []
+      : resolvePackageTestGroups(packageDirectory, manifest, files, error =>
+          validationErrors.push(error)
+        )
   )
     .map(group => files.filter(file => group.some(selector => file.includes(selector))))
     .filter(group => group.length > 0);
-  const selectorIndices = new Set(
-    positionals
-      .filter((_, index) => inventory.some(file => file.includes(selectors[index])))
-      .map(token => token.index)
-  );
+  const selectorIndices = new Set(positionals.map(token => token.index));
   const options = requested.filter((_, index) => !selectorIndices.has(index));
   return {
+    validationErrors,
+    allowsNoTests: optionTokens.some(token => token.name === 'pass-with-no-tests'),
     // Let Bun own no-match errors and flags such as --help or --pass-with-no-tests.
     groups:
       groups.length === 0
-        ? [requested]
+        ? validationErrors.length > 0
+          ? []
+          : [requested]
         : groups.map(group => [...options, ...group.map(file => `./${file}`)]),
     filtersNames:
       groups.length > 0 && optionTokens.some(token => token.name === 'test-name-pattern'),

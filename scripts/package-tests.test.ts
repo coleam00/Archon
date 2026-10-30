@@ -331,7 +331,7 @@ for (const concurrency of [1, 2]) {
         ).not.toBe(0);
         const xml = readFileSync(report, 'utf8');
         for (const name of ['first', 'second', 'third']) expect(xml).toContain(`name="${name}"`);
-        expect(xml).toMatch(/<testsuites[^>]*tests="3"/);
+        expect(xml).toMatch(/<testsuites[^>]*tests="4"/);
         expect(xml).toMatch(/<testsuites[^>]*failures="1"/);
         expect(readFileSync(join(root, 'third'), 'utf8')).toBe('ran');
       },
@@ -400,7 +400,99 @@ test(
     expect(await run(root, ['src/a.test.ts'])).toBe(0);
     expect(readFileSync(join(root, 'selected'), 'utf8')).toBe('yes');
     expect(await run(root, ['src/invalid.test.ts'])).not.toBe(0);
+    testFile(
+      root,
+      'z-isolated',
+      `test('isolated', () => appendFileSync('isolated', 'yes'));`,
+      true
+    );
+    unlinkSync(join(root, 'selected'));
+    expect(await run(root, ['src/'])).not.toBe(0);
+    expect(readFileSync(join(root, 'selected'), 'utf8')).toBe('yes');
+    expect(readFileSync(join(root, 'isolated'), 'utf8')).toBe('yes');
     expect(await run(root)).not.toBe(0);
+  },
+  testTimeout(5000)
+);
+
+for (const omission of ['ignored', 'sharded', 'changed', 'unmatched', 'module', 'describe']) {
+  test(
+    `name filters allow legitimate missing suites: ${omission}`,
+    async () => {
+      const root = fixture();
+      testFile(root, 'a-empty', `test('other', () => {});`);
+      testFile(root, 'b-empty', `test('other', () => {});`);
+      testFile(root, 'c-match', `test('wanted', () => appendFileSync('matched', 'yes'));`, true);
+      const options: string[] = [];
+      if (omission === 'ignored') options.push('--path-ignore-patterns', '**/*empty*');
+      if (omission === 'sharded') options.push('--shard', '1/2');
+      if (omission === 'unmatched') options.push('no-such-substring');
+      if (omission === 'module') testFile(root, 'a-empty', `export const value = 1;`);
+      if (omission === 'describe')
+        testFile(
+          root,
+          'a-empty',
+          `import { describe } from 'bun:test'; describe('empty', () => {});`
+        );
+      if (omission === 'changed') {
+        for (const args of [
+          ['init'],
+          ['add', '.'],
+          [
+            '-c',
+            'user.name=Runner',
+            '-c',
+            'user.email=runner@example.com',
+            'commit',
+            '-m',
+            'fixture',
+          ],
+        ]) {
+          expect(Bun.spawnSync(['git', ...args], { cwd: root }).exitCode).toBe(0);
+        }
+        testFile(
+          root,
+          'c-match',
+          `test('wanted', () => appendFileSync('matched', 'changed'));`,
+          true
+        );
+        testFile(root, 'b-empty', `test('other changed', () => {});`);
+        options.push('--changed=HEAD');
+      }
+      const report = join(root, 'omission.xml');
+      expect(
+        await run(root, [
+          'src/',
+          '-t',
+          'wanted',
+          ...options,
+          '--reporter=junit',
+          '--reporter-outfile',
+          report,
+        ])
+      ).toBe(0);
+      expect(existsSync(join(root, 'matched'))).toBe(true);
+      expect(readFileSync(report, 'utf8')).toMatch(/<testsuites[^>]*errors="0"/);
+    },
+    testTimeout(5000)
+  );
+}
+
+test(
+  'mixed assertion and load failures retain the failed process in JUnit',
+  async () => {
+    const root = fixture();
+    testFile(root, 'a-fail', `test('assertion', () => expect(1).toBe(2));`);
+    testFile(root, 'b-load', `import './missing';`);
+    testFile(root, 'c-pass', `test('pass', () => {});`, true);
+    const report = join(root, 'mixed.xml');
+    expect(await run(root, ['src/', '--reporter=junit', '--reporter-outfile', report])).not.toBe(0);
+    const xml = readFileSync(report, 'utf8');
+    expect(xml).toContain('name="assertion"');
+    expect(xml).toContain('name="pass"');
+    expect(xml).toMatch(/<testsuites[^>]*failures="1"/);
+    expect(xml).toMatch(/<testsuites[^>]*errors="1"/);
+    expect(xml).toContain('see child output for diagnostics');
   },
   testTimeout(5000)
 );

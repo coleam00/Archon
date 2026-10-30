@@ -114,7 +114,10 @@ isolation groups. Every selected group runs, even after another group fails; the
 returns nonzero if any group fails. A full run without arguments still stops admitting
 groups after a failure.
 
-Test options are forwarded to each group. Name filters use private JUnit reports to
-distinguish groups with no matching names from test or load failures. An explicit
+Test options are forwarded to each group. Name filters use Bun's
+`--pass-with-no-tests` per child and private JUnit counts to detect an empty result
+across all groups. Load and hook failures still return nonzero. An explicit
 `--reporter=junit --reporter-outfile <path>` receives one combined report containing all
-started groups, including their failures and aggregate counts.
+started groups, including their failures and aggregate counts. Each failed child also
+contributes a process error because Bun can omit load failures from its JUnit output;
+the child output contains the diagnostics.
