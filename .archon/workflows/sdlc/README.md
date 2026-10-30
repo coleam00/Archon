@@ -656,8 +656,9 @@ that measures it, and its threshold and window. A PRD missing any of them gets
   `<!-- archon-split: <item> <key> -->`, and a `Depends on: #n` line per dependency.
   Each filed issue is recorded on the work item before the next is filed, and a key
   already recorded is never filed again; a key whose issue was filed but not recorded
-  is recovered by its marker. So a run that stops part way, or a split repeated after
-  a re-triage, files no issue twice. The item then gets one marked comment listing its
+  is recovered by its marker, from one scan of the repository's issues per run. So a
+  run that stops part way, or a split repeated after a re-triage, files no issue
+  twice. The item then gets one marked comment listing its
   issues. A PRD is labelled `archon-prd` and stays open until its hypothesis has a
   verdict; a bundle is closed as completed. The last write records the split done and
   releases the claim. An issue closed before its split finishes is recorded and

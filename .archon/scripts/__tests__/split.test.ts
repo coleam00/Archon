@@ -140,7 +140,7 @@ describe('split publish', () => {
     expect(publish(at, PRD, first.createdIssues).createdIssues).toEqual([]);
   });
 
-  test('an issue filed before a stop, but not recorded, is recovered by its marker', () => {
+  test('an issue filed before a stop, but not recorded, is recovered by its marker from one scan', () => {
     const at = install();
     seed(at);
     const filed: GhIssue = {
@@ -152,6 +152,8 @@ describe('split publish', () => {
     const run = publish(at, { kind: 'bundle' }, [filed]);
     ok(run);
     expect(run.createdIssues.map(issue => issue.title)).toEqual(['Ship the feature']);
+    // Both unrecorded keys are looked up in one listing of the repository's issues.
+    expect(run.gh.filter(call => call.includes('issues?state=all'))).toHaveLength(1);
     expect(run.createdIssues[0]?.body).toEndWith('Depends on: #100');
     // A bundle is closed with its list; it gets no PRD label.
     expect(run.closes).toEqual([{ number: 7, state: 'closed', state_reason: 'completed' }]);

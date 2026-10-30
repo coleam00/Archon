@@ -5,7 +5,9 @@
  * and ends with a `Depends on: #n` line per dependency. A key the work item already
  * records is not filed again; any other is created or, when an earlier attempt filed
  * it before stopping, recovered by its marker. Each filed issue is recorded on the
- * work item before the next is filed, so a rerun after a stop files none twice.
+ * work item before the next is filed, so a rerun after a stop files none twice. On
+ * the gh source the repository's issues are scanned for markers once per run, not
+ * once per issue.
  *
  * Then the item gets one marked comment listing its issues. A PRD is labelled
  * `archon-prd` and stays open until its hypothesis has a verdict; a bundle is closed
@@ -18,7 +20,7 @@
 
 import { forgeSource, parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { closeIssue, createIssue } from '../../.shared/issue.ts';
+import { closeIssue, createIssue, markerScan } from '../../.shared/issue.ts';
 import { writeLabels } from '../../.shared/labels.ts';
 import { upsertComment } from '../../.shared/pr.ts';
 import { type SplitIssue, type SplitRecord, splitMarker } from '../../.shared/split.ts';
@@ -110,10 +112,11 @@ function publish(item: QualifiedPr, runId: string, split: Split, planned: readon
   const problem = unfileable(planned, issues);
   if (problem !== null) throw new Error(`nothing was filed: ${problem}`);
   const numbers = new Map(issues.map(entry => [entry.key, entry.number]));
+  const scan = markerScan(item.repo);
   for (const entry of planned) {
     if (numbers.has(entry.key)) continue;
     const marker = splitMarker(item.number, entry.key);
-    const created = createIssue(item.repo, entry.title, body(item.number, entry, numbers), marker);
+    const created = createIssue(item.repo, entry.title, body(item.number, entry, numbers), marker, scan);
     numbers.set(entry.key, created.issue.number);
     const filed = { key: entry.key, number: created.issue.number, url: created.url };
     const doc = updateClaimed(item, runId, current => ({
