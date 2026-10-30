@@ -1110,3 +1110,33 @@ test('selected composition still rejects a suspension reached through a child in
     { id: 'pause', reason: 'approval gate' },
   ]);
 });
+
+test('global resume ignores unreadable project workflow assets and skipped YAML', async () => {
+  const ignored = {
+    'pack/scripts/check.ts': 'unused',
+    'fixtures/run.yaml': workflow('fixture', first),
+    'team/fixtures/run.yaml': workflow('nested-fixture', first),
+    'pack/archon-plugin.json': '{}',
+    'pack/run.yaml': workflow('pack-root', first),
+    'team/deep/nested/run.yaml': workflow('deep', first),
+  };
+  for (const [path, content] of Object.entries(ignored))
+    await put(join(project, '.archon/workflows', path), content);
+  await put(
+    join(root, 'home/workflows/healthy.yaml'),
+    workflow(
+      'healthy',
+      `${first}\n  - id: remaining\n    bash: echo frozen-global\n    depends_on: [first]`
+    )
+  );
+  const fixture = await pausedRun();
+  const fault = denyReads(join(fixture.capture.anchor.root, 'project'));
+  try {
+    expect(await fixture.resume()).toMatchObject({ success: true });
+    expect(await fixture.store.getWorkflowRunStatus(fixture.run.id)).toBe('completed');
+    const outputs = (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs;
+    expect(outputs.get('remaining')?.output).toContain('frozen-global');
+  } finally {
+    fault.mockRestore();
+  }
+});

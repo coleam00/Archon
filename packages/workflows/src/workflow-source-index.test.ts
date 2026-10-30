@@ -16,12 +16,16 @@ import {
   openWorkflowSource,
   verifyWorkflowSourceUnits,
   loadWorkflowSource,
+  selectedWorkflowUnits,
 } from './workflow-source/load';
 import { DEFAULT_WORKFLOW_SOURCE_CONFIG } from './workflow-source/roots';
 import {
   WorkflowSourceIntegrityError,
   WorkflowSourceUnavailableError,
 } from './workflow-source/integrity';
+
+import { providerRegistry } from '@archon/providers';
+import { loadScopeDirectory } from './workflow-discovery/load-dir';
 
 const track = trackTempRoots();
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
@@ -372,3 +376,52 @@ test('the legacy manifest discriminator rejects v3 rather than treating it as an
   const { manifest } = await fixture();
   expect(oldReaderDiscriminator.safeParse(manifest).success).toBe(false);
 });
+
+const workflowInventoryCases = [
+  { files: ['check.ts'], admitted: false },
+  { files: ['pack/scripts/check.ts'], admitted: false },
+  { files: ['fixtures/run.yaml'], admitted: false },
+  { files: ['team/fixtures/run.yml'], admitted: false },
+  { files: ['pack/archon-plugin.json', 'pack/run.yaml'], admitted: false },
+  { files: ['team/deep/nested/run.yaml'], admitted: false },
+  { files: ['defaults/deep/run.yaml'], admitted: false, bundled: true },
+  { files: ['pack/.shared/run.yaml'], admitted: false },
+  { files: ['pack/fixtures/run.yml'], admitted: false },
+  { files: ['.hidden/run.yaml'], admitted: true, bundled: false },
+  { files: ['defaults/run.yaml'], admitted: true },
+  { files: ['defaults/fixtures/run.yaml'], admitted: false },
+  { files: ['defaults/pack/archon-plugin.json', 'defaults/pack/run.yaml'], admitted: false },
+  { files: ['run.yaml'], admitted: true, bundled: false },
+  { files: ['team/run.yml'], admitted: true, bundled: false },
+  { files: ['pack/run/run.yaml'], admitted: true },
+  { files: ['pack/archon-plugin.json', 'pack/run/run.yml'], admitted: true },
+];
+
+for (const scope of ['project', 'global', 'bundled'] as const) {
+  for (const { files, admitted, bundled } of workflowInventoryCases) {
+    test(`${scope} selection follows disk admission for ${files.join(', ')}`, async () => {
+      const { manifest, root } = await fixture();
+      const directory = scope === 'project' ? '.archon/workflows' : 'workflows';
+      const expected = scope === 'bundled' ? (bundled ?? admitted) : admitted;
+      const inventory = files.map(path => `${directory}/${path}`);
+      manifest.units = [
+        { root: scope, files: inventory.map(path => ({ path, hash: hash(''), size: 0 })) },
+      ];
+      const disk = join(root, 'admission');
+      const content =
+        'name: run\ndescription: Fixture\nnodes:\n  - id: check\n    bash: echo done\n';
+      for (const path of inventory) {
+        await mkdir(dirname(join(disk, path)), { recursive: true });
+        await writeFile(join(disk, path), content);
+      }
+      const parsed = await loadScopeDirectory(
+        { providers: providerRegistry, configuredEnvNames: new Set() },
+        join(disk, directory, ...(scope === 'bundled' ? ['defaults'] : [])),
+        join(disk, directory),
+        scope
+      );
+      expect(parsed.workflows.size > 0).toBe(expected);
+      expect(selectedWorkflowUnits(manifest, 'run')).toEqual(expected ? [scope] : []);
+    });
+  }
+}

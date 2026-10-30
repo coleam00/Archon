@@ -61,6 +61,45 @@ export function isYamlFile(entry: string): boolean {
   return entry.endsWith('.yaml') || entry.endsWith('.yml');
 }
 
+/** Match the scope loader against an authenticated, slash-separated file inventory. */
+export function hasWorkflowFiles(
+  files: ReadonlySet<string>,
+  flatDirectory: string,
+  packagedRoot: string
+): boolean {
+  return [...files].some(path => {
+    if (!isYamlFile(path)) return false;
+    if (path.startsWith(`${flatDirectory}/`)) {
+      const directories = path
+        .slice(flatDirectory.length + 1)
+        .split('/')
+        .slice(0, -1);
+      if (
+        directories.length <= MAX_DISCOVERY_DEPTH &&
+        directories.every(
+          (entry, depth) =>
+            entry !== FIXTURES_DIR &&
+            !files.has(
+              `${flatDirectory}/${directories.slice(0, depth + 1).join('/')}/${PLUGIN_MANIFEST_FILE}`
+            )
+        )
+      )
+        return true;
+    }
+    if (!path.startsWith(`${packagedRoot}/`)) return false;
+    const segments = path.slice(packagedRoot.length + 1).split('/');
+    const [pack, folder] = segments;
+    return (
+      segments.length === 3 &&
+      pack !== 'defaults' &&
+      pack !== FIXTURES_DIR &&
+      isValidWorkflowFolderSegment(pack) &&
+      folder !== FIXTURES_DIR &&
+      isValidWorkflowFolderSegment(folder)
+    );
+  });
+}
+
 /** A filesystem failure as a load error: `<operation> error: <message> (<code>)`. */
 export function fileSystemError(
   filename: string,

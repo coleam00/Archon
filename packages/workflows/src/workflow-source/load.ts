@@ -4,6 +4,7 @@ import {
   getWorkflowFolderSearchPaths,
 } from '@archon/paths';
 import { getRuntimeForExtension, MAX_SCRIPT_DISCOVERY_DEPTH } from '../script-file';
+import { hasWorkflowFiles } from '../workflow-discovery/load-dir';
 import { installedWorkflowName } from './installed-record';
 import { parsePackagedResourceReference } from '../packaged-workflow';
 import { isDeepStrictEqual } from 'node:util';
@@ -333,11 +334,13 @@ export function selectedWorkflowUnits(
         .filter(
           unit =>
             !unit.root.startsWith(`${INSTALLED_SCOPE_DIR}/`) &&
-            unit.files.some(file =>
-              (unit.root === PROJECT_SCOPE_DIR
-                ? getWorkflowFolderSearchPaths()
-                : ['workflows']
-              ).some(directory => file.path.startsWith(`${directory}/`))
+            (unit.root === PROJECT_SCOPE_DIR ? getWorkflowFolderSearchPaths() : ['workflows']).some(
+              directory =>
+                hasWorkflowFiles(
+                  new Set(unit.files.map(file => file.path)),
+                  unit.root === BUNDLED_SCOPE_DIR ? `${directory}/defaults` : directory,
+                  directory
+                )
             )
         )
         .map(unit => unit.root);
