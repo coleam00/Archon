@@ -106,8 +106,19 @@ nodes:
               size: { type: string, enum: [s, m, l] }
               depends_on: { type: array, items: { type: string } }
             required: [key, title, body, size, depends_on]
+        # Existing open issues that already own part of the outcome, listed instead
+        # of filed again; the outcome depends on them as on the filed issues.
+        existing:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              number: { type: integer, minimum: 1 }
+              why: { type: string, pattern: '\S' }
+            required: [number, why]
         summary: { type: string, pattern: '\S' }
-      required: [split, issues, summary]
+      required: [split, issues, existing, summary]
 
   # Files each issue once, records it on the work item as it goes, comments the list
   # on the item, then labels a PRD or closes a bundle, and releases the claim.
@@ -121,6 +132,7 @@ nodes:
       item: { from: "$facts.output.item" }
       split: { from: "$slice.output.split", if_skipped: null }
       issues: { from: "$slice.output.issues", if_skipped: null }
+      existing: { from: "$slice.output.existing", if_skipped: null }
       summary: { from: "$slice.output.summary", if_skipped: null }
     output_format:
       type: object
@@ -137,5 +149,14 @@ nodes:
               number: { type: integer }
               url: { type: string }
             required: [key, number, url]
+        adopted:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer }
+              url: { type: string }
+              why: { type: string }
+            required: [number, url, why]
         summary: { type: string }
-      required: [path, item, kind, issues, summary]
+      required: [path, item, kind, issues, adopted, summary]

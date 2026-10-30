@@ -4,7 +4,9 @@
  * Triage routes a PRD or a bundle of tasks to `split`; archon-split files the issues
  * it splits into. The record lists every issue filed from the item by its key, written
  * as each one is filed, so a run that stops part way, or a split repeated after a
- * re-triage, finds them and files none of them again.
+ * re-triage, finds them and files none of them again. It also lists the open issues
+ * the split adopted instead of filing, because they already own part of the outcome:
+ * the item's outcome waits on those as much as on the filed ones.
  */
 
 import type { Pickup, WorkItem } from './workitem.ts';
@@ -19,6 +21,14 @@ export interface SplitIssue {
   readonly url: string;
 }
 
+/** An existing issue the item's outcome depends on, which the split did not file. */
+export interface AdoptedIssue {
+  readonly number: number;
+  readonly url: string;
+  /** Why the outcome depends on it, as the slice agent judged. */
+  readonly why: string;
+}
+
 /**
  * `filing` while publish files the issues; `done` once every one is filed and a PRD is
  * labelled `archon-prd` or a bundle closed; `closed` when the item's issue was closed
@@ -29,6 +39,7 @@ export type SplitRecord =
       readonly status: 'filing' | 'done';
       readonly kind: SplitKind;
       readonly issues: readonly SplitIssue[];
+      readonly adopted: readonly AdoptedIssue[];
       /** A PRD's measurement: the command that prints its signal; null on a bundle. */
       readonly signal_command: string | null;
       /** How many days after release the PRD's threshold is judged; null on a bundle. */

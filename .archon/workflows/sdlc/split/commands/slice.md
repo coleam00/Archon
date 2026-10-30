@@ -23,7 +23,8 @@ Triage found the item to be one of the two. Declare which one you find, and why,
 At most twelve, in filing order. Each one is a single change a run can deliver and a reviewer can read.
 
 - **A PRD plans for learning.** The first issue puts the hypothesis in front of real data as soon as possible: the smallest change that lets the signal be measured on real use. When the signal has no data source yet, or its command does not exist, the first issue adds that measurement, so the command prints the signal. The issues after it build what the hypothesis is about, each one moving the signal or making it readable. In a product that already runs, no issue rebuilds what already exists or sets the product up again: build on what is there.
-- **A bundle is split as written.** One issue per task the item lists, in the item's order, with the task's own scope. Do not merge, widen or reinterpret the tasks; a task that is already done or already tracked by an open issue gets no issue.
+- **A bundle is split as written.** One issue per task the item lists, in the item's order, with the task's own scope. Do not merge, widen or reinterpret the tasks; a task that is already done gets no issue.
+- **An open issue that already owns a piece is listed, not filed again.** When an open issue in this repository already tracks part of the outcome, declare it in `existing` with one line on why the outcome depends on it, and file no issue for that piece. The item's outcome waits on it as much as on the issues you file. A piece already done gets neither.
 
 Each issue:
 
@@ -39,4 +40,5 @@ Each issue goes back through triage on its own, which judges its contract the wa
 
 - `split` — `{ "kind": "prd", "signal_command", "window_days" }` or `{ "kind": "bundle" }`.
 - `issues` — the list above.
+- `existing` — `{ "number", "why" }` for each open issue in this repository the outcome depends on and you did not file again, possibly empty.
 - `summary` — two or three sentences: what the item is, how the list is ordered and why the first issue comes first.

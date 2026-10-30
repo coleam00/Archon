@@ -12,6 +12,7 @@ slice:
   issues:
     - { key: measure, title: "Measure the signal", body: "stub: the measurement contract", size: s, depends_on: [] }
     - { key: feature, title: "Ship the feature", body: "stub: the feature contract", size: m, depends_on: [measure] }
+  existing: []
   summary: "stub: measure first, then ship"
 publish:
   path: slice
@@ -20,6 +21,7 @@ publish:
   issues:
     - { key: measure, number: 8, url: "https://github.com/example/repo/issues/8" }
     - { key: feature, number: 9, url: "https://github.com/example/repo/issues/9" }
+  adopted: []
   summary: "stub: Issue 7: split as a prd into 2 issues"
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }

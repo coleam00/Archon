@@ -85,7 +85,7 @@ function stored(at: Install): WorkItem {
   return inProcess(at, () => parseWorkItem(stateGet('work/7').value));
 }
 
-function publish(at: Install, split: unknown, issues: readonly GhIssue[] = []): ScriptRun {
+function publish(at: Install, split: unknown, issues: readonly GhIssue[] = [], existing: unknown[] = []): ScriptRun {
   return runPackScript('split/scripts/publish', {
     cwd: at.checkout,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
@@ -97,6 +97,7 @@ function publish(at: Install, split: unknown, issues: readonly GhIssue[] = []): 
       INPUTS_ITEM: JSON.stringify(SUBJECT),
       INPUTS_SPLIT: JSON.stringify(split),
       INPUTS_ISSUES: JSON.stringify(ISSUES),
+      INPUTS_EXISTING: JSON.stringify(existing),
       INPUTS_SUMMARY: 'Measure first.',
     },
   });
@@ -161,6 +162,21 @@ describe('split publish', () => {
     expect(stored(at).facts.split).toMatchObject({ status: 'done', kind: 'bundle', signal_command: null });
   });
 
+  test('an existing issue the outcome depends on is recorded as adopted and never filed', () => {
+    const at = install();
+    seed(at);
+    const owner: GhIssue = { number: 50, title: 'The light route', body: 'Owned elsewhere.', state: 'OPEN' };
+    const run = publish(at, PRD, [owner], [{ number: 50, why: 'it owns the light route' }]);
+    expect(ok(run)).toMatchObject({ adopted: [{ number: 50, why: 'it owns the light route' }] });
+    expect(run.createdIssues.map(issue => issue.number)).toEqual([101, 102]);
+    expect(run.comments[0]?.body).toContain('- #50 it owns the light route');
+    const split = stored(at).facts.split;
+    expect(split?.issues.map(issue => issue.number)).toEqual([101, 102]);
+    expect(split?.status === 'closed' ? null : split?.adopted).toEqual([
+      { number: 50, url: 'https://ghe.example.com/example/repo/issues/50', why: 'it owns the light route' },
+    ]);
+  });
+
   test('a list whose dependency is neither filed nor listed earlier files nothing', () => {
     const at = install();
     seed(at);
@@ -175,6 +191,7 @@ describe('split publish', () => {
         INPUTS_ITEM: JSON.stringify(SUBJECT),
         INPUTS_SPLIT: JSON.stringify(PRD),
         INPUTS_ISSUES: JSON.stringify([...ISSUES].reverse()),
+        INPUTS_EXISTING: '[]',
         INPUTS_SUMMARY: 's',
       },
     });

@@ -651,21 +651,25 @@ that measures it, and its threshold and window. A PRD missing any of them gets
   hypothesis in front of real data, adding the measurement when the signal has no
   source or its command does not exist yet. In a product that already runs, no issue
   rebuilds or sets up what exists. A bundle is split as written, one issue per task.
-  For a PRD the agent also declares the signal command and the window in days.
+  An open issue that already owns a piece of the outcome is listed as existing, with
+  why the outcome depends on it, instead of being filed again. For a PRD the agent also
+  declares the signal command and the window in days.
 - **Publish.** The `publish` script files each issue with a hidden first line,
   `<!-- archon-split: <item> <key> -->`, and a `Depends on: #n` line per dependency.
   Each filed issue is recorded on the work item before the next is filed, and a key
   already recorded is never filed again; a key whose issue was filed but not recorded
   is recovered by its marker, from one scan of the repository's issues per run. So a
   run that stops part way, or a split repeated after a re-triage, files no issue
-  twice. The item then gets one marked comment listing its
+  twice. Each existing issue the agent listed is read to prove it is an issue of the
+  repository. The item then gets one marked comment listing its
   issues. A PRD is labelled `archon-prd` and stays open until its hypothesis has a
   verdict; a bundle is closed as completed. The last write records the split done and
   releases the claim. An issue closed before its split finishes is recorded and
   files nothing more.
 - **Record.** The work item's `facts.split` holds the status (`filing`, `done` or
   `closed`), whether the item is a `prd` or a `bundle`, every issue filed from it by
-  key, and a PRD's signal command and window.
+  key, the existing issues it adopted with why, and a PRD's signal command and window.
+  The comment on the item lists both.
 - **The filed issues** come back through intake like any other issue. They are opened
   by the install's own identity, so intake trusts them only when that login is on the
   maintainer list.

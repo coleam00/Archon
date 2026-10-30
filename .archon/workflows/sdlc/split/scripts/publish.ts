@@ -7,7 +7,8 @@
  * it before stopping, recovered by its marker. Each filed issue is recorded on the
  * work item before the next is filed, so a rerun after a stop files none twice. On
  * the gh source the repository's issues are scanned for markers once per run, not
- * once per issue.
+ * once per issue. The existing issues the agent listed instead of filing are read to
+ * prove each is an issue of the repository, and recorded beside the filed ones.
  *
  * Then the item gets one marked comment listing its issues. A PRD is labelled
  * `archon-prd` and stays open until its hypothesis has a verdict; a bundle is closed
@@ -20,10 +21,10 @@
 
 import { forgeSource, parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { closeIssue, createIssue, markerScan } from '../../.shared/issue.ts';
+import { closeIssue, createIssue, markerScan, viewIssue } from '../../.shared/issue.ts';
 import { writeLabels } from '../../.shared/labels.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { type SplitIssue, type SplitRecord, splitMarker } from '../../.shared/split.ts';
+import { type AdoptedIssue, type SplitIssue, type SplitRecord, splitMarker } from '../../.shared/split.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { newest, readWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
@@ -34,6 +35,12 @@ interface Planned {
   readonly body: string;
   readonly size: string;
   readonly depends_on: readonly string[];
+}
+
+/** An existing issue the agent listed instead of filing. */
+interface Existing {
+  readonly number: number;
+  readonly why: string;
 }
 
 type Split =
@@ -84,8 +91,17 @@ function body(item: number, planned: Planned, numbers: ReadonlyMap<string, numbe
   return [splitMarker(item, planned.key), planned.body.trim(), depends].filter(part => part !== '').join('\n\n');
 }
 
-function comment(split: Split, planned: readonly Planned[], numbers: ReadonlyMap<string, number>): string {
+function comment(
+  split: Split,
+  planned: readonly Planned[],
+  numbers: ReadonlyMap<string, number>,
+  adopted: readonly AdoptedIssue[]
+): string {
   const lines = planned.map(entry => `- #${String(numbers.get(entry.key))} ${entry.title}`);
+  const tracked =
+    adopted.length > 0
+      ? [`It also depends on these open issues, which already own part of it:\n${adopted.map(entry => `- #${String(entry.number)} ${entry.why}`).join('\n')}`]
+      : [];
   const lead =
     split.kind === 'prd'
       ? 'This PRD is split into these issues. It stays open until its hypothesis has a verdict.'
@@ -94,15 +110,23 @@ function comment(split: Split, planned: readonly Planned[], numbers: ReadonlyMap
     split.kind === 'prd'
       ? [`The signal is measured with \`${split.signal_command}\`, ${String(split.window_days)} days after release.`]
       : [];
-  return [COMMENT_MARKER, lead, lines.join('\n'), ...measure].join('\n\n');
+  return [COMMENT_MARKER, lead, lines.join('\n'), ...tracked, ...measure].join('\n\n');
 }
 
-function publish(item: QualifiedPr, runId: string, split: Split, planned: readonly Planned[], summary: string): void {
+function publish(
+  item: QualifiedPr,
+  runId: string,
+  split: Split,
+  planned: readonly Planned[],
+  existing: readonly Existing[],
+  summary: string
+): void {
   const at = new Date().toISOString();
   const recorded = (issues: readonly SplitIssue[], status: 'filing' | 'done' = 'filing'): SplitRecord => ({
     status,
     kind: split.kind,
     issues,
+    adopted,
     signal_command: split.kind === 'prd' ? split.signal_command : null,
     window_days: split.kind === 'prd' ? split.window_days : null,
     at,
@@ -111,6 +135,12 @@ function publish(item: QualifiedPr, runId: string, split: Split, planned: readon
   let issues = filedOn(readWorkItem(item.number));
   const problem = unfileable(planned, issues);
   if (problem !== null) throw new Error(`nothing was filed: ${problem}`);
+  // viewIssue refuses a number that is not an issue of the repository.
+  const adopted: AdoptedIssue[] = existing.map(entry => ({
+    number: entry.number,
+    url: viewIssue({ repo: item.repo, number: entry.number }).url,
+    why: entry.why,
+  }));
   const numbers = new Map(issues.map(entry => [entry.key, entry.number]));
   const scan = markerScan(item.repo);
   for (const entry of planned) {
@@ -126,7 +156,7 @@ function publish(item: QualifiedPr, runId: string, split: Split, planned: readon
     issues = filedOn(doc);
   }
 
-  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(split, planned, numbers), forgeSource());
+  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(split, planned, numbers, adopted), forgeSource());
   if (split.kind === 'prd') writeLabels(item, ['archon-prd'], []);
   else closeIssue(item, 'completed');
 
@@ -136,6 +166,7 @@ function publish(item: QualifiedPr, runId: string, split: Split, planned: readon
     item: item.number,
     kind: split.kind,
     issues,
+    adopted,
     summary: `Issue ${String(item.number)}: split as a ${split.kind} into ${String(planned.length)} issues; ${summary}`,
   });
 }
@@ -146,7 +177,7 @@ function main(): void {
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
   if (path === 'idle') {
     const summary = idleSummary('No item waits for the split queue.', stuckItems(runId));
-    emit({ path, item: null, kind: null, issues: [], summary });
+    emit({ path, item: null, kind: null, issues: [], adopted: [], summary });
     return;
   }
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
@@ -156,13 +187,15 @@ function main(): void {
     const doc = updateClaimed(item, runId, current =>
       finish(current, { status: 'closed', issues: filedOn(current), at, run_id: runId }, runId, 'closed', reason)
     );
-    emit({ path, item: item.number, kind: null, issues: filedOn(doc), summary: `Issue ${String(item.number)}: ${reason}` });
+    emit({ path, item: item.number, kind: null, issues: filedOn(doc), adopted: [], summary: `Issue ${String(item.number)}: ${reason}` });
     return;
   }
   const split = nullableJson(process.env.INPUTS_SPLIT) as Split | null;
   const planned = nullableJson(process.env.INPUTS_ISSUES) as Planned[] | null;
-  if (path !== 'slice' || split === null || planned === null) throw new Error(`the ${path} path reached publish with no split`);
-  publish(item, runId, split, planned, text(process.env.INPUTS_SUMMARY));
+  const existing = nullableJson(process.env.INPUTS_EXISTING) as Existing[] | null;
+  if (path !== 'slice' || split === null || planned === null || existing === null)
+    throw new Error(`the ${path} path reached publish with no split`);
+  publish(item, runId, split, planned, existing, text(process.env.INPUTS_SUMMARY));
 }
 
 try {
