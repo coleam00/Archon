@@ -198,8 +198,8 @@ nodes:
       properties:
         delivered: { type: boolean }
         # Deliver's reason when it ran (or `failed` / `pr_create_unresolved`),
-        # otherwise why no delivery ran: no_action, blocked, needs_contract, refuted,
-        # not_rooted or ask.
+        # otherwise why no delivery ran: no_action, blocked, needs_contract, split,
+        # refuted, not_rooted or ask.
         reason: { type: string }
         # The delivery's pull request, ready or not; '' when no delivery opened one.
         pr_url: { type: string }

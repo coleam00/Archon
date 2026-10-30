@@ -4,7 +4,8 @@ description: |
   of work it needs. Reconciles tracker history, current code, moved branches,
   stale assumptions, and explicit direction; judges whether the item is a
   contract a run can start from; then routes to investigate, plan, deliver,
-  continue an open PR that already carries the outcome, or no action.
+  continue an open PR that already carries the outcome, split a PRD or a
+  bundle of tasks into issues, or no action.
   Advisory: it leaves the checkout unchanged, and writes labels only when asked
   to publish.
 
@@ -68,7 +69,7 @@ nodes:
               additionalProperties: false
               properties:
                 contract: { type: string, enum: [READY] }
-                route: { type: string, enum: [investigate, plan, deliver] }
+                route: { type: string, enum: [investigate, plan, deliver, split] }
               required: [contract, route]
             - type: object
               additionalProperties: false
@@ -255,7 +256,7 @@ nodes:
           enum: [READY, NEEDS_CONTRACT_WORK, BLOCKED, NO_ACTION]
         route:
           type: string
-          enum: [investigate, plan, deliver, continue, no_action]
+          enum: [investigate, plan, deliver, continue, split, no_action]
         # The number of the open pull request a `continue` route finishes; null on
         # every other route.
         pull_request: { type: [integer, 'null'] }

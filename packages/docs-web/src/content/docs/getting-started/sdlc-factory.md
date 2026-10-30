@@ -94,7 +94,7 @@ archon workflow run archon-intake \
   --input repo_host=github.com --input repo_path=acme/widgets --input number=42
 ```
 
-Intake labels the issue with its route (`archon-ready`, `archon-plan` or `archon-investigate`), its type and its size, creating any pack label the repository lacks, and records a work item. Read the item with `archon state get work/42`.
+Intake labels the issue with its route (`archon-ready`, `archon-plan`, `archon-investigate` or `archon-split`), its type and its size, creating any pack label the repository lacks, and records a work item. Read the item with `archon state get work/42`.
 
 Build it:
 

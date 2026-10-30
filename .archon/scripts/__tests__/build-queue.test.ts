@@ -117,7 +117,7 @@ describe('the build record', () => {
     expect(
       buildWaits({ ...retriaged, facts: { ...retriaged.facts, triage: { ...TRIAGE, at: '2026-10-16T02:00:00.000Z' } } })
     ).toBe(true);
-    for (const stage of ['new', 'needs_maintainer', 'needs_contract', 'blocked', 'close'] as const) {
+    for (const stage of ['new', 'needs_maintainer', 'split', 'needs_contract', 'blocked', 'close'] as const) {
       expect(buildWaits(triaged({ stage }))).toBe(false);
     }
   });

@@ -170,6 +170,7 @@ const STAGES = {
   plan: true,
   deliver: true,
   continue: true,
+  split: true,
   needs_contract: true,
   blocked: true,
   close: true,

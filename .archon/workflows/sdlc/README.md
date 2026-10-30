@@ -492,7 +492,7 @@ it; both share one resource so runs queue rather than overlap:
 
 The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 `{"kind": "label.changed", "actions": ["added"], "predicates": [{"field": "label.name",
-"in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate"]}]}`, and two
+"in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate", "archon-split"]}]}`, and two
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
 The predicate only saves runs; intake ignores any other label. A binding installed before the investigate label was renamed still lists `archon-issue`: replace it with `archon-investigate` in that binding, and in any build-queue binding that selects on it, because `label.name` predicates match exactly.
 
@@ -506,7 +506,8 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
 
 - **Pickup.** A run claims one item with intake's claim and order. An item waits for the build queue when its work item's stage is a READY
   route (`deliver`, `continue`, `plan` or `investigate`) and the queue has not
-  recorded it, or recorded it as waiting for its next round. A re-triage after the
+  recorded it, or recorded it as waiting for its next round. A `split` item is the
+  split queue's, never the build queue's. A re-triage after the
   queue's last decision starts the item over. The build queue's claim takes none of
   the item's intake requests, so an edit or label request recorded while it holds the
   item waits for intake's next pickup. The queue writes no labels; intake's mirror

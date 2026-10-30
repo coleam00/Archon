@@ -38,6 +38,8 @@ A run cannot recover from a premise that was never stated, so before choosing a 
 
 Then check the delivery preconditions the outcome actually depends on: an existing primitive or owner, a data shape or typed seam, a persistence model, the observability needed to verify the result. A refactor of code the work must already touch is issue-owned enabling work, not a blocker. A missing foundation with its own outcome, broader owners, or a separate product decision is a prerequisite that must land first — report it with the same weight whether or not anyone has logged it. Treat alignment with current direction as part of readiness.
 
+When the item asks for more than one run's work, the triage policy's section on PRDs and bundles of tasks decides which of the three shapes it is and what makes it ready: a PRD passes only with its hypothesis, its signal and the command that measures it, and its threshold and window, judged from the whole item rather than from its headings, and a PRD missing any of them is `NEEDS_CONTRACT_WORK` whose proposed edits name the gap. A bundle's six elements belong to each of its tasks, which triage judges when each comes back as its own issue. Name the shape you judged, and why, in the assessment.
+
 The verdict says whether a run should start from this item, not only whether the item is well written. A well-formed contract whose outcome already holds on the current base is never `READY`: it is `NO_ACTION`, or `BLOCKED` when the policy leaves its close to a maintainer.
 
 Declare exactly one contract verdict:
@@ -66,6 +68,7 @@ Never derive a priority; the queue that picks the item orders it from these fiel
 - `investigate` — the work asserts broken or unexplained current behavior, but the causal chain or responsible fix boundary is not proven against current code.
 - `plan` — the desired outcome is known, but material implementation or product-shape decisions remain. Use this when a prescribed solution is stale, unsupported, or merely one option even if the issue calls itself a bug. A design call that may need a person is still `plan`: the planner settles it from the project's own documents, code, and evidence, and stops with the exact question only when those cannot. When you route `plan`, do not declare that the item holds no decision a person must make; that judgment is the planner's. An owner-level product decision the item cannot proceed without is `BLOCKED`, not `plan`.
 - `deliver` — the current evidence already forms an implementation-ready work order: the relevant behavior and boundary are verified, acceptance and scope are clear enough to start without asking a human, and delivery will not inherit an untested assumption.
+- `split` — the item is a ready PRD or a ready bundle of tasks, as the triage policy defines them. The split files each piece as its own issue, and each comes back through triage; do not plan or size the pieces here. Declare `size` and the other fields for the item as a whole.
 - `continue` — an open pull request already carries this outcome, because the operator names one to continue or you find one: the run finishes that pull request instead of opening another. Name it in `pull_request`. A pull request from a fork whose author did not allow maintainer edits cannot be continued by this run: that item is `BLOCKED` on it.
 
 Never route from labels or issue type alone. A bug can need planning; a feature can need investigation; a tiny request can still rest on a false premise. Cost is not the criterion — uncertainty is. `type` and `size` do not choose among `investigate`, `plan`, and `deliver`.
@@ -86,7 +89,7 @@ Write `$ARTIFACTS_DIR/triage.md`. Title it `# Triage: owner/repo#N — <item tit
 - **Contract** — the verdict, which of the six elements are present or missing, the preconditions checked, and any prerequisite found. When the verdict is `READY`, quote the source's invariants, acceptance items, and any solution steering here, each item as the source words it. Later steps plan, implement, and review against this section, and an item you only count or summarize is one they cannot check.
 - **Disposition** — exactly one route and why the evidence requires it. When the verdict is not `READY`, name here the route the item would take once it is.
 - **Proposed contract** — only for `NEEDS_CONTRACT_WORK`: the title and body you declare in `proposed_edits`, in the repository's issue template shape when one exists, with only the context that constrains the work. Propose; never apply. A later gated step owns the edit.
-- **Handoff** — the precise investigation question, planning decision, implementation-ready work order, the pull request to continue, or the reason no action should occur. State an open decision as a question; never name a mechanism, data structure, or protocol as the answer — the next node designs it, and a mechanism named here becomes the contract every later node builds.
+- **Handoff** — the precise investigation question, planning decision, implementation-ready work order, the pull request to continue, for a split whether the item is a PRD or a bundle of tasks, or the reason no action should occur. State an open decision as a question; never name a mechanism, data structure, or protocol as the answer — the next node designs it, and a mechanism named here becomes the contract every later node builds.
 
 Omit a section that does not apply; never write a placeholder to preserve one. Curate the evidence rather than dumping the tracker or repository.
 
@@ -97,7 +100,7 @@ Do not investigate the full causal chain, choose the implementation design, impl
 ## Declare the disposition
 
 - `decision` — the contract verdict and only what it carries, using the definitions above:
-  - `READY` with `route` `investigate`, `plan`, or `deliver`;
+  - `READY` with `route` `investigate`, `plan`, `deliver`, or `split`;
   - `READY` with `route` `continue` and `pull_request` — the number of the open pull request to finish, in the item's repository;
   - `NEEDS_CONTRACT_WORK` with `proposed_edits` — `{ "title", "body" }`, both non-empty;
   - `BLOCKED` with `blocked_reason` — what it waits on — and `blocked_by` — fully qualified URLs of the items it waits on, possibly empty;

@@ -22,6 +22,10 @@ export const PACK_LABELS = {
     color: 'C5DEF5',
     description: 'Triage: ready; an investigation comes before delivery',
   },
+  'archon-split': {
+    color: 'BFDADC',
+    description: 'Triage: ready; a PRD or a bundle of tasks to split into issues',
+  },
   'archon-needs-contract': {
     color: 'D93F0B',
     description: "Triage: one of the contract's six elements is missing",
@@ -82,12 +86,13 @@ export function isOwnedLabel(name: string): name is OwnedLabel {
 export type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
 export type WorkType = 'bug' | 'feature' | 'refactor' | 'maintenance' | 'docs' | 'question';
 export type Size = 's' | 'm' | 'l';
-export type Route = 'investigate' | 'plan' | 'deliver' | 'continue';
+export type Route = 'investigate' | 'plan' | 'deliver' | 'continue' | 'split';
 
 // Exactly one state label per item. A READY item's label names the route the run
 // takes on it: archon-ready delivers (a new pull request, or the open one it
-// continues), archon-plan plans then delivers, and archon-investigate investigates
-// then delivers.
+// continues), archon-plan plans then delivers, archon-investigate investigates
+// then delivers, and archon-split files the issues a PRD or a bundle of tasks splits
+// into.
 export const STATE_LABEL = {
   NEEDS_CONTRACT_WORK: 'archon-needs-contract',
   BLOCKED: 'archon-blocked',
@@ -98,6 +103,7 @@ export const ROUTE_LABEL = {
   continue: 'archon-ready',
   plan: 'archon-plan',
   investigate: 'archon-investigate',
+  split: 'archon-split',
 } as const satisfies Record<Route, PackLabel>;
 // Of triage's five fields only type and size become labels, the two a person
 // filters by; complexity, importance and urgency stay in the verdict.

@@ -51,7 +51,7 @@ The review then treats an item that only later parts list as deferred: it is nei
 
 #### `archon-triage`
 
-Reconciles an issue, plan, or request with the current code, tracker history, and stated direction, judges whether it is a contract a run can start from, then routes it to investigate, plan, deliver, or no action.
+Reconciles an issue, plan, or request with the current code, tracker history, and stated direction, judges whether it is a contract a run can start from, then routes it to investigate, plan, deliver, split, or no action.
 
 **When to use it**: An item may be stale or may prescribe an unverified solution, and you want to know what it needs next before paying for the work.
 
