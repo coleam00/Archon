@@ -127,5 +127,8 @@ started groups and repository-root owners, including their failures and aggregat
 contributes a process error because Bun can omit load failures from its JUnit output;
 the child output contains the diagnostics. Selected discovery failures contribute runner
 errors too, including when no valid child group can start.
-A missing, unreadable or invalid private report fails its group and contributes a runner error
-without preventing later requested groups from running.
+An unreadable or invalid private report fails its group and contributes a runner error
+without preventing later requested groups from running. Bun can omit JUnit output on
+successful zero-file runs. An absent report after exit 0 emits a diagnostic and contributes
+no results, preserving Bun's exit code; absence after a nonzero exit remains a runner error.
+The wrapper cannot distinguish successful zero-file execution from report loss after exit 0.

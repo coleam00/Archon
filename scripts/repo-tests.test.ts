@@ -5,10 +5,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { archonCliInvocation } from '@archon/paths/cli-command';
+import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import {
   planRequestedRuns,
   planShard,
@@ -325,6 +326,54 @@ for (const option of ['coverage-dir', 'reporter-outfile', 'path-ignore-patterns'
 }
 
 const track = trackTempRoots();
+for (const owner of ['package', 'root'] as const) {
+  for (const scenario of ['explicit-pass', 'empty-shard', 'unchanged-name-filter'] as const) {
+    if (owner === 'root' && scenario === 'explicit-pass') continue;
+    test(`JUnit preserves native zero-file success: ${owner}, ${scenario}`, () => {
+      const root = track(mkdtempSync(join(tmpdir(), 'zero-file-junit-')));
+      const cwd = owner === 'package' ? fromRoot('packages/paths') : REPO_ROOT;
+      const selector =
+        owner === 'package' ? 'src/skills.test.ts' : './scripts/bun-test-command.test.ts';
+      const args =
+        scenario === 'explicit-pass'
+          ? [selector.replace('.test.ts', '-unmatched.test.ts'), '--pass-with-no-tests']
+          : scenario === 'empty-shard'
+            ? [selector, '--shard=2/2']
+            : [selector, '--changed', '-t', 'resolveSkillDirectories'];
+      const nativeReport = join(root, 'native.xml');
+      const native = Bun.spawnSync(
+        bunTestCommand([...args, '--reporter=junit', `--reporter-outfile=${nativeReport}`]),
+        { cwd, env: bunTestEnv(), stdout: 'pipe', stderr: 'pipe' }
+      );
+      expect(native.exitCode).toBe(0);
+      expect(existsSync(nativeReport)).toBe(false);
+
+      const entryPoints =
+        owner === 'package'
+          ? [
+              { cwd, args },
+              {
+                cwd: REPO_ROOT,
+                args: [`packages/paths/${args[0]}`, ...args.slice(1)],
+              },
+            ]
+          : [{ cwd, args }];
+      for (const [index, entry] of entryPoints.entries()) {
+        const report = join(root, `wrapped-${index}.xml`);
+        const wrapped = Bun.spawnSync(
+          ['bun', 'run', 'test', ...entry.args, '--reporter=junit', `--reporter-outfile=${report}`],
+          { cwd: entry.cwd, env: bunTestEnv(), stdout: 'pipe', stderr: 'pipe' }
+        );
+        expect(wrapped.exitCode).toBe(native.exitCode);
+        const xml = readFileSync(report, 'utf8');
+        expect(xml).toMatch(/<testsuites[^>]*tests="0"/);
+        expect(xml).toMatch(/<testsuites[^>]*errors="0"/);
+        expect(wrapped.stderr.toString()).toContain('Bun exited 0 without a JUnit report');
+      }
+    });
+  }
+}
+
 for (const second of ['package', 'root']) {
   test(`root JUnit retains earlier owners before a ${second} owner`, () => {
     const root = track(mkdtempSync(join(tmpdir(), 'root-junit-')));

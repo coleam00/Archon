@@ -79,6 +79,19 @@ export async function runReportedGroup(
     try {
       report = parseReport(readFileSync(reportPath, 'utf8'));
     } catch (error) {
+      if (code === 0 && error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        // Bun emits no report for successful zero-file runs; it exposes no separate result flag.
+        console.error(
+          'Bun exited 0 without a JUnit report; retaining its exit code and reporting no results.'
+        );
+        return {
+          code,
+          report: {
+            counts: { tests: 0, assertions: 0, failures: 0, skipped: 0, errors: 0, time: 0 },
+            suites: '',
+          },
+        };
+      }
       const message = `Unable to read Bun JUnit report: ${error instanceof Error ? error.message : String(error)}. Bun exited ${code} (see child output for diagnostics)`;
       console.error(message);
       return { code: code || 1, report: runnerErrorReport(message, groupName) };

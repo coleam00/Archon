@@ -33,8 +33,11 @@ Sharding (`--shard`) also requires one isolation group; splitting the shard acro
 groups could omit selected files. Root requests with `--shard` must also select one
 test owner. Select files from one group or run each group separately. Load and hook
 failures remain failures. Selected discovery errors also appear as runner errors in the combined JUnit
-report. A missing, unreadable or invalid private report fails its group and contributes
-a runner error; later requested groups still run.
+report. An unreadable or invalid private report fails its group and contributes a runner
+error; later requested groups still run. Bun can omit JUnit output on successful
+zero-file runs. An absent report after exit 0 emits a diagnostic and contributes no
+results, preserving Bun's exit code; absence after a nonzero exit remains a runner error.
+The wrapper cannot distinguish successful zero-file execution from report loss after exit 0.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,

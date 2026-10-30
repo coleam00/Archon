@@ -29,12 +29,33 @@ const damagedReports = {
   'invalid-attribute': '<testsuites><testsuite name="first><testcase /></testsuite></testsuites>',
 };
 
+test('successful absent report contributes no results and cleans its private directory', async () => {
+  let privatePath = '';
+  const result = await runReportedGroup(['selected.test.ts'], async args => {
+    privatePath = reportDestination(args);
+    return 0;
+  });
+  expect(result.code).toBe(0);
+  expect(result.report.counts).toEqual({
+    tests: 0,
+    assertions: 0,
+    failures: 0,
+    skipped: 0,
+    errors: 0,
+    time: 0,
+  });
+  expect(result.report.suites).toBe('');
+  expect(existsSync(privatePath)).toBe(false);
+  expect(existsSync(join(privatePath, '..'))).toBe(false);
+});
+
 for (const [damage, damagedXml] of [
   ...Object.entries(damagedReports),
   ['unreadable', undefined],
   ['missing', undefined],
 ]) {
   for (const childCode of [0, 1, 7]) {
+    if (damage === 'missing' && childCode === 0) continue;
     test(`damaged ${damage} report after exit ${childCode} fails the group and retains later reports`, async () => {
       const root = track(mkdtempSync(join(tmpdir(), 'package-report-')));
       let privatePath = '';
@@ -105,7 +126,7 @@ for (const outcome of ['missing', 'invalid', 'failed'] as const) {
             reportDestination(args),
             outcome === 'invalid' ? '<broken' : '<testsuites tests="0"></testsuites>'
           );
-        return outcome === 'failed' ? 7 : 0;
+        return outcome === 'failed' || outcome === 'missing' ? 7 : 0;
       }
     );
     expect(result.code).not.toBe(0);
