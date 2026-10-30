@@ -154,7 +154,11 @@ describe('InProcessWorkflowEngine', () => {
     nodes: [{ id: 'inner', kind: 'agent', source: { kind: 'inline', prompt: 'Two' } }],
   });
 
-  async function makeEngine(): Promise<{ engine: InProcessWorkflowEngine; store: IWorkflowStore }> {
+  async function makeEngine(): Promise<{
+    engine: InProcessWorkflowEngine;
+    store: IWorkflowStore;
+    deps: WorkflowDeps;
+  }> {
     const store = await createFileWorkflowStore({
       root: roots(await mkdtemp(join(tmpdir(), 'archon-engine-subscribe-'))),
     });
@@ -172,66 +176,103 @@ describe('InProcessWorkflowEngine', () => {
         run: async (): Promise<void> => undefined,
       }),
     } as unknown as WorkflowDeps;
-    return { engine: new InProcessWorkflowEngine(deps), store };
+    return { engine: new InProcessWorkflowEngine(deps), store, deps };
   }
 
-  it.each([
-    [
-      'mode',
-      { mode: 'supersede' },
-      'ancestor',
-      'ancestor',
-      'adopt',
-      'conflicts with recorded continuation mode',
-    ],
-    [
-      'ancestor',
-      { mode: 'adopt' },
-      'ancestor',
-      'other',
-      'adopt',
-      'conflicts with recorded continuation ancestor',
-    ],
-    [
-      'malformed stamp',
-      { mode: 'unsupported' },
-      'ancestor',
-      'ancestor',
-      'adopt',
-      'Invalid recorded continuation metadata.',
-    ],
-    [
-      'legacy mode',
-      undefined,
-      'ancestor',
-      'ancestor',
-      'supersede',
-      'conflicts with recorded continuation mode',
-    ],
-    [
-      'absent ancestor',
-      undefined,
-      undefined,
-      'ancestor',
-      'adopt',
-      'conflicts with recorded continuation ancestor',
-    ],
-  ] as const)(
-    'submit refuses a pending row with conflicting %s before inheritance',
-    async (_label, stamp, recordedId, callerId, callerMode, message) => {
+  describe.each(['pending', 'claimed'] as const)('%s continuation submission', state => {
+    it.each([
+      [
+        'mode',
+        { mode: 'supersede' },
+        'ancestor',
+        'ancestor',
+        'adopt',
+        'conflicts with recorded continuation mode',
+      ],
+      [
+        'ancestor',
+        { mode: 'adopt' },
+        'ancestor',
+        'other',
+        'adopt',
+        'conflicts with recorded continuation ancestor',
+      ],
+      [
+        'malformed stamp',
+        { mode: 'unsupported' },
+        'ancestor',
+        'ancestor',
+        'adopt',
+        'Invalid recorded continuation metadata.',
+      ],
+      [
+        'legacy mode',
+        undefined,
+        'ancestor',
+        'ancestor',
+        'supersede',
+        'conflicts with recorded continuation mode',
+      ],
+      [
+        'absent ancestor',
+        undefined,
+        undefined,
+        'ancestor',
+        'adopt',
+        'conflicts with recorded continuation ancestor',
+      ],
+    ] as const)(
+      'submit refuses a pending row with conflicting %s before inheritance',
+      async (_label, stamp, recordedId, callerId, callerMode, message) => {
+        const { engine, store } = await makeEngine();
+        const pending = await store.createWorkflowRun({
+          workflow_name: parent.name,
+          user_message: '',
+          adopted_from_run_id: recordedId,
+          metadata: stamp ? { continuation: stamp } : {},
+        });
+        if (state === 'claimed') await store.claimPendingWorkflowRun(pending.id, '/other-worker');
+        const before = await store.getWorkflowRun(pending.id);
+        const read = spyOn(store, 'getWorkflowRun');
+        let executed = false;
+        dagBody = async () => {
+          executed = true;
+          return undefined;
+        };
+        await expect(
+          engine.submit({
+            platform,
+            conversationId: 'conv-1',
+            cwd: '/tmp/ops',
+            workflow: parent,
+            userMessage: '',
+            options: {
+              preCreatedRun: pending,
+              adoptedFromRunId: callerId,
+              continuationMode: callerMode,
+            },
+          })
+        ).rejects.toThrow(message);
+        expect(read).not.toHaveBeenCalledWith(callerId);
+        expect(executed).toBe(false);
+        read.mockRestore();
+        expect(await store.getWorkflowRun(pending.id)).toEqual(before);
+      }
+    );
+  });
+
+  it.each(['pending', 'claimed'] as const)(
+    'configuration refusal preserves an unowned %s row',
+    async state => {
       const { engine, store } = await makeEngine();
       const pending = await store.createWorkflowRun({
         workflow_name: parent.name,
         user_message: '',
-        adopted_from_run_id: recordedId,
-        metadata: stamp ? { continuation: stamp } : {},
+        metadata: { ai_configuration: { version: 2 } },
       });
-      const read = spyOn(store, 'getWorkflowRun');
-      let executed = false;
-      dagBody = async () => {
-        executed = true;
-        return undefined;
-      };
+      if (state === 'claimed') await store.claimPendingWorkflowRun(pending.id, '/other-worker');
+      const before = await store.getWorkflowRun(pending.id);
+      const execute = spyOn(store, 'claimPendingWorkflowRun');
       await expect(
         engine.submit({
           platform,
@@ -239,16 +280,44 @@ describe('InProcessWorkflowEngine', () => {
           cwd: '/tmp/ops',
           workflow: parent,
           userMessage: '',
-          options: {
-            preCreatedRun: pending,
-            adoptedFromRunId: callerId,
-            continuationMode: callerMode,
-          },
+          options: { preCreatedRun: pending },
         })
-      ).rejects.toThrow(message);
-      expect(read).not.toHaveBeenCalledWith(callerId);
-      expect(executed).toBe(false);
-      read.mockRestore();
+      ).rejects.toThrow('Invalid recorded run AI configuration');
+      expect(execute).not.toHaveBeenCalled();
+      execute.mockRestore();
+      expect(await store.getWorkflowRun(pending.id)).toEqual(before);
+    }
+  );
+
+  it.each(['initial', 'resumed', 'replaced'] as const)(
+    'configuration failure only terminalizes the owned resume claim (%s)',
+    async claim => {
+      const { store, deps } = await makeEngine();
+      const run = await store.createWorkflowRun({
+        workflow_name: parent.name,
+        user_message: '',
+        metadata: { ai_configuration: { version: 2 } },
+      });
+      let owned = await store.claimPendingWorkflowRun(run.id);
+      if (!owned) throw new Error('expected initial claim');
+      if (claim !== 'initial') {
+        await store.failWorkflowRun(run.id, 'interrupted');
+        owned = await store.resumeWorkflowRun(run.id);
+      }
+      if (claim === 'replaced') {
+        await store.failWorkflowRun(run.id, 'interrupted');
+        await store.resumeWorkflowRun(run.id);
+      }
+      const before = await store.getWorkflowRun(run.id);
+      await expect(
+        executeWorkflow(deps, platform, 'conv-1', '/tmp/ops', parent, '', undefined, {
+          preCreatedRun: owned,
+          priorCompletedNodes: new Map(),
+        })
+      ).rejects.toThrow('Invalid recorded run AI configuration');
+      const after = await store.getWorkflowRun(run.id);
+      if (claim === 'replaced') expect(after).toEqual(before);
+      else expect(after?.status).toBe('failed');
     }
   );
 

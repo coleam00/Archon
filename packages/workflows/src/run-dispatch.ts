@@ -30,6 +30,7 @@ import {
 } from './schemas';
 import { isContainerRun, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { executionClaim } from './store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -279,10 +280,10 @@ async function prepareDispatchAiConfiguration(
   isContinuation: boolean
 ): Promise<PreparedRunAiConfiguration> {
   const { preCreatedRun } = opts;
+  const recorded =
+    preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
+  const adoptedAiRun = await findAdoptedAiRun(deps, opts, isContinuation, !!recorded);
   try {
-    const recorded =
-      preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    const adoptedAiRun = await findAdoptedAiRun(deps, opts, isContinuation, !!recorded);
     const inherited =
       adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
     if (!recorded && !inherited && opts.preparedAiConfiguration) {
@@ -299,9 +300,11 @@ async function prepareDispatchAiConfiguration(
     });
   } catch (error) {
     if (error instanceof TerminalStatusWriteError) throw error;
-    if (preCreatedRun)
+    if (preCreatedRun && isContinuation)
       await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(preCreatedRun.id, (error as Error).message),
+        deps.store.failWorkflowRun(preCreatedRun.id, (error as Error).message, {
+          expectedExecutionClaim: executionClaim(preCreatedRun.metadata),
+        }),
         { workflowRunId: preCreatedRun.id, site: 'workflow.configuration_fail_db_record_failed' }
       );
     throw error;

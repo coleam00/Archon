@@ -158,10 +158,7 @@ describe('recorded launch AI configuration', () => {
       'Invalid recorded continuation metadata.'
     );
     expect(deps.store.getWorkflowRun).not.toHaveBeenCalledWith('ancestor');
-    expect(deps.store.failWorkflowRun).toHaveBeenCalledWith(
-      run.id,
-      'Invalid recorded continuation metadata.'
-    );
+    expect(deps.store.failWorkflowRun).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
@@ -491,11 +488,13 @@ describe('run-scoped model bindings (#2481)', () => {
     await expect(startWorkflow({ store, workflow: large, options: resumeOf(run) })).rejects.toThrow(
       error
     );
-    expect(store.failWorkflowRun).toHaveBeenCalledWith(run.id, expect.stringMatching(error));
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(run.id, expect.stringMatching(error), {
+      expectedExecutionClaim: null,
+    });
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
-  it('fails a pre-created row when a semantic binding error stops startup', async () => {
+  it('refuses a pre-created row without claiming it when a semantic binding error stops startup', async () => {
     const store = makeStore();
     await expect(
       startWorkflow({
@@ -510,10 +509,7 @@ describe('run-scoped model bindings (#2481)', () => {
         },
       })
     ).rejects.toThrow(/'@missing' is not configured/);
-    expect(store.failWorkflowRun).toHaveBeenCalledWith(
-      'invalid-model-run',
-      expect.stringContaining("'@missing' is not configured")
-    );
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
@@ -690,7 +686,8 @@ describe('run-scoped config layer (#2482)', () => {
     ).rejects.toThrow('could not be decrypted');
     expect(store.failWorkflowRun).toHaveBeenCalledWith(
       'broken-config-run',
-      'Workflow run config could not be decrypted.'
+      'Workflow run config could not be decrypted.',
+      { expectedExecutionClaim: null }
     );
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
