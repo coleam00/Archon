@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
 import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
@@ -57,7 +58,7 @@ async function confirmedRunContainer(
   run: WorkflowRun
 ): Promise<string | undefined> {
   if (!isContainerRun(run)) return undefined;
-  const envId = run.metadata?.isolation_env_id;
+  const envId = run.metadata?.[ISOLATION_ENV_ID_METADATA_KEY];
   if (typeof envId !== 'string' || envId.trim().length === 0) {
     throw new CancelRefusedError(
       'not_stopped',

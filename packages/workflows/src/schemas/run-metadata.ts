@@ -137,6 +137,8 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   };
 }
 
+export const ISOLATION_ENV_ID_METADATA_KEY = 'isolation_env_id';
+
 /**
  * Keys the run-lifecycle machinery writes into a row's untyped `metadata` JSONB, and the
  * shape of each value. `metadata` is `Record<string, unknown>`, so a typo in a string

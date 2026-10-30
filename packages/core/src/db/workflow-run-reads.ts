@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import {
   STALE_PENDING_AGE_MS,
@@ -64,7 +65,7 @@ export async function getWorkflowRunForAttention(
  * `getLiveRunOwningEnv` to check wider ownership before removing an environment.
  */
 export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun | null> {
-  const extract = getDialect().jsonText('metadata', 'isolation_env_id');
+  const extract = getDialect().jsonText('metadata', ISOLATION_ENV_ID_METADATA_KEY);
   const result = await pool
     .query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
@@ -82,7 +83,7 @@ export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun
 }
 
 export async function getRunIdsByIsolationEnvId(envId: string): Promise<string[]> {
-  const extract = getDialect().jsonText('metadata', 'isolation_env_id');
+  const extract = getDialect().jsonText('metadata', ISOLATION_ENV_ID_METADATA_KEY);
   const result = await pool.query<{ id: string }>(
     `SELECT id FROM remote_agent_workflow_runs WHERE ${extract} = $1 ORDER BY id`,
     [envId]

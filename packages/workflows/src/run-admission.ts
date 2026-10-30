@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { executionClaim } from './store';
 import { formatDuration } from '@archon/paths/duration';
@@ -365,7 +366,7 @@ function freshInvocationMetadata(
     [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
     ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
     ...(opts.execContext?.kind === 'container' ? { isolation: 'container' } : {}),
-    ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+    ...(containerCtx ? { [ISOLATION_ENV_ID_METADATA_KEY]: containerCtx.envId } : {}),
     ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
   };
 }

@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -364,7 +365,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
               row.id !== excludeRunId &&
               (!isTerminalRunStatus(row.status) ||
                 RESUMABLE_WORKFLOW_STATUSES.includes(row.status)) &&
-              (row.metadata.isolation_env_id === id ||
+              (row.metadata[ISOLATION_ENV_ID_METADATA_KEY] === id ||
                 worktreeReferenceSchema.safeParse(row.metadata.owned_worktree).data?.envId === id ||
                 (row.codebase_id === env?.codebase_id && row.working_path === env?.working_path))
           ) ?? null

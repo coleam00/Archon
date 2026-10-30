@@ -138,6 +138,52 @@ describe('workflowRunCommand — progress rendering', () => {
     stderrSpy.mockRestore();
   });
 
+  it.each([false, true])(
+    'releases foreground host images after execution (failure=%s)',
+    async fails => {
+      setupWorkflowMocks();
+      const { executeWorkflow } = require('@archon/workflows/executor');
+      let settled = false;
+      (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+        settled = true;
+        return { success: true, workflowRunId: 'test-run-id' };
+      });
+      const host = createTestWorkflowHost();
+      const failure = new Error('Docker denied image removal');
+      const release = mock(async (_runId: string) => {
+        expect(settled).toBe(true);
+        if (fails) throw failure;
+      });
+      host.deps.releaseRunResources = release;
+      mockFolderBackendDestroy.mockClear();
+      const warning = spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const execution = workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
+        if (fails) {
+          const error = await execution.catch((err: unknown) => err);
+          expect(error).toBeInstanceOf(Error);
+          expect(error).toMatchObject({ cause: failure });
+          expect(resolveCliExitCode(error)).toBe(1);
+          expect(warning).toHaveBeenCalledWith(
+            'WARNING: Run test-run-id retained verification images: Error: Docker denied image removal'
+          );
+          expect(mockLogger.warn).toHaveBeenCalledWith(
+            { err: failure, runId: 'test-run-id' },
+            'cli.resource_release_failed'
+          );
+        } else {
+          await execution;
+          expect(warning).not.toHaveBeenCalled();
+        }
+        expect(release).toHaveBeenCalledTimes(1);
+        expect(release).toHaveBeenCalledWith('test-run-id');
+        expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
+      } finally {
+        warning.mockRestore();
+      }
+    }
+  );
+
   it.each([...workflowRunStatusSchema.options, null])(
     'reports ownership handoff with observed status %s without claiming approval or completion',
     async observedStatus => {

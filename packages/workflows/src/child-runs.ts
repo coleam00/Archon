@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { existsSync } from 'fs';
 import type { ChildIsolationResolver, ChildIsolationResult } from './child-isolation';
@@ -606,7 +607,7 @@ function childInputsMetadata(inputs: Record<string, JsonValue>): Record<string, 
 // can find it. Absent for `inherit`/shared-checkout children.
 function childIsolationMetadata(isolationEnv: ChildIsolationResult): Record<string, unknown> {
   return {
-    isolation_env_id: isolationEnv.envId,
+    [ISOLATION_ENV_ID_METADATA_KEY]: isolationEnv.envId,
     ...(isolationEnv.ownedWorktree ? { owned_worktree: isolationEnv.ownedWorktree } : {}),
     branch_name: isolationEnv.branchName,
   };

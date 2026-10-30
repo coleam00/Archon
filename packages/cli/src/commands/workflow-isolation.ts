@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { statSync } from 'node:fs';
 import {
@@ -556,8 +557,8 @@ async function resumeFolderContainer(
   image: string
 ): Promise<PreparedEnv> {
   const resumeEnvId =
-    typeof resumable?.metadata?.isolation_env_id === 'string'
-      ? resumable.metadata.isolation_env_id
+    typeof resumable?.metadata?.[ISOLATION_ENV_ID_METADATA_KEY] === 'string'
+      ? resumable.metadata[ISOLATION_ENV_ID_METADATA_KEY]
       : undefined;
   if (!resumeEnvId) {
     throw new Error(

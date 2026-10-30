@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
@@ -285,15 +286,18 @@ export async function reclaimCancelledRunContainer(
   ctx: OperationContext,
   run: WorkflowRun
 ): Promise<string[]> {
-  if (!isContainerRun(run) || typeof run.metadata?.isolation_env_id !== 'string') {
+  if (!isContainerRun(run) || typeof run.metadata?.[ISOLATION_ENV_ID_METADATA_KEY] !== 'string') {
     return [];
   }
   try {
-    await ctx.reclaimContainerEnv(run.metadata.isolation_env_id, ctx.hostStore.isolation);
+    await ctx.reclaimContainerEnv(
+      run.metadata[ISOLATION_ENV_ID_METADATA_KEY],
+      ctx.hostStore.isolation
+    );
   } catch (err) {
     getLog().warn({ err, runId: run.id }, 'operations.workflow_abandon_container_reclaim_failed');
     return [
-      `Could not reclaim container environment ${run.metadata.isolation_env_id} for run ${run.id}; resources may remain allocated. Inspect the managed containers before retrying cleanup.`,
+      `Could not reclaim container environment ${run.metadata[ISOLATION_ENV_ID_METADATA_KEY]} for run ${run.id}; resources may remain allocated. Inspect the managed containers before retrying cleanup.`,
     ];
   }
   return [];

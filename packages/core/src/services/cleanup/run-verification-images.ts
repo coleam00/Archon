@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { releaseRunVerificationImages } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { noExecutorCanWrite } from '@archon/workflows/run-scratch';
@@ -26,7 +27,7 @@ export function createRunResourceRelease(
         log.debug({ runId }, 'verification_images.kept_for_resumable_run');
         return;
       }
-      const envId = run.metadata.isolation_env_id;
+      const envId = run.metadata[ISOLATION_ENV_ID_METADATA_KEY];
       if (isContainerRun(run) && (typeof envId !== 'string' || !envId.trim())) {
         throw new Error(`Missing container identity for verification image cleanup: ${runId}`);
       }
