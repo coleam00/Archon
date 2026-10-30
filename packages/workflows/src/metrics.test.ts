@@ -1,6 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
+import { mockWorkflowRun } from './dag/test-utils';
 import { queryMetrics, type MetricsQuery, type MetricsStore } from './metrics';
 import type { WorkflowEventRow } from './schemas/workflow-event';
+import type { WorkflowRun } from './schemas/workflow-run';
 import type { MetricRecordRow } from './store';
 
 const window: MetricsQuery = {
@@ -45,12 +48,16 @@ function event(row: MetricRecordRow, type: 'node_completed' | 'node_failed'): Wo
 /** Every row is its node's terminal event unless `events` says otherwise. */
 function store(
   rows: MetricRecordRow[],
-  events: WorkflowEventRow[] = rows.map(row => event(row, 'node_completed'))
+  {
+    events = rows.map(row => event(row, 'node_completed')),
+    runs = [],
+  }: { events?: WorkflowEventRow[]; runs?: WorkflowRun[] } = {}
 ): MetricsStore {
   return {
     listMetricRecords: async () => rows,
     listEventsForRuns: async ids =>
       new Map(ids.map(id => [id, events.filter(row => row.workflow_run_id === id)])),
+    getWorkflowRunsByIds: async ids => runs.filter(run => ids.includes(run.id)),
   };
 }
 
@@ -268,15 +275,14 @@ describe('queryMetrics', () => {
     const first = completion([count(1)], { run: 'rerun' });
     const second = completion([count(1)], { run: 'rerun' });
     const report = await queryMetrics(
-      store(
-        [amended, first, second],
-        [
+      store([amended, first, second], {
+        events: [
           event(amended, 'node_completed'),
           event(amended, 'node_failed'),
           event(first, 'node_completed'),
           event(second, 'node_completed'),
-        ]
-      ),
+        ],
+      }),
       window
     );
     expect(report.metrics[0]?.instruments[0]).toMatchObject({ value: 1, n: 1 });
@@ -291,5 +297,262 @@ describe('queryMetrics', () => {
       window
     );
     expect(report.metrics[0]?.instruments[0]?.value).toBe(1);
+  });
+});
+
+const cut = new Date('2026-10-04T00:00:00Z');
+
+function runStarted(at: string, metadata: Record<string, unknown> = {}): WorkflowRun {
+  return { ...mockWorkflowRun(randomUUID()), started_at: new Date(at), metadata };
+}
+
+const before = (metadata?: Record<string, unknown>): WorkflowRun =>
+  runStarted('2026-10-02T00:00:00Z', metadata);
+const after = (metadata?: Record<string, unknown>): WorkflowRun =>
+  runStarted('2026-10-05T00:00:00Z', metadata);
+
+/** A merge-rate record for `subject`, produced by `runs`. */
+const merged = (value: number, subject: string, runs: WorkflowRun[]): Record<string, unknown> => ({
+  name: 'sdlc.pr_merge_rate',
+  kind: 'score',
+  unit: 'ratio',
+  value,
+  subject,
+  runs: runs.map(run => run.id),
+});
+
+/** `successes` of `n` merge-rate records, each produced by its own run from `start`. */
+function cohort(prefix: string, successes: number, n: number, start: () => WorkflowRun) {
+  const runs = Array.from({ length: n }, start);
+  const records = runs.map((run, i) =>
+    merged(i < successes ? 1 : 0, `${prefix}-${String(i)}`, [run])
+  );
+  return { runs, records };
+}
+
+async function compareRates(
+  [beforeSuccesses, beforeN]: [number, number],
+  [afterSuccesses, afterN]: [number, number]
+) {
+  const old = cohort('old', beforeSuccesses, beforeN, () => before());
+  const fresh = cohort('new', afterSuccesses, afterN, () => after());
+  const report = await queryMetrics(
+    store([completion([...old.records, ...fresh.records])], { runs: [...old.runs, ...fresh.runs] }),
+    { ...window, compareAt: cut }
+  );
+  return report.metrics[0]?.instruments[0];
+}
+
+describe('queryMetrics attribution, cost and compare', () => {
+  test('a record falls in the cohort of its producing runs, not of its `at`', async () => {
+    const run = before();
+    const report = await queryMetrics(
+      store(
+        [
+          completion([
+            merged(1, 'pr-1', [run]),
+            { ...merged(0, 'pr-2', [run]), at: '2026-10-06T00:00:00Z' },
+          ]),
+        ],
+        {
+          runs: [run],
+        }
+      ),
+      { ...window, compareAt: cut }
+    );
+    expect(report.metrics[0]?.instruments[0]?.compare).toMatchObject({
+      at: cut.toISOString(),
+      before: { n: 2, value: 0.5 },
+      after: { n: 0, value: null, interval: null },
+      delta: null,
+      straddling: 0,
+      unattributed: 0,
+    });
+  });
+
+  test('a record with no runs is produced by the run that returned it', async () => {
+    const emitter = after();
+    const row = completion([merged(1, 'pr-1', [emitter])], { run: emitter.id });
+    const { runs: _runs, ...unnamed } = merged(1, 'pr-1', [emitter]);
+    const report = await queryMetrics(
+      store([{ ...row, metrics: [unnamed] }], { runs: [emitter] }),
+      { ...window, compareAt: cut }
+    );
+    expect(report.metrics[0]?.instruments[0]?.compare).toMatchObject({
+      before: { n: 0 },
+      after: { n: 1, value: 1 },
+    });
+  });
+
+  test('a record with runs on both sides of the cut is straddling, in neither cohort', async () => {
+    const runs = [before(), after()];
+    const report = await queryMetrics(
+      store([completion([merged(1, 'pr-1', runs), merged(0, 'pr-2', [runs[1] ?? after()])])], {
+        runs,
+      }),
+      { ...window, compareAt: cut }
+    );
+    const [instrument] = report.metrics[0]?.instruments ?? [];
+    expect(instrument?.n).toBe(2);
+    expect(instrument?.compare).toMatchObject({
+      before: { n: 0 },
+      after: { n: 1, value: 0 },
+      straddling: 1,
+      unattributed: 0,
+    });
+  });
+
+  test('a record whose named runs are all gone is unattributed, not credited to its emitting run', async () => {
+    const emitter = after();
+    const gone = before();
+    const report = await queryMetrics(
+      store(
+        [
+          completion([merged(1, 'pr-1', [gone]), merged(0, 'pr-2', [emitter])], {
+            run: emitter.id,
+          }),
+        ],
+        {
+          runs: [emitter],
+        }
+      ),
+      { ...window, compareAt: cut }
+    );
+    const [instrument] = report.metrics[0]?.instruments ?? [];
+    expect(instrument).toMatchObject({ value: 0.5, n: 2 });
+    expect(instrument?.compare).toMatchObject({
+      before: { n: 0 },
+      after: { n: 1, value: 0 },
+      straddling: 0,
+      unattributed: 1,
+    });
+    expect(instrument?.cost).toMatchObject({ runs: 1, runs_missing: 1 });
+  });
+
+  test('30 of 50 against 40 of 50 is separated although the cohort intervals overlap', async () => {
+    const compare = (await compareRates([30, 50], [40, 50]))?.compare;
+    expect(compare?.delta).toBeCloseTo(0.2, 10);
+    expect(compare?.delta_interval?.low).toBeCloseTo(0.0201, 4);
+    expect(compare?.delta_interval?.high).toBeCloseTo(0.3636, 4);
+    expect(compare?.separated).toBe(true);
+    expect(compare?.before.interval?.high ?? 0).toBeGreaterThan(compare?.after.interval?.low ?? 1);
+    const worse = (await compareRates([40, 50], [30, 50]))?.compare;
+    expect(worse?.delta_interval?.high).toBeCloseTo(-0.0201, 4);
+    expect(worse?.separated).toBe(true);
+  });
+
+  test('18 of 30 against 24 of 30 is not separated', async () => {
+    const compare = (await compareRates([18, 30], [24, 30]))?.compare;
+    expect(compare?.delta_interval?.low).toBeCloseTo(-0.0317, 4);
+    expect(compare?.delta_interval?.high).toBeCloseTo(0.4056, 4);
+    expect(compare?.separated).toBe(false);
+  });
+
+  test('identical rates are not separated', async () => {
+    const compare = (await compareRates([20, 40], [20, 40]))?.compare;
+    expect(compare?.delta).toBe(0);
+    expect(compare?.separated).toBe(false);
+  });
+
+  test("scores that are not rates compare with Welch's interval", async () => {
+    const values = { old: [27.5, 21.0, 19.0, 23.6], new: [27.1, 22.0, 20.8, 23.4] };
+    const runs: WorkflowRun[] = [];
+    const record = (value: number, subject: string, run: WorkflowRun): Record<string, unknown> => {
+      runs.push(run);
+      return { ...merged(value, subject, [run]), name: 'sdlc.review_minutes', unit: 'minutes' };
+    };
+    const records = [
+      ...values.old.map((value, i) => record(value, `old-${String(i)}`, before())),
+      ...values.new.map((value, i) => record(value, `new-${String(i)}`, after())),
+    ];
+    const report = await queryMetrics(store([completion(records)], { runs }), {
+      ...window,
+      compareAt: cut,
+    });
+    const compare = report.metrics[0]?.instruments[0]?.compare;
+    // Welch for [27.1, 22.0, 20.8, 23.4] − [27.5, 21.0, 19.0, 23.6]: ν = 5.54.
+    expect(compare?.delta_interval?.low).toBeCloseTo(-5.1611, 4);
+    expect(compare?.delta_interval?.high).toBeCloseTo(6.2611, 4);
+    expect(compare?.separated).toBe(false);
+  });
+
+  test('cost counts each producing run once and counts runs without cost, tokens or a row', async () => {
+    const priced = before({ total_cost_usd: 1.5, total_tokens_in: 100, total_tokens_out: 20 });
+    const unpriced = after({ total_tokens_in: 50, total_tokens_out: 5 });
+    const bare = after();
+    const gone = after();
+    const report = await queryMetrics(
+      store(
+        [
+          completion([
+            merged(1, 'pr-1', [priced, unpriced]),
+            merged(1, 'pr-2', [priced]),
+            merged(0, 'pr-3', [bare, gone]),
+          ]),
+        ],
+        { runs: [priced, unpriced, bare] }
+      ),
+      window
+    );
+    expect(report.metrics[0]?.instruments[0]?.cost).toEqual({
+      usd: 1.5,
+      input_tokens: 150,
+      output_tokens: 25,
+      runs: 3,
+      runs_without_cost: 2,
+      runs_without_tokens: 1,
+      runs_missing: 1,
+    });
+    expect(report.metrics[0]?.instruments[0]?.compare).toBeUndefined();
+  });
+
+  test('cost is null, not zero, when no producing run recorded one', async () => {
+    const run = after();
+    const report = await queryMetrics(
+      store([completion([merged(1, 'pr-1', [run])])], { runs: [run] }),
+      window
+    );
+    expect(report.metrics[0]?.instruments[0]?.cost).toMatchObject({
+      usd: null,
+      input_tokens: null,
+      runs_without_cost: 1,
+      runs_without_tokens: 1,
+    });
+  });
+
+  test('a count has no interval, and a score needs two records for one', async () => {
+    const run = after();
+    const report = await queryMetrics(
+      store([completion([count(3), count(4), merged(1, 'pr-1', [run])])], { runs: [run] }),
+      window
+    );
+    expect(report.metrics.map(m => [m.name, m.instruments[0]?.interval])).toEqual([
+      ['factory.prs_merged', null],
+      ['sdlc.pr_merge_rate', null],
+    ]);
+  });
+
+  test('a rate reports its Wilson interval and other scores their t interval', async () => {
+    const run = after();
+    const rates = Array.from({ length: 10 }, (_, i) =>
+      merged(i < 5 ? 1 : 0, `pr-${String(i)}`, [run])
+    );
+    const minutes = [3, 5, 7].map((value, i) => ({
+      ...merged(value, `pr-${String(i)}`, [run]),
+      name: 'sdlc.review_minutes',
+      unit: 'minutes',
+    }));
+    const report = await queryMetrics(
+      store([completion([...rates, ...minutes])], { runs: [run] }),
+      window
+    );
+    const intervals = Object.fromEntries(
+      report.metrics.map(m => [m.name, m.instruments[0]?.interval])
+    );
+    expect(intervals['sdlc.pr_merge_rate']?.low).toBeCloseTo(0.2366, 4);
+    expect(intervals['sdlc.pr_merge_rate']?.high).toBeCloseTo(0.7634, 4);
+    // 5 ± t(0.975, 2) · 2 / √3
+    expect(intervals['sdlc.review_minutes']?.low).toBeCloseTo(0.0317, 4);
+    expect(intervals['sdlc.review_minutes']?.high).toBeCloseTo(9.9683, 4);
   });
 });

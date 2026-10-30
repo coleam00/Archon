@@ -37,7 +37,7 @@ const recordFields = {
   subject: z.string().max(256).nullable(),
   /** When the outcome happened; defaults to the node's completion time. */
   at: isoTimeSchema.optional(),
-  /** The runs that produced the outcome. Stored and validated; read from slice 1b on. */
+  /** The runs that produced the outcome; without it, the run that returned the record. */
   runs: z
     .array(runIdSchema)
     .min(1)
@@ -111,11 +111,73 @@ const metricSeriesPointSchema = z.object({
   n: z.number().int(),
 });
 
+/**
+ * A two-sided 95% interval. `null` for a `count`, for fewer than two records, or for a
+ * difference whose sides have no spread.
+ */
+const metricIntervalSchema = z.object({ low: z.number(), high: z.number() }).nullable();
+
+/**
+ * Spend of the distinct runs that produced a group's records. Every figure is a floor:
+ * a run that recorded no cost or no tokens adds nothing to it and is counted instead.
+ */
+const metricCostSchema = z.object({
+  /** Total USD of the runs that recorded a cost; `null` when none did. */
+  usd: z.number().nullable(),
+  /** Input and output tokens of the runs that recorded tokens; `null` when none did. */
+  input_tokens: z.number().nullable(),
+  output_tokens: z.number().nullable(),
+  /** Producing runs found. */
+  runs: z.number().int(),
+  runs_without_cost: z.number().int(),
+  runs_without_tokens: z.number().int(),
+  /** Named runs that no longer exist. */
+  runs_missing: z.number().int(),
+});
+export type MetricCost = z.infer<typeof metricCostSchema>;
+
+const metricCohortSchema = z.object({
+  /** `null` when the cohort holds no record. */
+  value: z.number().nullable(),
+  n: z.number().int(),
+  interval: metricIntervalSchema,
+});
+export type MetricCohort = z.infer<typeof metricCohortSchema>;
+
+/**
+ * Records split by when their producing runs started. Observational: anything else that
+ * changed around the cut is mixed into the difference.
+ */
+const metricCompareSchema = z.object({
+  /** The cut, as an ISO time. */
+  at: z.string(),
+  /** Records whose producing runs all started before the cut. */
+  before: metricCohortSchema,
+  /** Records whose producing runs all started at or after it. */
+  after: metricCohortSchema,
+  /** `after.value − before.value`; `null` when either cohort is empty. */
+  delta: z.number().nullable(),
+  /** Newcombe's interval for a rate, Welch's for other scores. */
+  delta_interval: metricIntervalSchema,
+  /** `delta_interval` excludes zero. */
+  separated: z.boolean(),
+  /** Records with producing runs on both sides of the cut, in neither cohort. */
+  straddling: z.number().int(),
+  /** Records whose named runs no longer exist, in neither cohort. */
+  unattributed: z.number().int(),
+});
+export type MetricCompare = z.infer<typeof metricCompareSchema>;
+
 const metricInstrumentReportSchema = z.object({
   instrument: z.string().nullable(),
   /** The sum for a `count`, the mean for a `score`. */
   value: z.number(),
   n: z.number().int(),
+  /** Wilson's interval when every value is 0 or 1, otherwise the t interval of the mean. */
+  interval: metricIntervalSchema,
+  cost: metricCostSchema,
+  /** Present when the query names a cut. */
+  compare: metricCompareSchema.optional(),
   latest: z.object({ value: z.number(), at: z.string(), subject: z.string().nullable() }),
   series: z.array(metricSeriesPointSchema),
 });
