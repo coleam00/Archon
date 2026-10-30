@@ -402,15 +402,20 @@ describe('queryMetrics attribution, cost and compare', () => {
     });
   });
 
-  test('a record whose named runs are all gone is unattributed, not credited to its emitting run', async () => {
+  test('a record with a named run gone is unattributed, not credited to its surviving or emitting run', async () => {
     const emitter = after();
     const gone = before();
     const report = await queryMetrics(
       store(
         [
-          completion([merged(1, 'pr-1', [gone]), merged(0, 'pr-2', [emitter])], {
-            run: emitter.id,
-          }),
+          completion(
+            [
+              merged(1, 'pr-1', [gone]),
+              merged(0, 'pr-2', [emitter]),
+              merged(1, 'pr-3', [before(), emitter]),
+            ],
+            { run: emitter.id }
+          ),
         ],
         {
           runs: [emitter],
@@ -419,14 +424,15 @@ describe('queryMetrics attribution, cost and compare', () => {
       { ...window, compareAt: cut }
     );
     const [instrument] = report.metrics[0]?.instruments ?? [];
-    expect(instrument).toMatchObject({ value: 0.5, n: 2 });
+    expect(instrument?.n).toBe(3);
+    expect(instrument?.value).toBeCloseTo(2 / 3, 10);
     expect(instrument?.compare).toMatchObject({
       before: { n: 0 },
       after: { n: 1, value: 0 },
       straddling: 0,
-      unattributed: 1,
+      unattributed: 2,
     });
-    expect(instrument?.cost).toMatchObject({ runs: 1, runs_missing: 1 });
+    expect(instrument?.cost).toMatchObject({ runs: 1, runs_missing: 2 });
   });
 
   test('30 of 50 against 40 of 50 is separated although the cohort intervals overlap', async () => {

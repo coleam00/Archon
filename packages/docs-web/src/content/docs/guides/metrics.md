@@ -296,9 +296,9 @@ archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
 
 - **Straddling.** A record with runs on both sides of the cut, such as a pull request
   built before the change and fixed after it, is in neither cohort. `straddling` counts it.
-- **Unattributed.** A record whose named runs no longer exist is in neither cohort.
-  `unattributed` counts it. It is never credited to the run that returned it, which ran
-  after the cut. It still counts in the entry's `value`.
+- **Unattributed.** A record with a named run that no longer exists is in neither cohort,
+  because that run's start is unknown. `unattributed` counts it. It is never credited to its
+  surviving runs or to the run that returned it. It still counts in the entry's `value`.
 - **The difference.** `delta` is `after − before`, with its own 95% `delta_interval`:
   Newcombe's hybrid score interval for a rate, Welch's interval for other scores. Each
   cohort needs at least two records. `separated` is true when that interval excludes zero.

@@ -234,15 +234,13 @@ type Cohort = 'before' | 'after' | 'straddling' | 'unattributed';
 
 /**
  * A record belongs to the cohort of its producing runs' start, not to its `at`. A record
- * whose named runs are all gone is unattributed rather than credited to the run that
- * returned it, which would place it after any cut older than the metric run.
+ * with any named run gone is unattributed: the gone run's start is unknown, so neither
+ * cohort's rule can be checked, and crediting the run that returned it would place the
+ * record after any cut older than the metric run.
  */
 function cohortOf(entry: CountedRecord, runs: ReportContext['runs'], cut: number): Cohort {
-  const starts = producingRunIds(entry).flatMap(id => {
-    const run = runs.get(id);
-    return run === undefined ? [] : [run.started_at.getTime()];
-  });
-  if (starts.length === 0) return 'unattributed';
+  const starts = producingRunIds(entry).map(id => runs.get(id)?.started_at.getTime());
+  if (!starts.every(start => start !== undefined)) return 'unattributed';
   if (starts.every(start => start < cut)) return 'before';
   return starts.every(start => start >= cut) ? 'after' : 'straddling';
 }

@@ -163,7 +163,7 @@ const metricCompareSchema = z.object({
   separated: z.boolean(),
   /** Records with producing runs on both sides of the cut, in neither cohort. */
   straddling: z.number().int(),
-  /** Records whose named runs no longer exist, in neither cohort. */
+  /** Records with a named run that no longer exists, in neither cohort. */
   unattributed: z.number().int(),
 });
 export type MetricCompare = z.infer<typeof metricCompareSchema>;
