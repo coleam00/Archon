@@ -590,10 +590,6 @@ function buildDetachedChildArgs(
     destination: childDestination,
     declaration,
   } = launch;
-  const adoptedRunId =
-    declaration?.stamp.mode === CONTINUATION_MODES.adopt ? declaration.runId : undefined;
-  const supersededRunId =
-    declaration?.stamp.mode === CONTINUATION_MODES.supersede ? declaration.runId : undefined;
   const extraArgs: string[] = [];
   let pinnedBranch: string | undefined;
   // Pin identity after name resolution so a rename cannot redirect the child.
@@ -619,8 +615,9 @@ function buildDetachedChildArgs(
   }
   // Between-run continuation (#2747) — the child re-resolves the adoption
   // against the live filesystem/database, so pass the declaration through.
-  if (adoptedRunId !== undefined) extraArgs.push('--adopt', adoptedRunId);
-  if (supersededRunId !== undefined) extraArgs.push('--supersedes', supersededRunId);
+  if (declaration) {
+    extraArgs.push(...continuationChildArgs(declaration));
+  }
   // Re-pin the source as an ABSOLUTE path (parseArgs is last-wins, same as --cwd).
   // The original argv may hold a relative `--workflow-source`, and the child is
   // spawned with a different working directory, so passing it through unresolved
@@ -637,6 +634,18 @@ function buildDetachedChildArgs(
     extraArgs.push('--internal-detached-run-id', launchedRunId);
   }
   return { extraArgs, pinnedBranch };
+}
+
+function continuationChildArgs(declaration: NonNullable<DetachedLaunch['declaration']>): string[] {
+  const { mode } = declaration.stamp;
+  switch (mode) {
+    case CONTINUATION_MODES.adopt:
+      return ['--adopt', declaration.runId];
+    case CONTINUATION_MODES.supersede:
+      return ['--supersedes', declaration.runId];
+  }
+  const exhaustive: never = mode;
+  return exhaustive;
 }
 
 async function resolveDetachedTranscriptPath(

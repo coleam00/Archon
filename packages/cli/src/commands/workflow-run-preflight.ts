@@ -48,15 +48,18 @@ export function buildResumeLookupFailureError(error: Error): Error {
   );
 }
 
+type ContinuationLaneByMode = {
+  [CONTINUATION_MODES.adopt]: { adoptedRun: WorkflowRun; lane: AdoptionLane };
+  [CONTINUATION_MODES.supersede]: { superseded: WorkflowRun };
+};
+
 /** A resolved between-run continuation declaration (#2747): `--adopt` or `--supersedes`. */
-export type ContinuationDeclaration =
-  | {
-      runId: string;
-      adoptedRun: WorkflowRun;
-      lane: AdoptionLane;
-      stamp: ContinuationMetadata;
-    }
-  | { runId: string; superseded: WorkflowRun; stamp: ContinuationMetadata };
+export type ContinuationDeclaration = {
+  [Mode in ContinuationMetadata['mode']]: {
+    runId: string;
+    stamp: ContinuationMetadata & { mode: Mode };
+  } & ContinuationLaneByMode[Mode];
+}[ContinuationMetadata['mode']];
 
 /**
  * Resolve `--adopt` or `--supersedes` to the run it names, or `undefined` when neither is
@@ -86,23 +89,29 @@ export async function resolveContinuationDeclaration(
   if (!resolved) return undefined;
   const { run, stamp } = resolved;
   const runId = run.id;
-  if (stamp.mode === CONTINUATION_MODES.adopt) {
-    const { adoptedRun, lane } = await resolveWorkflowAdoption({
-      deps: {
-        getRun: id => host.deps.store.getWorkflowRun(id),
-        getActiveRunByPath: (...args) => host.deps.store.getActiveWorkflowRunByPath(...args),
-        findEnvironmentByPath: (...args) =>
-          host.records.isolation.findLatestByCodebaseAndWorkingPath(...args),
-      },
-      adoptedRunId: runId,
-      codebaseId: codebase.id,
-      codebasePath: codebase.default_cwd,
-      codebaseKind: codebase.kind,
-      containerRequested: options.container === true,
-    });
-    return { runId, adoptedRun, lane, stamp };
+  const { mode } = stamp;
+  switch (mode) {
+    case CONTINUATION_MODES.adopt: {
+      const { adoptedRun, lane } = await resolveWorkflowAdoption({
+        deps: {
+          getRun: id => host.deps.store.getWorkflowRun(id),
+          getActiveRunByPath: (...args) => host.deps.store.getActiveWorkflowRunByPath(...args),
+          findEnvironmentByPath: (...args) =>
+            host.records.isolation.findLatestByCodebaseAndWorkingPath(...args),
+        },
+        adoptedRunId: runId,
+        codebaseId: codebase.id,
+        codebasePath: codebase.default_cwd,
+        codebaseKind: codebase.kind,
+        containerRequested: options.container === true,
+      });
+      return { runId, adoptedRun, lane, stamp: { ...stamp, mode } };
+    }
+    case CONTINUATION_MODES.supersede:
+      return { runId, superseded: run, stamp: { ...stamp, mode } };
   }
-  return { runId, superseded: run, stamp };
+  const exhaustive: never = mode;
+  return exhaustive;
 }
 
 /**

@@ -610,7 +610,10 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     expect(spawnCmd[supIndex + 1]).toBe(supersededRunId);
     expect(workflowDb.findWorkflowRunsByIdPrefix).toHaveBeenCalledWith('0b1ee8da', 'cb-1');
     expect(mockCreateWorkflowRun).toHaveBeenCalledWith(
-      expect.objectContaining({ adopted_from_run_id: supersededRunId })
+      expect.objectContaining({
+        adopted_from_run_id: supersededRunId,
+        metadata: expect.objectContaining({ continuation: { mode: 'supersede' } }),
+      })
     );
   });
 
