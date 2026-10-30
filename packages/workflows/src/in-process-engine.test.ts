@@ -467,6 +467,89 @@ describe('InProcessWorkflowEngine', () => {
     }
   );
 
+  it.each(['failed', 'cancelled'] as const)(
+    'returns the original %s resume result without retrying its terminal write',
+    async status => {
+      const { engine, store } = await makeEngine();
+      const run = await store.createWorkflowRun({ workflow_name: parent.name, user_message: '' });
+      await completeNode(store, run.id, 'first');
+      await store.failWorkflowRun(run.id, 'interrupted');
+      const failed = await store.getWorkflowRun(run.id);
+      if (!failed) throw new Error('expected failed run');
+      const cause = new Error('DAG failed');
+      dagBody = async () => {
+        if (status === 'cancelled') {
+          await store.cancelWorkflowRun(run.id);
+          return undefined;
+        }
+        throw cause;
+      };
+      const fail = store.failWorkflowRun.bind(store);
+      const failRun = spyOn(store, 'failWorkflowRun')
+        .mockRejectedValue(new Error('second failure write refused'))
+        .mockImplementationOnce(fail);
+      try {
+        const admission = await engine.resume({
+          platform,
+          conversationId: 'conv-1',
+          cwd: '/tmp/ops',
+          userMessage: '',
+          run: failed,
+          legacyWorkflow: parent,
+        });
+        if (!admission.accepted) throw new Error('expected resume');
+        expect(await admission.settled).toEqual({
+          success: false,
+          workflowRunId: run.id,
+          error: status === 'failed' ? cause.message : 'Workflow did not complete successfully',
+        });
+        expect(failRun).toHaveBeenCalledTimes(status === 'failed' ? 1 : 0);
+        expect(await store.getWorkflowRunStatus(run.id)).toBe(status);
+        if (status === 'failed')
+          expect(await store.getWorkflowRun(run.id)).toMatchObject({
+            metadata: { error: cause.message },
+          });
+      } finally {
+        failRun.mockRestore();
+      }
+    }
+  );
+
+  it('rejects an owned container refusal when its failure write rejects', async () => {
+    const { engine, store } = await makeEngine();
+    const run = await store.createWorkflowRun({
+      workflow_name: parent.name,
+      user_message: '',
+      metadata: { isolation: 'container', isolation_env_id: 'env-x' },
+    });
+    await completeNode(store, run.id, 'first');
+    await store.failWorkflowRun(run.id, 'interrupted');
+    const failed = await store.getWorkflowRun(run.id);
+    if (!failed) throw new Error('expected failed run');
+    const persistError = new Error('failure write refused');
+    const failRun = spyOn(store, 'failWorkflowRun').mockRejectedValue(persistError);
+    try {
+      const admission = await engine.resume({
+        platform,
+        conversationId: 'conv-1',
+        cwd: '/tmp/ops',
+        userMessage: '',
+        run: failed,
+        legacyWorkflow: parent,
+      });
+      if (!admission.accepted) throw new Error('expected resume');
+      await expect(admission.settled).rejects.toMatchObject({
+        name: 'TerminalStatusWriteError',
+        cause: persistError,
+        failure: expect.stringContaining('CLI'),
+      });
+      expect(failRun).toHaveBeenCalledTimes(1);
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('running');
+    } finally {
+      failRun.mockRestore();
+    }
+  });
+
   it('stale container submit preserves another worker claim', async () => {
     const { engine, store } = await makeEngine();
     const pending = await store.createWorkflowRun({

@@ -122,7 +122,11 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       { ...context.options, ...hydrated }
     ).then(
       async result => {
-        if (!result.success && !('handedOff' in result)) {
+        if (
+          !result.success &&
+          !('handedOff' in result) &&
+          (await this.deps.store.getWorkflowRunStatus(hydrated.preCreatedRun.id)) === 'running'
+        ) {
           await requireTerminalStatusWrite(
             this.deps.store.failWorkflowRun(hydrated.preCreatedRun.id, result.error, {
               expectedExecutionClaim: executionClaim(hydrated.preCreatedRun.metadata),
