@@ -349,12 +349,23 @@ describe('Windows capture ordering', () => {
 describe.skipIf(process.platform === 'win32')('terminateTree POSIX', () => {
   let kill: ReturnType<typeof spyOn<typeof process, 'kill'>>;
   const refused = Object.assign(new Error('signal refused'), { code: 'EPERM' });
+  const originalLevel = getLogLevel();
+  let lines: string[];
   beforeEach(() => {
+    lines = [];
+    setLogLevel('info');
+    setLogSink(line => {
+      lines.push(line);
+    });
     kill = spyOn(process, 'kill').mockImplementation(() => {
       throw refused;
     });
   });
-  afterEach(() => kill.mockRestore());
+  afterEach(() => {
+    kill.mockRestore();
+    setLogSink(undefined);
+    setLogLevel(originalLevel);
+  });
 
   test.each(['', '120 R\n', '12 Z\n12 ZN\n120 R\n', '012 Z+\n'])(
     'accepts ended group %p',
@@ -380,7 +391,34 @@ describe.skipIf(process.platform === 'win32')('terminateTree POSIX', () => {
     expect(kill.mock.calls).toEqual([[-12, 'SIGKILL']]);
   });
 
-  test('retains EPERM when inspection fails', async () => {
+  test.each(['command', 'listing'])(
+    'logs failed %s inspection and retains EPERM',
+    async failure => {
+      const inspectionError = Object.assign(new Error('ps failed'), { code: 'ETIMEDOUT' });
+      await expect(
+        terminateTree(12, undefined, async () => {
+          if (failure === 'command') throw inspectionError;
+          return 'invalid';
+        })
+      ).rejects.toBe(refused);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0])).toMatchObject({
+        level: 40,
+        module: 'paths.plugin-process',
+        msg: 'process_group_inspection_failed',
+        targetPid: 12,
+        err:
+          failure === 'command'
+            ? { message: 'ps failed', code: 'ETIMEDOUT' }
+            : { message: 'Invalid POSIX process listing' },
+      });
+    }
+  );
+
+  test('retains EPERM when inspection and logging both fail', async () => {
+    setLogSink(() => {
+      throw new Error('sink failed');
+    });
     await expect(
       terminateTree(12, undefined, async () => {
         throw new Error('ps failed');

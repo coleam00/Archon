@@ -101,8 +101,15 @@ export async function terminateTree(
       // Darwin can refuse signals to zombie-only groups. Failed observation proves nothing.
       try {
         if (processGroupHasEnded(pid, await listGroups())) return;
-      } catch {
-        // Preserve the original signal error when the process table cannot prove exit.
+      } catch (inspectionError) {
+        try {
+          createLogger('paths.plugin-process').warn(
+            { err: inspectionError, targetPid: pid },
+            'process_group_inspection_failed'
+          );
+        } catch {
+          // Optional diagnostics must not replace the original signal error.
+        }
       }
     }
     throw error;
