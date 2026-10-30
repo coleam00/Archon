@@ -13,7 +13,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
 import { TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
-import { resolveRequestedTestGroups } from './package-test-requests';
+import {
+  junitDestination,
+  parseTestArguments,
+  resolveRequestedTestGroups,
+} from './package-test-requests';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 const track = trackTempRoots();
@@ -769,5 +773,21 @@ test('every explicit package manifest accounts for a newly requested filename', 
     );
     expect(request.validationErrors.length).toBe(covered ? 0 : 1);
     expect(request.groups.length).toBe(covered ? 1 : 0);
+  }
+});
+
+test('JUnit destination follows the final reporter and outfile options', () => {
+  for (const [args, expected] of [
+    [[], undefined],
+    [['--reporter=junit'], undefined],
+    [['--reporter-outfile=ignored.xml'], undefined],
+    [
+      ['--reporter=junit', '--reporter-outfile=first.xml', '--reporter-outfile', 'last.xml'],
+      'last.xml',
+    ],
+    [['--reporter=junit', '--reporter-outfile=result.xml', '--reporter=dots'], undefined],
+    [['--reporter=dots', '--reporter=junit', '--reporter-outfile=result.xml'], 'result.xml'],
+  ] satisfies [string[], string | undefined][]) {
+    expect(junitDestination(parseTestArguments(args).optionTokens)).toBe(expected);
   }
 });

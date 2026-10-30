@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
-import { parseTestArguments } from './package-test-requests';
+import { junitDestination, parseTestArguments } from './package-test-requests';
 import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
 /**
@@ -227,10 +227,7 @@ async function runRequested(requested: string[]): Promise<number> {
   }
 
   const { optionTokens } = parseTestArguments(requested);
-  const destination =
-    optionTokens.filter(token => token.name === 'reporter').at(-1)?.value === 'junit'
-      ? optionTokens.filter(token => token.name === 'reporter-outfile').at(-1)?.value
-      : undefined;
+  const destination = junitDestination(optionTokens);
   const reports = [];
   let code = 0;
   for (const { owner, args } of runs) {
