@@ -26,42 +26,6 @@ function send(socket: Socket<Connection>, id: number, method: string, params = {
   socket.write(Buffer.concat([header, body]));
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function readIdentity(result: unknown): { pid: number; parent: number } {
-  if (!isObject(result) || !isObject(result.result) || typeof result.result.value !== 'string') {
-    throw new Error('Invalid inspector identity');
-  }
-  const identity: unknown = JSON.parse(result.result.value);
-  if (
-    !isObject(identity) ||
-    typeof identity.pid !== 'number' ||
-    typeof identity.parent !== 'number'
-  ) {
-    throw new Error('Invalid inspector process');
-  }
-  return { pid: identity.pid, parent: identity.parent };
-}
-
-function recordStatus(state: Connection, status: unknown): void {
-  switch (status) {
-    case 'skipped_because_label':
-      state.filtered++;
-      break;
-    case 'pass':
-    case 'fail':
-    case 'timeout':
-    case 'skip':
-    case 'todo':
-      state.matched++;
-      break;
-    default:
-      throw new Error(`Unsupported native test status: ${String(status)}`);
-  }
-}
-
 // JUnit collapses filtered tests and explicit skips. The native inspector reports
 // `skipped_because_label` separately, including in Bun's parallel worker processes.
 export async function runNameFilteredGroup(
@@ -80,21 +44,6 @@ export async function runNameFilteredGroup(
   // Test subprocesses inherit inspector settings too; only our preload marks group members.
   const ownedPrefix = join(root, 'owned-');
   const preload = join(root, 'ready.ts');
-  const receive = (socket: Socket<Connection>, message: unknown) => {
-    if (!isObject(message)) throw new Error('Invalid inspector message');
-    if ('error' in message) throw new Error(JSON.stringify(message.error));
-    if (message.id === 2) {
-      const identity = readIdentity(message.result);
-      socket.data.pid = identity.pid;
-      socket.data.parent = identity.parent;
-      writeFileSync(readyPrefix + identity.pid, '');
-      send(socket, 4, 'Inspector.initialized');
-    }
-    if (message.method === 'TestReporter.end') {
-      if (!isObject(message.params)) throw new Error('Missing native test status');
-      recordStatus(socket.data, message.params.status);
-    }
-  };
   let server: SocketListener<Connection> | undefined;
   try {
     writeFileSync(
@@ -136,7 +85,59 @@ while (!existsSync(${JSON.stringify(readyPrefix)} + process.pid)) {
             if (state.pending.length < length + 4) break;
             try {
               const message: unknown = JSON.parse(state.pending.subarray(4, length + 4).toString());
-              receive(socket, message);
+              if (typeof message !== 'object' || message === null)
+                throw new Error('Invalid inspector message');
+              if ('error' in message) throw new Error(JSON.stringify(message.error));
+              if ('id' in message && message.id === 2 && 'result' in message) {
+                const result = message.result;
+                if (typeof result !== 'object' || result === null || !('result' in result))
+                  throw new Error('Missing inspector identity');
+                const value = result.result;
+                if (
+                  typeof value !== 'object' ||
+                  value === null ||
+                  !('value' in value) ||
+                  typeof value.value !== 'string'
+                )
+                  throw new Error('Invalid inspector identity');
+                const identity: unknown = JSON.parse(value.value);
+                if (
+                  typeof identity !== 'object' ||
+                  identity === null ||
+                  !('pid' in identity) ||
+                  typeof identity.pid !== 'number' ||
+                  !('parent' in identity) ||
+                  typeof identity.parent !== 'number'
+                )
+                  throw new Error('Invalid inspector process');
+                state.pid = identity.pid;
+                state.parent = identity.parent;
+                writeFileSync(readyPrefix + identity.pid, '');
+                send(socket, 4, 'Inspector.initialized');
+              }
+              if (
+                'method' in message &&
+                message.method === 'TestReporter.end' &&
+                'params' in message
+              ) {
+                const params = message.params;
+                if (typeof params !== 'object' || params === null || !('status' in params))
+                  throw new Error('Missing native test status');
+                switch (params.status) {
+                  case 'skipped_because_label':
+                    state.filtered++;
+                    break;
+                  case 'pass':
+                  case 'fail':
+                  case 'timeout':
+                  case 'skip':
+                  case 'todo':
+                    state.matched++;
+                    break;
+                  default:
+                    throw new Error(`Unsupported native test status: ${String(params.status)}`);
+                }
+              }
             } catch (error) {
               protocolError = String(error);
               socket.end();
