@@ -26,12 +26,12 @@ isolation groups. Every requested group runs, and any failed group makes the com
 fail. Files selected outside explicit `testGroups` fail discovery while covered groups
 still run. Test flags apply to each selected group; JUnit output is combined across
 groups and, from the repository root, across every started owner.
-A single selected group's name filter keeps Bun's native exit result. Split runs use
-Bun's `--pass-with-no-tests` per child and match the names in private JUnit reports
-to detect an empty result across all groups. Matching skipped or todo tests
-count as matches. Load and hook failures remain failures. Selected discovery errors
-also appear as runner errors in the combined JUnit report. An unreadable or invalid
-private report fails its group and contributes a runner error; later requested groups
+Name filters (`-t` or `--test-name-pattern`) are supported only when the request selects
+one isolation group, preserving Bun's native exit result. Requests selecting multiple
+groups with a name filter fail before tests load, with a diagnostic naming the groups.
+Select files from one group or run each group separately. Load and hook failures remain
+failures. Selected discovery errors also appear as runner errors in the combined JUnit
+report. An unreadable or invalid private report fails its group and contributes a runner error; later requested groups
 still run.
 
 CI is the full validation gate. While working, choose checks for the files and packages

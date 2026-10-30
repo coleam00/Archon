@@ -239,9 +239,9 @@ async function runRequested(requested: string[]): Promise<number> {
     if (destination === undefined) {
       code = await runOwner(args);
     } else {
-      const result = await runReportedGroup(args, runOwner, undefined);
+      const result = await runReportedGroup(args, runOwner);
       reports.push(result.report);
-      code = result.code === 'no-name-match' ? 0 : result.code;
+      code = result.code;
     }
     if (code !== 0) break;
   }

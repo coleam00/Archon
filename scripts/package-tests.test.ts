@@ -42,19 +42,22 @@ async function native(root: string, args: string[]): Promise<number> {
   ]);
   return code;
 }
-async function run(root: string, args: string[] = [], part = ''): Promise<number> {
+async function runResult(root: string, args: string[] = [], part = '') {
   const child = Bun.spawn([process.execPath, 'run', runner, ...args], {
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',
     env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ARCHON_TEST_PART: part },
   });
-  const [status] = await Promise.all([
+  const [status, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ]);
-  return status;
+  return { status, stdout, stderr };
+}
+async function run(root: string, args: string[] = [], part = ''): Promise<number> {
+  return (await runResult(root, args, part)).status;
 }
 function testFile(root: string, name: string, body: string, isolated = false): void {
   writeFileSync(
@@ -157,7 +160,7 @@ for (const declaration of [
         true
       );
       testFile(root, 'other', `test('wanted', () => { throw new Error('not requested'); });`);
-      expect(await run(root, ['a-mock', 'b-real', '-t', 'wanted'])).toBe(0);
+      expect(await run(root, ['a-mock', 'b-real'])).toBe(0);
       const pids = readFileSync(join(root, 'pids'), 'utf8').trim().split('\n');
       expect(pids).toHaveLength(2);
       expect(new Set(pids).size).toBe(2);
@@ -211,47 +214,44 @@ test('optional inline flags leave the following file selector intact', () => {
   ]);
 });
 
-test(
-  'name filters may match one isolation group, while real failures and zero matches stay red',
-  async () => {
-    const root = fixture({ testConcurrency: 2 });
-    testFile(root, 'a', `test('other', () => { throw new Error('not selected'); });`, true);
-    testFile(root, 'b', `test('wanted', () => appendFileSync('selected', 'yes'));`, true);
-    const args = ['src/', '-t', 'wanted'];
-    expect(await run(root, args)).toBe(0);
-    expect(readFileSync(join(root, 'selected'), 'utf8')).toBe('yes');
-    const report = join(root, 'requested-report.xml');
-    expect(await run(root, [...args, '--reporter=junit', '--reporter-outfile', report])).toBe(0);
-    const xml = readFileSync(report, 'utf8');
-    expect(xml).toContain('name="other"');
-    expect(xml).toContain('name="wanted"');
-    expect(xml).toMatch(/<testsuites[^>]*skipped="1"/);
-
-    expect(await run(root, ['src/', '-t', 'absent'])).not.toBe(0);
-    expect(await run(root, ['src/', '-t', 'absent', '--pass-with-no-tests'])).toBe(0);
-    testFile(root, 'a', `test('wanted', () => { throw new Error('real failure'); });`, true);
-    expect(await run(root, args)).not.toBe(0);
-    testFile(root, 'a', `test('other', () => {}); throw new Error('load failure');`, true);
-    expect(await run(root, args)).not.toBe(0);
-    testFile(
-      root,
-      'a',
-      `import { beforeAll } from 'bun:test';
-      beforeAll(() => { throw new Error('hook failure'); }); test('wanted', () => {});`,
-      true
+for (const concurrency of [1, 2]) {
+  for (const declaration of [{}, { testGroups: [['src/a.test.ts'], ['src/b.test.ts']] }]) {
+    test(
+      `cross-group name filters fail before loading tests: ${JSON.stringify(declaration)}, concurrency=${concurrency}`,
+      async () => {
+        const root = fixture({ ...declaration, testConcurrency: concurrency });
+        for (const name of ['a', 'b']) {
+          testFile(root, name, `appendFileSync('loaded', 'yes'); test('wanted', () => {});`, true);
+        }
+        const report = join(root, 'rejected.xml');
+        for (const args of [
+          ['a.test', 'b.test', '-t', 'wanted'],
+          ['src/', '--test-name-pattern', 'wanted'],
+          ['src/', '--test-name-pattern=wanted'],
+          ['src/', '-twanted'],
+          ['-t', ''],
+          [
+            'src/',
+            '-t',
+            'absent',
+            '--pass-with-no-tests',
+            '--reporter=junit',
+            '--reporter-outfile',
+            report,
+          ],
+        ]) {
+          const result = await runResult(root, args);
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain('Name filters require one isolation group');
+          for (const name of ['a', 'b']) expect(result.stderr).toContain(`./src/${name}.test.ts`);
+          expect(existsSync(join(root, 'loaded'))).toBe(false);
+          expect(existsSync(report)).toBe(false);
+        }
+      },
+      testTimeout(5000)
     );
-    expect(await run(root, args)).not.toBe(0);
-    testFile(
-      root,
-      'a',
-      `import { afterAll } from 'bun:test';
-      afterAll(() => { throw new Error('cleanup failure'); }); test('wanted', () => {});`,
-      true
-    );
-    expect(await run(root, args)).not.toBe(0);
-  },
-  testTimeout(5000)
-);
+  }
+}
 
 test(
   'requested failures run later groups while full runs stop early',
@@ -331,47 +331,42 @@ test(
 );
 
 for (const concurrency of [1, 2]) {
-  for (const nameFilter of [false, true]) {
-    test(
-      `requested JUnit combines every group: concurrency=${concurrency}, filter=${nameFilter}`,
-      async () => {
-        const root = fixture({ testConcurrency: concurrency });
-        testFile(root, 'a', `test('first', () => { throw new Error('expected'); });`, true);
-        testFile(root, 'b', `test('second', () => {});`, true);
-        testFile(root, 'c', `test('third', () => appendFileSync('third', 'ran'));`, true);
-        const report = join(root, 'report.xml');
-        expect(
-          await run(root, [
-            'src/',
-            '--reporter=junit',
-            '--reporter-outfile',
-            report,
-            ...(nameFilter ? ['-t', 'first|second|third'] : []),
-          ])
-        ).not.toBe(0);
-        const xml = readFileSync(report, 'utf8');
-        for (const name of ['first', 'second', 'third']) expect(xml).toContain(`name="${name}"`);
-        expect(xml).toMatch(/<testsuites[^>]*tests="4"/);
-        expect(xml).toMatch(/<testsuites[^>]*failures="1"/);
-        expect(readFileSync(join(root, 'third'), 'utf8')).toBe('ran');
-      },
-      testTimeout(5000)
-    );
-  }
+  test(
+    `requested JUnit combines every group: concurrency=${concurrency}`,
+    async () => {
+      const root = fixture({ testConcurrency: concurrency });
+      testFile(root, 'a', `test('first', () => { throw new Error('expected'); });`, true);
+      testFile(root, 'b', `test('second', () => {});`, true);
+      testFile(root, 'c', `test('third', () => appendFileSync('third', 'ran'));`, true);
+      const report = join(root, 'report.xml');
+      expect(await run(root, ['src/', '--reporter=junit', '--reporter-outfile', report])).not.toBe(
+        0
+      );
+      const xml = readFileSync(report, 'utf8');
+      for (const name of ['first', 'second', 'third']) expect(xml).toContain(`name="${name}"`);
+      expect(xml).toMatch(/<testsuites[^>]*tests="4"/);
+      expect(xml).toMatch(/<testsuites[^>]*failures="1"/);
+      expect(readFileSync(join(root, 'third'), 'utf8')).toBe('ran');
+    },
+    testTimeout(5000)
+  );
 }
 
 for (const failure of [
   `throw new Error('top level');`,
   `import './missing-module';`,
   `const broken = ;`,
+  `test('wanted', () => expect(1).toBe(2));`,
+  `import { beforeAll } from 'bun:test'; beforeAll(() => { throw new Error('hook'); }); test('wanted', () => {});`,
+  `import { afterAll } from 'bun:test'; afterAll(() => { throw new Error('cleanup'); }); test('wanted', () => {});`,
 ]) {
   test(
-    `shared load failures stay red under name filters: ${failure}`,
+    `single-group failures stay red under name filters: ${failure}`,
     async () => {
       const root = fixture();
       testFile(root, 'a-skip', `test('other', () => {});`);
       testFile(root, 'b-broken', failure);
-      testFile(root, 'c-match', `test('wanted', () => {});`, true);
+      testFile(root, 'c-match', `test('wanted', () => {});`);
       const report = join(root, 'load-failure.xml');
       expect(
         await run(root, ['src/', '-t', 'wanted', '--reporter=junit', '--reporter-outfile', report])
@@ -434,69 +429,6 @@ test(
   },
   testTimeout(5000)
 );
-
-for (const omission of ['ignored', 'sharded', 'changed', 'unmatched', 'module', 'describe']) {
-  test(
-    `name filters allow legitimate missing suites: ${omission}`,
-    async () => {
-      const root = fixture();
-      testFile(root, 'a-empty', `test('other', () => {});`);
-      testFile(root, 'b-empty', `test('other', () => {});`);
-      testFile(root, 'c-match', `test('wanted', () => appendFileSync('matched', 'yes'));`, true);
-      const options: string[] = [];
-      if (omission === 'ignored') options.push('--path-ignore-patterns', '**/*empty*');
-      if (omission === 'sharded') options.push('--shard', '1/2');
-      if (omission === 'unmatched') options.push('no-such-substring');
-      if (omission === 'module') testFile(root, 'a-empty', `export const value = 1;`);
-      if (omission === 'describe')
-        testFile(
-          root,
-          'a-empty',
-          `import { describe } from 'bun:test'; describe('empty', () => {});`
-        );
-      if (omission === 'changed') {
-        for (const args of [
-          ['init'],
-          ['add', '.'],
-          [
-            '-c',
-            'user.name=Runner',
-            '-c',
-            'user.email=runner@example.com',
-            'commit',
-            '-m',
-            'fixture',
-          ],
-        ]) {
-          expect(Bun.spawnSync(['git', ...args], { cwd: root }).exitCode).toBe(0);
-        }
-        testFile(
-          root,
-          'c-match',
-          `test('wanted', () => appendFileSync('matched', 'changed'));`,
-          true
-        );
-        testFile(root, 'b-empty', `test('other changed', () => {});`);
-        options.push('--changed=HEAD');
-      }
-      const report = join(root, 'omission.xml');
-      expect(
-        await run(root, [
-          'src/',
-          '-t',
-          'wanted',
-          ...options,
-          '--reporter=junit',
-          '--reporter-outfile',
-          report,
-        ])
-      ).toBe(0);
-      expect(existsSync(join(root, 'matched'))).toBe(true);
-      expect(readFileSync(report, 'utf8')).toMatch(/<testsuites[^>]*errors="0"/);
-    },
-    testTimeout(5000)
-  );
-}
 
 test(
   'mixed assertion and load failures retain the failed process in JUnit',
@@ -623,10 +555,9 @@ for (const suffix of ['test', 'spec']) {
 
 for (const concurrency of [1, 2]) {
   test(
-    `split name filters match native empty-name and skipped-suite outcomes: concurrency ${concurrency}`,
+    `single-group name filters match native empty-name and skipped-suite outcomes: concurrency ${concurrency}`,
     async () => {
       const root = fixture({ testConcurrency: concurrency });
-      testFile(root, 'unrelated', `test('unrelated', () => {});`, true);
       const cases: { body: string; patterns: string[] }[] = [];
       for (const modifier of ['', '.skip', '.todo']) {
         const body = modifier === '' ? `() => {}` : `() => { throw new Error('skipped body'); }`;
@@ -753,25 +684,23 @@ for (const modifier of ['', '.skip', '.todo']) {
   );
 }
 
-for (const mode of ['shared parallel workers', 'concurrent isolation groups']) {
+for (const options of [[], ['--parallel=2'], ['--pass-with-no-tests']]) {
   test(
-    `name-filter results survive ${mode}`,
+    `single-group name-filter results survive options ${JSON.stringify(options)}`,
     async () => {
       const root = fixture({ testConcurrency: 2 });
-      const isolated = mode === 'concurrent isolation groups';
-      testFile(root, 'a', `test('other', () => { throw new Error('filtered'); });`, isolated);
-      testFile(root, 'b', `test.skip('wanted', () => { throw new Error('skipped'); });`, isolated);
-      const options = isolated ? [] : ['--parallel=2'];
+      testFile(root, 'a', `test('other', () => { throw new Error('filtered'); });`);
+      testFile(root, 'b', `test.skip('wanted', () => { throw new Error('skipped'); });`);
       for (const pattern of ['wanted', 'absent']) {
         const args = ['src/', '-t', pattern, ...options];
         expect(await run(root, args)).toBe(await native(root, args));
       }
-      testFile(root, 'b', `test('wanted', () => appendFileSync('ran', 'yes'));`, isolated);
+      testFile(root, 'b', `test('wanted', () => appendFileSync('ran', 'yes'));`);
       expect(await run(root, ['src/', '-t', 'wanted', ...options])).toBe(0);
       expect(readFileSync(join(root, 'ran'), 'utf8')).toBe('yes');
-      testFile(root, 'b', `test('wanted', () => { throw new Error('real failure'); });`, isolated);
+      testFile(root, 'b', `test('wanted', () => { throw new Error('real failure'); });`);
       expect(await run(root, ['src/', '-t', 'wanted', ...options])).not.toBe(0);
-      testFile(root, 'b', `test('other', () => {}); throw new Error('load failure');`, isolated);
+      testFile(root, 'b', `test('other', () => {}); throw new Error('load failure');`);
       expect(await run(root, ['src/', '-t', 'wanted', ...options])).not.toBe(0);
     },
     testTimeout(5000)

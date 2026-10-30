@@ -115,10 +115,11 @@ returns nonzero if any group fails. A full run without arguments still stops adm
 groups after a failure. A selected file outside explicit `testGroups` contributes a
 discovery error while covered groups still run.
 
-Test options are forwarded to each group. A single selected group's name filter keeps
-Bun's native exit result. Split runs use Bun's `--pass-with-no-tests` per child and
-testcase names in private JUnit reports to detect an empty result across all groups. Matching skipped or todo tests count as matches.
-Load and hook failures still return nonzero. An explicit
+Test options are forwarded to each group. Name filters (`-t` or `--test-name-pattern`)
+are supported only when the request selects one isolation group, preserving Bun's native
+exit result. Requests selecting multiple groups with a name filter fail before tests load,
+with a diagnostic naming the groups. Select files from one group or run each group
+separately. Load and hook failures still return nonzero. An explicit
 `--reporter=junit --reporter-outfile <path>` receives one combined report containing all
 started groups and repository-root owners, including their failures and aggregate counts. Each failed child also
 contributes a process error because Bun can omit load failures from its JUnit output;

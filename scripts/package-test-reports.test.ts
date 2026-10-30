@@ -33,47 +33,37 @@ for (const [damage, damagedXml] of [...Object.entries(damagedReports), ['unreada
   for (const childCode of [0, 1, 7]) {
     test(`damaged ${damage} report after exit ${childCode} fails the group and retains later reports`, async () => {
       const root = track(mkdtempSync(join(tmpdir(), 'package-report-')));
-      for (const namePattern of [undefined, 'wanted', 'absent']) {
-        let privatePath = '';
-        const damaged = await runReportedGroup(
-          ['first.test.ts'],
-          async args => {
-            privatePath = reportDestination(args);
-            if (damagedXml === undefined) mkdirSync(privatePath);
-            else writeFileSync(privatePath, damagedXml);
-            return childCode;
-          },
-          namePattern
-        );
-        expect(damaged.code).toBe(childCode || 1);
-        expect(damaged.report.counts.errors).toBe(1);
-        expect(damaged.report.suites).toContain('first.test.ts');
-        expect(damaged.report.suites).toContain(`Bun exited ${childCode}`);
-        expect(damaged.report.suites).toContain('see child output for diagnostics');
-        expect(damaged.report.suites).toContain('Unable to read Bun JUnit report');
-        expect(existsSync(privatePath)).toBe(false);
+      let privatePath = '';
+      const damaged = await runReportedGroup(['first.test.ts'], async args => {
+        privatePath = reportDestination(args);
+        if (damagedXml === undefined) mkdirSync(privatePath);
+        else writeFileSync(privatePath, damagedXml);
+        return childCode;
+      });
+      expect(damaged.code).toBe(childCode || 1);
+      expect(damaged.report.counts.errors).toBe(1);
+      expect(damaged.report.suites).toContain('first.test.ts');
+      expect(damaged.report.suites).toContain(`Bun exited ${childCode}`);
+      expect(damaged.report.suites).toContain('see child output for diagnostics');
+      expect(damaged.report.suites).toContain('Unable to read Bun JUnit report');
+      expect(existsSync(privatePath)).toBe(false);
 
-        const later = await runReportedGroup(
-          ['later.test.ts'],
-          async args => {
-            const destination = reportDestination(args);
-            writeFileSync(
-              destination,
-              `<testsuites tests="1"><testsuite name="later"><testcase name="${namePattern ?? 'wanted'}" /></testsuite></testsuites>`
-            );
-            return 0;
-          },
-          namePattern
+      const later = await runReportedGroup(['later.test.ts'], async args => {
+        const destination = reportDestination(args);
+        writeFileSync(
+          destination,
+          `<testsuites tests="1"><testsuite name="later"><testcase name="wanted" /></testsuite></testsuites>`
         );
-        expect(later.code).toBe(0);
-        const combined = join(root, 'combined.xml');
-        writeCombinedReport(combined, [damaged.report, later.report]);
-        const xml = readFileSync(combined, 'utf8');
-        expect(() => parser(true).write(xml).close()).not.toThrow();
-        expect(xml).toContain('name="later"');
-        expect(xml).toContain('name="first.test.ts"');
-        expect(xml).toMatch(/<testsuites[^>]*errors="1"/);
-      }
+        return 0;
+      });
+      expect(later.code).toBe(0);
+      const combined = join(root, 'combined.xml');
+      writeCombinedReport(combined, [damaged.report, later.report]);
+      const xml = readFileSync(combined, 'utf8');
+      expect(() => parser(true).write(xml).close()).not.toThrow();
+      expect(xml).toContain('name="later"');
+      expect(xml).toContain('name="first.test.ts"');
+      expect(xml).toMatch(/<testsuites[^>]*errors="1"/);
     });
   }
 }
@@ -86,14 +76,10 @@ for (const content of [
   test(`valid escaped report content survives aggregation: ${content}`, async () => {
     const root = track(mkdtempSync(join(tmpdir(), 'package-report-')));
     const suites = `<testsuite name="valid">${content}</testsuite>`;
-    const result = await runReportedGroup(
-      ['valid.test.ts'],
-      async args => {
-        writeFileSync(reportDestination(args), `<testsuites tests="1">${suites}</testsuites>`);
-        return 0;
-      },
-      undefined
-    );
+    const result = await runReportedGroup(['valid.test.ts'], async args => {
+      writeFileSync(reportDestination(args), `<testsuites tests="1">${suites}</testsuites>`);
+      return 0;
+    });
     expect(result.code).toBe(0);
     expect(result.report.suites).toBe(suites);
     const combined = join(root, 'combined.xml');

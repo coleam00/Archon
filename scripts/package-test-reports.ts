@@ -49,32 +49,6 @@ export function runnerErrorReport(message: string, name: string): TestReport {
   };
 }
 
-function decodeAttribute(value: string): string {
-  const entities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
-  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (entity, key: string) => {
-    if (key.startsWith('#x')) return String.fromCodePoint(Number.parseInt(key.slice(2), 16));
-    if (key.startsWith('#')) return String.fromCodePoint(Number(key.slice(1)));
-    return entities[key] ?? entity;
-  });
-}
-
-function hasMatchingTestcase(suites: string, pattern: string): boolean {
-  const names: string[] = [];
-  const regex = new RegExp(pattern);
-  // Bun's classname lists parents in reverse order. The nested suites preserve
-  // the actual name order, including suite names that themselves contain " > ".
-  for (const [tag] of suites.matchAll(/<\/?(?:testsuite|testcase)\b[^>]*>/g)) {
-    if (tag.startsWith('</testsuite')) names.pop();
-    else if (tag.startsWith('<testsuite')) {
-      names.push(decodeAttribute(attributes(tag).get('name') ?? ''));
-    } else if (tag.startsWith('<testcase')) {
-      const name = decodeAttribute(attributes(tag).get('name') ?? '');
-      if (regex.test([...names.slice(1), name].join(' '))) return true;
-    }
-  }
-  return false;
-}
-
 export function writeCombinedReport(destination: string, reports: TestReport[]): void {
   const totals = countFields.map(
     field => `${field}="${reports.reduce((sum, report) => sum + report.counts[field], 0)}"`
@@ -87,17 +61,11 @@ export function writeCombinedReport(destination: string, reports: TestReport[]):
 
 export async function runReportedGroup(
   args: string[],
-  run: (args: string[]) => Promise<number>,
-  namePattern: string | undefined
-): Promise<{ code: number | 'no-name-match'; report: TestReport }> {
+  run: (args: string[]) => Promise<number>
+): Promise<{ code: number; report: TestReport }> {
   const root = mkdtempSync(join(tmpdir(), 'archon-test-report-'));
   const reportPath = join(root, 'junit.xml');
-  const options = [
-    '--reporter=junit',
-    `--reporter-outfile=${reportPath}`,
-    // Bun keeps load and hook failures nonzero with this flag; empty filters exit zero.
-    ...(namePattern !== undefined ? ['--pass-with-no-tests'] : []),
-  ];
+  const options = ['--reporter=junit', `--reporter-outfile=${reportPath}`];
   const terminator = args.indexOf('--');
   const insertion = terminator < 0 ? args.length : terminator;
   try {
@@ -114,13 +82,6 @@ export async function runReportedGroup(
       const message = `Unable to read Bun JUnit report: ${error instanceof Error ? error.message : String(error)}. Bun exited ${code} (see child output for diagnostics)`;
       console.error(message);
       return { code: code || 1, report: runnerErrorReport(message, args.join(' ')) };
-    }
-    if (
-      namePattern !== undefined &&
-      code === 0 &&
-      !hasMatchingTestcase(report.suites, namePattern)
-    ) {
-      return { code: 'no-name-match', report };
     }
     if (code !== 0) {
       // Bun can omit load failures even when another test fails. Retain the process outcome.

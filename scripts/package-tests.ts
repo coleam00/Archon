@@ -71,9 +71,11 @@ if (part !== undefined) {
 }
 
 for (const error of request?.validationErrors ?? []) console.error(error.message);
-// A single group's native exit already decides the whole request.
-const splitNamePattern = groups.length > 1 ? request?.namePattern : undefined;
-let emptyNameGroups = 0;
+if (groups.length > 1 && request?.namePattern !== undefined) {
+  throw new Error(
+    `Name filters require one isolation group; selected ${groups.length}:\n${groups.map((group, index) => `  ${index + 1}: ${group.join(' ')}`).join('\n')}\nSelect files from one group or run each group separately.`
+  );
+}
 const reports = (request?.validationErrors ?? []).map(error =>
   runnerErrorReport(error.message, 'Test discovery')
 );
@@ -81,22 +83,18 @@ const reports = (request?.validationErrors ?? []).map(error =>
 /** Runs one group and reports how long it took, for `update-test-weights.ts`. */
 const timed = async (group: string[], runGroup: (group: string[]) => Promise<number>) => {
   const startedAt = performance.now();
-  let result: number | 'no-name-match';
-  if (
-    request !== undefined &&
-    (splitNamePattern !== undefined || request.reporterOutfile !== undefined)
-  ) {
-    const reported = await runReportedGroup(group, runGroup, splitNamePattern);
+  let result: number;
+  if (request?.reporterOutfile !== undefined) {
+    const reported = await runReportedGroup(group, runGroup);
     reports.push(reported.report);
     result = reported.code;
   } else {
     result = await runGroup(group);
   }
-  if (result === 'no-name-match') emptyNameGroups++;
   console.log(
     `◀ ${packageName} ${group[0]} ${((performance.now() - startedAt) / 1000).toFixed(1)}s`
   );
-  return result === 'no-name-match' ? 0 : result;
+  return result;
 };
 
 const runBuffered = async (group: string[]): Promise<number> => {
@@ -147,9 +145,4 @@ async function runGroups(): Promise<number> {
 // Not `process.exit`: on a pipe it can cut off the buffered group output written just before.
 const code = await runGroups();
 if (request?.reporterOutfile !== undefined) writeCombinedReport(request.reporterOutfile, reports);
-process.exitCode =
-  code ||
-  (request?.validationErrors.length ? 1 : 0) ||
-  (request?.namePattern !== undefined && !request.allowsNoTests && emptyNameGroups === groups.length
-    ? 1
-    : 0);
+process.exitCode = code || (request?.validationErrors.length ? 1 : 0);

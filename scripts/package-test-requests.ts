@@ -102,7 +102,6 @@ export function resolveRequestedTestGroups(
   const options = requested.filter((_, index) => !selectorIndices.has(index));
   return {
     validationErrors,
-    allowsNoTests: optionTokens.some(token => token.name === 'pass-with-no-tests'),
     // Let Bun own no-match errors and flags such as --help or --pass-with-no-tests.
     groups:
       groups.length === 0
