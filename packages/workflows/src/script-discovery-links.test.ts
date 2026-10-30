@@ -102,3 +102,34 @@ for (const source of ['project', 'global', 'installed'] as const) {
     expect(scripts.get(name)?.path).toBe(join(dir, 'good.ts').replaceAll('\\', '/'));
   });
 }
+
+test('a verified legacy bundled capture still ignores an unrelated dangling neighbor', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'legacy-bundled-links-')));
+  const dir = join(root, 'bundled/workflows/pack/deliver/scripts');
+  await mkdir(dir, { recursive: true });
+  const content = 'console.log("ok")';
+  await writeFile(join(dir, 'good.ts'), content);
+  await symlink(join(root, 'absent'), join(dir, 'unrelated.ts'));
+  const { digestEntries, foldDigest, writeManifest } = await import('./workflow-source/manifest');
+  const { BUNDLED_VERSION } = await import('@archon/paths/bundled-build');
+  const digest = foldDigest(await digestEntries(root));
+  await writeManifest(root, {
+    version: 1,
+    engine_version: BUNDLED_VERSION,
+    origin: root,
+    captured_at: new Date(0).toISOString(),
+    digest,
+    file_count: 1,
+    byte_count: Buffer.byteLength(content),
+    scopes: ['bundled'],
+    source_config: DEFAULT_WORKFLOW_SOURCE_CONFIG,
+  });
+  const { capturedSourceRoots } = await import('./workflow-source');
+  const roots = capturedSourceRoots({ root, digest, config: DEFAULT_WORKFLOW_SOURCE_CONFIG });
+  const name = formatPackagedResourceReference(
+    { source: 'bundled', pack: 'pack', workflow: 'deliver' },
+    'good'
+  );
+  const scripts = await discoverScriptsForCwd(root, roots, new Set([name]));
+  expect(scripts.get(name)?.path).toBe(join(dir, 'good.ts').replaceAll('\\', '/'));
+});
