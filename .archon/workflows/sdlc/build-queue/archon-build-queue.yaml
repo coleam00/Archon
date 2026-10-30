@@ -228,8 +228,10 @@ nodes:
           required: [repo, number]
         reason: { type: string, pattern: '\S' }
         # On ask, what the question is about, as the agent judged it: `scope` for the
-        # contract's shape or the rounds' trend, `stop` for anything else. Null otherwise.
-        ask_class: { type: [string, 'null'], enum: [stop, scope, null] }
+        # contract's shape or the rounds' trend, `stop` for anything else. Ignored on
+        # done and continue. Not nullable: Codex's constrained decoding could not emit
+        # `null` from an enum and padded whitespace until max_output_tokens.
+        ask_class: { type: string, enum: [stop, scope] }
         attention: *attention
       required: [decision, brief, push, reason, ask_class, attention]
 
