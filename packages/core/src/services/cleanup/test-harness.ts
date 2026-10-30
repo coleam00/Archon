@@ -211,6 +211,7 @@ export const mockReleaseVerificationImages = mock<typeof Isolation.releaseRunVer
   async () => undefined
 );
 mock.module('@archon/isolation', () => ({
+  dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
   releaseRunVerificationImages: mockReleaseVerificationImages,
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,

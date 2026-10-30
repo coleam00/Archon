@@ -558,6 +558,7 @@ mock.module('../db/messages', () => ({
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
 mock.module('@archon/isolation', () => ({
+  dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
   releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,

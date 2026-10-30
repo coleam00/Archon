@@ -2,7 +2,7 @@ import {
   CANCELLED_REASON_METADATA_KEY,
   ISOLATION_ENV_ID_METADATA_KEY,
 } from '@archon/workflows/schemas/run-metadata';
-import { releaseRunVerificationImages } from '@archon/isolation';
+import { dockerCli, releaseRunVerificationImages } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { noExecutorCanWrite } from '@archon/workflows/run-scratch';
 import {
@@ -12,16 +12,31 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { FAN_OUT_CANCEL_REASONS, type IWorkflowStore } from '@archon/workflows/store';
 
+async function hostDockerAvailable(): Promise<boolean> {
+  if (!Bun.which('docker', { PATH: process.env.PATH ?? '' })) return false;
+  try {
+    await dockerCli(['version', '--format', '{{.Server.Version}}'], {
+      timeout: 10_000,
+      env: { ...process.env },
+    });
+    return true;
+  } catch (err) {
+    createLogger('cleanup.verification-images').info(
+      { err },
+      'verification_images.docker_unavailable'
+    );
+    return false;
+  }
+}
+
 export function createRunResourceRelease(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
-  // Snapshot the optional host capability before execution. Losing Docker later
-  // must remain a cleanup failure, rather than looking like a Docker-free host.
-  release: typeof releaseRunVerificationImages | undefined = Bun.which('docker', {
-    PATH: process.env.PATH ?? '',
-  })
-    ? releaseRunVerificationImages
-    : undefined
+  release: typeof releaseRunVerificationImages = releaseRunVerificationImages
 ): (runId: string) => Promise<void> {
+  // Snapshot daemon reachability before execution. Losing Docker later must
+  // remain a cleanup failure, rather than looking like a Docker-free host.
+  const dockerAvailable =
+    release === releaseRunVerificationImages ? hostDockerAvailable() : Promise.resolve(true);
   return async runId => {
     const log = createLogger('cleanup.verification-images');
     try {
@@ -46,14 +61,12 @@ export function createRunResourceRelease(
       if (isContainerRun(run) && (typeof envId !== 'string' || !envId.trim())) {
         throw new Error(`Missing container identity for verification image cleanup: ${runId}`);
       }
-      if (!release && !isContainerRun(run)) {
+      // A workflow can start Docker itself after the host was created.
+      if (!isContainerRun(run) && !(await dockerAvailable) && !(await hostDockerAvailable())) {
         log.info({ runId }, 'verification_images.skipped_docker_unavailable');
         return;
       }
-      await (release ?? releaseRunVerificationImages)(
-        runId,
-        isContainerRun(run) && typeof envId === 'string' ? envId : undefined
-      );
+      await release(runId, isContainerRun(run) && typeof envId === 'string' ? envId : undefined);
     } catch (err) {
       log.warn({ err, runId }, 'verification_images.release_failed');
       throw err;

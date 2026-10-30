@@ -212,6 +212,7 @@ const mockDestroyWorktree = mock<ReturnType<typeof Isolation.getIsolationProvide
 );
 
 mock.module('@archon/isolation', () => ({
+  dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
   releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
