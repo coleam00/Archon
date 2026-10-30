@@ -334,6 +334,7 @@ mock.module('../../db/workflows', () => ({
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
   listDashboardRuns: mockListDashboardRuns,
   getWorkflowRun: mockGetWorkflowRun,
+  getWorkflowRunForAttention: mockGetWorkflowRun,
   findWorkflowRunsByIdPrefix: mockFindWorkflowRunsByIdPrefix,
   findChildRuns: mockFindChildRuns,
   resumeWorkflowRun: mockResumeWorkflowRun,

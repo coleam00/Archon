@@ -207,6 +207,8 @@ export class InMemoryStore implements IWorkflowStore {
     return Promise.resolve(r ? this.clone(r) : null);
   };
 
+  getWorkflowRunForAttention = (id: string) => this.getWorkflowRun(id);
+
   findChildRuns = (parentRunId: string): Promise<WorkflowRun[]> =>
     Promise.resolve(
       [...this.runs.values()].filter(r => r.parent_run_id === parentRunId).map(r => this.clone(r))

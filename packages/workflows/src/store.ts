@@ -8,6 +8,7 @@
  * The records and rules every store shares live in `./store/` by area and are
  * re-exported here, so this stays the one import path for the port.
  */
+import type { AttentionRead } from './schemas/attention-degraded';
 import type { IResourceStartStore } from './resource-start-store';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
@@ -251,11 +252,14 @@ export interface IWorkflowStore
     id: string,
     write: AttentionLabelWrite
   ): Promise<{ labeled: true; wait: WorkflowAttentionWaitContext } | { labeled: false }>;
+  /** Batch descendant read: corrupt origins become safe reports; query failures still reject. */
+  getWorkflowRunForAttention(id: string): Promise<AttentionRead<WorkflowRun> | null>;
   /**
    * Every row the attention queue reads (`isAttentionQueueRow`), most recently started
-   * first. The rows only: `@archon/workflows/attention-queue` builds the items.
+   * first, with a degraded report for each unreadable row.
+   * `@archon/workflows/attention-queue` builds items from readable rows.
    */
-  listAttentionQueueRows(): Promise<WorkflowRun[]>;
+  listAttentionQueueRows(): Promise<AttentionRead<WorkflowRun>[]>;
   /** Atomically record an unexpired event signal and its audit event without changing lifecycle. */
   signalWorkflowWait(
     id: string,

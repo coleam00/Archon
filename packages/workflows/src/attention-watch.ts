@@ -7,6 +7,7 @@
  * covered because the feed is the persisted store, not an in-process emitter.
  * The watch reads only.
  */
+import { attentionDegradedBaseSchema, splitAttentionRead } from './schemas/attention-degraded';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
@@ -136,11 +137,7 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
   /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
   z.object({ type: z.literal('bookmark'), cursor: cursorSchema }),
-  z.object({
-    type: z.literal('degraded'),
-    reason: z.literal('run_unreadable'),
-    cursor: cursorSchema,
-  }),
+  attentionDegradedBaseSchema.extend({ cursor: cursorSchema }),
   /** The store cannot read the stream's cursor; the last line of the stream. */
   z.object({ type: z.literal('error'), error: z.literal('cursor_invalid') }),
 ]);
@@ -171,6 +168,7 @@ export type AttentionWatchStore = Pick<
   | 'readWorkflowEventsAfter'
   | 'listAttentionQueueRows'
   | 'getWorkflowRun'
+  | 'getWorkflowRunForAttention'
   | 'getCodebase'
   | 'listWorkflowRuns'
   | 'listEventsForRuns'
@@ -396,8 +394,9 @@ export async function watchAttentionQueue(
     return closing;
   };
 
-  // 1. The snapshot: the complete open set in scope, refilled on every connect.
-  const snapshot = selectAttentionQueue(await listAttentionQueue(source), {
+  // 1. Refill the open set on every connect, reporting rows we cannot read.
+  const { values, degraded } = splitAttentionRead(await listAttentionQueue(source));
+  const snapshot = selectAttentionQueue(values, {
     scope,
     labels,
     order: { by: 'age' },
@@ -412,6 +411,9 @@ export async function watchAttentionQueue(
       ...itemContext(item),
       item,
     });
+  }
+  for (const report of degraded) {
+    await emit({ type: report.type, reason: report.reason, cursor: start });
   }
   await emit({ type: 'ready', cursor: start });
 

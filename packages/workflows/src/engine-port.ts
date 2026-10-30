@@ -142,7 +142,8 @@ export interface IWorkflowEngine {
   ): Promise<WorkflowRunSubscription>;
   /**
    * Stream the attention queue across every run in scope, including runs started later:
-   * the open items as a snapshot, then `ready`, then follow committed changes. Repeated
+   * the open items and identifier-free `degraded` warnings for snapshot items that cannot be read or projected,
+   * then `ready`, then follow committed changes. Repeated
    * projection failures send identifier-free `degraded` lines at the last handled cursor.
    * Unreadable deliveries may be omitted after an independent fresh projection succeeds;
    * outages affecting all projections retain the cursor and retry. Reconnect after repair

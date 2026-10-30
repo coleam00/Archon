@@ -151,6 +151,7 @@ mock.module('@archon/core/db/conversations', () => ({
 let runTranscript = false;
 const mockIsRunTranscriptConversation = mock(async (_id: string) => runTranscript);
 mock.module('@archon/core/db/workflows', () => ({
+  getWorkflowRunForAttention: mock(async () => null),
   listWorkflowRuns: mock(async () => []),
   listDashboardRuns: makeListDashboardRunsMock(),
   getWorkflowRun: mock(async () => null),

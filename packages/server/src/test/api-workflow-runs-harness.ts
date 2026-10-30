@@ -4,6 +4,7 @@
  * anything that reads a mocked module. Describes assign the mocked auth session and
  * ARCHON_HOME through the setters, since an imported binding cannot be assigned.
  */
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { mock, beforeAll } from 'bun:test';
 import { join, relative, sep } from 'path';
 import * as realStorage from '@archon/paths/archon-paths';
@@ -91,7 +92,9 @@ type ListWorkflowRunsOptions = Parameters<
 export const mockListWorkflowRuns = mock<
   (_options?: ListWorkflowRunsOptions) => Promise<MockWorkflowRun[]>
 >(async () => []);
-export const mockListAttentionQueueRows = mock(async (): Promise<DashboardWorkflowRun[]> => []);
+export const mockListAttentionQueueRows = mock(
+  async (): Promise<AttentionRead<DashboardWorkflowRun>[]> => []
+);
 export const mockListDashboardRuns = makeListDashboardRunsMock();
 export const mockGetWorkflowRunByWorkerPlatformId = mock(
   async (_id: string) => null as null | MockWorkflowRun
@@ -186,6 +189,7 @@ mock.module('@archon/core', () => ({
   createWorkflowDeps: mock(() => ({
     store: {
       getWorkflowRun: mockGetWorkflowRun,
+      getWorkflowRunForAttention: mockGetWorkflowRun,
       signalWorkflowWait: mockSignalWorkflowWait,
       listDueWorkflowContinuations: mockListDueWorkflowContinuations,
       deferWorkflowContinuation: mock(async () => {}),
@@ -391,6 +395,7 @@ mock.module('@archon/core/db/workflows', () => ({
   listDashboardRuns: mockListDashboardRuns,
   listAttentionQueueRows: mockListAttentionQueueRows,
   getWorkflowRun: mockGetWorkflowRun,
+  getWorkflowRunForAttention: mockGetWorkflowRun,
   findChildRuns: mockFindChildRuns,
   cancelWorkflowRun: mockCancelWorkflowRun,
   deleteWorkflowRun: mockDeleteWorkflowRun,

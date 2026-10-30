@@ -1,3 +1,4 @@
+import { attentionDegradedSchema } from '@archon/workflows/schemas/attention-degraded';
 import {
   toolCallAttentionArraySchema,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -377,12 +378,16 @@ export const runsNeedingAttentionResponseSchema = z
   .object({
     runs: z.array(dashboardWorkflowRunSchema),
     items: z.array(attentionQueueItemSchema.meta({ id: 'AttentionQueueItem' })),
+    degraded: z.array(attentionDegradedSchema).optional(),
   })
   .openapi('RunsNeedingAttentionResponse');
 
 /** GET /api/runs/attention response when `countBy` is given. */
 export const attentionQueueCountsResponseSchema = z
-  .object({ counts: attentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }) })
+  .object({
+    counts: attentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }),
+    degraded: z.array(attentionDegradedSchema).optional(),
+  })
   .openapi('AttentionQueueCountsResponse');
 
 /** GET /api/runs/{runId}/attention response: null when the run needs no one now. */

@@ -45,6 +45,7 @@ mock.module('../db/workflows', () => ({
   ),
   createWorkflowRun: mockCreateWorkflowRun,
   getWorkflowRun: mockGetWorkflowRun,
+  getWorkflowRunForAttention: mockGetWorkflowRun,
   findChildRuns: mockFindChildRuns,
   getRunAncestry: mockGetRunAncestry,
   getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,

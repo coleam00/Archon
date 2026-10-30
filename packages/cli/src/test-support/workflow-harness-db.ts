@@ -107,6 +107,7 @@ mock.module('@archon/core/db/workflows', () => ({
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mockLookupWorkflowRun,
+  getWorkflowRunForAttention: mockLookupWorkflowRun,
   findAdoptingRuns: mock(() => Promise.resolve([])),
   findWorkflowRunsByIdPrefix: mock(() => Promise.resolve([])),
   updateWorkflowRun: mock(() => Promise.resolve()),

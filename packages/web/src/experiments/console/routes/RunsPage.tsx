@@ -354,6 +354,13 @@ export function RunsPage(): ReactElement {
           Could not load runs needing your input: {pending.error.message}
         </p>
       ) : null}
+      {pending.degraded.map((report, index) => (
+        <p key={report.runId ?? index} role="alert" className="px-6 py-3 text-error">
+          Attention coverage incomplete:{' '}
+          {report.runId === undefined ? 'a paused run' : `run ${report.runId}`} could not be read.
+          Check operator logs, repair the stored run, then reload.
+        </p>
+      ))}
       <PendingInputBanner
         runs={pending.visible}
         showProject={scope === 'all'}
@@ -377,6 +384,7 @@ export function RunsPage(): ReactElement {
 }
 
 interface PendingInput {
+  degraded: skill.RunsAttention['degraded'];
   /** Pending-input runs the banner shows: in scope and not dismissed. */
   visible: Run[];
   promotedRunIds: ReadonlySet<string>;
@@ -389,7 +397,7 @@ function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
   // Pending-input runs the user has dismissed from the banner this session.
   // Not persisted — the run is still paused, so it re-surfaces on reload.
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
-  const { data: attentionRuns, error } = useEntity<Run[]>(
+  const { data: attentionRuns, error } = useEntity<skill.RunsAttention>(
     K.runsAttention,
     skill.listRunsNeedingAttention
   );
@@ -399,7 +407,7 @@ function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
         ...demoRuns.filter(
           run => run.attention?.kind === 'awaiting_response' || run.attention?.kind === 'attention'
         ),
-        ...(attentionRuns ?? []),
+        ...(attentionRuns?.runs ?? []),
       ].filter(run => scope === 'all' || run.projectId === scope),
     [demoRuns, attentionRuns, scope]
   );
@@ -434,7 +442,10 @@ function usePendingInput(demoRuns: Run[], scope: Scope): PendingInput {
       return next;
     });
   };
-  return { visible, promotedRunIds, error, dismiss };
+  const degraded = (attentionRuns?.degraded ?? []).map(report =>
+    scope === 'all' ? report : { type: report.type, reason: report.reason }
+  );
+  return { visible, promotedRunIds, degraded, error, dismiss };
 }
 
 /** j/k selection over the visible runs plus the page's other shortcuts; returns the selected run id. */

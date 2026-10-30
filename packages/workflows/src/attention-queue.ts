@@ -4,9 +4,14 @@
  *
  * `toAttentionQueueItem` is the one constructor: it builds an item from a run row and its
  * run-attention projection, so the list, the single read and the stream
- * (`attention-watch.ts`) cannot disagree. Labels are data. The queue filters them by exact match and sorts them as
+ * (`attention-watch.ts`) share the readable projection. Labels are data. The queue filters them by exact match and sorts them as
  * plain strings, and nothing here depends on who is asking.
  */
+import {
+  isAttentionDegraded,
+  splitAttentionRead,
+  type AttentionRead,
+} from './schemas/attention-degraded';
 import { z } from 'zod';
 import {
   getRunArtifactsDirForRoot,
@@ -239,7 +244,10 @@ export function toAttentionQueueItem(
 
 /** What the queue reads: the store, and the host's record of each checkout's branch. */
 export interface AttentionQueueSource {
-  store: Pick<IWorkflowStore, 'listAttentionQueueRows' | 'getWorkflowRun' | 'getCodebase'>;
+  store: Pick<
+    IWorkflowStore,
+    'listAttentionQueueRows' | 'getWorkflowRun' | 'getWorkflowRunForAttention' | 'getCodebase'
+  >;
   /** The branch of a run's checkout; null when the host has no record of one. */
   branchOf(run: WorkflowRun): Promise<string | null>;
 }
@@ -313,13 +321,42 @@ export async function attentionQueueItemForRun(
 /** The items for rows the store's queue list returned, in their order. */
 export async function attentionQueueItems(
   source: AttentionQueueSource,
-  runs: readonly WorkflowRun[]
-): Promise<AttentionQueueItem[]> {
+  runs: readonly AttentionRead<WorkflowRun>[]
+): Promise<AttentionRead<AttentionQueueItem>[]> {
+  const unreadableIds = new Set(splitAttentionRead(runs).degraded.map(report => report.runId));
+  const reportedUnreadableRun = new Error('Run already reported unreadable by attention batch');
+  const unreadableDescendant = new Error('Unreadable attention descendant');
+  const batchSource: AttentionQueueSource = {
+    ...source,
+    store: {
+      listAttentionQueueRows: () => source.store.listAttentionQueueRows(),
+      getWorkflowRunForAttention: id => source.store.getWorkflowRunForAttention(id),
+      getCodebase: id => source.store.getCodebase(id),
+      getWorkflowRun: async id => {
+        // The batch already reports this row. Rereading it could log stored parser text;
+        // treating it as missing would instead invent a missing-child queue item.
+        if (unreadableIds.has(id)) throw reportedUnreadableRun;
+        const child = await source.store.getWorkflowRunForAttention(id);
+        if (child !== null && isAttentionDegraded(child)) throw unreadableDescendant;
+        return child;
+      },
+    },
+  };
   const codebases: CodebaseCache = new Map();
-  const items: AttentionQueueItem[] = [];
+  const items: AttentionRead<AttentionQueueItem>[] = [];
   for (const run of runs) {
-    const item = await attentionQueueItemForRun(source, run, codebases);
-    if (item !== null) items.push(item);
+    if (isAttentionDegraded(run)) {
+      items.push(run);
+      continue;
+    }
+    try {
+      const item = await attentionQueueItemForRun(batchSource, run, codebases);
+      if (item !== null) items.push(item);
+    } catch (error) {
+      if (error === reportedUnreadableRun) continue;
+      if (error !== unreadableDescendant) throw error;
+      items.push({ type: 'degraded', reason: 'run_unreadable', runId: run.id });
+    }
   }
   return items;
 }
@@ -327,7 +364,7 @@ export async function attentionQueueItems(
 /** Every item in the install, in the store's order: most recently started run first. */
 export async function listAttentionQueue(
   source: AttentionQueueSource
-): Promise<AttentionQueueItem[]> {
+): Promise<AttentionRead<AttentionQueueItem>[]> {
   return attentionQueueItems(source, await source.store.listAttentionQueueRows());
 }
 

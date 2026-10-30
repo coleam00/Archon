@@ -260,6 +260,7 @@ export function createInMemoryWorkflowStore(
     getCodebaseEnvVars: async () => ({}),
     createWorkflowRun: input => write(view => view.createWorkflowRun(input)),
     getWorkflowRun: id => write(view => view.getWorkflowRun(id)),
+    getWorkflowRunForAttention: id => write(view => view.getWorkflowRunForAttention(id)),
     getWorkflowRunStatus: id => write(view => view.getWorkflowRunStatus(id)),
     claimPendingWorkflowRun: (id, path) => write(view => view.claimPendingWorkflowRun(id, path)),
     updateWorkflowRun: (id, updates) => write(view => view.updateWorkflowRun(id, updates)),
