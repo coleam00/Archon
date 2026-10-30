@@ -1,0 +1,121 @@
+name: god-mode-learn
+description: |
+  Use when: you want god mode to improve itself. Run it on a schedule (see
+  `god-mode/triggers/`), and it becomes the always-on half of god mode.
+
+  It reads the record of every workflow in the project, the SDLC pack and any other
+  pack included. A script lists every recent run, completed and failed, with where its
+  transcript and artifacts live, plus the state documents and open attention items. An
+  agent then reads that record, ranks every failure class it finds by what it costs,
+  and picks the single highest-leverage improvement:
+  - `revise`: change an existing workflow, prompt, script or policy document (for
+    example an SDLC stage whose prompt keeps producing the same failure);
+  - `forge`: build a handler workflow for a recurring class of problem;
+  - `consolidate`: rewrite the memory into fewer and better lessons, with a revision
+    guard;
+  - `none`: nothing in the evidence justifies a change.
+
+  `revise` and `forge` end as draft pull requests, opened only after a person approves
+  the full diff. The memory lands in an audited state document. It never edits the
+  engine, its own governance, or the trust ladder.
+
+  Usage: archon workflow run god-mode-learn
+
+returns: report
+
+nodes:
+  - id: observe
+    script: observe
+    runtime: bun
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        evidence: { type: string }
+        lessons_revision: { type: integer }
+      required: [evidence, lessons_revision]
+
+  # Reading dozens of transcripts and artifacts is the job, so this node runs on the
+  # large tier with no idle cap of its own.
+  - id: reflect
+    depends_on: [observe]
+    command: reflect
+    context: fresh
+    model: large
+    mutates_checkout: false
+    with:
+      evidence: "$observe.output.evidence"
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        action: { type: string, enum: [revise, forge, consolidate, none] }
+        rationale: { type: string, pattern: '\S' }
+        evidence: { type: string }
+        need: { type: string }
+        lessons: { type: array, items: { type: string }, maxItems: 25 }
+        classes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              name: { type: string, pattern: '\S' }
+              cost: { type: string }
+              evidence: { type: string }
+              cause: { type: string }
+              fix: { type: string }
+            required: [name, cost, evidence, cause, fix]
+      required: [action, rationale, evidence, need, lessons, classes]
+
+  - id: consolidate
+    depends_on: [observe, reflect]
+    when: "$reflect.output.action == 'consolidate'"
+    script: consolidate
+    runtime: bun
+    mutates_checkout: false
+    with:
+      lessons: { from: "$reflect.output.lessons" }
+      revision: "$observe.output.lessons_revision"
+    output_format:
+      type: object
+      properties:
+        kept: { type: integer }
+      required: [kept]
+
+  - id: forge
+    depends_on: [reflect]
+    when: "$reflect.output.action == 'forge'"
+    workflow: god-mode-forge
+    isolation: worktree
+    with:
+      need: "$reflect.output.need"
+
+  - id: revise
+    depends_on: [reflect]
+    when: "$reflect.output.action == 'revise'"
+    workflow: god-mode-revise
+    isolation: worktree
+    with:
+      need: "$reflect.output.need"
+
+  - id: report
+    depends_on: [reflect, consolidate, forge, revise]
+    trigger_rule: all_done
+    script: report
+    runtime: bun
+    mutates_checkout: false
+    with:
+      action: "$reflect.output.action"
+      rationale: "$reflect.output.rationale"
+      classes: { from: "$reflect.output.classes" }
+      consolidated: { from: "$consolidate.output.kept", if_skipped: null }
+      forged: { from: "$forge.output", if_skipped: null }
+      revised: { from: "$revise.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        action: { type: string }
+        summary: { type: string }
+        classes: { type: integer }
+      required: [action, summary, classes]
