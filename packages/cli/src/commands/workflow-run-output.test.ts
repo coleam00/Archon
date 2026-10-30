@@ -138,6 +138,37 @@ describe('workflowRunCommand — progress rendering', () => {
     stderrSpy.mockRestore();
   });
 
+  it('keeps a successful foreground host workflow successful without Docker', async () => {
+    setupWorkflowMocks();
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'test-run-id',
+    });
+    const { hostname } = await import('node:os');
+    const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
+    const { createRunResourceRelease } = await import(
+      '../../../core/src/services/cleanup/run-verification-images'
+    );
+    const host = createTestWorkflowHost();
+    const row = {
+      ...mockWorkflowRun,
+      id: 'test-run-id',
+      status: 'completed' as const,
+      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+    };
+    const previousPath = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      host.deps.releaseRunResources = createRunResourceRelease({ getWorkflowRun: async () => row });
+      await expect(
+        workflowRunCommand(host, '/test/path', 'plan', 'hello', {})
+      ).resolves.toBeUndefined();
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
   it.each([false, true])(
     'releases foreground host images after execution (failure=%s)',
     async fails => {

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'bun:test';
 import { hostname, tmpdir } from 'node:os';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
@@ -183,3 +183,67 @@ test.each([...FAN_OUT_CANCEL_REASONS])(
     expect(release.mock.calls).toEqual([[run.id, undefined]]);
   }
 );
+
+test.each(['completed', 'cancelled'] as const)(
+  'Docker-free host skips optional cleanup for %s runs',
+  async status => {
+    const run = {
+      ...mockWorkflowRun,
+      status,
+      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+    };
+    const previousPath = process.env.PATH;
+    process.env.PATH = '';
+    try {
+      const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
+      await expect(cleanup(run.id)).resolves.toBeUndefined();
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  }
+);
+
+test.each([false, true])(
+  'Docker disappearing after host setup remains a failure (container=%s)',
+  async container => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-docker-capability-')));
+    await writeFile(join(root, 'docker'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const run = {
+      ...mockWorkflowRun,
+      status: 'completed' as const,
+      metadata: {
+        execution_owner: { host: hostname(), pid: process.pid },
+        ...(container ? { isolation: 'container', isolation_env_id: 'env-a' } : {}),
+      },
+    };
+    const previousPath = process.env.PATH;
+    process.env.PATH = root;
+    try {
+      const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
+      process.env.PATH = '';
+      await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  }
+);
+
+test('container cleanup requires Docker even when the host started without it', async () => {
+  const run = {
+    ...mockWorkflowRun,
+    status: 'completed' as const,
+    metadata: {
+      execution_owner: { host: hostname(), pid: process.pid },
+      isolation: 'container',
+      isolation_env_id: 'env-a',
+    },
+  };
+  const previousPath = process.env.PATH;
+  process.env.PATH = '';
+  try {
+    const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
+    await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');
+  } finally {
+    process.env.PATH = previousPath;
+  }
+});

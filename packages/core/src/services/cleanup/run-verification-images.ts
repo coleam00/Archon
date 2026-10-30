@@ -1,4 +1,7 @@
-import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
+import {
+  CANCELLED_REASON_METADATA_KEY,
+  ISOLATION_ENV_ID_METADATA_KEY,
+} from '@archon/workflows/schemas/run-metadata';
 import { releaseRunVerificationImages } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { noExecutorCanWrite } from '@archon/workflows/run-scratch';
@@ -11,7 +14,13 @@ import { FAN_OUT_CANCEL_REASONS, type IWorkflowStore } from '@archon/workflows/s
 
 export function createRunResourceRelease(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
-  release = releaseRunVerificationImages
+  // Snapshot the optional host capability before execution. Losing Docker later
+  // must remain a cleanup failure, rather than looking like a Docker-free host.
+  release: typeof releaseRunVerificationImages | undefined = Bun.which('docker', {
+    PATH: process.env.PATH ?? '',
+  })
+    ? releaseRunVerificationImages
+    : undefined
 ): (runId: string) => Promise<void> {
   return async runId => {
     const log = createLogger('cleanup.verification-images');
@@ -26,7 +35,9 @@ export function createRunResourceRelease(
       if (
         RESUMABLE_WORKFLOW_STATUSES.includes(run.status) ||
         (run.status === 'cancelled' &&
-          FAN_OUT_CANCEL_REASONS.some(reason => reason === run.metadata.cancelled_reason))
+          FAN_OUT_CANCEL_REASONS.some(
+            reason => reason === run.metadata[CANCELLED_REASON_METADATA_KEY]
+          ))
       ) {
         log.debug({ runId }, 'verification_images.kept_for_resumable_run');
         return;
@@ -35,7 +46,14 @@ export function createRunResourceRelease(
       if (isContainerRun(run) && (typeof envId !== 'string' || !envId.trim())) {
         throw new Error(`Missing container identity for verification image cleanup: ${runId}`);
       }
-      await release(runId, isContainerRun(run) && typeof envId === 'string' ? envId : undefined);
+      if (!release && !isContainerRun(run)) {
+        log.info({ runId }, 'verification_images.skipped_docker_unavailable');
+        return;
+      }
+      await (release ?? releaseRunVerificationImages)(
+        runId,
+        isContainerRun(run) && typeof envId === 'string' ? envId : undefined
+      );
     } catch (err) {
       log.warn({ err, runId }, 'verification_images.release_failed');
       throw err;

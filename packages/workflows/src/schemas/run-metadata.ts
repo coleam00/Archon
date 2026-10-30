@@ -137,6 +137,8 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   };
 }
 
+export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
+
 export const ISOLATION_ENV_ID_METADATA_KEY = 'isolation_env_id';
 
 /**
