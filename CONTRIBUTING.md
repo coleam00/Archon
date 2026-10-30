@@ -125,19 +125,7 @@ drop; never run destructive verification against a configured live database.
 | Linux `test` Slack conformance and smoke | compiled Slack plugin with a stubbed client for conformance, and the unmodified release binary for initialization and missing-token smoke | CI only; source conformance runs in `cd packages/chat-slack && bun run test` |
 | `serve-binary` | compiled CLI and server artifacts; CI runs the build and smoke on Linux and Windows | CI only; no local compilation on macOS |
 | `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
-| `file-store-primitives-macos` | GitHub Actions for the compiled probe, and a macOS runner for process-group and filesystem behavior; ordinary tests also run under `validate` | Run the macOS recipe below; the compiled probe skips locally |
-
-To reproduce `file-store-primitives-macos` on macOS, run:
-
-```bash
-bun run --cwd packages/paths test src/plugin-process.test.ts
-bun run --cwd packages/core test src/providers/inspect-provider-plugin.test.ts
-bun run --cwd packages/core test src/providers/process-provider.test.ts
-bun run --cwd packages/cli test src/commands/inspect-chat-plugin.integration.test.ts
-bun run --cwd packages/providers test src/codex/app-server.test.ts
-bun run --cwd packages/workflows test src/file-store
-bun run --cwd packages/cli test src/commands/workflow-file-store.integration.spec.ts
-```
+| `file-store-primitives-macos` | GitHub Actions for the compiled probe, and a macOS runner for process-group and filesystem behavior; ordinary tests also run under `validate` | On macOS, run the test commands from this job in [`.github/workflows/test.yml`](.github/workflows/test.yml); the compiled probe skips locally |
 
 The `serve-binary` CI job builds matching CLI and server executables on Linux and
 Windows, then checks `archon serve` against `/api/health` and the console. The
