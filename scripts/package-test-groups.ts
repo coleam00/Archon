@@ -47,7 +47,15 @@ function groupDiscoveredTestFiles(
   const shared: string[] = [];
   const unmarkedMocks: string[] = [];
   for (const file of files) {
-    const source = readFileSync(join(packageDirectory, file), 'utf8').replace(/^\uFEFF/, '');
+    let source: string;
+    try {
+      source = readFileSync(join(packageDirectory, file), 'utf8').replace(/^\uFEFF/, '');
+    } catch (cause) {
+      const error = new Error(`Cannot read test file ${file}: ${String(cause)}`, { cause });
+      if (onDiscoveryError === undefined) throw error;
+      onDiscoveryError(error);
+      continue;
+    }
     if (source.split(/\r?\n/, 1)[0] === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
     else if (source.includes('mock.module(')) unmarkedMocks.push(file);
     else shared.push(file);

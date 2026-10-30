@@ -115,9 +115,11 @@ returns nonzero if any group fails. A full run without arguments still stops adm
 groups after a failure.
 
 Test options are forwarded to each group. Name filters use Bun's
-`--pass-with-no-tests` per child and private JUnit counts to detect an empty result
-across all groups. Load and hook failures still return nonzero. An explicit
+`--pass-with-no-tests` per child and testcase names in private JUnit reports to detect
+an empty result across all groups. Matching skipped or todo tests count as matches.
+Load and hook failures still return nonzero. An explicit
 `--reporter=junit --reporter-outfile <path>` receives one combined report containing all
 started groups, including their failures and aggregate counts. Each failed child also
 contributes a process error because Bun can omit load failures from its JUnit output;
-the child output contains the diagnostics.
+the child output contains the diagnostics. Selected discovery failures contribute runner
+errors too, including when no valid child group can start.

@@ -7,6 +7,7 @@ import {
   existsSync,
   unlinkSync,
   realpathSync,
+  chmodSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -496,3 +497,74 @@ test(
   },
   testTimeout(5000)
 );
+
+for (const owner of ['test', 'describe']) {
+  for (const modifier of ['skip', 'todo', 'skipIf(true)', 'todoIf(true)', 'if(false)']) {
+    test(
+      `matching ${owner}.${modifier} names succeed without executing skipped bodies`,
+      async () => {
+        const root = fixture();
+        const body = `() => { throw new Error('must remain skipped'); }`;
+        testFile(
+          root,
+          'skipped',
+          owner === 'test'
+            ? `test.${modifier}('wanted & "quoted"', ${body});`
+            : `import { describe } from 'bun:test';
+             describe.${modifier}('outer & "quoted" > segment', () => {
+               describe('inner', () => { test('wanted', ${body}); });
+             });`,
+          true
+        );
+        const pattern =
+          owner === 'test' ? '^wanted & "quoted"$' : '^outer & "quoted" > segment inner wanted$';
+        expect(await run(root, ['src/', '-t', pattern])).toBe(0);
+        expect(await run(root, ['src/', '-t', 'absent'])).not.toBe(0);
+      },
+      testTimeout(5000)
+    );
+  }
+}
+
+test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'requested read and directive failures retain valid siblings and JUnit errors',
+  async () => {
+    const root = fixture();
+    testFile(root, 'unreadable', `test('unreadable', () => {});`);
+    testFile(root, 'unmarked', `mock.module('./value', () => ({}));`);
+    testFile(root, 'shared', `test('shared', () => appendFileSync('shared', 'yes'));`);
+    testFile(root, 'isolated', `test('isolated', () => appendFileSync('isolated', 'yes'));`, true);
+    const unreadable = join(root, 'src/unreadable.test.ts');
+    const report = join(root, 'discovery.xml');
+    chmodSync(unreadable, 0);
+    try {
+      expect(await run(root, ['src/shared.test.ts'])).toBe(0);
+      unlinkSync(join(root, 'shared'));
+      expect(await run(root, ['src/', '--reporter=junit', '--reporter-outfile', report])).not.toBe(
+        0
+      );
+      expect(readFileSync(join(root, 'shared'), 'utf8')).toBe('yes');
+      expect(readFileSync(join(root, 'isolated'), 'utf8')).toBe('yes');
+      const xml = readFileSync(report, 'utf8');
+      expect(xml).toMatch(/<testsuites[^>]*errors="2"/);
+      expect(xml).toContain('unreadable.test.ts');
+      expect(xml).toContain('unmarked.test.ts');
+      expect(xml).toContain('EACCES');
+      unlinkSync(join(root, 'shared'));
+      expect(await run(root)).not.toBe(0);
+      expect(existsSync(join(root, 'shared'))).toBe(false);
+    } finally {
+      chmodSync(unreadable, 0o600);
+    }
+  },
+  testTimeout(5000)
+);
+
+test('discovery-only failures produce a failing JUnit report', async () => {
+  const root = fixture();
+  testFile(root, 'unmarked', `mock.module('./value', () => ({}));`);
+  const report = join(root, 'discovery.xml');
+  expect(await run(root, ['src/', '--reporter=junit', '--reporter-outfile', report])).not.toBe(0);
+  expect(readFileSync(report, 'utf8')).toMatch(/<testsuites[^>]*errors="1"/);
+  expect(readFileSync(report, 'utf8')).toContain('unmarked.test.ts');
+});

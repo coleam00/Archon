@@ -7,7 +7,7 @@ import {
 } from './package-test-groups';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import { resolveRequestedTestGroups } from './package-test-requests';
-import { runReportedGroup, writeCombinedReport } from './package-test-reports';
+import { runnerErrorReport, runReportedGroup, writeCombinedReport } from './package-test-reports';
 
 /**
  * Runs one package's tests, from that package's directory.
@@ -72,14 +72,19 @@ if (part !== undefined) {
 
 for (const error of request?.validationErrors ?? []) console.error(error.message);
 let emptyNameGroups = 0;
-const reports: Awaited<ReturnType<typeof runReportedGroup>>['report'][] = [];
+const reports = (request?.validationErrors ?? []).map(error =>
+  runnerErrorReport(error.message, 'Test discovery')
+);
 
 /** Runs one group and reports how long it took, for `update-test-weights.ts`. */
 const timed = async (group: string[], runGroup: (group: string[]) => Promise<number>) => {
   const startedAt = performance.now();
   let result: number | 'no-name-match';
-  if (request?.filtersNames || request?.reporterOutfile !== undefined) {
-    const reported = await runReportedGroup(group, runGroup, request.filtersNames);
+  if (
+    request !== undefined &&
+    (request.namePattern !== undefined || request.reporterOutfile !== undefined)
+  ) {
+    const reported = await runReportedGroup(group, runGroup, request.namePattern);
     reports.push(reported.report);
     result = reported.code;
   } else {
@@ -143,4 +148,6 @@ if (request?.reporterOutfile !== undefined) writeCombinedReport(request.reporter
 process.exitCode =
   code ||
   (request?.validationErrors.length ? 1 : 0) ||
-  (request?.filtersNames && !request.allowsNoTests && emptyNameGroups === groups.length ? 1 : 0);
+  (request?.namePattern !== undefined && !request.allowsNoTests && emptyNameGroups === groups.length
+    ? 1
+    : 0);

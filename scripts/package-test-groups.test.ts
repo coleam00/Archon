@@ -174,3 +174,19 @@ test('discovery errors remain visible and explicit script chains still cover tes
   );
   expect(inspectPackage(root)).toBeUndefined();
 });
+
+test('selected file-read failures are retained while readable groups are discovered', () => {
+  const root = fixture();
+  write(root, 'src/marked.test.ts', TEST_ISOLATION_DIRECTIVE);
+  write(root, 'src/plain.test.ts');
+  const files = ['src/missing.test.ts', 'src/marked.test.ts', 'src/plain.test.ts'];
+  const errors: Error[] = [];
+  expect(resolvePackageTestGroups(root, {}, files, error => errors.push(error))).toEqual([
+    ['src/marked.test.ts'],
+    ['src/plain.test.ts'],
+  ]);
+  expect(errors).toHaveLength(1);
+  expect(errors[0].message).toContain('src/missing.test.ts');
+  expect(errors[0].cause).toBeInstanceOf(Error);
+  expect(() => resolvePackageTestGroups(root, {}, files)).toThrow('src/missing.test.ts');
+});

@@ -96,8 +96,10 @@ export function resolveRequestedTestGroups(
           ? []
           : [requested]
         : groups.map(group => [...options, ...group.map(file => `./${file}`)]),
-    filtersNames:
-      groups.length > 0 && optionTokens.some(token => token.name === 'test-name-pattern'),
+    namePattern:
+      groups.length > 0
+        ? optionTokens.filter(token => token.name === 'test-name-pattern').at(-1)?.value
+        : undefined,
     reporterOutfile:
       optionTokens.filter(token => token.name === 'reporter').at(-1)?.value === 'junit'
         ? optionTokens.filter(token => token.name === 'reporter-outfile').at(-1)?.value
