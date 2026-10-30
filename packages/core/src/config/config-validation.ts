@@ -41,6 +41,20 @@ export class InvalidConfigError extends Error {
   }
 }
 
+/**
+ * A config file that is not valid YAML or whose top level is not a map. Like
+ * `InvalidConfigError`, `summary` leaves out the server's filesystem path.
+ */
+export class ConfigParseError extends Error {
+  readonly summary: string;
+
+  constructor(configPath: string, detail: string, options?: ErrorOptions) {
+    super(`'${configPath}' ${detail}`, options);
+    this.name = 'ConfigParseError';
+    this.summary = `Config file ${detail}`;
+  }
+}
+
 export function validateWorkflowContinuationConfig(parsed: unknown, configPath: string): void {
   if (typeof parsed !== 'object' || parsed === null || !('workflows' in parsed)) return;
   const config = parsed as { workflows?: unknown };

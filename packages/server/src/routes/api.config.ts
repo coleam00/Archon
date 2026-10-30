@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import type { GlobalConfig, TiersPatch } from '@archon/core';
 import { getDatabaseType, loadConfig, toSafeConfig, updateGlobalConfig } from '@archon/core';
 import type { AliasesPatch } from '@archon/core';
-import { InvalidConfigError, toSafeProjectConfig } from '@archon/core/config';
+import { ConfigParseError, InvalidConfigError, toSafeProjectConfig } from '@archon/core/config';
 import * as codebaseDb from '@archon/core/db/codebases';
 import { missingProviderMessage } from '@archon/provider-contract';
 import { isRegisteredProvider, providerRegistry } from '@archon/providers';
@@ -176,10 +176,14 @@ export function registerConfigRoutes(app: OpenAPIHono): void {
     try {
       const codebase = await codebaseDb.getCodebase(id);
       if (!codebase) return apiError(c, 404, 'Codebase not found');
-      return c.json(toSafeProjectConfig(await loadConfig(codebase.default_cwd)));
+      return c.json(
+        toSafeProjectConfig(await loadConfig(codebase.default_cwd, { readOnly: true }))
+      );
     } catch (error) {
-      // `summary` names the refused key without the server-side file path.
-      if (error instanceof InvalidConfigError) return apiError(c, 422, error.summary);
+      // `summary` names what is wrong without the server-side file path.
+      if (error instanceof InvalidConfigError || error instanceof ConfigParseError) {
+        return apiError(c, 422, error.summary);
+      }
       getLog().error({ err: error, codebaseId: id }, 'config.project_read_failed');
       return apiError(c, 500, 'Failed to read project config');
     }

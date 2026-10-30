@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { projectKeyForCodebase } from '@archon/paths';
@@ -180,6 +180,13 @@ describe('projectConfigCommand', () => {
     expect(view.project.id).toBe('cb-repo');
     expect(view.envKeys).toEqual(['ARCHON_SDLC_FORGE', 'SECRET_TOKEN']);
     expect(stdout.join('')).not.toContain(ENV_SECRET);
+    expect(stdout.join('')).not.toContain(PATH_SECRET);
+  });
+
+  it('does not create a missing global config', async () => {
+    rmSync(join(home, 'config.yaml'));
+    expect(await projectConfigCommand(store(), 'cb-repo', { json: true })).toBe(0);
+    expect(readdirSync(home)).toEqual([]);
   });
 
   it('refuses an ambiguous name and an unknown project', async () => {

@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -130,6 +130,12 @@ describe('GET /api/codebases/{id}/config', () => {
     expect({ ...snapshot(home), ...snapshot(project) }).toEqual(before);
   });
 
+  test('a read does not create a missing global config', async () => {
+    rmSync(join(home, 'config.yaml'));
+    expect((await app().request('/api/codebases/cb-1/config')).status).toBe(200);
+    expect(readdirSync(home)).toEqual([]);
+  });
+
   test('an unknown project is 404', async () => {
     const response = await app().request('/api/codebases/nope/config');
     expect(response.status).toBe(404);
@@ -143,5 +149,15 @@ describe('GET /api/codebases/{id}/config', () => {
     const text = await response.text();
     expect(text).toContain('tiers');
     expect(text).not.toContain(project);
+  });
+
+  test.each([
+    ['not valid YAML', 'tiers: [unclosed\n'],
+    ['not a map', '- botName: x\n'],
+  ])('a project config that is %s is 422 and names no server path', async (_, content) => {
+    writeFileSync(join(project, '.archon', 'config.yaml'), content);
+    const response = await app().request('/api/codebases/cb-1/config');
+    expect(response.status).toBe(422);
+    expect(await response.text()).not.toContain(project);
   });
 });

@@ -57,8 +57,9 @@ export async function projectListCommand(
 
 /**
  * `archon project config <id|name>`: one registered project's merged config, its
- * own `.archon/config.yaml` included, as `GET /api/codebases/{id}/config` serves it.
- * Env values are never printed, only their keys. Reads only.
+ * own `.archon/config.yaml` included: the view `GET /api/codebases/{id}/config`
+ * serves, plus a `project` field naming the match. Env values are never printed,
+ * only their keys. Writes nothing, not even a missing global config.
  */
 export async function projectConfigCommand(
   codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebaseClaims' | 'getCodebase'>,
@@ -83,7 +84,7 @@ export async function projectConfigCommand(
   }
   const view = {
     project: { id: codebase.id, name: codebase.name },
-    ...toSafeProjectConfig(await loadConfig(codebase.default_cwd)),
+    ...toSafeProjectConfig(await loadConfig(codebase.default_cwd, { readOnly: true })),
   };
   if (opts.json) await writeJsonLine(view);
   else await writeStdout(`${Bun.YAML.stringify(view, null, 2)}\n`);
