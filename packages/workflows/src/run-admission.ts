@@ -17,6 +17,7 @@ import type { RunDispatch } from './run-dispatch';
 import type { ResolvedWorkflow, WorkflowExecutionResult, WorkflowRun } from './schemas';
 import {
   CONTINUATION_METADATA_KEY,
+  CONTINUATION_MODES,
   EXECUTION_OWNER_METADATA_KEY,
   RUN_DISPATCH_METADATA_KEY,
   SUBRUN_METADATA_KEYS,
@@ -193,7 +194,7 @@ async function createWorkflowRunRow(
         // Between-run continuation (#2747): the mode stamp rides the same
         // creation write as `adopted_from_run_id` so both are write-once.
         ...(adoptedFromRunId
-          ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? 'adopt' } }
+          ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? CONTINUATION_MODES.adopt } }
           : {}),
         ...freshInvocationMetadata(opts, dispatch),
         [EXECUTION_OWNER_METADATA_KEY]: executionOwner,

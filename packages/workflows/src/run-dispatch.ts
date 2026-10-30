@@ -19,6 +19,8 @@ import type {
   WorkflowSource,
 } from './schemas';
 import {
+  CONTINUATION_MODES,
+  continuationInheritsEstate,
   isIncludeDirective,
   isLoopGroupNode,
   isWaitNode,
@@ -241,8 +243,14 @@ async function findAdoptedAiRun(
 ) {
   const { preCreatedRun } = opts;
   const aiAncestorId = opts.adoptedFromRunId ?? preCreatedRun?.adopted_from_run_id;
-  const aiContinuationMode = opts.continuationMode ?? readContinuationMode(preCreatedRun?.metadata);
-  return !isContinuation && !recorded && aiAncestorId && aiContinuationMode !== 'supersede'
+  const aiContinuationMode =
+    opts.continuationMode ??
+    readContinuationMode(preCreatedRun?.metadata) ??
+    CONTINUATION_MODES.adopt;
+  return !isContinuation &&
+    !recorded &&
+    aiAncestorId &&
+    continuationInheritsEstate(aiContinuationMode)
     ? await deps.store.getWorkflowRun(aiAncestorId)
     : undefined;
 }

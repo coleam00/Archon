@@ -83,7 +83,14 @@ describe('recorded launch AI configuration', () => {
     }
   );
 
-  it.each(['adopt', 'supersede'] as const)('%s uses the correct AI owner', async mode => {
+  it.each([
+    [undefined, false],
+    ['adopt', false],
+    ['supersede', false],
+    [undefined, true],
+    ['adopt', true],
+    ['supersede', true],
+  ] as const)('%s uses the correct AI owner (pre-created: %s)', async (mode, preCreated) => {
     const deps = makeDeps();
     const workflow = makeWorkflow();
     deps.loadConfig = configWith({
@@ -108,17 +115,29 @@ describe('recorded launch AI configuration', () => {
       workflow,
       origin: { conversationId: 'db-conv-1', userId: 'new-actor' },
       options: {
-        adoptedFromRunId: 'ancestor',
-        continuationMode: mode,
+        ...(preCreated
+          ? {
+              preCreatedRun: makeRun({
+                status: 'pending',
+                adopted_from_run_id: 'ancestor',
+                metadata: mode ? { continuation: { mode } } : {},
+              }),
+            }
+          : { adoptedFromRunId: 'ancestor', continuationMode: mode }),
         preparedAiConfiguration: different,
       },
     });
     expect(result.success).toBe(true);
-    expect(dagCall()?.workflowProvider).toBe(mode === 'adopt' ? 'codex' : 'claude');
-    expect(dagCall()?.workflowModel).toBe(mode === 'adopt' ? 'launch-model' : 'opus');
-    expect(deps.store.createWorkflowRun).toHaveBeenCalledWith(
-      expect.objectContaining({ origin: expect.objectContaining({ userId: 'new-actor' }) })
-    );
+    expect(dagCall()?.workflowProvider).toBe(mode === 'supersede' ? 'claude' : 'codex');
+    expect(dagCall()?.workflowModel).toBe(mode === 'supersede' ? 'opus' : 'launch-model');
+    if (!preCreated) {
+      expect(deps.store.createWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          origin: expect.objectContaining({ userId: 'new-actor' }),
+          metadata: expect.objectContaining({ continuation: { mode: mode ?? 'adopt' } }),
+        })
+      );
+    }
   });
 
   it('rejects an invalid pre-created continuation before reading ancestor AI configuration', async () => {

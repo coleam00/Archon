@@ -175,6 +175,16 @@ export interface ContinuationMetadata {
   mode: ContinuationMode;
 }
 
+export function continuationInheritsEstate(mode: ContinuationMode): boolean {
+  switch (mode) {
+    case CONTINUATION_MODES.adopt:
+      return true;
+    case CONTINUATION_MODES.supersede:
+      return false;
+  }
+  return mode satisfies never;
+}
+
 const continuationMetadataSchema = z.object({ mode: z.enum(Object.values(CONTINUATION_MODES)) });
 
 /** Unstamped legacy runs retain adoption behavior; malformed stamps must not select an estate. */

@@ -6,6 +6,8 @@ import type { ExecuteWorkflowOptions } from './executor';
 import { sendCriticalMessage } from './platform-messages';
 import { type RunPhase } from './executor-shared';
 import {
+  CONTINUATION_MODES,
+  continuationInheritsEstate,
   RUN_METADATA_KEYS,
   persistScopeKey,
   readContinuationMode,
@@ -426,12 +428,12 @@ export async function resolveAdoptedRunDir(
   // On a fresh invocation the caller supplies the mode alongside the id. On
   // resume neither is in opts — the executor reads the row's metadata stamp.
   const effectiveContinuationMode =
-    continuationMode ?? readContinuationMode(workflowRun.metadata) ?? 'adopt';
+    continuationMode ?? readContinuationMode(workflowRun.metadata) ?? CONTINUATION_MODES.adopt;
   if (!effectiveAdoptedFromRunId) return undefined;
   let adoptedRunDir: string | undefined;
   // Supersession is metadata-only (#3064): no estate, so skip the output_root
   // gate and the $ADOPTED_RUN_DIR resolution that only adoption needs.
-  if (effectiveContinuationMode !== 'supersede') {
+  if (continuationInheritsEstate(effectiveContinuationMode)) {
     const adopted = await deps.store.getWorkflowRun(effectiveAdoptedFromRunId);
     // Deliberately precedes the resolver below: a missing persisted root is
     // corruption, not relocation, so adoption refuses rather than re-deriving
