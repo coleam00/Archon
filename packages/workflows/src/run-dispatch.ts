@@ -29,7 +29,7 @@ import {
   type RunDispatchMetadata,
 } from './schemas';
 import { isContainerRun, type WorkflowRunOrigin } from './schemas/workflow-run';
-import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite } from './terminal-status-write';
 import { executionClaim } from './store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -290,32 +290,20 @@ async function prepareDispatchAiConfiguration(
   const recorded =
     preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
   const adoptedAiRun = await findAdoptedAiRun(deps, opts, isContinuation, !!recorded);
-  try {
-    const inherited =
-      adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    if (!recorded && !inherited && opts.preparedAiConfiguration) {
-      return opts.preparedAiConfiguration;
-    }
-    return await prepareRunAiConfiguration(deps, workflow, cwd, {
-      codebaseId: opts.codebaseId,
-      userId: executionUserId,
-      runConfig: opts.runConfig,
-      modelOverrideLayer: opts.modelOverrideLayer,
-      ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
-      aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
-      ...(recorded ? { inheritAiConfiguration: true } : {}),
-    });
-  } catch (error) {
-    if (error instanceof TerminalStatusWriteError) throw error;
-    if (preCreatedRun && isContinuation)
-      await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(preCreatedRun.id, (error as Error).message, {
-          expectedExecutionClaim: executionClaim(preCreatedRun.metadata),
-        }),
-        { workflowRunId: preCreatedRun.id, site: 'workflow.configuration_fail_db_record_failed' }
-      );
-    throw error;
+  const inherited =
+    adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
+  if (!recorded && !inherited && opts.preparedAiConfiguration) {
+    return opts.preparedAiConfiguration;
   }
+  return await prepareRunAiConfiguration(deps, workflow, cwd, {
+    codebaseId: opts.codebaseId,
+    userId: executionUserId,
+    runConfig: opts.runConfig,
+    modelOverrideLayer: opts.modelOverrideLayer,
+    ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
+    aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
+    ...(recorded ? { inheritAiConfiguration: true } : {}),
+  });
 }
 
 async function resolveBaseBranch(

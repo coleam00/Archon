@@ -330,6 +330,41 @@ describe('InProcessWorkflowEngine', () => {
       data: { node_output: step },
     });
 
+  it('preserves a configuration load failure with exactly one terminal write on resume', async () => {
+    const { engine, store, deps } = await makeEngine();
+    const run = await store.createWorkflowRun({ workflow_name: parent.name, user_message: '' });
+    await completeNode(store, run.id, 'first');
+    await store.failWorkflowRun(run.id, 'interrupted');
+    const failed = await store.getWorkflowRun(run.id);
+    if (!failed) throw new Error('expected failed run');
+    const cause = new Error('config read unavailable');
+    const loadConfig = spyOn(deps, 'loadConfig').mockRejectedValue(cause);
+    const fail = store.failWorkflowRun.bind(store);
+    const failRun = spyOn(store, 'failWorkflowRun')
+      .mockRejectedValue(new Error('second failure write refused'))
+      .mockImplementationOnce(fail);
+    try {
+      const admission = await engine.resume({
+        platform,
+        conversationId: 'conv-1',
+        cwd: '/tmp/ops',
+        userMessage: '',
+        run: failed,
+        legacyWorkflow: parent,
+      });
+      if (!admission.accepted) throw new Error('expected resume');
+      await expect(admission.settled).rejects.toBe(cause);
+      expect(failRun).toHaveBeenCalledTimes(1);
+      expect(await store.getWorkflowRun(run.id)).toMatchObject({
+        status: 'failed',
+        metadata: { error: cause.message },
+      });
+    } finally {
+      loadConfig.mockRestore();
+      failRun.mockRestore();
+    }
+  });
+
   it.each(['preparation', 'configuration', 'stamp'] as const)(
     'public resume failure preserves a replaced claim during %s',
     async phase => {

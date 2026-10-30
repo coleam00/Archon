@@ -1,9 +1,7 @@
-import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { resolveContinuationWorkflow } from './run-source';
 import {
-  WorkflowExecutionHandoffError,
   FRESH_RUN_FORBIDDEN_OPTIONS,
   RESUME_FORBIDDEN_OPTIONS,
   type AttentionWatch,
@@ -120,28 +118,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       input.userMessage,
       hydrated.preCreatedRun.origin ?? undefined,
       { ...context.options, ...hydrated }
-    ).catch(async (error: unknown) => {
-      // Hydration already claimed the row. The executor's early setup can throw
-      // before its terminal-write boundary; recovery must work without a server.
-      if (
-        !isWorkflowExecutionInterruption(error) &&
-        !(error instanceof WorkflowExecutionHandoffError)
-      ) {
-        await requireTerminalStatusWrite(
-          this.deps.store.failWorkflowRun(
-            hydrated.preCreatedRun.id,
-            error instanceof Error ? error.message : String(error),
-            { expectedExecutionClaim: executionClaim(hydrated.preCreatedRun.metadata) }
-          ),
-          {
-            workflowRunId: hydrated.preCreatedRun.id,
-            site: 'engine.resume_execution_failed',
-            failure: error,
-          }
-        );
-      }
-      throw error;
-    });
+    );
     return { accepted: true, runId: hydrated.preCreatedRun.id, settled };
   }
 
