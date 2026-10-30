@@ -122,17 +122,10 @@ describe('Windows stop diagnostics', () => {
       expect(kill.mock.calls).toEqual([[pid, 0]]);
       expect(identity.mock.calls).toEqual([[pid], [pid]]);
       const events = lines.map(line => JSON.parse(line));
-      expect(events).toHaveLength(2);
+      expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
         level: 20,
         module: 'paths.plugin-process',
-        msg: 'process.windows_tree_stop',
-        targetPid: pid,
-        phase: 'stop_entry',
-        identity: entry,
-      });
-      expect(events[1]).toMatchObject({
-        level: 20,
         msg: 'process.windows_tree_stop',
         targetPid: pid,
         phase: 'taskkill_failed',
@@ -177,7 +170,7 @@ describe('Windows stop diagnostics', () => {
           caught => caught
         );
         expect(result).toBe(code === 'ESRCH' ? 'resolved' : error);
-        expect(JSON.parse(lines[1])).toMatchObject({
+        expect(JSON.parse(lines[0])).toMatchObject({
           entryIdentity: entry,
           failureIdentity: sample,
         });
@@ -199,13 +192,13 @@ describe('Windows stop diagnostics', () => {
     expect(lines).toEqual([]);
   });
 
-  test('successful taskkill never probes liveness or takes a failure snapshot', async () => {
+  test('successful taskkill never probes liveness, takes a failure snapshot or emits diagnostics', async () => {
     const kill = spyOn(process, 'kill').mockReturnValue(true);
     spies.push(kill);
     await terminateWindowsTree(pid, async () => {});
     expect(kill).not.toHaveBeenCalled();
     expect(identity).toHaveBeenCalledTimes(1);
-    expect(lines).toHaveLength(1);
+    expect(lines).toEqual([]);
   });
 
   test.each(['ESRCH', 'EPERM'])(
@@ -226,7 +219,7 @@ describe('Windows stop diagnostics', () => {
           caught => caught
         );
       expect(await stop()).toBe(code === 'ESRCH' ? 'resolved' : error);
-      expect(JSON.parse(lines[1])).toMatchObject({
+      expect(JSON.parse(lines[0])).toMatchObject({
         entryIdentity: { pid, status: 'unavailable', code: 'CAPTURE_FAILED' },
         failureIdentity: { pid, status: 'unavailable', code: 'CAPTURE_FAILED' },
       });
@@ -250,8 +243,8 @@ describe('Windows stop diagnostics', () => {
           throw error;
         })
       ).rejects.toBe(error);
-      expect(JSON.parse(lines[1]).taskkill).toEqual({ code: code ?? null, stderr: null });
-      expect(JSON.parse(lines[1]).liveness).toEqual({
+      expect(JSON.parse(lines[0]).taskkill).toEqual({ code: code ?? null, stderr: null });
+      expect(JSON.parse(lines[0]).liveness).toEqual({
         status: 'returned',
         value: false,
         provablyGone: false,
@@ -287,7 +280,7 @@ describe('Windows capture ordering', () => {
         throw Object.assign(new Error('failed'), { code: 128, stderr: 'stderr string' });
       });
       expect(order).toEqual(['entry', 'taskkill', 'probe', 'failure']);
-      expect(JSON.parse(lines[1]).taskkill).toEqual({ code: 128, stderr: 'stderr string' });
+      expect(JSON.parse(lines[0]).taskkill).toEqual({ code: 128, stderr: 'stderr string' });
     } finally {
       identity.mockRestore();
       kill.mockRestore();

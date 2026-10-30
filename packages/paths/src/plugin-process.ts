@@ -102,7 +102,6 @@ export async function terminateWindowsTree(
     }
   };
   const entryIdentity = debug ? await identity() : undefined;
-  if (debug) emit({ phase: 'stop_entry', identity: entryIdentity });
   try {
     await taskkill(pid);
   } catch (error) {
