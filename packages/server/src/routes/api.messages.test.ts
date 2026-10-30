@@ -146,6 +146,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
 }));
 
 mock.module('@archon/core/db/workflows', () => ({
+  getWorkflowRunForAttention: mock(async () => null),
   listWorkflowRuns: mock(async () => []),
   listDashboardRuns: makeListDashboardRunsMock(),
   getWorkflowRun: mock(async () => null),

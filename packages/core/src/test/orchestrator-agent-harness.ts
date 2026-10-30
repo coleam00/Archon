@@ -486,6 +486,7 @@ mock.module('../workflows/store-adapter', () => ({
 mock.module('../db/workflows', () => ({
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
   getWorkflowRun: mockGetWorkflowRunDb,
+  getWorkflowRunForAttention: mockGetWorkflowRunDb,
   findResumableRunByParentConversation: mockFindResumableRunByParentConversation,
   updateWorkflowRun: mockUpdateWorkflowRun,
   resolveApprovalGate: mockResolveApprovalGate,

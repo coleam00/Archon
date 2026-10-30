@@ -87,7 +87,9 @@ mock.module('@archon/core/db/conversations', () => ({
 }));
 
 mock.module('@archon/core/db/isolation-environments', () => ({}));
-mock.module('@archon/core/db/workflows', () => ({}));
+mock.module('@archon/core/db/workflows', () => ({
+  getWorkflowRunForAttention: mock(async () => null),
+}));
 mock.module('@archon/core/db/workflow-events', () => ({}));
 const mockAddMessage = mock(async (_convId: string, _role: string, _content: string) => ({
   id: 'msg-uuid-1',
