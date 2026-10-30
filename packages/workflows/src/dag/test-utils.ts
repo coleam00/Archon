@@ -70,7 +70,6 @@ export function setMockArtifactHome(home: string): void {
 export function setMockWorkflowHome(home: string): void {
   mockWorkflowHome = home;
 }
-const { isPathInside } = actualPaths;
 mock.module('@archon/paths', () => ({
   ...actualPaths,
   createLogger: mock(() => mockLogger),
@@ -86,7 +85,7 @@ mock.module('@archon/paths', () => ({
   // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
   // containment rules are exercised rather than stubbed away.
   isInsideArchonHome: (candidate: string): boolean =>
-    isPathInside(mockArtifactHome, candidate, { includeRoot: true, lexical: true }),
+    actualPaths.isPathInside(mockArtifactHome, candidate, { includeRoot: true, lexical: true }),
   getRunArtifactsDirForRoot: (root: string, runId: string): string =>
     join(root, 'artifacts', 'runs', runId),
 }));
@@ -117,8 +116,6 @@ export function composeInnerStep(
   const scope = composeScope(nodeId, loopGroupPath);
   return `${scope}__${identity}__${nodeId}__${identity}__${innerNodeId}`;
 }
-
-// --- Mock helpers ---
 
 // This fixture's createWorkflowEvent mock collects both durable and best-effort writes.
 // The production IWorkflowStore interface separately restricts the best-effort route.
@@ -650,8 +647,6 @@ export function dagOptions(overrides: DagOptionsOverrides): ExecuteDagWorkflowOp
     workflow: resolveTestWorkflow(workflow),
   };
 }
-
-// --- Helpers ---
 
 export function ready(wf: TestWorkflowDefinition): ResolvedWorkflow {
   return resolveTestWorkflow(wf);
