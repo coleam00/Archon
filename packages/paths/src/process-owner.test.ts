@@ -61,7 +61,7 @@ describe('probePidLiveness', () => {
   test.each([true, false])('retains a normal %p return without proving death', value => {
     const kill = spyOn(process, 'kill').mockImplementation((() => value) as typeof process.kill);
     spies.push(kill);
-    expect(probePidLiveness(123)).toEqual({ status: 'returned', value, provablyGone: false });
+    expect(probePidLiveness(123)).toEqual({ status: 'returned', value });
     expect(kill.mock.calls).toEqual([[123, 0]]);
     expect(isPidProvablyGone(123)).toBe(false);
   });
@@ -75,7 +75,6 @@ describe('probePidLiveness', () => {
       status: 'threw',
       code: code ?? null,
       errno: -42,
-      provablyGone: code === 'ESRCH',
     });
     expect(kill.mock.calls).toEqual([[123, 0]]);
     expect(isPidProvablyGone(123)).toBe(code === 'ESRCH');
@@ -91,7 +90,6 @@ describe('probePidLiveness', () => {
       status: 'threw',
       code: null,
       errno: null,
-      provablyGone: false,
     });
   });
 });

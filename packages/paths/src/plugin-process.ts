@@ -99,7 +99,8 @@ export async function terminateWindowsTree(
     await taskkill(pid);
   } catch (error) {
     const liveness = probePidLiveness(pid);
-    const level = liveness.provablyGone ? 'debug' : 'warn';
+    const gone = liveness.status === 'threw' && liveness.code === 'ESRCH';
+    const level = gone ? 'debug' : 'warn';
     if (log.isLevelEnabled(level)) {
       const failureIdentity = await identity();
       try {
@@ -119,7 +120,7 @@ export async function terminateWindowsTree(
       }
     }
     // Identity samples and taskkill's prose are diagnostic evidence, never stop authorization.
-    if (!liveness.provablyGone) throw error;
+    if (!gone) throw error;
   }
 }
 

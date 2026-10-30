@@ -134,12 +134,11 @@ describe('Windows stop diagnostics', () => {
         taskkill: { code: 128, stderr: 'requested stderr' },
         liveness:
           typeof outcome === 'boolean'
-            ? { status: 'returned', value: outcome, provablyGone: false }
+            ? { status: 'returned', value: outcome }
             : {
                 status: 'threw',
                 code: outcome ?? null,
                 errno: -42,
-                provablyGone: outcome === 'ESRCH',
               },
       });
       expect(lines.join('')).not.toContain('SECRET');
@@ -196,7 +195,7 @@ describe('Windows stop diagnostics', () => {
       targetPid: pid,
       phase: 'taskkill_failed',
       failureIdentity: entry,
-      liveness: { status: 'returned', value: true, provablyGone: false },
+      liveness: { status: 'returned', value: true },
       taskkill: { code: 128, stderr: 'requested stderr' },
     });
     expect(JSON.parse(lines[0])).not.toHaveProperty('entryIdentity');
@@ -299,7 +298,6 @@ describe('Windows stop diagnostics', () => {
       expect(JSON.parse(lines[0]).liveness).toEqual({
         status: 'returned',
         value: false,
-        provablyGone: false,
       });
       expect(lines.join('')).not.toContain('SECRET');
     }
