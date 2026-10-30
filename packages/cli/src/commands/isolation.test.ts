@@ -28,14 +28,13 @@ import {
   isolationListCommand,
 } from './isolation';
 import { runIsolation } from '../routes/commands';
-import * as stdout from '../utils/stdout';
 import type { CliRouteContext } from '../routes/context';
 
 mock.module('../routes/route-loader', () => ({
   loadRoute: async <T>(loader: () => Promise<T>): Promise<T> => loader(),
 }));
 
-function cleanupRoute(merged = false, json = false): Promise<number> {
+function cleanupRoute(merged = false): Promise<number> {
   const context: CliRouteContext = {
     command: 'isolation',
     subcommand: 'cleanup',
@@ -43,7 +42,7 @@ function cleanupRoute(merged = false, json = false): Promise<number> {
     values: { merged },
     cwd: '/test/repo',
     effectiveCwd: '/test/repo',
-    json,
+    json: false,
     detachedRunConfig: undefined,
     inheritedEnv: {},
     forgeTrustedEnv: {},
@@ -1430,26 +1429,25 @@ describe('isolationCleanupCommand', () => {
     expect(await cleanupRoute()).toBe(failed ? 1 : 0);
   });
 
-  it.each([false, true])('reports image cleanup results in JSON (failed: %s)', async failed => {
-    const report = {
+  it.each([false, true])('reports image cleanup results (failed: %s)', async failed => {
+    mockCleanupContainerEnvironments.mockResolvedValueOnce({
       removed: ['container'],
       skipped: [],
       errors: failed
         ? [{ id: 'container', error: 'Image cleanup for run older: Docker denied' }]
         : [],
-    };
-    mockCleanupContainerEnvironments.mockResolvedValueOnce(report);
-    const json = spyOn(stdout, 'writeJsonLine').mockResolvedValue();
-    try {
-      expect(await cleanupRoute(false, true)).toBe(failed ? 1 : 0);
-      expect(json).toHaveBeenCalledWith({
-        ok: !failed,
-        worktrees: { cleaned: 0, skipped: 0, failed: 0 },
-        containers: report,
-      });
-      expect(consoleLogSpy).not.toHaveBeenCalled();
-    } finally {
-      json.mockRestore();
+    });
+    expect(await cleanupRoute()).toBe(failed ? 1 : 0);
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Removed: containe');
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      `Container cleanup: 1 removed, 0 skipped, ${failed ? 1 : 0} failed`
+    );
+    if (failed) {
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '  Failed: containe — Image cleanup for run older: Docker denied'
+      );
+    } else {
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
     }
   });
 

@@ -1,7 +1,6 @@
 /**
  * Isolation commands - list, cleanup, and complete worktrees
  */
-import { writeJsonLine } from '../utils/stdout';
 import type { IsolationEnvironmentRow } from '@archon/isolation/types';
 import { getCodebase } from '@archon/core/db/codebases';
 import * as isolationDb from '@archon/core/db/isolation-environments';
@@ -114,16 +113,16 @@ function printContainerEnvironments(
   console.log(`\nTotal: ${String(containers.length)} container environment(s)`);
 }
 
-async function reportCleanupReconciliation(print: (line: string) => void): Promise<void> {
+async function reportCleanupReconciliation(): Promise<void> {
   const { ghostsReconciled, codebases } = await listEnvironments();
   if (ghostsReconciled > 0) {
-    print(`Reconciled ${String(ghostsReconciled)} ghost environment(s) (missing from disk).`);
+    console.log(`Reconciled ${String(ghostsReconciled)} ghost environment(s) (missing from disk).`);
   }
 
   for (const codebase of codebases) {
     for (const env of codebase.environments) {
       if (env.cleanupSkipReason) {
-        print(`Skipped: ${env.branch_name ?? env.workflow_id} (${env.cleanupSkipReason})`);
+        console.log(`Skipped: ${env.branch_name ?? env.workflow_id} (${env.cleanupSkipReason})`);
       }
     }
   }
@@ -134,11 +133,10 @@ type StaleEnvironment = Awaited<ReturnType<typeof isolationDb.findStaleEnvironme
 async function cleanupStaleWorktree(
   env: StaleEnvironment,
   daysStale: number,
-  provider: ReturnType<typeof getIsolationProvider>,
-  print: (line: string) => void
+  provider: ReturnType<typeof getIsolationProvider>
 ): Promise<'cleaned' | 'skipped' | 'failed'> {
-  print(`\nCleaning: ${env.branch_name ?? env.workflow_id}`);
-  print(`  Path: ${env.working_path}`);
+  console.log(`\nCleaning: ${env.branch_name ?? env.workflow_id}`);
+  console.log(`  Path: ${env.working_path}`);
 
   try {
     // Same lock the cleanup-service sweeps use: a run that can still claim the
@@ -151,7 +149,7 @@ async function cleanupStaleWorktree(
     if (lock.kind === 'locked') {
       const { runId, runStatus, display } = lock.blocker;
       getLog().info({ envId: env.id, runId, runStatus }, 'skip_stale_live_run');
-      print(`  Status: Skipped — ${display}`);
+      console.log(`  Status: Skipped — ${display}`);
       return 'skipped';
     }
     if (lock.kind === 'unpushed') {
@@ -159,7 +157,7 @@ async function cleanupStaleWorktree(
         { envId: env.id, ...(lock.runId ? { runId: lock.runId } : {}) },
         'skip_stale_unpushed_commits'
       );
-      print(`  Status: Skipped — ${lock.display}`);
+      console.log(`  Status: Skipped — ${lock.display}`);
       return 'skipped';
     }
 
@@ -183,8 +181,8 @@ async function cleanupStaleWorktree(
       await markDestroyed();
       return result;
     });
-    for (const warning of result.warnings) print(`  Warning: ${warning}`);
-    print(
+    for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
+    console.log(
       lock.kind === 'released'
         ? `  Status: Cleaned (failed run ${lock.runId.slice(0, 8)} released: ${lock.reason})`
         : '  Status: Cleaned'
@@ -229,11 +227,10 @@ function printContainerCleanupReport(
  * criteria). Kept here because the display-heavy flow doesn't map cleanly to
  * the operations layer's batch-oriented API.
  */
-export async function isolationCleanupCommand(daysStale = 7, json = false): Promise<0 | 1> {
-  const print = json ? console.error : console.log;
-  await reportCleanupReconciliation(print);
+export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
+  await reportCleanupReconciliation();
 
-  print(
+  console.log(
     `Finding eligible worktrees inactive for ${String(daysStale)}+ days and eligible containers created ${String(daysStale)}+ days ago...`
   );
 
@@ -242,28 +239,26 @@ export async function isolationCleanupCommand(daysStale = 7, json = false): Prom
   );
 
   if (staleEnvs.length === 0) {
-    print('No stale worktree environments found.');
+    console.log('No stale worktree environments found.');
   } else {
-    print(`Found ${String(staleEnvs.length)} stale worktree environment(s):`);
+    console.log(`Found ${String(staleEnvs.length)} stale worktree environment(s):`);
   }
 
   const provider = getIsolationProvider();
   const counts = { cleaned: 0, skipped: 0, failed: 0 };
   for (const env of staleEnvs) {
-    counts[await cleanupStaleWorktree(env, daysStale, provider, print)]++;
+    counts[await cleanupStaleWorktree(env, daysStale, provider)]++;
   }
 
-  print(
+  console.log(
     `\nCleanup complete: ${String(counts.cleaned)} cleaned, ${String(counts.skipped)} skipped, ${String(counts.failed)} failed`
   );
 
   // Reap orphaned container environments (terminal / run-less, older than the
   // threshold). Paused runs' containers are deliberately skipped (awaited state).
   const containerReport = await cleanupContainerEnvironments(daysStale);
-  const failed = counts.failed > 0 || containerReport.errors.length > 0;
-  if (json) await writeJsonLine({ ok: !failed, worktrees: counts, containers: containerReport });
-  else printContainerCleanupReport(containerReport);
-  return failed ? 1 : 0;
+  printContainerCleanupReport(containerReport);
+  return counts.failed > 0 || containerReport.errors.length > 0 ? 1 : 0;
 }
 
 function printMergedCleanupResult(result: MergedCleanupResult): void {
