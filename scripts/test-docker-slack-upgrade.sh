@@ -16,7 +16,9 @@ cleanup() {
   docker rm -f "$container" "$service" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   docker volume rm "$volume" >/dev/null 2>&1 || true
-  docker image rm "$tampered_image" >/dev/null 2>&1 || true
+  if [ -z "${WORKFLOW_ID:-}" ]; then
+    docker image rm --no-prune "$tampered_image" >/dev/null 2>&1 || true
+  fi
   rm -rf "$scratch"
   exit "$result"
 }
@@ -136,7 +138,11 @@ ARG BASE
 FROM ${BASE}
 RUN echo tampered >> /opt/archon/image-plugins/archon-chat-slack
 DOCKERFILE
-docker build --network none --build-arg "BASE=$image" -f "$scratch/Dockerfile" -t "$tampered_image" "$root"
+verification_build=(--network none --build-arg "BASE=$image" -f "$scratch/Dockerfile" -t "$tampered_image")
+if [ -n "${WORKFLOW_ID:-}" ]; then
+  verification_build+=(--label "archon.run_id=$WORKFLOW_ID")
+fi
+docker build "${verification_build[@]}" "$root"
 docker volume rm "$volume" >/dev/null
 docker volume create "$volume" >/dev/null
 network_mode=none

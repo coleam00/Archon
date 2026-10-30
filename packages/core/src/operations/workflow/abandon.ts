@@ -12,7 +12,7 @@ import type {
 } from '@archon/workflows/schemas/workflow-run';
 import type { ReleasedWorktree, RunWorktreeRelease } from '../../services/cleanup/run-worktree';
 import type { RunActor } from '../run-authorization';
-import { getLog, type OperationContext } from './context';
+import { getLog, releaseRunResources, type OperationContext } from './context';
 import {
   cancelRunAndCleanup,
   findParentBlockedOn,
@@ -98,8 +98,10 @@ export async function abandonWorkflow(
   );
   const { warnings, releasedWorktrees } = await releaseAbandonedWorktrees(ctx, run, result, owner);
   // An output holder the stop left running may still write scratch.
-  if (result.cancelled && !(owner.kind === 'stopped' && owner.cleanupWarnings?.length))
+  if (result.cancelled && !(owner.kind === 'stopped' && owner.cleanupWarnings?.length)) {
     await releaseRunScratch(run);
+    warnings.push(...(await releaseRunResources(ctx, run.id)));
+  }
   return {
     run,
     cancelled: result.cancelled,
@@ -369,6 +371,7 @@ export async function abandonResumableRunsForConversation(
       cleanupWarnings.push(...release.warnings);
       if (release.released) releasedWorktrees.push(release.released);
       await releaseRunScratch(run);
+      cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
     }
     const blocked = await findParentBlockedOn(ctx, run);
     if (blockedParentRunId === null) blockedParentRunId = blocked;

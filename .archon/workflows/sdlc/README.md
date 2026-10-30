@@ -922,3 +922,13 @@ pass every few hours:
   "schedule": { "intervalSeconds": 21600, "runAtLoad": false }
 }
 ```
+
+## Docker verification
+
+For disposable verification images, use `docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .` (or the same `--label` with `docker buildx build --load`). Give each run unique tags and use the same Docker context as the Archon host. A child run uses its own `$WORKFLOW_ID`. Remove verification containers when the check finishes, including stopped containers.
+
+Cleanup is a one-shot attempt after a completed or non-recoverable cancelled run stops writing. Failed runs (including SIGINT/SIGTERM interruptions) and recoverable fan-out-cancelled children retain their images because they can resume under the same run ID. Failed runs can release their images through explicit abandonment or safe manual recovery. Recoverable fan-out-cancelled children require the safe manual recovery below; explicit abandonment does not release their images. Container-used images and ambiguous/live owners retain their images too. There is no watcher for containers removed later. Docker errors are reported; terminal run status is unchanged. Host runs skip optional image cleanup with an availability diagnostic when neither host setup nor cleanup can reach Docker. If Docker becomes available during the workflow, cleanup runs normally. Losing Docker after a successful host-setup probe remains a cleanup failure. Container runs always require Docker.
+
+Use one tag per image. Cleanup deletes immutable image IDs without force or parent pruning; Docker refuses IDs with multiple repository references. Those images require manual cleanup under exclusive control of their tags. After removing late test containers and confirming the run cannot resume or write, list its images with `docker image ls --all --no-trunc --filter "label=archon.run_id=<run-id>"`, inspect each full ID with `docker image inspect <full-id>`, and check all containers with `docker container ls --all --filter ancestor=<full-id>`. For a confirmed owned, unused image, use `docker image rm --no-prune <full-id>`. If multiple tags prevent removal, verify and remove those references manually only while no other build or operator can reassign them. Never force removal or prune shared images/cache.
+
+Unlabelled images and other runs' images are left alone. Shared build cache is retained: Docker cannot filter it by this image label.

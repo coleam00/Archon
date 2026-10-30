@@ -41,6 +41,7 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
             errors: [],
           });
           const host = createTestWorkflowHost();
+          host.deps.releaseRunResources = undefined;
           const codebases = await import('@archon/core/db/codebases');
           const findCodebase = spyOn(codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
             id: 'cb-wait',

@@ -2757,7 +2757,6 @@
       "configureIsolation",
       "copyWorktreeFile",
       "copyWorktreeFiles",
-      "dockerCli",
       "dockerPreflight",
       "extractDockerError",
       "getPrState",

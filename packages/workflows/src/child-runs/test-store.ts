@@ -1,3 +1,4 @@
+import { CANCELLED_REASON_METADATA_KEY } from '../schemas/run-metadata';
 import { inMemoryEventRows, type InMemoryStoreEvent } from '../test-utils';
 import { readEventsForRuns } from './test-events';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
@@ -250,13 +251,13 @@ export class InMemoryStore implements IWorkflowStore {
 
   recoverCancelledFanOutRun = (id: string): Promise<WorkflowRun> => {
     const r = this.runs.get(id);
-    const reason = r?.metadata.cancelled_reason;
+    const reason = r?.metadata[CANCELLED_REASON_METADATA_KEY];
     if (!r || r.status !== 'cancelled' || !FAN_OUT_CANCEL_REASONS.some(known => known === reason)) {
       throw new Error(`run ${id} is not recoverable`);
     }
     r.status = 'running';
     r.completed_at = null;
-    const { cancelled_reason: _cancelledReason, ...metadata } = r.metadata;
+    const { [CANCELLED_REASON_METADATA_KEY]: _cancelledReason, ...metadata } = r.metadata;
     r.metadata = metadata;
     return Promise.resolve(this.clone(r));
   };
@@ -395,7 +396,7 @@ export class InMemoryStore implements IWorkflowStore {
     if (r && r.status !== 'completed' && r.status !== 'cancelled') {
       r.status = 'cancelled';
       r.completed_at = new Date();
-      r.metadata = { ...r.metadata, cancelled_reason: reason };
+      r.metadata = { ...r.metadata, [CANCELLED_REASON_METADATA_KEY]: reason };
       this.events.push({
         workflow_run_id: id,
         event_type: 'workflow_cancelled',

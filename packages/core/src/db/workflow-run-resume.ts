@@ -3,6 +3,7 @@
  * fan-out child recovery and paused-run slot release. Re-exported from the
  * `./workflows` entry.
  */
+import { CANCELLED_REASON_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { resumeTransition } from '@archon/workflows/resume-transition';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -339,8 +340,11 @@ export async function resumeWorkflowRun(
 
 export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun> {
   const dialect = getDialect();
-  const cancelledReason = dialect.jsonText('metadata', 'cancelled_reason');
-  const metadataWithoutCancelledReason = dialect.jsonRemove('metadata', 'cancelled_reason');
+  const cancelledReason = dialect.jsonText('metadata', CANCELLED_REASON_METADATA_KEY);
+  const metadataWithoutCancelledReason = dialect.jsonRemove(
+    'metadata',
+    CANCELLED_REASON_METADATA_KEY
+  );
   const eventReason = dialect.jsonText('data', 'reason');
   // Placeholders follow the reason list, so a new fan-out cancel reason needs no SQL edit.
   const reasonPlaceholders = (first: number): string =>

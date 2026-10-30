@@ -371,7 +371,7 @@ describe('public CLI adopted workflow source', () => {
         writePack(fixture.target, 'later target');
         writeFileSync(join(fixture.target, 'allow-finish'), 'ready');
         const resumed = runCli(fixture, ['workflow', 'resume', run.id, '--cwd', fixture.repo]);
-        expect(resumed.status).toBe(0);
+        expect(resumed.status, resumed.output).toBe(0);
         expect(readRun(fixture, run.id).status).toBe('completed');
         expectProbe(fixture, 'fresh source');
       }, 120_000);

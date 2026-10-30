@@ -11,6 +11,7 @@ import * as isolationEnvDb from '../../db/isolation-environments';
 import * as workflowDb from '../../db/workflows';
 import { getLiveRunBlocker, type LiveRunBlocker } from './run-lock';
 import { getLog } from './log';
+import { createRunResourceRelease } from './run-verification-images';
 
 /**
  * `ContainerBackend.destroy()` reads the container/volume names from the tracking
@@ -155,12 +156,26 @@ export async function reapContainerEnvironments(
     try {
       await backend.destroy(row.id);
       report.removed.push(row.id);
-      // No runId: the reap only happens when no run can still claim this env.
       getLog().info({ envId: row.id }, 'container_env_reaped');
+      await releaseContainerRunImages(row.id);
     } catch (err) {
       report.errors.push({ id: row.id, error: (err as Error).message });
       getLog().warn({ err, envId: row.id }, 'container_env_reap_failed');
     }
   }
   return report;
+}
+
+async function releaseContainerRunImages(envId: string): Promise<void> {
+  const runIds = await workflowDb.getRunIdsByIsolationEnvId(envId);
+  const release = createRunResourceRelease({ getWorkflowRun: workflowDb.getWorkflowRun });
+  const errors: unknown[] = [];
+  for (const runId of runIds) {
+    try {
+      await release(runId);
+    } catch (err) {
+      errors.push(new Error(`Image cleanup for run ${runId}: ${String(err)}`, { cause: err }));
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, errors.map(String).join('; '));
 }

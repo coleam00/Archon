@@ -244,6 +244,8 @@ export interface StoredProviderCredential {
 }
 
 export interface WorkflowDeps {
+  /** Host cleanup after terminal execution; must retain resources with live writers. */
+  releaseRunResources?: (runId: string) => Promise<void>;
   providers: ProviderRegistry;
   store: IWorkflowStore;
   /**

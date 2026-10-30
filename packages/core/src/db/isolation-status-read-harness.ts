@@ -42,12 +42,17 @@ export function isolationStatusReadTests(
     }
   });
 
-  test('environment lookup returns the newest run', async () => {
+  test('environment lookup returns the newest run and inventory returns all matching runs', async () => {
     const db = getDb();
-    const { getRunByIsolationEnvId } = await import('./workflow-run-reads');
+    const { getRunByIsolationEnvId, getRunIdsByIsolationEnvId } = await import(
+      './workflow-run-reads'
+    );
     const env = await createEnv(randomUUID());
+    expect(await getRunIdsByIsolationEnvId(env.id)).toEqual([]);
     const failed = await seedRun(env.id, 'failed');
     const completed = await seedRun(env.id, 'completed');
+    const otherEnv = await createEnv(randomUUID());
+    await seedRun(otherEnv.id, 'completed');
     for (const [id, date] of [
       [failed, '2020-01-02'],
       [completed, '2020-01-03'],
@@ -58,6 +63,7 @@ export function isolationStatusReadTests(
       ]);
     }
     expect((await getRunByIsolationEnvId(env.id))?.id).toBe(completed);
+    expect(await getRunIdsByIsolationEnvId(env.id)).toEqual([failed, completed].sort());
   });
 
   test.each(['unexpected', ''])(

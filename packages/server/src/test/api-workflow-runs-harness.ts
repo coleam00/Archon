@@ -391,6 +391,7 @@ export const mockLabelAttentionWait = mock<
 >(async () => ({ labeled: false }));
 
 mock.module('@archon/core/db/workflows', () => ({
+  getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   listWorkflowRuns: mockListWorkflowRuns,
   listDashboardRuns: mockListDashboardRuns,
   listAttentionQueueRows: mockListAttentionQueueRows,

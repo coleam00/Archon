@@ -1590,7 +1590,9 @@ environments remain. The error lists their environment IDs and the cleanup comma
 Clean them up explicitly, then retry deletion.
 
 Cleanup continues after individual errors and exits with status `1` if any removal fails;
-protected skips exit with status `0`.
+protected skips exit with status `0`. After container teardown, cleanup attempts image
+release for every associated run. Image lookup/removal failures count as errors even when
+the container was successfully removed.
 
 Age cleanup uses the originating platform's registered policy.
 Both the CLI and server read chat policies from installed plugin receipts without starting

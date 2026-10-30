@@ -30,6 +30,7 @@ const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
 
 mock.module('../db/workflows', () => ({
+  getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   insertWorkflowRun: async (): Promise<never> => {
     throw new Error('Unexpected admission run insert');
   },
@@ -424,6 +425,12 @@ describe('createWorkflowDeps', () => {
       email: '42+connected@users.noreply.github.com',
     });
     expect(mockGetUserGithubAuthor).toHaveBeenCalledWith('user-1');
+  });
+  test('SQL and file dependency composition both supply external resource cleanup', () => {
+    expect(createWorkflowDeps().releaseRunResources).toEqual(expect.any(Function));
+    expect(createWorkflowDeps(createWorkflowStore(), 'files').releaseRunResources).toEqual(
+      expect.any(Function)
+    );
   });
   test('only the SQL host gets the SQL completed-run worktree release', () => {
     expect(createWorkflowDeps().completedRunWorktree).toEqual({
