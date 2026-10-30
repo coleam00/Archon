@@ -139,6 +139,7 @@ mock.module('@archon/workflows/defaults', () => ({
 mock.module('@archon/core/db/conversations', () => ({}));
 mock.module('@archon/core/db/isolation-environments', () => ({}));
 mock.module('@archon/core/db/workflows', () => ({
+  getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
 }));
 mock.module('@archon/core/db/workflow-events', () => ({}));

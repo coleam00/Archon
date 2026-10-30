@@ -565,6 +565,7 @@ mock.module('../services/title-generator', () => ({
 // for all platforms (not just web), so this module must be stubbed even when these tests don't
 // exercise the resume path. The default null return keeps execution on the "fresh run" branch.
 mock.module('../db/workflows', () => ({
+  getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
   findResumableRunByParentConversation: mock<
     typeof WorkflowDb.findResumableRunByParentConversation

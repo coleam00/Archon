@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
-import { mockWorkflowRun } from './dag/test-utils';
+import { makeRun } from './engine-contract-fixtures';
 import { queryMetrics, type MetricsQuery, type MetricsStore } from './metrics';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowRun } from './schemas/workflow-run';
@@ -303,7 +303,7 @@ describe('queryMetrics', () => {
 const cut = new Date('2026-10-04T00:00:00Z');
 
 function runStarted(at: string, metadata: Record<string, unknown> = {}): WorkflowRun {
-  return { ...mockWorkflowRun(randomUUID()), started_at: new Date(at), metadata };
+  return makeRun({ id: randomUUID(), started_at: new Date(at), metadata });
 }
 
 const before = (metadata?: Record<string, unknown>): WorkflowRun =>

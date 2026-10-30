@@ -329,6 +329,7 @@ mock.module('../../db/sessions', () => ({
 }));
 
 mock.module('../../db/workflows', () => ({
+  getWorkflowRunsByIds: mock(async () => []),
   getActiveWorkflowRun: mockGetActiveWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
