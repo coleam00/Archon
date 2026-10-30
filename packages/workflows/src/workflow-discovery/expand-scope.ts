@@ -7,7 +7,7 @@ import type {
   WorkflowLoadError,
   WorkflowWithSource,
 } from '../schemas';
-import { isIncludeDirective, isLoopGroupNode } from '../schemas';
+import { isComposeFanOutNode, isIncludeDirective, isLoopGroupNode } from '../schemas';
 import { collectLoopGroupSinkWarnings } from '../loader/parse-warnings';
 import { expandWorkflowIncludes } from '../include-expander';
 import { attachHomeMcpDirectory } from '../compiled-command';
@@ -28,6 +28,8 @@ export async function expandScope(
   files: Map<string, ScopeFile>
 ): Promise<{ workflows: WorkflowWithSource[]; errors: WorkflowLoadError[] }> {
   const errors: ParsedWorkflowLoadError[] = [];
+  if (context.capture?.manifest.version === 3 && context.workflowName !== undefined)
+    retainSelectedClosure(files, context.workflowName);
   await validateNamedScripts(context, files, errors);
   const duplicateNames = reportDuplicateNames(files, errors);
   attachGlobalMcpDirectories(files);
@@ -71,6 +73,27 @@ export async function expandScope(
     result.push(expandedWorkflow(file, expanded));
   }
   return { workflows: result, errors };
+}
+
+function retainSelectedClosure(files: Map<string, ScopeFile>, selected: string): void {
+  const required = new Set<string>();
+  const visit = (name: string): void => {
+    if (required.has(name)) return;
+    required.add(name);
+    for (const { workflow } of files.values()) {
+      if (workflow.name === name) visitNodes(workflow.nodes);
+    }
+  };
+  const visitNodes = (nodes: WorkflowDefinition['nodes']): void => {
+    for (const node of nodes) {
+      if (isIncludeDirective(node) || isComposeFanOutNode(node)) visit(node.include);
+      else if (isLoopGroupNode(node)) visitNodes(node.loop_group.nodes);
+    }
+  };
+  visit(selected);
+  for (const [filename, { workflow }] of files) {
+    if (!required.has(workflow.name)) files.delete(filename);
+  }
 }
 
 /**

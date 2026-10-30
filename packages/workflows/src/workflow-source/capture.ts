@@ -4,8 +4,12 @@ import * as archonPaths from '@archon/paths';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
 import type { WorkflowSourceConfig } from '../schemas/workflow-run';
 import { resolveBundledScope, writeBundledScope } from './bundled-scope';
-import { listInstalledPacks } from './installed-packs';
-import { WorkflowSourceUnavailableError, sourceReadError } from './integrity';
+import { installedPackKey, listInstalledPacks, readPackManifest } from './installed-packs';
+import {
+  WorkflowSourceIntegrityError,
+  WorkflowSourceUnavailableError,
+  sourceReadError,
+} from './integrity';
 import { openWorkflowSource } from './load';
 import { verifyIndexedUnits } from './verify-units';
 import type { WorkflowSourceAnchor } from './roots';
@@ -234,6 +238,13 @@ async function stageCapture(
   // them back would restate what the scope already carries. Everything else is read.
   const entries = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
   const allEntries = [...entries, ...(bundled?.files ?? [])];
+  const records = installed.inherited
+    ? installed.records
+    : await stagedInstalledRecords(
+        staging,
+        installed.records,
+        new Set(entries.map(entry => entry.relPath.split('\\').join('/')))
+      );
   const unitRoots = [
     ...[...scopesCaptured].filter(scope => scope !== 'installed'),
     ...installed.records.map(record => `installed/${record.key}`),
@@ -261,7 +272,7 @@ async function stageCapture(
     captured_at: new Date().toISOString(),
     version: 3,
     units,
-    installed_plugins: installed.records,
+    installed_plugins: records,
     digest: '0'.repeat(64),
     file_count: units.reduce((sum, unit) => sum + unit.files.length, 0),
     byte_count: units.reduce(
@@ -278,6 +289,28 @@ async function stageCapture(
   workflowSourceManifestSchema.parse(manifest);
   await writeManifest(staging, manifest);
   return manifest;
+}
+
+async function stagedInstalledRecords(
+  staging: string,
+  records: readonly IndexedInstalledPlugin[],
+  files: ReadonlySet<string>
+): Promise<IndexedInstalledPlugin[]> {
+  const staged: IndexedInstalledPlugin[] = [];
+  for (const record of records) {
+    const root = `installed/${record.key}`;
+    const manifest = await readPackManifest(join(staging, root));
+    if (installedPackKey(record.id.split('/')[0], manifest.name) !== record.key)
+      throw new Error(
+        `Captured pack ${record.key} does not match its staged manifest name ${manifest.name}`
+      );
+    for (const path of Object.values(manifest.entrypoints)) {
+      if (!files.has(`${root}/${path}`))
+        throw new Error(`Captured pack ${record.key} is missing entrypoint ${path}`);
+    }
+    staged.push({ ...record, manifest });
+  }
+  return staged;
 }
 
 function logCaptured(
@@ -336,13 +369,13 @@ async function copyInheritedUnits(
       await verifyIndexedUnits(staging, inherited.manifest, [unit.root]);
     } catch (error) {
       if (
-        !(error instanceof WorkflowSourceUnavailableError) ||
-        error.path !== inherited.anchor.root
+        !(error instanceof WorkflowSourceIntegrityError) ||
+        (error.path !== inherited.anchor.root && error.path !== staging)
       )
         throw error;
       await rm(destination, { recursive: true, force: true });
       getLog().warn(
-        { captureRoot: inherited.anchor.root, unit: unit.root },
+        { captureRoot: inherited.anchor.root, unit: unit.root, err: error },
         'workflow.source_inherited_unit_unavailable'
       );
     }

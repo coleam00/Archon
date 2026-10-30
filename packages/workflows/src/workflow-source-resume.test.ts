@@ -16,6 +16,7 @@ import {
   openWorkflowSource,
   verifyWorkflowSourceUnits,
   WorkflowSourceUnavailableError,
+  WorkflowSourceIntegrityError,
   type WorkflowSourceCapture,
 } from './workflow-source';
 import { resolveCommandContentForScan } from './workflow-discovery/command-scan';
@@ -285,84 +286,102 @@ test('a runtime-substituted script verifies its installed owner and recovers aft
   }
 });
 
-test('a resumed parent launches a child while retaining an unavailable inherited pack commitment', async () => {
-  await put(
-    join(project, '.archon/workflows/healthy.yaml'),
-    workflow('healthy', `${first}\n  - id: child\n    workflow: child\n    depends_on: [first]`)
-  );
-  await install('healthy', {
-    'run/run.yaml': workflow('run', '  - id: unused\n    bash: exit 98'),
-    'run/scripts/check.ts': "console.log('inherited-result');",
-  });
-  const fixture = await pausedRun();
-  await put(
-    join(
-      packTreePath(join(root, 'home/plugins'), 'acme/healthy', 'a'.repeat(40)),
-      'run/scripts/check.ts'
-    ),
-    "throw new Error('updated live pack must not execute');"
-  );
-  await put(
-    join(project, '.archon/workflows/child.yaml'),
-    workflow(
-      'child',
-      `  - id: remaining\n    script: check\n    runtime: bun\n  - id: inherited\n    script: ${packScript('healthy')}\n    runtime: bun\n    depends_on: [remaining]`
-    )
-  );
-  await put(join(project, '.archon/scripts/check.ts'), "console.log('live-child-result');");
-  const fault = denyReads(join(fixture.capture.anchor.root, 'installed/acme.broken'));
-  try {
-    const result = await fixture.resume();
-    expect(result).toMatchObject({ success: true });
-    const children = await fixture.store.findChildRuns(fixture.run.id);
-    expect(children).toHaveLength(1);
-    const child = children[0];
-    expect(child.status).toBe('completed');
-    const state = (await import('./schemas/workflow-run')).readWorkflowSourceState(child.metadata);
-    if (state.kind !== 'recorded') throw new Error('Child lost source record');
-    const capture = await openWorkflowSource(
-      state.record.root,
-      state.record.digest,
-      state.record.source_config
+for (const faultKind of ['unreadable', 'tampered']) {
+  test(`a resumed parent launches a child while retaining an ${faultKind} inherited pack commitment`, async () => {
+    await put(
+      join(project, '.archon/workflows/healthy.yaml'),
+      workflow('healthy', `${first}\n  - id: child\n    workflow: child\n    depends_on: [first]`)
     );
-    expect(capture.manifest.version).toBe(3);
-    if (capture.manifest.version !== 3 || fixture.capture.manifest.version !== 3)
-      throw new Error('Expected indexed capture');
-    expect(capture.manifest.units.find(unit => unit.root === 'installed/acme.broken')).toEqual(
-      fixture.capture.manifest.units.find(unit => unit.root === 'installed/acme.broken')
+    await install('healthy', {
+      'run/run.yaml': workflow('run', '  - id: unused\n    bash: exit 98'),
+      'run/scripts/check.ts': "console.log('inherited-result');",
+    });
+    const fixture = await pausedRun();
+    await put(
+      join(
+        packTreePath(join(root, 'home/plugins'), 'acme/healthy', 'a'.repeat(40)),
+        'run/scripts/check.ts'
+      ),
+      "throw new Error('updated live pack must not execute');"
     );
-    expect(capture.manifest.installed_plugins).toEqual(fixture.capture.manifest.installed_plugins);
-    await expect(
-      verifyWorkflowSourceUnits(capture.anchor, ['installed/acme.broken'])
-    ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
-    await expect(
-      discoverWorkflowsWithConfig(
+    await put(
+      join(project, '.archon/workflows/child.yaml'),
+      workflow(
+        'child',
+        `  - id: remaining\n    script: check\n    runtime: bun\n  - id: inherited\n    script: ${packScript('healthy')}\n    runtime: bun\n    depends_on: [remaining]`
+      )
+    );
+    await put(join(project, '.archon/scripts/check.ts'), "console.log('live-child-result');");
+    const brokenFile = join(fixture.capture.anchor.root, 'installed/acme.broken/run/run.yaml');
+    const originalBytes = await fs.readFile(brokenFile);
+    if (faultKind === 'tampered') {
+      await put(brokenFile, 'tampered source');
+      await expect(
+        verifyWorkflowSourceUnits(fixture.capture.anchor, ['installed/acme.broken'])
+      ).rejects.toBeInstanceOf(WorkflowSourceIntegrityError);
+    }
+    const fault =
+      faultKind === 'unreadable'
+        ? denyReads(join(fixture.capture.anchor.root, 'installed/acme.broken'))
+        : undefined;
+    try {
+      const result = await fixture.resume();
+      expect(result).toMatchObject({ success: true });
+      const children = await fixture.store.findChildRuns(fixture.run.id);
+      expect(children).toHaveLength(1);
+      const child = children[0];
+      expect(child.status).toBe('completed');
+      const state = (await import('./schemas/workflow-run')).readWorkflowSourceState(
+        child.metadata
+      );
+      if (state.kind !== 'recorded') throw new Error('Child lost source record');
+      const capture = await openWorkflowSource(
+        state.record.root,
+        state.record.digest,
+        state.record.source_config
+      );
+      expect(capture.manifest.version).toBe(3);
+      if (capture.manifest.version !== 3 || fixture.capture.manifest.version !== 3)
+        throw new Error('Expected indexed capture');
+      expect(capture.manifest.units.find(unit => unit.root === 'installed/acme.broken')).toEqual(
+        fixture.capture.manifest.units.find(unit => unit.root === 'installed/acme.broken')
+      );
+      expect(capture.manifest.installed_plugins).toEqual(
+        fixture.capture.manifest.installed_plugins
+      );
+      await expect(
+        verifyWorkflowSourceUnits(capture.anchor, ['installed/acme.broken'])
+      ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+      await expect(
+        discoverWorkflowsWithConfig(
+          project,
+          loadConfig,
+          providerRegistry,
+          capturedSourceRoots(capture.anchor, 'acme/broken:run')
+        )
+      ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+      const outputs = (await fixture.store.getDagResumeSnapshot(child.id)).completedNodeOutputs;
+      expect(outputs.get('remaining')?.output).toContain('live-child-result');
+      expect(outputs.get('inherited')?.output).toContain('inherited-result');
+      if (faultKind === 'tampered') await fs.writeFile(brokenFile, originalBytes);
+      await fs.cp(
+        join(fixture.capture.anchor.root, 'installed/acme.broken'),
+        join(capture.anchor.root, 'installed/acme.broken'),
+        { recursive: true }
+      );
+      await verifyWorkflowSourceUnits(capture.anchor, ['installed/acme.broken']);
+      const restored = await discoverWorkflowsWithConfig(
         project,
         loadConfig,
         providerRegistry,
         capturedSourceRoots(capture.anchor, 'acme/broken:run')
-      )
-    ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
-    const outputs = (await fixture.store.getDagResumeSnapshot(child.id)).completedNodeOutputs;
-    expect(outputs.get('remaining')?.output).toContain('live-child-result');
-    expect(outputs.get('inherited')?.output).toContain('inherited-result');
-    await fs.cp(
-      join(fixture.capture.anchor.root, 'installed/acme.broken'),
-      join(capture.anchor.root, 'installed/acme.broken'),
-      { recursive: true }
-    );
-    await verifyWorkflowSourceUnits(capture.anchor, ['installed/acme.broken']);
-    const restored = await discoverWorkflowsWithConfig(
-      project,
-      loadConfig,
-      providerRegistry,
-      capturedSourceRoots(capture.anchor, 'acme/broken:run')
-    );
-    expect(restored.workflows.map(entry => entry.workflow.name)).toEqual(['acme/broken:run']);
-  } finally {
-    fault.mockRestore();
-  }
-});
+      );
+      expect(restored.workflows.map(entry => entry.workflow.name)).toEqual(['acme/broken:run']);
+    } finally {
+      fault?.mockRestore();
+    }
+  });
+}
 
 test('resume expands an installed support include and executes its frozen resource', async () => {
   await install('healthy', {
@@ -518,49 +537,58 @@ test('resume reads an included command and global MCP config without scanning un
   }
 });
 
-test('an inherited read fault after partial copying removes payloads and retains the original inventory', async () => {
-  await put(join(project, '.archon/workflows/healthy.yaml'), workflow('healthy', first));
-  const fixture = await pausedRun();
-  const brokenFile = join(fixture.capture.anchor.root, 'installed/acme.broken/run/run.yaml');
-  let reads = 0;
-  const fault = spyOn(fs, 'readFile').mockImplementation(
-    new Proxy(originalRead, {
-      apply(target, thisArg, args: Parameters<typeof originalRead>) {
-        if (String(args[0]) === brokenFile && ++reads === 2) {
-          return Promise.reject(
-            Object.assign(new Error('read failed during copy'), {
-              code: 'EACCES',
-              syscall: 'open',
-              path: brokenFile,
-            })
-          );
-        }
-        return Reflect.apply(target, thisArg, args);
-      },
-    })
-  );
-  try {
-    const child = await captureWorkflowSource({
-      sourceRoot: project,
-      captureRoot: join(root, 'child-capture'),
-      installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
-    });
-    expect(reads).toBe(2);
-    await expect(fs.stat(join(child.anchor.root, 'installed/acme.broken'))).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
-    if (child.manifest.version !== 3 || fixture.capture.manifest.version !== 3)
-      throw new Error('Expected v3 captures');
-    expect(child.manifest.units.find(unit => unit.root === 'installed/acme.broken')).toEqual(
-      fixture.capture.manifest.units.find(unit => unit.root === 'installed/acme.broken')
+for (const copyFault of ['unreadable', 'tampered']) {
+  test(`an inherited ${copyFault} fault during copying removes payloads and retains the original inventory`, async () => {
+    await put(join(project, '.archon/workflows/healthy.yaml'), workflow('healthy', first));
+    const fixture = await pausedRun();
+    const brokenFile = join(fixture.capture.anchor.root, 'installed/acme.broken/run/run.yaml');
+    let reads = 0;
+    const fault = spyOn(fs, 'readFile').mockImplementation(
+      new Proxy(originalRead, {
+        apply(target, thisArg, args: Parameters<typeof originalRead>) {
+          if (String(args[0]) === brokenFile && ++reads === 2) {
+            if (copyFault === 'tampered') {
+              return fs
+                .writeFile(brokenFile, 'changed during copy')
+                .then(() => Reflect.apply(target, thisArg, args));
+            }
+            return Promise.reject(
+              Object.assign(new Error('read failed during copy'), {
+                code: 'EACCES',
+                syscall: 'open',
+                path: brokenFile,
+              })
+            );
+          }
+          return Reflect.apply(target, thisArg, args);
+        },
+      })
     );
-    await expect(
-      verifyWorkflowSourceUnits(child.anchor, ['installed/acme.broken'])
-    ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
-  } finally {
-    fault.mockRestore();
-  }
-});
+    try {
+      const child = await captureWorkflowSource({
+        sourceRoot: project,
+        captureRoot: join(root, 'child-capture'),
+        installedFrom: { kind: 'captured', anchor: fixture.capture.anchor },
+      });
+      expect(reads).toBe(2);
+      await expect(fs.stat(join(child.anchor.root, 'installed/acme.broken'))).rejects.toMatchObject(
+        {
+          code: 'ENOENT',
+        }
+      );
+      if (child.manifest.version !== 3 || fixture.capture.manifest.version !== 3)
+        throw new Error('Expected v3 captures');
+      expect(child.manifest.units.find(unit => unit.root === 'installed/acme.broken')).toEqual(
+        fixture.capture.manifest.units.find(unit => unit.root === 'installed/acme.broken')
+      );
+      await expect(
+        verifyWorkflowSourceUnits(child.anchor, ['installed/acme.broken'])
+      ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+    } finally {
+      fault.mockRestore();
+    }
+  });
+}
 
 test('include command scans retain source recovery when a verified resource disappears during lookup', async () => {
   await put(join(project, '.archon/workflows/healthy.yaml'), workflow('healthy', first));
@@ -590,3 +618,160 @@ test('include command scans retain source recovery when a verified resource disa
     fault.mockRestore();
   }
 });
+
+for (const dependency of [
+  'script',
+  'command',
+  'loop-command',
+  'composed-command',
+  'nested-command',
+]) {
+  test(`resume ignores an unrelated workflow's ${dependency} dependency but refuses it when selected`, async () => {
+    await install('broken', {
+      'run/run.yaml': workflow('run', first),
+      'run/scripts/check.ts': "console.log('unused');",
+      'run/commands/check.md': 'unused command',
+    });
+    await put(
+      join(project, '.archon/workflows/healthy.yaml'),
+      workflow('healthy', `${first}\n${remaining}`)
+    );
+    await put(join(project, '.archon/scripts/check.ts'), "console.log('frozen-result');");
+    const command = packScript('broken');
+    const body =
+      dependency === 'script'
+        ? `  - id: use\n    script: ${command}\n    runtime: bun`
+        : dependency === 'loop-command'
+          ? `  - id: use\n    loop:\n      command: ${command}\n      until: DONE\n      max_iterations: 1`
+          : `  - id: use\n    command: ${command}`;
+    await put(join(project, '.archon/workflows/block.yaml'), workflow('block', body));
+    const include =
+      dependency === 'composed-command'
+        ? '  - id: use\n    include: block\n    depends_on: [first]\n    fan_out:\n      items: $first.output\n      as: item\n      max_parallel: 1\n      join: all_success'
+        : dependency === 'nested-command'
+          ? '  - id: group\n    loop_group:\n      until: DONE\n      max_iterations: 1\n      nodes:\n        - id: use\n          include: block'
+          : '  - id: use\n    include: block';
+    await put(
+      join(project, '.archon/workflows/other.yaml'),
+      workflow('other', `${first}\n${include}`)
+    );
+    const fixture = await pausedRun();
+    const fault = denyReads(join(fixture.capture.anchor.root, 'installed/acme.broken'));
+    try {
+      expect(await fixture.resume()).toMatchObject({ success: true });
+      const outputs = (await fixture.store.getDagResumeSnapshot(fixture.run.id))
+        .completedNodeOutputs;
+      expect(outputs.get('remaining')?.output).toContain('frozen-result');
+      await expect(
+        discoverWorkflowsWithConfig(
+          project,
+          loadConfig,
+          providerRegistry,
+          capturedSourceRoots(fixture.capture.anchor, 'other')
+        )
+      ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+      await expect(
+        discoverWorkflowsWithConfig(
+          project,
+          loadConfig,
+          providerRegistry,
+          capturedSourceRoots(fixture.capture.anchor)
+        )
+      ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+    } finally {
+      fault.mockRestore();
+    }
+  });
+}
+
+test('project resume completes with an unreadable unrelated installed directory', async () => {
+  await put(
+    join(project, '.archon/workflows/healthy.yaml'),
+    workflow('healthy', `${first}\n${remaining}`)
+  );
+  await put(join(project, '.archon/scripts/check.ts'), "console.log('frozen-directory-result');");
+  const fixture = await pausedRun();
+  await put(join(project, '.archon/scripts/check.ts'), "throw new Error('live source');");
+  const blocked = join(fixture.capture.anchor.root, 'installed/acme.broken');
+  const original = fs.readdir;
+  const fault = spyOn(fs, 'readdir').mockImplementation(
+    new Proxy(original, {
+      apply(target, thisArg, args: Parameters<typeof original>) {
+        if (String(args[0]).startsWith(blocked))
+          return Promise.reject(
+            Object.assign(new Error('persistent directory fault'), {
+              code: 'EACCES',
+              syscall: 'scandir',
+              path: blocked,
+            })
+          );
+        return Reflect.apply(target, thisArg, args);
+      },
+    })
+  );
+  try {
+    expect(await fixture.resume()).toMatchObject({ success: true });
+    expect(await fixture.store.getWorkflowRunStatus(fixture.run.id)).toBe('completed');
+    const outputs = (await fixture.store.getDagResumeSnapshot(fixture.run.id)).completedNodeOutputs;
+    expect(outputs.get('first')?.output).toBe('already-done');
+    expect(outputs.get('remaining')?.output).toContain('frozen-directory-result');
+    await expect(
+      verifyWorkflowSourceUnits(fixture.capture.anchor, ['installed/acme.broken'])
+    ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+  } finally {
+    fault.mockRestore();
+  }
+});
+
+for (const mutation of ['entrypoint', 'name', 'missing-entrypoint']) {
+  test(`live capture derives and validates the staged installed descriptor after the ${mutation} changes`, async () => {
+    const live = packTreePath(join(root, 'home/plugins'), 'acme/broken', 'a'.repeat(40));
+    const original = fs.copyFile;
+    let changed = false;
+    const fault = spyOn(fs, 'copyFile').mockImplementation(async (...args) => {
+      if (!changed && String(args[0]).startsWith(live)) {
+        changed = true;
+        await put(
+          join(live, 'archon-plugin.json'),
+          JSON.stringify({
+            schemaVersion: 1,
+            kind: 'workflow-pack',
+            name: mutation === 'name' ? 'renamed' : 'broken',
+            description: 'Changed during capture',
+            entrypoints: {
+              changed: mutation === 'missing-entrypoint' ? 'missing/missing.yaml' : 'run/run.yaml',
+            },
+          })
+        );
+      }
+      return original(...args);
+    });
+    try {
+      const capture = captureWorkflowSource({
+        sourceRoot: project,
+        captureRoot: join(root, 'capture'),
+      });
+      if (mutation !== 'entrypoint') {
+        await expect(capture).rejects.toThrow();
+      } else {
+        const result = await capture;
+        if (result.manifest.version !== 3) throw new Error('Expected v3');
+        expect(result.manifest.installed_plugins[0].manifest.entrypoints).toEqual({
+          changed: 'run/run.yaml',
+        });
+        const catalog = await discoverWorkflowsWithConfig(
+          project,
+          loadConfig,
+          providerRegistry,
+          capturedSourceRoots(result.anchor, 'acme/broken:changed')
+        );
+        expect(catalog.workflows.map(entry => entry.workflow.name)).toEqual([
+          'acme/broken:changed',
+        ]);
+      }
+      expect(changed).toBe(true);
+    } finally {
+      fault.mockRestore();
+    }
+  });
+}

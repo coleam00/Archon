@@ -53,7 +53,7 @@ export function installedPackKey(owner: string, name: string): string {
   return `${owner}.${name}`;
 }
 
-async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
+export async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
   const file = join(dir, PLUGIN_MANIFEST_FILE);
   let raw: unknown;
   try {
