@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'bun:test';
+import { execFile } from 'node:child_process';
 import { win32 } from 'node:path';
+import { promisify } from 'node:util';
 import { readWindowsProcessIdentity } from './windows-process-identity';
 
 const pid = 123;
@@ -99,3 +101,28 @@ test.skipIf(process.platform !== 'win32')(
     });
   }
 );
+
+test.skipIf(process.platform !== 'win32').each([
+  { exception: '[System.ComponentModel.Win32Exception]::new(5)', code: 5 },
+  {
+    exception: "[System.Runtime.InteropServices.COMException]::new('fixture', -2147467259)",
+    code: -2147467259,
+  },
+])('native unavailable query preserves the exception code $code', async ({ exception, code }) => {
+  const result = await readWindowsProcessIdentity(
+    process.pid,
+    async (executable, args, options) => {
+      const script = Buffer.from(args[3], 'base64').toString('utf16le');
+      const startTimeRead = '  $ticks = $proc.StartTime.ToUniversalTime().Ticks.ToString';
+      expect(script.split(startTimeRead)).toHaveLength(2);
+      // Force a capture failure without relying on the runner's process access rights.
+      const failingScript = script.replace(startTimeRead, `  throw ${exception}\n${startTimeRead}`);
+      return promisify(execFile)(
+        executable,
+        [...args.slice(0, 3), Buffer.from(failingScript, 'utf16le').toString('base64')],
+        options
+      );
+    }
+  );
+  expect(result).toEqual({ pid: process.pid, status: 'unavailable', code });
+});
