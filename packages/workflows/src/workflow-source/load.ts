@@ -194,12 +194,11 @@ export async function assertWorkflowSourceIntegrity(
       roots.anchor.config
     );
     if (opened.verifiedFiles !== undefined) return opened.verifiedFiles;
-    return (
-      await verifyWorkflowSourceUnits(
-        roots.anchor,
-        read.units.filter(root => opened.manifest.units.some(unit => unit.root === root))
-      )
-    ).verifiedFiles;
+    return verifyIndexedUnits(
+      roots.anchor.root,
+      opened.manifest,
+      read.units.filter(root => opened.manifest.units.some(unit => unit.root === root))
+    );
   }
   const capture = await verifySelectedWorkflowSource(roots.anchor, roots.workflowName);
   return capture.verifiedFiles;
@@ -330,7 +329,12 @@ export async function verifySelectedWorkflowSource(
   const capture = await openWorkflowSource(anchor.root, anchor.digest, anchor.config);
   if (capture.verifiedFiles !== undefined)
     return { ...capture, verifiedFiles: capture.verifiedFiles };
-  return verifyWorkflowSourceUnits(anchor, selectedWorkflowUnits(capture.manifest, workflowName));
+  const verifiedFiles = await verifyIndexedUnits(
+    anchor.root,
+    capture.manifest,
+    selectedWorkflowUnits(capture.manifest, workflowName)
+  );
+  return { ...capture, verifiedFiles };
 }
 
 /** A resource lookup verifies its actual owners, after runtime substitution. */
@@ -354,12 +358,11 @@ export async function verifyWorkflowSourceResources(
     return [sourceUnitForOwner(reference.owner)];
   });
   const available = new Set(capture.manifest.units.map(unit => unit.root));
-  return (
-    await verifyWorkflowSourceUnits(
-      roots.anchor,
-      requested.filter(root => available.has(root))
-    )
-  ).verifiedFiles;
+  return verifyIndexedUnits(
+    roots.anchor.root,
+    capture.manifest,
+    requested.filter(root => available.has(root))
+  );
 }
 
 /** Empty or absent scopes have no readable resources; never inspect injected directories. */

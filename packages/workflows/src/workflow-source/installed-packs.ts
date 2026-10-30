@@ -1,9 +1,4 @@
-import {
-  openWorkflowSource,
-  verifyWorkflowSourceUnits,
-  assertWorkflowSourceIntegrity,
-  sourceDirectoryHasFiles,
-} from './load';
+import { openWorkflowSource, assertWorkflowSourceIntegrity, sourceDirectoryHasFiles } from './load';
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import {
@@ -27,6 +22,7 @@ export {
   type InstalledPluginRecord,
 } from './installed-record';
 import { installedWorkflowName, type InstalledPluginRecord } from './installed-record';
+import { verifyIndexedUnits } from './verify-units';
 
 /** One installed workflow pack, read from receipts (live) or from a capture. */
 export interface InstalledPack {
@@ -92,8 +88,9 @@ export async function listInstalledPacks(
       const records = capture.manifest.installed_plugins.filter(
         record => keys === undefined || keys.has(record.key)
       );
-      await verifyWorkflowSourceUnits(
-        root.anchor,
+      await verifyIndexedUnits(
+        root.anchor.root,
+        capture.manifest,
         records.map(record => `installed/${record.key}`)
       );
       return {
