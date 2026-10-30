@@ -71,6 +71,8 @@ if (part !== undefined) {
 }
 
 for (const error of request?.validationErrors ?? []) console.error(error.message);
+// A single group's native exit already decides the whole request.
+const splitNamePattern = groups.length > 1 ? request?.namePattern : undefined;
 let emptyNameGroups = 0;
 const reports = (request?.validationErrors ?? []).map(error =>
   runnerErrorReport(error.message, 'Test discovery')
@@ -82,9 +84,9 @@ const timed = async (group: string[], runGroup: (group: string[]) => Promise<num
   let result: number | 'no-name-match';
   if (
     request !== undefined &&
-    (request.namePattern !== undefined || request.reporterOutfile !== undefined)
+    (splitNamePattern !== undefined || request.reporterOutfile !== undefined)
   ) {
-    const reported = await runReportedGroup(group, runGroup, request.namePattern);
+    const reported = await runReportedGroup(group, runGroup, splitNamePattern);
     reports.push(reported.report);
     result = reported.code;
   } else {

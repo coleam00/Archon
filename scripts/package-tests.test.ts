@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
 import { TEST_ISOLATION_DIRECTIVE } from './package-test-groups';
 import { resolveRequestedTestGroups } from './package-test-requests';
+import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 const track = trackTempRoots();
 const runner = join(import.meta.dir, 'package-tests.ts');
@@ -22,6 +23,20 @@ function fixture(manifest: object = {}): string {
   mkdirSync(join(root, 'src'));
   writeFileSync(join(root, 'package.json'), JSON.stringify(manifest));
   return root;
+}
+async function native(root: string, args: string[]): Promise<number> {
+  const child = Bun.spawn(bunTestCommand(args), {
+    cwd: root,
+    env: bunTestEnv(),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const [code] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return code;
 }
 async function run(root: string, args: string[] = [], part = ''): Promise<number> {
   const child = Bun.spawn([process.execPath, 'run', runner, ...args], {
@@ -518,8 +533,15 @@ for (const owner of ['test', 'describe']) {
         );
         const pattern =
           owner === 'test' ? '^wanted & "quoted"$' : '^outer & "quoted" > segment inner wanted$';
-        expect(await run(root, ['src/', '-t', pattern])).toBe(0);
-        expect(await run(root, ['src/', '-t', 'absent'])).not.toBe(0);
+        for (const [filter, expected] of [
+          [pattern, 0],
+          ['absent', owner === 'describe' ? 0 : 1],
+        ] as const) {
+          const args = ['src/', '-t', filter];
+          const code = await native(root, args);
+          expect(code).toBe(expected);
+          expect(await run(root, args)).toBe(code);
+        }
       },
       testTimeout(5000)
     );
@@ -594,3 +616,110 @@ for (const suffix of ['test', 'spec']) {
     });
   }
 }
+
+for (const modifier of ['', '.skip', '.todo']) {
+  for (const scenario of [
+    {
+      name: 'empty outer suite',
+      body: (test: string) => `describe('', () => { ${test} });`,
+      matching: '^ wanted$',
+      absent: '^wanted$',
+    },
+    {
+      name: 'empty nested suite',
+      body: (test: string) => `describe('outer', () => describe('', () => { ${test} }));`,
+      matching: '^outer  wanted$',
+      absent: '^outer wanted$',
+    },
+    {
+      name: 'empty testcase',
+      body: (test: string) => `describe('outer', () => { ${test.replace("'wanted'", "''")} });`,
+      matching: '^outer $',
+      absent: '^outer$',
+    },
+  ]) {
+    test(
+      `native name-filter outcomes survive ${scenario.name}: test${modifier}`,
+      async () => {
+        const root = fixture();
+        testFile(
+          root,
+          'names',
+          `import { describe } from 'bun:test';
+${scenario.body(`test${modifier}('wanted', () => appendFileSync('executed', 'yes'));`)}`,
+          true
+        );
+        for (const [pattern, expected] of [
+          [scenario.matching, 0],
+          [scenario.absent, 1],
+        ] as const) {
+          const args = ['src/', '-t', pattern];
+          const code = await native(root, args);
+          expect(code).toBe(expected);
+          expect(await run(root, args)).toBe(code);
+          const report = join(root, 'names.xml');
+          expect(await run(root, [...args, '--reporter=junit', '--reporter-outfile', report])).toBe(
+            code
+          );
+          expect(existsSync(report)).toBe(true);
+        }
+        expect(existsSync(join(root, 'executed'))).toBe(modifier === '');
+      },
+      testTimeout(5000)
+    );
+  }
+}
+
+for (const modifier of ['', '.skip', '.todo']) {
+  test(
+    `native empty root testcase remains unmatched: test${modifier}`,
+    async () => {
+      const root = fixture();
+      testFile(root, 'names', `test${modifier}('', () => {});`, true);
+      const args = ['src/', '-t', '^$'];
+      const code = await native(root, args);
+      expect(code).toBe(1);
+      expect(await run(root, args)).toBe(code);
+    },
+    testTimeout(5000)
+  );
+}
+
+for (const mode of ['shared parallel workers', 'concurrent isolation groups']) {
+  test(
+    `name-filter results survive ${mode}`,
+    async () => {
+      const root = fixture({ testConcurrency: 2 });
+      const isolated = mode === 'concurrent isolation groups';
+      testFile(root, 'a', `test('other', () => { throw new Error('filtered'); });`, isolated);
+      testFile(root, 'b', `test.skip('wanted', () => { throw new Error('skipped'); });`, isolated);
+      const options = isolated ? [] : ['--parallel=2'];
+      for (const pattern of ['wanted', 'absent']) {
+        const args = ['src/', '-t', pattern, ...options];
+        expect(await run(root, args)).toBe(await native(root, args));
+      }
+      testFile(root, 'b', `test('wanted', () => appendFileSync('ran', 'yes'));`, isolated);
+      expect(await run(root, ['src/', '-t', 'wanted', ...options])).toBe(0);
+      expect(readFileSync(join(root, 'ran'), 'utf8')).toBe('yes');
+      testFile(root, 'b', `test('wanted', () => { throw new Error('real failure'); });`, isolated);
+      expect(await run(root, ['src/', '-t', 'wanted', ...options])).not.toBe(0);
+      testFile(root, 'b', `test('other', () => {}); throw new Error('load failure');`, isolated);
+      expect(await run(root, ['src/', '-t', 'wanted', ...options])).not.toBe(0);
+    },
+    testTimeout(5000)
+  );
+}
+
+test('single-group name filters preserve caller Bun options for test subprocesses', async () => {
+  const root = fixture();
+  testFile(
+    root,
+    'options',
+    `test('wanted', async () => {
+    const child = Bun.spawn([process.execPath, '-e', 'console.log(process.env.BUN_OPTIONS ?? "unset")'], { stdout: 'pipe' });
+    expect(await new Response(child.stdout).text()).toBe(${JSON.stringify((process.env.BUN_OPTIONS ?? 'unset') + '\n')});
+    expect(await child.exited).toBe(0);
+  });`
+  );
+  expect(await run(root, ['src/', '-t', 'wanted'])).toBe(0);
+});
