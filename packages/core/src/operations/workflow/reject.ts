@@ -357,7 +357,7 @@ async function rejectGate(
   if (cancelled && noExecutorCanWrite(run)) {
     cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));
     await releaseRunScratch(run);
-    await releaseRunResources(ctx, run.id);
+    cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
   }
 
   // Won the CAS — resolution/status + audit event already committed atomically.

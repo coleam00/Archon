@@ -44,8 +44,11 @@ export function isolationStatusReadTests(
 
   test('environment lookup returns the newest run', async () => {
     const db = getDb();
-    const { getRunByIsolationEnvId } = await import('./workflow-run-reads');
+    const { getRunByIsolationEnvId, getRunIdsByIsolationEnvId } = await import(
+      './workflow-run-reads'
+    );
     const env = await createEnv(randomUUID());
+    expect(await getRunIdsByIsolationEnvId(env.id)).toEqual([]);
     const failed = await seedRun(env.id, 'failed');
     const completed = await seedRun(env.id, 'completed');
     for (const [id, date] of [
@@ -58,6 +61,7 @@ export function isolationStatusReadTests(
       ]);
     }
     expect((await getRunByIsolationEnvId(env.id))?.id).toBe(completed);
+    expect(await getRunIdsByIsolationEnvId(env.id)).toEqual([failed, completed].sort());
   });
 
   test.each(['unexpected', ''])(

@@ -106,7 +106,9 @@ describe('workflowRunCommand — progress rendering', () => {
 
     const readsBefore = workflowDb.getWorkflowRun.mock.calls.length;
     try {
-      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+      const host = createTestWorkflowHost();
+      host.deps.releaseRunResources = undefined;
+      await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
       return undefined;
     } catch (error) {
       return error;
@@ -226,7 +228,9 @@ describe('workflowRunCommand — progress rendering', () => {
       new Error('database unavailable')
     );
 
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+    const host = createTestWorkflowHost();
+    host.deps.releaseRunResources = undefined;
+    await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
 
     expect(consoleSpy).toHaveBeenCalledWith(
       '\nWorkflow finished.\n  Status: completed\n  Authored outcome: unavailable — failed to read persisted run'
@@ -245,7 +249,9 @@ describe('workflowRunCommand — progress rendering', () => {
     const readsBefore = lookup.mock.calls.length;
     let thrown: unknown;
     try {
-      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+      const host = createTestWorkflowHost();
+      host.deps.releaseRunResources = undefined;
+      await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
     } catch (error) {
       thrown = error;
     }
@@ -333,7 +339,9 @@ describe('workflowRunCommand — progress rendering', () => {
               }
         );
       const readsBefore = lookup.mock.calls.length;
-      await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+      const host = createTestWorkflowHost();
+      host.deps.releaseRunResources = undefined;
+      await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
       expect(lookup.mock.calls.length - readsBefore).toBe(1);
       expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
       expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
@@ -362,7 +370,9 @@ describe('workflowRunCommand — progress rendering', () => {
       else lookup.mockResolvedValueOnce(null);
       let thrown: unknown;
       try {
-        await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
+        const host = createTestWorkflowHost();
+        host.deps.releaseRunResources = undefined;
+        await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
       } catch (error) {
         thrown = error;
       }
@@ -662,6 +672,18 @@ describe('workflowRunCommand — progress rendering', () => {
     return (_id, error, reason) => failureStore.failWorkflowRun(storedRun.id, error, reason);
   }
 
+  async function expectContainerExecution(
+    execution: Promise<unknown>,
+    rejection: Error | undefined,
+    cleanupError: Error | undefined,
+    runFailed: boolean
+  ): Promise<void> {
+    if (cleanupError) await expect(execution).rejects.toThrow('retained verification images');
+    else if (rejection) await expect(execution).rejects.toBe(rejection);
+    else if (runFailed) await expect(execution).rejects.toBeInstanceOf(WorkflowRunFailedError);
+    else await execution;
+  }
+
   /**
    * A container run that receives a signal during its final progress drain, or with
    * `signalAt: 'lookup'` while the CLI reads the settled run's write-back state. Returns
@@ -674,7 +696,8 @@ describe('workflowRunCommand — progress rendering', () => {
     rejection?: 'published' | 'pre-publication',
     signal: 'SIGINT' | 'SIGTERM' = 'SIGTERM',
     settledStatus: 'completed' | 'failed' | 'cancelled' = 'completed',
-    destroyError?: Error
+    destroyError?: Error,
+    cleanupError?: Error
   ): Promise<number> {
     const { discoverWorkflowsWithConfig } = require('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -737,6 +760,7 @@ describe('workflowRunCommand — progress rendering', () => {
     const releaseRunResources = mock(async (id: string) => {
       expect(id).toBe(OWNED_RUN);
       expect(mockFolderBackendDestroy.mock.calls.length).toBeGreaterThan(0);
+      if (cleanupError) throw cleanupError;
     });
     host.deps.releaseRunResources = releaseRunResources;
     const initialStatus =
@@ -801,17 +825,14 @@ describe('workflowRunCommand — progress rendering', () => {
 
     try {
       const execution = workflowRunCommand(host, '/test/path', 'assist', 'go', { container: true });
-      if (rejection) {
-        await expect(execution).rejects.toBe(failure);
-      } else if (
+      await expectContainerExecution(
+        execution,
+        rejection ? failure : undefined,
+        cleanupError,
         handoffStatus === 'failed' ||
-        handoffStatus === 'cancelled' ||
-        (handoffStatus === undefined && end === 'settled' && settledStatus !== 'completed')
-      ) {
-        await expect(execution).rejects.toBeInstanceOf(WorkflowRunFailedError);
-      } else {
-        await execution;
-      }
+          handoffStatus === 'cancelled' ||
+          (handoffStatus === undefined && end === 'settled' && settledStatus !== 'completed')
+      );
       if (handoffStatus !== undefined || rejection === 'published' || end === 'paused') {
         expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
         expect(status).toBe(initialStatus);
@@ -822,11 +843,24 @@ describe('workflowRunCommand — progress rendering', () => {
       exitSpy.mockRestore();
     }
     expect(releaseRunResources.mock.calls.length).toBe(
-      Math.min(mockFolderBackendDestroy.mock.calls.length, Number(!destroyError))
+      destroyError ? 0 : mockFolderBackendDestroy.mock.calls.length
     );
     if (!rejection && handoffStatus === undefined) expect(fail).not.toHaveBeenCalled();
     return destroyedAtSignal;
   }
+
+  it('surfaces image cleanup failure after successful teardown', async () => {
+    await signalDuringContainerDrain(
+      'settled',
+      'drain',
+      undefined,
+      undefined,
+      'SIGTERM',
+      'completed',
+      undefined,
+      new Error('Docker denied image removal')
+    );
+  });
 
   it('retains images when container teardown fails after an execution error', async () => {
     await signalDuringContainerDrain(

@@ -81,6 +81,15 @@ export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun
   return row ? normalizeWorkflowRun(row) : null;
 }
 
+export async function getRunIdsByIsolationEnvId(envId: string): Promise<string[]> {
+  const extract = getDialect().jsonText('metadata', 'isolation_env_id');
+  const result = await pool.query<{ id: string }>(
+    `SELECT id FROM remote_agent_workflow_runs WHERE ${extract} = $1 ORDER BY id`,
+    [envId]
+  );
+  return result.rows.map(row => row.id);
+}
+
 /**
  * Find runs in a codebase whose id starts with `idPrefix` (e.g. the 8-char
  * short id shown in listings). Returns up to two matches so callers can detect

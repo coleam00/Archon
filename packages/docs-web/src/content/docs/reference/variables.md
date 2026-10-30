@@ -116,8 +116,13 @@ Use the current run's identity to opt disposable images into terminal cleanup:
 docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
 ```
 
-Use run-unique tags and the Archon host's Docker context. Buildx builds use the same label with `--load`. Remove test containers when finished. The host removes labelled images once the run is terminal and no executor or container can use them. Running, paused and ambiguously owned runs retain their images. Unlabelled images and shared build cache are never pruned by this cleanup.
+Use run-unique tags and the Archon host's Docker context. Buildx builds use the same label with `--load`. Remove test containers when finished.
 
+Cleanup is a one-shot attempt after an unresumable terminal run (completed or cancelled) stops writing. Failed runs remain resumable, including runs interrupted by SIGINT/SIGTERM, so their images are retained until explicit abandonment. Container-used images and ambiguous/live owners retain their images too. There is no watcher for containers removed later. Docker errors are reported; terminal run status is unchanged.
+
+Use one tag per image. Cleanup deletes immutable image IDs without force or parent pruning; Docker refuses IDs with multiple repository references. Those images require manual cleanup under exclusive control of their tags. After removing late test containers and confirming the run cannot resume or write, list its images with `docker image ls --no-trunc --filter "label=archon.run_id=<run-id>"`, inspect each full ID with `docker image inspect <full-id>`, and check all containers with `docker container ls --all --filter ancestor=<full-id>`. For a confirmed owned, unused image, use `docker image rm --no-prune <full-id>`. If multiple tags prevent removal, verify and remove those references manually only while no other build or operator can reassign them. Never force removal or prune shared images/cache.
+
+Unlabelled images and shared build cache are never pruned by this cleanup.
 
 ## Positional Arguments (not supported)
 

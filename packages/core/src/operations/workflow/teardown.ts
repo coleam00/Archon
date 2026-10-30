@@ -316,6 +316,7 @@ export async function cancelRunAndCleanup(
     throw new Error(`Failed to abandon workflow run ${run.id}: ${err.message}`);
   }
 
+  const imageWarnings: string[] = [];
   let cascadeFailures = 0;
   let cancelledDescendants: WorkflowRun[] = [];
   if (cancelled) {
@@ -326,7 +327,7 @@ export async function cancelRunAndCleanup(
     if (!stopWarnings.length)
       for (const child of cascade.cancelledRuns) {
         await releaseRunScratch(child);
-        await releaseRunResources(ctx, child.id);
+        imageWarnings.push(...(await releaseRunResources(ctx, child.id)));
       }
   }
   const blockedParentRunId = cancelled ? await findParentBlockedOn(ctx, run) : null;
@@ -334,6 +335,7 @@ export async function cancelRunAndCleanup(
   // Reclaim only when our cancel won the CAS. A miss means another lifecycle
   // owner now controls the run and its environment.
   const cleanupWarnings = [
+    ...imageWarnings,
     ...stopWarnings,
     ...(cancelled ? await reclaimCancelledRunContainer(ctx, run) : []),
   ];

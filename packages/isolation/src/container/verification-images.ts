@@ -3,12 +3,11 @@ import { CONTAINER_LABELS } from '../types';
 import { dockerCli, type DockerRunner } from './docker-exec';
 
 const RUN_LABEL = 'archon.run_id';
-const INSPECT = `{"id":{{json .Id}},"parent":{{json .Parent}},"tags":{{json .RepoTags}},"owner":{{json (index .Config.Labels ${JSON.stringify(RUN_LABEL)})}}}`;
+const INSPECT = `{"id":{{json .Id}},"parent":{{json .Parent}},"owner":{{json (index .Config.Labels ${JSON.stringify(RUN_LABEL)})}}}`;
 
 interface Image {
   id: string;
   parent: string;
-  tags: string[];
   owner: string;
 }
 
@@ -23,15 +22,10 @@ function readImage(stdout: string): Image {
     !('parent' in value) ||
     typeof value.parent !== 'string' ||
     !('owner' in value) ||
-    typeof value.owner !== 'string' ||
-    !('tags' in value) ||
-    !(
-      value.tags === null ||
-      (Array.isArray(value.tags) && value.tags.every((tag: unknown) => typeof tag === 'string'))
-    )
+    typeof value.owner !== 'string'
   )
     throw new Error('Incomplete Docker image inspection');
-  return { id: value.id, parent: value.parent, owner: value.owner, tags: value.tags ?? [] };
+  return { id: value.id, parent: value.parent, owner: value.owner };
 }
 
 function missingDocker(error: unknown): boolean {
@@ -53,7 +47,11 @@ async function inUse(runner: DockerRunner, id: string): Promise<boolean> {
   );
 }
 
-async function ownedImages(runner: DockerRunner, runId: string): Promise<Image[]> {
+async function ownedImages(
+  runner: DockerRunner,
+  runId: string,
+  errors: unknown[]
+): Promise<Image[]> {
   const ids = new Set(
     (
       await output(runner, [
@@ -75,6 +73,7 @@ async function ownedImages(runner: DockerRunner, runId: string): Promise<Image[]
       const image = await inspect(runner, id);
       if (image.id === id && image.owner === runId) images.push(image);
     } catch (err) {
+      errors.push(err);
       createLogger('isolation.verification-images').warn(
         { err, runId, imageId: id },
         'verification_images.inspect_failed'
@@ -107,12 +106,9 @@ async function removeImage(runner: DockerRunner, image: Image, runId: string): P
     );
     return;
   }
-  for (const ref of image.tags.length ? image.tags : [image.id]) {
-    const current = await inspect(runner, ref);
-    if (current.id !== image.id || current.owner !== runId || (await inUse(runner, image.id)))
-      continue;
-    await output(runner, ['image', 'rm', '--no-prune', ref]);
-  }
+  // Delete the identity we authorized. A tag can be rebound between inspect and rm.
+  // Docker refuses non-forced ID deletion with multiple tags; retain and report it.
+  await output(runner, ['image', 'rm', '--no-prune', image.id]);
 }
 
 /** Release only this run's unused verification images, without pruning their parents. */
@@ -123,6 +119,7 @@ export async function releaseRunVerificationImages(
 ): Promise<void> {
   if (!runId.trim()) throw new Error('A run ID is required for verification image cleanup');
   const log = createLogger('isolation.verification-images');
+  const errors: unknown[] = [];
   try {
     if (
       containerEnvId &&
@@ -140,15 +137,25 @@ export async function releaseRunVerificationImages(
       log.debug({ runId, containerEnvId }, 'verification_images.kept_for_container');
       return;
     }
-    for (const image of descendantsFirst(await ownedImages(runner, runId))) {
+    for (const image of descendantsFirst(await ownedImages(runner, runId, errors))) {
       try {
         await removeImage(runner, image, runId);
       } catch (err) {
+        errors.push(err);
         log.warn({ err, runId, imageId: image.id }, 'verification_images.remove_failed');
       }
     }
   } catch (err) {
-    if (missingDocker(err)) log.debug({ runId }, 'verification_images.docker_missing');
-    else log.warn({ err, runId }, 'verification_images.cleanup_failed');
+    if (missingDocker(err)) {
+      log.debug({ runId }, 'verification_images.docker_missing');
+      return;
+    }
+    errors.push(err);
+    log.warn({ err, runId }, 'verification_images.cleanup_failed');
   }
+  if (errors.length)
+    throw new AggregateError(
+      errors,
+      `Verification image cleanup failed for run ${runId}: ${errors.map(String).join('; ')}`
+    );
 }

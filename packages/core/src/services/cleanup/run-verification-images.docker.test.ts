@@ -99,7 +99,13 @@ test.skipIf(process.env.ARCHON_TEST_DOCKER !== '1')(
         status: 'completed' as const,
         metadata: { execution_owner: { host: hostname(), pid: process.pid } },
       };
-      await createRunResourceRelease({ getWorkflowRun: async () => run })(runId);
+      const release = createRunResourceRelease({ getWorkflowRun: async () => run });
+      await expect(release(runId)).rejects.toThrow('cleanup failed');
+      expect(await imageId(unused)).not.toBeNull();
+      expect(await imageId(second)).toBe(await imageId(unused));
+      // Only this fixture controls these tags; production cannot assume exclusivity.
+      await docker('image', 'rm', '--no-prune', second);
+      await release(runId);
       expect(await imageId(unused)).toBeNull();
       expect(await imageId(second)).toBeNull();
       for (const [tag, expected] of [...bases, ...before])

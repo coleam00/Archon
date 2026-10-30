@@ -100,7 +100,7 @@ export async function abandonWorkflow(
   // An output holder the stop left running may still write scratch.
   if (result.cancelled && !(owner.kind === 'stopped' && owner.cleanupWarnings?.length)) {
     await releaseRunScratch(run);
-    await releaseRunResources(ctx, run.id);
+    warnings.push(...(await releaseRunResources(ctx, run.id)));
   }
   return {
     run,
@@ -371,7 +371,7 @@ export async function abandonResumableRunsForConversation(
       cleanupWarnings.push(...release.warnings);
       if (release.released) releasedWorktrees.push(release.released);
       await releaseRunScratch(run);
-      await releaseRunResources(ctx, run.id);
+      cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
     }
     const blocked = await findParentBlockedOn(ctx, run);
     if (blockedParentRunId === null) blockedParentRunId = blocked;

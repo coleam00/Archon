@@ -94,14 +94,12 @@ export async function executeOwnedRun(
         registerTerminationPreparation: prepare => lease.registerTerminationPreparation(prepare),
       },
       detachedProcessOwner: request.detachedProcessOwner,
-      teardown: signal => teardownOnSignal(launch, execution, signal),
+      teardown: signal => teardownOnSignal(launch, execution, ownedRunId, signal),
     });
   };
 
-  // A genuine container-teardown failure captured in the finally, rethrown AFTER
-  // the finally when the run itself succeeded — so a leaked privileged container
-  // fails the CLI instead of reporting success + exit 0.
-  let containerTeardownError: Error | undefined;
+  // A successful run must not hide leaked resources behind CLI exit 0.
+  let resourceCleanupError: Error | undefined;
   const preparationTermination = defersContainerResume(launch)
     ? registerResumePreparationTermination()
     : undefined;
@@ -145,24 +143,16 @@ export async function executeOwnedRun(
     throw error;
   } finally {
     try {
-      containerTeardownError = await settleRun(
-        launch,
-        execution,
-        ownedRunId,
-        deregisterTermination
-      );
+      resourceCleanupError = await settleRun(launch, execution, ownedRunId, deregisterTermination);
     } finally {
       preparationTermination?.dispose();
     }
   }
   const { result } = execution;
 
-  // A container teardown failure on an otherwise-SUCCESSFUL run must fail the CLI
-  // (non-zero exit) — a leaked privileged container is not a success. On a failed
-  // run the workflow-failed error below already exits non-zero (the leak was
-  // logged loudly above), so don't mask it.
-  if (containerTeardownError && result?.success) {
-    throw containerTeardownError;
+  // Preserve the workflow failure when both execution and resource cleanup fail.
+  if (resourceCleanupError && result?.success) {
+    throw resourceCleanupError;
   }
   if (!result) {
     // The engine threw and it was re-thrown out of the try; this line is unreachable in
@@ -183,6 +173,7 @@ export async function executeOwnedRun(
 async function teardownOnSignal(
   launch: ForegroundLaunch,
   execution: RunExecution,
+  runId: string,
   signal: string
 ): Promise<void> {
   // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
@@ -191,6 +182,7 @@ async function teardownOnSignal(
   if (container && !execution.containerPreserved) {
     try {
       await container.backend.destroy(container.envId);
+      await releaseRunResources(launch, runId);
     } catch (destroyErr) {
       console.error(
         `\nWARNING: could not remove the isolation container on ${signal}: ` +
@@ -199,6 +191,7 @@ async function teardownOnSignal(
       );
     }
   }
+  if (!container && !execution.containerPreserved) await releaseRunResources(launch, runId);
   // Reclaim the staged capture for the same reason: the ownership `finally` —
   // whose whole premise is "whichever way we leave" — never runs. Ctrl-C during
   // isolation resolution or worktree creation would otherwise strand a complete
@@ -531,16 +524,25 @@ async function settleRun(
       container.envId,
       result?.workflowRunId
     );
-    if (!error) await releaseRunResources(launch, runId);
-    return error;
+    return error ?? (await releaseRunResources(launch, runId));
   }
+  if (!execution.containerPreserved) return releaseRunResources(launch, runId);
   return undefined;
 }
 
-async function releaseRunResources(launch: ForegroundLaunch, runId: string): Promise<void> {
+async function releaseRunResources(
+  launch: ForegroundLaunch,
+  runId: string
+): Promise<Error | undefined> {
   try {
     await launch.request.host.deps.releaseRunResources?.(runId);
   } catch (err) {
     getLog().warn({ err, runId }, 'cli.resource_release_failed');
+    const error = new Error(`Run ${runId} retained verification images: ${String(err)}`, {
+      cause: err,
+    });
+    console.error(`WARNING: ${error.message}`);
+    return error;
   }
+  return undefined;
 }

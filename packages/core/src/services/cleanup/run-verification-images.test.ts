@@ -1,12 +1,19 @@
 import { expect, mock, test } from 'bun:test';
-import { hostname } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
+import { mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { enterRunExecution } from '@archon/workflows/run-scratch';
 import {
   isTerminalRunStatus,
+  RESUMABLE_WORKFLOW_STATUSES,
   workflowRunStatusSchema,
 } from '@archon/workflows/schemas/workflow-run';
 import { mockWorkflowRun } from '../../test/mocks/workflow-run';
 import { createRunResourceRelease } from './run-verification-images';
+
+const trackTempRoot = trackTempRoots();
 
 test.each(workflowRunStatusSchema.options)(
   'fresh %s status controls Docker cleanup',
@@ -18,7 +25,11 @@ test.each(workflowRunStatusSchema.options)(
     };
     const release = mock(async (_id: string, _env?: string) => {});
     await createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id);
-    expect(release.mock.calls).toEqual(isTerminalRunStatus(status) ? [[run.id, undefined]] : []);
+    expect(release.mock.calls).toEqual(
+      isTerminalRunStatus(status) && !RESUMABLE_WORKFLOW_STATUSES.includes(status)
+        ? [[run.id, undefined]]
+        : []
+    );
   }
 );
 
@@ -65,37 +76,68 @@ test.each([undefined, '', 42])(
     const release = mock(async (_id: string, _env?: string) => {});
     const run = {
       ...mockWorkflowRun,
-      status: 'failed' as const,
+      status: 'completed' as const,
       metadata: {
         execution_owner: { host: hostname(), pid: process.pid },
         isolation: 'container',
         isolation_env_id,
       },
     };
-    await createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id);
+    await expect(
+      createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id)
+    ).rejects.toThrow('Missing container identity');
     expect(release).not.toHaveBeenCalled();
   }
 );
 
-test('missing rows and failed lookups or Docker calls never fail terminal work', async () => {
+test('missing rows skip cleanup while lookup and Docker errors reach the caller', async () => {
   const release = mock(async (_id: string) => {
     throw new Error('Docker unavailable');
   });
   await createRunResourceRelease({ getWorkflowRun: async () => null }, release)('missing');
   expect(release).not.toHaveBeenCalled();
-  await createRunResourceRelease(
-    {
-      getWorkflowRun: async () => {
-        throw new Error('store unavailable');
+  await expect(
+    createRunResourceRelease(
+      {
+        getWorkflowRun: async () => {
+          throw new Error('store unavailable');
+        },
       },
-    },
-    release
-  )('missing');
+      release
+    )('missing')
+  ).rejects.toThrow('store unavailable');
   const run = {
     ...mockWorkflowRun,
     status: 'completed' as const,
     metadata: { execution_owner: { host: hostname(), pid: process.pid } },
   };
-  await createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id);
+  await expect(
+    createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id)
+  ).rejects.toThrow('Docker unavailable');
   expect(release).toHaveBeenCalledWith(run.id, undefined);
+});
+
+test('a failed run cannot authorize asynchronous deletion before a concurrent resume', async () => {
+  const store = await createFileWorkflowStore({
+    root: trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-image-resume-'))),
+  });
+  const run = await store.createWorkflowRun({ workflow_name: 'verification', user_message: '' });
+  await store.claimPendingWorkflowRun(run.id);
+  await store.updateWorkflowRun(run.id, {
+    metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+  });
+  await store.failWorkflowRun(run.id, 'verification failed');
+  let deletedDuringExecution = false;
+  const release = mock(async () => {
+    await store.resumeWorkflowRun(run.id);
+    const leave = enterRunExecution(run.id);
+    try {
+      deletedDuringExecution = (await store.getWorkflowRun(run.id))?.status === 'running';
+    } finally {
+      leave();
+    }
+  });
+  await createRunResourceRelease(store, release)(run.id);
+  expect(release).not.toHaveBeenCalled();
+  expect(deletedDuringExecution).toBe(false);
 });

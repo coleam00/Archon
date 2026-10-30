@@ -269,7 +269,7 @@ export async function runIsolation({
         });
       } else {
         const days = parseInt(positionals[2] ?? '7', 10);
-        return await isolationCleanupCommand(days);
+        return await isolationCleanupCommand(days, Boolean(json));
       }
     }
 

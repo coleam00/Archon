@@ -129,12 +129,18 @@ export async function cancelWorkflow(
         `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
     );
   }
+  const cleanupWarnings = [...(recorded.cleanupWarnings ?? [])];
   // An output holder the stop left running may still write scratch.
   if (!owner.cleanupWarnings?.length) {
     await releaseRunScratch(run);
-    await releaseRunResources(ctx, run.id);
+    cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
   }
-  return { kind: 'stopped', pid: owner.pid, ...recorded };
+  return {
+    kind: 'stopped',
+    pid: owner.pid,
+    ...recorded,
+    ...(cleanupWarnings.length ? { cleanupWarnings } : {}),
+  };
 }
 
 /**

@@ -167,10 +167,15 @@ export async function reapContainerEnvironments(
 }
 
 async function releaseContainerRunImages(envId: string): Promise<void> {
-  try {
-    const run = await workflowDb.getRunByIsolationEnvId(envId);
-    if (run) await createRunResourceRelease({ getWorkflowRun: workflowDb.getWorkflowRun })(run.id);
-  } catch (err) {
-    getLog().warn({ err, envId }, 'container_env_image_release_failed');
+  const runIds = await workflowDb.getRunIdsByIsolationEnvId(envId);
+  const release = createRunResourceRelease({ getWorkflowRun: workflowDb.getWorkflowRun });
+  const errors: unknown[] = [];
+  for (const runId of runIds) {
+    try {
+      await release(runId);
+    } catch (err) {
+      errors.push(new Error(`Image cleanup for run ${runId}: ${String(err)}`, { cause: err }));
+    }
   }
+  if (errors.length) throw new AggregateError(errors, errors.map(String).join('; '));
 }

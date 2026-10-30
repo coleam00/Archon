@@ -254,11 +254,13 @@ mock.module('../../db/isolation-environments', () => ({
 }));
 
 export const mockGetWorkflowRun = mock<typeof WorkflowDb.getWorkflowRun>(async () => null);
+export const mockGetRunIdsByIsolationEnvId = mock<typeof WorkflowDb.getRunIdsByIsolationEnvId>();
 export const mockGetRunByIsolationEnvId = mock<typeof WorkflowDb.getRunByIsolationEnvId>();
 mock.module('../../db/workflows', () => ({
   getWorkflowRun: mockGetWorkflowRun,
   getWorkflowRunForAttention: mock(async () => null),
   getRunByIsolationEnvId: mockGetRunByIsolationEnvId,
+  getRunIdsByIsolationEnvId: mockGetRunIdsByIsolationEnvId,
 }));
 
 export const mockGetConversationByPlatformId =
@@ -331,6 +333,7 @@ export function resetCleanupMocks(): void {
   mockListActiveContainerEnvironments.mockReset().mockResolvedValue([]);
   mockReleaseVerificationImages.mockClear();
   mockGetWorkflowRun.mockReset().mockResolvedValue(null);
+  mockGetRunIdsByIsolationEnvId.mockReset().mockResolvedValue([]);
   mockGetRunByIsolationEnvId.mockReset().mockResolvedValue(null);
   mockGetConversationByPlatformId.mockReset().mockResolvedValue(null);
   mockUpdateConversation.mockReset().mockResolvedValue(undefined);

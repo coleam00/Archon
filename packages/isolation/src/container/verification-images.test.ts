@@ -7,6 +7,7 @@ function fixture() {
   const images = new Map<string, { id: string; parent: string; owner: string; tags: string[] }>();
   const used = new Set<string>();
   const failures = new Set<string>();
+  const removalFailures = new Set<string>();
   const calls: string[][] = [];
   let containerPresent = false;
   const add = (name: string, owner = 'run-a', tags = [`${name}:test`], parent = '') => {
@@ -24,15 +25,22 @@ function fixture() {
     return JSON.stringify(find(ref));
   };
   const remove = (ref: string): string => {
-    if (failures.has(ref)) throw new Error('removal failed');
+    if (removalFailures.has(ref)) throw new Error('removal failed');
     const image = find(ref);
+    if (ref === image.id) {
+      if (image.tags.length > 1) throw new Error('multiple repository references');
+      images.delete(image.id);
+      return '';
+    }
     image.tags = image.tags.filter(tag => tag !== ref);
     if (!image.tags.length) images.delete(image.id);
     return '';
   };
   const containerList = (args: string[]): string => {
     const ancestor = args.find(arg => arg.startsWith('ancestor='));
-    const present = ancestor ? used.has(ancestor.slice(9)) : containerPresent;
+    const present = ancestor
+      ? used.has(ancestor.slice(9))
+      : containerPresent && args.includes('--all');
     return present ? 'container' : '';
   };
   const runner: DockerRunner = async args => {
@@ -52,19 +60,20 @@ function fixture() {
     images,
     used,
     failures,
+    removalFailures,
     calls,
     runner,
-    container: () => {
-      containerPresent = true;
+    container: (present = true) => {
+      containerPresent = present;
     },
   };
 }
 
 describe('run verification images', () => {
-  test('exact label selection, all tags, dangling images and child-before-parent deletion', async () => {
+  test('exact label selection, single tags, dangling images and child-before-parent deletion', async () => {
     const f = fixture();
     const parent = f.add('owned-parent');
-    f.add('child', 'run-a', ['child:a', 'child:b'], parent.id);
+    f.add('child', 'run-a', ['child:a'], parent.id);
     f.add('dangling', 'run-a', []);
     f.add('base', '', ['alpine:latest']);
     f.add('bun', '', ['oven/bun:latest']);
@@ -84,8 +93,8 @@ describe('run verification images', () => {
     expect(removals.every(args => args[2] === '--no-prune' && !args.includes('--force'))).toBe(
       true
     );
-    expect(removals.findIndex(args => args.at(-1) === 'child:b')).toBeLessThan(
-      removals.findIndex(args => args.at(-1) === 'owned-parent:test')
+    expect(removals.findIndex(args => args.at(-1) === id('child'))).toBeLessThan(
+      removals.findIndex(args => args.at(-1) === id('owned-parent'))
     );
     expect(f.calls.some(args => args.includes('prune'))).toBe(false);
   });
@@ -105,6 +114,10 @@ describe('run verification images', () => {
     await releaseRunVerificationImages('run-a', 'env-a', f.runner);
     expect(f.calls).toHaveLength(1);
     expect(f.calls[0]).toContain('label=diy.archon.env-id=env-a');
+    expect(f.images.has(id('verification'))).toBe(true);
+    f.container(false);
+    await releaseRunVerificationImages('run-a', 'env-a', f.runner);
+    expect(f.images.size).toBe(0);
   });
 
   test('failed inspections and removals retain candidates and allow independent cleanup', async () => {
@@ -113,17 +126,21 @@ describe('run verification images', () => {
     f.add('blocked');
     f.add('independent');
     f.failures.add(id('unreadable'));
-    f.failures.add('blocked:test');
-    await releaseRunVerificationImages('run-a', undefined, f.runner);
+    f.removalFailures.add(id('blocked'));
+    await expect(releaseRunVerificationImages('run-a', undefined, f.runner)).rejects.toThrow(
+      'cleanup failed'
+    );
     expect([...f.images.keys()].sort()).toEqual([id('blocked'), id('unreadable')]);
   });
 
   test('malformed inspections cannot authorize removal', async () => {
     const calls: string[][] = [];
-    await releaseRunVerificationImages('run-a', undefined, async args => {
-      calls.push(args);
-      return { stdout: args[1] === 'ls' ? id('broken') : '{}', stderr: '' };
-    });
+    await expect(
+      releaseRunVerificationImages('run-a', undefined, async args => {
+        calls.push(args);
+        return { stdout: args[1] === 'ls' ? id('broken') : '{}', stderr: '' };
+      })
+    ).rejects.toThrow('cleanup failed');
     expect(calls.some(args => args[1] === 'rm')).toBe(false);
   });
 
@@ -132,7 +149,7 @@ describe('run verification images', () => {
     async failure => {
       const f = fixture();
       f.add('verification');
-      await releaseRunVerificationImages('run-a', undefined, async (args, opts) => {
+      const cleanup = releaseRunVerificationImages('run-a', undefined, async (args, opts) => {
         if (
           (failure === 'inventory' && args[1] === 'ls') ||
           (failure === 'container-lookup' && args[0] === 'container')
@@ -142,23 +159,47 @@ describe('run verification images', () => {
           throw Object.assign(new Error('spawn failed'), { code: 'ENOENT' });
         return f.runner(args, opts);
       });
+      if (failure === 'missing-docker') await cleanup;
+      else await expect(cleanup).rejects.toThrow('cleanup failed');
       expect(f.calls.some(args => args[1] === 'rm')).toBe(false);
       expect(f.images.has(id('verification'))).toBe(true);
     }
   );
 
-  test('a tag reassigned after inventory is preserved', async () => {
+  test.each([1, 2])(
+    'a tag reassigned immediately before deletion is preserved (%s tags)',
+    async count => {
+      const f = fixture();
+      const image = f.add(
+        'old',
+        'run-a',
+        Array.from({ length: count }, (_, i) => `old:${i}`)
+      );
+      const runner: DockerRunner = async (args, opts) => {
+        if (args[1] === 'rm') {
+          const tags = image.tags;
+          image.tags = [];
+          f.add('operator', '', tags);
+        }
+        return f.runner(args, opts);
+      };
+      await releaseRunVerificationImages('run-a', undefined, runner);
+      expect(f.images.has(id('operator'))).toBe(true);
+      expect(f.images.has(image.id)).toBe(false);
+    }
+  );
+
+  test('multiply tagged images are retained and reported without unsafe tag deletion', async () => {
     const f = fixture();
-    const image = f.add('old');
-    const runner: DockerRunner = async (args, opts) => {
-      if (args.at(-1) === 'old:test') {
-        image.tags = [];
-        f.add('new', 'run-b', ['old:test']);
-      }
-      return f.runner(args, opts);
-    };
-    await releaseRunVerificationImages('run-a', undefined, runner);
-    expect(f.calls.some(args => args[1] === 'rm')).toBe(false);
+    f.add('multi', 'run-a', ['multi:a', 'multi:b']);
+    f.add('independent');
+    await expect(releaseRunVerificationImages('run-a', undefined, f.runner)).rejects.toThrow(
+      'cleanup failed'
+    );
+    expect([...f.images.keys()]).toEqual([id('multi')]);
+    expect(
+      f.calls.filter(args => args[1] === 'rm').every(args => args.at(-1)?.startsWith('sha256:'))
+    ).toBe(true);
   });
 
   test('empty identity is rejected before Docker is called', async () => {

@@ -585,7 +585,10 @@ describe('abandonWorkflow', () => {
     });
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
-    await abandonWorkflow(run.id, operator);
+    if (!kept)
+      mockReleaseRunResources.mockRejectedValueOnce(new Error('root image removal denied'));
+    const result = await abandonWorkflow(run.id, operator);
+    if (!kept) expect(result.cleanupWarnings?.join(' ')).toContain('root image removal denied');
 
     expect(existsSync(checkout)).toBe(kept);
   });
@@ -615,7 +618,10 @@ describe('abandonWorkflow', () => {
       );
 
       mockReleaseRunResources.mockClear();
-      await abandonWorkflow(root.id, operator);
+      if (!kept)
+        mockReleaseRunResources.mockRejectedValueOnce(new Error('child image removal denied'));
+      const result = await abandonWorkflow(root.id, operator);
+      if (!kept) expect(result.cleanupWarnings?.join(' ')).toContain('child image removal denied');
 
       expect(mockReleaseRunResources.mock.calls.some(([id]) => id === child.id)).toBe(!kept);
       expect(existsSync(checkout)).toBe(kept);
@@ -746,7 +752,9 @@ describe('abandonResumableRunsForConversation', () => {
     mockCancelResumableRunsForConversation.mockResolvedValueOnce([run]);
 
     mockReleaseRunResources.mockClear();
-    await abandonResumableRunsForConversation('conv-1', operator);
+    mockReleaseRunResources.mockRejectedValueOnce(new Error('reset image removal denied'));
+    const result = await abandonResumableRunsForConversation('conv-1', operator);
+    expect(result.cleanupWarnings?.join(' ')).toContain('reset image removal denied');
 
     // The host effect independently checks the fresh owner before touching Docker.
     expect(mockReleaseRunResources).toHaveBeenCalledWith(run.id);
