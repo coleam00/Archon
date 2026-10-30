@@ -9,7 +9,10 @@ import * as git from '@archon/git';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import { adoptRegisteredWorktree } from '@archon/core/operations/workflow-adoption';
+import {
+  type AdoptionLane,
+  adoptRegisteredWorktree,
+} from '@archon/core/operations/workflow-adoption';
 import {
   configureWorktreeIsolation,
   createRunWorktreeSetupExecutor,
@@ -102,8 +105,8 @@ export async function launchDetachedOwnedRun(
 
   // Adoption resolution is read-only; the child re-resolves against the live checkout.
   const declaration = await resolveContinuationDeclaration(host, cwd, options, detachCodebase);
-  if (declaration?.mode === 'adopt') admission.aiConfigurationRun = declaration.adoptedRun;
-  const adoptionLane = declaration?.mode === 'adopt' ? declaration.lane : undefined;
+  if (declaration && 'lane' in declaration) admission.aiConfigurationRun = declaration.adoptedRun;
+  const adoptionLane = declaration && 'lane' in declaration ? declaration.lane : undefined;
   if (
     detachCodebase?.kind !== 'folder' &&
     adoptionLane?.kind !== 'checkout-branch' &&
@@ -157,7 +160,7 @@ function detachedLaneConfig(
   declaration: ContinuationDeclaration | undefined,
   codebase: Codebase | null
 ): LaneConfigSource {
-  const lane = declaration?.mode === 'adopt' ? declaration.lane : undefined;
+  const lane = declaration && 'lane' in declaration ? declaration.lane : undefined;
   if (lane?.kind === 'checkout-branch' && codebase) {
     return { kind: 'branch', codebase, branch: lane.taskBranch.branch };
   }
@@ -350,10 +353,10 @@ async function bindContinuationLane(
     adoptedTaskBranch: undefined,
     runsIsolatedCheckout: false,
   };
-  if (declaration?.mode === 'adopt' && codebase) {
+  if (declaration && 'lane' in declaration && codebase) {
     admission.aiConfigurationRun = declaration.adoptedRun;
     await bindAdoptionLane(request, admission, declaration, codebase, workspace, continuation);
-  } else if (declaration?.mode === 'supersede') {
+  } else if (declaration && 'superseded' in declaration) {
     console.log(`Superseding run ${declaration.superseded.id} — fresh lane, provenance recorded.`);
   }
   return continuation;
@@ -362,7 +365,7 @@ async function bindContinuationLane(
 async function bindAdoptionLane(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
-  declaration: Extract<ContinuationDeclaration, { mode: 'adopt' }>,
+  declaration: Extract<ContinuationDeclaration, { lane: AdoptionLane }>,
   codebase: Codebase,
   workspace: RunWorkspace,
   continuation: LaunchContinuation

@@ -71,7 +71,7 @@ async function resolveRunReference(
       `Run id '${reference}' matches more than one run in this project:\n${matches.map(match => `  ${match.id}`).join('\n')}\nUse more characters or the full id.`
     );
   }
-  return matches[0] ?? store.getWorkflowRun(reference);
+  return matches[0] ?? null;
 }
 
 function requireSelectedProjectMatch(matches: WorkflowRun[], reference: string): WorkflowRun {

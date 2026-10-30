@@ -468,11 +468,21 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
       makeContinuationRun({ id: supersededRunId }),
     ]);
 
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+    const host = createTestWorkflowHost();
+    const submit = spyOn(host.engine, 'submit');
+    await workflowRunCommand(host, '/test/path', 'assist', 'hello', {
       supersedesRunId: '0b1ee8da',
       noWorktree: true,
     });
 
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          adoptedFromRunId: supersededRunId,
+          continuationMode: 'supersede',
+        }),
+      })
+    );
     expect(workflowDb.findWorkflowRunsByIdPrefix).toHaveBeenCalledWith('0b1ee8da', 'cb-sup');
     expect(workflowDb.getWorkflowRun).not.toHaveBeenCalledWith('0b1ee8da');
     expect(consoleSpy).toHaveBeenCalledWith(

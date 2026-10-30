@@ -26,7 +26,10 @@ import type {
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { resolveRunContinuation } from '@archon/core/operations/workflow-continuation';
-import type { ContinuationMetadata } from '@archon/workflows/schemas/workflow-run';
+import {
+  CONTINUATION_MODES,
+  type ContinuationMetadata,
+} from '@archon/workflows/schemas/workflow-run';
 import { readChatProjectScope } from '../workflow-scope';
 import { resolveCliUserId } from '../utils/cli-user';
 import { getLog, type WorkflowRunOptions } from './workflow-shared';
@@ -48,13 +51,12 @@ export function buildResumeLookupFailureError(error: Error): Error {
 /** A resolved between-run continuation declaration (#2747): `--adopt` or `--supersedes`. */
 export type ContinuationDeclaration =
   | {
-      mode: 'adopt';
       runId: string;
       adoptedRun: WorkflowRun;
       lane: AdoptionLane;
       stamp: ContinuationMetadata;
     }
-  | { mode: 'supersede'; runId: string; superseded: WorkflowRun; stamp: ContinuationMetadata };
+  | { runId: string; superseded: WorkflowRun; stamp: ContinuationMetadata };
 
 /**
  * Resolve `--adopt` or `--supersedes` to the run it names, or `undefined` when neither is
@@ -84,7 +86,7 @@ export async function resolveContinuationDeclaration(
   if (!resolved) return undefined;
   const { run, stamp } = resolved;
   const runId = run.id;
-  if (stamp.mode === 'adopt') {
+  if (stamp.mode === CONTINUATION_MODES.adopt) {
     const { adoptedRun, lane } = await resolveWorkflowAdoption({
       deps: {
         getRun: id => host.deps.store.getWorkflowRun(id),
@@ -98,9 +100,9 @@ export async function resolveContinuationDeclaration(
       codebaseKind: codebase.kind,
       containerRequested: options.container === true,
     });
-    return { mode: stamp.mode, runId, adoptedRun, lane, stamp };
+    return { runId, adoptedRun, lane, stamp };
   }
-  return { mode: stamp.mode, runId, superseded: run, stamp };
+  return { runId, superseded: run, stamp };
 }
 
 /**

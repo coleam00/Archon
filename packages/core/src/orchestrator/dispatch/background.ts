@@ -1,3 +1,4 @@
+import { CONTINUATION_MODES } from '@archon/workflows/schemas/workflow-run';
 import type { ResolvedRunContinuation } from '../../operations/workflow-continuation';
 // Background dispatch: run a workflow in a hidden worker conversation, bridged to the
 // parent, and return once the run is submitted. Its phases, in order: estate, source and
@@ -321,7 +322,9 @@ async function prepareLaunch(
       codebaseId: ctx.codebaseId,
       userId: ctx.userId,
       aiConfigurationRun:
-        ctx.declaredContinuation?.stamp.mode === 'adopt' ? ctx.declaredContinuation.run : undefined,
+        ctx.declaredContinuation?.stamp.mode === CONTINUATION_MODES.adopt
+          ? ctx.declaredContinuation.run
+          : undefined,
       runConfig: ctx.runConfig,
       ...(ctx.modelOverrides
         ? { modelOverrideLayer: { kind: 'raw', overrides: ctx.modelOverrides } }

@@ -21,6 +21,7 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
   CONTINUATION_METADATA_KEY,
+  CONTINUATION_MODES,
   SUBRUN_METADATA_KEYS,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -446,7 +447,7 @@ export interface DetachedLaunch {
   isFolder: boolean;
   wantsIsolation: boolean;
   destination: RunDestination;
-  declaration: Pick<ContinuationDeclaration, 'mode' | 'runId'> | undefined;
+  declaration: Pick<ContinuationDeclaration, 'stamp' | 'runId'> | undefined;
   prepared: PreparedRunAiConfiguration;
   resolvedInputs: Record<string, string> | undefined;
   runConfig: WorkflowRunConfigInput | undefined;
@@ -563,7 +564,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
           ? { [SUBRUN_METADATA_KEYS.inputs]: { ...resolvedInputs } }
           : {}),
         ...(continuationDeclaration
-          ? { [CONTINUATION_METADATA_KEY]: { mode: continuationDeclaration.mode } }
+          ? { [CONTINUATION_METADATA_KEY]: continuationDeclaration.stamp }
           : {}),
       },
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
@@ -589,8 +590,10 @@ function buildDetachedChildArgs(
     destination: childDestination,
     declaration,
   } = launch;
-  const adoptedRunId = declaration?.mode === 'adopt' ? declaration.runId : undefined;
-  const supersededRunId = declaration?.mode === 'supersede' ? declaration.runId : undefined;
+  const adoptedRunId =
+    declaration?.stamp.mode === CONTINUATION_MODES.adopt ? declaration.runId : undefined;
+  const supersededRunId =
+    declaration?.stamp.mode === CONTINUATION_MODES.supersede ? declaration.runId : undefined;
   const extraArgs: string[] = [];
   let pinnedBranch: string | undefined;
   // Pin identity after name resolution so a rename cannot redirect the child.

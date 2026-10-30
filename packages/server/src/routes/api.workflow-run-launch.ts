@@ -1,3 +1,4 @@
+import { CONTINUATION_MODES, type ContinuationMode } from '@archon/workflows/schemas/workflow-run';
 import {
   resolveRunContinuation,
   WorkflowContinuationError,
@@ -459,6 +460,20 @@ interface RunLaunchDeps {
   dispatchToOrchestrator: OrchestratorDispatch;
 }
 
+function continuationFields(
+  mode: ContinuationMode,
+  runId: string
+): Pick<RunLaunchRequest, 'adoptRunId' | 'supersedesRunId'> {
+  switch (mode) {
+    case CONTINUATION_MODES.adopt:
+      return { adoptRunId: runId, supersedesRunId: undefined };
+    case CONTINUATION_MODES.supersede:
+      return { adoptRunId: undefined, supersedesRunId: runId };
+  }
+  const exhaustive: never = mode;
+  return exhaustive;
+}
+
 async function launchWorkflowRun(
   c: Context,
   workflowName: string,
@@ -480,8 +495,7 @@ async function launchWorkflowRun(
     if (resolved) {
       request = {
         ...request,
-        adoptRunId: resolved.stamp.mode === 'adopt' ? resolved.run.id : undefined,
-        supersedesRunId: resolved.stamp.mode === 'supersede' ? resolved.run.id : undefined,
+        ...continuationFields(resolved.stamp.mode, resolved.run.id),
       };
     }
   } catch (error) {

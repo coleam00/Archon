@@ -102,6 +102,19 @@ describe('continuation resolution', () => {
     ]);
   });
 
+  test.each(['deadbeef', 'unknown', '   '])(
+    'unknown short reference %j never reaches an exact UUID lookup',
+    async reference => {
+      for (const declaration of [{ adoptRunId: reference }, { supersedesRunId: reference }]) {
+        const args = fixture();
+        const result = resolveRunContinuation({ ...args, ...declaration });
+        await expect(result).rejects.toBeInstanceOf(WorkflowContinuationError);
+        await expect(result).rejects.toThrow(`'${reference}'`);
+        expect(args.store.getWorkflowRun).not.toHaveBeenCalled();
+      }
+    }
+  );
+
   test('unknown and ambiguous references retain the reference and candidates', async () => {
     const args = fixture();
     await expect(resolveRunContinuation({ ...args, supersedesRunId: 'unknown' })).rejects.toThrow(

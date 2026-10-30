@@ -1,3 +1,4 @@
+import { CONTINUATION_MODES } from '@archon/workflows/schemas/workflow-run';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as sqlWorkflow from '@archon/core/db/workflows';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -52,7 +53,7 @@ export async function resolveDispatchAdoption(
   // cross-codebase id, or a missing estate refuses here, before any worktree is
   // cut; the resolved lane then drives where the run actually executes.
   const adoption =
-    declaredContinuation?.stamp.mode === 'adopt'
+    declaredContinuation?.stamp.mode === CONTINUATION_MODES.adopt
       ? await resolveWorkflowAdoption({
           deps: {
             getRun: sqlWorkflow.getWorkflowRun,
@@ -71,7 +72,7 @@ export async function resolveDispatchAdoption(
   // that opted out of worktrees runs in the parent checkout and has nothing to
   // inherit, so honoring the adoption would mean silently dropping the lane.
   if (
-    declaredContinuation?.stamp.mode === 'adopt' &&
+    declaredContinuation?.stamp.mode === CONTINUATION_MODES.adopt &&
     adoptionLane !== undefined &&
     adoptionLane.kind !== 'in-place' &&
     workflow.worktree?.enabled === false
@@ -143,14 +144,22 @@ export async function detectContinuation(
   // executes and which estate it inherits, and every continuation path forwards
   // only the resume context — an adopted id would be validated above and then silently
   // dropped. Refuse the combination up front, mirroring the CLI's adopt/resume guard.
-  if (declaredContinuation?.stamp.mode === 'adopt' && willContinueExistingRun && resumableRun) {
+  if (
+    declaredContinuation?.stamp.mode === CONTINUATION_MODES.adopt &&
+    willContinueExistingRun &&
+    resumableRun
+  ) {
     throw new WorkflowAdoptionError(
       `Cannot adopt run '${declaredContinuation.run.id}': this conversation already continues ` +
         `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
         'first, or declare the adoption from a conversation with no open run.'
     );
   }
-  if (declaredContinuation?.stamp.mode === 'supersede' && willContinueExistingRun && resumableRun) {
+  if (
+    declaredContinuation?.stamp.mode === CONTINUATION_MODES.supersede &&
+    willContinueExistingRun &&
+    resumableRun
+  ) {
     throw new WorkflowAdoptionError(
       `Cannot supersede run '${declaredContinuation.run.id}': this conversation already continues ` +
         `run '${resumableRun.id}' (${resumableRun.status}). Resume or abandon that run ` +
