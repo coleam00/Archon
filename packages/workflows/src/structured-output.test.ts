@@ -103,6 +103,7 @@ describe('validateStructuredOutput: reserved metrics key', () => {
     ['a negative count', { ...count, value: -1 }, '/metrics/1/value'],
     ['a bad name', { ...count, name: 'Factory PRs' }, '/metrics/1/name'],
     ['calibrates on a count', { ...count, calibrates: 'factory.prs' }, '/metrics/1'],
+    ['a time without an offset', { ...count, at: '2026-10-24T10:00:00' }, '/metrics/1/at'],
     ['a malformed run id', { ...count, runs: ['not-a-run'] }, '/metrics/1/runs/0'],
     [
       'a repeated run id',

@@ -20,12 +20,23 @@ const runIdSchema = z
     'must be a run id'
   );
 
+const offsetTimeSchema = z.iso.datetime({ offset: true });
+
+/**
+ * An ISO time with an offset. Published as `format: date-time` (RFC 3339, which requires
+ * the offset) rather than as zod's generated pattern, which no provider needs to see.
+ */
+const isoTimeSchema = z
+  .string()
+  .refine(value => offsetTimeSchema.safeParse(value).success, 'must be an ISO time with an offset')
+  .meta({ format: 'date-time' });
+
 const recordFields = {
   name: metricNameSchema,
   unit: z.string().regex(/^[a-z0-9_%/.-]{1,32}$/, 'must be 1-32 characters of [a-z0-9_%/.-]'),
   subject: z.string().max(256).nullable(),
   /** When the outcome happened; defaults to the node's completion time. */
-  at: z.iso.datetime({ offset: true }).optional(),
+  at: isoTimeSchema.optional(),
   /** The runs that produced the outcome. Stored and validated; read from slice 1b on. */
   runs: z
     .array(runIdSchema)
