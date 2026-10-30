@@ -1,4 +1,3 @@
-import type { Logger } from '@archon/paths';
 import { inMemoryEventRows } from '../test-utils';
 import { afterEach, expect, mock, spyOn, type Mock } from 'bun:test';
 import { readFile } from 'fs/promises';
@@ -40,10 +39,16 @@ import { CONTAINER_MARKER_PROBE } from '../checkout-observation';
  */
 
 const actualPaths = await import('@archon/paths');
+const levelProbe = actualPaths.createLogger('test.dag');
 
 export const mockLogFn = mock((_data: unknown, _message?: string): void => undefined);
-export const mockLogger: Logger = Object.assign(actualPaths.createLogger('test.dag'), {
+export const mockLogger = {
   level: 'info',
+  // Pino's level setter replaces log methods; keep it off the double that owns the spies.
+  isLevelEnabled: (level: string): boolean => {
+    levelProbe.level = mockLogger.level;
+    return levelProbe.isLevelEnabled(level);
+  },
   info: mockLogFn,
   warn: mockLogFn,
   error: mockLogFn,
@@ -51,7 +56,7 @@ export const mockLogger: Logger = Object.assign(actualPaths.createLogger('test.d
   trace: mockLogFn,
   fatal: mockLogFn,
   child: mock(() => mockLogger),
-});
+};
 /**
  * The Archon home the artifact-pointer gate (#2453) resolves run artifact roots under.
  * Mutable so the pointer suite can point it at its own temp tree; every other suite
