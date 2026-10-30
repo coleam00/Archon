@@ -1140,3 +1140,63 @@ test('global resume ignores unreadable project workflow assets and skipped YAML'
     fault.mockRestore();
   }
 });
+
+for (const scope of ['project', 'global', 'bundled'] as const) {
+  for (const nonempty of [false, true]) {
+    test(`${scope} resume with a ${nonempty ? 'nonempty' : 'empty'} directory manifest ignores persistent unrelated EACCES`, async () => {
+      const directory =
+        scope === 'project'
+          ? join(project, '.archon/workflows/team')
+          : scope === 'global'
+            ? join(root, 'home/workflows/team')
+            : join(bundleRoot, 'defaults/team');
+      const marker = join(directory, 'archon-plugin.json');
+      await mkdir(marker, { recursive: true });
+      if (nonempty) await mkdir(join(marker, 'assets'));
+      await put(
+        join(directory, 'healthy.yaml'),
+        workflow(
+          'healthy',
+          `${first}\n  - id: remaining\n    bash: echo frozen-${scope}\n    depends_on: [first]`
+        )
+      );
+      if (scope === 'bundled')
+        spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['defaults']);
+      try {
+        const fixture = await pausedRun();
+        if (scope === 'bundled') {
+          // Bundling selects files; exercise directory-only entries at the captured reader boundary.
+          const capturedMarker = join(
+            fixture.capture.anchor.root,
+            'bundled/workflows/defaults/team/archon-plugin.json'
+          );
+          await mkdir(nonempty ? join(capturedMarker, 'assets') : capturedMarker, {
+            recursive: true,
+          });
+        }
+        await put(
+          join(directory, 'healthy.yaml'),
+          workflow('healthy', '  - id: wrong\n    bash: exit 98')
+        );
+        const fault = denyReads(join(fixture.capture.anchor.root, 'installed/acme.broken'));
+        try {
+          expect(await fixture.resume()).toMatchObject({ success: true });
+          expect(await fixture.store.getWorkflowRunStatus(fixture.run.id)).toBe('completed');
+          const outputs = (await fixture.store.getDagResumeSnapshot(fixture.run.id))
+            .completedNodeOutputs;
+          expect(outputs.get('remaining')?.output).toContain(`frozen-${scope}`);
+          await expect(
+            verifyWorkflowSourceUnits(fixture.capture.anchor, ['installed/acme.broken'])
+          ).rejects.toBeInstanceOf(WorkflowSourceUnavailableError);
+        } finally {
+          fault.mockRestore();
+        }
+      } finally {
+        if (scope === 'bundled') {
+          spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue([]);
+          await removeTempTree(join(bundleRoot, 'defaults'));
+        }
+      }
+    });
+  }
+}

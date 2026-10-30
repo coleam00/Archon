@@ -1,5 +1,5 @@
 import { type ProviderRegistry } from '@archon/provider-contract';
-import { readFile, readdir, access, stat } from 'fs/promises';
+import { readFile, readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import type { WorkflowDefinition, WorkflowLoadError, WorkflowSource } from '../schemas';
@@ -167,8 +167,7 @@ export async function loadScopeDirectory(
 
 async function isPackDirectory(dirPath: string): Promise<boolean> {
   try {
-    await access(join(dirPath, PLUGIN_MANIFEST_FILE));
-    return true;
+    return (await stat(join(dirPath, PLUGIN_MANIFEST_FILE))).isFile();
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw error;

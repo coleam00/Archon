@@ -383,6 +383,16 @@ const workflowInventoryCases = [
   { files: ['fixtures/run.yaml'], admitted: false },
   { files: ['team/fixtures/run.yml'], admitted: false },
   { files: ['pack/archon-plugin.json', 'pack/run.yaml'], admitted: false },
+  {
+    files: ['defaults/pack/run.yaml'],
+    markerDirectory: 'defaults/pack/archon-plugin.json',
+    admitted: true,
+  },
+  {
+    files: ['defaults/pack/run.yaml', 'defaults/pack/archon-plugin.json/asset.txt'],
+    markerDirectory: 'defaults/pack/archon-plugin.json',
+    admitted: true,
+  },
   { files: ['team/deep/nested/run.yaml'], admitted: false },
   { files: ['defaults/deep/run.yaml'], admitted: false, bundled: true },
   { files: ['pack/.shared/run.yaml'], admitted: false },
@@ -398,16 +408,20 @@ const workflowInventoryCases = [
 ];
 
 for (const scope of ['project', 'global', 'bundled'] as const) {
-  for (const { files, admitted, bundled } of workflowInventoryCases) {
+  for (const { files, admitted, bundled, markerDirectory } of workflowInventoryCases) {
     test(`${scope} selection follows disk admission for ${files.join(', ')}`, async () => {
       const { manifest, root } = await fixture();
       const directory = scope === 'project' ? '.archon/workflows' : 'workflows';
       const expected = scope === 'bundled' ? (bundled ?? admitted) : admitted;
-      const inventory = files.map(path => `${directory}/${path}`);
+      const scopePath = (path: string) =>
+        scope !== 'bundled' && markerDirectory ? path.slice('defaults/'.length) : path;
+      const inventory = files.map(path => `${directory}/${scopePath(path)}`);
       manifest.units = [
         { root: scope, files: inventory.map(path => ({ path, hash: hash(''), size: 0 })) },
       ];
       const disk = join(root, 'admission');
+      if (markerDirectory)
+        await mkdir(join(disk, directory, scopePath(markerDirectory)), { recursive: true });
       const content =
         'name: run\ndescription: Fixture\nnodes:\n  - id: check\n    bash: echo done\n';
       for (const path of inventory) {
@@ -425,3 +439,39 @@ for (const scope of ['project', 'global', 'bundled'] as const) {
     });
   }
 }
+
+test('a manifest stat failure remains an observable workflow read error', async () => {
+  const { root } = await fixture();
+  const directory = join(root, 'admission');
+  await mkdir(join(directory, 'team'), { recursive: true });
+  await writeFile(join(directory, 'team/run.yaml'), 'name: run');
+  const marker = join(directory, 'team/archon-plugin.json');
+  const cause = Object.assign(new Error('manifest stat denied'), { code: 'EACCES' });
+  const original = fs.stat;
+  const fault = spyOn(fs, 'stat').mockImplementation(
+    new Proxy(original, {
+      apply(target, receiver, args: Parameters<typeof original>) {
+        if (String(args[0]) === marker) return Promise.reject(cause);
+        return Reflect.apply(target, receiver, args);
+      },
+    })
+  );
+  try {
+    const parsed = await loadScopeDirectory(
+      { providers: providerRegistry, configuredEnvNames: new Set() },
+      directory,
+      directory,
+      'project'
+    );
+    expect(parsed.workflows.size).toBe(0);
+    expect(parsed.errors).toContainEqual(
+      expect.objectContaining({
+        filename: 'team',
+        errorType: 'read_error',
+        cause,
+      })
+    );
+  } finally {
+    fault.mockRestore();
+  }
+});
