@@ -120,6 +120,12 @@ describe('GET /api/metrics', () => {
     expect(((await response.json()) as { error: string }).error).toContain('cannot be combined');
   });
 
+  test('an empty byModel returns 400', async () => {
+    const response = await app().request('/api/metrics?byModel=');
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain('needs a node id');
+  });
+
   test('a byModel node no producing run ran returns 400 with the nodes they ran', async () => {
     const response = await app({ getWorkflowRunsByIds: async () => [run] }).request(
       '/api/metrics?since=2026-10-01&until=2026-10-30&byModel=review'

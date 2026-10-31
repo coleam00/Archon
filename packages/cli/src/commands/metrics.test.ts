@@ -164,6 +164,12 @@ test('--compare and --by-model together are a usage error', async () => {
   expect(stderr.join('')).toContain('compare and by-model cannot be combined');
 });
 
+test('an empty --by-model is a usage error', async () => {
+  const { invoke, stderr } = await fixture([{}]);
+  expect(await invoke({ byModel: '' })).toBe(1);
+  expect(stderr.join('')).toContain('by-model needs a node id');
+});
+
 test('--by-model with a node no producing run ran exits 2 and lists the AI nodes they ran', async () => {
   const { invoke, stderr, store, runIds } = await fixture([{}]);
   await store.persistWorkflowEvent({
@@ -233,4 +239,34 @@ test('the headline is the newest judge model, and each instrument line names its
   expect(lines).toContain(
     '  judge-v1 on claude/claude-opus-5-5: value 0.2  n 1  latest 0.2 at 2026-10-28T00:00:00.000Z (pr-1)'
   );
+});
+
+test('a headline judge label containing a comma is not two labels', async () => {
+  const judge = { kind: 'score', unit: 'ratio', instrument: 'judge-v1', instrument_node: 'judge' };
+  const { invoke, stdout, store, runIds } = await fixture([
+    { ...judge, value: 0.2, subject: 'pr-1', at: '2026-10-28T00:00:00Z' },
+    { ...judge, value: 0.8, subject: 'pr-1', at: '2026-10-29T00:00:00Z' },
+  ]);
+  const judgeSteps = [
+    { run: 0, model: 'a', iteration: 1 },
+    { run: 0, model: 'b', iteration: 2 },
+    { run: 1, model: 'a,codex/b', iteration: 1 },
+  ];
+  for (const { run, model, iteration } of judgeSteps) {
+    await store.persistWorkflowEvent({
+      workflow_run_id: runIds[run] ?? '',
+      event_type: 'node_completed',
+      step_name: 'judge',
+      data: {
+        type: 'agent',
+        provider: 'codex',
+        model,
+        invocation: { loopPath: [{ groupId: 'rounds', iteration }] },
+      },
+    });
+  }
+  expect(await invoke({})).toBe(0);
+  const lines = stdout.join('').split('\n');
+  expect(lines[1]).toContain('value 0.8');
+  expect(lines[1]).toContain('[judge-v1 on codex/a,codex/b]');
 });

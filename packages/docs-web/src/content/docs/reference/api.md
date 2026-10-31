@@ -568,7 +568,7 @@ The window is half-open. It returns the same `MetricsReport` `archon metrics --j
 prints: per name, its definition and one entry per instrument and `measured_by` with
 `value`, `n`, `interval`, `cost`, `latest` and a daily `series`, a `compare` block when
 `compare` is given or a `by_model` block when `byModel` is, plus `refused[]`. Returns
-**400** for a malformed window or `compare`, for `compare` with `byModel`, and for a
+**400** for a malformed window or `compare`, an empty `byModel`, `compare` with `byModel`, and a
 `byModel` node no producing run ran, with the AI node ids they did run in the error.
 See the [metrics guide](/guides/metrics/).
 

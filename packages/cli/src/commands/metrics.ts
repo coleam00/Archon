@@ -127,7 +127,7 @@ function identityText(instrument: string | null, measuredBy: readonly string[]):
 }
 
 const sameModels = (a: readonly string[], b: readonly string[]): boolean =>
-  a.join(',') === b.join(',');
+  a.length === b.length && a.every((label, i) => label === b[i]);
 
 function metricLines(metric: MetricReport): string[] {
   const headline = metric.instruments.find(
