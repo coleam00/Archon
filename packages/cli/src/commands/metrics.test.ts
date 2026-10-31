@@ -206,3 +206,31 @@ test('--by-model prints a line per model label and labels the split observationa
   );
   expect(text).toContain('The split is observational');
 });
+
+test('the headline is the newest judge model, and each instrument line names its models', async () => {
+  const judge = { kind: 'score', unit: 'ratio', instrument: 'judge-v1', instrument_node: 'judge' };
+  const { invoke, stdout, store, runIds } = await fixture([
+    { ...judge, value: 0.2, subject: 'pr-1', at: '2026-10-28T00:00:00Z' },
+    { ...judge, value: 0.8, subject: 'pr-1', at: '2026-10-29T00:00:00Z' },
+  ]);
+  const judges = [
+    { provider: 'claude', model: 'claude-opus-5-5' },
+    { provider: 'codex', model: 'gpt-6.1-sol' },
+  ];
+  for (const [i, binding] of judges.entries()) {
+    await store.persistWorkflowEvent({
+      workflow_run_id: runIds[i] ?? '',
+      event_type: 'node_completed',
+      step_name: 'judge',
+      data: { type: 'agent', ...binding },
+    });
+  }
+  expect(await invoke({})).toBe(0);
+  const lines = stdout.join('').split('\n');
+  expect(lines[1]).toBe(
+    'factory.prs_merged  score/ratio  value 0.8  n 1  latest 0.8 at 2026-10-29T00:00:00.000Z (pr-1)  [judge-v1 on codex/gpt-6.1-sol]'
+  );
+  expect(lines).toContain(
+    '  judge-v1 on claude/claude-opus-5-5: value 0.2  n 1  latest 0.2 at 2026-10-28T00:00:00.000Z (pr-1)'
+  );
+});
