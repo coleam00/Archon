@@ -6,7 +6,17 @@
  */
 import { z } from 'zod';
 import {
+  meanInterval,
+  newcombeDifference,
+  welchDifference,
+  wilsonInterval,
+  type Interval,
+} from './metrics-stats';
+import {
   metricRecordSchema,
+  type MetricCohort,
+  type MetricCompare,
+  type MetricCost,
   type MetricDefinition,
   type MetricInstrumentReport,
   type MetricRecord,
@@ -15,9 +25,14 @@ import {
   type MetricsReport,
 } from './schemas/metric';
 import type { NodeDescriptor } from './schemas/node-execution';
+import { parseRunUsage } from './schemas/run-usage';
+import type { WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore, MetricRecordRow } from './store';
 
-export type MetricsStore = Pick<IWorkflowStore, 'listMetricRecords' | 'listEventsForRuns'>;
+export type MetricsStore = Pick<
+  IWorkflowStore,
+  'listMetricRecords' | 'listEventsForRuns' | 'getWorkflowRunsByIds'
+>;
 
 export interface MetricsQuery {
   /** Inclusive start of the window. */
@@ -27,9 +42,12 @@ export interface MetricsQuery {
   name?: string;
   subject?: string;
   codebaseId?: string;
+  /** Split each group into runs started before and at or after this time. */
+  compareAt?: Date;
 }
 
-export class MetricsWindowError extends Error {}
+/** A malformed window or cut. */
+export class MetricsQueryError extends Error {}
 
 const DAY_MS = 86_400_000;
 export const DEFAULT_METRICS_WINDOW_DAYS = 30;
@@ -41,7 +59,7 @@ const INSTANT_FORMS =
 
 function parseInstant(field: string, value: string, forms = INSTANT_FORMS): Date {
   if (!instantSchema.safeParse(value).success) {
-    throw new MetricsWindowError(`${field} must be ${forms}; got "${value}"`);
+    throw new MetricsQueryError(`${field} must be ${forms}; got "${value}"`);
   }
   return new Date(value);
 }
@@ -59,9 +77,14 @@ export function resolveMetricsWindow(
   const until = input.until === undefined ? now : parseInstant('until', input.until);
   const since = resolveSince(input.since, until);
   if (since.getTime() >= until.getTime()) {
-    throw new MetricsWindowError('since must be before until');
+    throw new MetricsQueryError('since must be before until');
   }
   return { since, until };
+}
+
+/** Resolve a `--compare` cut: an ISO date or a time with an offset. */
+export function resolveCompareCut(value: string): Date {
+  return parseInstant('compare', value);
 }
 
 function resolveSince(since: string | undefined, until: Date): Date {
@@ -73,7 +96,7 @@ function resolveSince(since: string | undefined, until: Date): Date {
   const unit = duration[2] as keyof typeof DURATION_UNIT_MS;
   const start = new Date(until.getTime() - Number(duration[1]) * DURATION_UNIT_MS[unit]);
   if (Number.isNaN(start.getTime())) {
-    throw new MetricsWindowError(`since "${since}" reaches before the earliest representable date`);
+    throw new MetricsQueryError(`since "${since}" reaches before the earliest representable date`);
   }
   return start;
 }
@@ -83,6 +106,14 @@ interface CountedRecord {
   record: MetricRecord;
   /** `at`, else the completion time, in ms. */
   time: number;
+  /** The run that returned the record. */
+  runId: string;
+}
+
+/** The runs the report reads, by id, and the cut it compares at. */
+interface ReportContext {
+  runs: ReadonlyMap<string, WorkflowRun>;
+  compareAt: Date | undefined;
 }
 
 const RUN_CHUNK = 500;
@@ -150,12 +181,128 @@ function aggregate(kind: MetricDefinition['kind'], values: readonly number[]): n
   return kind === 'count' ? sum : sum / values.length;
 }
 
+/** A record's `runs`, or the run that returned it. */
+const producingRunIds = (entry: CountedRecord): readonly string[] =>
+  entry.record.runs ?? [entry.runId];
+
+const isRate = (values: readonly number[]): boolean =>
+  values.every(value => value === 0 || value === 1);
+
+const successes = (values: readonly number[]): number => values.filter(value => value === 1).length;
+
+function valueInterval(
+  kind: MetricDefinition['kind'],
+  rate: boolean,
+  values: readonly number[]
+): Interval | null {
+  if (kind === 'count' || values.length < 2) return null;
+  return rate ? wilsonInterval(successes(values), values.length) : meanInterval(values);
+}
+
+/** Sums over the distinct producing runs; a run without a figure is counted, never zero. */
+function costReport(records: readonly CountedRecord[], runs: ReportContext['runs']): MetricCost {
+  const cost: MetricCost = {
+    usd: null,
+    input_tokens: null,
+    output_tokens: null,
+    runs: 0,
+    runs_without_cost: 0,
+    runs_without_tokens: 0,
+    runs_missing: 0,
+  };
+  for (const id of new Set(records.flatMap(producingRunIds))) {
+    const run = runs.get(id);
+    if (run === undefined) {
+      cost.runs_missing += 1;
+      continue;
+    }
+    cost.runs += 1;
+    const usage = parseRunUsage(run.metadata);
+    if (usage.costUsd === undefined) cost.runs_without_cost += 1;
+    else cost.usd = (cost.usd ?? 0) + usage.costUsd;
+    if (usage.tokens === undefined) {
+      cost.runs_without_tokens += 1;
+    } else {
+      cost.input_tokens = (cost.input_tokens ?? 0) + usage.tokens.input;
+      cost.output_tokens = (cost.output_tokens ?? 0) + usage.tokens.output;
+    }
+  }
+  return cost;
+}
+
+type Cohort = 'before' | 'after' | 'straddling' | 'unattributed';
+
+/**
+ * A record belongs to the cohort of its producing runs' start, not to its `at`. A record
+ * with any named run gone is unattributed: the gone run's start is unknown, so neither
+ * cohort's rule can be checked, and crediting the run that returned it would place the
+ * record after any cut older than the metric run.
+ */
+function cohortOf(entry: CountedRecord, runs: ReportContext['runs'], cut: number): Cohort {
+  const starts = producingRunIds(entry).map(id => runs.get(id)?.started_at.getTime());
+  if (!starts.every(start => start !== undefined)) return 'unattributed';
+  if (starts.every(start => start < cut)) return 'before';
+  return starts.every(start => start >= cut) ? 'after' : 'straddling';
+}
+
+function compareReport(
+  kind: MetricDefinition['kind'],
+  records: readonly CountedRecord[],
+  runs: ReportContext['runs'],
+  cut: Date
+): MetricCompare {
+  const values: Record<Cohort, number[]> = {
+    before: [],
+    after: [],
+    straddling: [],
+    unattributed: [],
+  };
+  for (const entry of records)
+    values[cohortOf(entry, runs, cut.getTime())].push(entry.record.value);
+  const rate = isRate(records.map(({ record }) => record.value));
+  const cohort = (cohortValues: readonly number[]): MetricCohort => ({
+    value: cohortValues.length === 0 ? null : aggregate(kind, cohortValues),
+    n: cohortValues.length,
+    interval: valueInterval(kind, rate, cohortValues),
+  });
+  const before = cohort(values.before);
+  const after = cohort(values.after);
+  const deltaInterval = differenceInterval(kind, rate, values.after, values.before);
+  return {
+    at: cut.toISOString(),
+    before,
+    after,
+    delta: before.value === null || after.value === null ? null : after.value - before.value,
+    delta_interval: deltaInterval,
+    separated: deltaInterval !== null && (deltaInterval.low > 0 || deltaInterval.high < 0),
+    straddling: values.straddling.length,
+    unattributed: values.unattributed.length,
+  };
+}
+
+/** The interval of `after − before`: Newcombe's for a rate, Welch's for other scores. */
+function differenceInterval(
+  kind: MetricDefinition['kind'],
+  rate: boolean,
+  after: readonly number[],
+  before: readonly number[]
+): Interval | null {
+  if (kind === 'count' || after.length < 2 || before.length < 2) return null;
+  if (!rate) return welchDifference(after, before);
+  return newcombeDifference(
+    { successes: successes(after), n: after.length },
+    { successes: successes(before), n: before.length }
+  );
+}
+
 function instrumentReport(
   kind: MetricDefinition['kind'],
   instrument: string | null,
-  records: readonly CountedRecord[]
+  records: readonly CountedRecord[],
+  context: ReportContext
 ): MetricInstrumentReport {
   const latest = newestOf(records);
+  const values = records.map(({ record }) => record.value);
   const byDay = new Map<string, number[]>();
   for (const { record, time } of records) {
     const day = new Date(time).toISOString().slice(0, 10);
@@ -163,11 +310,13 @@ function instrumentReport(
   }
   return {
     instrument,
-    value: aggregate(
-      kind,
-      records.map(({ record }) => record.value)
-    ),
+    value: aggregate(kind, values),
     n: records.length,
+    interval: valueInterval(kind, isRate(values), values),
+    cost: costReport(records, context.runs),
+    ...(context.compareAt === undefined
+      ? {}
+      : { compare: compareReport(kind, records, context.runs, context.compareAt) }),
     latest: {
       value: latest.record.value,
       at: new Date(latest.time).toISOString(),
@@ -196,6 +345,9 @@ const byInstrument = (a: string | null, b: string | null): number =>
  *    record counts once per run and node, by rule 1.
  * 4. A record falls in the window by `at`, else by its completion time.
  * 5. Each name reports one entry per instrument, so two instruments are never averaged.
+ * 6. A record's producing runs are its `runs`, else the run that returned it. Cost sums
+ *    each distinct producing run once, and `compareAt` splits records by when those runs
+ *    started, not by `at`.
  *
  * Refusals are reported for the queried name and window. A stored output the record
  * schema rejects (written before the schema, or unreadable) has no trusted name, so it
@@ -226,6 +378,10 @@ export async function queryMetrics(
     if (query.subject !== undefined && record.subject !== query.subject) continue;
     byName.set(record.name, [...(byName.get(record.name) ?? []), entry]);
   }
+  const context: ReportContext = {
+    runs: await runsOf(store, [...byName.values()].flat()),
+    compareAt: query.compareAt,
+  };
   const queried = (refusal: MetricRefusal): boolean =>
     query.name === undefined ||
     (refusal.reason === 'definition_conflict' && refusal.name === query.name);
@@ -234,11 +390,21 @@ export async function queryMetrics(
     window: { since: query.since.toISOString(), until: query.until.toISOString() },
     metrics: [...byName]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, named]) => nameReport(name, named)),
+      .map(([name, named]) => nameReport(name, named, context)),
     refused: refused
       .filter(({ refusal, time }) => inWindow(time) && queried(refusal))
       .map(({ refusal }) => refusal),
   };
+}
+
+/** The producing runs of `records`, read once. */
+async function runsOf(
+  store: MetricsStore,
+  records: readonly CountedRecord[]
+): Promise<ReportContext['runs']> {
+  const ids = [...new Set(records.flatMap(producingRunIds))];
+  if (ids.length === 0) return new Map();
+  return new Map((await store.getWorkflowRunsByIds(ids)).map(run => [run.id, run]));
 }
 
 /** A refusal with the time it is placed in a window by. */
@@ -310,7 +476,7 @@ function admitRow(
     const time = Date.parse(record.at ?? row.completedAt);
     const conflict = admitDefinition(definitions, record);
     if (conflict === null) {
-      admitted.push({ record, time });
+      admitted.push({ record, time, runId: row.runId });
     } else {
       refused.push({
         time,
@@ -337,7 +503,11 @@ const newestOf = (records: readonly CountedRecord[]): CountedRecord =>
   records.reduce((a, b) => (b.time >= a.time ? b : a));
 
 /** `records` is non-empty, and every record carries the name's one definition. */
-function nameReport(name: string, records: readonly CountedRecord[]): MetricReport {
+function nameReport(
+  name: string,
+  records: readonly CountedRecord[],
+  context: ReportContext
+): MetricReport {
   const newest = newestOf(records);
   const definition = definitionOf(newest.record);
   const groups = new Map<string | null, CountedRecord[]>();
@@ -351,6 +521,6 @@ function nameReport(name: string, records: readonly CountedRecord[]): MetricRepo
     headline_instrument: newest.record.instrument ?? null,
     instruments: [...groups]
       .sort(([a], [b]) => byInstrument(a, b))
-      .map(([instrument, group]) => instrumentReport(definition.kind, instrument, group)),
+      .map(([instrument, group]) => instrumentReport(definition.kind, instrument, group, context)),
   };
 }

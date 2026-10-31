@@ -126,3 +126,32 @@ test('--subject reports only that subject', async () => {
     metricsReportSchema.parse(JSON.parse(stdout.join(''))).metrics[0]?.instruments ?? [];
   expect([instrument?.n, instrument?.latest.subject]).toEqual([1, 'pr-1']);
 });
+
+test('--compare splits by run start, prints both cohorts and labels the comparison observational', async () => {
+  const score = { kind: 'score', unit: 'ratio' };
+  const { invoke, stdout } = await fixture([
+    { ...score, value: 1, subject: 'pr-1' },
+    { ...score, value: 0, subject: 'pr-2' },
+  ]);
+  expect(await invoke({ compare: '2026-01-01' })).toBe(0);
+  const text = stdout.join('');
+  expect(text).toContain('factory.prs_merged  score/ratio  value 0.5  n 2  95% [');
+  expect(text).toContain('cost no cost recorded, no tokens recorded over 2 runs found');
+  expect(text).toContain(
+    'compare at 2026-01-01T00:00:00.000Z: before none (n 0), after 0.5 (n 2  95% ['
+  );
+  expect(text).toContain('separated: no  straddling 0  unattributed 0');
+  expect(text).toContain('The comparison is observational');
+
+  stdout.length = 0;
+  expect(await invoke({ compare: '2026-01-01', json: true })).toBe(0);
+  const [instrument] =
+    metricsReportSchema.parse(JSON.parse(stdout.join(''))).metrics[0]?.instruments ?? [];
+  expect(instrument?.compare).toMatchObject({ before: { n: 0 }, after: { n: 2, value: 0.5 } });
+});
+
+test('a malformed --compare is a usage error', async () => {
+  const { invoke, stderr } = await fixture([{}]);
+  expect(await invoke({ compare: 'last release' })).toBe(1);
+  expect(stderr.join('')).toContain('compare must be an ISO date');
+});

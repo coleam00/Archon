@@ -1,7 +1,8 @@
 import { type OpenAPIHono, createRoute } from '@hono/zod-openapi';
 import {
-  MetricsWindowError,
+  MetricsQueryError,
   queryMetrics,
+  resolveCompareCut,
   resolveMetricsWindow,
   type MetricsStore,
 } from '@archon/workflows/metrics';
@@ -25,19 +26,24 @@ const getMetricsRoute = createRoute({
       content: { 'application/json': { schema: metricsReportSchema } },
       description: 'OK',
     },
-    400: jsonError('Malformed window'),
+    400: jsonError('Malformed window or compare cut'),
     500: jsonError('Server error'),
   },
 });
 
 export function registerMetricsRoute(app: OpenAPIHono, store: MetricsStore): void {
   openApiRouteRegistrar(app)(getMetricsRoute, async c => {
-    const { since, until, name, subject, codebaseId } = getValidatedQuery(c, metricsQuerySchema);
+    const { since, until, name, subject, codebaseId, compare } = getValidatedQuery(
+      c,
+      metricsQuerySchema
+    );
     let window: { since: Date; until: Date };
+    let compareAt: Date | undefined;
     try {
       window = resolveMetricsWindow({ since, until });
+      compareAt = compare === undefined ? undefined : resolveCompareCut(compare);
     } catch (error) {
-      if (!(error instanceof MetricsWindowError)) throw error;
+      if (!(error instanceof MetricsQueryError)) throw error;
       return apiError(c, 400, error.message);
     }
     try {
@@ -47,6 +53,7 @@ export function registerMetricsRoute(app: OpenAPIHono, store: MetricsStore): voi
           ...(name === undefined ? {} : { name }),
           ...(subject === undefined ? {} : { subject }),
           ...(codebaseId === undefined ? {} : { codebaseId }),
+          ...(compareAt === undefined ? {} : { compareAt }),
         })
       );
     } catch (error) {

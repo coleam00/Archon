@@ -208,6 +208,14 @@ export class InMemoryStore implements IWorkflowStore {
     return Promise.resolve(r ? this.clone(r) : null);
   };
 
+  getWorkflowRunsByIds = (ids: readonly string[]): Promise<WorkflowRun[]> =>
+    Promise.resolve(
+      [...new Set(ids)].flatMap(id => {
+        const r = this.runs.get(id);
+        return r ? [this.clone(r)] : [];
+      })
+    );
+
   getWorkflowRunForAttention = (id: string) => this.getWorkflowRun(id);
 
   findChildRuns = (parentRunId: string): Promise<WorkflowRun[]> =>

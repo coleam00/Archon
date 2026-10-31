@@ -484,6 +484,7 @@ mock.module('../workflows/store-adapter', () => ({
 }));
 
 mock.module('../db/workflows', () => ({
+  getWorkflowRunsByIds: mock(async () => []),
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
   getWorkflowRun: mockGetWorkflowRunDb,
   getWorkflowRunForAttention: mockGetWorkflowRunDb,

@@ -251,6 +251,7 @@ mock.module('../../db/isolation-environments', () => ({
 
 export const mockGetRunByIsolationEnvId = mock<typeof WorkflowDb.getRunByIsolationEnvId>();
 mock.module('../../db/workflows', () => ({
+  getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
   getRunByIsolationEnvId: mockGetRunByIsolationEnvId,
 }));

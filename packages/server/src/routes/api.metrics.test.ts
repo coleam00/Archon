@@ -17,6 +17,7 @@ const row = {
 
 const store: MetricsStore = {
   listMetricRecords: async () => [row],
+  getWorkflowRunsByIds: async () => [],
   listEventsForRuns: async ids =>
     new Map(
       ids.map(id => [
@@ -62,6 +63,27 @@ describe('GET /api/metrics', () => {
     );
     expect(response.status).toBe(200);
     expect(metricsReportSchema.parse(await response.json()).metrics).toEqual([]);
+  });
+
+  test('compare splits each group at the cut', async () => {
+    const response = await app().request(
+      '/api/metrics?since=2026-10-01&until=2026-10-30&compare=2026-10-15'
+    );
+    expect(response.status).toBe(200);
+    const [instrument] =
+      metricsReportSchema.parse(await response.json()).metrics[0]?.instruments ?? [];
+    expect(instrument?.compare).toMatchObject({
+      at: '2026-10-15T00:00:00.000Z',
+      before: { n: 0 },
+      after: { n: 0 },
+      unattributed: 1,
+    });
+  });
+
+  test('a malformed compare returns 400', async () => {
+    const response = await app().request('/api/metrics?compare=last-release');
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain('compare must be');
   });
 
   test('a malformed since returns 400', async () => {

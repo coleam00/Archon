@@ -234,9 +234,12 @@ affected; to use the key for something else, rename it.
 - `at`: when the outcome happened. Without it, the node's completion time is used.
 - `instrument`: what measured the value, such as a hash of a judge's prompt.
 - `calibrates`: on a `score`, the metric this score calibrates.
-- `runs` and `instrument_node`: the runs that produced the outcome (1 to 20 run ids) and
-  the node that did the measuring. Set them now if you know them: they are stored and
-  validated, but `archon metrics` does not read them yet.
+- `runs`: the runs that produced the outcome, 1 to 20 run ids. A record without `runs` was
+  produced by the run that returned it. Name the runs that did the work, not the metric
+  run that observed it: a merged pull request belongs to the runs that built it. Don't
+  list both a run and its child run, since a parent's cost already includes its children.
+- `instrument_node`: the node that did the measuring. It is stored and validated, but
+  `archon metrics` does not read it yet.
 
 Records hold only these fields. A record with any other key is refused, so a record
 cannot carry credentials, prompt contents or messages beyond its bounded `subject` and
@@ -264,6 +267,54 @@ cannot carry credentials, prompt contents or messages beyond its bounded `subjec
 - **Records live with their runs.** Deleting a run, for example with
   `archon workflow cleanup`, deletes its records.
 
+## Intervals and spend
+
+Every entry reports `n`, the records it counts after the rules above. A `score` with at
+least two records also reports a 95% `interval`: the Wilson score interval when every value
+is 0 or 1, so the score is a rate, and otherwise the mean ± t(0.975, n−1) · s / √n. A
+`count` has no interval.
+
+Each entry also reports the `cost` of its producing runs: `usd`, `input_tokens` and
+`output_tokens` summed over the distinct runs its records name, each run once. Providers
+that report no cost, such as Codex, add tokens but no cost, so the sum is a floor, never a
+total. `runs_without_cost`, `runs_without_tokens` and `runs_missing` count the runs that
+added nothing to it: runs that recorded no cost, no tokens, or no longer exist. `usd` is
+`null`, not `0`, when no run recorded a cost. Tokens of differently priced models do not compare as
+spend.
+
+## Comparing before and after a change
+
+`archon metrics <name> --compare <cut>` (or `compare=` on the API) splits each entry's
+records by when their producing runs started. A record whose runs all started before the
+cut is in `before`; one whose runs all started at or after it is in `after`. The record's
+`at` does not decide it: a pull request merged after a change, but built by runs that
+started before it, belongs to `before`.
+
+```bash
+archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
+```
+
+- **Straddling.** A record with runs on both sides of the cut, such as a pull request
+  built before the change and fixed after it, is in neither cohort. `straddling` counts it.
+- **Unattributed.** A record with a named run that no longer exists is in neither cohort,
+  because that run's start is unknown. `unattributed` counts it. It is never credited to its
+  surviving runs or to the run that returned it. It still counts in the entry's `value`.
+- **The difference.** `delta` is `after − before`, with its own 95% `delta_interval`:
+  Newcombe's hybrid score interval for a rate, Welch's interval for other scores. Each
+  cohort needs at least two records. `separated` is true when that interval excludes zero.
+  Don't judge by whether the two cohort intervals overlap: that is far stricter than a
+  test of the difference, and two rates can differ while their intervals overlap.
+- **Pick the cut by when the install ran the change.** The cut is when the install's
+  checkout picked the change up, not when the change merged.
+- **The after cohort is younger.** It has had less time for slow outcomes, such as a pull
+  request being merged, to resolve. Read a comparison after the after cohort has settled.
+
+A comparison is observational. The cohorts differ in the change and in everything else
+that changed around the cut, and in the work each cohort happened to run: the SDLC pack,
+for example, routes larger work to Claude and small work to Codex. The text output of
+`archon metrics --compare` ends with a line that says so. Showing that a change caused a difference needs runs
+assigned to each side independently of the work.
+
 Metric names are shared by every project on the install. Pass `--project` to read one
 codebase's records; their names keep the install's definitions.
 
@@ -278,7 +329,8 @@ curl 'http://localhost:3090/api/metrics?name=repo.commits&since=7d'
 ```
 
 Each metric reports its `value` (the sum or the mean), `n` (the records counted), its
-latest record and a daily `series`, per instrument. `archon metrics` exits `4` when it
+`interval`, the `cost` of its producing runs, its latest record and a daily `series`, per
+instrument, and a `compare` block when a cut is given. `archon metrics` exits `4` when it
 refused a record, and prints each refusal to stderr. See
 [`archon metrics`](/reference/cli/#metrics-name) and
 [`GET /api/metrics`](/reference/api/#metrics) for every option.

@@ -306,6 +306,7 @@ export function createMockStore(): MockWorkflowStore {
       async (_id, baseline) => baseline
     ),
     getWorkflowRun: mock<IWorkflowStore['getWorkflowRun']>(async _id => null),
+    getWorkflowRunsByIds: mock<IWorkflowStore['getWorkflowRunsByIds']>(async _ids => []),
     findChildRuns: mock<IWorkflowStore['findChildRuns']>(async _parentRunId => []),
     getRunAncestry: mock<IWorkflowStore['getRunAncestry']>(async _runId => []),
     getActiveWorkflowRunByPath: mock<IWorkflowStore['getActiveWorkflowRunByPath']>(

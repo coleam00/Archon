@@ -212,6 +212,7 @@ export async function createFileWorkflowStore(
       });
     },
     getWorkflowRun: id => readRun(root, id),
+    getWorkflowRunsByIds: ids => query([...new Set(ids)], view => view.getWorkflowRunsByIds(ids)),
     getWorkflowRunForAttention: id => readRun(root, id),
     getWorkflowRunStatus: async id => (await readRun(root, id))?.status ?? null,
     claimPendingWorkflowRun: (id, path) =>
