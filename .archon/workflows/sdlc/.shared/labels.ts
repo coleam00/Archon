@@ -185,7 +185,9 @@ function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly Own
   for (const name of add) {
     if (!present.has(name) && isPackLabel(name)) {
       const { color, description } = PACK_LABELS[name];
-      gh('label', 'create', name, '--repo', repository, '--color', color, '--description', description);
+      // --force: parallel intakes on a fresh repository race to create the same pack label,
+      // and a plain create fails the loser with "already exists".
+      gh('label', 'create', name, '--repo', repository, '--color', color, '--description', description, '--force');
       present.add(name);
     }
   }
