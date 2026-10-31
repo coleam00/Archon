@@ -9,7 +9,10 @@ import * as git from '@archon/git';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Codebase } from '@archon/core/schemas/codebase';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import { adoptRegisteredWorktree } from '@archon/core/operations/workflow-adoption';
+import {
+  type AdoptionLane,
+  adoptRegisteredWorktree,
+} from '@archon/core/operations/workflow-adoption';
 import {
   configureWorktreeIsolation,
   createRunWorktreeSetupExecutor,
@@ -26,7 +29,6 @@ import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import {
   CONTINUATION_METADATA_KEY,
   SUBRUN_METADATA_KEYS,
-  type ContinuationMode,
   type OwnedWorktree,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -102,9 +104,9 @@ export async function launchDetachedOwnedRun(
   assertNoWorktreeOptionsForFolder(detachIsFolder, options);
 
   // Adoption resolution is read-only; the child re-resolves against the live checkout.
-  const declaration = await resolveContinuationDeclaration(host, cwd, options, detachCodebase);
-  if (declaration?.mode === 'adopt') admission.aiConfigurationRun = declaration.adoptedRun;
-  const adoptionLane = declaration?.mode === 'adopt' ? declaration.lane : undefined;
+  const declaration = await resolveContinuationDeclaration(host, options, detachCodebase);
+  if (declaration && 'lane' in declaration) admission.aiConfigurationRun = declaration.adoptedRun;
+  const adoptionLane = declaration && 'lane' in declaration ? declaration.lane : undefined;
   if (
     detachCodebase?.kind !== 'folder' &&
     adoptionLane?.kind !== 'checkout-branch' &&
@@ -158,7 +160,7 @@ function detachedLaneConfig(
   declaration: ContinuationDeclaration | undefined,
   codebase: Codebase | null
 ): LaneConfigSource {
-  const lane = declaration?.mode === 'adopt' ? declaration.lane : undefined;
+  const lane = declaration && 'lane' in declaration ? declaration.lane : undefined;
   if (lane?.kind === 'checkout-branch' && codebase) {
     return { kind: 'branch', codebase, branch: lane.taskBranch.branch };
   }
@@ -205,8 +207,7 @@ export interface RunWorkspace {
 
 /** The between-run continuation (#2747) this launch records and the lane it chose. */
 interface LaunchContinuation {
-  adoptedFromRunId: string | undefined;
-  continuationMode: ContinuationMode | undefined;
+  declaration: ContinuationDeclaration | undefined;
   adoptedTaskBranch: Extract<TaskBranchSelection, { kind: 'existing' }> | undefined;
   /**
    * Set when the adopt lane executes inside a checkout whose `.archon` may differ from
@@ -345,22 +346,17 @@ async function bindContinuationLane(
   codebase: Codebase | null,
   workspace: RunWorkspace
 ): Promise<LaunchContinuation> {
-  const { host, cwd, options } = request;
+  const { host, options } = request;
+  const declaration = await resolveContinuationDeclaration(host, options, codebase);
   const continuation: LaunchContinuation = {
-    adoptedFromRunId: undefined,
-    continuationMode: undefined,
+    declaration,
     adoptedTaskBranch: undefined,
     runsIsolatedCheckout: false,
   };
-  const declaration = await resolveContinuationDeclaration(host, cwd, options, codebase);
-  if (declaration !== undefined) {
-    continuation.continuationMode = declaration.mode;
-    continuation.adoptedFromRunId = declaration.runId;
-  }
-  if (declaration?.mode === 'adopt' && codebase) {
+  if (declaration && 'lane' in declaration && codebase) {
     admission.aiConfigurationRun = declaration.adoptedRun;
     await bindAdoptionLane(request, admission, declaration, codebase, workspace, continuation);
-  } else if (declaration?.mode === 'supersede') {
+  } else if (declaration && 'superseded' in declaration) {
     console.log(`Superseding run ${declaration.superseded.id} — fresh lane, provenance recorded.`);
   }
   return continuation;
@@ -369,7 +365,7 @@ async function bindContinuationLane(
 async function bindAdoptionLane(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
-  declaration: Extract<ContinuationDeclaration, { mode: 'adopt' }>,
+  declaration: Extract<ContinuationDeclaration, { lane: AdoptionLane }>,
   codebase: Codebase,
   workspace: RunWorkspace,
   continuation: LaunchContinuation
@@ -700,7 +696,7 @@ function createSetupRun(
   runId: string
 ): Promise<WorkflowRun> {
   const { request, admission, conversation, preparedAiConfiguration, continuation } = launch;
-  const { adoptedFromRunId } = continuation;
+  const { declaration } = continuation;
   return request.host.deps.store.createWorkflowRun({
     id: runId,
     workflow_name: admission.workflow.name,
@@ -718,11 +714,9 @@ function createSetupRun(
       ...(admission.resolvedInputs
         ? { [SUBRUN_METADATA_KEYS.inputs]: admission.resolvedInputs }
         : {}),
-      ...(adoptedFromRunId
-        ? { [CONTINUATION_METADATA_KEY]: { mode: continuation.continuationMode } }
-        : {}),
+      ...(declaration ? { [CONTINUATION_METADATA_KEY]: declaration.stamp } : {}),
     },
-    ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
+    ...(declaration ? { adopted_from_run_id: declaration.runId } : {}),
   });
 }
 

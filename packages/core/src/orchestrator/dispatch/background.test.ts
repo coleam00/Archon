@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { makeRun } from '../../test/orchestrator-agent-fixtures';
 import type * as WorkflowRunSource from '@archon/workflows/run-source';
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, realpath } from 'node:fs/promises';
@@ -713,26 +714,16 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   );
 
-  // #2910: a rejected terminal write means the row still says 'running' and the run's
-  // real outcome is unknown. Both sides of the branch are asserted — an ordinary
-  // rejection keeps its compensating write and its "failed" card; a terminal-write
-  // rejection gets neither, because a second write over the channel that just failed
-  // would either fail again or bury the real error.
-  test('marks the run failed and says so when execution rejects with an ordinary error', async () => {
+  test('reports execution rejection without an unowned terminal write', async () => {
     const workflow = makeWorkflow({ worktree: { enabled: false } });
     mockExecuteWorkflow.mockRejectedValueOnce(new Error('exec boom'));
-    mockFailWorkflowRun.mockImplementationOnce(async () => {
-      runLiveOwnerCalls.push('fail');
-      return { failed: true };
-    });
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
     await flushBackgroundExecution();
 
-    expect(mockFailWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(mockFailWorkflowRun.mock.calls[0]?.[0]).toBe('run-1');
+    expect(mockFailWorkflowRun).not.toHaveBeenCalled();
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
-    expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'fail', 'close']);
+    expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'close']);
     const sent = platform.sendMessage.mock.calls.map(c => c[1]);
     expect(sent.some(m => m.includes('failed: exec boom'))).toBe(true);
   });
@@ -825,18 +816,44 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
   });
 
-  test('fresh background supersede persists provenance on the pre-created row', async () => {
+  test('fresh background supersede records launch AI configuration and provenance', async () => {
     await dispatchBackgroundWorkflow(
-      makeRoutingCtx({ supersedesRunId: 'replaced-run' }),
+      makeRoutingCtx({
+        declaredContinuation: {
+          run: makeRun({
+            id: 'replaced-run',
+            status: 'failed',
+            metadata: {
+              ai_configuration: {
+                version: 1,
+                assistant: 'codex',
+                assistants: { codex: { model: 'replaced-model' } },
+                baseAiProfile: buildAiProfile('codex'),
+                modelOverrides: {},
+              },
+            },
+          }),
+          stamp: { mode: 'supersede' },
+        },
+      }),
       makeWorkflow({ worktree: { enabled: false } })
     );
 
     expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
     expect(mockCreateWorkflowRun.mock.calls[0][0]).toMatchObject({
       adopted_from_run_id: 'replaced-run',
-      metadata: { continuation: { mode: 'supersede' } },
+      metadata: {
+        continuation: { mode: 'supersede' },
+        ai_configuration: { assistant: 'claude', assistants: { claude: {} } },
+      },
     });
     await flushBackgroundExecution();
+    const prepared = mockExecuteWorkflow.mock.calls[0]?.[7]?.preparedAiConfiguration;
+    expect(prepared?.config.assistant).toBe('claude');
+    expect(prepared?.config.assistants.claude.model).toBeUndefined();
+    expect(mockCreateWorkflowRun.mock.calls[0][0].metadata?.ai_configuration).toEqual(
+      prepared?.aiConfigurationSnapshot
+    );
   });
 
   test('writes no inputs key on the pre-created row when none are supplied', async () => {
@@ -878,7 +895,10 @@ describe('dispatchBackgroundWorkflow', () => {
     }));
     try {
       await dispatchBackgroundWorkflow(
-        makeRoutingCtx({ adoptRunId: 'ancestor', userId: 'new-actor' }),
+        makeRoutingCtx({
+          declaredContinuation: { run: ancestor, stamp: { mode: 'adopt' } },
+          userId: 'new-actor',
+        }),
         makeWorkflow({ worktree: { enabled: false } })
       );
       await flushBackgroundExecution();
@@ -954,16 +974,14 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(opts?.runConfig).toEqual(runConfig);
   });
 
-  test('terminalizes a pre-created row when executor setup rejects the run config', async () => {
+  test('preserves a pre-created row when executor setup rejects the run config', async () => {
     const workflow = makeWorkflow({ worktree: { enabled: false } });
     mockExecuteWorkflow.mockRejectedValueOnce(new Error('invalid run config provider'));
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
     await flushBackgroundExecution();
 
-    expect(mockFailWorkflowRun).toHaveBeenCalledWith('run-1', 'invalid run config provider', {
-      exitReason: 'unhandled_error',
-    });
+    expect(mockFailWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('default policy still resolves isolation for the worker', async () => {
