@@ -86,12 +86,13 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
       const [cmd, args, opts] = execSpy.mock.calls[0] as [
         string,
         string[],
-        { env: NodeJS.ProcessEnv },
+        { env: NodeJS.ProcessEnv; input?: string },
       ];
       expect(cmd).toBe('bun');
       // Source is byte-identical to the author's body — the payload never appears in it.
-      expect(args).toEqual(['--no-env-file', '-e', 'console.log(process.env.ARGUMENTS)']);
+      expect(args).toEqual(['--no-env-file', '-']);
       expect(args.join(' ')).not.toContain('execSync');
+      expect(opts.input).toBe('console.log(process.env.ARGUMENTS)');
       // The value reaches the script via env vars instead.
       expect(opts.env.ARGUMENTS).toBe(workflowRun.user_message);
       expect(opts.env.USER_MESSAGE).toBe(workflowRun.user_message);
@@ -126,10 +127,11 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
         })
       );
 
-      const [, args] = execSpy.mock.calls[0] as [string, string[], unknown];
+      const [, args, opts] = execSpy.mock.calls[0] as [string, string[], { input?: string }];
       // The dangerous payload is NOT interpolated into the source; $ARGUMENTS stays literal.
-      expect(args[2]).toBe('console.log("value: $ARGUMENTS")');
-      expect(args[2]).not.toContain('rm -rf');
+      expect(args).toEqual(['--no-env-file', '-']);
+      expect(opts.input).toBe('console.log("value: $ARGUMENTS")');
+      expect(opts.input).not.toContain('rm -rf');
     } finally {
       execSpy.mockRestore();
     }
@@ -262,11 +264,11 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
       );
 
       const scriptCall = execSpy.mock.calls.find(
-        c => (c[0] as string) === 'bun' && (c[1] as string[]).includes('-e')
-      ) as [string, string[], unknown] | undefined;
+        c => (c[0] as string) === 'bun' && (c[1] as string[]).includes('-')
+      ) as [string, string[], { input?: string }] | undefined;
       expect(scriptCall).toBeDefined();
       // Raw (unquoted) node-output splice is intact — the direct-assignment pattern.
-      expect(scriptCall?.[1][2]).toBe('const v = "UPSTREAM_RAW"; console.log(v)');
+      expect(scriptCall?.[2].input).toBe('const v = "UPSTREAM_RAW"; console.log(v)');
     } finally {
       execSpy.mockRestore();
     }
@@ -1202,7 +1204,7 @@ describe('executeDagWorkflow -- script nodes', () => {
     }
   );
 
-  it('failure message strips the "Command failed: bun -e <body>" prefix and stays small', async () => {
+  it('failure message strips the subprocess command prefix and stays small', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('script-1389-run-id', {
@@ -1213,8 +1215,7 @@ describe('executeDagWorkflow -- script nodes', () => {
 
     // 500 × 7 chars = 3.5 KB — larger than SUBPROCESS_ERROR_MAX_CHARS (2 KB),
     // so any leak of the full script body via err.message would violate the length
-    // assertion below. Block-comment padding (no newlines) avoids Windows execFile
-    // arg truncation at \n that would cause bun to exit 0 on the comment-only prefix.
+    // assertion below.
     const paddingAboveMax = '/* p */'.repeat(500);
     const scriptNode: ExecNode = {
       id: 'fail-script-1389',
@@ -1248,9 +1249,9 @@ describe('executeDagWorkflow -- script nodes', () => {
     // 2 KB diagnostic cap + label prefix + truncation marker should stay under
     // 2.1 KB. Bumping SUBPROCESS_ERROR_MAX_CHARS would trip this.
     expect(errorMsg.length).toBeLessThan(2100);
-    // Bun emits `error: <description>\n    at [eval]:L:C` for parse failures —
+    // Bun emits `error: <description>\n    at [stdin]:L:C` for parse failures —
     // the location marker is the strongest signal that the diagnostic survived.
-    expect(errorMsg).toContain('[eval]');
+    expect(errorMsg).toContain('[stdin]');
   });
 
   it(
@@ -1660,9 +1661,10 @@ describe('executeDagWorkflow -- script nodes', () => {
 
     expect(execSpy).toHaveBeenCalledWith(
       'bun',
-      ['--no-env-file', '-e', 'console.log("ok")'],
+      ['--no-env-file', '-'],
       expect.objectContaining({
         env: expect.objectContaining({ MY_SECRET: 'abc123' }),
+        input: 'console.log("ok")',
       })
     );
     execSpy.mockRestore();
