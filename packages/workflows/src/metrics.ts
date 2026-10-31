@@ -119,6 +119,7 @@ export function resolveMetricsSplit(input: { compare?: string; byModel?: string 
     throw new MetricsQueryError('compare and by-model cannot be combined; run one query for each');
   }
   if (input.compare !== undefined) return { compareAt: parseInstant('compare', input.compare) };
+  if (input.byModel === '') throw new MetricsQueryError('by-model needs a node id');
   return input.byModel === undefined ? {} : { byModelNode: input.byModel };
 }
 
@@ -472,8 +473,9 @@ const byIdentity = (a: Identity, b: Identity): number => {
 /**
  * Aggregate stored metric records over `[since, until)`.
  *
- * 1. Only a node's latest terminal event in its run counts, and only from the node that
- *    produced the output, not from a node that relays it.
+ * 1. Only the latest terminal event of a node position counts, a position being the node
+ *    and the loop iterations it ran in, and only from the node that produced the output,
+ *    not from a node that relays it.
  * 2. A name's earliest stored record on the install, in recorded order, fixes its
  *    definition (`kind`, `unit`, `calibrates`), whatever codebase is queried. A later
  *    record that disagrees is refused and reported with both definitions, so a name keeps
@@ -484,7 +486,7 @@ const byIdentity = (a: Identity, b: Identity): number => {
  * 4. The latest record per `(name, subject, instrument, measured-by)` replaces earlier ones
  *    for a non-null subject, so a re-measurement never double-counts and a second judge
  *    model keeps the first one's records. A `subject: null` record counts once per run and
- *    node, by rule 1.
+ *    node position, by rule 1.
  * 5. A record falls in the window by `at`, else by its completion time.
  * 6. Each name reports one entry per instrument and measured-by, so two instruments are
  *    never averaged.

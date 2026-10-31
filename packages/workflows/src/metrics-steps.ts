@@ -5,13 +5,15 @@
  * level per query.
  */
 import { z } from 'zod';
+import { nodeInvocationKey } from './node-record-reader';
 import { serializedNodeDataSchema } from './node-record-serialization';
+import { nodeInvocationSchema } from './schemas/node-execution';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { IWorkflowStore } from './store';
 
 export type RunStepsStore = Pick<IWorkflowStore, 'listEventsForRuns' | 'listWorkflowRuns'>;
 
-/** Per run, the latest terminal event of each node, in recorded order. */
+/** Per run, the latest terminal event of each node position, in recorded order. */
 export type TerminalEvents = Map<string, WorkflowEventRow[]>;
 
 /** One AI node that completed: the node and the model binding that ran it. */
@@ -35,8 +37,9 @@ const CHILD_PAGE = 500;
 
 /**
  * Read the terminal events of `runIds` not already in `known`, and add them to it. A
- * completion later amended to `node_failed`, or superseded by a re-execution, is not its
- * node's latest terminal event.
+ * position is a node and the loop iterations it ran in, so each iteration of a loop body
+ * node counts. Within one position a completion later amended to `node_failed`, or
+ * superseded by a re-execution, is not the latest terminal event.
  */
 export async function readTerminalEvents(
   store: Pick<IWorkflowStore, 'listEventsForRuns'>,
@@ -47,17 +50,23 @@ export async function readTerminalEvents(
   for (let start = 0; start < missing.length; start += RUN_CHUNK) {
     const chunk = missing.slice(start, start + RUN_CHUNK);
     const byRun = await store.listEventsForRuns(chunk, ['node_completed', 'node_failed']);
-    for (const id of chunk) known.set(id, latestPerNode(byRun.get(id) ?? []));
+    for (const id of chunk) known.set(id, latestPerPosition(byRun.get(id) ?? []));
   }
   return known;
 }
 
-function latestPerNode(events: readonly WorkflowEventRow[]): WorkflowEventRow[] {
-  const lastByNode = new Map<string, WorkflowEventRow>();
+const loopPathOf = z.object({ invocation: nodeInvocationSchema.pick({ loopPath: true }) });
+
+function latestPerPosition(events: readonly WorkflowEventRow[]): WorkflowEventRow[] {
+  const lastByPosition = new Map<string, WorkflowEventRow>();
   for (const event of events) {
-    if (event.step_name !== null) lastByNode.set(event.step_name, event);
+    if (event.step_name === null) continue;
+    // Events written before `invocation` existed fall back to the node alone.
+    const parsed = loopPathOf.safeParse(event.data);
+    const loopPath = parsed.success ? parsed.data.invocation.loopPath : [];
+    lastByPosition.set(nodeInvocationKey(event.step_name, loopPath), event);
   }
-  return [...lastByNode.values()];
+  return [...lastByPosition.values()];
 }
 
 const stepDataSchema = serializedNodeDataSchema

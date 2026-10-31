@@ -37,7 +37,16 @@ function completion(
   };
 }
 
-function event(row: MetricRecordRow, type: 'node_completed' | 'node_failed'): WorkflowEventRow {
+/** The loop iterations a node ran in, as the engine records them on its terminal event. */
+const inIteration = (iteration: number): Record<string, unknown> => ({
+  invocation: { loopPath: [{ groupId: 'rounds', iteration }] },
+});
+
+function event(
+  row: MetricRecordRow,
+  type: 'node_completed' | 'node_failed',
+  data: Record<string, unknown> = {}
+): WorkflowEventRow {
   sequence += 1;
   return {
     id: type === 'node_completed' ? row.eventId : `event-${String(sequence)}`,
@@ -45,7 +54,7 @@ function event(row: MetricRecordRow, type: 'node_completed' | 'node_failed'): Wo
     event_type: type,
     step_index: null,
     step_name: row.nodeId,
-    data: {},
+    data,
     created_at: row.completedAt,
     event_order: sequence,
   };
@@ -325,6 +334,26 @@ describe('queryMetrics', () => {
       window
     );
     expect(report.metrics[0]?.instruments[0]).toMatchObject({ value: 1, n: 1 });
+  });
+
+  test('each loop iteration of a node counts; within one only the latest terminal event', async () => {
+    const run = 'looped';
+    const [first, second, rerun, amended] = Array.from({ length: 4 }, () =>
+      completion([count(1)], { run })
+    ) as [MetricRecordRow, MetricRecordRow, MetricRecordRow, MetricRecordRow];
+    const report = await queryMetrics(
+      store([first, second, rerun, amended], {
+        events: [
+          event(first, 'node_completed', inIteration(1)),
+          event(second, 'node_completed', inIteration(2)),
+          event(rerun, 'node_completed', inIteration(2)),
+          event(amended, 'node_completed', inIteration(3)),
+          event(amended, 'node_failed', inIteration(3)),
+        ],
+      }),
+      window
+    );
+    expect(report.metrics[0]?.instruments[0]).toMatchObject({ value: 2, n: 2 });
   });
 
   test('the window is half-open', async () => {
@@ -608,7 +637,8 @@ function aiStep(
   run: WorkflowRun,
   node: string,
   binding: { provider: string; model: string; resolved?: string; effort?: string; cost?: number },
-  type: 'node_completed' | 'node_failed' = 'node_completed'
+  type: 'node_completed' | 'node_failed' = 'node_completed',
+  data: Record<string, unknown> = {}
 ): WorkflowEventRow {
   sequence += 1;
   return {
@@ -626,6 +656,7 @@ function aiStep(
         ? {}
         : { model_usage: { requested: binding.model, resolved: binding.resolved } }),
       ...(binding.cost === undefined ? {} : { cost_usd: binding.cost }),
+      ...data,
     },
     created_at: '2026-10-02T00:00:00.000Z',
     event_order: sequence,
@@ -796,5 +827,20 @@ describe('queryMetrics step models', () => {
       runs_without_cost: 1,
       runs_partial_cost: 1,
     });
+  });
+
+  test('a costless earlier loop iteration gives its run partial cost', async () => {
+    const looped = after({ total_cost_usd: 2 });
+    const report = await queryMetrics(
+      store([completion([merged(1, 'pr-1', [looped])])], {
+        runs: [looped],
+        steps: [
+          aiStep(looped, REVIEW, codex, 'node_completed', inIteration(1)),
+          aiStep(looped, REVIEW, { ...opus, cost: 2 }, 'node_completed', inIteration(2)),
+        ],
+      }),
+      window
+    );
+    expect(report.metrics[0]?.instruments[0]?.cost).toMatchObject({ runs_partial_cost: 1 });
   });
 });

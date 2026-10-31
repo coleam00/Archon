@@ -256,11 +256,12 @@ cannot carry credentials, prompt contents or messages beyond its bounded `subjec
   record of a name, subject, instrument and `measured_by` replaces the earlier ones, so
   re-measuring a subject never counts it twice, and judging it again on another model keeps
   the first model's judgment. A `subject: null` record counts once for each run of
-  the node that returned it.
-- **Only a node's final result counts.** When a node runs again in the same run, or its
-  completion is later marked failed, only its last result counts, and a failed one
-  counts nothing. A `workflow:` node, a `loop_group` or a fan-out include that passes on
-  another node's output does not count its records again.
+  the node that returned it, and once for each loop iteration it ran in.
+- **Only a node's final result counts.** When a node runs again in the same run and loop
+  iteration, or its completion is later marked failed, only its last result counts, and a
+  failed one counts nothing. Each loop iteration of a node is its own result. A `workflow:`
+  node, a `loop_group` or a fan-out include that passes on another node's output does not
+  count its records again.
 - **Windows use `at`.** A record falls in a window by `at`, or by its completion time when
   it has none. The window includes its start and excludes its end.
 - **Instruments are kept apart.** A name reports one entry per `instrument` and
@@ -348,8 +349,10 @@ archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.r
   `separated`, computed the same way as `--compare`.
 - **Node ids are per workflow.** A node id names a node inside one workflow, with any
   `include:` prefix. The same step can be `ship__deliver__rounds.review__code` inside one
-  workflow and `review__code` in another, so records from the two land in separate
-  comparisons.
+  workflow and `review__code` in another. A query has no workflow filter, so with
+  `--by-model ship__deliver__rounds.review__code` the other workflow's records fall in
+  `none`, and `none` reports its difference from the model groups combined. Read a
+  `none` group as other work, not as a model.
 - **A node no run ran fails.** When no producing run ran `<node>`, the query fails and
   lists the AI node ids the producing runs did run, at most 50: `archon metrics` exits `2`,
   and the API returns 400.
