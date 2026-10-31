@@ -569,8 +569,10 @@ prints: per name, its definition and one entry per instrument and `measured_by` 
 `value`, `n`, `interval`, `cost`, `latest` and a daily `series`, a `compare` block when
 `compare` is given or a `by_model` block when `byModel` is, plus `refused[]`. Returns
 **400** for a malformed window or `compare`, an empty `byModel`, `compare` with `byModel`, and a
-`byModel` node none of the window's producing runs ran, with the AI node ids they did run
-in the error. A window with no producing runs returns an empty report.
+`byModel` node none of the window's existing producing runs ran, with the AI node ids they
+did run in the error. The node is not checked when no producing run still exists: a window
+with no records returns an empty report, and records whose runs were all deleted are
+`unattributed`.
 See the [metrics guide](/guides/metrics/).
 
 ---

@@ -501,8 +501,10 @@ const byIdentity = (a: Identity, b: Identity): number => {
  * holds no record; only an output written before the key was reserved can carry one.
  *
  * Throws {@link MetricsByModelNodeError} when `byModelNode` names a node that no found
- * producing run ran, so a mistyped node is not reported as a table of `none`. A window
- * with no producing runs has no runs to check the node against and reports no records.
+ * producing run ran, so a mistyped node is not reported as a table of `none`. The check
+ * needs at least one producing run that still exists: a window with no records reports
+ * none, and records whose producing runs were all deleted are reported `unattributed`
+ * without checking the node.
  */
 export async function queryMetrics(
   store: MetricsStore,

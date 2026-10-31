@@ -353,10 +353,12 @@ archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.r
   `--by-model ship__deliver__rounds.review__code` the other workflow's records fall in
   `none`, and `none` reports its difference from the model groups combined. Read a
   `none` group as other work, not as a model.
-- **A node no run ran fails.** When the window has producing runs and none of them ran
-  `<node>`, the query fails and lists the AI node ids they did run, at most 50:
-  `archon metrics` exits `2`, and the API returns 400. A window with no producing runs
-  has nothing to check the node against, so it reports no records and succeeds.
+- **A node no run ran fails.** When at least one of the window's producing runs still
+  exists and none of them ran `<node>`, the query fails and lists the AI node ids they did
+  run, at most 50: `archon metrics` exits `2`, and the API returns 400. Without an
+  existing producing run there is nothing to check the node against, and the query
+  succeeds: a window with no records reports none, and records whose runs were all
+  deleted are counted as `unattributed`.
 - `--by-model` and `--compare` cannot be combined in one query.
 
 A model split is observational, like a cohort comparison. Each model ran the work it was

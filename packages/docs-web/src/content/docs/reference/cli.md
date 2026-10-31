@@ -2031,9 +2031,10 @@ stderr as `error: metric <name> is <definition>; run <id> node <node> offered
 <definition>`, where each `<definition>` is `<kind>/<unit>`, followed by
 ` calibrates <metric>` for a score that calibrates another metric. A stored output the record schema rejects is reported the same way when
 no name is given. Exit codes: `0` success, `1` usage (including a malformed window or
-`--compare`, an empty `--by-model`, or `--compare` with `--by-model`), `2` the window has producing runs and
+`--compare`, an empty `--by-model`, or `--compare` with `--by-model`), `2` the window has existing producing runs and
 none ran the `--by-model` node, with the AI node ids they did run (at most 50) on stderr
-(a window with no producing runs reports no records and exits `0`), `4` the report refused a
+(with no existing producing run the node is not checked and the query exits `0`: a window
+with no records reports none, and records whose runs were all deleted are `unattributed`), `4` the report refused a
 record.
 
 ### `chat <message>`

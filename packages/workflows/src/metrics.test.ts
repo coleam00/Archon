@@ -734,9 +734,17 @@ describe('queryMetrics step models', () => {
     await expect(query).rejects.toMatchObject({ seenNodeIds: ['plan', 'review__code'] });
   });
 
-  test('--by-model over a window with no producing runs is an empty report, not an error', async () => {
-    const report = await queryMetrics(store([]), { ...window, byModelNode: REVIEW });
-    expect(report.metrics).toEqual([]);
+  test('--by-model checks the node only against producing runs that still exist', async () => {
+    const empty = await queryMetrics(store([]), { ...window, byModelNode: REVIEW });
+    expect(empty.metrics).toEqual([]);
+
+    const deleted = await queryMetrics(store([completion([merged(1, 'pr-1', [after()])])]), {
+      ...window,
+      byModelNode: REVIEW,
+    });
+    const byModel = deleted.metrics[0]?.instruments[0]?.by_model;
+    expect(byModel?.groups).toEqual([]);
+    expect(byModel?.unattributed).toBe(1);
   });
 
   test('a step in a grandchild run is found through the level walk; an amended one is not', async () => {
