@@ -174,3 +174,12 @@ test('discovery errors remain visible and explicit script chains still cover tes
   );
   expect(inspectPackage(root)).toBeUndefined();
 });
+
+test('selected file-read failures stop discovery', () => {
+  const root = fixture();
+  write(root, 'src/plain.test.ts');
+  const files = ['src/missing.test.ts', 'src/plain.test.ts'];
+  expect(() => resolvePackageTestGroups(root, {}, files)).toThrow(
+    'Cannot read test file src/missing.test.ts'
+  );
+});

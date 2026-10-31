@@ -5,7 +5,11 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { archonCliInvocation } from '@archon/paths/cli-command';
+import { bunTestCommand, bunTestEnv } from './bun-test-command';
 import {
   planRequestedRuns,
   planShard,
@@ -127,6 +131,20 @@ describe('planRequestedRuns', () => {
     );
   }
 
+  test.each(['--changed', '--changed=HEAD', '--parallel=2', '--bail=1'])(
+    '%s preserves the following selector for package and root routing',
+    option => {
+      expect(planRequestedRuns([option, 'packages/paths/src/skills.test.ts'])[0].args).toEqual([
+        option,
+        'src/skills.test.ts',
+      ]);
+      expect(planRequestedRuns([option, 'scripts/package-tests.test.ts'])[0].args).toEqual([
+        option,
+        './scripts/package-tests.test.ts',
+      ]);
+    }
+  );
+
   test('plans no run when no argument names an owner', () => {
     expect(planRequestedRuns(['some/where/nope.test.ts'])).toEqual([]);
     expect(planRequestedRuns(['logger'])).toEqual([]);
@@ -203,13 +221,17 @@ describe('planStepCommand', () => {
  */
 describe('repo-tests exit codes', () => {
   const SCRIPT = fromRoot('scripts/repo-tests.ts');
-  const invoke = (args: string[]): { exitCode: number | null; stderr: string } => {
+  const invoke = (args: string[]): { exitCode: number | null; stderr: string; stdout: string } => {
     const result = Bun.spawnSync(['bun', SCRIPT, ...args], {
       cwd: REPO_ROOT,
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+    return {
+      exitCode: result.exitCode,
+      stderr: result.stderr.toString(),
+      stdout: result.stdout.toString(),
+    };
   };
 
   test('exits non-zero and names what it accepts when no argument routes', () => {
@@ -218,6 +240,22 @@ describe('repo-tests exit codes', () => {
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain('No argument named a test path this runner can place');
   });
+
+  for (const options of [['--shard=2/2'], ['--shard', '2/2']]) {
+    test(`rejects sharding across owners before starting children: ${options.join(' ')}`, () => {
+      const { exitCode, stdout, stderr } = invoke([
+        ...options,
+        'packages/paths/src/skills.test.ts',
+        'scripts/bun-test-command.test.ts',
+      ]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain('Sharding requires one test owner');
+      expect(stderr).toContain('packages/paths');
+      expect(stderr).toContain('the repository root');
+      expect(stdout).toBe('');
+      expect(stderr).not.toContain('bun test v');
+    });
+  }
 
   test('exits non-zero with the usage for an unknown plan shard', () => {
     const { exitCode, stderr } = invoke(['--plan', 'nope']);
@@ -238,10 +276,17 @@ describe('repo-tests exit codes', () => {
     expect(exitCode).not.toBe(0);
   });
 
+  test('single-owner sharding preserves native execution', () => {
+    const { exitCode, stdout } = invoke(['--shard=1/1', 'packages/paths/src/skills.test.ts']);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('◀ @archon/paths --shard=1/1');
+  });
+
   test('exits 0 when the routed run passes', () => {
-    const { exitCode } = invoke([fromRoot('packages/paths/src/skills.test.ts')]);
+    const { exitCode, stdout } = invoke([fromRoot('packages/paths/src/skills.test.ts')]);
 
     expect(exitCode).toBe(0);
+    expect(stdout).toContain('◀ @archon/paths ./src/skills.test.ts');
   });
 
   test('bun run test .archon/scripts/ executes the directory tests', () => {
@@ -256,4 +301,135 @@ describe('repo-tests exit codes', () => {
 
     expect(exitCode).toBe(0);
   });
+});
+
+for (const option of ['coverage-dir', 'reporter-outfile', 'path-ignore-patterns', 'timings']) {
+  test(`root routing preserves --${option} path values`, () => {
+    for (const value of [
+      'packages/paths/src/skills.test.ts',
+      'scripts/test-inventory.test.ts',
+      '.archon/scripts/',
+    ]) {
+      expect(
+        planRequestedRuns([`--${option}`, value, 'scripts/test-inventory.test.ts']).map(
+          run => run.args
+        )
+      ).toEqual([[`--${option}`, value, './scripts/test-inventory.test.ts']]);
+      expect(planRequestedRuns([`--${option}`, value])).toEqual([]);
+      expect(
+        planRequestedRuns([`--${option}`, value, 'packages/paths/src/skills.test.ts']).map(
+          run => run.args
+        )
+      ).toEqual([[`--${option}`, value, 'src/skills.test.ts']]);
+    }
+  });
+}
+
+const track = trackTempRoots();
+for (const owner of ['package', 'root'] as const) {
+  for (const scenario of ['explicit-pass', 'empty-shard', 'unchanged-name-filter'] as const) {
+    if (owner === 'root' && scenario === 'explicit-pass') continue;
+    test(`JUnit preserves native zero-file success: ${owner}, ${scenario}`, () => {
+      const root = track(mkdtempSync(join(tmpdir(), 'zero-file-junit-')));
+      const cwd = owner === 'package' ? fromRoot('packages/paths') : REPO_ROOT;
+      const selector =
+        owner === 'package' ? 'src/skills.test.ts' : './scripts/bun-test-command.test.ts';
+      const args =
+        scenario === 'explicit-pass'
+          ? [selector.replace('.test.ts', '-unmatched.test.ts'), '--pass-with-no-tests']
+          : scenario === 'empty-shard'
+            ? [selector, '--shard=2/2']
+            : [selector, '--changed', '-t', 'resolveSkillDirectories'];
+      const nativeReport = join(root, 'native.xml');
+      const native = Bun.spawnSync(
+        bunTestCommand([...args, '--reporter=junit', `--reporter-outfile=${nativeReport}`]),
+        { cwd, env: bunTestEnv(), stdout: 'pipe', stderr: 'pipe' }
+      );
+      expect(native.exitCode).toBe(0);
+      expect(existsSync(nativeReport)).toBe(false);
+
+      const entryPoints =
+        owner === 'package'
+          ? [
+              { cwd, args },
+              {
+                cwd: REPO_ROOT,
+                args: [`packages/paths/${args[0]}`, ...args.slice(1)],
+              },
+            ]
+          : [{ cwd, args }];
+      for (const [index, entry] of entryPoints.entries()) {
+        const report = join(root, `wrapped-${index}.xml`);
+        const wrapped = Bun.spawnSync(
+          ['bun', 'run', 'test', ...entry.args, '--reporter=junit', `--reporter-outfile=${report}`],
+          { cwd: entry.cwd, env: bunTestEnv(), stdout: 'pipe', stderr: 'pipe' }
+        );
+        expect(wrapped.exitCode).toBe(native.exitCode);
+        const xml = readFileSync(report, 'utf8');
+        expect(xml).toMatch(/<testsuites[^>]*tests="0"/);
+        expect(xml).toMatch(/<testsuites[^>]*errors="0"/);
+        expect(wrapped.stderr.toString()).toContain('Bun exited 0 without a JUnit report');
+      }
+    });
+  }
+}
+
+for (const second of ['package', 'root']) {
+  test(`root JUnit retains earlier owners before a ${second} owner`, () => {
+    const root = track(mkdtempSync(join(tmpdir(), 'root-junit-')));
+    const report = join(root, 'combined.xml');
+    const secondFile =
+      second === 'package'
+        ? 'packages/plugin-manifest/src/index.test.ts'
+        : 'scripts/bun-test-command.test.ts';
+    const result = Bun.spawnSync(
+      [
+        'bun',
+        fromRoot('scripts/repo-tests.ts'),
+        'packages/paths/src/skills.test.ts',
+        secondFile,
+        '-t',
+        'returns empty paths and missing for undefined input|accepts comparator ranges on full versions|sets the default per-test budget',
+        '--reporter=junit',
+        '--reporter-outfile',
+        second === 'root' ? relative(REPO_ROOT, report) : report,
+      ],
+      { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' }
+    );
+    expect(result.exitCode).toBe(0);
+    const xml = readFileSync(report, 'utf8');
+    expect(xml).toContain('<testcase name="returns empty paths and missing for undefined input"');
+    expect(xml).toContain(
+      second === 'package'
+        ? 'accepts comparator ranges on full versions'
+        : 'sets the default per-test budget'
+    );
+    expect(xml.match(/<\?xml/g)).toHaveLength(1);
+    expect(xml).toMatch(/<testsuites[^>]*failures="0"[^>]*errors="0"/);
+  });
+}
+
+test('root JUnit includes a failing owner and stops before unstarted owners', () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'root-junit-')));
+  const report = join(root, 'failure.xml');
+  const result = Bun.spawnSync(
+    [
+      'bun',
+      fromRoot('scripts/repo-tests.ts'),
+      'packages/paths/src/skills.test.ts',
+      'packages/plugin-manifest/src/index.test.ts',
+      'scripts/bun-test-command.test.ts',
+      '-t',
+      'returns empty paths and missing for undefined input|sets the default per-test budget',
+      '--reporter=junit',
+      `--reporter-outfile=${report}`,
+    ],
+    { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' }
+  );
+  expect(result.exitCode).not.toBe(0);
+  const xml = readFileSync(report, 'utf8');
+  expect(xml).toContain('<testcase name="returns empty paths and missing for undefined input"');
+  expect(xml).toContain('index.test.ts');
+  expect(xml).toContain('<error');
+  expect(xml).not.toContain('bun-test-command.test.ts');
 });

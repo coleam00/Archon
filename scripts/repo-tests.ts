@@ -2,6 +2,8 @@ import { existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
+import { junitDestination, parseTestArguments } from './package-test-requests';
+import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
 /**
  * Runs the repository's tests, from the repository root.
@@ -189,15 +191,11 @@ export function planShard(requested: readonly string[]): TestShard | undefined {
  * owner means no run: the caller reports that rather than falling back to the full suite.
  */
 export function planRequestedRuns(requested: string[]): RequestedRun[] {
-  let expectsTestName = false;
-  const routes = requested.map(
-    (argument): { argument: string; route: RoutedArgument | undefined } => {
-      const route = expectsTestName ? undefined : routeArgument(argument);
-      expectsTestName =
-        !expectsTestName && (argument === '-t' || argument === '--test-name-pattern');
-      return { argument, route };
-    }
-  );
+  const selectors = new Set(parseTestArguments(requested).positionals.map(token => token.index));
+  const routes = requested.map((argument, index) => ({
+    argument,
+    route: selectors.has(index) ? routeArgument(argument) : undefined,
+  }));
 
   const owners = new Map<string, TestOwner>();
   for (const { route } of routes) {
@@ -228,12 +226,33 @@ async function runRequested(requested: string[]): Promise<number> {
     return 1;
   }
 
-  for (const { owner, args } of runs) {
-    const code = await run(bunTestCommand(args), owner.cwd);
-    if (code !== 0) return code;
+  const { optionTokens } = parseTestArguments(requested);
+  if (runs.length > 1 && optionTokens.some(token => token.name === 'shard')) {
+    console.error(
+      `Sharding requires one test owner; selected: ${runs.map(({ owner }) => owner.label).join(', ')}. Run each owner separately.`
+    );
+    return 1;
   }
-
-  return 0;
+  const destination = junitDestination(optionTokens);
+  const reports = [];
+  let code = 0;
+  for (const { owner, args } of runs) {
+    const runOwner = (ownerArgs: string[]) =>
+      run(
+        owner.cwd === REPO_ROOT ? bunTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
+        owner.cwd
+      );
+    if (destination === undefined) {
+      code = await runOwner(args);
+    } else {
+      const result = await runReportedGroup(args, runOwner);
+      reports.push(result.report);
+      code = result.code;
+    }
+    if (code !== 0) break;
+  }
+  if (destination !== undefined) writeCombinedReport(resolve(REPO_ROOT, destination), reports);
+  return code;
 }
 
 async function main(requested: string[]): Promise<number> {

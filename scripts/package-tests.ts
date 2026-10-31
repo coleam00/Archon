@@ -6,6 +6,8 @@ import {
   resolvePackageTestGroups,
 } from './package-test-groups';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
+import { resolveRequestedTestGroups } from './package-test-requests';
+import { runReportedGroup, writeCombinedReport, type TestReport } from './package-test-reports';
 
 /**
  * Runs one package's tests, from that package's directory.
@@ -46,14 +48,7 @@ const run = async (args: string[]): Promise<number> => {
 
 const requested = Bun.argv.slice(2);
 
-// Requested arguments go through verbatim. Do not add a path-existence check here:
-// `bun test` already exits 1 when a selector matches no test file, and its selectors are
-// substring filters rather than paths, so `bun run test logger` is a valid run that any
-// such check would refuse. The exit-0-on-a-bad-path this runner was written to fix came
-// from `bun run` appending the argument to a chain whose other selectors still matched.
-if (requested.length > 0) process.exit(await run(requested));
-
-const part = parseTestPart(process.env.ARCHON_TEST_PART);
+const part = requested.length === 0 ? parseTestPart(process.env.ARCHON_TEST_PART) : undefined;
 const packageName =
   typeof manifest === 'object' && manifest !== null && 'name' in manifest
     ? String(manifest.name)
@@ -61,24 +56,48 @@ const packageName =
 const weights: Record<string, Record<string, number>> = await Bun.file(
   join(import.meta.dir, 'test-weights.json')
 ).json();
-const groups = partitionTestGroups(
-  resolvePackageTestGroups(packageDir, manifest),
-  weights[packageName] ?? {},
-  part?.count ?? 1
-)[(part?.index ?? 1) - 1];
+const request =
+  requested.length > 0 ? resolveRequestedTestGroups(packageDir, manifest, requested) : undefined;
+const groups =
+  request?.groups ??
+  partitionTestGroups(
+    resolvePackageTestGroups(packageDir, manifest),
+    weights[packageName] ?? {},
+    part?.count ?? 1
+  )[(part?.index ?? 1) - 1];
 const concurrency = resolvePackageTestConcurrency(manifest);
 if (part !== undefined) {
   console.log(`Part ${String(part.index)}/${String(part.count)}: ${String(groups.length)} groups`);
 }
 
+const singleGroupOption =
+  request?.namePattern !== undefined
+    ? 'Name filters require'
+    : request?.hasShard
+      ? 'Sharding requires'
+      : undefined;
+if (groups.length > 1 && singleGroupOption !== undefined) {
+  throw new Error(
+    `${singleGroupOption} one isolation group; selected ${groups.length}:\n${groups.map((group, index) => `  ${index + 1}: ${group.join(' ')}`).join('\n')}\nSelect files from one group or run each group separately.`
+  );
+}
+const reports: TestReport[] = [];
+
 /** Runs one group and reports how long it took, for `update-test-weights.ts`. */
 const timed = async (group: string[], runGroup: (group: string[]) => Promise<number>) => {
   const startedAt = performance.now();
-  const code = await runGroup(group);
+  let result: number;
+  if (request?.reporterOutfile !== undefined) {
+    const reported = await runReportedGroup(group, runGroup);
+    reports.push(reported.report);
+    result = reported.code;
+  } else {
+    result = await runGroup(group);
+  }
   console.log(
     `◀ ${packageName} ${group[0]} ${((performance.now() - startedAt) / 1000).toFixed(1)}s`
   );
-  return code;
+  return result;
 };
 
 const runBuffered = async (group: string[]): Promise<number> => {
@@ -102,20 +121,22 @@ const runBuffered = async (group: string[]): Promise<number> => {
 
 /**
  * Runs the groups `concurrency` at a time and returns the first failure's code. After a
- * failure no new group starts, but the running ones finish so their output is not lost.
+ * failure a full run stops admitting groups; requested runs finish every selected group.
  */
 async function runGroups(): Promise<number> {
   if (concurrency === 1) {
+    let firstFailure = 0;
     for (const group of groups) {
       const code = await timed(group, run);
-      if (code !== 0) return code;
+      if (firstFailure === 0) firstFailure = code;
+      if (code !== 0 && request === undefined) return code;
     }
-    return 0;
+    return firstFailure;
   }
   let next = 0;
   let firstFailure = 0;
   const worker = async (): Promise<void> => {
-    while (firstFailure === 0 && next < groups.length) {
+    while ((request !== undefined || firstFailure === 0) && next < groups.length) {
       const code = await timed(groups[next++], runBuffered);
       if (firstFailure === 0) firstFailure = code;
     }
@@ -125,4 +146,6 @@ async function runGroups(): Promise<number> {
 }
 
 // Not `process.exit`: on a pipe it can cut off the buffered group output written just before.
-process.exitCode = await runGroups();
+const code = await runGroups();
+if (request?.reporterOutfile !== undefined) writeCombinedReport(request.reporterOutfile, reports);
+process.exitCode = code;

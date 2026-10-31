@@ -21,7 +21,22 @@ or through a helper, must start with the exact line `// @archon-test-isolated`;
 discovery fails on a direct call without it.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
-are forwarded to Bun verbatim and bypass default grouping.
+retain Bun's substring-filter meaning and run only matching files, preserving the same
+isolation groups. Every requested group runs, and any failed group makes the command
+fail. Discovery errors, including selected files outside explicit `testGroups`, stop
+the request before any group starts. Test flags apply to each selected group; JUnit output
+is combined across groups and, from the repository root, across every started owner.
+Name filters (`-t` or `--test-name-pattern`) are supported only when the request selects
+one isolation group, preserving Bun's native exit result. Requests selecting multiple
+groups with a name filter fail before tests load, with a diagnostic naming the groups.
+Sharding (`--shard`) also requires one isolation group; splitting the shard across
+groups could omit selected files. Root requests with `--shard` must also select one
+test owner. Select files from one group or run each group separately. Load and hook
+failures remain failures. An unreadable or invalid private report fails its group and
+contributes a runner error; later requested groups still run. Bun can omit JUnit output on successful
+zero-file runs. An absent report after exit 0 emits a diagnostic and contributes no
+results, preserving Bun's exit code; absence after a nonzero exit remains a runner error.
+The wrapper cannot distinguish successful zero-file execution from report loss after exit 0.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,

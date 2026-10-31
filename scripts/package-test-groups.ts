@@ -5,7 +5,8 @@ export const TEST_ISOLATION_DIRECTIVE = '// @archon-test-isolated';
 
 export function resolvePackageTestGroups(
   packageDirectory: string,
-  declaration: unknown
+  declaration: unknown,
+  selectedFiles?: readonly string[]
 ): string[][] {
   if (typeof declaration !== 'object' || declaration === null || Array.isArray(declaration)) {
     throw new Error('Package test declaration must be an object');
@@ -25,26 +26,31 @@ export function resolvePackageTestGroups(
       )
     )
       throw new Error('testGroups must contain nonempty arrays of string selectors');
-    return groups;
+    return selectedFiles === undefined
+      ? groups
+      : groups.map(group =>
+          selectedFiles.filter(file => group.some(selector => file.includes(selector)))
+        );
   }
 
-  const files = [
-    ...new Set(
-      new Bun.Glob('src/**/*.{test,spec}.{ts,tsx}').scanSync({
-        cwd: packageDirectory,
-        onlyFiles: true,
-        dot: true,
-      })
-    ),
-  ]
-    .map(path => path.replaceAll('\\', '/'))
-    .sort();
+  return groupDiscoveredTestFiles(
+    packageDirectory,
+    selectedFiles ?? discoverPackageTestFiles(packageDirectory)
+  );
+}
+
+function groupDiscoveredTestFiles(packageDirectory: string, files: readonly string[]): string[][] {
   if (files.length === 0) throw new Error('Test discovery found no tests under src');
   const isolated: string[][] = [];
   const shared: string[] = [];
   const unmarkedMocks: string[] = [];
   for (const file of files) {
-    const source = readFileSync(join(packageDirectory, file), 'utf8').replace(/^\uFEFF/, '');
+    let source: string;
+    try {
+      source = readFileSync(join(packageDirectory, file), 'utf8').replace(/^\uFEFF/, '');
+    } catch (cause) {
+      throw new Error(`Cannot read test file ${file}: ${String(cause)}`, { cause });
+    }
     if (source.split(/\r?\n/, 1)[0] === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
     else if (source.includes('mock.module(')) unmarkedMocks.push(file);
     else shared.push(file);
@@ -58,6 +64,20 @@ export function resolvePackageTestGroups(
     );
   }
   return shared.length > 0 ? [...isolated, shared] : isolated;
+}
+
+export function discoverPackageTestFiles(packageDirectory: string): string[] {
+  return [
+    ...new Set(
+      new Bun.Glob('src/**/*.{test,spec}.{ts,tsx}').scanSync({
+        cwd: packageDirectory,
+        onlyFiles: true,
+        dot: true,
+      })
+    ),
+  ]
+    .map(path => path.replaceAll('\\', '/'))
+    .sort();
 }
 
 /** How many of a package's test groups may run at once; 1 when the manifest does not say. */
