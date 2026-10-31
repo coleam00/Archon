@@ -734,6 +734,11 @@ describe('queryMetrics step models', () => {
     await expect(query).rejects.toMatchObject({ seenNodeIds: ['plan', 'review__code'] });
   });
 
+  test('--by-model over a window with no producing runs is an empty report, not an error', async () => {
+    const report = await queryMetrics(store([]), { ...window, byModelNode: REVIEW });
+    expect(report.metrics).toEqual([]);
+  });
+
   test('a step in a grandchild run is found through the level walk; an amended one is not', async () => {
     const parent = after();
     const children = Array.from({ length: 3 }, () =>
