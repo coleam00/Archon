@@ -25,7 +25,7 @@ route:
   brief: "stub-brief: replan https://github.com/example/repo/issues/7 from dev; the dated ruling supersedes https://github.com/example/repo/pull/1"
   reason: "stub: a dated ruling supersedes the open pull request"
   attention: null
-checkout: { head: null, pull_request: none }
+checkout: { head: null, reviewed: null, pull_request: none }
 ship__forge: { source: forge }
 ship__triage__triage:
   decision: { contract: READY, route: continue, pull_request: 1 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -20,6 +20,7 @@ import {
   ROUTE_DECISIONS,
 } from '../../workflows/sdlc/.shared/build';
 import { BUILD_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
+import { reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { mergeWaits } from '../../workflows/sdlc/.shared/merge';
 import { CONFIDENCES, checkAttention, chosen, renderAttention, withOther } from '../../workflows/sdlc/.shared/queue';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
@@ -32,7 +33,7 @@ import {
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
 import {
-  type GhApiIssue, type GhPr, type ScriptOptions, type ScriptRun,
+  type GhApiIssue, type GhCommentRow, type GhPr, type ScriptOptions, type ScriptRun,
   forgePrRecord, gitCheckout, hostCli, PACK, packScriptRunner, PR,
 } from './deliver-checks-harness';
 
@@ -281,6 +282,7 @@ function run(
   options: {
     issue?: GhApiIssue;
     pr?: GhPr;
+    comments?: readonly GhCommentRow[];
     writeLost?: boolean;
     source?: ScriptOptions['source'];
     preload?: ScriptOptions['preload'];
@@ -296,6 +298,7 @@ function run(
       issueLabels: ['archon-ready'],
       repositoryLabels: [],
       pr: { state: 'OPEN', headRefName: 'feature', ...options.pr },
+      comments: options.comments,
       writeLost: options.writeLost,
     },
     inputs: {
@@ -943,19 +946,45 @@ describe('the build queue checkout', () => {
     return result.stdout.trim();
   }
 
-  test('a continued round starts at the PR head on its queue branch', () => {
+  /** What checkout emitted, after checking it carries exactly the keys its node's output format requires. */
+  function emitted(result: ScriptRun): unknown {
+    const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'build-queue/archon-build-queue.yaml'), 'utf8')) as {
+      nodes: { id: string; output_format?: { required: string[] } }[];
+    };
+    const output = ok(result) as Record<string, unknown>;
+    const required = workflow.nodes.find(node => node.id === 'checkout')?.output_format?.required;
+    expect(Object.keys(output).sort()).toEqual([...(required ?? [])].sort());
+    return output;
+  }
+
+  test('a continued round starts at the PR head on its queue branch and reports the head its last review named', () => {
     const at = install();
+    git(at.checkout, 'checkout', '-q', 'dev');
+    mkdirSync(join(at.checkout, '.archon/sdlc/policy'), { recursive: true });
+    writeFileSync(join(at.checkout, '.archon/sdlc/policy/maintainers.json'), '["Maintainer"]\n');
+    git(at.checkout, 'add', '.archon/sdlc/policy/maintainers.json');
+    git(at.checkout, 'commit', '-q', '-m', 'maintainers');
+    git(at.checkout, 'push', '-q', 'upstream', 'HEAD:dev');
     git(at.checkout, 'push', '-q', 'upstream', 'feature');
     const head = git(at.checkout, 'rev-parse', 'feature');
+    // The review judged an older commit; the pull request gained commits after it.
+    const reviewed = git(at.checkout, 'rev-parse', 'feature~1');
     const branch = 'build/7-continued-round';
     git(at.checkout, 'checkout', '-q', '-b', branch, 'dev');
     const result = run(
       at,
       'checkout',
       { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
-      { pr: { headRefOid: head } }
+      { pr: { headRefOid: head }, comments: [{ id: 1, author: 'Maintainer', body: reviewCommentBody(reviewed, false, 'open', '# Review report') }] }
     );
-    expect(ok(result)).toEqual({ head, pull_request: 42 });
+    expect(emitted(result)).toEqual({ head, reviewed, pull_request: 42 });
+    const inputs = { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) };
+    // A pull request never reviewed has no baseline, and is not mistaken for one reviewed at its head.
+    expect(emitted(run(at, 'checkout', inputs, { pr: { headRefOid: head } }))).toEqual({ head, reviewed: null, pull_request: 42 });
+    const review = { id: 1, author: 'Maintainer', body: reviewCommentBody(reviewed, false, 'open', '# Review report') };
+    const duplicate = run(at, 'checkout', inputs, { pr: { headRefOid: head }, comments: [review, { ...review, id: 2 }] });
+    expect(duplicate.code).not.toBe(0);
+    expect(duplicate.stderr).toContain('more than one trusted review comment');
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
   }, 60_000);
@@ -967,11 +996,11 @@ describe('the build queue checkout', () => {
     const base = git(at.checkout, 'rev-parse', 'HEAD');
     const pr = JSON.stringify({ repo: PR.repo, number: 42 });
     const item = JSON.stringify(SUBJECT);
-    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
+    expect(emitted(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, reviewed: null, pull_request: 'none' });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
     // A pull request facts never offered, such as a fork's, is not left to ship's triage either.
-    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, pull_request: 'none' });
-    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' }))).toEqual({ head: null, pull_request: null });
+    expect(emitted(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, reviewed: null, pull_request: 'none' });
+    expect(emitted(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' }))).toEqual({ head: null, reviewed: null, pull_request: null });
     expect(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
   }, 60_000);
 
