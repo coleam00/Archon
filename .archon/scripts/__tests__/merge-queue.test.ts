@@ -449,7 +449,8 @@ function ghCalls(result: ScriptRun): string[] {
 }
 
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
-const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null }]);
+const PATHS = { changed: 1, sensitive: [] };
+const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null, paths: PATHS }]);
 const BASE_GREEN = { summary: 'dev is green', reran: false, attention: null };
 
 const ATTENTION: MergeAttention = {
@@ -475,7 +476,7 @@ const FACTS_BASE_RED = { branch: 'dev', head: OLD, checks: { state: 'red', faili
 function recordFacts(output: Record<string, unknown>): Record<string, string> {
   return {
     INPUTS_PATH: String(output.path), INPUTS_ITEMS: JSON.stringify(output.items),
-    INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_BASE: JSON.stringify(output.base),
+    INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_HELD: JSON.stringify(output.held), INPUTS_BASE: JSON.stringify(output.base),
     INPUTS_BASE_ERROR: String(output.base_error), INPUTS_SWEEP: 'null',
   };
 }
@@ -489,6 +490,7 @@ function recordInputs(
     INPUTS_PATH: 'sweep',
     INPUTS_ITEMS: ITEMS,
     INPUTS_SETTLED: '[]',
+    INPUTS_HELD: '[]',
     INPUTS_BASE: JSON.stringify(factsBase),
     INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept' }),
   };
@@ -499,7 +501,7 @@ const OTHER = { repo: PR.repo, number: 8 };
 const OTHER_PR = { repo: PR.repo, number: 43 };
 const OTHER_URL = PR_URL.replace(/42$/, '43');
 const BOTH_ITEMS = JSON.stringify([
-  { item: OTHER, pr: OTHER_PR, url: OTHER_URL, facts: { ...FACTS, pr: OTHER_PR, url: OTHER_URL }, record: null },
+  { item: OTHER, pr: OTHER_PR, url: OTHER_URL, facts: { ...FACTS, pr: OTHER_PR, url: OTHER_URL }, record: null, paths: PATHS },
   ...JSON.parse(ITEMS),
 ]);
 const HOLD = { id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', effect: 'hold', ruling: '' };
@@ -598,7 +600,7 @@ describe('the merge queue scripts', () => {
         const inputs = recordInputs([decision({ action: 'ask', head, attention })]);
         const recorded = ok(run(at, 'record', {
           ...inputs,
-          INPUTS_ITEMS: JSON.stringify([{ item: PR, pr: PR, url: PR_URL, facts: { ...FACTS, head_revision: head }, record: null, own_pr: true }]),
+          INPUTS_ITEMS: JSON.stringify([{ item: PR, pr: PR, url: PR_URL, facts: { ...FACTS, head_revision: head }, record: null, own_pr: true, paths: PATHS }]),
         }, { pr: { headRefOid: head } })) as { asked: { attention: MergeAttention } };
         // The queue owns `other`'s text; the sweep writes what its own `park` does.
         if (choice === 'other') expect(recorded.asked.attention.choices.find(entry => entry.id === 'other')?.does).toContain('different head');
@@ -696,8 +698,14 @@ describe('the merge queue scripts', () => {
       expect(picked.code).toBe(0);
       if (status === 'unknown') expect(picked.stderr).toContain('the engine reports no status');
       else expect(picked.stderr).toBe('');
-      expect(JSON.parse(picked.stdout)).toMatchObject({ path: status === 'failed' ? 'sweep' : 'idle' });
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(status === 'failed' ? 1 : 0);
+      const output = JSON.parse(picked.stdout) as { path: string; held: string[] };
+      expect(output.path).toBe(status === 'failed' ? 'sweep' : 'idle');
+      // A live owner keeps its claim; only the summary reads the head, to say the park would recover.
+      expect(output.held).toEqual(
+        status === 'running' ? ['PR 42: not mine: run owner holds it (running)']
+          : status === 'unknown' ? ['work/42: stuck: claimed by run owner, which the engine reports no status for'] : [],
+      );
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(status === 'unknown' ? 0 : 1);
       expect(stored(at, PR.number).value?.claim?.run_id).toBe(status === 'failed' ? 'run-1' : 'owner');
     }, 60_000);
   }
@@ -769,6 +777,58 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const picked = run(at, 'facts', {}, { pr: { ownPrs: [{ number: 50, url: PR_URL.replace(/42$/, '50'), isDraft: false }] } });
     expect(ok(picked)).toMatchObject({ path: 'idle' });
     expect(forgeCalls(picked).filter(call => call.startsWith('pr list'))).toEqual([]);
+  }, 60_000);
+
+  test("facts gives the sweep each changed path in a policy category, with the project's globs read from the default branch", () => {
+    const at = install();
+    const commit = (files: Record<string, string>, message: string): void => {
+      for (const [path, body] of Object.entries(files)) {
+        mkdirSync(join(at.checkout, path, '..'), { recursive: true });
+        writeFileSync(join(at.checkout, path), body);
+      }
+      git(at.checkout, 'add', '-A');
+      git(at.checkout, 'commit', '-q', '-m', message);
+    };
+    git(at.checkout, 'checkout', '-q', 'dev');
+    commit({ '.archon/sdlc/policy/merge-paths.yaml': "credentials: ['src/keys/**']\n", 'src/old-secret.ts': 'x\n' }, 'policy');
+    git(at.checkout, 'push', '-q', 'upstream', 'HEAD:dev');
+    git(at.checkout, 'checkout', '-q', '-b', 'pr-42');
+    mkdirSync(join(at.checkout, 'lib'));
+    git(at.checkout, 'mv', 'src/old-secret.ts', 'lib/plain.ts');
+    // The pull request also drops the project's glob from its own copy of the policy.
+    commit({
+      'src/keys/a.ts': 'k\n', 'src/keys/nøkkel\tfil.ts': 'u\n', 'src/OAuthFlow.ts': 'o\n', 'docs/guide.md': 'd\n',
+      '.archon/sdlc/policy/merge-paths.yaml': "credentials: ['nothing/**']\n",
+    }, 'change');
+    git(at.checkout, 'push', '-q', 'upstream', 'HEAD:refs/pull/42/head');
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
+    seed(at, item());
+    const output = ok(run(at, 'facts', {}, { pr: { headRefOid: head } })) as { items: { paths: unknown }[] };
+    // The default branch's glob adds to the defaults' (oauth, secret) whatever the pull request's copy says,
+    // matching ignores case, a name git would quote still matches, and a rename counts its old path.
+    expect(output.items[0]?.paths).toEqual({
+      changed: 7,
+      sensitive: [{ category: 'credentials', paths: ['src/OAuthFlow.ts', 'src/keys/a.ts', 'src/keys/nøkkel\tfil.ts', 'src/old-secret.ts'] }],
+    });
+  }, 60_000);
+
+  test('path facts that cannot be read reach the sweep as their error; a malformed project file fails facts before any claim', () => {
+    const at = install();
+    seed(at, item());
+    const output = ok(run(at, 'facts', {})) as { items: { paths: { error?: string } }[] };
+    expect(output.items[0]?.paths.error).toStartWith('its changed paths could not be read: git fetch');
+    const broken = install();
+    git(broken.checkout, 'checkout', '-q', 'dev');
+    mkdirSync(join(broken.checkout, '.archon/sdlc/policy'), { recursive: true });
+    writeFileSync(join(broken.checkout, '.archon/sdlc/policy/merge-paths.yaml'), 'credentials: src/keys\n');
+    git(broken.checkout, 'add', '-A');
+    git(broken.checkout, 'commit', '-q', '-m', 'broken policy');
+    git(broken.checkout, 'push', '-q', 'upstream', 'HEAD:dev');
+    seed(broken, item());
+    const refused = run(broken, 'facts', {});
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain('.archon/sdlc/policy/merge-paths.yaml must map each category name to a list of path globs');
+    expect(stored(broken).value?.claim).toBeNull();
   }, 60_000);
 
   test('an item whose pull request merged before the sweep is settled without it', () => {
@@ -928,7 +988,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       const output = ok(run(at, 'facts', {}, { pr: { unreadable: [PR.number] } })) as { settled: MergeSettled[] };
       expect(output.settled).toMatchObject([{ item: SUBJECT, status, decision: UNREADABLE }]);
       ok(run(at, 'record', {
-        INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null',
+        INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_HELD: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null',
       }));
       expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status } } });
       expect(mergeWaits(stored(at).value as WorkItem)).toBe(status === 'waiting');
@@ -941,7 +1001,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const failAndRecord = () => {
       const output = ok(run(at, 'facts', {}, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
       expect(output.settled).toMatchObject([{ status: 'waiting', decision: UNREADABLE }]);
-      ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null' }));
+      ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_HELD: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null' }));
     };
     failAndRecord();
     const readable = ok(run(at, 'facts', {}));
@@ -959,7 +1019,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     seed(at, item());
     const first = ok(run(at, 'facts', {}, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
-    ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(first.settled), INPUTS_SWEEP: 'null' }));
+    ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_HELD: '[]', INPUTS_SETTLED: JSON.stringify(first.settled), INPUTS_SWEEP: 'null' }));
     const before = stored(at).value as WorkItem;
     const readable = run(at, 'facts', { WORKFLOW_ID: 'readable-run' }, { pr: { baseUnreadable: failure === 'base read failed' } });
     if (failure === 'base read failed') {
@@ -1142,6 +1202,63 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     ok(run(at, 'record', recordInputs([decision({ action: 'wait', reran: true, reason: 'red in untouched code; re-ran' })])));
     const record = (stored(at).value as WorkItem).facts.merge as MergeRecord;
     expect(record.decisions.at(-1)).toMatchObject({ head: HEAD, reran: true });
+  }, 60_000);
+
+  test("the run's summary gives each considered pull request its decision, class and reason", () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const output = ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'CI is pending at its head' })])));
+    expect(String(output.summary).split('\n')).toEqual(['swept', 'PR 42: waiting (clear): CI is pending at its head']);
+  }, 60_000);
+
+  test("record refuses facts' payload without its held lines or an item's path facts, before writing", () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const { INPUTS_HELD: _held, ...unbound } = recordInputs([decision({ action: 'wait', reason: 'CI pending' })]);
+    const missing = run(at, 'record', unbound);
+    expect(missing.code).not.toBe(0);
+    expect(missing.stderr).toContain('held must be the list of lines facts emits');
+    const bare = JSON.stringify([{ ...JSON.parse(ITEMS)[0], paths: undefined }]);
+    const pathless = run(at, 'record', { ...recordInputs([decision({ action: 'wait', reason: 'CI pending' })]), INPUTS_ITEMS: bare });
+    expect(pathless.code).not.toBe(0);
+    expect(pathless.stderr).toContain(`the item for ${PR_URL} carries no path facts`);
+    expect(stored(at).value?.claim?.run_id).toBe('run-1');
+  }, 60_000);
+
+  test('the summary says what was recorded when the read-back fails, not what the sweep proposed', () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const output = ok(run(at, 'record', recordInputs([decision({ action: 'return', brief: 'Fix the thread.', reason: 'one open thread' })]), { pr: { unreadable: true } }));
+    const line = String(output.summary).split('\n')[1] ?? '';
+    expect(line).toStartWith(`PR 42: waiting (clear): ${PR_URL} could not be read back:`);
+    // Nothing went back to the build queue.
+    expect(stored(at).value?.facts.build?.status).toBe('ready');
+  }, 60_000);
+
+  test("facts names the items its pickup left by pickup's own rule, and record prints them in every summary", () => {
+    const at = install();
+    const builtFor = (url: string): BuildRecord => ({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: url })) });
+    const claim = (run_id: string) => ({ claim: { run_id, at: AT, requests: [] } });
+    // Asked about by a paused run; claimed by a run the engine does not know; claimed by a finished run.
+    seed(at, item(BUILT, merge('asking'), claim('run-asking')));
+    seed(at, item(builtFor(OTHER_URL), undefined, { ...claim('run-gone'), subject: OTHER }));
+    seed(at, item(builtFor(PR_URL.replace(/42$/, '44')), undefined, { ...claim('run-done'), subject: { repo: PR.repo, number: 9 } }));
+    const picked = run(at, 'facts', { INTAKE_RUN_STATUSES: '{"run-asking":"paused","run-done":"completed"}' });
+    expect(picked.code).toBe(0);
+    expect(picked.stderr).toContain('merge leaves work/8 claimed: the engine reports no status for run run-gone');
+    const output = JSON.parse(picked.stdout) as { held: string[]; items: { item: { number: number } }[] };
+    expect(output.held).toEqual([
+      'PR 42: not mine: run run-asking holds it (paused)',
+      'work/8: stuck: claimed by run run-gone, which the engine reports no status for',
+    ]);
+    // Pickup released the finished run's claim and took the item, so it is this run's, not held.
+    expect(output.items.map(entry => entry.item.number)).toEqual([9]);
+    const held = JSON.stringify(output.held);
+    const idle = ok(run(at, 'record', { INPUTS_PATH: 'idle', INPUTS_ITEMS: '[]', INPUTS_SETTLED: '[]', INPUTS_HELD: held, INPUTS_BASE: 'null', INPUTS_SWEEP: 'null' }));
+    expect(String(idle.summary).split('\n')).toEqual(['No pull request waits for this run.', ...output.held]);
+    seed(at, item(BUILT, undefined, { ...CLAIMED, subject: OTHER }));
+    const swept = ok(run(at, 'record', { ...recordInputs([decision({ number: 43, action: 'wait', reason: 'CI is pending' })]), INPUTS_ITEMS: JSON.stringify(JSON.parse(BOTH_ITEMS).slice(0, 1)), INPUTS_HELD: held }));
+    expect(String(swept.summary).split('\n').slice(-2)).toEqual(output.held);
   }, 60_000);
 
   test('a return hands the item back to the build queue with its brief', () => {

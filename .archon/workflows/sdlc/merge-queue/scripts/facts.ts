@@ -5,7 +5,8 @@
  * live claims, in intake's order, every item the build queue finished, up to `limit`,
  * including answered own-PR parks whose head changed, and reads each pull request
  * in one snapshot: its head, the trusted review
- * verdict, CI and review threads at that head, and whether it merges cleanly. An item
+ * verdict, CI and review threads at that head, and whether it merges cleanly, plus which
+ * of its changed paths fall in a merge-policy path category (`merge-paths.ts`). An item
  * whose pull request is already merged or closed, or that names none, is settled without
  * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
  * read with the reason, without stopping the rest of the batch. Successful reads reset
@@ -33,9 +34,11 @@ import {
   UNREADABLE,
   withMerge,
 } from '../../.shared/merge.ts';
+import { pathFacts, type PathFacts, readPathCategories } from '../../.shared/merge-paths.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
 import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
+import { unclaimedItems } from '../../.shared/stuck.ts';
 import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
@@ -47,6 +50,8 @@ interface Item {
   readonly record: MergeRecord | null;
   /** A maintainer's own pull request the queue enrolled: no issue and no build round behind it. */
   readonly own_pr: boolean;
+  /** Which changed paths fall in a policy category, read at `facts.head_revision`. */
+  readonly paths: PathFacts;
 }
 
 function positive(name: string, value: string): number {
@@ -153,7 +158,41 @@ function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem 
   }));
 }
 
-function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: readonly MergeSettled[], gate: string): void {
+function prName(doc: WorkItem): string {
+  try {
+    const pr = itemPr(doc);
+    if (pr !== null) return `PR ${String(pr.number)}`;
+  } catch {
+    // A malformed pull request URL still has its work item to name it by.
+  }
+  return `Issue ${String(doc.subject.number)}`;
+}
+
+/**
+ * One summary line for each item this run's pickup left that a person may look for:
+ * one it would take that a live run holds (`not mine`), and one stuck, from the same
+ * eligibility and claim rule the claim used. The summary is supplementary, so a failed
+ * listing is reported as a line rather than failing the run after its claims.
+ */
+function unclaimedLines(runId: string, pickup: Pickup): string[] {
+  try {
+    const { stuck, held } = unclaimedItems(runId, pickup);
+    return [
+      ...held.map(entry => `${prName(entry.doc)}: not mine: run ${entry.run_id} holds it (${entry.status})`),
+      ...stuck.map(entry => `${entry.name}: stuck: ${entry.reason}`),
+    ];
+  } catch (error) {
+    return [`The items other runs hold could not be listed: ${error instanceof Error ? error.message : String(error)}`];
+  }
+}
+
+function emitFacts(
+  repo: QualifiedPr['repo'],
+  items: readonly Item[],
+  settled: readonly MergeSettled[],
+  held: readonly string[],
+  gate: string,
+): void {
   // The default branch is read on every run: a red one after the last merge needs the
   // sweep's question even when no pull request waits.
   let inspection: { base: ReturnType<typeof readBase>; error: '' } | { base: null; error: string };
@@ -174,6 +213,7 @@ function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: r
     base_error: inspection.error,
     items,
     settled,
+    held,
     gate,
     policy_defaults: POLICY_DEFAULTS,
   });
@@ -190,6 +230,8 @@ function main(): void {
   requireMergeSource(repo);
   const list = readMaintainerList(repo);
   const maintainers = list.logins;
+  // Read before any claim, so a malformed project file fails the run with nothing held.
+  const categories = readPathCategories(repo);
   enrollOrNote(repo, list.ownPrs);
   const snapshot = snapshotReader(maintainers);
   const pickup = recoveryPickup(snapshot);
@@ -222,6 +264,7 @@ function main(): void {
       facts,
       record: current.facts.merge ?? null,
       own_pr: isOwnPr(doc),
+      paths: pathFacts(facts, categories),
     });
   }
   const gate = [
@@ -232,7 +275,7 @@ function main(): void {
   ]
     .map(quoted)
     .join(' ');
-  emitFacts(repo, items, settled, gate);
+  emitFacts(repo, items, settled, unclaimedLines(runId, pickup), gate);
 }
 
 try {

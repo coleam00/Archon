@@ -1,0 +1,35 @@
+# Archon's path categories for the merge queue, added to the SDLC pack's defaults
+# (credentials, persisted-format). The queue lists each pull request's changed paths
+# that match a category's globs; the sweep judges clear or unclear from merge.md with
+# that list in hand. A category says where a policy line applies, not the class.
+# The queue reads this file from the default branch.
+
+# Authentication, credentials or permissions (the default policy's unclear line).
+credentials:
+  - 'packages/core/src/credentials/**'
+  - 'packages/forge/src/credentials*'
+  - '**/*token-store*'
+  - 'auth-service/**'
+
+# A persisted schema, a migration, or any stored or wire format.
+persisted-format:
+  - 'packages/core/src/db/adapters/*.ts'
+  - 'packages/core/src/db/*schema*'
+
+# Changes to the SDLC pack itself (merge.md, below "Unclear").
+sdlc-pack:
+  - '.archon/**'
+
+# The workflow language: its YAML surface, schemas or validation.
+workflow-language:
+  - 'packages/workflows/src/schemas/**'
+  - 'packages/workflows/src/validator/**'
+  - 'packages/workflows/src/*validat*'
+  - 'packages/web/src/experiments/console/builder/validation/**'
+  - 'packages/cli/src/commands/validate.ts'
+
+# The plugin protocol, or any contract an outside plugin or provider builds against.
+plugin-protocol:
+  - 'packages/provider-contract/**'
+  - 'packages/chat-contract/**'
+  - 'packages/plugin-manifest/**'

@@ -22,8 +22,14 @@
  * or the maintainer refresh fails, record settlements without further forge reads,
  * leaving open companions untouched, then fail with the original diagnostic.
  *
- * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
- * from facts; INPUTS_SWEEP,
+ * A record that completes emits a summary giving every decision its class and reason,
+ * every settlement its reason, and the lines facts listed for items this run did not
+ * claim: those another live run holds, and those stuck. A record that fails emits no
+ * summary; its decisions are on the work items' merge records and the failure names
+ * what it refused.
+ *
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_HELD, INPUTS_BASE and
+ * INPUTS_BASE_ERROR from facts; INPUTS_SWEEP,
  * the sweep's whole output, "null" when it was skipped.
  */
 
@@ -46,9 +52,9 @@ import {
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
+import { isPathFacts, type PathFacts } from '../../.shared/merge-paths.ts';
 import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
 
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
@@ -74,6 +80,7 @@ interface Item {
   readonly record: MergeRecord | null;
   /** An enrolled maintainer's own pull request: its work item has no build record of its own. */
   readonly own_pr?: boolean;
+  readonly paths: PathFacts;
 }
 
 interface Decision {
@@ -259,14 +266,17 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   const { decision, status, reason, head } = outcome;
   const label = labelOf(decision, outcome, raised);
   const decided = `${label} (${decision.class})`;
+  const stored = raised ? 'asking' : status;
+  // The summary says what was recorded after read-back, which can differ from the sweep's proposal.
+  const line = `${stored} (${decision.class}): ${reason}`;
   const links = [item.url, ...(decision.attention?.links ?? [])];
   const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran };
   if (item.item === null) {
-    writes.lines.push(`PR ${String(decision.number)}: ${label}, with no work item to record it on`);
+    writes.lines.push(`PR ${String(decision.number)}: ${line}, with no work item to record it on`);
     return false;
   }
-  return write(writes, item.item, `PR ${String(decision.number)}`, label, doc => {
-    const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr, release: !raised });
+  return write(writes, item.item, `PR ${String(decision.number)}`, line, doc => {
+    const recorded = withMerge(doc, { at, run_id: runId, entry, status: stored, pr: item.pr, release: !raised });
     if (status !== 'returned') return recorded;
     const returned = { ...entry, decision: 'returned by the merge queue' };
     return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief, release: true });
@@ -276,10 +286,38 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
 function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
   for (const done of settled) {
     const entry = { at: writes.at, run_id: writes.runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false };
-    write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
+    const name = done.pr === null ? `Issue ${String(done.item.number)}` : `PR ${String(done.pr.number)}`;
+    write(writes, done.item, name, `${done.status}: ${done.reason}`, doc =>
       withMerge(doc, { at: writes.at, run_id: writes.runId, entry, status: done.status, pr: done.pr, release: true })
     );
   }
+}
+
+/**
+ * The items facts claimed, refused unless each carries the path facts facts emits: a
+ * missed binding or a reshaped producer fails here instead of reaching the record.
+ */
+function claimedItems(value: string | undefined): Item[] {
+  const items = nullableJson(value);
+  if (!Array.isArray(items)) throw new Error('items must be the list facts emits; the binding is missing or malformed');
+  for (const item of items as Item[]) {
+    if (!isPathFacts(item.paths)) throw new Error(`the item for ${String(item.url)} carries no path facts from facts`);
+  }
+  return items as Item[];
+}
+
+/** The summary lines facts listed for items this run did not claim; a missing binding refuses. */
+function heldLines(value: string | undefined): string[] {
+  const held = nullableJson(value);
+  if (!Array.isArray(held) || !held.every(line => typeof line === 'string')) {
+    throw new Error('held must be the list of lines facts emits; the binding is missing or malformed');
+  }
+  return held;
+}
+
+/** An idle run's summary: what other runs hold and what is stuck, as facts listed them. */
+function idleRecord(held: readonly string[]): string {
+  return [held.length === 0 ? 'No pull request waits for the merge queue.' : 'No pull request waits for this run.', ...held].join('\n');
 }
 
 function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], baseError: string): never {
@@ -290,8 +328,9 @@ function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], bas
 function main(): void {
   const path = MERGE_PATHS.find(candidate => candidate === trimmed(process.env.INPUTS_PATH));
   if (path === undefined) throw new Error(`path must be one of ${MERGE_PATHS.join(', ')}`);
-  const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
+  const items = claimedItems(process.env.INPUTS_ITEMS);
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
+  const held = heldLines(process.env.INPUTS_HELD);
   const baseError = text(process.env.INPUTS_BASE_ERROR);
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
@@ -300,7 +339,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       merged: [],
-      summary: idleSummary('No pull request waits for the merge queue.', stuckItems(text(process.env.WORKFLOW_ID))),
+      summary: idleRecord(held),
       attention: '',
       options: [],
       class: '',
@@ -365,7 +404,7 @@ function main(): void {
 
   emit({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
-    summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
+    summary: [sweep?.summary ?? '', ...writes.lines, ...held].filter(line => line !== '').join('\n'),
     attention: render(asked),
     options: asked === null ? [] : attentionOptions<string>(asked.attention),
     class: asked?.by ?? '',

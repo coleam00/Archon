@@ -17,7 +17,8 @@ such as one that arrived with a merge of the default branch, doesn't hold it.
 
 - A bug fix whose change stays inside the defect it fixes and the tests that prove it.
 - A small feature: one coherent behavior, a few files, with its tests and docs.
-- Tests, documentation and comments.
+- Tests, documentation and comments, including tests of code an unclear case below
+  names: moving or splitting a credentials test is a test change.
 - A pull request a maintainer approved for merge at its current head, or at an earlier
   head when everything since is merges of the default branch and the resolution of
   their conflicts, and the review is Ready at the current head. Anything else since the
