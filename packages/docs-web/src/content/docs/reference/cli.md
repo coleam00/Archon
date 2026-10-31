@@ -1997,6 +1997,7 @@ archon metrics factory.prs_merged --since 2026-10-01 --until 2026-10-22 --json
 archon metrics sdlc.tests_unprotective --subject https://github.com/acme/widgets/pull/12
 archon metrics --project acme/widgets
 archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
+archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.review__code
 ```
 
 The window is `[--since, --until)`. `--until` defaults to now and takes an ISO date or a
@@ -2006,17 +2007,23 @@ records about one subject. `--project <id|name|key>` keeps records from one regi
 codebase. A name's definition is install-wide either way: a record another codebase
 stored first still fixes it. `--compare <ISO>` takes an ISO date or a time with an offset
 and splits each instrument's records by when their producing runs started: before the cut,
-or at or after it.
+or at or after it. `--by-model <node>` splits them instead by the model label that ran
+`<node>` in their producing runs and the runs below them. The two cannot be combined.
 
 Text output prints one line per metric for its newest instrument: name, kind and unit,
 `value` (the sum for a `count`, the mean for a `score`), `n`, the 95% interval for a score
-of at least two records, and the latest record. An indented line gives the cost and tokens
-of the producing runs, with how many runs recorded no cost, no tokens or no longer exist.
-Other instruments follow with the same lines, indented further. With `--compare`, each
+of at least two records, the latest record, and the instrument with the models that ran its
+`instrument_node`, such as `[judge-v1 on claude/claude-opus-5-5@high]`. An indented line
+gives the cost and tokens of the producing runs, with how many runs recorded no cost, no
+tokens, only partial cost, or no longer exist. Other instruments follow with the same
+lines, indented further. With `--compare`, each
 entry adds the `before` and `after` cohorts with their value, `n` and interval, the delta
 with its 95% interval, whether that interval excludes zero (`separated`), and how many
 records were `straddling` the cut or `unattributed`, and the output ends with a line that
-the comparison is observational. `--json` prints one `MetricsReport` document, the same
+the comparison is observational. With `--by-model`, each entry adds one line per model label,
+then `(mixed)` and `(none)`, with its value, `n`, interval, its difference from the other
+model labels combined (`vs rest`, with its interval and `separated`), the requested models
+it merges, and its cost, and the output ends with a line that the split is observational. `--json` prints one `MetricsReport` document, the same
 shape `GET /api/metrics` returns, with names and instruments in sorted order.
 
 A record that conflicts with its name's first definition is left out and reported on
@@ -2024,7 +2031,11 @@ stderr as `error: metric <name> is <definition>; run <id> node <node> offered
 <definition>`, where each `<definition>` is `<kind>/<unit>`, followed by
 ` calibrates <metric>` for a score that calibrates another metric. A stored output the record schema rejects is reported the same way when
 no name is given. Exit codes: `0` success, `1` usage (including a malformed window or
-`--compare`), `4` the report refused a record.
+`--compare`, an empty `--by-model`, or `--compare` with `--by-model`), `2` the window has existing producing runs and
+none ran the `--by-model` node, with the AI node ids they did run (at most 50) on stderr
+(with no existing producing run the node is not checked and the query exits `0`: a window
+with no records reports none, and records whose runs were all deleted are `unattributed`), `4` the report refused a
+record.
 
 ### `chat <message>`
 
