@@ -1,12 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
 import { makeRun } from './engine-contract-fixtures';
-import { queryMetrics, type MetricsQuery, type MetricsStore } from './metrics';
+import {
+  MetricsByModelNodeError,
+  queryMetrics,
+  type MetricsQuery,
+  type MetricsStore,
+} from './metrics';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowRun } from './schemas/workflow-run';
+import type { DashboardWorkflowRun } from './schemas/workflow-run-listing';
 import type { MetricRecordRow } from './store';
 
-const window: MetricsQuery = {
+const window: Pick<MetricsQuery, 'since' | 'until'> = {
   since: new Date('2026-10-01T00:00:00Z'),
   until: new Date('2026-10-08T00:00:00Z'),
 };
@@ -45,19 +51,52 @@ function event(row: MetricRecordRow, type: 'node_completed' | 'node_failed'): Wo
   };
 }
 
-/** Every row is its node's terminal event unless `events` says otherwise. */
+function listed(run: WorkflowRun): DashboardWorkflowRun {
+  return {
+    ...run,
+    codebase_name: null,
+    platform_type: null,
+    worker_platform_id: null,
+    parent_platform_id: null,
+    active_nodes: [],
+    current_step_name: null,
+    total_steps: null,
+    current_step_status: null,
+    agents_completed: null,
+    agents_failed: null,
+    agents_total: null,
+  };
+}
+
+/**
+ * Every row is its node's terminal event unless `events` says otherwise; `steps` are
+ * further node events. Child runs list two to a page, so a walk must page.
+ */
 function store(
   rows: MetricRecordRow[],
   {
-    events = rows.map(row => event(row, 'node_completed')),
+    steps = [],
+    events = [...rows.map(row => event(row, 'node_completed')), ...steps],
     runs = [],
-  }: { events?: WorkflowEventRow[]; runs?: WorkflowRun[] } = {}
+  }: { steps?: WorkflowEventRow[]; events?: WorkflowEventRow[]; runs?: WorkflowRun[] } = {}
 ): MetricsStore {
   return {
     listMetricRecords: async () => rows,
     listEventsForRuns: async ids =>
       new Map(ids.map(id => [id, events.filter(row => row.workflow_run_id === id)])),
     getWorkflowRunsByIds: async ids => runs.filter(run => ids.includes(run.id)),
+    listWorkflowRuns: async options => {
+      const children = runs.filter(
+        run => run.parent_run_id !== null && options?.parentRunIds?.includes(run.parent_run_id)
+      );
+      const offset = options?.offset ?? 0;
+      const all = children.length;
+      return {
+        runs: children.slice(offset, offset + Math.min(options?.limit ?? 50, 2)).map(listed),
+        total: all,
+        counts: { all, running: 0, pending: 0, paused: 0, completed: 0, failed: 0, cancelled: 0 },
+      };
+    },
   };
 }
 
@@ -507,6 +546,7 @@ describe('queryMetrics attribution, cost and compare', () => {
       runs: 3,
       runs_without_cost: 2,
       runs_without_tokens: 1,
+      runs_partial_cost: 0,
       runs_missing: 1,
     });
     expect(report.metrics[0]?.instruments[0]?.compare).toBeUndefined();
@@ -560,5 +600,201 @@ describe('queryMetrics attribution, cost and compare', () => {
     // 5 ± t(0.975, 2) · 2 / √3
     expect(intervals['sdlc.review_minutes']?.low).toBeCloseTo(0.0317, 4);
     expect(intervals['sdlc.review_minutes']?.high).toBeCloseTo(9.9683, 4);
+  });
+});
+
+/** A completed AI node of `run`, recorded the way the engine serializes one. */
+function aiStep(
+  run: WorkflowRun,
+  node: string,
+  binding: { provider: string; model: string; resolved?: string; effort?: string; cost?: number },
+  type: 'node_completed' | 'node_failed' = 'node_completed'
+): WorkflowEventRow {
+  sequence += 1;
+  return {
+    id: `step-${String(sequence)}`,
+    workflow_run_id: run.id,
+    event_type: type,
+    step_index: null,
+    step_name: node,
+    data: {
+      type: 'agent',
+      provider: binding.provider,
+      model: binding.model,
+      ...(binding.effort === undefined ? {} : { effort: binding.effort }),
+      ...(binding.resolved === undefined
+        ? {}
+        : { model_usage: { requested: binding.model, resolved: binding.resolved } }),
+      ...(binding.cost === undefined ? {} : { cost_usd: binding.cost }),
+    },
+    created_at: '2026-10-02T00:00:00.000Z',
+    event_order: sequence,
+  };
+}
+
+const codex = { provider: 'codex', model: 'gpt-6.1-sol' };
+const opus = { provider: 'claude', model: 'claude-opus-5-5', resolved: 'claude-opus-5-5' };
+const opusAlias = { provider: 'claude', model: 'opus', resolved: 'claude-opus-5-5' };
+const REVIEW = 'ship__deliver__rounds.review__code';
+
+describe('queryMetrics step models', () => {
+  test('--by-model groups records by the label that ran the node, with mixed and none', async () => {
+    const [onCodex, onOpus, onAlias, mixedA, mixedB, never] = Array.from({ length: 6 }, () =>
+      after()
+    ) as [WorkflowRun, WorkflowRun, WorkflowRun, WorkflowRun, WorkflowRun, WorkflowRun];
+    const report = await queryMetrics(
+      store(
+        [
+          completion([
+            merged(1, 'pr-1', [onCodex]),
+            merged(0, 'pr-2', [onOpus]),
+            merged(1, 'pr-3', [onAlias]),
+            merged(1, 'pr-4', [mixedA, mixedB]),
+            merged(0, 'pr-5', [never]),
+            merged(1, 'pr-6', [before()]),
+          ]),
+        ],
+        {
+          runs: [onCodex, onOpus, onAlias, mixedA, mixedB, never],
+          steps: [
+            aiStep(onCodex, REVIEW, codex),
+            aiStep(onOpus, REVIEW, { ...opus, cost: 2 }),
+            aiStep(onAlias, REVIEW, { ...opusAlias, cost: 1 }),
+            aiStep(mixedA, REVIEW, codex),
+            aiStep(mixedB, REVIEW, opus),
+            aiStep(never, 'plan', codex),
+          ],
+        }
+      ),
+      { ...window, byModelNode: REVIEW }
+    );
+    const byModel = report.metrics[0]?.instruments[0]?.by_model;
+    expect(byModel?.unattributed).toBe(1);
+    expect(
+      byModel?.groups.map(g => [
+        g.split === 'model' ? g.label : g.split,
+        g.n,
+        g.value,
+        g.requested_models,
+      ])
+    ).toEqual([
+      ['claude/claude-opus-5-5', 2, 0.5, ['claude-opus-5-5', 'opus']],
+      ['codex/gpt-6.1-sol', 1, 1, ['gpt-6.1-sol']],
+      ['mixed', 1, 1, ['claude-opus-5-5', 'gpt-6.1-sol']],
+      ['none', 1, 0, []],
+    ]);
+    expect(byModel?.groups[0]).toMatchObject({
+      resolved_models: ['claude-opus-5-5'],
+      delta_vs_rest: -0.5,
+      cost: { runs: 2 },
+    });
+  });
+
+  test('--by-model with a node no producing run ran fails with the AI nodes they ran', async () => {
+    const run = after();
+    const query = queryMetrics(
+      store([completion([merged(1, 'pr-1', [run])])], {
+        runs: [run],
+        steps: [aiStep(run, 'review__code', codex), aiStep(run, 'plan', opus)],
+      }),
+      { ...window, byModelNode: REVIEW }
+    );
+    await expect(query).rejects.toBeInstanceOf(MetricsByModelNodeError);
+    await expect(query).rejects.toMatchObject({ seenNodeIds: ['plan', 'review__code'] });
+  });
+
+  test('a step in a grandchild run is found through the level walk; an amended one is not', async () => {
+    const parent = after();
+    const children = Array.from({ length: 3 }, () =>
+      makeRun({ id: randomUUID(), parent_run_id: parent.id })
+    );
+    const grandchild = makeRun({ id: randomUUID(), parent_run_id: children[2]?.id ?? '' });
+    const amendedRun = after();
+    const report = await queryMetrics(
+      store([completion([merged(1, 'pr-1', [parent]), merged(0, 'pr-2', [amendedRun])])], {
+        runs: [parent, ...children, grandchild, amendedRun],
+        steps: [
+          aiStep(grandchild, REVIEW, { ...opus, effort: 'high', cost: 1 }),
+          aiStep(amendedRun, REVIEW, codex),
+          aiStep(amendedRun, REVIEW, codex, 'node_failed'),
+        ],
+      }),
+      { ...window, byModelNode: REVIEW }
+    );
+    expect(
+      report.metrics[0]?.instruments[0]?.by_model?.groups.map(g =>
+        g.split === 'model' ? g.label : g.split
+      )
+    ).toEqual(['claude/claude-opus-5-5@high', 'none']);
+  });
+
+  test('a judge model is part of the instrument; other AI nodes do not change it', async () => {
+    const judge = (value: number, subject: string): Record<string, unknown> => ({
+      name: 'sdlc.tests_unprotective',
+      kind: 'score',
+      unit: 'ratio',
+      value,
+      subject,
+      instrument: 'judge-v1',
+      instrument_node: 'judge',
+    });
+    const onOpus = after();
+    const onCodex = after();
+    const extra = after();
+    const failedChild = makeRun({ id: randomUUID(), parent_run_id: extra.id });
+    const rows = [
+      completion([judge(0.2, 'pr-1'), judge(0.6, 'pr-2')], { run: onOpus.id, node: 'emit' }),
+      completion([judge(0.4, 'pr-1')], { run: onCodex.id, node: 'emit' }),
+      completion([judge(0.8, 'pr-2')], {
+        run: extra.id,
+        node: 'emit',
+        at: '2026-10-03T00:00:00.000Z',
+      }),
+    ];
+    const report = await queryMetrics(
+      store(rows, {
+        runs: [onOpus, onCodex, extra, failedChild],
+        steps: [
+          aiStep(onOpus, 'judge', opus),
+          aiStep(onCodex, 'judge', codex),
+          aiStep(extra, 'judge', opusAlias),
+          aiStep(extra, 'summarize', codex),
+          aiStep(failedChild, 'prepare', codex, 'node_failed'),
+        ],
+      }),
+      window
+    );
+    const [metric] = report.metrics;
+    expect(metric?.headline_instrument).toBe('judge-v1');
+    expect(metric?.headline_measured_by).toEqual(['claude/claude-opus-5-5']);
+    expect(metric?.instruments.map(i => [i.measured_by, i.n, i.value])).toEqual([
+      [['claude/claude-opus-5-5'], 2, (0.2 + 0.8) / 2],
+      [['codex/gpt-6.1-sol'], 1, 0.4],
+    ]);
+  });
+
+  test('a run that recorded a cost while one of its steps did not has partial cost', async () => {
+    const mixed = after({ total_cost_usd: 3 });
+    const child = makeRun({ id: randomUUID(), parent_run_id: mixed.id });
+    const complete = after({ total_cost_usd: 1 });
+    const unpriced = after();
+    const report = await queryMetrics(
+      store([completion([merged(1, 'pr-1', [mixed, complete, unpriced])])], {
+        runs: [mixed, child, complete, unpriced],
+        steps: [
+          aiStep(mixed, 'plan', { ...opus, cost: 3 }),
+          aiStep(child, REVIEW, codex),
+          aiStep(complete, 'plan', { ...opus, cost: 1 }),
+          aiStep(unpriced, REVIEW, codex),
+        ],
+      }),
+      window
+    );
+    expect(report.metrics[0]?.instruments[0]?.cost).toMatchObject({
+      usd: 4,
+      runs: 3,
+      runs_without_cost: 1,
+      runs_partial_cost: 1,
+    });
   });
 });

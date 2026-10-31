@@ -1,17 +1,20 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { resolveAttentionProject } from '@archon/core/operations/attention-queue';
 import {
+  MetricsByModelNodeError,
   MetricsQueryError,
   queryMetrics,
-  resolveCompareCut,
+  resolveMetricsSplit,
   resolveMetricsWindow,
 } from '@archon/workflows/metrics';
 import type {
+  MetricByModel,
   MetricCohort,
   MetricCompare,
   MetricCost,
   MetricDefinition,
   MetricInstrumentReport,
+  MetricModelGroup,
   MetricRefusal,
   MetricReport,
   MetricsReport,
@@ -24,13 +27,15 @@ export interface MetricsCommandOptions {
   subject?: string;
   /** Compare records whose producing runs started before and at or after this ISO time. */
   compare?: string;
+  /** Split each metric by the model label that ran this node; exclusive with `compare`. */
+  byModel?: string;
   /** A codebase id, name or project key, resolved as `workflow attention --project` does. */
   project?: string;
   json?: boolean;
 }
 
 // Scripts branch on these, never on message text.
-const EXIT = { ok: 0, usage: 1, refused: 4 } as const;
+const EXIT = { ok: 0, usage: 1, unknownNode: 2, refused: 4 } as const;
 
 type MetricsHost = Pick<WorkflowHost, 'deps' | 'records'>;
 
@@ -70,6 +75,7 @@ function costText(cost: MetricCost): string {
   const gaps = [
     runCount(cost.runs_without_cost, 'without cost'),
     runCount(cost.runs_without_tokens, 'without tokens'),
+    runCount(cost.runs_partial_cost, 'with partial cost'),
     runCount(cost.runs_missing, 'missing'),
   ];
   return `cost ${usd}, ${tokens} over ${runCount(cost.runs, 'found')}; ${gaps.join(', ')}`;
@@ -88,30 +94,68 @@ function compareLines(compare: MetricCompare): string[] {
   ];
 }
 
-function detailLines(entry: MetricInstrumentReport, indent: string): string[] {
-  return [costText(entry.cost), ...(entry.compare ? compareLines(entry.compare) : [])].map(
-    line => `${indent}${line}`
-  );
+function modelGroupLine(group: MetricModelGroup): string {
+  const name = group.split === 'model' ? group.label : `(${group.split})`;
+  const models =
+    group.requested_models.length === 0 ? '' : `  requested ${group.requested_models.join(', ')}`;
+  const delta =
+    group.delta_vs_rest === null
+      ? ''
+      : `  vs rest ${figure(group.delta_vs_rest)}${intervalText(group.delta_interval_vs_rest)}  separated: ${group.separated ? 'yes' : 'no'}`;
+  return `  ${name}: ${cohortText('value', group)}${delta}${models}; ${costText(group.cost)}`;
 }
 
-function metricLines(metric: MetricReport): string[] {
-  const headline = metric.instruments.find(i => i.instrument === metric.headline_instrument);
-  const others = metric.instruments.filter(i => i !== headline);
-  const instrument = (name: string | null): string => name ?? '(no instrument)';
+function byModelLines(byModel: MetricByModel): string[] {
   return [
-    `${metric.name}  ${metric.kind}/${metric.unit}  ${headline ? figures(headline) : ''}${
-      metric.headline_instrument === null ? '' : `  [${metric.headline_instrument}]`
-    }`,
+    `by model at ${byModel.node} (unattributed ${String(byModel.unattributed)}):`,
+    ...byModel.groups.map(modelGroupLine),
+  ];
+}
+
+function detailLines(entry: MetricInstrumentReport, indent: string): string[] {
+  return [
+    costText(entry.cost),
+    ...(entry.compare ? compareLines(entry.compare) : []),
+    ...(entry.by_model ? byModelLines(entry.by_model) : []),
+  ].map(line => `${indent}${line}`);
+}
+
+/** An instrument and the models that ran its node, such as `judge-v1 on claude/opus`. */
+function identityText(instrument: string | null, measuredBy: readonly string[]): string {
+  const on = measuredBy.length === 0 ? '' : ` on ${measuredBy.join(', ')}`;
+  return `${instrument ?? '(no instrument)'}${on}`;
+}
+
+const sameModels = (a: readonly string[], b: readonly string[]): boolean =>
+  a.join(',') === b.join(',');
+
+function metricLines(metric: MetricReport): string[] {
+  const headline = metric.instruments.find(
+    i =>
+      i.instrument === metric.headline_instrument &&
+      sameModels(i.measured_by, metric.headline_measured_by)
+  );
+  const others = metric.instruments.filter(i => i !== headline);
+  const headlineIdentity =
+    metric.headline_instrument === null && metric.headline_measured_by.length === 0
+      ? ''
+      : `  [${identityText(metric.headline_instrument, metric.headline_measured_by)}]`;
+  return [
+    `${metric.name}  ${metric.kind}/${metric.unit}  ${headline ? figures(headline) : ''}${headlineIdentity}`,
     ...(headline ? detailLines(headline, '  ') : []),
     ...others.flatMap(entry => [
-      `  ${instrument(entry.instrument)}: ${figures(entry)}`,
+      `  ${identityText(entry.instrument, entry.measured_by)}: ${figures(entry)}`,
       ...detailLines(entry, '    '),
     ]),
   ];
 }
 
-const OBSERVATIONAL =
-  'The comparison is observational: the cohorts also differ in the work they ran and in anything else that changed around the cut.';
+const OBSERVATIONAL = {
+  compare:
+    'The comparison is observational: the cohorts also differ in the work they ran and in anything else that changed around the cut.',
+  byModel:
+    'The split is observational: each model ran the work it was routed, so a difference mixes the model with the work.',
+} as const;
 
 function definitionText(definition: MetricDefinition): string {
   const calibrates = definition.calibrates === null ? '' : ` calibrates ${definition.calibrates}`;
@@ -127,16 +171,24 @@ function refusalLine(refusal: MetricRefusal): string {
   return `error: metric ${refusal.name} is ${definitionText(definition)}; ${where} offered ${definitionText(offered)}`;
 }
 
-function reportText(report: MetricsReport, compared: boolean): string {
+/** The note a split report ends with; a report carries at most one kind of split. */
+function observationalNote(report: MetricsReport): string[] {
+  const entries = report.metrics.flatMap(metric => metric.instruments);
+  if (entries.some(entry => entry.compare !== undefined)) return [OBSERVATIONAL.compare];
+  return entries.some(entry => entry.by_model !== undefined) ? [OBSERVATIONAL.byModel] : [];
+}
+
+function reportText(report: MetricsReport): string {
   const window = `${report.window.since} to ${report.window.until}`;
   if (report.metrics.length === 0) return `No metrics from ${window}.\n`;
-  const lines = [...report.metrics.flatMap(metricLines), ...(compared ? [OBSERVATIONAL] : [])];
+  const lines = [...report.metrics.flatMap(metricLines), ...observationalNote(report)];
   return `Metrics from ${window}:\n${lines.join('\n')}\n`;
 }
 
 /**
  * `archon metrics [name]`: aggregate stored metric records over a window. Exits 4 when
- * any record was refused, so a script can tell a clean report from one with conflicts.
+ * any record was refused, so a script can tell a clean report from one with conflicts,
+ * and 2 when no producing run ran the `--by-model` node.
  */
 export async function metricsCommand(
   host: MetricsHost,
@@ -148,12 +200,11 @@ export async function metricsCommand(
   const stderr = io.stderr ?? writeStderr;
   let report: MetricsReport;
   try {
-    const window = resolveMetricsWindow(options, io.now);
     report = await queryMetrics(host.deps.store, {
-      ...window,
+      ...resolveMetricsWindow(options, io.now),
       ...(name === undefined ? {} : { name }),
       ...(options.subject === undefined ? {} : { subject: options.subject }),
-      ...(options.compare === undefined ? {} : { compareAt: resolveCompareCut(options.compare) }),
+      ...resolveMetricsSplit(options),
       ...(options.project === undefined
         ? {}
         : { codebaseId: await resolveCodebaseId(host, options.project) }),
@@ -161,15 +212,11 @@ export async function metricsCommand(
   } catch (error) {
     if (!(error instanceof MetricsQueryError || error instanceof MetricsUsageError)) throw error;
     await stderr(`Error: ${error.message}\n`);
-    return EXIT.usage;
+    return error instanceof MetricsByModelNodeError ? EXIT.unknownNode : EXIT.usage;
   }
 
   // Same document form as writeJsonLine, through the injectable stdout.
-  await stdout(
-    options.json
-      ? `${JSON.stringify(report, null, 2)}\n`
-      : reportText(report, options.compare !== undefined)
-  );
+  await stdout(options.json ? `${JSON.stringify(report, null, 2)}\n` : reportText(report));
   for (const refusal of report.refused) await stderr(`${refusalLine(refusal)}\n`);
   return report.refused.length > 0 ? EXIT.refused : EXIT.ok;
 }

@@ -562,11 +562,14 @@ curl 'http://localhost:3090/api/metrics?name=factory.prs_merged&since=7d'
 
 Query parameters, all optional: `since` (a duration such as `7d`, `24h` or `2w`, or an ISO
 date or time; default 30 days before `until`), `until` (an ISO date or time; default now),
-`name`, `subject`, `codebaseId` and `compare` (an ISO date or time to split each
-instrument's records at). The window is half-open. It returns the same `MetricsReport`
-`archon metrics --json` prints: per name, its definition and one entry per instrument with
+`name`, `subject`, `codebaseId`, `compare` (an ISO date or time to split each
+instrument's records at) and `byModel` (a node id to split them by the model that ran it).
+The window is half-open. It returns the same `MetricsReport` `archon metrics --json`
+prints: per name, its definition and one entry per instrument and `measured_by` with
 `value`, `n`, `interval`, `cost`, `latest` and a daily `series`, a `compare` block when
-`compare` is given, plus `refused[]`. Returns **400** for a malformed window or `compare`.
+`compare` is given or a `by_model` block when `byModel` is, plus `refused[]`. Returns
+**400** for a malformed window or `compare`, for `compare` with `byModel`, and for a
+`byModel` node no producing run ran, with the AI node ids they did run in the error.
 See the [metrics guide](/guides/metrics/).
 
 ---

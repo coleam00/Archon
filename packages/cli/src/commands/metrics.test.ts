@@ -14,8 +14,10 @@ const now = new Date('2026-10-30T12:00:00Z');
 async function fixture(overrides: Record<string, unknown>[]) {
   const records = createInMemoryWorkflowHostStore();
   const store = createInMemoryWorkflowStore(records);
+  const runIds: string[] = [];
   for (const override of overrides) {
     const run = await store.createWorkflowRun({ workflow_name: 'count-prs', user_message: '' });
+    runIds.push(run.id);
     await store.persistWorkflowEvent({
       workflow_run_id: run.id,
       event_type: 'node_completed',
@@ -60,7 +62,7 @@ async function fixture(overrides: Record<string, unknown>[]) {
         stderr.push(String(text));
       },
     });
-  return { invoke, stdout, stderr };
+  return { invoke, stdout, stderr, store, runIds };
 }
 
 test('--since 7d ends the window now and starts it seven days earlier', async () => {
@@ -154,4 +156,53 @@ test('a malformed --compare is a usage error', async () => {
   const { invoke, stderr } = await fixture([{}]);
   expect(await invoke({ compare: 'last release' })).toBe(1);
   expect(stderr.join('')).toContain('compare must be an ISO date');
+});
+
+test('--compare and --by-model together are a usage error', async () => {
+  const { invoke, stderr } = await fixture([{}]);
+  expect(await invoke({ compare: '2026-01-01', byModel: 'review' })).toBe(1);
+  expect(stderr.join('')).toContain('compare and by-model cannot be combined');
+});
+
+test('--by-model with a node no producing run ran exits 2 and lists the AI nodes they ran', async () => {
+  const { invoke, stderr, store, runIds } = await fixture([{}]);
+  await store.persistWorkflowEvent({
+    workflow_run_id: runIds[0] ?? '',
+    event_type: 'node_completed',
+    step_name: 'review__code',
+    data: { type: 'agent', provider: 'codex', model: 'gpt-6.1-sol' },
+  });
+  expect(await invoke({ byModel: 'ship__review__code' })).toBe(2);
+  expect(stderr.join('')).toContain(
+    'no producing run ran an AI node "ship__review__code"; AI nodes they ran: review__code'
+  );
+});
+
+test('--by-model prints a line per model label and labels the split observational', async () => {
+  const { invoke, stdout, store, runIds } = await fixture([
+    { subject: 'pr-1' },
+    { subject: 'pr-2' },
+  ]);
+  const bindings = [
+    { provider: 'codex', model: 'gpt-6.1-sol' },
+    { provider: 'claude', model: 'opus', model_usage: { resolved: 'claude-opus-5-5' } },
+  ];
+  for (const [i, binding] of bindings.entries()) {
+    await store.persistWorkflowEvent({
+      workflow_run_id: runIds[i] ?? '',
+      event_type: 'node_completed',
+      step_name: 'review',
+      data: { type: 'agent', ...binding },
+    });
+  }
+  expect(await invoke({ byModel: 'review' })).toBe(0);
+  const text = stdout.join('');
+  expect(text).toContain('by model at review (unattributed 0):');
+  expect(text).toContain(
+    '    claude/claude-opus-5-5: value 2 (n 1)  vs rest 0  separated: no  requested opus;'
+  );
+  expect(text).toContain(
+    '    codex/gpt-6.1-sol: value 2 (n 1)  vs rest 0  separated: no  requested gpt-6.1-sol;'
+  );
+  expect(text).toContain('The split is observational');
 });

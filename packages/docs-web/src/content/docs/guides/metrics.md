@@ -238,8 +238,9 @@ affected; to use the key for something else, rename it.
   produced by the run that returned it. Name the runs that did the work, not the metric
   run that observed it: a merged pull request belongs to the runs that built it. Don't
   list both a run and its child run, since a parent's cost already includes its children.
-- `instrument_node`: the node that did the measuring. It is stored and validated, but
-  `archon metrics` does not read it yet.
+- `instrument_node`: the node that did the measuring, such as a judge's prompt node. The
+  engine reads which models ran it, in the run that returned the record and in that run's
+  child runs, and keeps the result as the record's `measured_by`. You never declare a model.
 
 Records hold only these fields. A record with any other key is refused, so a record
 cannot carry credentials, prompt contents or messages beyond its bounded `subject` and
@@ -252,8 +253,9 @@ cannot carry credentials, prompt contents or messages beyond its bounded `subjec
   reported as refused, with both definitions. To fix a wrong first definition, rename the
   metric, or delete the run that wrote it.
 - **The latest record per subject wins.** For a non-null `subject`, the latest stored
-  record of a name, subject and instrument replaces the earlier ones, so re-measuring a
-  subject never counts it twice. A `subject: null` record counts once for each run of
+  record of a name, subject, instrument and `measured_by` replaces the earlier ones, so
+  re-measuring a subject never counts it twice, and judging it again on another model keeps
+  the first model's judgment. A `subject: null` record counts once for each run of
   the node that returned it.
 - **Only a node's final result counts.** When a node runs again in the same run, or its
   completion is later marked failed, only its last result counts, and a failed one
@@ -261,9 +263,14 @@ cannot carry credentials, prompt contents or messages beyond its bounded `subjec
   another node's output does not count its records again.
 - **Windows use `at`.** A record falls in a window by `at`, or by its completion time when
   it has none. The window includes its start and excludes its end.
-- **Instruments are kept apart.** A name reports one entry per `instrument`, so a new
-  judge version never averages with the old one. The headline is the instrument of the
-  newest record.
+- **Instruments are kept apart.** A name reports one entry per `instrument` and
+  `measured_by`, so a new judge version, or the same judge on another model, never averages
+  with the old one. The headline (`headline_instrument` and `headline_measured_by`) is the
+  identity of the newest record.
+- **Only the measuring node's model counts.** `measured_by` is the sorted model labels that
+  ran `instrument_node`. Adding another prompt node to the metric workflow, or a child run
+  that fails before its judge node, leaves it unchanged. A record without `instrument_node`
+  has an empty `measured_by`.
 - **Records live with their runs.** Deleting a run, for example with
   `archon workflow cleanup`, deletes its records.
 
@@ -278,8 +285,10 @@ Each entry also reports the `cost` of its producing runs: `usd`, `input_tokens` 
 `output_tokens` summed over the distinct runs its records name, each run once. Providers
 that report no cost, such as Codex, add tokens but no cost, so the sum is a floor, never a
 total. `runs_without_cost`, `runs_without_tokens` and `runs_missing` count the runs that
-added nothing to it: runs that recorded no cost, no tokens, or no longer exist. `usd` is
-`null`, not `0`, when no run recorded a cost. Tokens of differently priced models do not compare as
+added nothing to it: runs that recorded no cost, no tokens, or no longer exist.
+`runs_partial_cost` counts runs that recorded a cost although an AI step in them, or in a
+run below them, recorded none, such as a Codex step in a run of Claude steps: their cost
+covers only some of their steps. `usd` is `null`, not `0`, when no run recorded a cost. Tokens of differently priced models do not compare as
 spend.
 
 ## Comparing before and after a change
@@ -315,6 +324,42 @@ for example, routes larger work to Claude and small work to Codex. The text outp
 `archon metrics --compare` ends with a line that says so. Showing that a change caused a difference needs runs
 assigned to each side independently of the work.
 
+## Comparing models
+
+`archon metrics <name> --by-model <node>` (or `byModel=` on the API) splits each entry's
+records by the model that ran `<node>` in their producing runs and the runs below them,
+such as the child runs of a `workflow:` node or a fan-out.
+
+```bash
+archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.review__code
+```
+
+- **Model labels.** A label is the provider, the model and the effort when recorded, such
+  as `claude/claude-opus-5-5@high`. The model is the one the provider reported running when
+  it reports one, otherwise the requested model, so an alias and the model it resolves to
+  share a label: `claude/opus` and `claude/claude-opus-5-5` are one group. Providers that
+  report no model, such as Codex, keep the requested one. Each group lists the
+  `requested_models` and `resolved_models` it merged.
+- **Mixed and none.** A record whose runs ran the node on more than one label is in
+  `mixed`; one whose runs never ran it is in `none`. A record with a named run that no
+  longer exists is in no group, and `unattributed` counts it.
+- **The difference.** Each group reports its `value`, `n`, `interval` and `cost`, and
+  `delta_vs_rest` against the other model groups combined, with its own interval and
+  `separated`, computed the same way as `--compare`.
+- **Node ids are per workflow.** A node id names a node inside one workflow, with any
+  `include:` prefix. The same step can be `ship__deliver__rounds.review__code` inside one
+  workflow and `review__code` in another, so records from the two land in separate
+  comparisons.
+- **A node no run ran fails.** When no producing run ran `<node>`, the query fails and
+  lists the AI node ids the producing runs did run, at most 50: `archon metrics` exits `2`,
+  and the API returns 400.
+- `--by-model` and `--compare` cannot be combined in one query.
+
+A model split is observational, like a cohort comparison. Each model ran the work it was
+routed: the SDLC pack sends larger and riskier work to Claude and small work to Codex, so a
+difference mixes the model with the task. The text output ends with a line that says so.
+Showing a model effect needs work assigned to each model independently of its size.
+
 Metric names are shared by every project on the install. Pass `--project` to read one
 codebase's records; their names keep the install's definitions.
 
@@ -330,7 +375,8 @@ curl 'http://localhost:3090/api/metrics?name=repo.commits&since=7d'
 
 Each metric reports its `value` (the sum or the mean), `n` (the records counted), its
 `interval`, the `cost` of its producing runs, its latest record and a daily `series`, per
-instrument, and a `compare` block when a cut is given. `archon metrics` exits `4` when it
+instrument and `measured_by`, a `compare` block when a cut is given, and a `by_model`
+block when a node is. `archon metrics` exits `4` when it
 refused a record, and prints each refusal to stderr. See
 [`archon metrics`](/reference/cli/#metrics-name) and
 [`GET /api/metrics`](/reference/api/#metrics) for every option.
