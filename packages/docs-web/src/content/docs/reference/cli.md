@@ -295,8 +295,8 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--config <path>` | Load one sparse YAML config layer for this fresh run. Relative paths resolve from the directory named by `--cwd`, even when it is a repository subdirectory. Values in the file override persistent config and user AI preferences; explicit `--model` flags then replace only their named bindings. Works with `--dry-run` and `--detach`; the parent validates and seals the layer before handing it to a detached child, so later file edits cannot change that launch. Rejected with `--resume` because a continuation restores the sealed layer recorded when the run started. |
 | `--config-from-run <run-id>` | Start this fresh run with the run config layer the named run was started with, as if its `--config` file were passed again. A run started without `--config` contributes nothing, so the new run uses the install's config alone. Use it when one workflow launches another to continue the same work, so the continuation keeps the provider configuration it started on. Exclusive with `--config`, and rejected with `--resume`. Works with `--detach`. |
 | `--resume` | Select the newest eligible run by start time for this workflow name and working path: a failed or paused run, or a `running` run whose last activity timestamp is missing or more than one day old. With a SQL store, a `running` run is excluded while its resource-start request is `admitted`; see [trigger inspection](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). Resume skips completed nodes and reuses the run's recorded AI configuration. Missing or old activity does not prove the owner is gone; verify that before resuming a `running` run. Rejected with `--branch`. Prefer [`workflow resume <run-id>`](#workflow-resume) when you hold the id of a failed or paused run. |
-| `--adopt <run-id>` | Start a new run in a terminal run's exact worktree or branch, with `adopted_from_run_id` provenance and `$ADOPTED_RUN_DIR` access. Inherits its recorded AI configuration; conflicting AI config or model overrides are rejected. Run-id selection is exact; adoption never infers a run from workflow name or prompt text. |
-| `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Unlike `--adopt`, it inherits no checkout. |
+| `--adopt <run-id>` | Start a new run in a terminal run's exact worktree or branch, with `adopted_from_run_id` provenance and `$ADOPTED_RUN_DIR` access. Inherits its recorded AI configuration; conflicting AI config or model overrides are rejected. A unique run-id prefix resolves within the launch project; ambiguous prefixes fail with candidate IDs unless `--chat-project-id` scopes selection. With that flag, use a longer prefix or full ID. Adoption never infers a run from workflow name or prompt text. |
+| `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Accepts a unique prefix within the launch project; ambiguous prefixes fail with candidate IDs unless `--chat-project-id` scopes selection. With that flag, use a longer prefix or full ID. Full IDs select the exact run, including another project unless `--chat-project-id` restricts selection. Unlike `--adopt`, it inherits no checkout. |
 | `--quiet`, `-q` | Suppress the progress lines on stderr |
 | `--verbose`, `-v` | Also print tool calls (name and duration) in the progress lines, and debug logs |
 | `--detach` | Run in a detached background child and return before completion. Human output names the transcript and the child's log file; the `--json` acknowledgement carries `runId`, `transcriptPath` (the run's JSONL transcript) and `logPath` (the child process's stdout and stderr). Follow execution with [`workflow logs <run-id> --follow`](#workflow-logs) and wait for the next terminal or gate transition with [`workflow wait <run-id>`](#workflow-wait). `approve`, `reject`, `respond` and `resume` accept it too; see [Detached control verbs](#detached-control-verbs). |
@@ -598,7 +598,7 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
 The node events for every listed run are read in one query, so the cost does not grow with
 one query per run.
 
-The listing shows short 8-character run ids. Every `<run-id>` command below (`get`, `artifacts`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any git repository or registered project folder. Short ids from `--all` rows belonging to *other* projects cannot be resolved; use the full id from `--json` for those.
+The listing shows short 8-character run ids. `workflow run --adopt` and `--supersedes` also resolve unique prefixes within the launch project and reject ambiguous prefixes. Full IDs select the exact run; adoption still requires the same project, and `--chat-project-id` restricts both flags to the selected project. Every `<run-id>` command below (`get`, `artifacts`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any git repository or registered project folder. Short ids from `--all` rows belonging to *other* projects cannot be resolved; use the full id from `--json` for those.
 
 ### `workflow get`
 
@@ -1984,6 +1984,47 @@ and `--install` selects install scope. The writer is recorded as
 `archon workflow cleanup <days>` also prunes old state revisions, keeps each live document's latest
 revision, retains the latest tombstone of deleted documents, and reports both counts.
 See [Durable state documents](/reference/workflow-language/#durable-state-documents).
+
+### `metrics [name]`
+
+Aggregate the metric records nodes returned under their reserved `metrics` output key.
+See the [metrics guide](/guides/metrics/) for how to emit them.
+
+```bash
+archon metrics
+archon metrics factory.prs_merged --since 7d
+archon metrics factory.prs_merged --since 2026-10-01 --until 2026-10-22 --json
+archon metrics sdlc.tests_unprotective --subject https://github.com/acme/widgets/pull/12
+archon metrics --project acme/widgets
+archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
+```
+
+The window is `[--since, --until)`. `--until` defaults to now and takes an ISO date or a
+time with an offset; a date alone is UTC midnight. `--since` takes the same, or a duration
+(`24h`, `7d`, `2w`) counted back from `--until`, and defaults to 30 days. `--subject` keeps
+records about one subject. `--project <id|name|key>` keeps records from one registered
+codebase. A name's definition is install-wide either way: a record another codebase
+stored first still fixes it. `--compare <ISO>` takes an ISO date or a time with an offset
+and splits each instrument's records by when their producing runs started: before the cut,
+or at or after it.
+
+Text output prints one line per metric for its newest instrument: name, kind and unit,
+`value` (the sum for a `count`, the mean for a `score`), `n`, the 95% interval for a score
+of at least two records, and the latest record. An indented line gives the cost and tokens
+of the producing runs, with how many runs recorded no cost, no tokens or no longer exist.
+Other instruments follow with the same lines, indented further. With `--compare`, each
+entry adds the `before` and `after` cohorts with their value, `n` and interval, the delta
+with its 95% interval, whether that interval excludes zero (`separated`), and how many
+records were `straddling` the cut or `unattributed`, and the output ends with a line that
+the comparison is observational. `--json` prints one `MetricsReport` document, the same
+shape `GET /api/metrics` returns, with names and instruments in sorted order.
+
+A record that conflicts with its name's first definition is left out and reported on
+stderr as `error: metric <name> is <definition>; run <id> node <node> offered
+<definition>`, where each `<definition>` is `<kind>/<unit>`, followed by
+` calibrates <metric>` for a score that calibrates another metric. A stored output the record schema rejects is reported the same way when
+no name is given. Exit codes: `0` success, `1` usage (including a malformed window or
+`--compare`), `4` the report refused a record.
 
 ### `chat <message>`
 

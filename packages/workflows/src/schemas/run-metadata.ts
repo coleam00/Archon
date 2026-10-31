@@ -165,21 +165,33 @@ export const RUN_METADATA_KEYS = {
  * Between-run continuation (#2747). Written once at run creation alongside
  * `adopted_from_run_id`: `{mode: 'adopt'}` when this run took over a terminal
  * run's estate, `{mode: 'supersede'}` when a fresh-lane rerun replaces its open
- * item (NO lane inheritance). Lives in metadata, not a column — nothing queries
- * it except display.
+ * item (NO lane inheritance). Execution uses the stamp to select inheritance.
  */
 export const CONTINUATION_METADATA_KEY = 'continuation';
 
-export type ContinuationMode = 'adopt' | 'supersede';
+export const CONTINUATION_MODES = { adopt: 'adopt', supersede: 'supersede' } as const;
+export type ContinuationMode = (typeof CONTINUATION_MODES)[keyof typeof CONTINUATION_MODES];
+const continuationMetadataSchema = z.object({ mode: z.enum(Object.values(CONTINUATION_MODES)) });
+export type ContinuationMetadata = z.infer<typeof continuationMetadataSchema>;
 
-/** Typed view of the continuation stamp; undefined when the run adopted nothing. */
+export function continuationInheritsEstate(mode: ContinuationMode): boolean {
+  switch (mode) {
+    case CONTINUATION_MODES.adopt:
+      return true;
+    case CONTINUATION_MODES.supersede:
+      return false;
+  }
+  return mode satisfies never;
+}
+
+/** Unstamped legacy runs retain adoption behavior; malformed stamps must not select an estate. */
 export function readContinuationMode(
   metadata: Record<string, unknown> | undefined
 ): ContinuationMode | undefined {
-  const raw = metadata?.[CONTINUATION_METADATA_KEY];
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const mode = (raw as { mode?: unknown }).mode;
-  return mode === 'adopt' || mode === 'supersede' ? mode : undefined;
+  if (!metadata || !Object.hasOwn(metadata, CONTINUATION_METADATA_KEY)) return undefined;
+  const parsed = continuationMetadataSchema.safeParse(metadata[CONTINUATION_METADATA_KEY]);
+  if (!parsed.success) throw new Error('Invalid recorded continuation metadata.');
+  return parsed.data.mode;
 }
 
 /**

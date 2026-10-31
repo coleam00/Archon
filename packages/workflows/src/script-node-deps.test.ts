@@ -190,6 +190,7 @@ function createMockStore(): IWorkflowStore {
     listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
+    listMetricRecords: mock<IWorkflowStore['listMetricRecords']>(async () => []),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
       throw new Error('Unexpected listWorkflowRuns');
@@ -222,6 +223,7 @@ function createMockStore(): IWorkflowStore {
       async (_id: string, baseline: CheckoutObservation) => baseline
     ),
     getWorkflowRun: mock(() => Promise.resolve(null)),
+    getWorkflowRunsByIds: mock(() => Promise.resolve([])),
     findChildRuns: mock(() => Promise.resolve([])),
     getRunAncestry: mock(() => Promise.resolve([])),
     getActiveWorkflowRunByPath: mock(() => Promise.resolve(null)),

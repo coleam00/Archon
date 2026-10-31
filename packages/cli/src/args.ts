@@ -68,6 +68,11 @@ export const cliArgOptions: CliArgOptions = {
   'if-revision': { type: 'string' },
   prefix: { type: 'string' },
   project: { type: 'string' },
+  // `archon metrics` window, subject filter and cohort cut.
+  since: { type: 'string' },
+  until: { type: 'string' },
+  subject: { type: 'string' },
+  compare: { type: 'string' },
   install: { type: 'boolean' },
   raw: { type: 'boolean' },
   values: { type: 'boolean' },

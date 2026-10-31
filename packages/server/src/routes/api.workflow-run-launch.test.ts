@@ -1,6 +1,9 @@
 import {
   mockFindConversationByPlatformId,
   mockHandleMessage,
+  mockGetWorkflowRun,
+  mockFindWorkflowRunsByIdPrefix,
+  MOCK_COMPLETED_RUN,
   mockAddMessage,
   mockGenerateAndSetTitle,
   mockArchonHome,
@@ -16,6 +19,7 @@ import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
+import * as auth from '../auth';
 import { workflowRunConfigKeys } from '@archon/core/config';
 import {
   workflowRunLaunchConfigSchema,
@@ -141,6 +145,10 @@ describe('POST /api/conversations/:id/message multipart files', () => {
 
 describe('POST /api/workflows/:name/run', () => {
   beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockGetWorkflowRun.mockResolvedValue(null);
+    mockFindWorkflowRunsByIdPrefix.mockReset();
+    mockFindWorkflowRunsByIdPrefix.mockResolvedValue([]);
     mockFindConversationByPlatformId.mockReset();
     mockHandleMessage.mockReset();
     mockAddMessage.mockReset();
@@ -1123,7 +1131,11 @@ describe('POST /api/workflows/:name/run', () => {
   });
 
   test('forwards one JSON continuation run id and refuses an invalid declaration', async () => {
-    mockFindConversationByPlatformId.mockImplementation(async () => null);
+    mockFindConversationByPlatformId.mockResolvedValue({ ...MOCK_CONV, codebase_id: 'cb-uuid-1' });
+    mockGetWorkflowRun.mockImplementation(async () => null);
+    mockFindWorkflowRunsByIdPrefix.mockImplementation(async ref => [
+      { ...MOCK_COMPLETED_RUN, id: ref + '-full' },
+    ]);
     mockHandleMessage.mockImplementation(async () => {});
     const { app } = makeApp();
     const run = async (extra: Record<string, unknown>): Promise<Response> =>
@@ -1135,13 +1147,41 @@ describe('POST /api/workflows/:name/run', () => {
 
     expect((await run({ adopt_run_id: 'run-1' })).status).toBe(200);
     expect((await run({ supersedes_run_id: 'run-2' })).status).toBe(200);
+    expect(mockFindWorkflowRunsByIdPrefix.mock.calls).toEqual([
+      ['run-1', 'cb-uuid-1'],
+      ['run-2', 'cb-uuid-1'],
+    ]);
     const [adoptCtx, supersedeCtx] = mockHandleMessage.mock.calls.map(call => call[3]);
-    expect(adoptCtx).toMatchObject({ workflowAdoptRunId: 'run-1' });
+    expect(adoptCtx).toMatchObject({ workflowAdoptRunId: 'run-1-full' });
     expect(adoptCtx).not.toHaveProperty('workflowSupersedesRunId');
-    expect(supersedeCtx).toMatchObject({ workflowSupersedesRunId: 'run-2' });
+    expect(supersedeCtx).toMatchObject({ workflowSupersedesRunId: 'run-2-full' });
     expect(supersedeCtx).not.toHaveProperty('workflowAdoptRunId');
 
     mockHandleMessage.mockClear();
+    mockAddMessage.mockClear();
+    for (const matches of [
+      [],
+      [
+        { ...MOCK_COMPLETED_RUN, id: 'candidate-one' },
+        { ...MOCK_COMPLETED_RUN, id: 'candidate-two' },
+      ],
+      [{ ...MOCK_COMPLETED_RUN, id: 'live-run', status: 'running' as const }],
+    ]) {
+      mockFindWorkflowRunsByIdPrefix.mockResolvedValue(matches);
+      const response = await run({ supersedes_run_id: 'prefix' });
+      expect(response.status).toBe(400);
+      const { error } = (await response.json()) as { error: string };
+      if (matches[0]?.status === 'running') {
+        expect(error).toBe("Cannot supersede run 'live-run': it is still running.");
+      }
+      for (const id of matches.length > 1
+        ? matches.map(row => row.id)
+        : [matches[0]?.id ?? 'prefix']) {
+        expect(error).toContain(id);
+      }
+    }
+    expect(mockAddMessage).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
     for (const [extra, error] of [
       [{ adopt_run_id: '' }, 'adopt_run_id must be a non-empty run id'],
       [{ supersedes_run_id: 7 }, 'supersedes_run_id must be a non-empty run id'],
@@ -1155,5 +1195,93 @@ describe('POST /api/workflows/:name/run', () => {
       expect(((await response.json()) as { error: string }).error).toBe(error);
     }
     expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+  test('continuation admission distinguishes missing scope, full IDs and backend failures', async () => {
+    const fullId = '12345678-1234-1234-1234-123456789abc';
+    mockFindConversationByPlatformId.mockResolvedValue(MOCK_CONV);
+    const { app } = makeApp();
+    const run = (id: string) =>
+      app.request('/api/workflows/deploy/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: 'web-test-abc',
+          message: 'Go',
+          supersedes_run_id: id,
+        }),
+      });
+    const missingScope = await run('12345678');
+    expect(missingScope.status).toBe(400);
+    expect(await missingScope.json()).toEqual({
+      error: expect.stringContaining("prefix '12345678' without a selected project"),
+    });
+    expect(mockFindWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
+    expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+    const unknown = await run(fullId);
+    expect(unknown.status).toBe(400);
+    expect(await unknown.json()).toEqual({
+      error: `Cannot supersede: no workflow run '${fullId}' exists.`,
+    });
+    expect(mockAddMessage).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+    mockGetWorkflowRun.mockResolvedValue({ ...MOCK_COMPLETED_RUN, id: fullId });
+    expect((await run(fullId)).status).toBe(200);
+    expect(mockHandleMessage.mock.calls[0][3]).toMatchObject({ workflowSupersedesRunId: fullId });
+    mockHandleMessage.mockClear();
+    mockAddMessage.mockClear();
+    mockGetWorkflowRun.mockRejectedValue(new Error('backend unavailable'));
+    const failed = await run(fullId);
+    expect(failed.status).toBe(500);
+    expect(await failed.json()).toEqual({ error: 'Failed to resolve workflow continuation' });
+    expect(mockAddMessage).not.toHaveBeenCalled();
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  test('authorization refuses before querying a continuation target', async () => {
+    const enforced = spyOn(auth, 'isConversationOwnershipEnforced').mockReturnValue(true);
+    try {
+      const { app } = makeApp();
+      const response = await app.request('/api/workflows/deploy/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: 'web-test-abc',
+          message: 'Go',
+          supersedes_run_id: '12345678',
+        }),
+      });
+      expect(response.status).toBe(401);
+      expect(mockFindWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
+      expect(mockGetWorkflowRun).not.toHaveBeenCalled();
+      expect(mockAddMessage).not.toHaveBeenCalled();
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+    } finally {
+      enforced.mockRestore();
+    }
+  });
+
+  test('invalid target never enters a busy conversation queue', async () => {
+    mockFindConversationByPlatformId.mockResolvedValue({ ...MOCK_CONV, codebase_id: 'cb-uuid-1' });
+    const lock = new ConversationLockManager();
+    const release = Promise.withResolvers<void>();
+    await lock.acquireLock('web-test-abc', () => release.promise);
+    try {
+      const { app } = makeApp(lock);
+      const response = await app.request('/api/workflows/deploy/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: 'web-test-abc',
+          message: 'Go',
+          supersedes_run_id: 'unknown',
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect(lock.getStats()).toMatchObject({ active: 1, queuedTotal: 0 });
+      expect(mockAddMessage).not.toHaveBeenCalled();
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+    }
   });
 });

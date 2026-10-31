@@ -69,6 +69,66 @@ describe('validateStructuredOutput', () => {
   });
 });
 
+describe('validateStructuredOutput: reserved metrics key', () => {
+  const schema = { type: 'object', properties: { metrics: { type: 'array' } } };
+  const count = {
+    name: 'factory.prs_merged',
+    kind: 'count',
+    unit: 'prs',
+    value: 7,
+    subject: null,
+  };
+  const errorsFor = (records: unknown[]): string[] => {
+    const r = validateStructuredOutput({ metrics: records }, schema);
+    return r.valid ? [] : r.errors;
+  };
+
+  test('a valid record passes, with legacy and UUID run ids', () => {
+    expect(errorsFor([count])).toEqual([]);
+    expect(
+      errorsFor([
+        {
+          ...count,
+          at: '2026-10-24T10:00:00Z',
+          runs: ['0123456789abcdef0123456789abcdef', '01234567-89ab-cdef-0123-456789abcdef'],
+          instrument: 'judge@sha256:abc',
+          instrument_node: 'judge',
+        },
+      ])
+    ).toEqual([]);
+  });
+
+  test.each([
+    ['an unknown key', { ...count, prompt: 'secret' }, '/metrics/1'],
+    ['a negative count', { ...count, value: -1 }, '/metrics/1/value'],
+    ['a bad name', { ...count, name: 'Factory PRs' }, '/metrics/1/name'],
+    ['calibrates on a count', { ...count, calibrates: 'factory.prs' }, '/metrics/1'],
+    ['a time without an offset', { ...count, at: '2026-10-24T10:00:00' }, '/metrics/1/at'],
+    ['a malformed run id', { ...count, runs: ['not-a-run'] }, '/metrics/1/runs/0'],
+    [
+      'a repeated run id',
+      { ...count, runs: ['0123456789abcdef0123456789abcdef', '0123456789abcdef0123456789abcdef'] },
+      '/metrics/1/runs',
+    ],
+  ])('%s fails with a path under /metrics', (_label, record, path) => {
+    const errors = errorsFor([count, record]);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.every(e => e.startsWith(path))).toBe(true);
+  });
+
+  test('a score may name the metric it calibrates', () => {
+    expect(
+      errorsFor([{ ...count, kind: 'score', unit: 'ratio', value: 1, calibrates: 'a.b' }])
+    ).toEqual([]);
+  });
+
+  test('an output with no metrics key is unaffected', () => {
+    expect(validateStructuredOutput({ other: [{ value: -1 }] }, { type: 'object' }).valid).toBe(
+      true
+    );
+  });
+});
+
 describe('compileOutputSchema', () => {
   test('returns null for a compilable schema', () => {
     expect(

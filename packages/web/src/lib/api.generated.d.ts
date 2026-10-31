@@ -1778,7 +1778,7 @@ export interface paths {
     put?: never;
     /**
      * Run a workflow via the orchestrator (JSON or multipart with file uploads)
-     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected. JSON requests may supply `adopt_run_id` or `supersedes_run_id`, but not both. If dispatch would continue an existing run, either declaration is refused before continuation or its fresh fallback. The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or use a conversation with no open run. An accepted fresh supersede records `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
+     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected. JSON requests may supply `adopt_run_id` or `supersedes_run_id`, but not both. Unique prefixes resolve in the conversation selected project; full IDs select the exact run. Missing project scope for a prefix, unknown or ambiguous IDs, and non-terminal targets return HTTP 400 before queuing; ambiguity errors list candidates. Execution rechecks targets after queuing. If dispatch would continue an existing run, either declaration is refused before continuation or its fresh fallback. Execution-time refusals arrive on conversation SSE after an HTTP 200 accepted response. The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or use a conversation with no open run. An accepted fresh supersede records `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
      */
     post: {
       parameters: {
@@ -3211,6 +3211,73 @@ export interface paths {
         };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/metrics': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Aggregate stored metric records by name, window and instrument */
+    get: {
+      parameters: {
+        query?: {
+          /** @description Window start: a duration before `until` (`24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days. */
+          since?: string;
+          /** @description Exclusive window end: an ISO date or time. Defaults to now. */
+          until?: string;
+          /** @description Only this metric name. */
+          name?: string;
+          /** @description Only records about this subject. */
+          subject?: string;
+          /** @description Only records from this codebase. */
+          codebaseId?: string;
+          /** @description An ISO date or time. Each group also reports records whose producing runs started before it against those started at or after it. */
+          compare?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['MetricsReport'];
+          };
+        };
+        /** @description Malformed window or compare cut */
+        400: {
           headers: {
             [name: string]: unknown;
           };
@@ -7219,6 +7286,107 @@ export interface components {
           };
       runId: string;
       stepName: string;
+    };
+    MetricsReport: {
+      window: {
+        since: string;
+        until: string;
+      };
+      metrics: {
+        name: string;
+        /** @enum {string} */
+        kind: 'count' | 'score';
+        unit: string;
+        calibrates: string | null;
+        headline_instrument: string | null;
+        instruments: {
+          instrument: string | null;
+          value: number;
+          n: number;
+          interval: {
+            low: number;
+            high: number;
+          } | null;
+          cost: {
+            usd: number | null;
+            input_tokens: number | null;
+            output_tokens: number | null;
+            runs: number;
+            runs_without_cost: number;
+            runs_without_tokens: number;
+            runs_missing: number;
+          };
+          compare?: {
+            at: string;
+            before: {
+              value: number | null;
+              n: number;
+              interval: {
+                low: number;
+                high: number;
+              } | null;
+            };
+            after: {
+              value: number | null;
+              n: number;
+              interval: {
+                low: number;
+                high: number;
+              } | null;
+            };
+            delta: number | null;
+            delta_interval: {
+              low: number;
+              high: number;
+            } | null;
+            separated: boolean;
+            straddling: number;
+            unattributed: number;
+          };
+          latest: {
+            value: number;
+            at: string;
+            subject: string | null;
+          };
+          series: {
+            day: string;
+            value: number;
+            n: number;
+          }[];
+        }[];
+      }[];
+      refused: (
+        | {
+            /** @enum {string} */
+            reason: 'invalid';
+            run_id: string;
+            workflow_name: string;
+            node_id: string;
+            completed_at: string;
+            errors: string[];
+          }
+        | {
+            /** @enum {string} */
+            reason: 'definition_conflict';
+            run_id: string;
+            workflow_name: string;
+            node_id: string;
+            completed_at: string;
+            name: string;
+            definition: {
+              /** @enum {string} */
+              kind: 'count' | 'score';
+              unit: string;
+              calibrates: string | null;
+            };
+            offered: {
+              /** @enum {string} */
+              kind: 'count' | 'score';
+              unit: string;
+              calibrates: string | null;
+            };
+          }
+      )[];
     };
     ValidateWorkflowResponse: {
       valid: boolean;

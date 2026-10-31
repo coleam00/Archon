@@ -355,13 +355,18 @@ curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \
 ```
 
 **Adoption and supersede.** JSON requests may supply `adopt_run_id` or `supersedes_run_id`,
-but cannot supply both. If the conversation would continue an existing run, either declaration
+but cannot supply both. Unique prefixes resolve within the conversation's selected project;
+a prefix without a selected project is refused. Full IDs select the exact run without prefix
+lookup; adoption still requires the same project. Unknown or ambiguous targets and non-terminal
+targets return HTTP 400 before uploads, history writes or queuing. Ambiguity errors list candidate
+IDs. Targets are checked again when execution begins, since their status can change while queued.
+If the conversation would continue an existing run, either declaration
 is refused before continuation or its fresh fallback. The refusal names the existing run: resume
 it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or
 use a conversation with no open run. An accepted fresh supersede records the replaced run ID in
 `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
 
-For a continuation refusal, the launch response still returns HTTP 200 with `accepted: true`.
+For an execution-time continuation refusal, the launch response still returns HTTP 200 with `accepted: true`.
 The refusal arrives as a `text` event on the conversation's SSE stream. Callers must read
 the stream to determine whether the workflow started; the JSON response alone does not confirm it.
 
@@ -547,6 +552,27 @@ owner, or no answer in time). It is `null` for a run that is not running. It is 
 and never changes `status`; how long a run has been quiet is not an input. The console shows
 a run whose owner is `unreachable` or `unknown` as not live and offers Abandon for
 `unreachable`.
+
+---
+
+## Metrics
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/metrics` | Aggregate stored metric records as a `MetricsReport` |
+
+```bash
+curl 'http://localhost:3090/api/metrics?name=factory.prs_merged&since=7d'
+```
+
+Query parameters, all optional: `since` (a duration such as `7d`, `24h` or `2w`, or an ISO
+date or time; default 30 days before `until`), `until` (an ISO date or time; default now),
+`name`, `subject`, `codebaseId` and `compare` (an ISO date or time to split each
+instrument's records at). The window is half-open. It returns the same `MetricsReport`
+`archon metrics --json` prints: per name, its definition and one entry per instrument with
+`value`, `n`, `interval`, `cost`, `latest` and a daily `series`, a `compare` block when
+`compare` is given, plus `refused[]`. Returns **400** for a malformed window or `compare`.
+See the [metrics guide](/guides/metrics/).
 
 ---
 

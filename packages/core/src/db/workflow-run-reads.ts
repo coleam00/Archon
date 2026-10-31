@@ -39,6 +39,32 @@ export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
   }
 }
 
+/** Ids per query, below SQLite's and PostgreSQL's bound-parameter limits. */
+const RUN_ID_CHUNK = 1000;
+
+/** The runs with these ids, in no particular order; an id with no row is absent. */
+export async function getWorkflowRunsByIds(ids: readonly string[]): Promise<WorkflowRun[]> {
+  const unique = [...new Set(ids)];
+  const runs: WorkflowRun[] = [];
+  try {
+    for (let start = 0; start < unique.length; start += RUN_ID_CHUNK) {
+      const chunk = unique.slice(start, start + RUN_ID_CHUNK);
+      const placeholders = chunk.map((_, index) => `$${String(index + 1)}`).join(', ');
+      const result = await pool.query<WorkflowRunRow>(
+        `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id IN (${placeholders})`,
+        chunk
+      );
+      runs.push(...result.rows.map(row => normalizeWorkflowRun(row)));
+    }
+    return runs;
+  } catch (error) {
+    if (error instanceof WorkflowStatusReadError) throw error;
+    const err = error as Error;
+    getLog().error({ err, count: unique.length }, 'db.workflow_runs_by_ids_failed');
+    throw new Error(`Failed to get workflow runs by id: ${err.message}`);
+  }
+}
+
 export async function getWorkflowRunForAttention(
   id: string
 ): Promise<AttentionRead<WorkflowRun> | null> {

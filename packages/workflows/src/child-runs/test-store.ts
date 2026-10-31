@@ -145,6 +145,7 @@ export class InMemoryStore implements IWorkflowStore {
     inMemoryEventRows(this.events).filter(event => event.workflow_run_id === runId);
   listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (ids, types) =>
     readEventsForRuns(this.events, ids, types);
+  listMetricRecords: IWorkflowStore['listMetricRecords'] = async () => [];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
     throw new Error('Unexpected listWorkflowRuns');
@@ -206,6 +207,14 @@ export class InMemoryStore implements IWorkflowStore {
     const r = this.runs.get(id);
     return Promise.resolve(r ? this.clone(r) : null);
   };
+
+  getWorkflowRunsByIds = (ids: readonly string[]): Promise<WorkflowRun[]> =>
+    Promise.resolve(
+      [...new Set(ids)].flatMap(id => {
+        const r = this.runs.get(id);
+        return r ? [this.clone(r)] : [];
+      })
+    );
 
   getWorkflowRunForAttention = (id: string) => this.getWorkflowRun(id);
 

@@ -16,6 +16,7 @@ export type {
 } from '../schemas/workflow-run';
 export {
   getWorkflowRun,
+  getWorkflowRunsByIds,
   getWorkflowRunForAttention,
   getRunByIsolationEnvId,
   findWorkflowRunsByIdPrefix,

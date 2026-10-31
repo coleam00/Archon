@@ -1,3 +1,4 @@
+import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { runChildWorkflow } from './child-runs';
 import { layerRunCredentials } from './run-credential-env';
 import { admitWorkflowRun, recordRunCheckoutBaseline } from './run-admission';
@@ -275,7 +276,22 @@ export async function executeWorkflow(
     userMessage,
     origin,
     opts
-  );
+  ).catch(async (error: unknown) => {
+    const run = opts.preCreatedRun;
+    if (
+      run?.status === 'running' &&
+      !isWorkflowExecutionInterruption(error) &&
+      !(error instanceof WorkflowExecutionHandoffError)
+    ) {
+      await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(run.id, error instanceof Error ? error.message : String(error), {
+          expectedExecutionClaim: executionClaim(run.metadata),
+        }),
+        { workflowRunId: run.id, site: 'workflow.setup_failed', failure: error }
+      );
+    }
+    throw error;
+  });
   if (started.stopped) return started.result;
   const { dispatch, workflowRun, paths, withArtifactWrites } = started.value;
 

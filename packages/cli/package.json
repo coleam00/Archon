@@ -183,6 +183,9 @@
       "src/commands/validate.test.ts"
     ],
     [
+      "src/commands/metrics.test.ts"
+    ],
+    [
       "src/cli.test.ts",
       "src/workflow-scope-boot.test.ts",
       "src/help.test.ts",

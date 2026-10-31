@@ -21,6 +21,7 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
   CONTINUATION_METADATA_KEY,
+  CONTINUATION_MODES,
   SUBRUN_METADATA_KEYS,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -446,7 +447,7 @@ export interface DetachedLaunch {
   isFolder: boolean;
   wantsIsolation: boolean;
   destination: RunDestination;
-  declaration: Pick<ContinuationDeclaration, 'mode' | 'runId'> | undefined;
+  declaration: Pick<ContinuationDeclaration, 'stamp' | 'runId'> | undefined;
   prepared: PreparedRunAiConfiguration;
   resolvedInputs: Record<string, string> | undefined;
   runConfig: WorkflowRunConfigInput | undefined;
@@ -563,7 +564,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
           ? { [SUBRUN_METADATA_KEYS.inputs]: { ...resolvedInputs } }
           : {}),
         ...(continuationDeclaration
-          ? { [CONTINUATION_METADATA_KEY]: { mode: continuationDeclaration.mode } }
+          ? { [CONTINUATION_METADATA_KEY]: continuationDeclaration.stamp }
           : {}),
       },
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
@@ -589,8 +590,6 @@ function buildDetachedChildArgs(
     destination: childDestination,
     declaration,
   } = launch;
-  const adoptedRunId = declaration?.mode === 'adopt' ? declaration.runId : undefined;
-  const supersededRunId = declaration?.mode === 'supersede' ? declaration.runId : undefined;
   const extraArgs: string[] = [];
   let pinnedBranch: string | undefined;
   // Pin identity after name resolution so a rename cannot redirect the child.
@@ -616,8 +615,9 @@ function buildDetachedChildArgs(
   }
   // Between-run continuation (#2747) — the child re-resolves the adoption
   // against the live filesystem/database, so pass the declaration through.
-  if (adoptedRunId !== undefined) extraArgs.push('--adopt', adoptedRunId);
-  if (supersededRunId !== undefined) extraArgs.push('--supersedes', supersededRunId);
+  if (declaration) {
+    extraArgs.push(...continuationChildArgs(declaration));
+  }
   // Re-pin the source as an ABSOLUTE path (parseArgs is last-wins, same as --cwd).
   // The original argv may hold a relative `--workflow-source`, and the child is
   // spawned with a different working directory, so passing it through unresolved
@@ -634,6 +634,18 @@ function buildDetachedChildArgs(
     extraArgs.push('--internal-detached-run-id', launchedRunId);
   }
   return { extraArgs, pinnedBranch };
+}
+
+function continuationChildArgs(declaration: NonNullable<DetachedLaunch['declaration']>): string[] {
+  const { mode } = declaration.stamp;
+  switch (mode) {
+    case CONTINUATION_MODES.adopt:
+      return ['--adopt', declaration.runId];
+    case CONTINUATION_MODES.supersede:
+      return ['--supersedes', declaration.runId];
+  }
+  const exhaustive: never = mode;
+  return exhaustive;
 }
 
 async function resolveDetachedTranscriptPath(

@@ -83,6 +83,9 @@
       "src/routes/api.providers.test.ts"
     ],
     [
+      "src/routes/api.metrics.test.ts"
+    ],
+    [
       "src/services/workflow-resume-service.test.ts",
       "src/services/webhook-source-plugins.test.ts"
     ],

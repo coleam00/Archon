@@ -21,10 +21,12 @@ type TransactionReads = Pick<
   TransactionView,
   | 'listDueWorkflowContinuations'
   | 'getWorkflowRun'
+  | 'getWorkflowRunsByIds'
   | 'getWorkflowRunForAttention'
   | 'getWorkflowRunStatus'
   | 'listWorkflowEvents'
   | 'listEventsForRuns'
+  | 'listMetricRecords'
   | 'getDagResumeSnapshot'
   | 'findChildRuns'
   | 'getRunAncestry'
@@ -73,6 +75,13 @@ function continuationTime(run: WorkflowRun): number {
   return at === undefined ? Number.POSITIVE_INFINITY : Date.parse(at);
 }
 
+/** `structured_output.metrics` when present and not null, matching the SQL stores' predicate. */
+function readMetrics(event: WorkflowEventRow): unknown {
+  const structured = event.data.structured_output;
+  if (typeof structured !== 'object' || structured === null) return undefined;
+  return (structured as { metrics?: unknown }).metrics ?? undefined;
+}
+
 /** The read side of a transaction view: queries over the transaction's runs and events. */
 export function createTransactionReads(
   runs: Map<string, WorkflowRun>,
@@ -110,6 +119,8 @@ export function createTransactionReads(
           .slice(0, limit)
       ),
     getWorkflowRun: async id => structuredClone(runs.get(id) ?? null),
+    getWorkflowRunsByIds: async ids =>
+      structuredClone([...new Set(ids)].flatMap(id => runs.get(id) ?? [])),
     getWorkflowRunForAttention: async id => structuredClone(runs.get(id) ?? null),
     getWorkflowRunStatus: async id => runs.get(id)?.status ?? null,
     listWorkflowEvents: async (id, options) =>
@@ -121,6 +132,38 @@ export function createTransactionReads(
           listEvents(id).filter(event => types.some(type => type === event.event_type)),
         ])
       ),
+    listMetricRecords: async () =>
+      // event_order counts within one run's log here, so only time orders across runs.
+      [...events]
+        .sort(
+          (a, b) =>
+            a.created_at.localeCompare(b.created_at) ||
+            (a.event_order ?? 0) - (b.event_order ?? 0) ||
+            a.id.localeCompare(b.id)
+        )
+        .flatMap(event => {
+          const run = runs.get(event.workflow_run_id);
+          const metrics = readMetrics(event);
+          if (
+            metrics === undefined ||
+            event.event_type !== 'node_completed' ||
+            event.step_name === null ||
+            !run
+          )
+            return [];
+          return [
+            {
+              eventId: event.id,
+              runId: run.id,
+              workflowName: run.workflow_name,
+              codebaseId: run.codebase_id,
+              nodeId: event.step_name,
+              nodeType: typeof event.data.type === 'string' ? event.data.type : null,
+              completedAt: event.created_at,
+              metrics: structuredClone(metrics),
+            },
+          ];
+        }),
     getDagResumeSnapshot: async id => foldDagResumeSnapshot(listEvents(id), id),
     findChildRuns: async id =>
       structuredClone(

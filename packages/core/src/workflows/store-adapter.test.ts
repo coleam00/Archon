@@ -30,6 +30,7 @@ const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
 
 mock.module('../db/workflows', () => ({
+  getWorkflowRunsByIds: mock(async () => []),
   insertWorkflowRun: async (): Promise<never> => {
     throw new Error('Unexpected admission run insert');
   },

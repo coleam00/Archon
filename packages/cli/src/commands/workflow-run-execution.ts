@@ -428,7 +428,7 @@ function submitRun(
 ): Promise<RunResult> {
   const { request, admission, workspace, continuation, conversation } = launch;
   const { modelOverrides, runConfig, preCreatedRun } = admission;
-  const { adoptedFromRunId, continuationMode } = continuation;
+  const { declaration } = continuation;
   const opts = {
     ...commonOptions,
     // A resume replays the inputs already on its row.
@@ -443,7 +443,9 @@ function submitRun(
     preparedSource: admission.preparedSource,
     capturedSourceOwner: request.owner,
     // Between-run continuation (#2747): written once onto the fresh row.
-    ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
+    ...(declaration
+      ? { adoptedFromRunId: declaration.runId, continuationMode: declaration.stamp.mode }
+      : {}),
     ...(preCreatedRun ? { preCreatedRun } : {}),
     ...(workspace.cutFromCommit !== undefined ? { cutFromCommit: workspace.cutFromCommit } : {}),
     ownedWorktree: workspace.ownedWorktree,

@@ -212,6 +212,7 @@ export async function createFileWorkflowStore(
       });
     },
     getWorkflowRun: id => readRun(root, id),
+    getWorkflowRunsByIds: ids => query([...new Set(ids)], view => view.getWorkflowRunsByIds(ids)),
     getWorkflowRunForAttention: id => readRun(root, id),
     getWorkflowRunStatus: async id => (await readRun(root, id))?.status ?? null,
     claimPendingWorkflowRun: (id, path) =>
@@ -324,6 +325,7 @@ export async function createFileWorkflowStore(
     listWorkflowEvents: (id, options) =>
       query([id], view => view.listWorkflowEvents(id, options), true),
     listEventsForRuns: (ids, types) => query(ids, view => view.listEventsForRuns(ids, types), true),
+    listMetricRecords: () => query('all', view => view.listMetricRecords(), true),
     getDagResumeSnapshot: id => query([id], view => view.getDagResumeSnapshot(id), true),
     listProviderEvents: (id, queryOptions) =>
       query([id], view => view.listProviderEvents(id, queryOptions), true),

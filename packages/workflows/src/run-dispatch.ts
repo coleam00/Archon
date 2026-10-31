@@ -19,6 +19,8 @@ import type {
   WorkflowSource,
 } from './schemas';
 import {
+  CONTINUATION_MODES,
+  continuationInheritsEstate,
   isIncludeDirective,
   isLoopGroupNode,
   isWaitNode,
@@ -27,7 +29,8 @@ import {
   type RunDispatchMetadata,
 } from './schemas';
 import { isContainerRun, type WorkflowRunOrigin } from './schemas/workflow-run';
-import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite } from './terminal-status-write';
+import { executionClaim } from './store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -215,8 +218,7 @@ async function refuseContainerResumeWithoutBackend(
   // reaches here for a container run WITHOUT that context — e.g. approving a
   // --container run from chat/web, which has no docker backend wired — would run
   // host-side and SILENTLY skip the write-back apply, losing the approved changes.
-  // Fail loudly and point at the CLI instead; the run stays resumable (failed) so
-  // the CLI can rediscover the container and apply.
+  // A pending submission owns no execution claim; only a running continuation can settle one.
   if (preCreatedRun && isContainerRun(preCreatedRun) && !container) {
     const msg =
       `Run '${preCreatedRun.id}' executed inside an isolation container. Resume it from the ` +
@@ -224,10 +226,18 @@ async function refuseContainerResumeWithoutBackend(
       'container is rediscovered — chat/web resume cannot rewire it.';
     getLog().warn({ workflowRunId: preCreatedRun.id }, 'workflow.container_resume_without_backend');
     await safeSendMessage(platform, conversationId, `⚠️ ${msg}`);
-    await requireTerminalStatusWrite(deps.store.failWorkflowRun(preCreatedRun.id, msg), {
-      workflowRunId: preCreatedRun.id,
-      site: 'workflow.container_resume_guard_fail_failed',
-    });
+    if (preCreatedRun.status === 'running') {
+      await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(preCreatedRun.id, msg, {
+          expectedExecutionClaim: executionClaim(preCreatedRun.metadata),
+        }),
+        {
+          workflowRunId: preCreatedRun.id,
+          site: 'workflow.container_resume_refused',
+          failure: msg,
+        }
+      );
+    }
     return { success: false, workflowRunId: preCreatedRun.id, error: msg };
   }
   return undefined;
@@ -240,9 +250,26 @@ async function findAdoptedAiRun(
   recorded: boolean
 ) {
   const { preCreatedRun } = opts;
-  const aiAncestorId = opts.adoptedFromRunId ?? preCreatedRun?.adopted_from_run_id;
-  const aiContinuationMode = opts.continuationMode ?? readContinuationMode(preCreatedRun?.metadata);
-  return !isContinuation && !recorded && aiAncestorId && aiContinuationMode !== 'supersede'
+  const recordedMode = readContinuationMode(preCreatedRun?.metadata) ?? CONTINUATION_MODES.adopt;
+  if (preCreatedRun) {
+    if (
+      opts.adoptedFromRunId !== undefined &&
+      opts.adoptedFromRunId !== preCreatedRun.adopted_from_run_id
+    ) {
+      throw new Error('Caller ancestor conflicts with recorded continuation ancestor.');
+    }
+    if (opts.continuationMode !== undefined && opts.continuationMode !== recordedMode) {
+      throw new Error('Caller mode conflicts with recorded continuation mode.');
+    }
+  }
+  const aiAncestorId = preCreatedRun ? preCreatedRun.adopted_from_run_id : opts.adoptedFromRunId;
+  const aiContinuationMode = preCreatedRun
+    ? recordedMode
+    : (opts.continuationMode ?? CONTINUATION_MODES.adopt);
+  return !isContinuation &&
+    !recorded &&
+    aiAncestorId &&
+    continuationInheritsEstate(aiContinuationMode)
     ? await deps.store.getWorkflowRun(aiAncestorId)
     : undefined;
 }
@@ -260,33 +287,23 @@ async function prepareDispatchAiConfiguration(
   isContinuation: boolean
 ): Promise<PreparedRunAiConfiguration> {
   const { preCreatedRun } = opts;
-  try {
-    const recorded =
-      preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    const adoptedAiRun = await findAdoptedAiRun(deps, opts, isContinuation, !!recorded);
-    const inherited =
-      adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    if (!recorded && !inherited && opts.preparedAiConfiguration) {
-      return opts.preparedAiConfiguration;
-    }
-    return await prepareRunAiConfiguration(deps, workflow, cwd, {
-      codebaseId: opts.codebaseId,
-      userId: executionUserId,
-      runConfig: opts.runConfig,
-      modelOverrideLayer: opts.modelOverrideLayer,
-      ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
-      aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
-      ...(recorded ? { inheritAiConfiguration: true } : {}),
-    });
-  } catch (error) {
-    if (error instanceof TerminalStatusWriteError) throw error;
-    if (preCreatedRun)
-      await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(preCreatedRun.id, (error as Error).message),
-        { workflowRunId: preCreatedRun.id, site: 'workflow.configuration_fail_db_record_failed' }
-      );
-    throw error;
+  const recorded =
+    preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
+  const adoptedAiRun = await findAdoptedAiRun(deps, opts, isContinuation, !!recorded);
+  const inherited =
+    adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
+  if (!recorded && !inherited && opts.preparedAiConfiguration) {
+    return opts.preparedAiConfiguration;
   }
+  return await prepareRunAiConfiguration(deps, workflow, cwd, {
+    codebaseId: opts.codebaseId,
+    userId: executionUserId,
+    runConfig: opts.runConfig,
+    modelOverrideLayer: opts.modelOverrideLayer,
+    ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
+    aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
+    ...(recorded ? { inheritAiConfiguration: true } : {}),
+  });
 }
 
 async function resolveBaseBranch(
