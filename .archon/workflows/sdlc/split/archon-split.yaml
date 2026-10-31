@@ -1,0 +1,162 @@
+name: archon-split
+description: |
+  The split queue: files the issues a PRD or a bundle of tasks splits into. Each run
+  claims the waiting item triage routed `split` with intake's claim, or the one the
+  number input names. One agent reads the item and lists its issues, each a
+  contract of its own: a PRD's first issue puts its hypothesis in front of real
+  data, adding the measurement when none exists; a bundle is split as written. A
+  script files each issue once, linked to the issues it depends on, and records
+  the split on the item's work item. A PRD is labelled archon-prd and stays open
+  until its hypothesis has a verdict; a bundle is closed with links to its issues.
+  The filed issues come back through intake like any other.
+
+  Use when: a trigger binding the operator installed starts it (see the SDLC pack
+  README, "Split queue").
+  NOT for: writing a PRD, triaging (archon-intake), or building the filed issues
+  (archon-build-queue).
+
+inputs:
+  repo_host:
+    description: The forge host of the repository whose work items the queue splits.
+  repo_path:
+    description: The owner/name path of that repository.
+  number:
+    default: ""
+    description: >-
+      The issue to split. Empty claims the waiting item that sorts first. A number
+      claims that item, and refuses the run with the reason when it cannot: it has no
+      work item, another run holds it, or it does not wait for the split queue.
+
+returns: publish
+
+# Reads the checkout and writes only to the tracker and the state store: runs in the
+# launch checkout beside any other run, and creates no worktree.
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+  # Claims the item and writes its issue to split/prd.md, the text the slice agent
+  # splits. Writes only the claim.
+  - id: facts
+    script: facts
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, closed, slice] }
+        item:
+          type: [object, 'null']
+          properties:
+            repo:
+              type: object
+              properties:
+                host: { type: string }
+                path: { type: string }
+              required: [host, path]
+            number: { type: integer }
+          required: [repo, number]
+        url: { type: string }
+        # The issues already filed from the item, by key, from its work item; empty
+        # when none are.
+        filed: { type: array, items: { type: object } }
+      required: [path, item, url, filed]
+
+  - id: slice
+    command: slice
+    depends_on: [facts]
+    when: "$facts.output.path == 'slice'"
+    model: large
+    with:
+      url: "$facts.output.url"
+      filed: { from: "$facts.output.filed" }
+    output_format:
+      type: object
+      properties:
+        # What the item is, and for a PRD how its hypothesis is measured.
+        split:
+          anyOf:
+            - type: object
+              additionalProperties: false
+              properties:
+                kind: { type: string, enum: [prd] }
+                # The command that prints the PRD's signal.
+                signal_command: { type: string, pattern: '\S' }
+                # How many days after release the threshold is judged.
+                window_days: { type: integer, minimum: 1 }
+              required: [kind, signal_command, window_days]
+            - type: object
+              additionalProperties: false
+              properties:
+                kind: { type: string, enum: [bundle] }
+              required: [kind]
+        # In filing order; each issue depends only on keys listed before it, or on
+        # keys already filed.
+        issues:
+          type: array
+          minItems: 1
+          maxItems: 12
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              key: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+              title: { type: string, pattern: '\S' }
+              body: { type: string, pattern: '\S' }
+              size: { type: string, enum: [s, m, l] }
+              depends_on: { type: array, items: { type: string } }
+            required: [key, title, body, size, depends_on]
+        # Existing open issues that already own part of the outcome, listed instead
+        # of filed again; the outcome depends on them as on the filed issues.
+        existing:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              number: { type: integer, minimum: 1 }
+              why: { type: string, pattern: '\S' }
+            required: [number, why]
+        summary: { type: string, pattern: '\S' }
+      required: [split, issues, existing, summary]
+
+  # Files each issue once, records it on the work item as it goes, comments the list
+  # on the item, then labels a PRD or closes a bundle, and releases the claim.
+  - id: publish
+    script: publish
+    runtime: bun
+    depends_on: [facts, slice]
+    trigger_rule: none_failed_min_one_success
+    with:
+      path: "$facts.output.path"
+      item: { from: "$facts.output.item" }
+      split: { from: "$slice.output.split", if_skipped: null }
+      issues: { from: "$slice.output.issues", if_skipped: null }
+      existing: { from: "$slice.output.existing", if_skipped: null }
+      summary: { from: "$slice.output.summary", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, closed, slice] }
+        item: { type: [integer, 'null'] }
+        kind: { type: [string, 'null'] }
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              number: { type: integer }
+              url: { type: string }
+            required: [key, number, url]
+        adopted:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer }
+              url: { type: string }
+              why: { type: string }
+            required: [number, url, why]
+        summary: { type: string }
+      required: [path, item, kind, issues, adopted, summary]

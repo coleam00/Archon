@@ -51,7 +51,7 @@ const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
 const delivery = text(process.env.INPUTS_DELIVERY);
 
 /** Why no delivery ran. */
-type Stop = 'no_action' | 'blocked' | 'needs_contract' | 'refuted' | 'not_rooted' | 'ask';
+type Stop = 'no_action' | 'blocked' | 'needs_contract' | 'split' | 'refuted' | 'not_rooted' | 'ask';
 
 /**
  * The planner's open questions as a list. Each carries the direction line that would
@@ -72,6 +72,13 @@ function stopped(): { readonly reason: Stop; readonly text: string; readonly rep
     return {
       reason: 'needs_contract',
       text: `Not done: the work item needs contract work before a run can start. ${summary}`,
+      report: 'triage.md',
+    };
+  }
+  if (route === 'split') {
+    return {
+      reason: 'split',
+      text: `Not done: the item is a PRD or a bundle of tasks, which archon-split files as separate issues. ${summary}`,
       report: 'triage.md',
     };
   }

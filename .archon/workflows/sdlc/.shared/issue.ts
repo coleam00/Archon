@@ -142,34 +142,24 @@ function firstLine(body: string): string {
   return body.split(/\r?\n/, 1)[0] ?? '';
 }
 
+/** Every issue number in the repository, open or closed, by its body's first line. */
+export type MarkerScan = () => ReadonlyMap<string, readonly number[]>;
+
 /**
- * Create the one issue whose body begins with `marker`, or recover it when an earlier
- * attempt already created it, so a repeated call never files a second one. Both
- * sources look across every issue, open or closed, and refuse when more than one
- * carries the marker. A recovered issue is returned as it is, never edited or
- * reopened. A new one must read back open with the requested title and body.
+ * The gh source's scan of the repository's issues for markers, read once on first use.
+ * The listing pages through every issue, so a caller that creates several issues in
+ * one pass shares one scan across them. It holds the issues as they were at that read:
+ * an issue created after it is not in it, so each marker in the pass must be distinct.
  */
-export function createIssue(
-  repo: QualifiedPr['repo'],
-  title: string,
-  body: string,
-  marker: string
-): CreatedIssue {
-  if (firstLine(body) !== marker) throw new Error('the issue body must begin with its marker');
-  if (forgeSource() === 'forge') {
-    const value = invokeForge('workitem.create', { repo, title, body, marker });
-    const item = record(value?.workitem);
-    const ref = parseQualifiedPr(JSON.stringify(item?.ref));
-    if (
-      value?.outcome !== 'applied' ||
-      item?.kind !== 'issue' ||
-      !samePr({ repo, number: ref.number }, ref) ||
-      typeof item.url !== 'string'
-    ) {
-      throw new Error('forge returned no verified created issue');
-    }
-    return { issue: ref, url: item.url };
-  }
+export function markerScan(repo: QualifiedPr['repo']): MarkerScan {
+  let scanned: Map<string, number[]> | undefined;
+  return () => {
+    scanned ??= ghMarkers(repo);
+    return scanned;
+  };
+}
+
+function ghMarkers(repo: QualifiedPr['repo']): Map<string, number[]> {
   const listed = Bun.spawnSync(
     [
       'gh',
@@ -189,21 +179,52 @@ export function createIssue(
   if (!Array.isArray(pages) || !pages.every(Array.isArray)) {
     throw new Error('gh api returned an unexpected issue listing');
   }
-  const marked = (pages as unknown[][])
-    .flat()
-    .map(record)
-    .filter(
-      row =>
-        row !== undefined &&
-        !('pull_request' in row) &&
-        typeof row.body === 'string' &&
-        firstLine(row.body) === marker
-    );
+  const markers = new Map<string, number[]>();
+  for (const row of (pages as unknown[][]).flat().map(record)) {
+    if (row === undefined || 'pull_request' in row || typeof row.body !== 'string') continue;
+    if (typeof row.number !== 'number') throw new Error('gh api listed an issue with no number');
+    const line = firstLine(row.body);
+    markers.set(line, [...(markers.get(line) ?? []), row.number]);
+  }
+  return markers;
+}
+
+/**
+ * Create the one issue whose body begins with `marker`, or recover it when an earlier
+ * attempt already created it, so a repeated call never files a second one. Both
+ * sources look across every issue, open or closed, and refuse when more than one
+ * carries the marker. A recovered issue is returned as it is, never edited or
+ * reopened. A new one must read back open with the requested title and body. On the
+ * gh source, `scan` is the marker scan to look in; a caller creating several issues
+ * passes one `markerScan` to each call.
+ */
+export function createIssue(
+  repo: QualifiedPr['repo'],
+  title: string,
+  body: string,
+  marker: string,
+  scan: MarkerScan = markerScan(repo)
+): CreatedIssue {
+  if (firstLine(body) !== marker) throw new Error('the issue body must begin with its marker');
+  if (forgeSource() === 'forge') {
+    const value = invokeForge('workitem.create', { repo, title, body, marker });
+    const item = record(value?.workitem);
+    const ref = parseQualifiedPr(JSON.stringify(item?.ref));
+    if (
+      value?.outcome !== 'applied' ||
+      item?.kind !== 'issue' ||
+      !samePr({ repo, number: ref.number }, ref) ||
+      typeof item.url !== 'string'
+    ) {
+      throw new Error('forge returned no verified created issue');
+    }
+    return { issue: ref, url: item.url };
+  }
+  const marked = scan().get(marker) ?? [];
   if (marked.length > 1) throw new Error(`more than one issue carries ${marker}`);
   const found = marked[0];
   if (found !== undefined) {
-    if (typeof found.number !== 'number') throw new Error('gh api listed an issue with no number');
-    const issue = { repo, number: found.number };
+    const issue = { repo, number: found };
     return { issue, url: ghIssue(issue).html_url };
   }
   const directory = mkdtempSync(join(tmpdir(), 'archon-issue-'));

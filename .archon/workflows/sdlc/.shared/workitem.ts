@@ -11,9 +11,10 @@
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
  *
- * The build and merge queues claim the same documents through the same claim, so an
- * item has one owner at a time across the queues; their records are `facts.build`
- * (./build.ts) and `facts.merge` (./merge.ts).
+ * The build, merge and split queues claim the same documents through the same claim,
+ * so an item has one owner at a time across the queues; their records are
+ * `facts.build` (./build.ts), `facts.merge` (./merge.ts) and `facts.split`
+ * (./split.ts).
  */
 
 import { createHash } from 'node:crypto';
@@ -21,6 +22,7 @@ import type { BuildRecord } from './build.ts';
 import type { Closure } from './close.ts';
 import { record, type QualifiedPr } from './forge.ts';
 import type { MergeRecord } from './merge.ts';
+import type { SplitRecord } from './split.ts';
 import { note } from './io.ts';
 import {
   type LabelVerdict,
@@ -94,7 +96,7 @@ export interface TriageFacts {
 export interface HistoryEntry {
   readonly at: string;
   /** The queue whose pickup or decision wrote the entry. */
-  readonly stage: 'intake' | 'build' | 'merge';
+  readonly stage: 'intake' | 'build' | 'merge' | 'split';
   readonly run_id: string;
   readonly outcome: string;
   readonly summary: string;
@@ -126,6 +128,7 @@ export interface WorkItem {
     readonly triage?: TriageFacts;
     readonly build?: BuildRecord;
     readonly merge?: MergeRecord;
+    readonly split?: SplitRecord;
     /** A maintainer's own pull request the merge queue enrolled; no build round made it. */
     readonly own_pr?: { readonly url: string; readonly at: string };
   };
@@ -170,6 +173,7 @@ const STAGES = {
   plan: true,
   deliver: true,
   continue: true,
+  split: true,
   needs_contract: true,
   blocked: true,
   close: true,
@@ -338,7 +342,13 @@ export function mirrorLabels(doc: WorkItem): PackLabel[] {
   if (doc.stage === 'needs_maintainer') return ['archon-needs-maintainer'];
   const triage = doc.facts.triage;
   if (doc.stage === 'new' || triage === undefined) return [];
-  return wantedLabels(triage.verdict, triage.type.value, triage.size.value);
+  const wanted = wantedLabels(triage.verdict, triage.type.value, triage.size.value);
+  // A split PRD stays open, marked as one, until its hypothesis has a verdict. A
+  // re-triage after the split drops the mark until the split queue files it again.
+  const split = doc.facts.split;
+  if (doc.stage === 'split' && split?.status === 'done' && split.kind === 'prd' && split.at >= triage.at)
+    wanted.push('archon-prd');
+  return wanted;
 }
 
 function promotedAt(promoted: Promotion | null, digest: string): boolean {
@@ -726,6 +736,26 @@ export function claimItem(
   if (!claimable(fresh, pickup)) return null;
   const retried = claimed(fresh, at, runId, pickup);
   return statePut(fresh.name, retried, fresh.revision) === 'ok' ? retried : null;
+}
+
+/**
+ * Claim the named item for a queue, releasing a terminal claim on it first as
+ * `claimNext` does. Refuses with the facts an operator acts on when it cannot.
+ */
+export function claimNamed(number: number, at: string, runId: string, pickup: Pickup): WorkItem {
+  const issue = `issue ${String(number)}`;
+  const found = read(workItemName(number));
+  if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
+  const item = releaseIfTerminal(found, at, runId, pickup);
+  const won = claimable(item, pickup) ? claimItem(item, at, runId, pickup) : null;
+  if (won !== null) return won;
+  const now = read(item.name) ?? item;
+  if (now.doc.claim !== null) throw new Error(`${issue} is claimed by run ${now.doc.claim.run_id}`);
+  // Both conditional writes can lose to concurrent writes that leave the item waiting.
+  if (pickup.waits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
+  const record = now.doc.facts[pickup.stage];
+  const status = record !== undefined && 'status' in record ? `, ${pickup.stage} status ${record.status}` : '';
+  throw new Error(`${issue} does not wait for the ${pickup.stage} queue: stage ${now.doc.stage}${status}`);
 }
 
 /**
