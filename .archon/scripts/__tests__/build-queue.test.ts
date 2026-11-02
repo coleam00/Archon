@@ -530,7 +530,10 @@ describe('the build queue scripts', () => {
       else process.env.INPUTS_NUMBER = parentNumber;
     }
     expect(ok(picked)).toMatchObject({ path: 'route', item: SUBJECT, url: ISSUE_URL, brief: '', at_cap: false });
-    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1', requests: [] }, requests: [request] });
+    expect(stored(at).value).toMatchObject({
+      claim: { run_id: 'run-1', requests: [], branch: 'build/7-an-issue-run-1' },
+      requests: [request],
+    });
     expect(readFileSync(join(picked.artifacts, 'build/issue.md'), 'utf8')).toContain('The contract.');
     // The item is now claimed, so the next pickup finds nothing.
     expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle', item: null });
@@ -598,6 +601,25 @@ describe('the build queue scripts', () => {
       continues: null,
       branch: 'build/7-an-issue-run-1',
     });
+  }, 60_000);
+
+  test("releasing a cancelled round's claim records the pull request its branch opened, and the next round continues it", () => {
+    const at = install();
+    const branch = 'build/7-an-issue-run-1';
+    const cancelled = { INTAKE_RUN_STATUSES: '{"run-1":"cancelled"}', WORKFLOW_ID: 'run-2' };
+    seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
+    // The run's pull request was closed before the release; it is still the run's round.
+    const picked = ok(run(at, 'facts', cancelled, { pr: { state: 'CLOSED', headRefName: branch } }));
+    expect(stored(at).value?.facts.build?.rounds).toEqual([
+      expect.objectContaining({ run_id: 'run-1', delivered: false, reason: 'ended_undecided', pr_url: 'https://ghe.example.com/example/repo/pull/42' }),
+    ]);
+    expect(picked).toMatchObject({ pull_request: { number: 42 }, branch: 'build/7-an-issue-run-2' });
+    seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
+    expect(ok(run(at, 'facts', cancelled, { pr: { headRefName: branch } }))).toMatchObject({ continues: 42 });
+    // A run whose branch opened no pull request leaves no round.
+    seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
+    expect(ok(run(at, 'facts', cancelled))).toMatchObject({ pull_request: null, continues: null });
+    expect(stored(at).value?.facts.build).toBeUndefined();
   }, 60_000);
 
   test('items intake has not routed, and items the queue finished, are never picked up', () => {

@@ -554,7 +554,11 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   default branch, and its brief asks for the old
   pull request to be closed as superseded once the replacement opens. A round that failed
   after publishing still records its pull request. A round that continues none opens its
-  pull request from `build/<issue>-<slug>-<run>`, a name never reused. A closed or
+  pull request from `build/<issue>-<slug>-<run>`, a name never reused, and facts records
+  that branch on the claim. When a pickup releases the claim of a run that ended before
+  recording its round, a pull request from that branch, in any state, is recorded as the
+  run's round with reason `ended_undecided`, and the next round sees it as its
+  candidate. On the forge source only an open one is found. A closed or
   merged pull request, or one from a fork, is asked about; a round launched anyway
   never continues it, since ship gets `none` for it too.
 - **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
