@@ -96,6 +96,21 @@ test('a count row renders its value, n and sparkline', () => {
   expect(row).toContain('2 days with records');
 });
 
+test('the sparkline line breaks at days without records', () => {
+  const days = (...series: string[]): Metric => ({
+    ...counted,
+    instruments: [
+      {
+        ...instrument(12, { instrument: null, measured_by: [] }),
+        series: series.map(day => ({ day, value: 4, n: 4 })),
+      },
+    ],
+  });
+  const polylines = (html: string): number => html.split('<polyline').length - 1;
+  expect(polylines(render({ metrics: [days('2026-10-20', '2026-10-21', '2026-10-25')] }))).toBe(2);
+  expect(polylines(render({ metrics: [days('2026-10-20', '2026-10-21', '2026-10-22')] }))).toBe(1);
+});
+
 test("the sparkline keeps a record from the window's first, partial day inside the chart", () => {
   const firstDay = {
     ...instrument(12, { instrument: null, measured_by: [] }),
@@ -106,6 +121,24 @@ test("the sparkline keeps a record from the window's first, partial day inside t
     metrics: [{ ...counted, instruments: [firstDay] }],
   });
   expect(html).toContain('<circle cx="0"');
+});
+
+test('a calibration that is itself calibrated keeps its own row and its badge on its target', () => {
+  const middle = agreement([JUDGE]);
+  const top: Metric = {
+    ...agreement([JUDGE]),
+    name: 'demo.items_flagged_agreement_check',
+    calibrates: middle.name,
+  };
+  const html = render({ metrics: [judged, middle, top] });
+  const judgedRow = html.slice(
+    html.indexOf('data-metric="demo.items_flagged"'),
+    html.indexOf('data-metric="demo.items_flagged_agreement"')
+  );
+  expect(judgedRow).toContain('demo.items_flagged_agreement 0.83 (n=12)');
+  const middleRow = html.slice(html.indexOf('data-metric="demo.items_flagged_agreement"'));
+  expect(middleRow).toContain('demo.items_flagged_agreement_check 0.83 (n=12)');
+  expect(html).not.toContain('data-metric="demo.items_flagged_agreement_check"');
 });
 
 test('an agreement shows as a badge on the calibrated row, not as its own row', () => {

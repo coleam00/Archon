@@ -38,8 +38,11 @@ function identityLabel(identity: Identity): string {
     : `${instrument} on ${identity.measured_by.join(', ')}`;
 }
 
+/** Two decimals, except a nonzero value below 0.01 keeps two significant digits rather than showing 0. */
 const formatNumber = (value: number): string =>
-  value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  value !== 0 && Math.abs(value) < 0.01
+    ? value.toLocaleString('en-US', { maximumSignificantDigits: 2 })
+    : value.toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 function definitionLabel(definition: Definition): string {
   const calibrates = definition.calibrates === null ? '' : `, calibrates ${definition.calibrates}`;
@@ -54,16 +57,17 @@ interface Row {
 }
 
 /**
- * One row per metric that calibrates nothing; a calibration shows on its calibrated metric's
- * row. The engine always reports the headline identity among a metric's instruments.
+ * One row per metric, except a calibration that nothing calibrates in turn: that one shows
+ * only on its calibrated metric's row. The engine always reports the headline identity among
+ * a metric's instruments.
  */
 function buildRows(report: MetricsReport): Row[] {
   return report.metrics.flatMap(metric => {
-    if (metric.calibrates !== null) return [];
+    const calibrators = report.metrics.filter(other => other.calibrates === metric.name);
+    if (metric.calibrates !== null && calibrators.length === 0) return [];
     const identity = headlineIdentity(metric);
     const headline = metric.instruments.find(instrument => sameIdentity(instrument, identity));
     if (headline === undefined) return [];
-    const calibrators = report.metrics.filter(other => other.calibrates === metric.name);
     return [{ metric, headline, calibrators }];
   });
 }
@@ -154,7 +158,7 @@ function MetricsBody({ report, loading, error, days, scope }: MetricsBodyProps):
     <div className="flex flex-col gap-4">
       <RefusalBanner refused={report.refused} scope={scope} />
       {rows.length === 0 ? (
-        <EmptyState title={`No metric records in the last ${days.toString()} days.`} />
+        <EmptyState title={`No headline metrics in the last ${days.toString()} days.`} />
       ) : (
         <MetricsTable rows={rows} window={report.window} />
       )}
@@ -321,6 +325,7 @@ function CalibrationBadge({ row }: { row: Row }): ReactElement | null {
 function CostCell({ cost }: { cost: InstrumentReport['cost'] }): ReactElement {
   const gaps = [
     [cost.runs_without_cost, 'without cost'],
+    [cost.runs_without_tokens, 'without tokens'],
     [cost.runs_partial_cost, 'partial'],
     [cost.runs_missing, 'missing'],
   ] as const;
@@ -345,8 +350,9 @@ function CostCell({ cost }: { cost: InstrumentReport['cost'] }): ReactElement {
 
 const SPARK_WIDTH = 96;
 const SPARK_HEIGHT = 24;
+const DAY_MS = 86_400_000;
 
-/** Daily values placed by date across the window, so days without records stay visible as gaps. */
+/** Daily values placed by date across the window; the line breaks at days without records. */
 function Sparkline({
   series,
   window,
@@ -361,9 +367,20 @@ function Sparkline({
   const low = Math.min(0, ...values);
   const range = Math.max(...values, low + 1) - low;
   const points = series.map(point => ({
+    time: Date.parse(point.day),
     x: ((Date.parse(point.day) - start) / span) * SPARK_WIDTH,
     y: SPARK_HEIGHT - 2 - ((point.value - low) / range) * (SPARK_HEIGHT - 4),
   }));
+  const runs: (typeof points)[] = [];
+  for (const point of points) {
+    const run = runs.at(-1);
+    const previous = run?.at(-1);
+    if (run !== undefined && previous !== undefined && point.time - previous.time === DAY_MS) {
+      run.push(point);
+    } else {
+      runs.push([point]);
+    }
+  }
   return (
     <svg
       role="img"
@@ -373,12 +390,15 @@ function Sparkline({
       viewBox={`0 0 ${SPARK_WIDTH.toString()} ${SPARK_HEIGHT.toString()}`}
       className="text-accent-bright"
     >
-      <polyline
-        points={points.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1.5}
-      />
+      {runs.map(run => (
+        <polyline
+          key={run[0]?.time}
+          points={run.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ')}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+        />
+      ))}
       {points.map(({ x, y }, i) => (
         <circle key={series[i]?.day} cx={x} cy={y} r={1.5} fill="currentColor" />
       ))}
