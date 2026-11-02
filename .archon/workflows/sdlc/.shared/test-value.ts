@@ -121,9 +121,12 @@ export function testValueRecords(judged: readonly Judged<MergedPr>[], instrument
  * placeholders (`${x}`, `<a|b>`, `%s`, `$x`) and punctuation dropped, so a parameterized
  * name written either way joins.
  */
+/** A template placeholder in a test title: `${x}`, `<a|b>`, `%s` or `$x`. */
+const PLACEHOLDER = /\$\{[^}]*\}|<[^>]*>|%[a-z]|\$[A-Za-z_]\w*/;
+
 function testKey(file: string, name: string): string {
   const words = name
-    .replace(/\$\{[^}]*\}|<[^>]*>|%[a-z]|\$[A-Za-z_]\w*/g, ' ')
+    .replace(new RegExp(PLACEHOLDER, 'g'), ' ')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
@@ -150,10 +153,11 @@ export function parseCases(value: unknown): Case[] {
 }
 
 /**
- * The verdict for a labeled test: the one with the same key, else the longest whose key
- * starts the label's. A label may spell out a parameterized test's cases, such as
- * `preserves deletion` for the source's `preserves ${kind}`, or annotate its
- * parameters after the title, and the judge names the test as its source writes it.
+ * The verdict for a labeled test: the one with the same key, else the longest
+ * parameterized one whose key starts the label's. A label may spell out a parameterized
+ * test's cases, such as `preserves deletion` for the source's `preserves ${kind}`, or
+ * annotate its parameters after the title, and the judge names the test as its source
+ * writes it. A verdict without a placeholder joins only its own name.
  */
 function verdictFor(test: LabeledTest, verdicts: readonly JudgedTest[]): JudgedTest | undefined {
   const key = testKey(test.file, test.name);
@@ -161,7 +165,10 @@ function verdictFor(test: LabeledTest, verdicts: readonly JudgedTest[]): JudgedT
   for (const verdict of verdicts) {
     const candidate = testKey(verdict.file, verdict.name);
     if (candidate === key) return verdict;
-    if (key.startsWith(`${candidate} `) && candidate.length > (best?.key.length ?? -1)) best = { verdict, key: candidate };
+    const parameterized = PLACEHOLDER.test(verdict.name);
+    if (parameterized && key.startsWith(`${candidate} `) && candidate.length > (best?.key.length ?? -1)) {
+      best = { verdict, key: candidate };
+    }
   }
   return best?.verdict;
 }

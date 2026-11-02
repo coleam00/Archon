@@ -66,13 +66,14 @@ describe('scoreCalibration', () => {
   };
   const judgedAs = (slot: JudgeSlot) => scoreCalibration([{ item: entry, slot }], 'test-value-judge:abc');
 
-  it('scores every labeled test once, joins a parameterized test to its labeled cases, and counts an unlisted test as disagreement', () => {
+  it('scores every labeled test once, joins a parameterized test to its labeled cases, and counts an unlisted test as disagreement even when a shorter name starts it', () => {
     const { metrics, disagreements } = judgedAs({
       ok: true,
       tests: [
         verdict('widget > keeps order for ${kind}', true),
         verdict('widget > preserves ${change}', true),
         verdict('widget > logs the probe', false),
+        verdict('widget > rewords', true),
       ],
     });
     const values = (name: string) => metrics.filter(row => row.name === name).map(row => row.value);
