@@ -146,4 +146,11 @@ export interface SqlDialect {
    * @param table - Table or alias to lock when the SELECT joins others
    */
   rowLock(table?: string): string;
+
+  /**
+   * Clause after a FROM table that forces `index`: ` INDEXED BY <index>` on SQLite,
+   * empty on Postgres. SQLite has no statistics unless ANALYZE ran, so it prefers any
+   * index with an equality term over a partial index whose predicate the query repeats.
+   */
+  indexedBy(index: string): string;
 }

@@ -137,7 +137,7 @@ describe('container resume guard', () => {
     container: { envId: 'env-x', writeBack: 'approve', backend: containerBackend() },
   });
 
-  it('fails a container run resumed without a container context, pointing at the CLI', async () => {
+  it('refuses a container run resumed without a container context, pointing at the CLI', async () => {
     const store = makeStore();
     const result = await startWorkflow({
       store,
@@ -146,7 +146,9 @@ describe('container resume guard', () => {
     });
     if (result.success) throw new Error('Expected missing-container-context failure');
     expect(result.error).toMatch(/executed inside an isolation container/);
-    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).toHaveBeenCalledWith('crun', result.error, {
+      expectedExecutionClaim: null,
+    });
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 
@@ -178,7 +180,16 @@ describe('container resume guard', () => {
           expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
           expect(store.resumeWorkflowRun).not.toHaveBeenCalled();
           expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
-          expect(store.failWorkflowRun).not.toHaveBeenCalled();
+          if (phase === 'resumed') {
+            expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+            expect(store.failWorkflowRun).toHaveBeenCalledWith(
+              run.id,
+              'Container backend requires a container execution context',
+              { expectedExecutionClaim: null }
+            );
+          } else {
+            expect(store.failWorkflowRun).not.toHaveBeenCalled();
+          }
           expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
         }
       );
@@ -219,7 +230,12 @@ describe('container resume guard', () => {
         expect(store.updateWorkflowRun).not.toHaveBeenCalled();
         expect(store.releaseRunForUnreadableSource).not.toHaveBeenCalled();
         expect(container.backend.prepareSuspend).not.toHaveBeenCalled();
-        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(store.failWorkflowRun).toHaveBeenCalledWith(
+          'run-123',
+          'Execution context does not match the recorded run isolation',
+          { expectedExecutionClaim: null }
+        );
         expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
       } finally {
         source.mockRestore();

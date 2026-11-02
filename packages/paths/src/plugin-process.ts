@@ -65,10 +65,28 @@ export function validateCommand(command: string): string | undefined {
   return undefined;
 }
 
+async function listPosixProcessGroupStates(): Promise<string> {
+  const { stdout } = await execFileAsync('/bin/ps', ['-A', '-o', 'pgid=,stat='], { timeout: 5000 });
+  return stdout;
+}
+
+function processGroupHasEnded(pgid: number, listing: string): boolean {
+  for (const line of listing.split('\n')) {
+    if (!line.trim()) continue;
+    const fields = /^\s*(\d+)\s+(\S+)\s*$/.exec(line);
+    if (!fields) throw new Error('Invalid POSIX process listing');
+    const group = Number(fields[1]);
+    if (!Number.isSafeInteger(group)) throw new Error('Invalid POSIX process identifier');
+    if (group === pgid && !fields[2].startsWith('Z')) return false;
+  }
+  return true;
+}
+
 /** End the process group led by `pid` on POSIX, or the tree rooted at `pid` on Windows. */
 export async function terminateTree(
   pid: number,
-  posixSignal: NodeJS.Signals = 'SIGKILL'
+  posixSignal: NodeJS.Signals = 'SIGKILL',
+  listGroups: () => Promise<string> = listPosixProcessGroupStates
 ): Promise<void> {
   if (process.platform === 'win32') {
     await terminateWindowsTree(pid);
@@ -77,7 +95,23 @@ export async function terminateTree(
   try {
     process.kill(-pid, posixSignal);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return;
+    if (code !== 'EPERM') throw error;
+    // Darwin can refuse signals to zombie-only groups. Failed observation proves nothing.
+    try {
+      if (processGroupHasEnded(pid, await listGroups())) return;
+    } catch (inspectionError) {
+      try {
+        createLogger('paths.plugin-process').warn(
+          { err: inspectionError, targetPid: pid },
+          'process_group_inspection_failed'
+        );
+      } catch {
+        // Optional diagnostics must not replace the original signal error.
+      }
+    }
+    throw error;
   }
 }
 

@@ -14,6 +14,7 @@ import { orderedExamples } from './help-table/examples';
 import { forgeHelp } from './help-table/forge';
 import { installHelp } from './help-table/install';
 import { metaHelp } from './help-table/meta';
+import { metricsHelp } from './help-table/metrics';
 import { operatorHelp } from './help-table/operator';
 import { orderedFlags } from './help-table/options';
 import { stateHelp } from './help-table/state';
@@ -23,6 +24,7 @@ import { worktreeHelp } from './help-table/worktree';
 
 const HELP_GROUPS: readonly HelpGroup[] = [
   stateHelp,
+  metricsHelp,
   forgeHelp,
   operatorHelp,
   workflowHelp,

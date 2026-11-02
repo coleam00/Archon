@@ -30,6 +30,7 @@ export async function submitFreshForeground(
     userId,
     source,
     options,
+    declaredContinuation,
     userMessage,
     parseWarnings,
     codebaseBaseBranch,
@@ -90,14 +91,12 @@ export async function submitFreshForeground(
         inputs: resolvedInputs,
         ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
         ownedWorktree,
-        ...(options?.adoptRunId
-          ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
-          : options?.supersedesRunId
-            ? {
-                adoptedFromRunId: options.supersedesRunId,
-                continuationMode: 'supersede' as const,
-              }
-            : {}),
+        ...(declaredContinuation
+          ? {
+              adoptedFromRunId: declaredContinuation.run.id,
+              continuationMode: declaredContinuation.stamp.mode,
+            }
+          : {}),
         ...(options?.modelOverrides
           ? {
               modelOverrideLayer: { kind: 'raw' as const, overrides: options.modelOverrides },

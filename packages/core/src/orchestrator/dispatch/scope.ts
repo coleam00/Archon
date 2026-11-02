@@ -1,3 +1,4 @@
+import type { ResolvedRunContinuation } from '../../operations/workflow-continuation';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import type { prepareRunAiConfiguration } from '@archon/workflows/run-preflight';
@@ -37,6 +38,7 @@ export interface WorkflowDispatchOptions {
 
 /** The values one dispatch reads everywhere and nothing reassigns. */
 export interface DispatchScope {
+  readonly declaredContinuation?: ResolvedRunContinuation;
   readonly owner: CapturedSourceOwner;
   readonly platform: IPlatformAdapter;
   readonly conversationId: string;

@@ -15,3 +15,24 @@ export async function findProjectRunsByReference(
   }
   return matches;
 }
+
+export function isFullRunId(reference: string): boolean {
+  return /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i.test(
+    reference
+  );
+}
+
+export function uniqueRunReferenceMatch(
+  matches: readonly WorkflowRun[],
+  reference: string
+): WorkflowRun | null {
+  const run = matches.length === 1 ? matches[0] : undefined;
+  if (
+    !run ||
+    (isFullRunId(reference) &&
+      run.id.replaceAll('-', '').toLowerCase() !== reference.replaceAll('-', '').toLowerCase())
+  ) {
+    return null;
+  }
+  return run;
+}

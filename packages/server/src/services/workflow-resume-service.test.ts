@@ -249,8 +249,8 @@ describe('workflow continuation scanner', () => {
     }
   );
 
-  // The unattended scanner must fail a claimed run after an ordinary rejection.
-  // A rejected terminal write must escape without a second write (#2910).
+  // The executor owns terminal settlement; this mock bypasses that write.
+  // Host rejection handling must report the error without compensating again.
   describe('rejected execution', () => {
     const startHeadlessResume = async (rejection: unknown): Promise<void> => {
       const paused = run('wait-headless', 'paused', {});
@@ -275,16 +275,23 @@ describe('workflow continuation scanner', () => {
       await Promise.resolve();
     };
 
-    test('marks the run failed when execution rejects with an ordinary error', async () => {
-      mockStoreFailWorkflowRun.mockImplementationOnce(async () => {
-        runLiveOwnerCalls.push('fail');
-        return { failed: true };
-      });
-      await startHeadlessResume(new Error('resume boom'));
+    test('reports an executor rejection and closes the owner without another failure write', async () => {
+      const logs = captureLogLines();
+      try {
+        await startHeadlessResume(new Error('resume boom'));
 
-      expect(mockStoreFailWorkflowRun).toHaveBeenCalledTimes(1);
-      expect(mockStoreFailWorkflowRun.mock.calls[0]?.[0]).toBe('wait-headless');
-      expect(runLiveOwnerCalls).toEqual(['start:wait-headless', 'fail', 'close']);
+        expect(logs.lines).toHaveLength(1);
+        expect(logs.lines[0]).toMatchObject({
+          level: 50,
+          runId: 'wait-headless',
+          msg: 'workflow_resume_headless_execute_failed',
+          err: { message: 'resume boom' },
+        });
+        expect(mockStoreFailWorkflowRun).not.toHaveBeenCalled();
+        expect(runLiveOwnerCalls).toEqual(['start:wait-headless', 'close']);
+      } finally {
+        logs.restore();
+      }
     });
 
     test('does not compensate a rejected terminal write with a second failure write', async () => {

@@ -42,8 +42,8 @@ interface AnswerOutput {
   readonly brief: string;
   readonly push: QualifiedPr | null;
   readonly reason: string;
-  /** The agent's own class for an ask; the round count does not decide it. */
-  readonly ask_class: Exclude<AskedBy, 'route'> | null;
+  /** The agent's own class for an ask; the round count does not decide it. Ignored otherwise. */
+  readonly ask_class: Exclude<AskedBy, 'route'>;
   readonly attention: BuildAttention | null;
 }
 
@@ -82,10 +82,7 @@ function decide(
   if (path === 'closed') return { kind: 'parked', reason: 'the issue is closed' };
   if (answer !== null) {
     if (answer.decision === 'done') return { kind: 'ready', reason: answer.reason };
-    if (answer.decision === 'ask') {
-      if (answer.ask_class === null) throw new Error('the answer asks without declaring ask_class');
-      return asked(answer.ask_class, answer.attention, answer.brief, answer.reason);
-    }
+    if (answer.decision === 'ask') return asked(answer.ask_class, answer.attention, answer.brief, answer.reason);
     if (answer.brief.trim() === '') throw new Error('a continue decision has no brief to launch from');
     return { kind: 'continue', brief: answer.brief, reason: answer.reason };
   }

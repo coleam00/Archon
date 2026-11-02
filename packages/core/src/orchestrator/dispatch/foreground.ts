@@ -151,7 +151,7 @@ export async function dispatchForeground(
 /** The run row a fresh worktree run is created under before its worktree setup runs. */
 function createSetupRun(
   setupDeps: ReturnType<typeof createWorkflowDeps>,
-  { conversation, codebase, userId, userMessage, options }: DispatchScope,
+  { conversation, codebase, userId, userMessage, declaredContinuation }: DispatchScope,
   { workflow, resolvedInputs }: ForegroundLaunch,
   freshCaptured: CapturedSource,
   preparedAiConfiguration: PreparedAiConfiguration
@@ -168,12 +168,8 @@ function createSetupRun(
         ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAiConfiguration.runConfigMetadata }
         : {}),
       ...(resolvedInputs ? { [SUBRUN_METADATA_KEYS.inputs]: resolvedInputs } : {}),
-      ...(options?.adoptRunId || options?.supersedesRunId
-        ? { [CONTINUATION_METADATA_KEY]: { mode: options.adoptRunId ? 'adopt' : 'supersede' } }
-        : {}),
+      ...(declaredContinuation ? { [CONTINUATION_METADATA_KEY]: declaredContinuation.stamp } : {}),
     },
-    ...(options?.adoptRunId || options?.supersedesRunId
-      ? { adopted_from_run_id: options.adoptRunId ?? options.supersedesRunId }
-      : {}),
+    ...(declaredContinuation ? { adopted_from_run_id: declaredContinuation.run.id } : {}),
   });
 }

@@ -80,6 +80,9 @@ mock.module('@archon/core/db/users', () => ({
   getUserById: mockGetUserById,
 }));
 
+export const mockFindWorkflowRunsByIdPrefix = mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(
+  async () => []
+);
 export const mockGetWorkflowRun = mock(async (_id: string) => null as null | MockWorkflowRun);
 export const mockListDueWorkflowContinuations = mock<
   IWorkflowStore['listDueWorkflowContinuations']
@@ -189,6 +192,7 @@ mock.module('@archon/core', () => ({
   createWorkflowDeps: mock(() => ({
     store: {
       getWorkflowRun: mockGetWorkflowRun,
+      findWorkflowRunsByIdPrefix: mockFindWorkflowRunsByIdPrefix,
       getWorkflowRunForAttention: mockGetWorkflowRun,
       signalWorkflowWait: mockSignalWorkflowWait,
       listDueWorkflowContinuations: mockListDueWorkflowContinuations,
@@ -392,6 +396,7 @@ export const mockLabelAttentionWait = mock<
 
 mock.module('@archon/core/db/workflows', () => ({
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
+  getWorkflowRunsByIds: mock(async () => []),
   listWorkflowRuns: mockListWorkflowRuns,
   listDashboardRuns: mockListDashboardRuns,
   listAttentionQueueRows: mockListAttentionQueueRows,

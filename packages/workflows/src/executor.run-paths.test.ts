@@ -4,6 +4,7 @@ import {
   cwdPath,
   dagCall,
   makeRun,
+  makeDeps,
   makeStore,
   makeWorkflow,
   mocked,
@@ -19,6 +20,7 @@ import { beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { join } from 'path';
 import type { ExecuteWorkflowOptions } from './executor';
 import { RUN_METADATA_KEYS } from './schemas';
+import { resolveAdoptedRunDir } from './run-paths';
 import type { IWorkflowStore } from './store';
 import { keepAwake } from './utils/keep-awake';
 
@@ -39,6 +41,18 @@ function adoptedRunEvents(store: IWorkflowStore): unknown[] {
 // A root inside ARCHON_HOME is used as is; a relocated root is re-derived under the current
 // ARCHON_HOME through the adopted run's codebase row rather than walked verbatim.
 describe('adopted run dir', () => {
+  it('rejects an invalid persisted mode before resolving resumed artifacts', async () => {
+    const deps = makeDeps();
+    const run = makeRun({
+      adopted_from_run_id: 'prior-run',
+      metadata: { continuation: { mode: 'unsupported' } },
+    });
+    await expect(resolveAdoptedRunDir(deps, run, {}, true)).rejects.toThrow(
+      'Invalid recorded continuation metadata.'
+    );
+    expect(deps.store.getWorkflowRun).not.toHaveBeenCalled();
+  });
+
   const trustedRoot = join(WS, 'workspaces', 'acme', 'widget');
   const roots = [
     ['inside ARCHON_HOME', trustedRoot, null, trustedRoot],

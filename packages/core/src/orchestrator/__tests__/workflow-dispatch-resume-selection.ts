@@ -12,6 +12,7 @@ import {
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
   mockFindResumableRunByParentConversation,
+  mockFindWorkflowRunsByIdPrefix,
   mockGetCodebase,
   mockGetOrCreateConversation,
   mockHandleCommand,
@@ -44,7 +45,7 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
       await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
         actor: operator,
         workflowAdoptRunId: 'adopted-run',
-        workflowSupersedesRunId: 'replaced-run',
+        workflowSupersedesRunId: '22222222-2222-4222-8222-222222222222',
       });
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'conv-1',
@@ -78,12 +79,12 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowSupersedesRunId: 'replaced-run',
+      workflowSupersedesRunId: '22222222-2222-4222-8222-222222222222',
     });
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
       expect.stringContaining(
-        `Cannot supersede run 'replaced-run': this conversation already continues run '${run.id}' (${run.status}). Resume or abandon that run first`
+        `Cannot supersede run '22222222-2222-4222-8222-222222222222': this conversation already continues run '${run.id}' (${run.status}). Resume or abandon that run first`
       )
     );
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
@@ -94,6 +95,36 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
   });
 
+  test('direct supersede resolves a project prefix before recording and executing', async () => {
+    const codebase = makeCodebase();
+    const ancestor = makeResumableRun({
+      id: '22222222-2222-4222-8222-222222222222',
+      codebase_id: codebase.id,
+      status: 'completed',
+    });
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(codebase);
+    mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
+    mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([ancestor]);
+
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+      workflowSupersedesRunId: '22222222',
+    });
+
+    expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('22222222', codebase.id);
+    expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockCreateWorkflowRun.mock.calls[0][0]).toMatchObject({
+      adopted_from_run_id: ancestor.id,
+      metadata: { continuation: { mode: 'supersede' } },
+    });
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow.mock.calls[0][7]).toMatchObject({
+      adoptedFromRunId: ancestor.id,
+      continuationMode: 'supersede',
+    });
+  });
+
   test.each([false, true])('fresh supersede records provenance (force=%s)', async force => {
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
     mockGetCodebase.mockResolvedValueOnce(makeCodebase());
@@ -101,19 +132,45 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowSupersedesRunId: 'replaced-run',
+      workflowSupersedesRunId: '22222222-2222-4222-8222-222222222222',
     });
     expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
     expect(mockCreateWorkflowRun.mock.calls[0][0]).toMatchObject({
-      adopted_from_run_id: 'replaced-run',
+      adopted_from_run_id: '22222222-2222-4222-8222-222222222222',
       metadata: { continuation: { mode: 'supersede' } },
     });
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow.mock.calls[0][7]).toMatchObject({
-      adoptedFromRunId: 'replaced-run',
+      adoptedFromRunId: '22222222-2222-4222-8222-222222222222',
       continuationMode: 'supersede',
     });
   });
+
+  test.each([false, true])(
+    'a target resumed after admission refuses before execution (background=%s)',
+    async background => {
+      makeResumableRun({ id: '22222222-2222-4222-8222-222222222222', status: 'running' });
+      mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+      mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
+      mockPrepareWorkflowSource.mockClear();
+      const platform = background ? makePlatform() : makeForegroundPlatform();
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+        actor: operator,
+        workflowSupersedesRunId: '22222222-2222-4222-8222-222222222222',
+      });
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining(
+          "Cannot supersede run '22222222-2222-4222-8222-222222222222': it is still running."
+        )
+      );
+      expect(mockPrepareWorkflowSource).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    }
+  );
 
   test('fresh background supersede forwards provenance to dispatch', async () => {
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
@@ -121,10 +178,15 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowSupersedesRunId: 'replaced-run',
+      workflowSupersedesRunId: '22222222-2222-4222-8222-222222222222',
     });
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
-      expect.objectContaining({ supersedesRunId: 'replaced-run' }),
+      expect.objectContaining({
+        declaredContinuation: {
+          run: expect.objectContaining({ id: '22222222-2222-4222-8222-222222222222' }),
+          stamp: { mode: 'supersede' },
+        },
+      }),
       expect.objectContaining({ name: 'test-workflow' })
     );
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -139,7 +201,10 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(noWorktreeResult));
     mockResolveWorkflowAdoption.mockImplementationOnce(() =>
       Promise.resolve({
-        adoptedRun: makeResumableRun({ id: 'prior-run', status: 'completed' }),
+        adoptedRun: makeResumableRun({
+          id: '11111111-1111-4111-8111-111111111111',
+          status: 'completed',
+        }),
         lane: {
           kind: 'reuse-worktree',
           environment: makeIsolationEnvironment({ working_path: '/wt/adopted' }),
@@ -150,7 +215,7 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
-      workflowAdoptRunId: 'prior-run',
+      workflowAdoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(platform.sendMessage).toHaveBeenCalledWith(

@@ -461,6 +461,8 @@ mock.module('../workflows/store-adapter', () => ({
     providers: providerRegistry,
     store: {
       getCodebaseEnvVars: async () => ({}),
+      getWorkflowRun: mockGetWorkflowRunDb,
+      findWorkflowRunsByIdPrefix: mockFindWorkflowRunsByIdPrefix,
       createWorkflowRun: mockCreateWorkflowRun,
       updateWorkflowRun: async () => {},
       failWorkflowRun: mockFailPreparedRun,
@@ -485,6 +487,7 @@ mock.module('../workflows/store-adapter', () => ({
 
 mock.module('../db/workflows', () => ({
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
+  getWorkflowRunsByIds: mock(async () => []),
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
   getWorkflowRun: mockGetWorkflowRunDb,
   getWorkflowRunForAttention: mockGetWorkflowRunDb,

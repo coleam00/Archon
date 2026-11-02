@@ -19,10 +19,7 @@ import {
   type IIsolationStore,
   type TaskBranchSelection,
 } from '@archon/isolation';
-import {
-  TERMINAL_WORKFLOW_STATUSES,
-  type ContinuationMode,
-} from '@archon/workflows/schemas/workflow-run';
+import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { IWorkflowHostStore } from '../workflows/host-store';
@@ -260,10 +257,4 @@ async function checkoutBranchLane(
     kind: 'checkout-branch',
     taskBranch: { kind: 'existing', branch: toBranchName(branch) },
   };
-}
-
-export const CONTINUATION_METADATA_KEY = 'continuation';
-
-export interface ContinuationMetadata {
-  mode: ContinuationMode;
 }

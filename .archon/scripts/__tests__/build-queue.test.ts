@@ -212,7 +212,7 @@ describe('the build record', () => {
     expect(field('answer', 'decision')?.enum).toEqual([...ANSWER_DECISIONS]);
     expect(field('apply', 'decision')?.enum).toEqual([...APPLY_DECISIONS]);
     expect(field('apply', 'class')?.enum).toEqual(['', ...ASKED_BY]);
-    expect(field('answer', 'ask_class')?.enum as unknown).toEqual([...ASKED_BY.filter(by => by !== 'route'), null]);
+    expect(field('answer', 'ask_class')?.enum).toEqual(ASKED_BY.filter(by => by !== 'route'));
     expect(field('ruling', 'decision')?.enum).toEqual([...BUILD_EFFECTS]);
     for (const id of ['route', 'answer']) {
       const attention = field(id, 'attention')?.properties;
@@ -342,7 +342,7 @@ function applyInputs(answer: Record<string, unknown>): Record<string, string> {
   };
 }
 
-const CONTINUE = { decision: 'continue', brief: 'continue PR 42 on R1', push: null, reason: 'R1 is correctable', ask_class: null, attention: null };
+const CONTINUE = { decision: 'continue', brief: 'continue PR 42 on R1', push: null, reason: 'R1 is correctable', ask_class: 'scope', attention: null };
 const ASK = { decision: 'ask', brief: 'continue PR 42 under the ruling', push: null, reason: 'the plan asks to relax a constraint', ask_class: 'stop', attention: ATTENTION };
 
 const HEAD_A = 'a'.repeat(40);
@@ -767,16 +767,6 @@ describe('the build queue scripts', () => {
     const applied = ok(run(at, 'apply', inputs));
     expect(applied).toMatchObject({ decision: 'asked', class: 'stop', asked: { by: 'stop' } });
     expect(stored(at).value?.facts.build).toMatchObject({ status: 'asking', decisions: [{ decision: 'ask stop' }] });
-  }, 60_000);
-
-  test('an ask without a declared class refuses before any write', () => {
-    const at = install();
-    seed(at, triaged(CLAIMED));
-    const before = stored(at).revision;
-    const applied = run(at, 'apply', applyInputs({ ...ASK, ask_class: null }));
-    expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain('asks without declaring ask_class');
-    expect(stored(at).revision).toBe(before);
   }, 60_000);
 
   test('an attention item recommending a choice it does not offer refuses before any write', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { dagNodeSchema } from '../../../schemas';
 import { resolveNodeOutputField } from '../../../output-ref';
 import type { NodeOutput } from '../../../schemas';
-import { certifyExecOutput } from './exec-output';
+import { ExecOutputContractError, certifyExecOutput } from './exec-output';
 
 describe('exec composition-only output certification', () => {
   for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
@@ -31,4 +31,23 @@ describe('exec composition-only output certification', () => {
       ).toThrow('not declared');
     });
   }
+});
+
+describe('exec metric record certification', () => {
+  it('fails a script whose stdout carries a malformed metric record', () => {
+    const node = dagNodeSchema.parse({
+      id: 'count',
+      script: 'emit',
+      runtime: 'bun',
+      output_format: { type: 'object', properties: { metrics: { type: 'array' } } },
+    });
+    if (node.kind !== 'exec') throw new Error('Expected a script node');
+    const stdout = JSON.stringify({
+      metrics: [
+        { name: 'factory.prs_merged', kind: 'count', unit: 'prs', value: -1, subject: null },
+      ],
+    });
+    expect(() => certifyExecOutput(node, stdout, [])).toThrow(ExecOutputContractError);
+    expect(() => certifyExecOutput(node, stdout, [])).toThrow('/metrics/0/value');
+  });
 });

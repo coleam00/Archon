@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import {
   mockFolderBackendPrepare,
   mockFolderBackendDestroy,
@@ -72,6 +73,10 @@ describe('workflow run credential launch refusal', () => {
     if (adopt) mockDiscoverWorkflowsWithConfig.mockImplementationOnce(discover);
     const adoptedRunId = '11111111-1111-1111-1111-111111111111';
     if (adopt) {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(
+        makeContinuationRun({ id: adoptedRunId })
+      );
       const { resolveWorkflowAdoption } = await import('@archon/core/operations/workflow-adoption');
       (resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
         adoptedRun: { id: adoptedRunId, status: 'completed', working_path: '/old' },

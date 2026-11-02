@@ -707,6 +707,9 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id ON remote_agent_workflow_events(workflow_run_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_type ON remote_agent_workflow_events(event_type);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at ON remote_agent_workflow_events(created_at);
+      -- Metric completions (listMetricRecords). Its predicate must equal the query's.
+      CREATE INDEX IF NOT EXISTS idx_workflow_events_metrics ON remote_agent_workflow_events(created_at)
+        WHERE event_type = 'node_completed' AND json_extract(data, '$.structured_output.metrics') IS NOT NULL;
       -- NOTE: the idx_workflow_events_run_order index and the assign_order trigger
       -- are deliberately NOT created here. Both reference event_order, which does
       -- not exist on databases created before it was introduced — and CREATE INDEX
@@ -785,5 +788,9 @@ export const sqliteDialect: SqlDialect = {
 
   rowLock(): string {
     return '';
+  },
+
+  indexedBy(index: string): string {
+    return ` INDEXED BY ${index}`;
   },
 };
