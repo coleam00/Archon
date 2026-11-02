@@ -1,6 +1,13 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { ClassifiedProviderError } from '../shared/failure';
-import { applyNodeScope, type CodexInventory } from './scope';
+import { createFakeAppServer } from '../test/codex-app-server-fake';
+import { AppServerConnection } from './app-server';
+import {
+  applyNodeScope,
+  checkThreadMcpScope,
+  readThreadMcpStatuses,
+  type CodexInventory,
+} from './scope';
 
 const inventory: CodexInventory = {
   codexHome: '/home/user/.codex',
@@ -62,4 +69,77 @@ describe('applyNodeScope', () => {
     expect(scope).toThrow(ClassifiedProviderError);
     expect(scope).toThrow(/declares posthog, which your Codex config also defines/);
   });
+});
+
+/** Exercise the wire reader without the fake server filling absent fields with null. */
+async function withMcpStatus(
+  status: object,
+  check: (connection: AppServerConnection) => Promise<void>
+): Promise<void> {
+  const connection = AppServerConnection.start(
+    { path: '/bin/codex', pathDirs: [] },
+    [],
+    {},
+    createFakeAppServer()
+  );
+  const request = spyOn(connection, 'request').mockResolvedValue({
+    data: [status],
+    nextCursor: null,
+  });
+  try {
+    await check(connection);
+  } finally {
+    request.mockRestore();
+    await connection.shutdown();
+  }
+}
+
+describe('Codex MCP status wire fields', () => {
+  test.each([{}, { pluginId: null }, { toolsError: null }, { pluginId: null, toolsError: null }])(
+    'normalizes absent nullable fields: %j',
+    async fields => {
+      await withMcpStatus({ name: 'local', runtimeStatus: 'connected', ...fields }, async c => {
+        expect(await readThreadMcpStatuses(c, 'thread')).toEqual([
+          { name: 'local', runtimeStatus: 'connected', pluginId: null, toolsError: null },
+        ]);
+        await checkThreadMcpScope(c, 'thread', ['local']);
+      });
+    }
+  );
+
+  test('disabled ambient servers may omit nullable fields', async () => {
+    await withMcpStatus({ name: 'ambient', runtimeStatus: 'disabled' }, async c => {
+      await checkThreadMcpScope(c, 'thread', []);
+    });
+  });
+
+  test.each(['connected', undefined])('undeclared servers still fail closed: %s', async status => {
+    await withMcpStatus({ name: 'ambient', runtimeStatus: status }, async c => {
+      await expect(checkThreadMcpScope(c, 'thread', [])).rejects.toThrow(
+        'Codex loaded MCP servers this node does not declare: ambient'
+      );
+    });
+  });
+
+  test('a plugin server cannot pass by matching a declared name', async () => {
+    await withMcpStatus(
+      { name: 'local', runtimeStatus: 'connected', pluginId: 'alpha@fixture' },
+      async c => {
+        await expect(checkThreadMcpScope(c, 'thread', ['local'])).rejects.toThrow(
+          'local (plugin alpha@fixture)'
+        );
+      }
+    );
+  });
+
+  test.each([{ pluginId: 42 }, { toolsError: false }])(
+    'rejects malformed fields: %j',
+    async fields => {
+      await withMcpStatus({ name: 'local', runtimeStatus: 'connected', ...fields }, async c => {
+        await expect(readThreadMcpStatuses(c, 'thread')).rejects.toThrow(
+          'unexpected `mcpServerStatus/list` response'
+        );
+      });
+    }
+  );
 });
