@@ -129,6 +129,10 @@ export function factoryPrs(prs: readonly PrFacts[]): { factory: PrFacts[]; skipp
   };
 }
 
+type Outcome = Pick<PrMetricRecord, 'name' | 'kind' | 'unit' | 'value' | 'at'>;
+
+const count = (name: PrMetricRecord['name'], value: number, at: string): Outcome => ({ name, kind: 'count', unit: 'prs', value, at });
+
 /**
  * Every factory pull request counts as opened; a merged one as merged. Every one also
  * records whether it is abandoned, closed without merging: 1 at its close, else 0, so a
@@ -136,23 +140,23 @@ export function factoryPrs(prs: readonly PrFacts[]): { factory: PrFacts[]; skipp
  * one also scores 1 or 0 on the merge rate, at its resolution time; an open one has no
  * rate yet.
  */
+function outcomes(pr: PrFacts): Outcome[] {
+  const opened = count('sdlc.prs_opened', 1, pr.createdAt);
+  if (pr.state === 'OPEN') return [opened, count('sdlc.prs_abandoned', 0, pr.createdAt)];
+  const merged = pr.state === 'MERGED';
+  const resolved = merged ? pr.mergedAt : pr.closedAt;
+  if (resolved === null) throw new Error(`GitHub reported ${pr.url} ${pr.state.toLowerCase()} without a time`);
+  const rate: Outcome = { name: 'sdlc.pr_merge_rate', kind: 'score', unit: 'ratio', value: merged ? 1 : 0, at: resolved };
+  return merged
+    ? [opened, count('sdlc.prs_merged', 1, resolved), count('sdlc.prs_abandoned', 0, resolved), rate]
+    : [opened, count('sdlc.prs_abandoned', 1, resolved), rate];
+}
+
+/** Each factory pull request's outcome records, with the pull request as subject and its build runs. */
 export function prMetricRecords(prs: readonly PrFacts[], runsByUrl: ReadonlyMap<string, readonly string[]>): PrMetricRecord[] {
-  const records: PrMetricRecord[] = [];
-  for (const pr of prs) {
+  return prs.flatMap(pr => {
     const runs = (runsByUrl.get(pr.url) ?? []).slice(0, MAX_RUNS);
     if (runs.length === 0) throw new Error(`no build round names ${pr.url}`);
-    const base = { subject: pr.url, runs };
-    records.push({ ...base, name: 'sdlc.prs_opened', kind: 'count', unit: 'prs', value: 1, at: pr.createdAt });
-    if (pr.state === 'OPEN') {
-      records.push({ ...base, name: 'sdlc.prs_abandoned', kind: 'count', unit: 'prs', value: 0, at: pr.createdAt });
-      continue;
-    }
-    const merged = pr.state === 'MERGED';
-    const resolved = merged ? pr.mergedAt : pr.closedAt;
-    if (resolved === null) throw new Error(`GitHub reported ${pr.url} ${pr.state.toLowerCase()} without a time`);
-    if (merged) records.push({ ...base, name: 'sdlc.prs_merged', kind: 'count', unit: 'prs', value: 1, at: resolved });
-    records.push({ ...base, name: 'sdlc.prs_abandoned', kind: 'count', unit: 'prs', value: merged ? 0 : 1, at: resolved });
-    records.push({ ...base, name: 'sdlc.pr_merge_rate', kind: 'score', unit: 'ratio', value: merged ? 1 : 0, at: resolved });
-  }
-  return records;
+    return outcomes(pr).map(outcome => ({ ...outcome, subject: pr.url, runs }));
+  });
 }
