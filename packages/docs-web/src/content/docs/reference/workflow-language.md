@@ -1854,12 +1854,13 @@ which surfaces can read it:
 |--------|-------------------------|-------------------------------------|--------------------------------|
 | `include:` | **Load time** (the block and command bodies are compiled into the flat DAG) | `prompt:` yes; `bash:` as a quoted `INPUTS_<UPPER_SNAKE>` reference; inline `script:` is a load error | **Yes**: resolved command bodies receive the same input binding before execution |
 | `workflow:` sub-run | **Runtime** (values become inputs on the child run) | `prompt:` yes; `bash:` and `script:` read `INPUTS_<UPPER_SNAKE>` env vars | **Yes**: command-backed prompts receive runtime substitution |
-| direct run (`--input` / console form) | **Runtime**: the same path as a sub-run; supplied values are persisted to the run's own metadata, so inputs reconstitute on a cold resume | `prompt:` yes; `bash:` and `script:` read `INPUTS_<UPPER_SNAKE>` env vars | **Yes**: command-backed prompts receive runtime substitution |
+| direct run (`--input` / console form) | **Runtime**: the same path as a sub-run; when the run starts, its complete `$INPUTS` (pack settings, declared defaults, supplied values) is written to the run's own metadata, so a cold resume reads the values the run started with | `prompt:` yes; `bash:` and `script:` read `INPUTS_<UPPER_SNAKE>` env vars | **Yes**: command-backed prompts receive runtime substitution |
 
 Both composition paths support command-backed prompts; their binding time differs. Includes
 snapshot and bind the resolved command body at load time, while sub-runs resolve inputs at
-runtime. Sub-run inputs are persisted to the child run's metadata at spawn, so `$INPUTS`
-reconstitutes on a cold resume.
+runtime. Every run, sub-run or direct, fixes its complete `$INPUTS` on its own row when it
+starts, so a cold resume reads exactly what the run started with, even if a default or a
+[pack setting](#pack-settings) was edited since.
 
 ### `$INPUTS` in `bash:`/`script:` nodes uses env vars
 
@@ -1953,7 +1954,13 @@ map goes through, so a map accepted when composing is accepted here:
 - a **required** input with no value is refused, naming it;
 - an **undeclared** key is refused, naming it and listing what the workflow does declare;
 - both refusals happen **before any worktree, clone, or AI cost**;
-- supplied values are recorded on the run, so a resume replays exactly what the run started with.
+- when the run starts, the supplied values, the declared defaults and the workflow's
+  [pack settings](#pack-settings) are recorded on the run together, so a resume replays exactly
+  what the run started with.
+
+A `--input`, or a trigger binding's input (event-mapped ones included), may also name one of
+the workflow's [pack settings](#pack-settings): it overrides the project's value for this one
+run, and is checked against the setting's type.
 
 One consequence worth knowing on **chat, the run route, and the console**: the surfaces that reuse a
 conversation. Invoking a workflow there when a resumable run of it already exists in that
@@ -1980,6 +1987,93 @@ registered project directory. Copilot/OpenCode launches are headless, use CLI id
 return a run ID for inspection without originating-chat progress or result delivery.
 Assistant prose, including slash-command examples, never launches or registers anything.
 See [Deprecated providers](/getting-started/ai-assistants/#deprecated-providers).
+
+### Pack settings
+
+A packaged workflow (`.archon/workflows/<pack>/<workflow>/<workflow>.yaml`, or an installed
+pack) can read settings its **pack** declares once, instead of each workflow declaring the
+same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
+`INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
+
+The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
+shape as a workflow's, plus a `type`:
+
+```yaml
+# .archon/workflows/review-kit/.pack/pack.yaml
+inputs:
+  forge:
+    type: enum            # string (default) | bool | enum | list
+    values: [gh, glab]    # enum only, and required for it
+    default: gh
+  strict:
+    type: bool            # the text true or false
+    default: false
+  reviewers:
+    type: list            # comma-separated text, no empty items
+    description: who to request reviews from
+```
+
+The declaration sits in a dot folder so neither workflow loader reads it as a workflow. Values
+stay text, as every `--input` is. An invalid declaration fails every workflow of the pack at
+load, naming the file and the key.
+
+A project sets the values in `.archon/packs/<pack>.yaml`, under `settings:` only:
+
+```yaml
+# .archon/packs/review-kit.yaml
+settings:
+  forge: glab
+  reviewers: ann,bo
+```
+
+`<pack>` is the pack's folder name; for an installed pack it is `<owner>.<manifest name>`
+(`acme.review-kit`), never its install path. The file is read from the run's own checkout
+(its worktree, for an isolated run) when the run starts. An unknown key, a value of the wrong
+type, or any top-level key other than `settings:` refuses the run at that point, before any
+node runs, naming the file and the key; for an isolated run that is after its worktree was
+created. A `required` setting must be set there, or passed with `--input`.
+
+Pack folders of the same name in the project, home and bundled scopes share one file, and each
+reads it against its own declaration. A bundled pack declares no settings, so if a project pack
+folder takes a bundled pack's name and the file sets the project pack's settings, the bundled
+workflows of that name refuse to start ("declares no settings"); the same happens when the
+project and home declarations of one name differ. Give a pack with settings a name of its own.
+
+**Layers**, lowest first: the pack's `default:`, then the project's `.archon/packs/<pack>.yaml`,
+then the workflow's own `inputs:` default of the same name, then the run's supplied inputs
+(`--input`, a parent's `with:`). The run resolves them **once, when it starts**, and stores the
+result on its row; a resumed run keeps those values even if the project file changed since.
+
+- **Settings belong to a run.** A run reads its root workflow's pack; every node of the run
+  sees the same `$INPUTS`. A workflow input of the same name as a pack setting overrides it.
+  Two different names that fold to the same `INPUTS_*` key across a workflow's inputs and its
+  pack's settings are a load error.
+- **An `include:`d block takes nothing from its pack.** Its `$INPUTS.<name>` references read
+  what its includer passes through `with:`, and a reference nothing supplies fails the load. A
+  block that wants a setting gets it from its includer:
+
+  ```yaml
+  - id: review
+    include: review-block
+    with:
+      forge: $INPUTS.forge   # the including run's setting, passed in
+  ```
+
+  Load checks a block's `$INPUTS.<name>` references against what its includer passes. It does
+  not check a `bash:`/`script:` node's raw `$INPUTS_<NAME>` env reads that way: those are
+  checked only against the block's own file, where its pack's settings count as declared. Every
+  node, an included one too, gets the including run's inputs as `INPUTS_*` env vars, so such a
+  read of a name the includer does not pass gets the including run's value of that name (its
+  pack setting or input) if the run has one, and is empty otherwise; never the block's own
+  pack's value. A block meant to be included should declare the name under its own `inputs:`
+  and have the includer pass it through `with:`.
+- **A `workflow:` child is a run of its own**: it resolves its own pack's settings when it
+  starts, under the `with:` values its parent passes. The parent's `with:` cannot set one of the
+  child's pack settings (unless the child also declares an input of that name); the node fails,
+  naming it. Only a run's own invocation can, `--input` or a trigger binding, and its value is
+  checked against the setting's type.
+- A run refused at start by its project settings file is marked failed, including a run row
+  created in advance by a background or detached launch.
 
 ## Launching a Separate Governed Run with `workflow:`
 

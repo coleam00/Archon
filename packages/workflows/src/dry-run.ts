@@ -10,7 +10,7 @@ import { resolveWorkflowModelScope, assistantModelDefaults } from './node-model-
 import type { ResolvedAiProfile } from './model-validation';
 import type { WorkflowConfig } from './deps';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
-import { defaultRunInputs } from './workflow-inputs';
+import { resolveRunStartInputs, type RunStartInputs } from './pack-settings';
 import {
   isExecNode,
   isAgentNode,
@@ -113,10 +113,11 @@ interface DryRunOptions {
   stubs?: DryRunStubs;
   /**
    * Caller-SUPPLIED input values, already validated against the workflow's declared
-   * `inputs:` at the invocation gate (`resolveTopLevelInputs`) — the same contract a
-   * real run enforces before any cost. Declared defaults are derived here, not by the
-   * caller, mirroring the executor's split (`defaultRunInputs` at run start), so the
-   * effective `$INPUTS` map cannot diverge between simulation and execution (#2610).
+   * `inputs:` and pack settings at the invocation gate (`resolveTopLevelInputs`) — the
+   * same contract a real run enforces before any cost. Pack settings and declared
+   * defaults are layered under them here, by the function a real run starts with
+   * (`resolveRunStartInputs`), so the effective `$INPUTS` map cannot diverge between
+   * simulation and execution (#2610).
    */
   inputs?: Record<string, string>;
   /**
@@ -145,13 +146,12 @@ interface DryRunOptions {
   aiProfile?: ResolvedAiProfile;
 }
 
-function createDryRunContext(options: DryRunOptions, tempRoot: string): DryRunContext {
+function createDryRunContext(
+  options: DryRunOptions,
+  tempRoot: string,
+  { inputs }: RunStartInputs
+): DryRunContext {
   const assistantModels = options.config ? assistantModelDefaults(options.config) : {};
-  // Same layering as the executor: declared defaults under caller-supplied values
-  // (supplied wins). A workflow with no `inputs:` block keeps passthrough semantics.
-  const declaredDefaults = defaultRunInputs(options.workflow.inputs);
-  const inputs =
-    declaredDefaults || options.inputs ? { ...declaredDefaults, ...options.inputs } : undefined;
   return {
     envVars: options.config?.envVars,
     protectedEnvKeys: options.config?.protectedEnvKeys,
@@ -188,7 +188,13 @@ function createDryRunContext(options: DryRunOptions, tempRoot: string): DryRunCo
 
 export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResult> {
   const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
-  const ctx = createDryRunContext(options, tempRoot);
+  // The same layering a real run fixes at its start: the pack's settings from the
+  // project's `.archon/packs/` file, then declared defaults, then supplied values.
+  const ctx = createDryRunContext(
+    options,
+    tempRoot,
+    await resolveRunStartInputs(options.cwd, options.workflow, options.inputs)
+  );
   const outputs = new Map<string, NodeOutput>();
   try {
     await simulateNodes(options.workflow.plan, outputs, ctx);

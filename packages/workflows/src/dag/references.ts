@@ -37,9 +37,10 @@ import { type LoopBodyScope, loopScopeTokens, substituteLoopBodyText } from './l
 import { shellQuoteOrFile } from './shell-quote';
 
 /**
- * Resolve this run's named inputs (#2470) from persisted sub-run metadata. Non-empty
- * only for `workflow:` sub-run children (the parent stamps `metadata.inputs` at spawn);
- * a top-level run has none. Threaded into every AI/prompt substitution so `$INPUTS.<name>`
+ * Resolve this run's named inputs (#2470) from its row's `metadata.inputs`. A fresh run
+ * writes its complete `$INPUTS` there when it starts (pack settings, declared defaults,
+ * supplied values); a `workflow:` child's parent first stamps its `with:` map there at
+ * spawn. Threaded into every AI/prompt substitution so `$INPUTS.<name>`
  * resolves, and mangled to `INPUTS_<UPPER_SNAKE>` env vars for bash/script nodes.
  * Values are logical JSON values (#2637): `readSubrunMetadata` prefers the
  * `inputs_values` sibling key and degrades to the legacy text map.

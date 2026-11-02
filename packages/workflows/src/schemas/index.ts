@@ -252,6 +252,7 @@ export {
   reRunsOwnNodeOnResume,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
+  runInputsMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
   WORKFLOW_SOURCE_METADATA_KEY,
@@ -354,3 +355,11 @@ export {
 export type { SessionCursor } from './workflow-run';
 
 export { canSuspend, isInteractiveSink } from './node-suspension';
+
+export {
+  PACK_SETTING_TYPES,
+  packSettingSpecSchema,
+  type PackSettingType,
+  type PackSettingSpec,
+  type WorkflowPack,
+} from './pack-settings';

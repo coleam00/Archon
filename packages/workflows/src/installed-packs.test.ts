@@ -30,7 +30,7 @@ import {
   type WorkflowSourceCapture,
 } from './workflow-source';
 import { WORKFLOW_SOURCE_METADATA_KEY } from './schemas/workflow-run';
-import { isAgentNode, type ResolvedWorkflow } from './schemas';
+import { isAgentNode, type ResolvedWorkflow, type WorkflowPack } from './schemas';
 import type { WorkflowDeps } from './deps';
 import * as bundleInventory from './defaults/bundle-inventory';
 
@@ -241,6 +241,22 @@ nodes:
     const bundled = catalog.workflows.find(e => e.workflow.name === 'fake-review');
     expect(bundled?.source).toBe('bundled');
     expect(bundled?.workflow.nodes.map(node => readHomeMcpDirectory(node))).toEqual([undefined]);
+  });
+
+  test('an installed pack is keyed owner.<manifest name>, not by its install path', async () => {
+    const kit = reviewKit();
+    await install({
+      ...kit,
+      files: { ...kit.files, '.pack/pack.yaml': 'inputs:\n  depth:\n    default: shallow\n' },
+    });
+    const { workflows, support } = await discover();
+    const review = workflows.find(entry => entry.workflow.name === REVIEW);
+    const expected: WorkflowPack = {
+      key: 'acme.review-kit',
+      settings: { depth: { type: 'string', default: 'shallow' } },
+    };
+    expect(review?.workflow.pack).toEqual(expected);
+    expect(support?.find(entry => entry.workflow.name === HELPER)?.workflow.pack).toEqual(expected);
   });
 
   test('entrypoints are dispatchable as owner/plugin:entrypoint; support workflows only compose', async () => {

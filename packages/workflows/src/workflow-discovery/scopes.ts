@@ -2,11 +2,13 @@ import { readdir, access } from 'fs/promises';
 import { basename, join } from 'path';
 import * as archonPaths from '@archon/paths';
 import type { WorkflowLoadError } from '../schemas';
+import type { WorkflowPack } from '../schemas/pack-settings';
 import {
   BUNDLED_WORKFLOWS,
   BUNDLED_WORKFLOW_OWNERS,
   BUNDLED_WORKFLOW_PATHS,
   isBinaryBuild,
+  type BundledWorkflowOwner,
 } from '../defaults/bundled-defaults';
 import { collectInstalledBundleSources, readBundleContent } from '../defaults/bundle-inventory';
 import { parseWorkflow } from '../loader';
@@ -91,6 +93,14 @@ export async function loadBundledScope(
 }
 
 /**
+ * A bundled workflow's pack. The bundle ships no settings declarations yet, so a bundled
+ * pack has a key and no settings: its project settings file may set nothing.
+ */
+function bundledPack(owner: BundledWorkflowOwner | undefined): WorkflowPack | undefined {
+  return owner === undefined ? undefined : { key: owner.pack };
+}
+
+/**
  * Load bundled default workflows (for binary distribution).
  *
  * Note: Bundled workflows are embedded at compile time and should ALWAYS be valid.
@@ -104,14 +114,20 @@ function loadEmbeddedWorkflows(context: WorkflowParseContext): DirLoadResult {
     const path = BUNDLED_WORKFLOW_PATHS[name];
     if (path === undefined) throw new Error(`Bundled workflow "${name}" has no source path.`);
     const filename = basename(path);
-    const result = parseWorkflow(content, filename, context.providers, context.configuredEnvNames);
+    const owner = BUNDLED_WORKFLOW_OWNERS[name];
+    const result = parseWorkflow(
+      content,
+      filename,
+      context.providers,
+      context.configuredEnvNames,
+      bundledPack(owner)
+    );
     if (!result.workflow) {
       // Bundled workflows should ALWAYS be valid - this indicates a build-time error
       getLog().error({ filename }, 'bundled_workflow_parse_failed');
       errors.push(result.error);
       continue;
     }
-    const owner = BUNDLED_WORKFLOW_OWNERS[name];
     if (owner !== undefined) {
       qualifyWorkflowResources(result.workflow, { source: 'bundled', ...owner });
     }
@@ -136,7 +152,8 @@ async function loadLiveBundle(
       await readBundleContent(file),
       filename,
       context.providers,
-      context.configuredEnvNames
+      context.configuredEnvNames,
+      bundledPack(file.owner)
     );
     if (!parsed.workflow) {
       result.errors.push(parsed.error);

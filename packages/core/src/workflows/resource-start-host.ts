@@ -56,12 +56,12 @@ import {
   SUBRUN_METADATA_KEYS,
   WORKFLOW_SOURCE_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
-import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import {
-  resolveDeclaredInputs,
-  WorkflowInputContractError,
-} from '@archon/workflows/workflow-inputs';
+  assertWorkflowRequirementsMet,
+  resolveInvocationInputs,
+} from '@archon/workflows/utils/workflow-requirements';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
 import { loadWorkflowRunConfigFile, unsealWorkflowRunConfig } from '../config/run-config';
 import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
 import type { Codebase } from '../schemas/codebase';
@@ -137,15 +137,24 @@ function quotedList(names: readonly string[]): string {
   return names.map(name => `'${name}'`).join(', ');
 }
 
-/** The binding's authored and event inputs, checked against the workflow's declared inputs. */
-function resolveBindingInputs(
-  intent: ResourceStartBindingIntent,
-  workflow: ResolvedWorkflow
+/**
+ * The binding's authored and event inputs, checked against the workflow's declared inputs
+ * and its pack's settings. Exported for its tests.
+ */
+export function resolveBindingInputs(
+  intent: Pick<ResourceStartBindingIntent, 'eventInputs'> & {
+    launch: Pick<ResourceStartBindingIntent['launch'], 'inputs'>;
+  },
+  workflow: Pick<ResolvedWorkflow, 'name' | 'inputs' | 'pack'>
 ): Record<string, JsonValue> {
-  // `resolveDeclaredInputs` passes inputs through to a workflow without `inputs:`, which
+  // The declared-input contract passes inputs through to a workflow without `inputs:`, which
   // operator-written literals rely on. Event inputs carry untrusted source content, so
   // they reach only a workflow that declares them.
-  const eventInputNames = Object.keys(intent.eventInputs ?? {});
+  // A pack setting is declared, by the pack, and checked against its type below.
+  const settings = workflow.pack?.settings ?? {};
+  const eventInputNames = Object.keys(intent.eventInputs ?? {}).filter(
+    name => !Object.hasOwn(settings, name)
+  );
   if (workflow.inputs === undefined && eventInputNames.length > 0) {
     throw new Error(
       `Workflow '${workflow.name}' declares no inputs; a trigger cannot pass event-mapped ` +
@@ -154,9 +163,10 @@ function resolveBindingInputs(
         ". Declare them under 'inputs:' in the workflow."
     );
   }
-  const inputs = { ...intent.launch.inputs, ...intent.eventInputs };
   try {
-    resolveDeclaredInputs(inputs, workflow.inputs, `Cannot run workflow '${workflow.name}'`, 'it');
+    // The same contract `--input` meets: the workflow's own inputs, or its pack's settings
+    // checked against their declared types.
+    return resolveInvocationInputs(workflow, { ...intent.launch.inputs, ...intent.eventInputs });
   } catch (error) {
     if (error instanceof WorkflowInputContractError && error.missingRequired.length > 0) {
       throw new Error(
@@ -167,7 +177,6 @@ function resolveBindingInputs(
     }
     throw error;
   }
-  return inputs;
 }
 
 /** Reconcile the requested isolation with the workflow's pin and the project kind. */
@@ -194,7 +203,8 @@ function resolveBindingIsolation(
     : { kind: 'in-place' };
 }
 
-// Persist only authored inputs; defaults stay derived from the frozen workflow.
+// The row is created with only the authored inputs. The run fixes its pack settings and
+// declared defaults on the row when it starts (resolveRunDispatch), and a resume reads that.
 function authoredInputsMetadata(inputs: Record<string, JsonValue>): Record<string, JsonValue> {
   if (Object.keys(inputs).length === 0) return {};
   return {

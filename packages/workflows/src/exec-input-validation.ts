@@ -107,7 +107,7 @@ function describeUnavailableEnvironmentRead(
 }
 
 function validateTargetEnvironmentReads(
-  workflow: Pick<WorkflowDefinition, 'inputs'>,
+  workflow: Pick<WorkflowDefinition, 'inputs' | 'pack'>,
   target: ExecInputValidationTarget,
   source: ExecInputSource,
   declaredInputs: readonly string[],
@@ -138,14 +138,20 @@ function validateTargetEnvironmentReads(
 }
 
 export function validateExecInputTargets(
-  workflow: Pick<WorkflowDefinition, 'inputs'>,
+  workflow: Pick<WorkflowDefinition, 'inputs' | 'pack'>,
   targets: readonly ExecInputValidationTarget[],
   resolveSource: (target: ExecInputValidationTarget) => ExecInputSource | undefined,
   configuredEnvNames: ReadonlySet<string> = new Set()
 ): ExecInputValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const declaredInputs = Object.keys(workflow.inputs ?? {});
+  // A pack setting reaches every node of the pack's workflows as an input.
+  const declaredInputs = [
+    ...new Set([
+      ...Object.keys(workflow.inputs ?? {}),
+      ...Object.keys(workflow.pack?.settings ?? {}),
+    ]),
+  ];
 
   for (const target of targets) {
     const source = resolveSource(target);

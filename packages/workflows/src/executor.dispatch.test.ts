@@ -491,6 +491,9 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
     expect(readRunDispatchMetadata(created.metadata)).toEqual({
       base_branch: 'develop',
       source: 'bundled',
+      // A flat workflow has no pack; the empty settings record still says the row's
+      // inputs were fixed at start.
+      pack_settings: {},
     });
   });
 

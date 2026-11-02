@@ -111,6 +111,36 @@ export function resolveDeclaredInputs(
 }
 
 /**
+ * Resolve a `workflow:` node's `with:` map against the child workflow it launches.
+ *
+ * The child is a run of its own and reads its own pack's settings, which only that run's
+ * invocation (`--input`, a trigger) may set, checked against the setting's type. So the
+ * parent's `with:` may not set one; a name the child also declares as its own input is
+ * that input, and stays settable. The refusal holds whether or not the child declares
+ * `inputs:`, so the passthrough of an undeclared child cannot smuggle one in either.
+ *
+ * @throws WorkflowInputContractError on a pack-setting name, then as {@link resolveDeclaredInputs}.
+ */
+export function resolveCallerInputs(
+  supplied: Record<string, JsonValue>,
+  callee: Pick<WorkflowDefinition, 'inputs' | 'pack'>,
+  context: string,
+  calleeLabel: string
+): Record<string, JsonValue> {
+  const settings = callee.pack?.settings ?? {};
+  const setsSetting = Object.keys(supplied).filter(
+    name => Object.hasOwn(settings, name) && !Object.hasOwn(callee.inputs ?? {}, name)
+  );
+  if (setsSetting.length > 0) {
+    throw new WorkflowInputContractError(
+      `${context}: ${calleeLabel} reads ${quoteNames(setsSetting)} as pack '${callee.pack?.key ?? ''}' setting${setsSetting.length === 1 ? '' : 's'}, which 'with:' cannot set. Set ${setsSetting.length === 1 ? 'it' : 'them'} in .archon/packs/${callee.pack?.key ?? ''}.yaml, or pass --input to the run.`,
+      { undeclared: setsSetting }
+    );
+  }
+  return resolveDeclaredInputs(supplied, callee.inputs, context, calleeLabel);
+}
+
+/**
  * Declared inputs that a run carries with no caller at all — the defaults of a workflow
  * started directly (CLI / chat / web), which has no parent to stamp `metadata.inputs`.
  *
