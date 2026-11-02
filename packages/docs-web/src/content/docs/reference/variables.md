@@ -116,15 +116,7 @@ Use the current run's identity to opt disposable images into terminal cleanup:
 docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
 ```
 
-Use run-unique tags and the Archon host's Docker context. Buildx builds use the same label with `--load`. Remove test containers when finished.
-
-Cleanup is a one-shot attempt after a completed or non-recoverable cancelled run stops writing. Failed runs (including SIGINT/SIGTERM interruptions) and recoverable fan-out-cancelled children retain their images because they can resume under the same run ID. Failed runs can release their images through explicit abandonment or safe manual recovery. Recoverable fan-out-cancelled children require the safe manual recovery below; explicit abandonment does not release their images. Container-used images and ambiguous/live owners retain their images too. There is no watcher for containers removed later. Docker errors are reported; terminal run status is unchanged.
-
-If Docker is installed but its daemon is unreachable at cleanup, Archon reports a cleanup warning: images may remain even when Docker was unavailable before the run. Restore daemon access and use the recovery steps below. Host runs skip optional image cleanup only when Docker is absent at both host setup and cleanup. Container runs always require Docker.
-
-Use one tag per image. Cleanup deletes immutable image IDs without force or parent pruning; Docker refuses IDs with multiple repository references. Those images require manual cleanup under exclusive control of their tags. After removing late test containers and confirming the run cannot resume or write, list its images with `docker image ls --all --no-trunc --filter "label=archon.run_id=<run-id>"`, inspect each full ID with `docker image inspect <full-id>`, and check all containers with `docker container ls --all --filter ancestor=<full-id>`. For a confirmed owned, unused image, use `docker image rm --no-prune <full-id>`. If multiple tags prevent removal, verify and remove those references manually only while no other build or operator can reassign them. Never force removal or prune shared images/cache.
-
-Unlabelled images and shared build cache are never pruned by this cleanup.
+See the [SDLC Docker verification guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#docker-verification) for build requirements, cleanup eligibility and safe manual recovery.
 
 ## Positional Arguments (not supported)
 
