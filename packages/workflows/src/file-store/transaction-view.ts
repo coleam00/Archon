@@ -1,4 +1,8 @@
-import { initialRunMetadata, mutableRunMetadata } from '../schemas/run-metadata';
+import {
+  CANCELLED_REASON_METADATA_KEY,
+  initialRunMetadata,
+  mutableRunMetadata,
+} from '../schemas/run-metadata';
 import { prepareWorkflowRunFailure } from '../workflow-run-failure';
 import { resumeRun } from './run-resume';
 import { createLogger } from '@archon/paths';
@@ -489,7 +493,7 @@ export function createTransactionView(
       if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
         return { cancelled: false };
       run.status = 'cancelled';
-      run.metadata.cancelled_reason = reason;
+      run.metadata[CANCELLED_REASON_METADATA_KEY] = reason;
       terminal(run, {
         workflow_run_id: id,
         event_type: TERMINAL_RUN_EVENT_TYPE.cancelled,
@@ -501,7 +505,9 @@ export function createTransactionView(
       const run = row(id);
       if (
         run.status !== 'cancelled' ||
-        !FAN_OUT_CANCEL_REASONS.some(reason => reason === run.metadata.cancelled_reason)
+        !FAN_OUT_CANCEL_REASONS.some(
+          reason => reason === run.metadata[CANCELLED_REASON_METADATA_KEY]
+        )
       )
         throw new Error('Not an engine-cancelled fan-out child');
       run.status = 'running';
@@ -509,7 +515,7 @@ export function createTransactionView(
       run.started_at = new Date();
       run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
       run.last_activity_at = new Date();
-      delete run.metadata.cancelled_reason;
+      delete run.metadata[CANCELLED_REASON_METADATA_KEY];
       Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
       for (let index = events.length - 1; index >= 0; index--) {
         const event = events[index];

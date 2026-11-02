@@ -181,6 +181,7 @@ test('a completed file run releases its clean checkout without SQL', async () =>
   const running = await host.deps.store.getWorkflowRun(run.id);
   if (!running) throw new Error('Expected the run');
 
+  expect(host.deps.releaseRunResources).toEqual(expect.any(Function));
   expect(await host.deps.completedRunWorktree?.assess(running)).toEqual({
     disposition: 'release',
   });

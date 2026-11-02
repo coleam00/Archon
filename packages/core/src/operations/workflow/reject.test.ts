@@ -10,6 +10,7 @@ import { enterRunExecution } from '@archon/workflows/run-scratch';
 import {
   operator,
   mockGetWorkflowRun,
+  mockReleaseRunResources,
   mockCancelWorkflowRun,
   mockResolveApprovalGate,
   mockResolveAndCancelApprovalGate,
@@ -417,13 +418,17 @@ describe('rejectWorkflow', () => {
         }
       );
       mockGetWorkflowRun.mockResolvedValueOnce(run);
+      mockReleaseRunResources.mockClear();
       const leave = executing ? enterRunExecution(run.id) : undefined;
       try {
-        await rejectWorkflow(run.id, 'no good', operator, { via: 'cli' });
+        if (!kept) mockReleaseRunResources.mockRejectedValueOnce(new Error('image removal denied'));
+        const result = await rejectWorkflow(run.id, 'no good', operator, { via: 'cli' });
+        if (!kept) expect(result.cleanupWarnings?.join(' ')).toContain('image removal denied');
       } finally {
         leave?.();
       }
 
+      expect(mockReleaseRunResources.mock.calls).toEqual(kept ? [] : [[run.id]]);
       expect(existsSync(checkout)).toBe(kept);
     }
   );

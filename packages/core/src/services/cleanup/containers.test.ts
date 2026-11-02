@@ -1,10 +1,15 @@
 // @archon-test-isolated
+import { hostname } from 'node:os';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import type { IIsolationStore } from '@archon/isolation';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { WorkflowStatusReadError } from '../../db/workflow-run-status';
 import { mockWorkflowRun } from '../../test/mocks/workflow-run';
-import { listContainerEnvironments, reclaimContainerEnv } from './containers';
+import {
+  listContainerEnvironments,
+  reclaimContainerEnv,
+  reapContainerEnvironments,
+} from './containers';
 import {
   UNKNOWN_PLATFORM,
   makeContainerEnvironment,
@@ -13,6 +18,9 @@ import {
   mockContainerOptions,
   mockListActiveContainerEnvironments,
   mockGetRunByIsolationEnvId,
+  mockGetRunIdsByIsolationEnvId,
+  mockGetWorkflowRun,
+  mockReleaseVerificationImages,
   resetCleanupMocks,
 } from './test-harness';
 
@@ -80,4 +88,68 @@ describe('listContainerEnvironments', () => {
     );
     expect(mockContainerDestroy).not.toHaveBeenCalled();
   });
+});
+
+describe('verification images after reaping', () => {
+  test.each([
+    'completed',
+    'paused',
+    'unknown-owner',
+    'missing',
+    'destroy-failed',
+    'lookup-failed',
+  ] as const)('rechecks the owning run after container teardown: %s', async mode => {
+    mockListActiveContainerEnvironments.mockResolvedValue([makeContainerEnvironment()]);
+    const run = {
+      ...mockWorkflowRun,
+      status: mode === 'paused' ? ('paused' as const) : ('completed' as const),
+      metadata:
+        mode === 'unknown-owner'
+          ? {}
+          : {
+              execution_owner: { host: hostname(), pid: process.pid },
+              isolation: 'container',
+              isolation_env_id: 'env-1',
+            },
+    };
+    mockGetRunIdsByIsolationEnvId.mockResolvedValue(mode === 'missing' ? [] : [run.id]);
+    mockGetWorkflowRun.mockResolvedValue(run);
+    if (mode === 'destroy-failed')
+      mockContainerDestroy.mockRejectedValueOnce(new Error('Docker unavailable'));
+    if (mode === 'lookup-failed')
+      mockGetRunIdsByIsolationEnvId.mockRejectedValueOnce(new Error('store unavailable'));
+    const report = await reapContainerEnvironments(1);
+    expect(report.removed).toEqual(mode === 'destroy-failed' ? [] : ['env-1']);
+    if (mode === 'completed') {
+      expect(mockReleaseVerificationImages).toHaveBeenCalledWith(run.id, 'env-1');
+      expect(mockContainerDestroy).toHaveBeenCalledWith('env-1');
+    } else expect(mockReleaseVerificationImages).not.toHaveBeenCalled();
+    expect(report.errors.length).toBe(
+      mode === 'lookup-failed' || mode === 'destroy-failed' ? 1 : 0
+    );
+  });
+});
+
+test('reaping releases every associated run and reports partial failures', async () => {
+  mockListActiveContainerEnvironments.mockResolvedValue([makeContainerEnvironment()]);
+  mockGetRunIdsByIsolationEnvId.mockResolvedValue(['older', 'newer']);
+  mockGetWorkflowRun.mockImplementation(async id => ({
+    ...mockWorkflowRun,
+    id,
+    status: 'completed',
+    metadata: {
+      execution_owner: { host: hostname(), pid: process.pid },
+      isolation: 'container',
+      isolation_env_id: 'env-1',
+    },
+  }));
+  mockReleaseVerificationImages.mockRejectedValueOnce(new Error('image removal denied'));
+  const report = await reapContainerEnvironments(1);
+  expect(mockReleaseVerificationImages.mock.calls).toEqual([
+    ['older', 'env-1'],
+    ['newer', 'env-1'],
+  ]);
+  expect(report.removed).toEqual(['env-1']);
+  expect(report.errors).toEqual([{ id: 'env-1', error: expect.stringContaining('older') }]);
+  expect(report.errors[0]?.error).toContain('image removal denied');
 });

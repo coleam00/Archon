@@ -212,6 +212,8 @@ const mockDestroyWorktree = mock<ReturnType<typeof Isolation.getIsolationProvide
 );
 
 mock.module('@archon/isolation', () => ({
+  dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
+  releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,
@@ -1427,6 +1429,28 @@ describe('isolationCleanupCommand', () => {
       errors: failed ? [{ id: 'container', error: 'removal failed' }] : [],
     });
     expect(await cleanupRoute()).toBe(failed ? 1 : 0);
+  });
+
+  it.each([false, true])('reports image cleanup results (failed: %s)', async failed => {
+    mockCleanupContainerEnvironments.mockResolvedValueOnce({
+      removed: ['container'],
+      skipped: [],
+      errors: failed
+        ? [{ id: 'container', error: 'Image cleanup for run older: Docker denied' }]
+        : [],
+    });
+    expect(await cleanupRoute()).toBe(failed ? 1 : 0);
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Removed: containe');
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      `Container cleanup: 1 removed, 0 skipped, ${failed ? 1 : 0} failed`
+    );
+    if (failed) {
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        '  Failed: containe — Image cleanup for run older: Docker denied'
+      );
+    } else {
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    }
   });
 
   it('refuses a changed stale registration before destruction', async () => {

@@ -13,23 +13,28 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  * because a named check reads it:
  *   - Pack prompts (`commands/`) and `.shared/` documents under `.archon/workflows/` are read
  *     by the bundle tests and embedded into the binary by `scripts/build-binaries.sh`
- *     (`serve-binary`); `isPackPrompt` matches them. Pack READMEs and design notes are prose.
+ *     (`serve-binary`); `isPackPrompt` matches them. Pack READMEs and design notes are prose
+ *     unless a test reads them.
  *     Every other file under `.archon/workflows/` is not Markdown, so it runs the suite anyway.
  *   - `.claude/skills/` is imported as text by `packages/cli/src/bundled-skill.ts`, so it is
  *     compiled into the CLI itself (CLI skill tests).
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
  *   - The docs manifest is copied by the Docker dependency layer.
+ *   - The SDLC README and variables reference contain Docker commands checked by
+ *     `docker-verification-label.test.ts` against the cleanup ownership label.
  *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
 const BUILD_INPUTS = [
   '.claude/skills/',
+  '.archon/workflows/sdlc/README.md',
   '.archon/architecture.md',
   '.archon/workflow-language-constitution.md',
   '.claude/commands/execute.md',
   'packages/providers/src/codex/protocol/README.md',
   'packages/docs-web/src/content/docs/reference/database.md',
+  'packages/docs-web/src/content/docs/reference/variables.md',
   'packages/docs-web/src/content/docs/reference/api.md',
   'packages/docs-web/src/content/docs/reference/node-execution.md',
   'packages/docs-web/src/content/docs/deployment/docker.md',

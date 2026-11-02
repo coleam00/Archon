@@ -247,6 +247,8 @@ class MockIsolationResolver {
 
 const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
+  releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,

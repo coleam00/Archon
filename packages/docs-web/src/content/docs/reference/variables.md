@@ -108,6 +108,16 @@ only state belonging to this directory into the new `$STATE_DIR`; legacy state m
 been shared by unrelated directories. New runs do not read or copy legacy state.
 Runs with an already recorded output root keep using it when resumed.
 
+### Disposable Docker verification images
+
+Use the current run's identity to opt disposable images into terminal cleanup:
+
+```bash
+docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
+```
+
+See the [SDLC Docker verification guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#docker-verification) for build requirements, cleanup eligibility and safe manual recovery.
+
 ## Positional Arguments (not supported)
 
 Archon does **not** support positional arguments (`$1`, `$2`, `$3`, … `$9`).

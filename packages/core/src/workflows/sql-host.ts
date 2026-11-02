@@ -1,3 +1,5 @@
+import type { WorkflowDeps } from '@archon/workflows/deps';
+import { createRunResourceRelease } from '../services/cleanup/run-verification-images';
 import { createLogger } from '@archon/paths';
 import { WORKFLOW_EVENT_NOTIFY_CHANNEL } from '../db/adapters/types';
 import * as connection from '../db/connection';
@@ -36,12 +38,16 @@ export function createWorkflowHostStore(): IWorkflowHostStore {
 
 export function createSqlWorkflowOperations(
   store: IWorkflowStore = createWorkflowStore(),
-  hostStore: IWorkflowHostStore = createWorkflowHostStore()
+  hostStore: IWorkflowHostStore = createWorkflowHostStore(),
+  effects: Pick<WorkflowDeps, 'releaseRunResources'> = {
+    releaseRunResources: createRunResourceRelease(store),
+  }
 ): WorkflowOperations {
   return createWorkflowOperations({
     getUserRole: async userId => (await hostStore.users.getUserById(userId))?.role,
     store: { ...store, deleteWorkflowRun },
     hostStore,
+    releaseRunResources: effects.releaseRunResources,
     requestDetachedRunStop,
     isRunOwnedByThisProcess,
     isRunOwnerAnswering,
@@ -67,7 +73,7 @@ export function createSqlWorkflowHost(deps = createWorkflowDeps()): WorkflowHost
       ownerLoss: runOwnerLossWatch(deps.store),
       doorbell: subscribeToSqlEventDoorbell,
     }),
-    operations: createSqlWorkflowOperations(deps.store, records),
+    operations: createSqlWorkflowOperations(deps.store, records, deps),
   };
 }
 

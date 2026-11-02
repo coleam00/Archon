@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 /**
  * Database operations for isolation environments
  */
@@ -541,7 +542,7 @@ export async function getLiveRunOwningEnv(
 ): Promise<{ id: string; status: WorkflowRunStatus } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const dialect = getDialect();
-  const envIdExtract = dialect.jsonText('r.metadata', 'isolation_env_id');
+  const envIdExtract = dialect.jsonText('r.metadata', ISOLATION_ENV_ID_METADATA_KEY);
   // UUID identifiers must compare as text so $1 has one type across metadata,
   // conversation links, and environment associations.
   const conversationEnvMatch = postgres ? 'c.isolation_env_id::text' : 'c.isolation_env_id';

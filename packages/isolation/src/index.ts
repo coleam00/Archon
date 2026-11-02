@@ -111,3 +111,5 @@ export type { WorktreeSetupExecutor, WorktreeSetupInput } from './types';
 export { WorktreePostCreateError } from './errors';
 
 export type { IsolationFailureKind } from './errors';
+
+export { releaseRunVerificationImages } from './container/verification-images';

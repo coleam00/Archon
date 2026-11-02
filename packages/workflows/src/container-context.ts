@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { isContainerRun, type WorkflowRun } from './schemas/workflow-run';
 
@@ -140,9 +141,9 @@ export function resolveRunExecutionMode(
     if (
       recordedMetadata &&
       (!isContainerRun({ metadata: recordedMetadata }) ||
-        typeof recordedMetadata.isolation_env_id !== 'string' ||
-        recordedMetadata.isolation_env_id.length === 0 ||
-        recordedMetadata.isolation_env_id !== container.envId)
+        typeof recordedMetadata[ISOLATION_ENV_ID_METADATA_KEY] !== 'string' ||
+        recordedMetadata[ISOLATION_ENV_ID_METADATA_KEY].length === 0 ||
+        recordedMetadata[ISOLATION_ENV_ID_METADATA_KEY] !== container.envId)
     ) {
       throw new Error('Execution context does not match the recorded run isolation');
     }

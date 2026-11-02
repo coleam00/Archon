@@ -13,6 +13,7 @@ import { DetachedRunOwnerUnavailableError } from '../../services/run-owner-stop'
 import {
   operator,
   mockGetWorkflowRun,
+  mockReleaseRunResources,
   mockCancelWorkflowRun,
   mockFindChildRuns,
   mockGetRunAncestry,
@@ -294,8 +295,12 @@ describe('cancelWorkflow', () => {
       })
     );
 
-    await cancelWorkflow(run.id, operator);
+    mockReleaseRunResources.mockClear();
+    if (!kept) mockReleaseRunResources.mockRejectedValueOnce(new Error('image removal denied'));
+    const result = await cancelWorkflow(run.id, operator);
+    if (!kept) expect(result.cleanupWarnings?.join(' ')).toContain('image removal denied');
 
+    expect(mockReleaseRunResources.mock.calls).toEqual(kept ? [] : [[run.id]]);
     expect(existsSync(checkout)).toBe(kept);
   });
 

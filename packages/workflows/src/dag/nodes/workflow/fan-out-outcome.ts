@@ -1,3 +1,4 @@
+import { CANCELLED_REASON_METADATA_KEY } from '../../../schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from '../../../execution-interruption';
 import type { WorkflowDeps } from '../../../deps';
 import type { WorkflowRun } from '../../../schemas';
@@ -17,7 +18,7 @@ import { findFanOutChildRuns } from './fan-out-children';
 const FAN_OUT_ROW_TAGS: ReadonlySet<string> = new Set(FAN_OUT_CANCEL_REASONS);
 
 function rowCancelTag(row: WorkflowRun): string | undefined {
-  const tag = (row.metadata as Record<string, unknown> | undefined)?.cancelled_reason;
+  const tag = row.metadata[CANCELLED_REASON_METADATA_KEY];
   return typeof tag === 'string' ? tag : undefined;
 }
 

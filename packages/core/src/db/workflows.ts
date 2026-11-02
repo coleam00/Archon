@@ -19,6 +19,7 @@ export {
   getWorkflowRunsByIds,
   getWorkflowRunForAttention,
   getRunByIsolationEnvId,
+  getRunIdsByIsolationEnvId,
   findWorkflowRunsByIdPrefix,
   getWorkflowRunStatus,
   WorkflowStatusReadError,

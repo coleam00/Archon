@@ -12,7 +12,7 @@ import type {
 } from '@archon/workflows/schemas/workflow-run';
 import type { GateResolutionEvent } from '@archon/workflows/store';
 import type { RunActor } from '../run-authorization';
-import type { OperationContext } from './context';
+import { releaseRunResources, type OperationContext } from './context';
 import {
   answerText,
   assertAnswerAdmissible,
@@ -357,6 +357,7 @@ async function rejectGate(
   if (cancelled && noExecutorCanWrite(run)) {
     cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));
     await releaseRunScratch(run);
+    cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
   }
 
   // Won the CAS — resolution/status + audit event already committed atomically.
