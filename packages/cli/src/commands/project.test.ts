@@ -132,7 +132,7 @@ describe('projectConfigCommand', () => {
     mkdirSync(join(project, '.archon'));
     writeFileSync(
       join(project, '.archon', 'config.yaml'),
-      `aliases:\n  '@planner': { provider: claude, model: opus }\nassistants:\n  codex:\n    additionalDirectories: ['${PATH_SECRET}']\nenv:\n  ARCHON_SDLC_FORGE: gh\n  SECRET_TOKEN: ${ENV_SECRET}\n`
+      `aliases:\n  '@planner': { provider: claude, model: opus }\nassistants:\n  codex:\n    additionalDirectories: ['${PATH_SECRET}']\nenv:\n  FORGE_SOURCE: gh\n  SECRET_TOKEN: ${ENV_SECRET}\n`
     );
     rows = [codebase({ id: 'cb-repo', name: 'acme/widget', kind: 'repo', default_cwd: project })];
     stdout = [];
@@ -168,7 +168,7 @@ describe('projectConfigCommand', () => {
       '@planner': { provider: 'claude', model: 'opus' },
       '@reviewer': { provider: 'claude', model: 'sonnet' },
     });
-    expect(view.envKeys).toEqual(['ARCHON_SDLC_FORGE', 'SECRET_TOKEN']);
+    expect(view.envKeys).toEqual(['FORGE_SOURCE', 'SECRET_TOKEN']);
     expect(text).not.toContain(ENV_SECRET);
     expect(text).not.toContain(PATH_SECRET);
     expect(files()).toEqual(before);
@@ -178,7 +178,7 @@ describe('projectConfigCommand', () => {
     expect(await projectConfigCommand(store(), 'acme/widget', {})).toBe(0);
     const view = Bun.YAML.parse(stdout.join('')) as { project: { id: string }; envKeys: string[] };
     expect(view.project.id).toBe('cb-repo');
-    expect(view.envKeys).toEqual(['ARCHON_SDLC_FORGE', 'SECRET_TOKEN']);
+    expect(view.envKeys).toEqual(['FORGE_SOURCE', 'SECRET_TOKEN']);
     expect(stdout.join('')).not.toContain(ENV_SECRET);
     expect(stdout.join('')).not.toContain(PATH_SECRET);
   });

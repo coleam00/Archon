@@ -48,7 +48,7 @@ assistants:
     additionalDirectories:
       - ${PATH_SECRET}
 env:
-  ARCHON_SDLC_FORGE: gh
+  FORGE_SOURCE: gh
   SECRET_TOKEN: ${ENV_SECRET}
 `;
 
@@ -113,7 +113,7 @@ describe('GET /api/codebases/{id}/config', () => {
       '@reviewer': { provider: 'claude', model: 'sonnet' },
     });
     expect(body.config.tiers?.large).toEqual({ provider: 'claude', model: 'opus' });
-    expect(body.envKeys).toEqual(['ARCHON_SDLC_FORGE', 'SECRET_TOKEN']);
+    expect(body.envKeys).toEqual(['FORGE_SOURCE', 'SECRET_TOKEN']);
   });
 
   test('never returns a secret value', async () => {
