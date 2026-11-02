@@ -7,12 +7,13 @@
  * know whether the item waits for it.
  */
 
-import { type QualifiedPr, sameRepo } from './forge.ts';
+import { forgeSource, type QualifiedPr, sameRepo } from './forge.ts';
 import { note } from './io.ts';
-import { PR_CREATE_UNRESOLVED } from './pr.ts';
+import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
+  type Claim,
   claimable,
   claimItem,
   type HistoryEntry,
@@ -264,5 +265,34 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
     claim: change.release ? null : doc.claim,
     facts: { ...doc.facts, build },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
+  };
+}
+
+/** The reason of a round recorded at release: its run ended before it decided the round. */
+export const ENDED_UNDECIDED = 'ended_undecided';
+
+/**
+ * The work item with the round a released build claim's run left: the pull request
+ * whose head is the branch the claim recorded. A run that opened none, and a run that
+ * recorded its round before it stopped, such as one that asked, add nothing.
+ */
+export function withReleasedRound(doc: WorkItem, claim: Claim, status: string, at: string): WorkItem {
+  const prior = doc.facts.build;
+  if (claim.branch === undefined || prior?.rounds.some(round => round.run_id === claim.run_id)) return doc;
+  const pr = findPrByHead(doc.subject.repo, claim.branch, forgeSource());
+  if (pr === undefined) return doc;
+  const round: BuildRound = {
+    run_id: claim.run_id,
+    at,
+    delivered: false,
+    reason: ENDED_UNDECIDED,
+    pr_url: pr.url,
+    summary: `The run ended ${status} after it opened ${pr.url} and before it recorded the round.`,
+    artifacts: '',
+  };
+  const build: BuildRecord = prior ?? { status: 'next', brief: '', rounds: [], decisions: [], at };
+  return {
+    ...doc,
+    facts: { ...doc.facts, build: { ...build, rounds: [...build.rounds, round].slice(-KEPT_ROUNDS) } },
   };
 }

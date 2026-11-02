@@ -17,7 +17,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { BuildRecord } from './build.ts';
+import { type BuildRecord, withReleasedRound } from './build.ts';
 import type { Closure } from './close.ts';
 import { record, type QualifiedPr } from './forge.ts';
 import type { MergeRecord } from './merge.ts';
@@ -62,6 +62,11 @@ export interface Claim {
   readonly run_id: string;
   readonly at: string;
   readonly requests: readonly IntakeRequest[];
+  /**
+   * The branch a build round opens its pull request from, recorded once the round
+   * names it, so a release can find a pull request its run opened. No other claim has one.
+   */
+  readonly branch?: string;
 }
 
 export interface Promotion {
@@ -625,7 +630,8 @@ export function readWorkItem(number: number): WorkItem | null {
 /**
  * Release a claim whose run the engine reports terminal; any other answer holds it.
  * A run that finishes clears its own claim, so a terminal run still holding one
- * stopped before its labels were written, and its requests wait again.
+ * stopped before its labels were written, and its requests wait again. A build round
+ * that opened a pull request before it stopped is recorded as a round.
  */
 export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
@@ -641,7 +647,7 @@ export function releaseIfTerminal(item: Read, at: string, runId: string, pickup:
     return item;
   }
   const doc: WorkItem = {
-    ...item.doc,
+    ...withReleasedRound(item.doc, claim, String(status), at),
     claim: null,
     requests: queued([...claim.requests, ...item.doc.requests]),
     history: newest([

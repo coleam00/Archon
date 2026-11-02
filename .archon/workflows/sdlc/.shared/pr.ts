@@ -224,6 +224,22 @@ export function findOpenPrByHead(
   return matches[0];
 }
 
+/**
+ * The newest pull request in `repo` whose head is `head` in `repo` itself, in any state.
+ * The forge contract's head selector reads open pull requests only, so on the forge
+ * source a closed one is not found.
+ */
+export function findPrByHead(repo: QualifiedPr['repo'], head: string, source: ForgeSource): PrRecord | undefined {
+  if (source === 'forge') return findOpenPrByHead(repo, repo, head, source)?.pr;
+  const listed = gh('pr', 'list', '--repo', ghRepo(repo), '--head', head, '--state', 'all', '--json', PR_FIELDS);
+  const rows: unknown = JSON.parse(required(listed, 'gh pr list'));
+  if (!Array.isArray(rows)) throw new Error('gh pr list returned an unexpected payload');
+  // gh lists newest first and matches the head by name alone.
+  return rows
+    .map(row => ghPrView(repo, row).pr)
+    .find(pr => pr.head_repo !== null && sameRepo(pr.head_repo, repo));
+}
+
 export function viewPr(ref: QualifiedPr, source: ForgeSource): PrView {
   if (source === 'forge') {
     const value = forgeResult('pr.view', {
