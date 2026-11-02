@@ -983,9 +983,10 @@ and scores it, one 0/1 record per labeled test:
 
 A labeled test the judge did not list counts as a disagreement. The node's
 `disagreements` output lists every test it got wrong, with the judge's reason. The run
-refuses when the file is missing, or holds fewer than 10 labeled pull requests or fewer
-than 5 tests labeled unprotective. The pack ships no labels: they are the project's own
-pull requests.
+refuses when the file is missing or empty, and when the judge failed on any case, since
+agreement over a different set of cases is not comparable. Each record's `n` and interval
+say how much the labels can tell; a handful of cases gives a wide interval. The pack ships
+no labels: they are the project's own pull requests.
 
 The file is a list with one case per pull request:
 

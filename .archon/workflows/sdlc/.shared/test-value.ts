@@ -24,10 +24,6 @@ export const JUDGE_NODE = 'judge';
 /** The project's calibration labels, relative to the checkout the calibration runs in. */
 export const CASES_PATH = '.archon/sdlc/metrics/test-value-cases.json';
 
-/** Cases below these leave agreement and catch rate too thin to read. */
-export const MIN_CASES = 10;
-export const MIN_UNPROTECTIVE = 5;
-
 export interface JudgedTest {
   readonly file: string;
   readonly name: string;
@@ -129,7 +125,7 @@ function testKey(file: string, name: string): string {
   return `${file.trim()}::${words}`;
 }
 
-/** The calibration cases, refused when there are too few to read agreement from. */
+/** The calibration cases; an empty set is refused, since it would score nothing and pass. */
 export function parseCases(value: unknown): Case[] {
   if (!Array.isArray(value)) throw new Error('the calibration cases are not a list');
   const cases = value.map(entry => {
@@ -144,12 +140,7 @@ export function parseCases(value: unknown): Case[] {
     });
     return { pr: row.pr, tests };
   });
-  const unprotective = cases.flatMap(entry => entry.tests).filter(test => !test.protects).length;
-  if (cases.length < MIN_CASES || unprotective < MIN_UNPROTECTIVE) {
-    throw new Error(
-      `calibration needs at least ${String(MIN_CASES)} labeled pull requests with ${String(MIN_UNPROTECTIVE)} unprotective tests; found ${String(cases.length)} with ${String(unprotective)}`
-    );
-  }
+  if (cases.length === 0) throw new Error('the calibration cases are empty');
   return cases;
 }
 
@@ -177,26 +168,28 @@ function testSubject(pr: string, test: LabeledTest): string {
 /**
  * Score the judge against the labels, one 0/1 record per labeled test: agreement for
  * every test, and catch rate for the tests labeled unprotective. A labeled test the judge
- * did not list disagrees. A case whose judge did not complete is skipped, not scored.
+ * did not list disagrees. Any case whose judge did not complete refuses the whole score:
+ * agreement over a different subset of cases is not comparable across runs.
  */
 export function scoreCalibration(cases: readonly Case[], slots: readonly JudgeSlot[], instrument: string) {
+  const failed = cases.flatMap((entry, index) => {
+    const slot = slots[index];
+    return slot === undefined || !slot.ok ? [`${entry.pr} (${slot?.ok === false ? slot.error : 'no judge result'})`] : [];
+  });
+  if (failed.length > 0) throw new Error(`the judge did not complete for ${failed.join(', ')}; calibrate again`);
   const metrics: Record<string, unknown>[] = [];
   const disagreements: Disagreement[] = [];
-  const skipped: { pr: string; error: string }[] = [];
   const base = { kind: 'score', unit: 'ratio', calibrates: 'sdlc.tests_unprotective', instrument, instrument_node: JUDGE_NODE };
   cases.forEach((entry, index) => {
     const slot = slots[index];
-    if (slot === undefined || !slot.ok) {
-      skipped.push({ pr: entry.pr, error: slot?.ok === false ? slot.error : 'no judge result' });
-      return;
-    }
+    if (slot === undefined || !slot.ok) return;
     for (const test of entry.tests) {
       const scored = scoreTest(entry.pr, test, verdictFor(test, slot.tests));
       metrics.push(...scored.records.map(record => ({ ...base, ...record })));
       if (scored.disagreement !== undefined) disagreements.push(scored.disagreement);
     }
   });
-  return { metrics, disagreements, skipped };
+  return { metrics, disagreements };
 }
 
 interface Disagreement {

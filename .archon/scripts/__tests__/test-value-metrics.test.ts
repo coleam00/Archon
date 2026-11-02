@@ -91,6 +91,11 @@ describe('scoreCalibration', () => {
     ]);
   });
 
+  it('refuses the whole score when the judge failed on any case', () => {
+    const slots: JudgeSlot[] = [{ ok: false, error: 'failed: judge failed' }];
+    expect(() => scoreCalibration(cases, slots, 'test-value-judge:abc')).toThrow(PR_A);
+  });
+
   it('gives a judge that always answers "protects" a catch rate of 0', () => {
     const slots: JudgeSlot[] = [{ ok: true, tests: cases[0]?.tests.map(test => verdict(test.name, true)) ?? [] }];
     const { metrics } = scoreCalibration(cases, slots, 'test-value-judge:abc');
