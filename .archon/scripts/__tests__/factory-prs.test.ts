@@ -68,16 +68,17 @@ describe('prMetricRecords', () => {
     [url(12), [RUN_A]],
   ]);
 
-  it('records a merged pull request as opened and merged, with a rate of 1 at its merge time', () => {
+  it('records a merged pull request as opened, merged and not abandoned, with a rate of 1 at its merge time', () => {
     const merged = pr(10, { state: 'MERGED', mergedAt: '2026-10-05T12:00:00Z', closedAt: '2026-10-05T12:00:00Z' });
     expect(prMetricRecords([merged], runsByUrl)).toEqual([
       { name: 'sdlc.prs_opened', kind: 'count', unit: 'prs', value: 1, subject: url(10), at: '2026-10-03T10:00:00Z', runs: [RUN_A, RUN_B] },
       { name: 'sdlc.prs_merged', kind: 'count', unit: 'prs', value: 1, subject: url(10), at: '2026-10-05T12:00:00Z', runs: [RUN_A, RUN_B] },
+      { name: 'sdlc.prs_abandoned', kind: 'count', unit: 'prs', value: 0, subject: url(10), at: '2026-10-05T12:00:00Z', runs: [RUN_A, RUN_B] },
       { name: 'sdlc.pr_merge_rate', kind: 'score', unit: 'ratio', value: 1, subject: url(10), at: '2026-10-05T12:00:00Z', runs: [RUN_A, RUN_B] },
     ]);
   });
 
-  it('records a pull request closed without merging as abandoned with a rate of 0, and an open one only as opened', () => {
+  it('records a pull request closed without merging as abandoned with a rate of 0, and an open one as opened and not abandoned', () => {
     const closed = pr(11, { state: 'CLOSED', closedAt: '2026-10-06T08:00:00Z' });
     const records = prMetricRecords([closed, pr(12)], runsByUrl);
     expect(records.map(({ name, value, subject, at }) => ({ name, value, subject, at }))).toEqual([
@@ -85,6 +86,7 @@ describe('prMetricRecords', () => {
       { name: 'sdlc.prs_abandoned', value: 1, subject: url(11), at: '2026-10-06T08:00:00Z' },
       { name: 'sdlc.pr_merge_rate', value: 0, subject: url(11), at: '2026-10-06T08:00:00Z' },
       { name: 'sdlc.prs_opened', value: 1, subject: url(12), at: '2026-10-03T10:00:00Z' },
+      { name: 'sdlc.prs_abandoned', value: 0, subject: url(12), at: '2026-10-03T10:00:00Z' },
     ]);
   });
 });

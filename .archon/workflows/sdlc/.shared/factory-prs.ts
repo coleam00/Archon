@@ -130,9 +130,11 @@ export function factoryPrs(prs: readonly PrFacts[]): { factory: PrFacts[]; skipp
 }
 
 /**
- * Every factory pull request counts as opened; a merged one as merged, and one closed
- * without merging as abandoned. A resolved one also scores 1 or 0 on the merge rate,
- * at its resolution time; an open one has no rate yet.
+ * Every factory pull request counts as opened; a merged one as merged. Every one also
+ * records whether it is abandoned, closed without merging: 1 at its close, else 0, so a
+ * pull request reopened after a run counted it abandoned replaces that record. A resolved
+ * one also scores 1 or 0 on the merge rate, at its resolution time; an open one has no
+ * rate yet.
  */
 export function prMetricRecords(prs: readonly PrFacts[], runsByUrl: ReadonlyMap<string, readonly string[]>): PrMetricRecord[] {
   const records: PrMetricRecord[] = [];
@@ -141,11 +143,15 @@ export function prMetricRecords(prs: readonly PrFacts[], runsByUrl: ReadonlyMap<
     if (runs.length === 0) throw new Error(`no build round names ${pr.url}`);
     const base = { subject: pr.url, runs };
     records.push({ ...base, name: 'sdlc.prs_opened', kind: 'count', unit: 'prs', value: 1, at: pr.createdAt });
-    if (pr.state === 'OPEN') continue;
+    if (pr.state === 'OPEN') {
+      records.push({ ...base, name: 'sdlc.prs_abandoned', kind: 'count', unit: 'prs', value: 0, at: pr.createdAt });
+      continue;
+    }
     const merged = pr.state === 'MERGED';
     const resolved = merged ? pr.mergedAt : pr.closedAt;
     if (resolved === null) throw new Error(`GitHub reported ${pr.url} ${pr.state.toLowerCase()} without a time`);
-    records.push({ ...base, name: merged ? 'sdlc.prs_merged' : 'sdlc.prs_abandoned', kind: 'count', unit: 'prs', value: 1, at: resolved });
+    if (merged) records.push({ ...base, name: 'sdlc.prs_merged', kind: 'count', unit: 'prs', value: 1, at: resolved });
+    records.push({ ...base, name: 'sdlc.prs_abandoned', kind: 'count', unit: 'prs', value: merged ? 0 : 1, at: resolved });
     records.push({ ...base, name: 'sdlc.pr_merge_rate', kind: 'score', unit: 'ratio', value: merged ? 1 : 0, at: resolved });
   }
   return records;

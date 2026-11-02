@@ -874,11 +874,13 @@ pull requests the build queue opened, for `archon metrics` to aggregate:
 |---|---|---|---|
 | `sdlc.prs_opened` | count | `prs` | its creation |
 | `sdlc.prs_merged` | count | `prs` | its merge |
-| `sdlc.prs_abandoned` | count | `prs` | its close, when it closed without merging |
+| `sdlc.prs_abandoned` | count | `prs` | its close (1) when it closed without merging; else its merge or creation (0) |
 | `sdlc.pr_merge_rate` | score | `ratio` | its merge (1) or its close without merging (0) |
 
 A pull request still open counts as opened and has no merge rate yet. Abandoned means
-closed without merging, whoever closed it.
+closed without merging, whoever closed it. Every pull request records 0 or 1 for
+abandoned, so a reopened pull request replaces its earlier 1; the abandoned value counts
+abandoned pull requests, and its `n` counts every pull request measured.
 
 The pull requests come from the build rounds on the work items: a factory pull request is
 one a round opened from a `build/` branch in the repository itself. A pull request a round
