@@ -325,7 +325,7 @@ describe('workflowRunCommand — progress rendering', () => {
         ]);
         expect(defaultRelease).not.toHaveBeenCalled();
       } finally {
-        mockFolderBackendReleaseImages.mockResolvedValue();
+        mockFolderBackendReleaseImages.mockResolvedValue(undefined);
       }
     }
   );
