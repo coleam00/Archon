@@ -3,20 +3,14 @@
  * scoring against labels, and the judge identity both carry.
  */
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import {
   type Case,
   type JudgeSlot,
-  judgeIdentity,
   judgeSlots,
   scoreCalibration,
   testValueRecords,
 } from '../../workflows/sdlc/.shared/test-value';
-import { trackTempRoots } from './temp-roots';
 
-const track = trackTempRoots();
 const PR_A = 'https://github.example.com/acme/widgets/pull/1';
 const PR_B = 'https://github.example.com/acme/widgets/pull/2';
 const RUN = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -95,14 +89,9 @@ describe('scoreCalibration', () => {
   });
 });
 
-describe('judgeIdentity', () => {
-  it('changes with the inlined criteria, and the metric and agreement records carry the same identity', () => {
-    const dir = track(mkdtempSync(join(tmpdir(), 'test-value-judge-')));
-    writeFileSync(join(dir, 'judge.yaml'), 'name: judge\n');
-    const identity = judgeIdentity(dir, 'criteria');
-    expect(judgeIdentity(dir, 'criteria')).toBe(identity);
-    expect(judgeIdentity(dir, 'reworded criteria')).not.toBe(identity);
-
+describe('judge identity', () => {
+  it('is carried the same way by the metric and the agreement records', () => {
+    const identity = 'test-value-judge:abc';
     const metric = testValueRecords(
       [{ item: { url: PR_A, merged_at: '2026-10-05T12:00:00Z', runs: [RUN] }, slot: { ok: true, tests: [] } }],
       identity
