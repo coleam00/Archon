@@ -903,11 +903,15 @@ it('forwards backend image release only after executor writer shutdown', async (
   const run = makeRun({ status: 'completed' });
   run.metadata[EXECUTION_OWNER_METADATA_KEY] = { host: hostname(), pid: process.pid };
   const store = makeStore({ getWorkflowRun: mock(async () => run) });
-  const releaseVerificationImages = mock(async (_id: string, _env: string) => {});
+  const releaseVerificationImages = mock(async function (this: unknown, _id: string, _env: string) {
+    expect(this).toBe(backend);
+  });
+  const backend = { ...containerBackend(), releaseVerificationImages };
   const releaseRunResources = mock(async (id: string, release?: ReleaseVerificationImages) => {
     expect(id).toBe(run.id);
     expect(noExecutorCanWrite(run)).toBe(true);
-    expect(release).toBe(releaseVerificationImages);
+    expect(release).toEqual(expect.any(Function));
+    await release?.(id, 'env-owned');
   });
   await startWorkflow({
     deps: { ...makeDeps(store), releaseRunResources },
@@ -916,10 +920,10 @@ it('forwards backend image release only after executor writer shutdown', async (
       container: {
         envId: 'env-owned',
         writeBack: 'auto',
-        backend: containerBackend(),
-        releaseVerificationImages,
+        backend,
       },
     },
   });
   expect(releaseRunResources).toHaveBeenCalledTimes(1);
+  expect(releaseVerificationImages).toHaveBeenCalledWith(run.id, 'env-owned');
 });

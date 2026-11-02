@@ -109,11 +109,12 @@ export interface ContainerWriteBackBackend {
  */
 export interface ContainerRunContext {
   envId: string;
-  /** Backend-owned image cleanup; omission requires an explicitly bound host resource owner. */
-  releaseVerificationImages?: ReleaseVerificationImages;
   /** `approve` (default) pauses at the write-back gate; `auto` applies without pausing. */
   writeBack: 'approve' | 'auto';
-  backend: ContainerWriteBackBackend;
+  backend: ContainerWriteBackBackend & {
+    /** Omission requires an explicitly bound host resource owner. */
+    releaseVerificationImages?: ReleaseVerificationImages;
+  };
   /**
    * Overlay mount mode in effect. `native` (CAP_SYS_ADMIN — the common fallback on
    * stock daemons) lets in-container root remount the read-only lower read-write, so

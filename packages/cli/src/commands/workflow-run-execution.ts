@@ -288,8 +288,6 @@ function commonRunOptions(
         envId: container.envId,
         writeBack: admission.workflow.container?.write_back ?? ('approve' as const),
         backend: container.backend,
-        releaseVerificationImages: (runId: string, envId: string) =>
-          container.backend.releaseVerificationImages(runId, envId),
         ...(overlayMode ? { overlayMode } : {}),
       }
     : undefined;

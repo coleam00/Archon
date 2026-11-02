@@ -281,7 +281,9 @@ describe('workflowRunCommand — progress rendering', () => {
         async (
           ...args: Parameters<typeof import('@archon/workflows/executor').executeWorkflow>
         ) => {
-          expect(args[7]?.container?.releaseVerificationImages).toEqual(expect.any(Function));
+          expect(args[7]?.container?.backend.releaseVerificationImages).toEqual(
+            expect.any(Function)
+          );
           return { success: true, workflowRunId: 'test-run-id' };
         }
       );

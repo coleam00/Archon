@@ -387,7 +387,11 @@ export async function executeWorkflow(
     if (!exit.terminalStatusWriteFailed) {
       if (!exit.executionStopped) await failRunLeftRunning(deps, workflowRun.id);
       await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
-      await releaseResourcesOnExit(deps, workflowRun.id, opts.container?.releaseVerificationImages);
+      await releaseResourcesOnExit(
+        deps,
+        workflowRun.id,
+        opts.container?.backend.releaseVerificationImages?.bind(opts.container.backend)
+      );
     }
   }
 }
