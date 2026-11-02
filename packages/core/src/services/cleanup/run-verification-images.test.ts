@@ -232,7 +232,9 @@ test.each([false, true])(
       const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
       await unlink(executable);
       if (container) {
-        await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');
+        await expect(
+          cleanup(run.id, (id, env) => isolation.releaseRunVerificationImages(id, env))
+        ).rejects.toThrow('Verification image cleanup failed');
       } else {
         await expect(cleanup(run.id)).resolves.toEqual([expect.stringContaining(run.id)]);
         expect(warning.mock.calls.flat().join(' ')).toContain(run.id);
@@ -320,26 +322,32 @@ test('host cleanup discovers Docker installed during execution', async () => {
   }
 });
 
-test('container cleanup requires Docker even when the host started without it', async () => {
-  const run = {
-    ...mockWorkflowRun,
-    status: 'completed' as const,
-    metadata: {
-      execution_owner: { host: hostname(), pid: process.pid },
-      isolation: 'container',
-      isolation_env_id: 'env-a',
-    },
-  };
-  const emptyPath = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-no-docker-')));
-  const previousPath = process.env.PATH;
-  process.env.PATH = emptyPath;
-  try {
-    const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
-    await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');
-  } finally {
-    process.env.PATH = previousPath;
+test.each(workflowRunStatusSchema.options)(
+  'container %s cleanup without an owner never calls host Docker',
+  async status => {
+    const run = {
+      ...mockWorkflowRun,
+      status,
+      metadata: {
+        execution_owner: { host: hostname(), pid: process.pid },
+        isolation: 'container',
+        isolation_env_id: 'env-a',
+      },
+    };
+    const docker = spyOn(isolation, 'dockerCli').mockRejectedValue(new Error('wrong daemon'));
+    try {
+      const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
+      if (isTerminalRunStatus(status) && !RESUMABLE_WORKFLOW_STATUSES.includes(status)) {
+        await expect(cleanup(run.id)).rejects.toThrow('Missing container resource owner');
+      } else {
+        await expect(cleanup(run.id)).resolves.toBeUndefined();
+      }
+      expect(docker).not.toHaveBeenCalled();
+    } finally {
+      docker.mockRestore();
+    }
   }
-});
+);
 
 test.each(['inspect', 'container-use', 'removal', 'container-inventory', 'isolation-container'])(
   '%s failure remains fatal at the run cleanup boundary',

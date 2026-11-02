@@ -201,11 +201,15 @@ export const mockGetPrState = mock<typeof Isolation.getPrState>();
 export const mockContainerDestroy = mock<ContainerBackend['destroy']>();
 export const mockContainerOptions =
   mock<(options: ConstructorParameters<typeof Isolation.ContainerBackend>[0]) => void>();
+export const mockContainerReleaseVerificationImages = mock<
+  ContainerBackend['releaseVerificationImages']
+>(async () => undefined);
 export class MockContainerBackend {
   constructor(options: ConstructorParameters<typeof Isolation.ContainerBackend>[0]) {
     mockContainerOptions(options);
   }
   destroy = mockContainerDestroy;
+  releaseVerificationImages = mockContainerReleaseVerificationImages;
 }
 export const mockReleaseVerificationImages = mock<typeof Isolation.releaseRunVerificationImages>(
   async () => undefined
@@ -339,6 +343,7 @@ export function resetCleanupMocks(): void {
   mockListByCodebaseWithAge.mockReset().mockResolvedValue([]);
   mockListActiveContainerEnvironments.mockReset().mockResolvedValue([]);
   mockReleaseVerificationImages.mockClear();
+  mockContainerReleaseVerificationImages.mockReset().mockResolvedValue(undefined);
   mockGetWorkflowRun.mockReset().mockResolvedValue(null);
   mockGetRunIdsByIsolationEnvId.mockReset().mockResolvedValue([]);
   mockGetRunByIsolationEnvId.mockReset().mockResolvedValue(null);

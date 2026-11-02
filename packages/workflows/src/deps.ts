@@ -248,7 +248,7 @@ export type ReleaseVerificationImages = (runId: string, containerEnvId: string) 
 export interface WorkflowDeps {
   /**
    * Host cleanup after terminal execution; retains live writers and returns non-fatal warnings.
-   * A supplied container effect overrides the host's default image resource owner.
+   * Container cleanup requires a supplied effect or an explicitly bound host resource owner.
    */
   releaseRunResources?: (
     runId: string,

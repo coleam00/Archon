@@ -109,7 +109,7 @@ export interface ContainerWriteBackBackend {
  */
 export interface ContainerRunContext {
   envId: string;
-  /** Backend-owned image cleanup; omission uses the host resource-release default. */
+  /** Backend-owned image cleanup; omission requires an explicitly bound host resource owner. */
   releaseVerificationImages?: ReleaseVerificationImages;
   /** `approve` (default) pauses at the write-back gate; `auto` applies without pausing. */
   writeBack: 'approve' | 'auto';

@@ -157,7 +157,7 @@ export async function reapContainerEnvironments(
       await backend.destroy(row.id);
       report.removed.push(row.id);
       getLog().info({ envId: row.id }, 'container_env_reaped');
-      await releaseContainerRunImages(row.id);
+      await releaseContainerRunImages(row.id, backend);
     } catch (err) {
       report.errors.push({ id: row.id, error: (err as Error).message });
       getLog().warn({ err, envId: row.id }, 'container_env_reap_failed');
@@ -166,13 +166,15 @@ export async function reapContainerEnvironments(
   return report;
 }
 
-async function releaseContainerRunImages(envId: string): Promise<void> {
+async function releaseContainerRunImages(envId: string, backend: ContainerBackend): Promise<void> {
   const runIds = await workflowDb.getRunIdsByIsolationEnvId(envId);
   const release = createRunResourceRelease({ getWorkflowRun: workflowDb.getWorkflowRun });
   const errors: unknown[] = [];
   for (const runId of runIds) {
     try {
-      await release(runId);
+      await release(runId, (id, containerEnvId) =>
+        backend.releaseVerificationImages(id, containerEnvId)
+      );
     } catch (err) {
       errors.push(new Error(`Image cleanup for run ${runId}: ${String(err)}`, { cause: err }));
     }
