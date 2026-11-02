@@ -24,6 +24,8 @@ test.skipIf(process.platform !== 'win32').each([...launchModes])(
 async function checkInlineScript(mode: (typeof launchModes)[number], shim: boolean): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'archon-inline bun-'));
   const trees = mode === 'recorded executor' ? recordNodeProcessTrees() : undefined;
+  const inheritedCanary = process.env.ARCHON_INLINE_ENV_CANARY;
+  delete process.env.ARCHON_INLINE_ENV_CANARY;
   try {
     await writeFile(join(dir, 'value.ts'), 'export const value: string = "relative import";');
     await writeFile(join(dir, '.env'), 'ARCHON_INLINE_ENV_CANARY=loaded\n');
@@ -69,6 +71,8 @@ async function checkInlineScript(mode: (typeof launchModes)[number], shim: boole
       shim: shim ? 'visited' : '',
     });
   } finally {
+    if (inheritedCanary !== undefined) process.env.ARCHON_INLINE_ENV_CANARY = inheritedCanary;
+    else delete process.env.ARCHON_INLINE_ENV_CANARY;
     trees?.release();
     await removeTempTree(dir);
   }
