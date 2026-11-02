@@ -211,7 +211,12 @@ const mockDestroyWorktree = mock<ReturnType<typeof Isolation.getIsolationProvide
   })
 );
 
+const { VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } = await import(
+  '@archon/isolation'
+);
 mock.module('@archon/isolation', () => ({
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
   dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
   releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,

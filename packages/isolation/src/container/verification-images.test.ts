@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { releaseRunVerificationImages } from './verification-images';
+import {
+  releaseRunVerificationImages,
+  VerificationImageInventoryError,
+} from './verification-images';
 import type { DockerRunner } from './docker-exec';
 
 const id = (name: string): string => `sha256:${name}`;
@@ -190,8 +193,11 @@ describe('run verification images', () => {
       const error = await cleanup.catch((error: unknown) => error);
       expect(error).toBeInstanceOf(AggregateError);
       if (!(error instanceof AggregateError)) throw new Error('Expected cleanup failure');
+      expect(error instanceof VerificationImageInventoryError).toBe(boundary === 'inventory');
       expect(error.message).toContain('run-a');
       expect(error.errors).toEqual([failure]);
+      expect(error.errors[0]).toBe(failure);
+      if (boundary === 'inventory') expect(f.calls).toEqual([]);
       expect(f.images.has(id('verification'))).toBe(true);
     }
   );
