@@ -151,6 +151,10 @@ export function parseCases(value: unknown): Case[] {
       }
       return { file: fields.file, name: fields.name, protects: fields.protects };
     });
+    const keys = tests.map(test => testKey(test.file, test.name));
+    const repeated = tests.find((_, index) => keys.indexOf(keys[index] as string) !== index);
+    // Two labels with one key would score the same verdict twice under one subject.
+    if (repeated !== undefined) throw new Error(`${row.pr} labels two tests that read as ${repeated.file} > ${repeated.name}`);
     return { pr: row.pr, tests };
   });
   if (cases.length === 0) throw new Error('the calibration cases are empty');
@@ -164,18 +168,18 @@ export function parseCases(value: unknown): Case[] {
  * annotate its parameters after the title, and the judge names the test as its source
  * writes it. A verdict without a placeholder joins only its own name.
  */
-function verdictFor(test: LabeledTest, verdicts: readonly JudgedTest[]): JudgedTest | undefined {
+function verdictFor(pr: string, test: LabeledTest, verdicts: readonly JudgedTest[]): JudgedTest | undefined {
   const key = testKey(test.file, test.name);
-  let best: { verdict: JudgedTest; key: string } | undefined;
-  for (const verdict of verdicts) {
-    const candidate = testKey(verdict.file, verdict.name);
-    if (candidate === key) return verdict;
-    const parameterized = PLACEHOLDER.test(verdict.name);
-    if (parameterized && key.startsWith(`${candidate} `) && candidate.length > (best?.key.length ?? -1)) {
-      best = { verdict, key: candidate };
-    }
+  const keyed = verdicts.map(verdict => ({ verdict, key: testKey(verdict.file, verdict.name) }));
+  const exact = keyed.filter(candidate => candidate.key === key);
+  const prefixed = keyed.filter(candidate => PLACEHOLDER.test(candidate.verdict.name) && key.startsWith(`${candidate.key} `));
+  const longest = Math.max(...prefixed.map(candidate => candidate.key.length));
+  const joined = exact.length > 0 ? exact : prefixed.filter(candidate => candidate.key.length === longest);
+  // Two verdicts one label joins would make its score depend on list order.
+  if (joined.length > 1) {
+    throw new Error(`the judge listed ${String(joined.length)} tests in ${pr} that the label ${test.file} > ${test.name} joins`);
   }
-  return best?.verdict;
+  return joined[0]?.verdict;
 }
 
 function testSubject(pr: string, test: LabeledTest): string {
@@ -197,7 +201,7 @@ export function scoreCalibration(judged: readonly Judged<Case>[], instrument: st
   const base = { kind: 'score', unit: 'ratio', calibrates: 'sdlc.tests_unprotective', instrument, instrument_node: JUDGE_NODE };
   for (const { entry, tests } of verdicts) {
     for (const test of entry.tests) {
-      const scored = scoreTest(entry.pr, test, verdictFor(test, tests));
+      const scored = scoreTest(entry.pr, test, verdictFor(entry.pr, test, tests));
       metrics.push(...scored.records.map(record => ({ ...base, ...record })));
       if (scored.disagreement !== undefined) disagreements.push(scored.disagreement);
     }

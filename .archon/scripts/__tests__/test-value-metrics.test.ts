@@ -7,6 +7,7 @@ import {
   type Case,
   type JudgeSlot,
   judgeSlots,
+  parseCases,
   scoreCalibration,
   testValueRecords,
 } from '../../workflows/sdlc/.shared/test-value';
@@ -79,6 +80,11 @@ describe('scoreCalibration', () => {
     ]);
   });
 
+  it('refuses a label that two verdicts could join', () => {
+    const tests = [verdict('widget > logs the probe', false), verdict('widget > logs the probe!', true)];
+    expect(() => judgedAs({ ok: true, tests })).toThrow('widget > logs the probe');
+  });
+
   it('refuses the whole score when the judge failed on any case', () => {
     expect(() => judgedAs({ ok: false, error: 'failed: judge failed' })).toThrow(PR_A);
   });
@@ -106,5 +112,15 @@ describe('judge identity', () => {
       [identity, 'judge'],
       [identity, 'judge'],
     ]);
+  });
+});
+
+describe('parseCases', () => {
+  it('refuses a case that labels two tests with one key', () => {
+    const tests = [
+      { file: FILE, name: 'widget > keeps %s', protects: true },
+      { file: FILE, name: 'widget > keeps ${kind}', protects: false },
+    ];
+    expect(() => parseCases([{ pr: PR_A, tests }])).toThrow(PR_A);
   });
 });
