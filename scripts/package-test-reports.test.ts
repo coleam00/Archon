@@ -21,6 +21,12 @@ const damagedReports = {
   'undeclared-attribute-entity': '<testsuites><testsuite name="&missing;" /></testsuites>',
   'undeclared-text-entity': '<testsuites><testsuite>&missing;</testsuite></testsuites>',
   'invalid-count': '<testsuites tests="invalid"></testsuites>',
+  ...Object.fromEntries(
+    ['tests', 'assertions', 'failures', 'skipped', 'errors', 'time'].map(field => [
+      `negative-${field}`,
+      `<testsuites ${field}="-1"></testsuites>`,
+    ])
+  ),
   'unclosed-suite': '<testsuites tests="1"><testsuite name="first"></testsuites>',
   'unclosed-testcase':
     '<testsuites tests="1"><testsuite name="first"><testcase name="one"></testsuites>',
@@ -94,6 +100,23 @@ for (const [damage, damagedXml] of [
     });
   }
 }
+
+test('fractional time survives report parsing and aggregation', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'package-report-')));
+  const reports = [];
+  for (const time of [0.125, 0.25]) {
+    const result = await runReportedGroup(['selected.test.ts'], async args => {
+      writeFileSync(reportDestination(args), `<testsuites time="${time}"></testsuites>`);
+      return 0;
+    });
+    expect(result.code).toBe(0);
+    expect(result.report.counts.time).toBe(time);
+    reports.push(result.report);
+  }
+  const combined = join(root, 'combined.xml');
+  writeCombinedReport(combined, reports);
+  expect(readFileSync(combined, 'utf8')).toContain('time="0.375"');
+});
 
 for (const content of [
   '<testcase name="a &amp; b &lt; c &quot;quoted&quot; &apos;single&apos; &#65; &#x42;" />',

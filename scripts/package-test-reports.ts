@@ -26,7 +26,9 @@ function parseReport(xml: string): TestReport {
   const counts: Counts = { tests: 0, assertions: 0, failures: 0, skipped: 0, errors: 0, time: 0 };
   for (const field of countFields) {
     counts[field] = Number(attrs.get(field) ?? 0);
-    if (!Number.isFinite(counts[field])) throw new Error(`Invalid JUnit ${field} count`);
+    if (!Number.isFinite(counts[field]) || counts[field] < 0) {
+      throw new Error(`Invalid JUnit ${field} count`);
+    }
   }
   return {
     counts,
