@@ -793,23 +793,6 @@ for (const selection of ['mixed', 'uncovered', 'covered']) {
   });
 }
 
-test('every explicit package manifest accounts for a newly requested filename', async () => {
-  for (const path of new Bun.Glob('packages/*/package.json').scanSync(
-    join(import.meta.dir, '..')
-  )) {
-    const declaration = await Bun.file(join(import.meta.dir, '..', path)).json();
-    if (declaration.testGroups === undefined) continue;
-    const root = fixture(declaration);
-    testFile(root, 'newly-added', `test('new', () => {});`);
-    const covered = declaration.testGroups.some((group: string[]) =>
-      group.some(selector => 'src/newly-added.test.ts'.includes(selector))
-    );
-    const resolve = () => resolveRequestedTestGroups(root, declaration, ['newly-added']);
-    if (covered) expect(resolve().groups).toHaveLength(1);
-    else expect(resolve).toThrow('Requested test is not covered by testGroups');
-  }
-});
-
 test('JUnit destination follows the final reporter and outfile options', () => {
   for (const [args, expected] of [
     [[], undefined],

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { parser } from 'sax';
+import { SaxesParser } from 'saxes';
 import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
 const track = trackTempRoots();
@@ -95,7 +95,7 @@ for (const [damage, damagedXml] of [
       const combined = join(root, 'combined.xml');
       writeCombinedReport(combined, [damaged.report, later.report]);
       const xml = readFileSync(combined, 'utf8');
-      expect(() => parser(true).write(xml).close()).not.toThrow();
+      expect(() => new SaxesParser().write(xml).close()).not.toThrow();
       expect(xml).toContain('name="later"');
       expect(xml).toContain('name="first.test.ts"');
       expect(xml).toMatch(/<testsuites[^>]*errors="1"/);
@@ -136,7 +136,7 @@ for (const content of [
     expect(result.report.suites).toBe(suites);
     const combined = join(root, 'combined.xml');
     writeCombinedReport(combined, [result.report]);
-    expect(() => parser(true).write(readFileSync(combined, 'utf8')).close()).not.toThrow();
+    expect(() => new SaxesParser().write(readFileSync(combined, 'utf8')).close()).not.toThrow();
   });
 }
 
