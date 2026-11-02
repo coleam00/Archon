@@ -39,6 +39,6 @@ Each issue goes back through triage on its own, which judges its contract the wa
 ## Declare
 
 - `split` — `{ "kind": "prd", "signal_command", "window_days" }` or `{ "kind": "bundle" }`.
-- `issues` — the list above, empty only when open issues in `existing` already own every piece.
+- `issues` — the list above, empty when nothing is left to file: every piece is done or owned by an issue in `existing`.
 - `existing` — `{ "number", "why" }` for each open issue in this repository the outcome depends on and you did not file again, possibly empty.
 - `summary` — two or three sentences: what the item is, how the list is ordered and why the first issue comes first.

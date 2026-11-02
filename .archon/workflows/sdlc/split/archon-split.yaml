@@ -92,7 +92,7 @@ nodes:
               required: [kind]
         # In filing order; each issue depends only on keys listed before it, or on
         # keys already filed.
-        # Empty when open issues already own every piece.
+        # Empty when nothing is left to file: every piece is done or already owned.
         issues:
           type: array
           maxItems: 12
