@@ -29,6 +29,14 @@ const damagedReports = {
       ])
     )
   ),
+  ...Object.fromEntries(
+    ['tests', 'assertions', 'failures', 'skipped', 'errors'].flatMap(field =>
+      ['"', "'"].map(quote => [
+        `fractional-${field}-${quote}`,
+        `<testsuites ${field}=${quote}0.5${quote}></testsuites>`,
+      ])
+    )
+  ),
   'unclosed-suite': '<testsuites tests="1"><testsuite name="first"></testsuites>',
   'unclosed-testcase':
     '<testsuites tests="1"><testsuite name="first"><testcase name="one"></testsuites>',
