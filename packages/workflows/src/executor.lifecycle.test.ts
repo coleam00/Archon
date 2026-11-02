@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import {
   dagCall,
+  containerBackend,
   makeDeps,
   makeRun,
   makeStore,
@@ -27,6 +28,7 @@ import * as source from './run-source';
 import { liveSourceRoots } from './workflow-source';
 import { hydrateResumableRun } from './run-resume';
 import { noExecutorCanWrite } from './run-scratch';
+import type { ReleaseVerificationImages } from './deps';
 import type { ContainerPauseReceipt } from './dag/pause';
 import type { WorkflowRunNodeSession } from './schemas';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
@@ -895,4 +897,33 @@ describe('terminal failure writes', () => {
     });
     expect(props.runId).toBeUndefined();
   });
+});
+
+it('forwards backend image release only after executor writer shutdown', async () => {
+  const run = makeRun({ status: 'completed' });
+  run.metadata[EXECUTION_OWNER_METADATA_KEY] = { host: hostname(), pid: process.pid };
+  const store = makeStore({ getWorkflowRun: mock(async () => run) });
+  const releaseVerificationImages = mock(async function (this: unknown, _id: string, _env: string) {
+    expect(this).toBe(backend);
+  });
+  const backend = { ...containerBackend(), releaseVerificationImages };
+  const releaseRunResources = mock(async (id: string, release?: ReleaseVerificationImages) => {
+    expect(id).toBe(run.id);
+    expect(noExecutorCanWrite(run)).toBe(true);
+    expect(release).toEqual(expect.any(Function));
+    await release?.(id, 'env-owned');
+  });
+  await startWorkflow({
+    deps: { ...makeDeps(store), releaseRunResources },
+    options: {
+      execContext: { kind: 'container', containerId: 'owned-container' },
+      container: {
+        envId: 'env-owned',
+        writeBack: 'auto',
+        backend,
+      },
+    },
+  });
+  expect(releaseRunResources).toHaveBeenCalledTimes(1);
+  expect(releaseVerificationImages).toHaveBeenCalledWith(run.id, 'env-owned');
 });

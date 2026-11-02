@@ -1,4 +1,5 @@
 import { ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
+import type { ReleaseVerificationImages } from './deps';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { isContainerRun, type WorkflowRun } from './schemas/workflow-run';
 
@@ -110,7 +111,10 @@ export interface ContainerRunContext {
   envId: string;
   /** `approve` (default) pauses at the write-back gate; `auto` applies without pausing. */
   writeBack: 'approve' | 'auto';
-  backend: ContainerWriteBackBackend;
+  backend: ContainerWriteBackBackend & {
+    /** Omission requires an explicitly bound host resource owner. */
+    releaseVerificationImages?: ReleaseVerificationImages;
+  };
   /**
    * Overlay mount mode in effect. `native` (CAP_SYS_ADMIN — the common fallback on
    * stock daemons) lets in-container root remount the read-only lower read-write, so

@@ -21,6 +21,7 @@ import {
   mockGetRunIdsByIsolationEnvId,
   mockGetWorkflowRun,
   mockReleaseVerificationImages,
+  mockContainerReleaseVerificationImages,
   resetCleanupMocks,
 } from './test-harness';
 
@@ -119,11 +120,12 @@ describe('verification images after reaping', () => {
     if (mode === 'lookup-failed')
       mockGetRunIdsByIsolationEnvId.mockRejectedValueOnce(new Error('store unavailable'));
     const report = await reapContainerEnvironments(1);
+    expect(mockReleaseVerificationImages).not.toHaveBeenCalled();
     expect(report.removed).toEqual(mode === 'destroy-failed' ? [] : ['env-1']);
     if (mode === 'completed') {
-      expect(mockReleaseVerificationImages).toHaveBeenCalledWith(run.id, 'env-1');
+      expect(mockContainerReleaseVerificationImages).toHaveBeenCalledWith(run.id, 'env-1');
       expect(mockContainerDestroy).toHaveBeenCalledWith('env-1');
-    } else expect(mockReleaseVerificationImages).not.toHaveBeenCalled();
+    } else expect(mockContainerReleaseVerificationImages).not.toHaveBeenCalled();
     expect(report.errors.length).toBe(
       mode === 'lookup-failed' || mode === 'destroy-failed' ? 1 : 0
     );
@@ -143,9 +145,10 @@ test('reaping releases every associated run and reports partial failures', async
       isolation_env_id: 'env-1',
     },
   }));
-  mockReleaseVerificationImages.mockRejectedValueOnce(new Error('image removal denied'));
+  mockContainerReleaseVerificationImages.mockRejectedValueOnce(new Error('image removal denied'));
   const report = await reapContainerEnvironments(1);
-  expect(mockReleaseVerificationImages.mock.calls).toEqual([
+  expect(mockReleaseVerificationImages).not.toHaveBeenCalled();
+  expect(mockContainerReleaseVerificationImages.mock.calls).toEqual([
     ['older', 'env-1'],
     ['newer', 'env-1'],
   ]);

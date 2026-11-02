@@ -1,5 +1,6 @@
 import {
   registerDestroyTests,
+  registerVerificationImageTests,
   registerFinalizeTests,
   registerResumeTests,
   registerSuspendTests,
@@ -13,6 +14,7 @@ import { registerOverlayTests, registerPrepareTests } from './__tests__/containe
 registerOverlayTests();
 registerPrepareTests();
 registerDestroyTests();
+registerVerificationImageTests();
 registerSuspendTests();
 registerResumeTests();
 registerFinalizeTests();

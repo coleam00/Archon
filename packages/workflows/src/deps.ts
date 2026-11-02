@@ -243,9 +243,17 @@ export interface StoredProviderCredential {
   getStatus: () => Promise<CredentialStatus>;
 }
 
+export type ReleaseVerificationImages = (runId: string, containerEnvId: string) => Promise<void>;
+
 export interface WorkflowDeps {
-  /** Host cleanup after terminal execution; retains live writers and returns non-fatal warnings. */
-  releaseRunResources?: (runId: string) => Promise<void | string[]>;
+  /**
+   * Host cleanup after terminal execution; retains live writers and returns non-fatal warnings.
+   * Container cleanup requires a supplied effect or an explicitly bound host resource owner.
+   */
+  releaseRunResources?: (
+    runId: string,
+    releaseVerificationImages?: ReleaseVerificationImages
+  ) => Promise<void | string[]>;
   providers: ProviderRegistry;
   store: IWorkflowStore;
   /**
