@@ -116,6 +116,10 @@ describe('judge identity', () => {
 });
 
 describe('parseCases', () => {
+  it('refuses a case that labels no tests', () => {
+    expect(() => parseCases([{ pr: PR_A, tests: [] }])).toThrow(PR_A);
+  });
+
   it('refuses a case that labels two tests with one key', () => {
     const tests = [
       { file: FILE, name: 'widget > keeps %s', protects: true },

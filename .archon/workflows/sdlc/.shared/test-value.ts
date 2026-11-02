@@ -144,6 +144,7 @@ export function parseCases(value: unknown): Case[] {
   const cases = value.map(entry => {
     const row = record(entry);
     if (typeof row?.pr !== 'string' || !Array.isArray(row.tests)) throw new Error('a calibration case has no pr and tests');
+    if (row.tests.length === 0) throw new Error(`the calibration case ${row.pr} labels no tests`);
     const tests = row.tests.map(test => {
       const fields = record(test);
       if (typeof fields?.file !== 'string' || typeof fields.name !== 'string' || typeof fields.protects !== 'boolean') {
