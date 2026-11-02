@@ -24,7 +24,7 @@ export function createRunResourceRelease(
   const usesDocker = release === releaseRunVerificationImages;
   const dockerInstalledAtSetup =
     usesDocker && Bun.which('docker', { PATH: process.env.PATH }) !== null;
-  return async runId => {
+  return async (runId, releaseVerificationImages) => {
     const log = createLogger('cleanup.verification-images');
     try {
       const run = await store.getWorkflowRun(runId);
@@ -47,6 +47,9 @@ export function createRunResourceRelease(
       const envId = run.metadata[ISOLATION_ENV_ID_METADATA_KEY];
       if (isContainerRun(run) && (typeof envId !== 'string' || !envId.trim())) {
         throw new Error(`Missing container identity for verification image cleanup: ${runId}`);
+      }
+      if (isContainerRun(run) && typeof envId === 'string' && releaseVerificationImages) {
+        return await releaseVerificationImages(runId, envId);
       }
       // Docker is optional on host runs, but it may have appeared during execution.
       if (

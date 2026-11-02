@@ -31,7 +31,7 @@ import {
   type PriorRunUsage,
 } from './dag-executor';
 import type { ChildWorkflowOutcome, RunChildWorkflowArgs } from './dag/child-run';
-import type { IWorkflowPlatform, WorkflowDeps } from './deps';
+import type { IWorkflowPlatform, ReleaseVerificationImages, WorkflowDeps } from './deps';
 import type { RunPhase } from './executor-shared';
 import { runWithAdoptedRunDir } from './workflow-variables';
 import { withContainerArtifactsRoot } from './artifact-writes';
@@ -387,7 +387,7 @@ export async function executeWorkflow(
     if (!exit.terminalStatusWriteFailed) {
       if (!exit.executionStopped) await failRunLeftRunning(deps, workflowRun.id);
       await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
-      await releaseResourcesOnExit(deps, workflowRun.id);
+      await releaseResourcesOnExit(deps, workflowRun.id, opts.container?.releaseVerificationImages);
     }
   }
 }
@@ -648,11 +648,19 @@ async function releaseScratchOnExit(
   else await cleanup();
 }
 
-async function releaseResourcesOnExit(deps: WorkflowDeps, runId: string): Promise<void> {
+async function releaseResourcesOnExit(
+  deps: WorkflowDeps,
+  runId: string,
+  releaseVerificationImages?: ReleaseVerificationImages
+): Promise<void> {
   if (!deps.releaseRunResources) return;
   try {
     const run = await deps.store.getWorkflowRun(runId);
-    if (run && isTerminalRunStatus(run.status)) await deps.releaseRunResources(runId);
+    if (run && isTerminalRunStatus(run.status)) {
+      if (releaseVerificationImages)
+        await deps.releaseRunResources(runId, releaseVerificationImages);
+      else await deps.releaseRunResources(runId);
+    }
   } catch (err) {
     getLog().warn({ err, runId }, 'executor.exit_resource_release_failed');
   }

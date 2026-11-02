@@ -388,3 +388,78 @@ test.each(['inspect', 'container-use', 'removal', 'container-inventory', 'isolat
     }
   }
 );
+
+test.each([false, true])('container owner overrides host cleanup (failure=%s)', async fails => {
+  const run = {
+    ...mockWorkflowRun,
+    status: 'completed' as const,
+    metadata: {
+      execution_owner: { host: hostname(), pid: process.pid },
+      isolation: 'container',
+      isolation_env_id: 'env-owned',
+    },
+  };
+  const hostRelease = mock(async () => {
+    throw new Error('wrong daemon');
+  });
+  const failure = new isolation.VerificationImageInventoryError(run.id, new Error('owner offline'));
+  const ownerRelease = mock(async (_id: string, _env: string) => {
+    if (fails) throw failure;
+  });
+  const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run }, hostRelease);
+  const result = cleanup(run.id, ownerRelease);
+  if (fails) await expect(result).rejects.toBe(failure);
+  else await result;
+  expect(ownerRelease.mock.calls).toEqual([[run.id, 'env-owned']]);
+  expect(hostRelease).not.toHaveBeenCalled();
+});
+
+test('container callback cannot change host cleanup ownership', async () => {
+  const run = {
+    ...mockWorkflowRun,
+    status: 'completed' as const,
+    metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+  };
+  const hostRelease = mock(async (_id: string, _env?: string) => {});
+  const ownerRelease = mock(async (_id: string, _env: string) => {});
+  await createRunResourceRelease({ getWorkflowRun: async () => run }, hostRelease)(
+    run.id,
+    ownerRelease
+  );
+  expect(hostRelease.mock.calls).toEqual([[run.id, undefined]]);
+  expect(ownerRelease).not.toHaveBeenCalled();
+});
+
+test.each(workflowRunStatusSchema.options)(
+  'backend callback respects %s eligibility and writer shutdown',
+  async status => {
+    const run = {
+      ...mockWorkflowRun,
+      status,
+      metadata: {
+        execution_owner: { host: hostname(), pid: process.pid },
+        isolation: 'container',
+        isolation_env_id: 'env-owned',
+      },
+    };
+    const hostRelease = mock(async () => {
+      throw new Error('wrong daemon');
+    });
+    const ownerRelease = mock(async (_id: string, _env: string) => {});
+    const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run }, hostRelease);
+    const leave = enterRunExecution(run.id);
+    try {
+      await cleanup(run.id, ownerRelease);
+      expect(ownerRelease).not.toHaveBeenCalled();
+    } finally {
+      leave();
+    }
+    await cleanup(run.id, ownerRelease);
+    expect(ownerRelease.mock.calls).toEqual(
+      isTerminalRunStatus(status) && !RESUMABLE_WORKFLOW_STATUSES.includes(status)
+        ? [[run.id, 'env-owned']]
+        : []
+    );
+    expect(hostRelease).not.toHaveBeenCalled();
+  }
+);

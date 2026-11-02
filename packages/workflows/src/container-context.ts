@@ -1,4 +1,5 @@
 import { ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
+import type { ReleaseVerificationImages } from './deps';
 import type { ExecutionContext } from '@archon/provider-contract';
 import { isContainerRun, type WorkflowRun } from './schemas/workflow-run';
 
@@ -108,6 +109,8 @@ export interface ContainerWriteBackBackend {
  */
 export interface ContainerRunContext {
   envId: string;
+  /** Backend-owned image cleanup; omission uses the host resource-release default. */
+  releaseVerificationImages?: ReleaseVerificationImages;
   /** `approve` (default) pauses at the write-back gate; `auto` applies without pausing. */
   writeBack: 'approve' | 'auto';
   backend: ContainerWriteBackBackend;
