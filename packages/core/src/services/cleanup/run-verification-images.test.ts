@@ -224,90 +224,60 @@ test.each([false, true])(
     };
     const previousPath = process.env.PATH;
     process.env.PATH = root;
-    const docker = isolation.dockerCli;
-    const probe = spyOn(isolation, 'dockerCli').mockImplementation((args, options) =>
-      args[0] === 'version'
-        ? Promise.resolve({ stdout: '28.0.0', stderr: '' })
-        : docker(args, options)
-    );
     try {
-      await expect(docker(['version', '--format', '{{.Server.Version}}'])).resolves.toEqual({
-        stdout: '',
-        stderr: '',
-      });
       const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
-      expect(probe).toHaveBeenCalledWith(
-        ['version', '--format', '{{.Server.Version}}'],
-        expect.objectContaining({ timeout: 10_000 })
-      );
       await unlink(executable);
       await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');
     } finally {
-      probe.mockRestore();
       process.env.PATH = previousPath;
     }
   }
 );
 
-test.skipIf(!Bun.which('docker'))(
-  'a Docker CLI without a reachable daemon does not fail completed or cancelled host runs',
-  async () => {
-    const previousHost = process.env.DOCKER_HOST;
-    const previousContext = process.env.DOCKER_CONTEXT;
-    process.env.DOCKER_HOST = 'tcp://127.0.0.1:1';
-    process.env.DOCKER_CONTEXT = '';
+test.each(['completed', 'cancelled'] as const)(
+  'an unreachable daemon reports inconclusive image cleanup for a %s host run',
+  async status => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-docker-outage-')));
+    await writeFile(join(root, process.platform === 'win32' ? 'docker.cmd' : 'docker'), '', {
+      mode: 0o755,
+    });
+    const previousPath = process.env.PATH;
+    process.env.PATH = root;
+    const docker = spyOn(isolation, 'dockerCli').mockRejectedValue(new Error('daemon unavailable'));
     try {
-      for (const status of ['completed', 'cancelled'] as const) {
-        const run = {
-          ...mockWorkflowRun,
-          status,
-          metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-        };
-        await expect(
-          createRunResourceRelease({ getWorkflowRun: async () => run })(run.id)
-        ).resolves.toBeUndefined();
-      }
       const run = {
         ...mockWorkflowRun,
-        status: 'completed' as const,
-        metadata: {
-          execution_owner: { host: hostname(), pid: process.pid },
-          isolation: 'container',
-          isolation_env_id: 'env-a',
-        },
+        status,
+        metadata: { execution_owner: { host: hostname(), pid: process.pid } },
       };
-      await expect(
-        createRunResourceRelease({ getWorkflowRun: async () => run })(run.id)
-      ).rejects.toThrow('Verification image cleanup failed');
+      const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
+      // Docker may have built images mid-run even if it was unreachable at setup.
+      await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');
     } finally {
-      if (previousHost === undefined) delete process.env.DOCKER_HOST;
-      else process.env.DOCKER_HOST = previousHost;
-      if (previousContext === undefined) delete process.env.DOCKER_CONTEXT;
-      else process.env.DOCKER_CONTEXT = previousContext;
+      docker.mockRestore();
+      process.env.PATH = previousPath;
     }
   }
 );
 
-test('host cleanup discovers images when Docker becomes reachable during execution', async () => {
+test('host cleanup discovers Docker installed during execution', async () => {
   const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-docker-start-')));
   await writeFile(join(root, process.platform === 'win32' ? 'docker.cmd' : 'docker'), '', {
     mode: 0o755,
   });
   const previousPath = process.env.PATH;
-  process.env.PATH = root;
-  const docker = spyOn(isolation, 'dockerCli')
-    .mockRejectedValueOnce(new Error('daemon not running at host setup'))
-    .mockResolvedValue({ stdout: '', stderr: '' });
+  process.env.PATH = '';
+  const docker = spyOn(isolation, 'dockerCli').mockResolvedValue({ stdout: '', stderr: '' });
   try {
     const run = {
       ...mockWorkflowRun,
       status: 'completed' as const,
       metadata: { execution_owner: { host: hostname(), pid: process.pid } },
     };
-    await createRunResourceRelease({ getWorkflowRun: async () => run })(run.id);
+    const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
+    process.env.PATH = root;
+    await cleanup(run.id);
     expect(docker.mock.calls.map(([args]) => args)).toEqual([
-      ['version', '--format', '{{.Server.Version}}'],
-      ['version', '--format', '{{.Server.Version}}'],
       [
         'image',
         'ls',

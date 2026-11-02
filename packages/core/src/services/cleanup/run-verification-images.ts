@@ -2,7 +2,7 @@ import {
   CANCELLED_REASON_METADATA_KEY,
   ISOLATION_ENV_ID_METADATA_KEY,
 } from '@archon/workflows/schemas/run-metadata';
-import { dockerCli, releaseRunVerificationImages } from '@archon/isolation';
+import { releaseRunVerificationImages } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { noExecutorCanWrite } from '@archon/workflows/run-scratch';
 import {
@@ -12,29 +12,13 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { FAN_OUT_CANCEL_REASONS, type IWorkflowStore } from '@archon/workflows/store';
 
-async function hostDockerAvailable(): Promise<boolean> {
-  try {
-    await dockerCli(['version', '--format', '{{.Server.Version}}'], {
-      timeout: 10_000,
-    });
-    return true;
-  } catch (err) {
-    createLogger('cleanup.verification-images').info(
-      { err },
-      'verification_images.docker_unavailable'
-    );
-    return false;
-  }
-}
-
 export function createRunResourceRelease(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
   release: typeof releaseRunVerificationImages = releaseRunVerificationImages
 ): (runId: string) => Promise<void> {
-  // Snapshot daemon reachability before execution. Losing Docker later must
-  // remain a cleanup failure, rather than looking like a Docker-free host.
-  const dockerAvailable =
-    release === releaseRunVerificationImages ? hostDockerAvailable() : Promise.resolve(true);
+  const usesDocker = release === releaseRunVerificationImages;
+  const dockerInstalledAtSetup =
+    usesDocker && Bun.which('docker', { PATH: process.env.PATH }) !== null;
   return async runId => {
     const log = createLogger('cleanup.verification-images');
     try {
@@ -59,9 +43,15 @@ export function createRunResourceRelease(
       if (isContainerRun(run) && (typeof envId !== 'string' || !envId.trim())) {
         throw new Error(`Missing container identity for verification image cleanup: ${runId}`);
       }
-      // A workflow can start Docker itself after the host was created.
-      if (!isContainerRun(run) && !(await dockerAvailable) && !(await hostDockerAvailable())) {
-        log.info({ runId }, 'verification_images.skipped_docker_unavailable');
+      // Docker is optional on host runs. An installed CLI with an unreachable
+      // daemon cannot prove there are no images; let release report that failure.
+      if (
+        !isContainerRun(run) &&
+        usesDocker &&
+        !dockerInstalledAtSetup &&
+        !Bun.which('docker', { PATH: process.env.PATH })
+      ) {
+        log.debug({ runId }, 'verification_images.skipped_docker_not_installed');
         return;
       }
       await release(runId, isContainerRun(run) && typeof envId === 'string' ? envId : undefined);
