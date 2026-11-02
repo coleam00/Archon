@@ -92,9 +92,9 @@ nodes:
               required: [kind]
         # In filing order; each issue depends only on keys listed before it, or on
         # keys already filed.
+        # Empty when open issues already own every piece.
         issues:
           type: array
-          minItems: 1
           maxItems: 12
           items:
             type: object

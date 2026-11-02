@@ -177,6 +177,16 @@ describe('split publish', () => {
     ]);
   });
 
+  test('a closed issue listed as an existing dependency files nothing', () => {
+    const at = install();
+    seed(at);
+    const done: GhIssue = { number: 50, title: 'The light route', body: 'Closed.', state: 'CLOSED' };
+    const run = publish(at, PRD, [done], [{ number: 50, why: 'it owns the light route' }]);
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('existing issue 50 is closed, not open');
+    expect(run.createdIssues).toEqual([]);
+  });
+
   test('a list whose dependency is neither filed nor listed earlier files nothing', () => {
     const at = install();
     seed(at);

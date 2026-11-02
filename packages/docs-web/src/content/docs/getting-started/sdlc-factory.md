@@ -15,7 +15,7 @@ The bundled `sdlc` pack is a software factory made of five queues. You write an 
 | `archon-build-queue` | Takes one triaged issue through `archon-ship` rounds until its pull request is reviewed Ready, or a maintainer's `ready` answer hands it to the merge queue |
 | `archon-merge-queue` | Merges the Ready, green pull requests the build queue finished, and sends back what it can't merge |
 | `archon-discoveries` | Files, tracks or drops what runs noticed outside their own task |
-| `archon-split` | Files the issues a PRD or a bundle of tasks splits into, and sends them back through intake |
+| `archon-split` | Files the issues a PRD or a bundle of tasks splits into, and sends them back through intake. They are opened by the install's login, so that login must be in `maintainers.json`, or intake treats them as outside items |
 
 Every workflow in the pack is described in [SDLC pack workflows](/reference/sdlc-workflows/).
 

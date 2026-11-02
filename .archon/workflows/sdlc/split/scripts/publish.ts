@@ -110,7 +110,7 @@ function comment(
     split.kind === 'prd'
       ? [`The signal is measured with \`${split.signal_command}\`, ${String(split.window_days)} days after release.`]
       : [];
-  return [COMMENT_MARKER, lead, lines.join('\n'), ...tracked, ...measure].join('\n\n');
+  return [COMMENT_MARKER, lead, lines.join('\n'), ...tracked, ...measure].filter(part => part !== '').join('\n\n');
 }
 
 function publish(
@@ -136,11 +136,11 @@ function publish(
   const problem = unfileable(planned, issues);
   if (problem !== null) throw new Error(`nothing was filed: ${problem}`);
   // viewIssue refuses a number that is not an issue of the repository.
-  const adopted: AdoptedIssue[] = existing.map(entry => ({
-    number: entry.number,
-    url: viewIssue({ repo: item.repo, number: entry.number }).url,
-    why: entry.why,
-  }));
+  const adopted: AdoptedIssue[] = existing.map(entry => {
+    const view = viewIssue({ repo: item.repo, number: entry.number });
+    if (view.state !== 'open') throw new Error(`nothing was filed: existing issue ${String(entry.number)} is ${view.state}, not open`);
+    return { number: entry.number, url: view.url, why: entry.why };
+  });
   const numbers = new Map(issues.map(entry => [entry.key, entry.number]));
   const scan = markerScan(item.repo);
   for (const entry of planned) {

@@ -184,7 +184,9 @@ function ghMarkers(repo: QualifiedPr['repo']): Map<string, number[]> {
     if (row === undefined || 'pull_request' in row || typeof row.body !== 'string') continue;
     if (typeof row.number !== 'number') throw new Error('gh api listed an issue with no number');
     const line = firstLine(row.body);
-    markers.set(line, [...(markers.get(line) ?? []), row.number]);
+    const numbers = markers.get(line);
+    if (numbers === undefined) markers.set(line, [row.number]);
+    else numbers.push(row.number);
   }
   return markers;
 }

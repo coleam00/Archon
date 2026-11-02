@@ -30,7 +30,7 @@ Each issue:
 
 - `key` — a short stable slug for the piece of work, lowercase words joined by hyphens. Reuse the key of an already filed issue that covers the same work.
 - `title` — the outcome, in plain words.
-- `body` — a contract another run starts from cold, in the repository's issue template shape when it has one. It states the problem, why it is worth solving, why now, the outcome that should become observably true, the invariants that must hold, and what acceptance looks like, with checks a person can observe. Link the item: say this issue is part of `$INPUTS.url`. Carry only the context from the item that constrains this piece; do not paste the whole item. Do not add the dependency lines or any marker; the next node writes those.
+- `body` — a contract another run starts from cold, in the repository's issue template shape when it has one. It states the problem, why it is worth solving, why now, the outcome that should become observably true, the invariants that must hold, and what acceptance looks like, with checks a person can observe. Link the item: say this issue is part of `$INPUTS.url`. Carry only the context from the item that constrains this piece; do not paste the whole item. Do not add the dependency lines for the issues you list, or any marker; the next node writes those. When the piece needs an issue in `existing` merged first, say so in its body and name that issue, so triage holds it until then.
 - `size` — `s` a few files on one surface, `m` several files or two surfaces, `l` several packages, schemas or surfaces. An `l` issue is a sign the piece is still more than one change; split it further when it is.
 - `depends_on` — the keys of the issues it genuinely needs merged first, each listed before it or already filed. Keep the list short, so as much work as possible can run in parallel.
 
@@ -39,6 +39,6 @@ Each issue goes back through triage on its own, which judges its contract the wa
 ## Declare
 
 - `split` — `{ "kind": "prd", "signal_command", "window_days" }` or `{ "kind": "bundle" }`.
-- `issues` — the list above.
+- `issues` — the list above, empty only when open issues in `existing` already own every piece.
 - `existing` — `{ "number", "why" }` for each open issue in this repository the outcome depends on and you did not file again, possibly empty.
 - `summary` — two or three sentences: what the item is, how the list is ordered and why the first issue comes first.
