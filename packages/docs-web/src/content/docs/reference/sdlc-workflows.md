@@ -210,6 +210,19 @@ archon workflow run archon-upkeep "Address the undici advisory"
 
 **What it produces**: A PR marked ready for review, or an explained stop when the locked version is already current.
 
+#### `archon-metrics-prs`
+
+Records the outcomes of the pull requests the build queue opened as metrics: `sdlc.prs_opened`, `sdlc.prs_merged`, `sdlc.prs_abandoned` and `sdlc.pr_merge_rate`. Each record is attributed to the build-queue runs that built its pull request, so `archon metrics --compare` splits pull requests by when those runs started. Pull requests a round only continued count in no metric.
+
+**When to use it**: You want current factory PR counts and merge rate, or to compare them before and after a pack change. Run it on demand, or add the schedule binding the SDLC pack README's "Metrics" section shows; the pack installs none.
+
+```bash
+archon workflow run archon-metrics-prs
+archon metrics sdlc.pr_merge_rate --since 2026-10-01
+```
+
+**What it produces**: Metric records on the node's output, read with [`archon metrics`](/guides/metrics/). It changes no code.
+
 ## Summary
 
 | Workflow | Use When | Creates PR? | Changes code? |
@@ -229,6 +242,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-review` | Review a PR or the working diff | No (comments on a PR) | No |
 | `archon-validate` | Run the project's checks | No | No |
 | `archon-upkeep` | Update one dependency | Yes | Yes |
+| `archon-metrics-prs` | Count factory PRs and their merge rate | No | No |
 
 ## Workflows that no longer ship
 

@@ -1,7 +1,7 @@
 /**
  * The build queue's record on an item's work item: `facts.build`.
  *
- * It is the queue's memory of the item: every round it ran (one archon-ship run), every
+ * It is the queue's memory of the item: every round it ran (one build-queue run), every
  * decision it made with the person's answer when it asked, and what happens next. The
  * deciding agents read it before deciding, and the queue's pickup reads `status` to
  * know whether the item waits for it.
@@ -58,7 +58,10 @@ export const LAUNCH_STAGES = [
   'continue',
 ] as const satisfies readonly Stage[];
 
-/** One archon-ship run the queue launched, as its terminal report ended it. */
+/**
+ * One build round, as its terminal report ended it. `run_id` is the build-queue run that
+ * delivered it; the ship work runs inside that run through `include:`.
+ */
 export interface BuildRound {
   readonly run_id: string;
   readonly at: string;
