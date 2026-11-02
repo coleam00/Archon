@@ -67,7 +67,7 @@ function namedPrs(): QualifiedPr[] {
 }
 
 /** A pull request from a round's branch: a `build/` branch in the repository itself. */
-function isQueueBuilt(pr: OpenPr): boolean {
+export function isQueueBuilt(pr: Pick<OpenPr, 'headRefName' | 'isCrossRepository'>): boolean {
   return !pr.isCrossRepository && pr.headRefName.startsWith(BUILD_BRANCH_PREFIX);
 }
 

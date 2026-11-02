@@ -865,6 +865,84 @@ back:
 }
 ```
 
+## Metrics
+
+[`archon-metrics-prs`](metrics-prs/archon-metrics-prs.yaml) records the outcomes of the
+pull requests the build queue opened, for `archon metrics` to aggregate:
+
+| Metric | Kind | Unit | One record per pull request, at |
+|---|---|---|---|
+| `sdlc.prs_opened` | count | `prs` | its creation |
+| `sdlc.prs_merged` | count | `prs` | its merge |
+| `sdlc.prs_abandoned` | count | `prs` | its close, when it closed without merging |
+| `sdlc.pr_merge_rate` | score | `ratio` | its merge (1) or its close without merging (0) |
+
+A pull request still open counts as opened and has no merge rate yet. Abandoned means
+closed without merging, whoever closed it.
+
+The pull requests come from the build rounds on the work items: a factory pull request is
+one a round opened from a `build/` branch in the repository itself. A pull request a round
+only continued, such as a contributor's, counts in no metric and is listed in the node's
+`skipped` output. Each record names its pull request as the subject and the build-queue
+runs that built it as its producing runs, so it lands in the cohort of those runs, not of
+the day the metric ran:
+
+```bash
+archon metrics sdlc.pr_merge_rate --compare <when this checkout picked up a pack change>
+```
+
+Records whose build runs started on both sides of the cut are counted as straddling and
+left out of both sides. The comparison is observational: anything else that changed
+around the cut is mixed in.
+
+Cost per merged pull request is the cost `archon metrics sdlc.prs_opened` reports
+(`cost.usd` with `--json`), divided by the `sdlc.prs_merged` value over the same window.
+It covers the build-queue runs that built a pull request; queue runs that built none are
+not attributed to any. It is a floor: runs on a provider that reports no cost add nothing
+and are counted instead.
+
+Two kinds of factory pull request are missed, and both are mostly ones closed without
+merging, so the abandoned count is low and the merge rate high:
+
+- A round is recorded when its run reaches the queue's decision. A run cancelled after
+  it opened a pull request records no round, so that pull request is missed.
+- A work item keeps its last ten rounds. A pull request whose rounds all fell out of that
+  record is missed, and one whose early rounds fell out is attributed to its later runs
+  only, so it can land in a later cohort with a lower cost.
+
+The workflow holds no state and reads every pull request again on each run; a re-run
+replaces the earlier records. It reads pull request timestamps through the GitHub CLI and
+refuses on `ARCHON_SDLC_FORGE=forge`. Run it on demand:
+
+```bash
+archon workflow run archon-metrics-prs
+```
+
+The pack installs no binding. A native schedule refreshes the records daily:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-metrics-prs",
+  "binding": {
+    "bindingId": "metrics-prs",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "metrics-prs:widgets",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-metrics-prs",
+      "inputs": {},
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 86400, "runAtLoad": false }
+}
+```
+
 ## Worktree cleanup
 
 [`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
