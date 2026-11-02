@@ -987,6 +987,23 @@ describe('the build queue checkout', () => {
     expect(duplicate.stderr).toContain('more than one trusted review comment');
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
+
+    // On the forge source the review is read through `archon forge`; gh holds no comments,
+    // so a non-null baseline can only come from the forge.
+    const forgeComments = [{ id: '1', body: review.body, url: 'https://ghe.example.com/example/repo/pull/42#issuecomment-1', author: { host: PR.repo.host, id: '1', login: 'Maintainer' } }];
+    const forge = `
+const harness = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  if (argv[2] !== 'forge') return harness(argv, settings);
+  const op = argv[3];
+  const value = op === 'pr.view'
+    ? { title: 'Fix', body: '', pr: { schemaVersion: 1, repo: ${JSON.stringify(PR.repo)}, number: 42, url: 'https://ghe.example.com/example/repo/pull/42', head: 'feature', base: 'dev', is_draft: false, state: 'open', head_repo: ${JSON.stringify(PR.repo)}, head_revision: ${JSON.stringify(head)}, base_revision: null, maintainer_can_modify: null } }
+    : op === 'workitem.comments' ? { comments: ${JSON.stringify(forgeComments)} } : null;
+  const body = value === null ? { operationId: 'op', ok: false, error: { kind: 'forge_error', message: 'unexpected ' + op } } : { operationId: 'op', ok: true, result: { op, value } };
+  return { exitCode: value === null ? 1 : 0, stdout: Buffer.from(JSON.stringify(body)), stderr: Buffer.from('') };
+} });
+`;
+    expect(emitted(run(at, 'checkout', inputs, { source: 'forge', preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42 });
   }, 60_000);
 
   test('a round route declares fresh stays on the base and tells ship none, and route cannot name a pull request facts did not offer', () => {
