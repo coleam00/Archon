@@ -12,9 +12,11 @@ description: |
   tier changed, or the labels grew (see the SDLC pack README, "Metrics").
   NOT for: judging new pull requests (archon-metrics-test-value).
 
-# It reads the labels from the checkout it starts in, and changes nothing there.
+# It reads the labels from the checkout it starts in and changes nothing there, so it
+# runs beside any other run on the same checkout.
 worktree:
   enabled: false
+mutates_checkout: false
 
 nodes:
   - id: cases
