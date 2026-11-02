@@ -1,18 +1,18 @@
 /**
  * Inline one pull request for the test-value judge, which runs with no tools: the
  * project's test-value criteria, every changed file's patch, and the full text of each
- * changed test file at the pull request's head, so a changed test's enclosing
- * `describe` blocks are visible.
+ * changed file that holds test code at the pull request's head, so a changed test's
+ * enclosing `describe` blocks are visible. Test code includes test cases defined
+ * outside test files, such as a shared conformance suite that test files run.
  */
 
 import { forgeSource, ghApi, record } from '../../.shared/forge.ts';
 import { refuse, report, trimmed } from '../../.shared/io.ts';
 import { prFromUrl } from '../../.shared/merge.ts';
-import { readCriteria } from '../../.shared/test-value.ts';
+import { holdsTestCode, readCriteria } from '../../.shared/test-value.ts';
 
 /** A test file's full text is inlined up to this size; beyond it the patch alone stands. */
 const MAX_FULL_TEXT = 120_000;
-const TEST_PATH = /(^|\/)(__tests__|tests?|spec)\/|(\.|_)(test|spec)\.[a-z]+$|(^|\/)test_[^/]+$/;
 
 const url = trimmed(process.env.INPUTS_PR);
 
@@ -43,7 +43,7 @@ try {
 
   const sections = files.map(file => {
     const parts = [`<patch>\n${file.patch}\n</patch>`];
-    if (TEST_PATH.test(file.path) && file.status !== 'removed') {
+    if (holdsTestCode(file.path, file.patch) && file.status !== 'removed') {
       const text = ghApi('read a test file', [
         ...host,
         '-H',

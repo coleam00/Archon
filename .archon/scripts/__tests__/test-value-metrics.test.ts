@@ -6,6 +6,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   type Case,
   type JudgeSlot,
+  holdsTestCode,
   judgeSlots,
   parseCases,
   scoreCalibration,
@@ -126,5 +127,15 @@ describe('parseCases', () => {
       { file: FILE, name: 'widget > keeps ${kind}', protects: false },
     ];
     expect(() => parseCases([{ pr: PR_A, tests }])).toThrow(PR_A);
+  });
+});
+
+describe('holdsTestCode', () => {
+  it('reads a test suite defined outside test files, and not source or docs that only mention tests', () => {
+    const suite = "+      const listed = await listQueue(source);\n+      expect(listed).toEqual([]);";
+    expect(holdsTestCode('src/store-conformance/attention.ts', suite)).toBe(true);
+    expect(holdsTestCode('src/widget.test.ts', '+const x = 1;')).toBe(true);
+    expect(holdsTestCode('src/keys.ts', '+  if (PLACEHOLDER.test(name)) return name;')).toBe(false);
+    expect(holdsTestCode('docs/testing.md', "+test('keeps order', () => {});")).toBe(false);
   });
 });

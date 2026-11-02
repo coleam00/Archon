@@ -1,9 +1,10 @@
 name: archon-metrics-test-value-judge
 description: |
   Judge, for each test one pull request adds or changes, whether it protects
-  behavior: whether a plausible regression of what the change promises would make
-  it fail. It returns the verdicts and records no metric, so calibrating it never
-  changes the metric. `archon-metrics-test-value` and
+  behavior on its own merits as a test in the suite: whether a plausible
+  regression would make it fail where no other test would. It returns the
+  verdicts and records no metric, so calibrating it never changes the metric.
+  `archon-metrics-test-value` and
   `archon-metrics-test-value-calibrate` launch it once per pull request.
 
   Use when: one of those workflows judges a pull request.
@@ -29,38 +30,55 @@ nodes:
     model: large
     allowed_tools: []
     prompt: |
-      You are judging the tests one pull request adds or changes. For each, decide
-      whether it protects behavior: whether a plausible future edit that breaks what
-      the change promises would make this test fail.
+      You are judging the tests one pull request adds or changes. Judge each test on
+      its own merits, as a test in the suite: does it protect behavior that matters,
+      so that a plausible future edit breaking that behavior makes this test fail
+      where no other test would? Do not judge a test against what its pull request
+      promised. A test that confirms the change does what it set out to do still has
+      to earn its place in the suite. Judge a test the pull request changed the same
+      way, as the test it is now.
 
-      The criteria below are this project's test-review lens. Use its standard for
-      what protects behavior and what is not worth testing. Ignore its instructions
-      about files to write, worktrees, findings and output; you only judge.
+      The criteria below are this project's test-review lens. It reviews a change for
+      missing tests, anchored on what the change promises; here, ignore that anchor
+      and its instructions about files to write, worktrees, findings and output. Use
+      only its standard for what a valuable test is and what is not worth testing.
 
       $read.output
 
       Rules:
       - Judge every test case the pull request adds, and every existing test case
-        whose body it changes. Leave out tests it only moves or deletes, and helpers
-        that are not test cases.
-      - `file` is the test file's path exactly as the pull request lists it.
+        whose body it changes, wherever it is defined: a test file, or a shared suite
+        such as a conformance module that test files run. Leave out tests it only
+        moves or deletes, and helpers that are not test cases.
+      - `file` is the path of the file that defines the test, exactly as the pull
+        request lists it.
       - `name` is the test's full name as its source writes it: the titles of its
         enclosing `describe` (or suite) blocks and its own title, joined by " > ".
         Keep a parameterized title's placeholders as written, such as `%s` or
         `${value}`.
       - A test protects behavior when it asserts an outcome or invariant someone
-        relies on, and a plausible regression of it would fail the test.
-      - A test that only checks diagnostic or log content does not protect behavior,
-        unless capturing that evidence is the pull request's purpose.
+        relies on, and a regression of it is an edit someone would plausibly make to
+        the code as it stands. Models overrate imagined regressions: a regression no
+        supported path reaches, or one the first real use would show at once, earns
+        no credit.
+      - A test protects nothing another test already protects. When several tests in
+        the pull request, or tests it shows you, fail for the same regression, only
+        the one that proves it most directly protects; the rest, including one more
+        permutation of a proven invariant, do not. Compare regressions, not levels: a
+        test at another boundary that also fails when the wiring between the layers
+        breaks catches a regression the lower test cannot.
+      - A test that checks wiring, framework behavior or what the type system already
+        proves does not protect behavior.
+      - A test that only checks diagnostic or log content does not protect behavior.
+        The one exception is a test proving that the evidence is captured at all,
+        when capturing it is the pull request's purpose. Tests of the evidence's
+        shape, order, format or decoding are diagnostic content.
       - A test that keeps a secret or credential out of logs or output protects
         behavior.
       - A test that only checks clearer error wording does not protect behavior, as
         long as the bad input is still rejected without it.
-      - A test that repeats what another test in the pull request already proves,
-        or that checks wiring, framework behavior, the type system or one more
-        permutation of a proven invariant, does not protect behavior.
-      - `reason` is one sentence: the regression it would catch, or why it catches
-        none.
+      - `reason` is one sentence: the regression it would catch that no other test
+        does, or why it catches none.
     output_format:
       type: object
       additionalProperties: false
