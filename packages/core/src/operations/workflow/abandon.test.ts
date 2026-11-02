@@ -1,6 +1,6 @@
 // @archon-test-isolated
 import { RunActionForbiddenError } from '../run-authorization';
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -11,7 +11,8 @@ import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
-import type { IIsolationStore } from '@archon/isolation';
+import { releaseRunVerificationImages, type IIsolationStore } from '@archon/isolation';
+import { createRunResourceRelease } from '../../services/cleanup/run-verification-images';
 import { DetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
 import {
   operator,
@@ -72,6 +73,63 @@ describe('abandonWorkflow', () => {
     expect(mockListWorkflowRuns).not.toHaveBeenCalled();
     expect(blockedParentRunId).toBeNull();
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
+  });
+
+  test('returns host inventory recovery warnings for the abandoned run and its cancelled child', async () => {
+    const root = makePausedRun({
+      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+    });
+    const child = makePausedRun({
+      id: 'child-inventory',
+      parent_run_id: root.id,
+      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+    });
+    const runs = new Map([root, child].map(run => [run.id, run]));
+    const operationStore: WorkflowOperationsDeps['store'] = {
+      ...store,
+      getWorkflowRun: async id => runs.get(id) ?? null,
+      findChildRuns: async id => (id === root.id ? [child] : []),
+      cancelWorkflowRun: async id => {
+        const run = runs.get(id);
+        if (!run) throw new Error(`Missing run ${id}`);
+        run.status = 'cancelled';
+        return { cancelled: true };
+      },
+    };
+    const inventory = mock(async () => {
+      throw new Error('inventory unavailable');
+    });
+    const operations = createWorkflowOperations({
+      getUserRole: async () => undefined,
+      store: operationStore,
+      hostStore: { isolation: isolationStore },
+      requestDetachedRunStop: noOwnerAnswers,
+      isRunOwnedByThisProcess: () => false,
+      isRunOwnerAnswering: async () => false,
+      reclaimRunWorktree: async () => ({ warnings: [] }),
+      reclaimContainerEnv: mockReclaimContainerEnv,
+      releaseRunResources: createRunResourceRelease(operationStore, (id, env) =>
+        releaseRunVerificationImages(id, env, inventory)
+      ),
+    });
+    const stderr = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await operations.abandonWorkflow(root.id, operator);
+      expect(result.cancelled).toBe(true);
+      for (const run of [root, child]) {
+        const warning = result.cleanupWarnings?.find(text => text.includes(`Run ${run.id} `));
+        expect(warning).toContain('inventory failed; cleanup is inconclusive');
+        expect(warning).toContain(`label=archon.run_id=${run.id}`);
+        expect(warning).toContain('cannot resume or write');
+        expect(warning).toContain('docker image inspect <full-id>');
+        expect(warning).toContain('docker container ls --all --filter ancestor=<full-id>');
+        expect(warning).toContain('docker image rm --no-prune <full-id>');
+        expect(warning).toContain('exclusive control');
+      }
+      expect(inventory).toHaveBeenCalledTimes(2);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   // #2121 Phase 2 (D7): abandoning a parent cascade-cancels its non-terminal

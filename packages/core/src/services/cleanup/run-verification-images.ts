@@ -9,6 +9,7 @@ import {
 } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { noExecutorCanWrite } from '@archon/workflows/run-scratch';
+import type { WorkflowDeps } from '@archon/workflows/deps';
 import {
   isContainerRun,
   isTerminalRunStatus,
@@ -19,7 +20,7 @@ import { FAN_OUT_CANCEL_REASONS, type IWorkflowStore } from '@archon/workflows/s
 export function createRunResourceRelease(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
   release: typeof releaseRunVerificationImages = releaseRunVerificationImages
-): (runId: string) => Promise<void> {
+): NonNullable<WorkflowDeps['releaseRunResources']> {
   const usesDocker = release === releaseRunVerificationImages;
   const dockerInstalledAtSetup =
     usesDocker && Bun.which('docker', { PATH: process.env.PATH }) !== null;
@@ -57,21 +58,22 @@ export function createRunResourceRelease(
         log.debug({ runId }, 'verification_images.skipped_docker_not_installed');
         return;
       }
-      await release(
+      return await release(
         runId,
         isContainerRun(run) && typeof envId === 'string' ? envId : undefined
       ).catch((err: unknown) => {
         if (isContainerRun(run) || !(err instanceof VerificationImageInventoryError)) throw err;
         log.warn({ err, runId }, 'verification_images.inventory_inconclusive');
-        console.error(
+        const warning =
           `WARNING: Run ${runId} verification image inventory failed; cleanup is inconclusive. ` +
-            'Restore access to the intended Docker context, confirm the run cannot resume or write, ' +
-            `then list its images with docker image ls --all --no-trunc --filter "label=${VERIFICATION_IMAGE_RUN_LABEL}=${runId}". ` +
-            'Inspect each full ID with docker image inspect <full-id> and check all containers with ' +
-            'docker container ls --all --filter ancestor=<full-id>. Remove only confirmed owned, unused images with ' +
-            'docker image rm --no-prune <full-id>. Multiple tags require manual recovery under exclusive control of their references. ' +
-            'Never force removal or prune shared images/cache.'
-        );
+          'Restore access to the intended Docker context, confirm the run cannot resume or write, ' +
+          `then list its images with docker image ls --all --no-trunc --filter "label=${VERIFICATION_IMAGE_RUN_LABEL}=${runId}". ` +
+          'Inspect each full ID with docker image inspect <full-id> and check all containers with ' +
+          'docker container ls --all --filter ancestor=<full-id>. Remove only confirmed owned, unused images with ' +
+          'docker image rm --no-prune <full-id>. Multiple tags require manual recovery under exclusive control of their references. ' +
+          'Never force removal or prune shared images/cache.';
+        console.error(warning);
+        return [warning];
       });
     } catch (err) {
       log.warn({ err, runId }, 'verification_images.release_failed');

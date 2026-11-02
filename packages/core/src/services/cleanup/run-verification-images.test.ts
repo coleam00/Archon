@@ -234,7 +234,7 @@ test.each([false, true])(
       if (container) {
         await expect(cleanup(run.id)).rejects.toThrow('Verification image cleanup failed');
       } else {
-        await expect(cleanup(run.id)).resolves.toBeUndefined();
+        await expect(cleanup(run.id)).resolves.toEqual([expect.stringContaining(run.id)]);
         expect(warning.mock.calls.flat().join(' ')).toContain(run.id);
       }
     } finally {
@@ -264,8 +264,10 @@ test.each([
       metadata: { execution_owner: { host: hostname(), pid: process.pid } },
     };
     const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
-    await expect(cleanup(run.id)).resolves.toBeUndefined();
+    const warnings = await cleanup(run.id);
+    expect(warnings).toEqual([expect.any(String)]);
     const text = warning.mock.calls.flat().join(' ');
+    expect(warnings).toEqual([text]);
     expect(text).toContain(run.id);
     expect(text).toContain('inconclusive');
     expect(text).toContain(
