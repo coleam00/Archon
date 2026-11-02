@@ -5,11 +5,10 @@
  * `describe` blocks are visible.
  */
 
-import { readFileSync } from 'node:fs';
 import { forgeSource, ghApi, record } from '../../.shared/forge.ts';
 import { refuse, report, trimmed } from '../../.shared/io.ts';
 import { prFromUrl } from '../../.shared/merge.ts';
-import { CRITERIA_FILE } from '../../.shared/test-value.ts';
+import { readCriteria } from '../../.shared/test-value.ts';
 
 /** A test file's full text is inlined up to this size; beyond it the patch alone stands. */
 const MAX_FULL_TEXT = 120_000;
@@ -56,7 +55,7 @@ try {
     return `<file path="${file.path}" status="${file.status}">\n${parts.join('\n')}\n</file>`;
   });
   report(
-    `<criteria>\n${readFileSync(CRITERIA_FILE, 'utf8').trimEnd()}\n</criteria>\n\n<pull_request url="${url}">\n${sections.join('\n\n')}\n</pull_request>`
+    `<criteria>\n${readCriteria()}\n</criteria>\n\n<pull_request url="${url}">\n${sections.join('\n\n')}\n</pull_request>`
   );
 } catch (error) {
   refuse(`read: ${error instanceof Error ? error.message : String(error)}`);

@@ -17,7 +17,7 @@ import { record } from './forge.ts';
 /** The judge workflow's directory: every file in it is part of the judge. */
 export const JUDGE_DIR = join(import.meta.dir, '..', 'metrics-test-value-judge');
 /** The test-value criteria the judge inlines, read when it runs. */
-export const CRITERIA_FILE = join(import.meta.dir, '..', 'review', 'commands', 'review-tests.md');
+const CRITERIA_FILE = join(import.meta.dir, '..', 'review', 'commands', 'review-tests.md');
 /** The node that judges, in the judge workflow and in the fan-out that launches it. */
 export const JUDGE_NODE = 'judge';
 
@@ -58,8 +58,13 @@ function filesUnder(dir: string): string[] {
     .sort();
 }
 
+/** The criteria text exactly as the judge receives it, and as its identity hashes it. */
+export function readCriteria(): string {
+  return readFileSync(CRITERIA_FILE, 'utf8').trimEnd();
+}
+
 /** The judge's identity: a sha256 over the judge workflow's files and the criteria text. */
-export function judgeIdentity(judgeDir = JUDGE_DIR, criteria = readFileSync(CRITERIA_FILE, 'utf8')): string {
+export function judgeIdentity(judgeDir = JUDGE_DIR, criteria = readCriteria()): string {
   const hash = createHash('sha256');
   for (const file of filesUnder(judgeDir)) {
     hash.update(`${relative(judgeDir, file)}\0`).update(readFileSync(file)).update('\0');
