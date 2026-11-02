@@ -40,19 +40,18 @@ describe('testValueRecords', () => {
       { url: PR_B, merged_at: '2026-10-06T12:00:00Z', runs: [RUN] },
     ];
     const { metrics, skipped } = testValueRecords(prs, slots, 'test-value-judge:abc');
+    const counted = {
+      kind: 'count',
+      unit: 'tests',
+      subject: PR_A,
+      at: '2026-10-05T12:00:00Z',
+      runs: [RUN],
+      instrument: 'test-value-judge:abc',
+      instrument_node: 'judge',
+    };
     expect(metrics).toEqual([
-      { kind: 'count', unit: 'tests', subject: PR_A, at: '2026-10-05T12:00:00Z', runs: [RUN], name: 'sdlc.tests_added', value: 2 },
-      {
-        kind: 'count',
-        unit: 'tests',
-        subject: PR_A,
-        at: '2026-10-05T12:00:00Z',
-        runs: [RUN],
-        name: 'sdlc.tests_unprotective',
-        value: 1,
-        instrument: 'test-value-judge:abc',
-        instrument_node: 'judge',
-      },
+      { ...counted, name: 'sdlc.tests_added', value: 2 },
+      { ...counted, name: 'sdlc.tests_unprotective', value: 1 },
     ]);
     expect(skipped).toEqual([{ url: PR_B, error: 'failed: judge failed' }]);
   });
@@ -111,6 +110,7 @@ describe('judgeIdentity', () => {
     const scored = scoreCalibration([{ pr: PR_A, tests: [{ file: FILE, name: 'a', protects: true }] }], [{ ok: true, tests: [] }], identity);
     const instruments = [...metric.metrics, ...scored.metrics].flatMap(row => (row.instrument === undefined ? [] : [[row.instrument, row.instrument_node]]));
     expect(instruments).toEqual([
+      [identity, 'judge'],
       [identity, 'judge'],
       [identity, 'judge'],
     ]);

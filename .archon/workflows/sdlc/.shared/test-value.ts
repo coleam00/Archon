@@ -107,15 +107,10 @@ export function testValueRecords(prs: readonly MergedPr[], slots: readonly Judge
       skipped.push({ url: pr.url, error: slot?.ok === false ? slot.error : 'no judge result' });
       return;
     }
-    const base = { kind: 'count', unit: 'tests', subject: pr.url, at: pr.merged_at, runs: pr.runs.slice(0, 20) };
+    // Both counts are the judge's, so both name it: a ratio never mixes two judges.
+    const base = { kind: 'count', unit: 'tests', subject: pr.url, at: pr.merged_at, runs: pr.runs.slice(0, 20), instrument, instrument_node: JUDGE_NODE };
     metrics.push({ ...base, name: 'sdlc.tests_added', value: slot.tests.length });
-    metrics.push({
-      ...base,
-      name: 'sdlc.tests_unprotective',
-      value: slot.tests.filter(test => !test.protects).length,
-      instrument,
-      instrument_node: JUDGE_NODE,
-    });
+    metrics.push({ ...base, name: 'sdlc.tests_unprotective', value: slot.tests.filter(test => !test.protects).length });
   });
   return { metrics, skipped };
 }

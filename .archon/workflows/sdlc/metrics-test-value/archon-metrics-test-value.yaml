@@ -3,8 +3,8 @@ description: |
   Judge the tests in each factory pull request merged since a date, and record
   per pull request how many tests it added or changed (sdlc.tests_added) and how
   many of them protect no behavior (sdlc.tests_unprotective). Each record is
-  attributed to the build-queue runs that built its pull request; the
-  unprotective count names the judge's identity, so agreement from
+  attributed to the build-queue runs that built its pull request; both counts
+  name the judge's identity, so agreement from
   `archon-metrics-test-value-calibrate` is read for the same judge. Re-runs
   replace earlier records.
 

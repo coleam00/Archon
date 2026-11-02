@@ -1002,7 +1002,7 @@ The file is a list with one case per pull request:
 or `${value}` are ignored when labels and verdicts are matched. Label by hand: labels a
 model drafted calibrate the judge against itself.
 
-**One judge, one identity.** All three records name the same instrument: a hash of the
+**One judge, one identity.** All four records name the same instrument: a hash of the
 judge workflow's files and the criteria text it inlines. The engine adds the models that
 ran the judge node, so `archon metrics` reports one entry per judge and model, and never
 averages two. Editing the judge's prompt, the test lens or anything in the judge's
