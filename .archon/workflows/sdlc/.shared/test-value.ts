@@ -45,7 +45,7 @@ export interface Case {
   readonly tests: readonly LabeledTest[];
 }
 
-/** A merged factory pull request, as the metric workflow hands it on. */
+/** A merged factory pull request, as the metric workflow hands it on; `runs` is already capped by `prRuns`. */
 export interface MergedPr {
   readonly url: string;
   readonly merged_at: string;
@@ -109,7 +109,7 @@ export function testValueRecords(judged: readonly Judged<MergedPr>[], instrument
       continue;
     }
     // Both counts are the judge's, so both name it: a ratio never mixes two judges.
-    const base = { kind: 'count', unit: 'tests', subject: pr.url, at: pr.merged_at, runs: pr.runs.slice(0, 20), instrument, instrument_node: JUDGE_NODE };
+    const base = { kind: 'count', unit: 'tests', subject: pr.url, at: pr.merged_at, runs: pr.runs, instrument, instrument_node: JUDGE_NODE };
     metrics.push({ ...base, name: 'sdlc.tests_added', value: slot.tests.length });
     metrics.push({ ...base, name: 'sdlc.tests_unprotective', value: slot.tests.filter(test => !test.protects).length });
   }

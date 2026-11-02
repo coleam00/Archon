@@ -46,6 +46,13 @@ export interface PrMetricRecord {
   readonly runs: readonly string[];
 }
 
+/** A pull request's build runs as a record's `runs`: the first the engine accepts, refused when none. */
+export function prRuns(runsByUrl: ReadonlyMap<string, readonly string[]>, url: string): string[] {
+  const runs = (runsByUrl.get(url) ?? []).slice(0, MAX_RUNS);
+  if (runs.length === 0) throw new Error(`no build round names ${url}`);
+  return runs;
+}
+
 /** Every pull request a build round recorded, with the runs of the rounds that carry it, oldest first. */
 export function factoryPrRuns(items: readonly WorkItem[]): Map<string, string[]> {
   const runs = new Map<string, string[]>();
@@ -155,8 +162,7 @@ function outcomes(pr: PrFacts): Outcome[] {
 /** Each factory pull request's outcome records, with the pull request as subject and its build runs. */
 export function prMetricRecords(prs: readonly PrFacts[], runsByUrl: ReadonlyMap<string, readonly string[]>): PrMetricRecord[] {
   return prs.flatMap(pr => {
-    const runs = (runsByUrl.get(pr.url) ?? []).slice(0, MAX_RUNS);
-    if (runs.length === 0) throw new Error(`no build round names ${pr.url}`);
+    const runs = prRuns(runsByUrl, pr.url);
     return outcomes(pr).map(outcome => ({ ...outcome, subject: pr.url, runs }));
   });
 }
