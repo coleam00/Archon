@@ -57,9 +57,10 @@ export function createRunResourceRelease(
         log.debug({ runId }, 'verification_images.skipped_docker_not_installed');
         return;
       }
-      try {
-        await release(runId, isContainerRun(run) && typeof envId === 'string' ? envId : undefined);
-      } catch (err) {
+      await release(
+        runId,
+        isContainerRun(run) && typeof envId === 'string' ? envId : undefined
+      ).catch((err: unknown) => {
         if (isContainerRun(run) || !(err instanceof VerificationImageInventoryError)) throw err;
         log.warn({ err, runId }, 'verification_images.inventory_inconclusive');
         console.error(
@@ -71,7 +72,7 @@ export function createRunResourceRelease(
             'docker image rm --no-prune <full-id>. Multiple tags require manual recovery under exclusive control of their references. ' +
             'Never force removal or prune shared images/cache.'
         );
-      }
+      });
     } catch (err) {
       log.warn({ err, runId }, 'verification_images.release_failed');
       throw err;
