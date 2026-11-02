@@ -958,13 +958,14 @@ run per pull request, and records per pull request:
 
 | Metric | Kind | Unit | Meaning |
 |---|---|---|---|
-| `sdlc.tests_added` | count | `tests` | tests the pull request added or changed |
+| `sdlc.tests_added` | count | `tests` | tests the pull request added or changed, as the judge listed them |
 | `sdlc.tests_unprotective` | count | `tests` | those that no plausible regression would fail |
 
-Both are attributed to the build-queue runs that built the pull request, at its merge
-time, like the PR metrics. A pull request whose judge run failed has no record and is
-listed in the node's `skipped` output. Each pull request costs one judge run on the
-`large` tier, so the window sets the cost.
+Both are the judge's counts: a test the judge leaves out is in neither, and calibration
+scores such omissions as disagreements. Both are attributed to the build-queue runs that
+built the pull request, at its merge time, like the PR metrics. A pull request whose
+judge run failed has no record and is listed in the node's `skipped` output. Each pull
+request costs one judge run on the `large` tier, so the window sets the cost.
 
 The judge applies the review pack's test lens
 ([`review/commands/review-tests.md`](review/commands/review-tests.md)), read when it runs,
