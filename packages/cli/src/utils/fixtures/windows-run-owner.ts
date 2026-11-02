@@ -129,6 +129,10 @@ if (mode === 'relay' || mode === 'relay-approve') {
     writeFileSync(join(dir, 'home', 'config.yaml'), 'store: files\n');
     const readyPath = join(dir, 'child-ready');
     const script = `import { writeFileSync, renameSync } from 'node:fs'; writeFileSync(${JSON.stringify(`${readyPath}.tmp`)}, String(process.pid)); renameSync(${JSON.stringify(`${readyPath}.tmp`)}, ${JSON.stringify(readyPath)}); setInterval(() => {}, 1000);`;
+    // The survivor query needs the directory on argv; inline source travels over stdin.
+    const scripts = join(dir, '.archon', 'scripts');
+    mkdirSync(scripts, { recursive: true });
+    writeFileSync(join(scripts, 'hold.ts'), script);
     writeFileSync(
       join(workflows, 'nested-child.yaml'),
       `name: nested-child
@@ -138,7 +142,7 @@ worktree:
 nodes:
 ${mode === 'nested-approve' ? '  - id: review\n    approval:\n      message: Continue?\n' : ''}  - id: hold
 ${mode === 'nested-approve' ? '    depends_on: [review]\n' : ''}    runtime: bun
-    script: ${JSON.stringify(script)}
+    script: hold
 `
     );
     const relay = spawn(
