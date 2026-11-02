@@ -223,6 +223,20 @@ archon metrics sdlc.pr_merge_rate --since 2026-10-01
 
 **What it produces**: Metric records on the node's output, read with [`archon metrics`](/guides/metrics/). It changes no code.
 
+#### `archon-metrics-test-value`
+
+Judges the tests in each factory pull request merged since a date, one `archon-metrics-test-value-judge` run per pull request, and records `sdlc.tests_added` and `sdlc.tests_unprotective`: how many tests it added or changed, and how many of them no plausible regression would fail. Both counts name the judge's identity.
+
+**When to use it**: You want to see whether factory pull requests carry tests that protect nothing. Calibrate the judge first with `archon-metrics-test-value-calibrate`, which scores it against hand-labeled pull requests as `sdlc.tests_unprotective_judge_agreement` and `sdlc.tests_unprotective_judge_catch_rate`.
+
+```bash
+archon workflow run archon-metrics-test-value-calibrate
+archon workflow run archon-metrics-test-value --input since=7d
+archon metrics sdlc.tests_unprotective
+```
+
+**What it produces**: Metric records on the node's output. Each judged pull request costs one judge run on the `large` tier. It changes no code.
+
 ## Summary
 
 | Workflow | Use When | Creates PR? | Changes code? |
@@ -243,6 +257,8 @@ archon metrics sdlc.pr_merge_rate --since 2026-10-01
 | `archon-validate` | Run the project's checks | No | No |
 | `archon-upkeep` | Update one dependency | Yes | Yes |
 | `archon-metrics-prs` | Count factory PRs and their merge rate | No | No |
+| `archon-metrics-test-value` | Count factory tests that protect no behavior | No | No |
+| `archon-metrics-test-value-calibrate` | Score the test-value judge against hand labels | No | No |
 
 ## Workflows that no longer ship
 

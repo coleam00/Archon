@@ -12,9 +12,11 @@ description: |
   (see the SDLC pack README, "Metrics"). The pack installs no binding.
   NOT for: pull requests opened by hand, or a forge other than GitHub through gh.
 
-# It reads the state store and the forge, not a checkout.
+# It reads the state store and the forge, not a checkout, so it runs beside any
+# other run on the same checkout.
 worktree:
   enabled: false
+mutates_checkout: false
 
 nodes:
   - id: prs

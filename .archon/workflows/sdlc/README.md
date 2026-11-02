@@ -949,6 +949,105 @@ The pack installs no binding. A native schedule refreshes the records daily:
 }
 ```
 
+### Test value
+
+[`archon-metrics-test-value`](metrics-test-value/archon-metrics-test-value.yaml) judges
+the tests in each factory pull request merged since its `since` input, one
+[`archon-metrics-test-value-judge`](metrics-test-value-judge/archon-metrics-test-value-judge.yaml)
+run per pull request, and records per pull request:
+
+| Metric | Kind | Unit | Meaning |
+|---|---|---|---|
+| `sdlc.tests_added` | count | `tests` | tests the pull request added or changed, as the judge listed them |
+| `sdlc.tests_unprotective` | count | `tests` | those that no plausible regression would fail |
+
+Both are the judge's counts: a test the judge leaves out is in neither, and calibration
+scores such omissions as disagreements. Both are attributed to the build-queue runs that
+built the pull request, at its merge time, like the PR metrics. A pull request whose
+judge run failed has no record and is listed in the node's `skipped` output. Each pull
+request costs one judge run on the `large` tier, so the window sets the cost.
+
+The judge applies the review pack's test lens
+([`review/commands/review-tests.md`](review/commands/review-tests.md)), read when it runs,
+plus the rules in its own prompt. It has no tools and records no metric of its own.
+
+**Calibration.** A judged count is only as good as the judge.
+[`archon-metrics-test-value-calibrate`](metrics-test-value-calibrate/archon-metrics-test-value-calibrate.yaml)
+runs the same judge over the pull requests the project labeled by hand in
+`.archon/sdlc/metrics/test-value-cases.json`, read from the checkout the run starts in,
+and scores it, one 0/1 record per labeled test:
+
+- `sdlc.tests_unprotective_judge_agreement`: the verdict matches the label.
+- `sdlc.tests_unprotective_judge_catch_rate`: for tests labeled unprotective only, the
+  judge flagged it. A judge that calls every test protective scores 0 here, however high
+  its agreement.
+
+A labeled test the judge did not list counts as a disagreement. The node's
+`disagreements` output lists every test it got wrong, with the judge's reason. The run
+refuses when the file is missing or empty, and when the judge failed on any case, since
+agreement over a different set of cases is not comparable. Each record's `n` and interval
+say how much the labels can tell; a handful of cases gives a wide interval. The pack ships
+no labels: they are the project's own pull requests.
+
+The file is a list with one case per pull request:
+
+```json
+[
+  {
+    "pr": "<pull request URL>",
+    "tests": [{ "file": "<path>", "name": "<suite> > <test>", "protects": true }]
+  }
+]
+```
+
+`name` is the test's suite titles and own title joined by ` > `. Placeholders such as `%s`
+or `${value}` are ignored when labels and verdicts are matched. Label by hand: labels a
+model drafted calibrate the judge against itself.
+
+**One judge, one identity.** All four records name the same instrument: a hash of the
+judge workflow's files and the criteria text it inlines. The engine adds the models that
+ran the judge node, so `archon metrics` reports one entry per judge and model, and never
+averages two. Editing the judge's prompt, the test lens or anything in the judge's
+directory, or remapping the `large` tier to another model, starts a new identity. Run
+the calibration again before trusting the counts it produces. Compare the agreement the
+two models reached after calibrating with each:
+
+```bash
+archon metrics sdlc.tests_unprotective_judge_agreement --by-model judge
+```
+
+`since` takes an ISO date or a number of days back, such as `7d`:
+
+```bash
+archon workflow run archon-metrics-test-value --input since=7d
+```
+
+The pack installs no binding. A native schedule judges the last day's merges daily; a
+pull request judged twice keeps its latest record:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-metrics-test-value",
+  "binding": {
+    "bindingId": "metrics-test-value",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "metrics-test-value:widgets",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-metrics-test-value",
+      "inputs": { "since": "1d" },
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 86400, "runAtLoad": false }
+}
+```
+
 ## Worktree cleanup
 
 [`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
