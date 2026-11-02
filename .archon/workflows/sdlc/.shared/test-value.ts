@@ -76,17 +76,23 @@ function judgedTest(value: unknown): JudgedTest {
   return { file: row.file, name: row.name, protects: row.protects, reason: row.reason };
 }
 
-/** The fan-out node's output, slot by slot in item order. */
-export function judgeSlots(value: unknown, expected: number): JudgeSlot[] {
+/** An item the judge fanned out over, with its slot. */
+export interface Judged<Item> {
+  readonly item: Item;
+  readonly slot: JudgeSlot;
+}
+
+/** The fan-out node's output paired with the items it ran over, which it reports in item order. */
+export function judgeSlots<Item>(items: readonly Item[], value: unknown): Judged<Item>[] {
   if (!Array.isArray(value)) throw new Error('the judge fan-out did not report a list');
-  if (value.length !== expected) {
-    throw new Error(`the judge fan-out reported ${String(value.length)} results for ${String(expected)} pull requests`);
+  if (value.length !== items.length) {
+    throw new Error(`the judge fan-out reported ${String(value.length)} results for ${String(items.length)} pull requests`);
   }
-  return value.map(slot => {
-    const row = record(slot);
-    if (row?.archon_failed === true) return { ok: false, error: `${String(row.status)}: ${String(row.error)}` };
+  return items.map((item, index) => {
+    const row = record(value[index]);
+    if (row?.archon_failed === true) return { item, slot: { ok: false, error: `${String(row.status)}: ${String(row.error)}` } };
     if (!Array.isArray(row?.tests)) throw new Error('a judge result carries no tests');
-    return { ok: true, tests: row.tests.map(judgedTest) };
+    return { item, slot: { ok: true, tests: row.tests.map(judgedTest) } };
   });
 }
 
@@ -94,20 +100,19 @@ export function judgeSlots(value: unknown, expected: number): JudgeSlot[] {
  * The judge's per-pull-request counts: tests added or changed, and those that protect no
  * behavior. A judge that did not complete makes no record; its pull request is skipped.
  */
-export function testValueRecords(prs: readonly MergedPr[], slots: readonly JudgeSlot[], instrument: string) {
+export function testValueRecords(judged: readonly Judged<MergedPr>[], instrument: string) {
   const metrics: Record<string, unknown>[] = [];
   const skipped: { url: string; error: string }[] = [];
-  prs.forEach((pr, index) => {
-    const slot = slots[index];
-    if (slot === undefined || !slot.ok) {
-      skipped.push({ url: pr.url, error: slot?.ok === false ? slot.error : 'no judge result' });
-      return;
+  for (const { item: pr, slot } of judged) {
+    if (!slot.ok) {
+      skipped.push({ url: pr.url, error: slot.error });
+      continue;
     }
     // Both counts are the judge's, so both name it: a ratio never mixes two judges.
     const base = { kind: 'count', unit: 'tests', subject: pr.url, at: pr.merged_at, runs: pr.runs.slice(0, 20), instrument, instrument_node: JUDGE_NODE };
     metrics.push({ ...base, name: 'sdlc.tests_added', value: slot.tests.length });
     metrics.push({ ...base, name: 'sdlc.tests_unprotective', value: slot.tests.filter(test => !test.protects).length });
-  });
+  }
   return { metrics, skipped };
 }
 
@@ -171,24 +176,20 @@ function testSubject(pr: string, test: LabeledTest): string {
  * did not list disagrees. Any case whose judge did not complete refuses the whole score:
  * agreement over a different subset of cases is not comparable across runs.
  */
-export function scoreCalibration(cases: readonly Case[], slots: readonly JudgeSlot[], instrument: string) {
-  const failed = cases.flatMap((entry, index) => {
-    const slot = slots[index];
-    return slot === undefined || !slot.ok ? [`${entry.pr} (${slot?.ok === false ? slot.error : 'no judge result'})`] : [];
-  });
+export function scoreCalibration(judged: readonly Judged<Case>[], instrument: string) {
+  const verdicts = judged.flatMap(({ item, slot }) => (slot.ok ? [{ entry: item, tests: slot.tests }] : []));
+  const failed = judged.flatMap(({ item, slot }) => (slot.ok ? [] : [`${item.pr} (${slot.error})`]));
   if (failed.length > 0) throw new Error(`the judge did not complete for ${failed.join(', ')}; calibrate again`);
   const metrics: Record<string, unknown>[] = [];
   const disagreements: Disagreement[] = [];
   const base = { kind: 'score', unit: 'ratio', calibrates: 'sdlc.tests_unprotective', instrument, instrument_node: JUDGE_NODE };
-  cases.forEach((entry, index) => {
-    const slot = slots[index];
-    if (slot === undefined || !slot.ok) return;
+  for (const { entry, tests } of verdicts) {
     for (const test of entry.tests) {
-      const scored = scoreTest(entry.pr, test, verdictFor(test, slot.tests));
+      const scored = scoreTest(entry.pr, test, verdictFor(test, tests));
       metrics.push(...scored.records.map(record => ({ ...base, ...record })));
       if (scored.disagreement !== undefined) disagreements.push(scored.disagreement);
     }
-  });
+  }
   return { metrics, disagreements };
 }
 

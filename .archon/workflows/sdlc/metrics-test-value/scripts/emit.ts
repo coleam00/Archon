@@ -8,8 +8,7 @@ import { judgeIdentity, judgeSlots, type MergedPr, testValueRecords } from '../.
 
 try {
   const prs = JSON.parse(text(process.env.INPUTS_PRS)) as MergedPr[];
-  const slots = judgeSlots(JSON.parse(text(process.env.INPUTS_VERDICTS)), prs.length);
-  emit(testValueRecords(prs, slots, judgeIdentity()));
+  emit(testValueRecords(judgeSlots(prs, JSON.parse(text(process.env.INPUTS_VERDICTS))), judgeIdentity()));
 } catch (error) {
   refuse(`emit: ${error instanceof Error ? error.message : String(error)}`);
 }

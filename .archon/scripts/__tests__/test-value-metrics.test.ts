@@ -28,18 +28,15 @@ function verdict(name: string, protects: boolean) {
 
 describe('testValueRecords', () => {
   it('counts each judged pull request under its runs and the judge identity, and skips a failed judge', () => {
-    const slots = judgeSlots(
-      [
-        { tests: [verdict('widget > keeps order', true), verdict('widget > logs the probe', false)] },
-        { archon_failed: true, error: 'judge failed', status: 'failed' },
-      ],
-      2
-    );
     const prs = [
       { url: PR_A, merged_at: '2026-10-05T12:00:00Z', runs: [RUN] },
       { url: PR_B, merged_at: '2026-10-06T12:00:00Z', runs: [RUN] },
     ];
-    const { metrics, skipped } = testValueRecords(prs, slots, 'test-value-judge:abc');
+    const judged = judgeSlots(prs, [
+      { tests: [verdict('widget > keeps order', true), verdict('widget > logs the probe', false)] },
+      { archon_failed: true, error: 'judge failed', status: 'failed' },
+    ]);
+    const { metrics, skipped } = testValueRecords(judged, 'test-value-judge:abc');
     const counted = {
       kind: 'count',
       unit: 'tests',
@@ -58,30 +55,26 @@ describe('testValueRecords', () => {
 });
 
 describe('scoreCalibration', () => {
-  const cases: Case[] = [
-    {
-      pr: PR_A,
-      tests: [
-        { file: FILE, name: 'widget > keeps order for %s (lists, sets)', protects: true },
-        { file: FILE, name: 'widget > preserves deletion', protects: true },
-        { file: FILE, name: 'widget > logs the probe', protects: false },
-        { file: FILE, name: 'widget > rewords the error', protects: false },
-      ],
-    },
-  ];
+  const entry: Case = {
+    pr: PR_A,
+    tests: [
+      { file: FILE, name: 'widget > keeps order for %s (lists, sets)', protects: true },
+      { file: FILE, name: 'widget > preserves deletion', protects: true },
+      { file: FILE, name: 'widget > logs the probe', protects: false },
+      { file: FILE, name: 'widget > rewords the error', protects: false },
+    ],
+  };
+  const judgedAs = (slot: JudgeSlot) => scoreCalibration([{ item: entry, slot }], 'test-value-judge:abc');
 
   it('scores every labeled test once, joins a parameterized test to its labeled cases, and counts an unlisted test as disagreement', () => {
-    const slots: JudgeSlot[] = [
-      {
-        ok: true,
-        tests: [
-          verdict('widget > keeps order for ${kind}', true),
-          verdict('widget > preserves ${change}', true),
-          verdict('widget > logs the probe', false),
-        ],
-      },
-    ];
-    const { metrics, disagreements } = scoreCalibration(cases, slots, 'test-value-judge:abc');
+    const { metrics, disagreements } = judgedAs({
+      ok: true,
+      tests: [
+        verdict('widget > keeps order for ${kind}', true),
+        verdict('widget > preserves ${change}', true),
+        verdict('widget > logs the probe', false),
+      ],
+    });
     const values = (name: string) => metrics.filter(row => row.name === name).map(row => row.value);
     expect(values('sdlc.tests_unprotective_judge_agreement')).toEqual([1, 1, 1, 0]);
     expect(values('sdlc.tests_unprotective_judge_catch_rate')).toEqual([1, 0]);
@@ -92,13 +85,11 @@ describe('scoreCalibration', () => {
   });
 
   it('refuses the whole score when the judge failed on any case', () => {
-    const slots: JudgeSlot[] = [{ ok: false, error: 'failed: judge failed' }];
-    expect(() => scoreCalibration(cases, slots, 'test-value-judge:abc')).toThrow(PR_A);
+    expect(() => judgedAs({ ok: false, error: 'failed: judge failed' })).toThrow(PR_A);
   });
 
   it('gives a judge that always answers "protects" a catch rate of 0', () => {
-    const slots: JudgeSlot[] = [{ ok: true, tests: cases[0]?.tests.map(test => verdict(test.name, true)) ?? [] }];
-    const { metrics } = scoreCalibration(cases, slots, 'test-value-judge:abc');
+    const { metrics } = judgedAs({ ok: true, tests: entry.tests.map(test => verdict(test.name, true)) });
     expect(metrics.filter(row => row.name === 'sdlc.tests_unprotective_judge_catch_rate').map(row => row.value)).toEqual([0, 0]);
   });
 });
@@ -111,8 +102,14 @@ describe('judgeIdentity', () => {
     expect(judgeIdentity(dir, 'criteria')).toBe(identity);
     expect(judgeIdentity(dir, 'reworded criteria')).not.toBe(identity);
 
-    const metric = testValueRecords([{ url: PR_A, merged_at: '2026-10-05T12:00:00Z', runs: [RUN] }], [{ ok: true, tests: [] }], identity);
-    const scored = scoreCalibration([{ pr: PR_A, tests: [{ file: FILE, name: 'a', protects: true }] }], [{ ok: true, tests: [] }], identity);
+    const metric = testValueRecords(
+      [{ item: { url: PR_A, merged_at: '2026-10-05T12:00:00Z', runs: [RUN] }, slot: { ok: true, tests: [] } }],
+      identity
+    );
+    const scored = scoreCalibration(
+      [{ item: { pr: PR_A, tests: [{ file: FILE, name: 'a', protects: true }] }, slot: { ok: true, tests: [] } }],
+      identity
+    );
     const instruments = [...metric.metrics, ...scored.metrics].flatMap(row => (row.instrument === undefined ? [] : [[row.instrument, row.instrument_node]]));
     expect(instruments).toEqual([
       [identity, 'judge'],
