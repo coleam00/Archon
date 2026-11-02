@@ -21,4 +21,8 @@ export const metricsQuerySchema = z.object({
     description:
       'An ISO date or time. Each group also reports records whose producing runs started before it against those started at or after it.',
   }),
+  byModel: z.string().optional().openapi({
+    description:
+      'A node id. Each group also reports its records split by the model label that ran this node in their producing runs and the runs below them. Not combined with `compare`; a node no producing run ran is a 400 listing the AI nodes they ran.',
+  }),
 });

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { MetricsStore } from '@archon/workflows/metrics';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { metricsReportSchema } from './schemas/metrics.schemas';
 import { registerMetricsRoute } from './api.metrics';
 
@@ -18,6 +19,11 @@ const row = {
 const store: MetricsStore = {
   listMetricRecords: async () => [row],
   getWorkflowRunsByIds: async () => [],
+  listWorkflowRuns: async () => ({
+    runs: [],
+    total: 0,
+    counts: { all: 0, running: 0, pending: 0, paused: 0, completed: 0, failed: 0, cancelled: 0 },
+  }),
   listEventsForRuns: async ids =>
     new Map(
       ids.map(id => [
@@ -37,9 +43,31 @@ const store: MetricsStore = {
     ),
 };
 
-function app(): OpenAPIHono {
+const run: WorkflowRun = {
+  origin: { conversationId: 'conv-1' },
+  id: row.runId,
+  workflow_name: row.workflowName,
+  conversation_id: 'conv-1',
+  parent_conversation_id: null,
+  codebase_id: null,
+  status: 'completed',
+  outcome: null,
+  user_message: '',
+  metadata: {},
+  started_at: new Date('2026-10-20T00:00:00.000Z'),
+  completed_at: null,
+  last_activity_at: null,
+  working_path: null,
+  user_id: null,
+  parent_run_id: null,
+  output_root: null,
+  checkout_baseline: null,
+  adopted_from_run_id: null,
+};
+
+function app(overrides: Partial<MetricsStore> = {}): OpenAPIHono {
   const app = new OpenAPIHono();
-  registerMetricsRoute(app, store);
+  registerMetricsRoute(app, { ...store, ...overrides });
   return app;
 }
 
@@ -84,6 +112,28 @@ describe('GET /api/metrics', () => {
     const response = await app().request('/api/metrics?compare=last-release');
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toContain('compare must be');
+  });
+
+  test('compare with byModel returns 400', async () => {
+    const response = await app().request('/api/metrics?compare=2026-10-15&byModel=review');
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain('cannot be combined');
+  });
+
+  test('an empty byModel returns 400', async () => {
+    const response = await app().request('/api/metrics?byModel=');
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain('needs a node id');
+  });
+
+  test('a byModel node no producing run ran returns 400 with the nodes they ran', async () => {
+    const response = await app({ getWorkflowRunsByIds: async () => [run] }).request(
+      '/api/metrics?since=2026-10-01&until=2026-10-30&byModel=review'
+    );
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain(
+      'no producing run ran an AI node "review"; AI nodes they ran: none'
+    );
   });
 
   test('a malformed since returns 400', async () => {

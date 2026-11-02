@@ -49,7 +49,7 @@ const recordFields = {
     .string()
     .regex(/^[A-Za-z0-9_.:@/-]{1,128}$/, 'must be 1-128 characters of [A-Za-z0-9_.:@/-]')
     .optional(),
-  /** The node that did the measuring. Stored and validated; read from slice 1c on. */
+  /** The node that did the measuring; the models that ran it are part of the instrument. */
   instrument_node: z.string().min(1).max(255).optional(),
 };
 
@@ -131,6 +131,11 @@ const metricCostSchema = z.object({
   runs: z.number().int(),
   runs_without_cost: z.number().int(),
   runs_without_tokens: z.number().int(),
+  /**
+   * Runs that recorded a cost although an AI step in them or in a run below them recorded
+   * none, such as a Codex step in a run of Claude steps: their cost covers only some steps.
+   */
+  runs_partial_cost: z.number().int(),
   /** Named runs that no longer exist. */
   runs_missing: z.number().int(),
 });
@@ -168,8 +173,53 @@ const metricCompareSchema = z.object({
 });
 export type MetricCompare = z.infer<typeof metricCompareSchema>;
 
+const metricModelGroupFields = {
+  value: z.number(),
+  n: z.number().int(),
+  interval: metricIntervalSchema,
+  cost: metricCostSchema,
+  /** The requested and the provider-reported models of the group's steps at the node. */
+  requested_models: z.array(z.string()),
+  resolved_models: z.array(z.string()),
+  /** `value` minus the value of every other model group combined; `null` without one. */
+  delta_vs_rest: z.number().nullable(),
+  /** Newcombe's interval for a rate, Welch's for other scores. */
+  delta_interval_vs_rest: metricIntervalSchema,
+  /** `delta_interval_vs_rest` excludes zero. */
+  separated: z.boolean(),
+};
+
+const metricModelGroupSchema = z.discriminatedUnion('split', [
+  /** Records whose producing runs ran the node on one model label. */
+  z.object({ split: z.literal('model'), label: z.string(), ...metricModelGroupFields }),
+  /** Records whose producing runs ran the node on more than one label. */
+  z.object({ split: z.literal('mixed'), ...metricModelGroupFields }),
+  /** Records whose producing runs never ran the node. */
+  z.object({ split: z.literal('none'), ...metricModelGroupFields }),
+]);
+export type MetricModelGroup = z.infer<typeof metricModelGroupSchema>;
+
+/**
+ * Records split by the model label that ran one node in their producing runs and the runs
+ * below them. Observational: each model ran the work it was routed, so a difference mixes
+ * the model with the work.
+ */
+const metricByModelSchema = z.object({
+  node: z.string(),
+  /** Model groups by label, then `mixed`, then `none`; empty groups are left out. */
+  groups: z.array(metricModelGroupSchema),
+  /** Records with a named run that no longer exists, in no group. */
+  unattributed: z.number().int(),
+});
+export type MetricByModel = z.infer<typeof metricByModelSchema>;
+
 const metricInstrumentReportSchema = z.object({
   instrument: z.string().nullable(),
+  /**
+   * The sorted model labels that ran the records' `instrument_node` in the run that returned
+   * them and the runs below it; empty without one. Part of the instrument's identity.
+   */
+  measured_by: z.array(z.string()),
   /** The sum for a `count`, the mean for a `score`. */
   value: z.number(),
   n: z.number().int(),
@@ -178,6 +228,8 @@ const metricInstrumentReportSchema = z.object({
   cost: metricCostSchema,
   /** Present when the query names a cut. */
   compare: metricCompareSchema.optional(),
+  /** Present when the query names a node to split by model. */
+  by_model: metricByModelSchema.optional(),
   latest: z.object({ value: z.number(), at: z.string(), subject: z.string().nullable() }),
   series: z.array(metricSeriesPointSchema),
 });
@@ -186,8 +238,9 @@ export type MetricInstrumentReport = z.infer<typeof metricInstrumentReportSchema
 const metricReportSchema = z.object({
   name: z.string(),
   ...metricDefinitionSchema.shape,
-  /** The instrument of the name's most recent record in the window. */
+  /** The instrument and measured-by of the name's most recent record in the window. */
   headline_instrument: z.string().nullable(),
+  headline_measured_by: z.array(z.string()),
   instruments: z.array(metricInstrumentReportSchema),
 });
 export type MetricReport = z.infer<typeof metricReportSchema>;
