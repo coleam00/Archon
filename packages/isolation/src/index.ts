@@ -112,4 +112,8 @@ export { WorktreePostCreateError } from './errors';
 
 export type { IsolationFailureKind } from './errors';
 
-export { releaseRunVerificationImages } from './container/verification-images';
+export {
+  releaseRunVerificationImages,
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+} from './container/verification-images';

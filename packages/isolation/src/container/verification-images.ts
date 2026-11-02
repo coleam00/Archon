@@ -5,6 +5,12 @@ import { dockerCli, type DockerRunner } from './docker-exec';
 export const VERIFICATION_IMAGE_RUN_LABEL = 'archon.run_id';
 const INSPECT = `{"id":{{json .Id}},"parent":{{json .Parent}},"owner":{{json (index .Config.Labels ${JSON.stringify(VERIFICATION_IMAGE_RUN_LABEL)})}}}`;
 
+export class VerificationImageInventoryError extends AggregateError {
+  constructor(runId: string, error: unknown) {
+    super([error], `Verification image cleanup failed for run ${runId}: ${String(error)}`);
+  }
+}
+
 interface Image {
   id: string;
   parent: string;
@@ -47,21 +53,21 @@ async function ownedImages(
   runId: string,
   errors: unknown[]
 ): Promise<Image[]> {
-  const ids = new Set(
-    (
-      await output(runner, [
-        'image',
-        'ls',
-        '--all',
-        '--quiet',
-        '--no-trunc',
-        '--filter',
-        `label=${VERIFICATION_IMAGE_RUN_LABEL}=${runId}`,
-      ])
-    )
-      .split(/\s+/)
-      .filter(Boolean)
-  );
+  let inventory: string;
+  try {
+    inventory = await output(runner, [
+      'image',
+      'ls',
+      '--all',
+      '--quiet',
+      '--no-trunc',
+      '--filter',
+      `label=${VERIFICATION_IMAGE_RUN_LABEL}=${runId}`,
+    ]);
+  } catch (err) {
+    throw new VerificationImageInventoryError(runId, err);
+  }
+  const ids = new Set(inventory.split(/\s+/).filter(Boolean));
   const images: Image[] = [];
   for (const id of ids) {
     try {
@@ -141,8 +147,9 @@ export async function releaseRunVerificationImages(
       }
     }
   } catch (err) {
-    errors.push(err);
     log.warn({ err, runId }, 'verification_images.cleanup_failed');
+    if (err instanceof VerificationImageInventoryError) throw err;
+    errors.push(err);
   }
   if (errors.length)
     throw new AggregateError(
