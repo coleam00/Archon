@@ -180,8 +180,9 @@ function RefusalBanner({
         {refused.length.toString()} metric output{refused.length === 1 ? ' was' : 's were'} refused
       </p>
       <ul className="mt-2 flex flex-col gap-1 text-text-secondary">
-        {refused.map(refusal => (
-          <li key={`${refusal.run_id}:${refusal.node_id}:${refusal.completed_at}`}>
+        {refused.map((refusal, i) => (
+          // One node output can refuse several records with the same run, node and time.
+          <li key={i}>
             <span className="font-mono">
               {refusal.workflow_name}/{refusal.node_id}
             </span>{' '}
@@ -353,7 +354,8 @@ function Sparkline({
   series: InstrumentReport['series'];
   window: MetricsReport['window'];
 }): ReactElement {
-  const start = Date.parse(window.since);
+  // Series days are UTC-midnight buckets; the window starts at any time of day.
+  const start = Date.parse(window.since.slice(0, 10));
   const span = Math.max(Date.parse(window.until) - start, 1);
   const values = series.map(point => point.value);
   const low = Math.min(0, ...values);

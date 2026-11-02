@@ -96,6 +96,18 @@ test('a count row renders its value, n and sparkline', () => {
   expect(row).toContain('2 days with records');
 });
 
+test("the sparkline keeps a record from the window's first, partial day inside the chart", () => {
+  const firstDay = {
+    ...instrument(12, { instrument: null, measured_by: [] }),
+    series: [{ day: '2026-10-03', value: 4, n: 4 }],
+  };
+  const html = render({
+    window: { since: '2026-10-03T15:00:00.000Z', until: '2026-11-02T15:00:00.000Z' },
+    metrics: [{ ...counted, instruments: [firstDay] }],
+  });
+  expect(html).toContain('<circle cx="0"');
+});
+
 test('an agreement shows as a badge on the calibrated row, not as its own row', () => {
   const html = render({ metrics: [counted, judged, agreement([JUDGE])] });
   expect(html).not.toContain('data-metric="demo.items_flagged_agreement"');
