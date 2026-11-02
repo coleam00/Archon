@@ -218,7 +218,9 @@ async function runRequested(requested: string[]): Promise<number> {
   if (runs.length === 0) {
     console.error(
       [
-        `No argument named a test path this runner can place: ${requested.join(' ')}`,
+        `No argument named a test path this runner can place: ${parseTestArguments(requested)
+          .positionals.map(token => token.value)
+          .join(' ')}`,
         'Name a path under packages/<name>/, scripts/ or .archon/scripts/, or run',
         '`bun run test <selector>` from the package directory the selector belongs to.',
       ].join('\n')
@@ -227,9 +229,14 @@ async function runRequested(requested: string[]): Promise<number> {
   }
 
   const { optionTokens } = parseTestArguments(requested);
-  if (runs.length > 1 && optionTokens.some(token => token.name === 'shard')) {
+  const singleOwnerOption = optionTokens.some(token => token.name === 'test-name-pattern')
+    ? 'Name filters require'
+    : optionTokens.some(token => token.name === 'shard')
+      ? 'Sharding requires'
+      : undefined;
+  if (runs.length > 1 && singleOwnerOption !== undefined) {
     console.error(
-      `Sharding requires one test owner; selected: ${runs.map(({ owner }) => owner.label).join(', ')}. Run each owner separately.`
+      `${singleOwnerOption} one test owner; selected: ${runs.map(({ owner }) => owner.label).join(', ')}. Run each owner separately.`
     );
     return 1;
   }

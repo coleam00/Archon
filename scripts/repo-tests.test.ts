@@ -241,6 +241,19 @@ describe('repo-tests exit codes', () => {
     expect(stderr).toContain('No argument named a test path this runner can place');
   });
 
+  test('unroutable diagnostics exclude option values', () => {
+    for (const options of [
+      ['--define', 'API_KEY="probe-secret"'],
+      ['--define=API_KEY="probe-secret"'],
+    ]) {
+      const { exitCode, stdout, stderr } = invoke([...options, 'unmatched']);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain('unmatched');
+      expect(stdout + stderr).not.toContain('probe-secret');
+      expect(stdout + stderr).not.toContain('--define');
+    }
+  });
+
   for (const options of [['--shard=2/2'], ['--shard', '2/2']]) {
     test(`rejects sharding across owners before starting children: ${options.join(' ')}`, () => {
       const { exitCode, stdout, stderr } = invoke([
@@ -279,7 +292,7 @@ describe('repo-tests exit codes', () => {
   test('single-owner sharding preserves native execution', () => {
     const { exitCode, stdout } = invoke(['--shard=1/1', 'packages/paths/src/skills.test.ts']);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('◀ @archon/paths --shard=1/1');
+    expect(stdout).toContain('◀ @archon/paths ./src/skills.test.ts');
   });
 
   test('exits 0 when the routed run passes', () => {
@@ -388,8 +401,6 @@ for (const second of ['package', 'root']) {
         fromRoot('scripts/repo-tests.ts'),
         'packages/paths/src/skills.test.ts',
         secondFile,
-        '-t',
-        'returns empty paths and missing for undefined input|accepts comparator ranges on full versions|sets the default per-test budget',
         '--reporter=junit',
         '--reporter-outfile',
         second === 'root' ? relative(REPO_ROOT, report) : report,
@@ -417,10 +428,8 @@ test('root JUnit includes a failing owner and stops before unstarted owners', ()
       'bun',
       fromRoot('scripts/repo-tests.ts'),
       'packages/paths/src/skills.test.ts',
-      'packages/plugin-manifest/src/index.test.ts',
+      'packages/plugin-manifest/src/no-matching-file.test.ts',
       'scripts/bun-test-command.test.ts',
-      '-t',
-      'returns empty paths and missing for undefined input|sets the default per-test budget',
       '--reporter=junit',
       `--reporter-outfile=${report}`,
     ],
@@ -429,7 +438,46 @@ test('root JUnit includes a failing owner and stops before unstarted owners', ()
   expect(result.exitCode).not.toBe(0);
   const xml = readFileSync(report, 'utf8');
   expect(xml).toContain('<testcase name="returns empty paths and missing for undefined input"');
-  expect(xml).toContain('index.test.ts');
+  expect(xml).toContain('no-matching-file.test.ts');
   expect(xml).toContain('<error');
   expect(xml).not.toContain('bun-test-command.test.ts');
 });
+
+for (const secondFile of [
+  'packages/plugin-manifest/src/index.test.ts',
+  'scripts/bun-test-command.test.ts',
+]) {
+  for (const options of [
+    ['-t', '.*'],
+    ['--test-name-pattern', '.*'],
+    ['--test-name-pattern=.*'],
+    ['-t.*'],
+  ]) {
+    test(`root rejects split name filters before children: ${secondFile}, ${options[0]}`, () => {
+      const root = track(mkdtempSync(join(tmpdir(), 'root-name-filter-')));
+      const report = join(root, 'rejected.xml');
+      const result = Bun.spawnSync(
+        [
+          'bun',
+          fromRoot('scripts/repo-tests.ts'),
+          'packages/paths/src/skills.test.ts',
+          secondFile,
+          ...options,
+          '--reporter=junit',
+          `--reporter-outfile=${report}`,
+        ],
+        { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' }
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout.toString()).toBe('');
+      const stderr = result.stderr.toString();
+      expect(stderr).toContain('Name filters require one test owner');
+      expect(stderr).toContain('packages/paths');
+      expect(stderr).toContain(
+        secondFile.startsWith('packages/') ? 'packages/plugin-manifest' : 'the repository root'
+      );
+      expect(stderr).not.toContain('bun test v');
+      expect(existsSync(report)).toBe(false);
+    });
+  }
+}

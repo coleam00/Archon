@@ -825,3 +825,28 @@ test('JUnit destination follows the final reporter and outfile options', () => {
     expect(junitDestination(parseTestArguments(args).optionTokens)).toBe(expected);
   }
 });
+
+for (const concurrency of [1, 2]) {
+  for (const inline of [false, true]) {
+    test(`requested diagnostics exclude option values: concurrency=${concurrency}, inline=${inline}`, async () => {
+      const root = fixture({ testConcurrency: concurrency });
+      testFile(root, 'a', `test('wanted', () => {});`, true);
+      testFile(root, 'b', `test('wanted', () => {});`, true);
+      const secret = 'probe-secret';
+      const define = `API_KEY="${secret}"`;
+      const options = inline ? [`--define=${define}`] : ['--define', define];
+      for (const selection of [
+        ['a.test'],
+        ['src/'],
+        ['src/', '-t', 'wanted'],
+        ['src/', '--shard=1/1'],
+      ]) {
+        const result = await runResult(root, [...options, ...selection]);
+        expect(result.status).toBe(selection.length === 1 ? 0 : 1);
+        expect(result.stdout + result.stderr).not.toContain(secret);
+        expect(result.stdout + result.stderr).not.toContain('--define');
+        expect(result.stdout + result.stderr).toContain('./src/a.test.ts');
+      }
+    });
+  }
+}

@@ -12,20 +12,20 @@ export interface TestReport {
   suites: string;
 }
 
-function attributes(tag: string): Map<string, string> {
-  return new Map([...tag.matchAll(/\b([\w-]+)="([^"]*)"/g)].map(match => [match[1], match[2]]));
-}
-
 function parseReport(xml: string): TestReport {
-  new SaxesParser().write(xml).close();
+  let attrs: Record<string, string> | undefined;
+  const parser = new SaxesParser();
+  parser.on('opentag', tag => {
+    attrs ??= tag.attributes;
+  });
+  parser.write(xml).close();
   // Bun owns this XML envelope. Keep suite bodies intact, including escaped failure text.
   const envelope =
     /^\s*(?:<\?xml[^?]*\?>\s*)?<testsuites\b([^>]*)>([\s\S]*)<\/testsuites>\s*$/.exec(xml);
   if (envelope === null) throw new Error('Bun wrote an unsupported JUnit report');
-  const attrs = attributes(envelope[1]);
   const counts: Counts = { tests: 0, assertions: 0, failures: 0, skipped: 0, errors: 0, time: 0 };
   for (const field of countFields) {
-    counts[field] = Number(attrs.get(field) ?? 0);
+    counts[field] = Number(attrs?.[field] ?? 0);
     if (!Number.isFinite(counts[field]) || counts[field] < 0) {
       throw new Error(`Invalid JUnit ${field} count`);
     }

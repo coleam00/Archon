@@ -30,8 +30,9 @@ Name filters (`-t` or `--test-name-pattern`) are supported only when the request
 one isolation group, preserving Bun's native exit result. Requests selecting multiple
 groups with a name filter fail before tests load, with a diagnostic naming the groups.
 Sharding (`--shard`) also requires one isolation group; splitting the shard across
-groups could omit selected files. Root requests with `--shard` must also select one
-test owner. Select files from one group or run each group separately. Load and hook
+groups could omit selected files. Root requests with name filters or `--shard` must
+also select one test owner; multi-owner requests fail before any tests start and name
+the owners. Select files from one group or run each group separately. Load and hook
 failures remain failures. An unreadable or invalid private report fails its group and
 contributes a runner error; later requested groups still run. Bun can omit JUnit output on successful
 zero-file runs. An absent report after exit 0 emits a diagnostic and contributes no

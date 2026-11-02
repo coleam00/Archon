@@ -6,7 +6,7 @@ import {
   resolvePackageTestGroups,
 } from './package-test-groups';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
-import { resolveRequestedTestGroups } from './package-test-requests';
+import { parseTestArguments, resolveRequestedTestGroups } from './package-test-requests';
 import { runReportedGroup, writeCombinedReport, type TestReport } from './package-test-reports';
 
 /**
@@ -70,6 +70,9 @@ if (part !== undefined) {
   console.log(`Part ${String(part.index)}/${String(part.count)}: ${String(groups.length)} groups`);
 }
 
+const selectedFiles = (group: string[]): string[] =>
+  parseTestArguments(group).positionals.map(token => token.value);
+
 const singleGroupOption =
   request?.namePattern !== undefined
     ? 'Name filters require'
@@ -78,7 +81,7 @@ const singleGroupOption =
       : undefined;
 if (groups.length > 1 && singleGroupOption !== undefined) {
   throw new Error(
-    `${singleGroupOption} one isolation group; selected ${groups.length}:\n${groups.map((group, index) => `  ${index + 1}: ${group.join(' ')}`).join('\n')}\nSelect files from one group or run each group separately.`
+    `${singleGroupOption} one isolation group; selected ${groups.length}:\n${groups.map((group, index) => `  ${index + 1}: ${selectedFiles(group).join(' ')}`).join('\n')}\nSelect files from one group or run each group separately.`
   );
 }
 const reports: TestReport[] = [];
@@ -95,13 +98,13 @@ const timed = async (group: string[], runGroup: (group: string[]) => Promise<num
     result = await runGroup(group);
   }
   console.log(
-    `◀ ${packageName} ${group[0]} ${((performance.now() - startedAt) / 1000).toFixed(1)}s`
+    `◀ ${packageName} ${selectedFiles(group)[0] ?? 'Test process'} ${((performance.now() - startedAt) / 1000).toFixed(1)}s`
   );
   return result;
 };
 
 const runBuffered = async (group: string[]): Promise<number> => {
-  console.log(`▶ ${group[0]}`);
+  console.log(`▶ ${selectedFiles(group)[0] ?? 'Test process'}`);
   const child = Bun.spawn(bunTestCommand(group), {
     cwd: packageDir,
     env: bunTestEnv(),

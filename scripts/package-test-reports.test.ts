@@ -22,10 +22,12 @@ const damagedReports = {
   'undeclared-text-entity': '<testsuites><testsuite>&missing;</testsuite></testsuites>',
   'invalid-count': '<testsuites tests="invalid"></testsuites>',
   ...Object.fromEntries(
-    ['tests', 'assertions', 'failures', 'skipped', 'errors', 'time'].map(field => [
-      `negative-${field}`,
-      `<testsuites ${field}="-1"></testsuites>`,
-    ])
+    ['tests', 'assertions', 'failures', 'skipped', 'errors', 'time'].flatMap(field =>
+      ['"', "'"].map(quote => [
+        `negative-${field}-${quote}`,
+        `<testsuites ${field}=${quote}-1${quote}></testsuites>`,
+      ])
+    )
   ),
   'unclosed-suite': '<testsuites tests="1"><testsuite name="first"></testsuites>',
   'unclosed-testcase':
