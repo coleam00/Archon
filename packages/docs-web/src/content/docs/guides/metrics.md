@@ -386,3 +386,10 @@ block when a node is. `archon metrics` exits `4` when it
 refused a record, and prints each refusal to stderr. See
 [`archon metrics`](/reference/cli/#metrics-name) and
 [`GET /api/metrics`](/reference/api/#metrics) for every option.
+
+The console shows the same report under **Metrics**: `/console/metrics` for every project,
+and a project's Metrics tab for its own records, over the last 7, 30 or 90 days. Each metric
+gets one row for its newest instrument, with a note naming any other instruments, and a
+daily sparkline. A score that `calibrates` a metric shows as a badge on that metric's row,
+only when it was measured by the same instrument on the same models; otherwise the row
+says "not calibrated". Refused records are listed above the table.

@@ -260,7 +260,7 @@ function MetricRow({ row, window }: { row: Row; window: MetricsReport['window'] 
         {formatNumber(headline.value)}
       </td>
       <td className="px-3 py-2 font-mono tabular-nums">{headline.n}</td>
-      <td className="px-3 py-2 font-mono tabular-nums">
+      <td className="whitespace-nowrap px-3 py-2 font-mono tabular-nums">
         {headline.interval === null
           ? '—'
           : `${formatNumber(headline.interval.low)} – ${formatNumber(headline.interval.high)}`}
