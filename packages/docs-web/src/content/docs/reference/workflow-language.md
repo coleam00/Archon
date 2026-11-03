@@ -2033,8 +2033,8 @@ it is committed or listed under
 [`worktree.copyFiles`](/reference/configuration/#worktree-file-copying-worktreecopyfiles).
 An unknown key, a value of the wrong type, or any top-level key other than `settings:` refuses
 the run at that point, before any node runs, naming the file and the key; for an isolated run
-that is after its worktree was created. A `required` setting must be set there, given a default by a workflow `inputs:` entry
-of the same name, or passed with `--input`.
+that is after its worktree was created. A `required` setting must be set there, given a default
+by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
 reads it against its own declaration. A bundled pack declares no settings, so if a project pack
@@ -2062,14 +2062,19 @@ result on its row; a resumed run keeps those values even if the project file cha
       forge: $INPUTS.forge   # the including run's setting, passed in
   ```
 
-  A `bash:` or `script:` node's raw `$INPUTS_<NAME>` env read of one of the block's pack
-  settings is checked the same way,
-  in `bash:`, inline and named `script:`, `until_bash` and `loop_group` body nodes: a read that
-  neither the includer's `with:` nor the node's own `with:` passes fails the load, naming the
-  node and the read. A block that declares `inputs:` must declare the name there too. Run
-  directly, the same workflow reads its pack settings raw. A raw read of a name that is not one
-  of the block's pack settings is not checked: it gets the including run's input of that name,
-  if the run has one.
+  A raw `$INPUTS_<NAME>` env read of one of the block's pack settings is checked the same way,
+  in `bash:`, inline and named `script:`, `until_bash` and `loop_group` body nodes. The read
+  loads only when the block's input contract supplies the name (the includer's `with:`, or a
+  default the block declares under `inputs:`) or a `script:` node binds it in its own `with:`;
+  a `bash:` node has no node-local `with:`. Otherwise the load fails, naming the node and the
+  read. A block that declares `inputs:` must declare the name there too. Run directly, the same
+  workflow reads its pack settings raw.
+
+  A raw read of a name that is not one of the block's pack settings follows the block's own
+  load check: in a block that declares `inputs:`, a read of an undeclared name fails to load.
+  A read of a declared input gets the value passed through `with:` or the declared default;
+  only a read the contract leaves unsupplied, or any read in a block that declares no
+  `inputs:`, gets the including run's input of that name, if the run has one.
 - **A `workflow:` child is a run of its own**: it resolves its own pack's settings when it
   starts, under the `with:` values its parent passes. The parent's `with:` cannot set one of the
   child's pack settings (unless the child also declares an input of that name); the node fails,
