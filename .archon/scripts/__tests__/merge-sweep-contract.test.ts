@@ -8,7 +8,9 @@ type Shape = string | { union: Shape[] } | { array: Shape } | {
 };
 
 interface Schema {
-  type: string | string[];
+  type?: string | string[];
+  const?: string;
+  oneOf?: Schema[];
   enum?: string[];
   properties?: Record<string, Schema>;
   required?: string[];
@@ -29,10 +31,17 @@ function union(shapes: Shape[]): Shape {
 }
 
 function schemaShape(schema: Schema): Shape {
+  if (schema.oneOf !== undefined) {
+    const { oneOf, ...common } = schema;
+    return union(oneOf.map(member => schemaShape({ ...common, ...member,
+      properties: { ...common.properties, ...member.properties } })));
+  }
+  if (schema.const !== undefined) return `literal:${JSON.stringify(schema.const)}`;
   // These annotations constrain values without changing their TypeScript shape.
   const supported = ['type', 'enum', 'properties', 'required', 'items', 'additionalProperties',
     'minimum', 'pattern', 'minItems', 'description'];
   expect(Object.keys(schema).filter(key => !supported.includes(key))).toEqual([]);
+  if (schema.type === undefined) throw new Error('Missing schema type');
   const types = Array.isArray(schema.type) ? schema.type : [schema.type];
   if (schema.enum !== undefined) {
     expect(types).toContain('string');
@@ -65,7 +74,7 @@ function typeShape(checker: ts.TypeChecker, type: ts.Type): Shape {
     const item = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
     if (item !== undefined) return { array: typeShape(checker, item) };
   }
-  if (type.flags & ts.TypeFlags.Object) {
+  if (type.flags & ts.TypeFlags.Object || type.isIntersection()) {
     return { fields: Object.fromEntries(checker.getPropertiesOfType(type).sort((a, b) => a.name.localeCompare(b.name))
       .map(property => {
         const declaration = property.valueDeclaration;
@@ -79,17 +88,20 @@ function typeShape(checker: ts.TypeChecker, type: ts.Type): Shape {
   throw new Error(`Unsupported sweep consumer type: ${checker.typeToString(type)}`);
 }
 
-test('the complete sweep output conforms to the recorder contract', () => {
+test.each([
+  { workflow: 'merge-queue/archon-merge-queue.yaml', node: 'sweep', contract: 'Sweep' },
+  { workflow: 'merge-question/archon-merge-question.yaml', node: 'question', contract: 'MergeQuestion' },
+])('the complete $node output conforms to the $contract contract', ({ workflow: path, node, contract }) => {
   const pack = resolve(import.meta.dir, '../../workflows/sdlc');
-  const workflow = Bun.YAML.parse(readFileSync(resolve(pack, 'merge-queue/archon-merge-queue.yaml'), 'utf8')) as {
+  const workflow = Bun.YAML.parse(readFileSync(resolve(pack, path), 'utf8')) as {
     nodes: { id: string; output_format?: Schema }[];
   };
-  const sweeps = workflow.nodes.filter(node => node.id === 'sweep');
+  const sweeps = workflow.nodes.filter(entry => entry.id === node);
   expect(sweeps).toHaveLength(1);
   const schema = sweeps[0]?.output_format;
-  if (schema === undefined) throw new Error('Missing sweep.output_format');
+  if (schema === undefined) throw new Error('Missing output_format');
   // TypeScript's number cannot express the positive integer PR identifier contract.
-  expect(schema.properties?.decisions.items?.properties?.number).toMatchObject({
+  if (contract === 'Sweep') expect(schema.properties?.decisions.items?.properties?.number).toMatchObject({
     type: 'integer', minimum: 1,
   });
   const file = resolve(pack, 'merge-queue/scripts/record.ts');
@@ -101,7 +113,7 @@ test('the complete sweep output conforms to the recorder contract', () => {
   const checker = program.getTypeChecker();
   const source = program.getSourceFile(file);
   const module = source && checker.getSymbolAtLocation(source);
-  const sweep = module && checker.getExportsOfModule(module).find(symbol => symbol.name === 'Sweep');
-  if (sweep === undefined) throw new Error('Missing exported Sweep consumer type');
+  const sweep = module && checker.getExportsOfModule(module).find(symbol => symbol.name === contract);
+  if (sweep === undefined) throw new Error('Missing exported consumer type');
   expect(typeShape(checker, checker.getDeclaredTypeOfSymbol(sweep))).toEqual(schemaShape(schema));
 });

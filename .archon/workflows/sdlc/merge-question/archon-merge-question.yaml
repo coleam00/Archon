@@ -18,19 +18,108 @@ nodes:
     output_format:
       type: object
       properties:
-        attention: { type: string }
+        attention: {type: string}
         options:
           type: array
           items:
             type: object
-            properties:
-              id: { type: string }
-              label: { type: string }
+            properties: {id: {type: string}, label: {type: string}}
             required: [id, label]
-        class: { type: string, enum: [pr, base] }
-        asked: { type: object }
-        owner_run_id: { type: string }
+        class: {type: string, enum: [pr, base]}
+        asked: {type: object}
+        owner_run_id: {type: string}
       required: [attention, options, class, asked, owner_run_id]
+      oneOf:
+        - properties:
+            class: {const: pr}
+            asked:
+              type: object
+              properties:
+                by: {type: string, const: pr}
+                item:
+                  type: object
+                  properties:
+                    repo:
+                      type: object
+                      properties: {host: {type: string}, path: {type: string}}
+                      required: [host, path]
+                    number: {type: integer}
+                  required: [repo, number]
+                pr:
+                  type: object
+                  properties:
+                    repo:
+                      type: object
+                      properties: {host: {type: string}, path: {type: string}}
+                      required: [host, path]
+                    number: {type: integer}
+                  required: [repo, number]
+                head: {type: string}
+                brief: {type: string}
+                attention:
+                  type: object
+                  properties:
+                    what: {type: string}
+                    why: {type: string}
+                    recommendation:
+                      type: object
+                      properties:
+                        choice: {type: string}
+                        why: {type: string}
+                        evidence: {type: string}
+                        confidence: {type: string, enum: [low, medium, high]}
+                        would_change: {type: string}
+                      required: [choice, why, evidence, confidence, would_change]
+                    choices:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          id: {type: string}
+                          label: {type: string}
+                          does: {type: string}
+                          effect: {type: string, enum: [merge, return, park]}
+                          ruling: {type: string}
+                        required: [id, label, does, effect, ruling]
+                    if_unanswered: {type: string}
+                    links: {type: array, items: {type: string}}
+                  required: [what, why, recommendation, choices, if_unanswered, links]
+              required: [by, item, pr, head, brief, attention]
+        - properties:
+            class: {const: base}
+            asked:
+              type: object
+              properties:
+                by: {type: string, const: base}
+                attention:
+                  type: object
+                  properties:
+                    what: {type: string}
+                    why: {type: string}
+                    recommendation:
+                      type: object
+                      properties:
+                        choice: {type: string}
+                        why: {type: string}
+                        evidence: {type: string}
+                        confidence: {type: string, enum: [low, medium, high]}
+                        would_change: {type: string}
+                      required: [choice, why, evidence, confidence, would_change]
+                    choices:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          id: {type: string}
+                          label: {type: string}
+                          does: {type: string}
+                          effect: {type: string, enum: [hold]}
+                          ruling: {type: string}
+                        required: [id, label, does, effect, ruling]
+                    if_unanswered: {type: string}
+                    links: {type: array, items: {type: string}}
+                  required: [what, why, recommendation, choices, if_unanswered, links]
+              required: [by, attention]
   - id: ask
     depends_on: [question]
     wait:

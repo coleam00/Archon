@@ -229,6 +229,7 @@ describe('the merge record and the gate', () => {
     );
     expect(child.nodes.find(node => node.id === 'question')?.output_format?.properties?.class?.enum).toEqual([...MERGE_ASKED_BY]);
     expect(child.nodes.find(node => node.id === 'ruling')?.output_format?.properties?.decision?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
+
   });
 });
 
@@ -1006,7 +1007,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(after.claim?.run_id).toBe('next-run');
   }, 60_000);
 
-  test('a claimed merge the forge does not show fails the record after every other decision is written', () => {
+  test('a claimed merge the forge does not show is reported after recording; a base question still reaches its child', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
@@ -1023,9 +1024,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, { claim: { run_id: 'another-run', at: AT, requests: [] } }), subject: OTHER });
     const closed = run(at, 'record', inputs(BASE_RED), { pr: { state: 'CLOSED', merged: [43] } });
-    expect(closed.code).not.toBe(0);
+    expect(closed.code).toBe(0);
+    expect(JSON.parse(closed.stdout).asks).toMatchObject([{ class: 'base' }]);
     expect(closed.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back closed`);
-    expect(closed.stderr).toContain('the default branch is red and was not raised (lint red on dev after a rerun)');
     expect(closed.stderr).toContain('PR 43: not recorded, the next sweep decides it again (work/8 is no longer claimed by this run); every other decision is recorded');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
   }, 60_000);
@@ -1301,6 +1302,29 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect((raised.asks as MergeQuestion[])[0]?.attention).toContain('dev is red since PR 43 merged');
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking', decisions: [{ decision: 'ask (unclear)' }] } } });
     expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+  }, 60_000);
+
+  test.each(['invalid-decision', 'claimed-merge', 'unraised-base'] as const)('an eligible question survives an unrelated %s failure', kind => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
+    const first = kind === 'invalid-decision' ? decision({ action: 'return', brief: '' })
+      : kind === 'claimed-merge' ? decision({ action: 'merged' }) : decision({ action: 'wait' });
+    const result = run(at, 'record', {
+      ...recordInputs([first, decision({ number: 43, action: 'ask', attention: ATTENTION, brief: 'rework PR 43' })],
+        BASE_GREEN, kind === 'unraised-base' ? FACTS_BASE_RED : undefined),
+      INPUTS_ITEMS: BOTH_ITEMS,
+    });
+    expect(result.code).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.asks).toMatchObject([{ class: 'pr', asked: { pr: { number: 43 } } }]);
+    expect(output.asks).toHaveLength(1);
+    const diagnostic = kind === 'invalid-decision' ? 'with no brief'
+      : kind === 'claimed-merge' ? 'reads back open' : 'neither reran it nor raised it';
+    expect(result.stderr).toContain(diagnostic);
+    expect(output.summary).toContain(diagnostic);
+    expect(stored(at).value?.claim).toBeNull();
+    expect(stored(at, 8).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
   test('three questions hold independent parent claims; one child answer is immediately claimable by a later sweep', () => {
