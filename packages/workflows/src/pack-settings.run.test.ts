@@ -99,7 +99,7 @@ function dispatchOf(run: WorkflowRun | undefined): Record<string, unknown> | und
 }
 
 describe('a packaged run reads its pack settings as $INPUTS', () => {
-  it('layers pack default < project file < workflow default < supplied input, and records the pack', async () => {
+  it('layers pack default < workflow default < project file < supplied input, and records the pack', async () => {
     await writePackDeclaration(
       'alpha',
       `
@@ -111,6 +111,8 @@ inputs:
   workflow_set:
     default: from-pack
   supplied:
+    default: from-pack
+  workflow_only:
     default: from-pack
 `
     );
@@ -128,15 +130,17 @@ settings:
       'layered',
       `
 name: layered
-description: reads four settings
+description: reads five settings
 inputs:
   workflow_set:
+    default: from-workflow
+  workflow_only:
     default: from-workflow
   supplied:
     default: from-workflow
 nodes:
   - id: emit
-    bash: echo "a=$INPUTS_ONLY_PACK b=$INPUTS_PROJECT_SET c=$INPUTS_WORKFLOW_SET d=$INPUTS_SUPPLIED"
+    bash: echo "a=$INPUTS_ONLY_PACK b=$INPUTS_PROJECT_SET c=$INPUTS_WORKFLOW_SET d=$INPUTS_SUPPLIED e=$INPUTS_WORKFLOW_ONLY"
 `
     );
 
@@ -155,14 +159,15 @@ nodes:
     expect(result.success).toBe(true);
     const run = runNamed(store, 'layered');
     expect(nodeOutput(store, run?.id, 'emit')).toContain(
-      'a=from-pack b=from-project c=from-workflow d=from-input'
+      'a=from-pack b=from-project c=from-project d=from-input e=from-workflow'
     );
     // Resolved once at run start and fixed on the row.
     expect(run?.metadata?.inputs).toEqual({
       only_pack: 'from-pack',
       project_set: 'from-project',
-      workflow_set: 'from-workflow',
+      workflow_set: 'from-project',
       supplied: 'from-input',
+      workflow_only: 'from-workflow',
     });
     expect(dispatchOf(run)?.pack).toBe('alpha');
   });

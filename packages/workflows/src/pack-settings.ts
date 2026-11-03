@@ -11,8 +11,9 @@
  *    read from the run's working directory. (`config.<name>.yaml` already names a
  *    `--config` run layer, so that spelling is not reused.)
  *  - A run RESOLVES them once, when it starts, and stores the result on its row: the
- *    declaration default, then the project file, then the workflow's own input default,
- *    then the run's supplied inputs. A resume reads the row, never the files.
+ *    declaration default, then the workflow's own input default, then the project file,
+ *    then the run's supplied inputs. Both defaults are the author's; the project file is
+ *    the project's choice and beats them. A resume reads the row, never the files.
  *
  * Settings belong to a run, not to a node: a run reads its root workflow's pack, and a
  * `workflow:` child, being a run of its own, reads its own. An `include:`d block takes
@@ -195,22 +196,25 @@ export function projectPackSettingsPath(cwd: string, packKey: string): string {
 }
 
 /**
- * A pack's settings for this project: its declaration defaults under the values of
- * `.archon/packs/<key>.yaml`. A missing file sets nothing; an unknown key, a value of
- * the wrong type, or any top-level key other than `settings:` fails.
+ * The values this project sets for a pack in `.archon/packs/<key>.yaml`. A missing file
+ * sets nothing; an unknown key, a value of the wrong type, or any top-level key other than
+ * `settings:` fails.
  *
  * @throws PackSettingsError naming the file and the key.
  */
-export async function loadProjectPackSettings(
+export async function readProjectPackSettings(
   cwd: string,
   pack: WorkflowPack
 ): Promise<Record<string, string>> {
-  const declared = pack.settings ?? {};
+  return readProjectValues(cwd, pack.key, pack.settings ?? {});
+}
+
+function packSettingDefaults(pack: WorkflowPack | undefined): Record<string, string> {
   const values: Record<string, string> = {};
-  for (const [name, spec] of Object.entries(declared)) {
+  for (const [name, spec] of Object.entries(pack?.settings ?? {})) {
     if (spec.default !== undefined) values[name] = spec.default;
   }
-  return { ...values, ...(await readProjectValues(cwd, pack.key, declared)) };
+  return values;
 }
 
 async function readProjectValues(
@@ -256,10 +260,11 @@ export async function resolveRunStartInputs(
   supplied: Readonly<Record<string, JsonValue>> | undefined
 ): Promise<RunStartInputs> {
   const pack = workflow.pack;
-  const packSettings = pack === undefined ? {} : await loadProjectPackSettings(cwd, pack);
+  const projectValues = pack === undefined ? {} : await readProjectPackSettings(cwd, pack);
   const inputs: Record<string, JsonValue> = {
-    ...packSettings,
+    ...packSettingDefaults(pack),
     ...defaultRunInputs(workflow.inputs),
+    ...projectValues,
     ...supplied,
   };
   if (pack !== undefined) assertRequiredSettings(cwd, pack, inputs);

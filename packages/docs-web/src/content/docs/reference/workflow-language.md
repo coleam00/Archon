@@ -2042,13 +2042,15 @@ folder takes a bundled pack's name and the file sets the project pack's settings
 workflows of that name refuse to start ("declares no settings"); the same happens when the
 project and home declarations of one name differ. Give a pack with settings a name of its own.
 
-**Layers**, lowest first: the pack's `default:`, then the project's `.archon/packs/<pack>.yaml`,
-then the workflow's own `inputs:` default of the same name, then the run's supplied inputs
-(`--input`, a parent's `with:`). The run resolves them **once, when it starts**, and stores the
+**Layers**, lowest first: the pack's `default:`, then the workflow's own `inputs:` default of the
+same name, then the project's `.archon/packs/<pack>.yaml`, then the run's supplied inputs
+(`--input`, a parent's `with:`). Both defaults are the pack author's; the project file is the
+project's choice, so it beats them. The run resolves them **once, when it starts**, and stores the
 result on its row; a resumed run keeps those values even if the project file changed since.
 
 - **Settings belong to a run.** A run reads its root workflow's pack; every node of the run
-  sees the same `$INPUTS`. A workflow input of the same name as a pack setting overrides it.
+  sees the same `$INPUTS`. A workflow input of the same name as a pack setting overrides the
+  pack's default, never the project file.
   Two different names that fold to the same `INPUTS_*` key across a workflow's inputs and its
   pack's settings are a load error.
 - **An `include:`d block takes nothing from its pack.** Its `$INPUTS.<name>` references read

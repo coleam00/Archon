@@ -74,8 +74,8 @@ export interface DryRunContext
   /** Nodes whose execution record some binding reads (`$<node>.execution.checkoutStart`). */
   checkoutProducers: ReadonlySet<string>;
   /**
-   * The run's EFFECTIVE `$INPUTS` map — pack settings, then declared defaults, then
-   * caller-supplied values: the same merge a real run performs at start
+   * The run's EFFECTIVE `$INPUTS` map — pack defaults, then declared defaults, then the
+   * project's pack settings file, then caller-supplied values: the same merge a real run performs at start
    * (`resolveRunStartInputs` in pack-settings.ts). Undefined when that merge is empty.
    * Values are logical JSON values (#2637 — a typed declared default stays typed).
    */

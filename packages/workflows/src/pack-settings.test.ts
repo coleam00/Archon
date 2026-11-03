@@ -10,7 +10,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-  loadProjectPackSettings,
+  readProjectPackSettings,
   packSettingValue,
   parsePackDeclaration,
   PackSettingsError,
@@ -96,7 +96,7 @@ describe('parsePackDeclaration', () => {
   });
 });
 
-describe('loadProjectPackSettings', () => {
+describe('readProjectPackSettings', () => {
   const pack = { key: 'alpha', settings: SPECS };
   const projectFile = (): string => join(cwd, '.archon', 'packs', 'alpha.yaml');
 
@@ -106,19 +106,18 @@ describe('loadProjectPackSettings', () => {
   }
 
   it('reads nothing from a missing file', async () => {
-    expect(await loadProjectPackSettings(cwd, pack)).toEqual({});
+    expect(await readProjectPackSettings(cwd, pack)).toEqual({});
   });
 
-  it('layers the file over declaration defaults', async () => {
+  it("returns only the file's values, not declaration defaults", async () => {
     await writeProject('settings:\n  forge: glab\n  strict: false\n');
     const declared = {
       key: 'alpha',
       settings: { ...SPECS, label: { type: 'string', default: 'd' } },
     } as const;
-    expect(await loadProjectPackSettings(cwd, declared)).toEqual({
+    expect(await readProjectPackSettings(cwd, declared)).toEqual({
       forge: 'glab',
       strict: 'false',
-      label: 'd',
     });
   });
 
@@ -129,14 +128,14 @@ describe('loadProjectPackSettings', () => {
     ['config:\n  forge: gh\n', "unknown key 'config'"],
   ])('refuses %p, naming the file and key', async (yaml, reason) => {
     await writeProject(yaml);
-    const loading = loadProjectPackSettings(cwd, pack);
+    const loading = readProjectPackSettings(cwd, pack);
     await expect(loading).rejects.toThrow(reason);
-    await expect(loadProjectPackSettings(cwd, pack)).rejects.toThrow(projectFile());
+    await expect(readProjectPackSettings(cwd, pack)).rejects.toThrow(projectFile());
   });
 
   it('refuses any setting for a pack that declares none', async () => {
     await writeProject('settings:\n  forge: gh\n');
-    await expect(loadProjectPackSettings(cwd, { key: 'alpha' })).rejects.toThrow(
+    await expect(readProjectPackSettings(cwd, { key: 'alpha' })).rejects.toThrow(
       "pack 'alpha' declares no settings"
     );
   });

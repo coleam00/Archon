@@ -188,8 +188,8 @@ function createDryRunContext(
 
 export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResult> {
   const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
-  // The same layering a real run fixes at its start: the pack's settings from the
-  // project's `.archon/packs/` file, then declared defaults, then supplied values.
+  // The same layering a real run fixes at its start: pack defaults, then declared
+  // defaults, then the project's `.archon/packs/` file, then supplied values.
   const ctx = createDryRunContext(
     options,
     tempRoot,
