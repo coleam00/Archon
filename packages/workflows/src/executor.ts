@@ -48,6 +48,7 @@ import type {
 import {
   SUBRUN_METADATA_KEYS,
   isTerminalRunStatus,
+  readRunDispatchMetadata,
   readSubrunMetadata,
   type ContinuationMode,
 } from './schemas';
@@ -56,6 +57,7 @@ import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-recor
 import { executionClaim, type PersistedNodeOutput, type PriorFailedNode } from './store';
 import type { ResumeCause } from './run-resume';
 import { requireTerminalStatusWrite } from './terminal-status-write';
+import { PackSettingsError } from './pack-settings';
 import { enterRunExecution, releaseRunScratch } from './run-scratch';
 import { keepAwake } from './utils/keep-awake';
 import { defaultRunInputs } from './workflow-inputs';
@@ -187,19 +189,21 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   resolveChildIsolation?: ChildIsolationResolver;
   /**
    * Declared inputs supplied by a DIRECT top-level invocation (#2554) — the CLI's
-   * `--input name=value`, the run route's `inputs` map, or the console's run form.
-   * Stamped onto the fresh run row's `metadata.inputs`, the same key a `workflow:`
-   * parent writes for its child, so every existing delivery path (`$INPUTS.<name>` on
-   * AI/prompt surfaces, `INPUTS_<UPPER_SNAKE>` for bash/script) works unchanged and the
-   * values survive a cold resume.
+   * `--input name=value`, the run route's `inputs` map, or the console's run form —
+   * which may also set one of the workflow's pack settings for this run.
+   * The top layer of the run's `$INPUTS`: the fresh run layers them over its pack's
+   * settings and its declared defaults and stamps the result onto the row's
+   * `metadata.inputs`, the same key a `workflow:` parent writes for its child, so every
+   * delivery path (`$INPUTS.<name>` on AI/prompt surfaces, `INPUTS_<UPPER_SNAKE>` for
+   * bash/script) reads it and the values survive a cold resume.
    *
    * ALREADY RESOLVED by the invocation gate (`resolveTopLevelInputs`), which validates
-   * against the workflow's declared `inputs:` before any worktree, clone, or AI cost —
-   * like `baseOverride` and `parseWarnings`, this is a caller-resolved value. The
-   * executor does not re-validate: it would run after the cost the gate exists to
-   * prevent, and its message would be shaped for the wrong surface.
+   * against the workflow's declared `inputs:` and its pack's settings before any
+   * worktree, clone, or AI cost — like `baseOverride` and `parseWarnings`, this is a
+   * caller-resolved value. The executor does not re-validate: it would run after the
+   * cost the gate exists to prevent, and its message would be shaped for the wrong surface.
    *
-   * Ignored on a resume: the row already carries the inputs validated at creation.
+   * Ignored on a resume: the row already carries the inputs fixed at its start.
    */
   inputs?: Readonly<Record<string, string>>;
   /**
@@ -288,6 +292,15 @@ export async function executeWorkflow(
           expectedExecutionClaim: executionClaim(run.metadata),
         }),
         { workflowRunId: run.id, site: 'workflow.setup_failed', failure: error }
+      );
+    }
+    // A pending row handed over for a fresh dispatch that its project's pack settings
+    // refuse can never start: nothing claimed it, and no retry would read the file any
+    // differently. Fail it here, so no launching surface leaves it pending.
+    if (run?.status === 'pending' && error instanceof PackSettingsError) {
+      await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(run.id, error.message, { exitReason: 'launch_failed' }),
+        { workflowRunId: run.id, site: 'workflow.pack_settings_refused', failure: error }
       );
     }
     throw error;
@@ -500,27 +513,23 @@ async function recordRunGraph(
 }
 
 /**
- * Declared-input defaults for a run with no caller (#2470). Runtime `$INPUTS` otherwise
- * comes only from `metadata.inputs`, which a parent stamps at spawn — so a workflow
- * started directly (CLI / chat / web) would throw on its own `$INPUTS.<name>` while the
- * identical workflow invoked as a `workflow:` child resolved it. Derived from the
- * definition rather than persisted, so it stays correct across a cold resume and when the
- * defaults are later edited. Any caller-supplied value already on the row wins; only
- * defaults are filled in.
+ * Declared-input defaults for a run started before runs fixed their inputs at start.
  *
- * The effective map is layered under the LOGICAL sibling key (#2637): defaults may now be
- * typed (`default: true`), and `readSubrunMetadata` prefers `inputs_values`, so the
- * in-memory overlay must not push a non-string value into the legacy text map (a shipped
- * binary reads a non-string `inputs` as corrupt). This overlay is never persisted — it
- * only shapes what resolveRunInputs sees for this execution.
+ * A fresh run resolves its complete `$INPUTS` when it starts (pack settings, declared
+ * defaults, supplied values) and marks its row `dispatch.inputs_resolved`, so the row is
+ * the whole answer and a resume keeps it. A row without that mark holds only what its
+ * caller supplied; for it the defaults are still layered under the row here, from the
+ * definition, as such runs always had them. The overlay rides the LOGICAL sibling key
+ * (#2637) and is never persisted.
  */
 function withDeclaredInputDefaults(
   workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun
 ): WorkflowRun {
+  const metadata = workflowRun.metadata as Record<string, unknown> | undefined;
+  if (readRunDispatchMetadata(metadata)?.inputs_resolved === true) return workflowRun;
   const declaredDefaults = defaultRunInputs(workflow.inputs);
   if (!declaredDefaults) return workflowRun;
-  const metadata = workflowRun.metadata as Record<string, unknown> | undefined;
   return {
     ...workflowRun,
     metadata: {

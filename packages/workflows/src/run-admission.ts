@@ -25,6 +25,7 @@ import {
   pendingWorkflowWaitDeadline,
   readSubrunMetadata,
   runAttention,
+  runInputsMetadata,
   type ExecutionOwnerRecord,
 } from './schemas';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
@@ -164,14 +165,7 @@ async function createWorkflowRunRow(
   dispatch: RunDispatch,
   executionOwner: ExecutionOwnerRecord
 ): Promise<RunPhase<WorkflowRun>> {
-  const {
-    preparedSource,
-    codebaseId,
-    issueContext,
-    inputs: suppliedInputs,
-    adoptedFromRunId,
-    continuationMode,
-  } = opts;
+  const { preparedSource, codebaseId, issueContext, adoptedFromRunId, continuationMode } = opts;
   const { prepared, runSource } = dispatch;
   try {
     const workflowRun = await deps.store.createWorkflowRun({
@@ -185,13 +179,6 @@ async function createWorkflowRunRow(
       working_path: cwd,
       metadata: {
         ...(issueContext ? { github_context: issueContext } : {}),
-        // Declared inputs supplied by a direct top-level invocation (#2554), already
-        // validated by the invocation gate. Written only on creation, so a resume, which
-        // arrives with `preCreatedRun` set and never creates a row, can never re-stamp or
-        // clobber what the original invocation supplied.
-        ...(suppliedInputs && Object.keys(suppliedInputs).length > 0
-          ? { [SUBRUN_METADATA_KEYS.inputs]: { ...suppliedInputs } }
-          : {}),
         // Between-run continuation (#2747): the mode stamp rides the same
         // creation write as `adopted_from_run_id` so both are write-once.
         ...(adoptedFromRunId
@@ -351,12 +338,33 @@ async function stampPreCreatedRun(
   };
 }
 
+/**
+ * What a fresh run fixed when it started: its dispatch record, and its complete `$INPUTS`
+ * (pack settings, declared defaults, supplied values), which every later read of the row
+ * takes as is. Written only on a fresh dispatch, so a resume can never re-stamp them.
+ */
+function runStartMetadata(
+  { dispatchMetadata, startInputs }: RunDispatch,
+  existingMetadata: WorkflowRun['metadata'] = {}
+): Record<string, unknown> {
+  return {
+    [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
+    ...(startInputs !== undefined
+      ? runInputsMetadata(
+          startInputs,
+          Object.hasOwn(existingMetadata, SUBRUN_METADATA_KEYS.inputsValues)
+        )
+      : {}),
+  };
+}
+
 // Container stamps let a later process rediscover the environment through backend.resumeEnv.
 function freshInvocationMetadata(
   opts: ExecuteWorkflowOptions,
-  { prepared, dispatchMetadata }: RunDispatch,
+  dispatch: RunDispatch,
   existingMetadata: WorkflowRun['metadata'] = {}
 ) {
+  const { prepared } = dispatch;
   const { modelBindingsMetadata, runConfigMetadata } = prepared;
   const containerCtx = opts.container;
   return {
@@ -364,7 +372,7 @@ function freshInvocationMetadata(
       ? {}
       : { [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot }),
     [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
-    [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
+    ...runStartMetadata(dispatch, existingMetadata),
     ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
     ...(opts.execContext?.kind === 'container' ? { isolation: 'container' } : {}),
     ...(containerCtx ? { [ISOLATION_ENV_ID_METADATA_KEY]: containerCtx.envId } : {}),

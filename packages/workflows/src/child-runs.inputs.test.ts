@@ -597,7 +597,7 @@ nodes:
     expect(prompts.some(p => p.includes('$INPUTS.diff'))).toBe(false);
   });
 
-  it('persists ONLY the supplied values on a top-level run, letting defaults stay derived', async () => {
+  it('fixes the supplied values and the declared defaults on the row when a top-level run starts', async () => {
     await writeWorkflow(
       'direct-persist',
       `
@@ -628,10 +628,9 @@ nodes:
 
     expect(result.success).toBe(true);
     const run = [...store.runs.values()].find(r => r.workflow_name === 'direct-persist');
-    // `style` is NOT on the row — freezing a derived default would make the row lie
-    // about what the invocation supplied, and pin a stale default across a resume.
-    expect(run?.metadata?.inputs).toEqual({ diff: 'D1' });
-    // …yet the default still reaches the node, layered under the persisted map.
+    // The run's complete `$INPUTS` is resolved once at start and kept on the row, so a
+    // resume reads what the run started with even if the default is later edited.
+    expect(run?.metadata?.inputs).toEqual({ diff: 'D1', style: 'strict' });
     const emitted = store.events.find(e => e.event_type === 'node_completed');
     expect(String(emitted?.data?.node_output)).toContain('style=strict');
   });
@@ -668,7 +667,7 @@ nodes:
     expect(String(emitted?.data?.node_output)).toContain('style=terse');
   });
 
-  it('writes no inputs key for a bare top-level run, preserving pre-#2554 behaviour', async () => {
+  it('fixes declared defaults on the row of a bare top-level run', async () => {
     await writeWorkflow(
       'direct-bare',
       `
@@ -695,7 +694,7 @@ nodes:
     );
 
     const run = [...store.runs.values()].find(r => r.workflow_name === 'direct-bare');
-    expect(run?.metadata?.inputs).toBeUndefined();
+    expect(run?.metadata?.inputs).toEqual({ style: 'strict' });
   });
 
   it('reconstitutes directly-supplied inputs on a COLD resume of a top-level run', async () => {

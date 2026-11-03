@@ -7,7 +7,7 @@ import { childOutcomeFromRun } from './dag/child-run';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import type { ResolvedRunModelOverrides } from './model-validation';
-import { canonicalValueText, type JsonValue } from './output-ref';
+import type { JsonValue } from './output-ref';
 import { resolveWorkflowName } from './router';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import {
@@ -22,12 +22,19 @@ import {
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
 } from './run-source';
-import type { ResolvedWorkflow, WorkflowRun } from './schemas';
-import { SUBRUN_METADATA_KEYS } from './schemas';
+import type {
+  ResolvedWorkflow,
+  WorkflowLoadError,
+  WorkflowRun,
+  WorkflowSource,
+  WorkflowWithSource,
+} from './schemas';
+import { findWorkflowLoadError } from './schemas/workflow';
+import { SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
-import { resolveDeclaredInputs } from './workflow-inputs';
+import { resolveCallerInputs } from './workflow-inputs';
 import {
   WorkflowSourceUnavailableError,
   isSourceReadFailure,
@@ -173,26 +180,28 @@ export async function runChildWorkflow(
   return withCapturedSource(async owner => {
     const source = await captureChildSource(launch, parentSource, owner);
     if (source.stopped) return source.outcome;
-    const workflow = await resolveChildWorkflow(launch, source.value);
-    if (workflow.stopped) return workflow.outcome;
-    const guard = await guardChildAncestry(launch, workflow.value);
+    const discovered = await resolveChildWorkflow(launch, source.value);
+    if (discovered.stopped) return discovered.outcome;
+    const { workflow, source: workflowSource } = discovered.value;
+    const guard = await guardChildAncestry(launch, workflow);
     if (guard.stopped) return guard.outcome;
-    const inputs = resolveChildInputs(args, workflow.value);
+    const inputs = resolveChildInputs(args, workflow);
     if (inputs.stopped) return inputs.outcome;
-    const prepared = await prepareChildAiConfiguration(launch, workflow.value);
+    const prepared = await prepareChildAiConfiguration(launch, workflow);
     if (prepared.stopped) return prepared.outcome;
     const placement = await resolveChildPlacement(launch, prepared.value);
     if (placement.stopped) return placement.outcome;
     const start = await startChildRun(launch, {
       source: source.value,
-      workflow: workflow.value,
+      workflow,
       inputs: inputs.value,
       prepared: prepared.value,
       placement: placement.value,
     });
     if (start.stopped) return start.outcome;
     return executeChildRun(launch, owner, {
-      workflow: workflow.value,
+      workflow,
+      source: workflowSource,
       prepared: prepared.value,
       cwd: placement.value.cwd,
       start: start.value,
@@ -246,12 +255,19 @@ async function captureChildSource(
   }
 }
 
+/**
+ * The child's workflow as discovery found it, with the scope it came from. Its pack rides
+ * the definition, so the child resolves its OWN pack's settings at its start, not the
+ * parent's.
+ */
 async function resolveChildWorkflow(
   { deps, args }: ChildLaunch,
   childSource: PreparedWorkflowSource
-): Promise<ChildPhase<ResolvedWorkflow>> {
+): Promise<ChildPhase<WorkflowWithSource>> {
   const { childWorkflowName } = args;
-  let childWorkflow: ResolvedWorkflow | undefined;
+  let childWorkflow: WorkflowWithSource | undefined;
+  // Why the child is missing, when discovery refused it (an invalid pack declaration, say).
+  let loadError: WorkflowLoadError | undefined;
   try {
     // DELIBERATE AFFORDANCE — do not "fix" this by adding a load-time existence
     // check for `workflow:` targets. Discovery runs HERE, when the node executes,
@@ -261,22 +277,32 @@ async function resolveChildWorkflow(
     // table (.archon/workflow-language-constitution.md) and locked by
     // `describe('workflow: late resolution is a deliberate affordance')` in
     // child-runs.late-resolution.test.ts.
-    const { workflows } = await discoverWorkflowsWithConfig(
+    const { workflows, errors } = await discoverWorkflowsWithConfig(
       args.cwd,
       deps.loadConfig,
       deps.providers,
       childSource.roots
     );
-    childWorkflow = resolveWorkflowName(
+    const resolved = resolveWorkflowName(
       childWorkflowName,
       workflows.map(w => w.workflow)
     );
-    if (childWorkflow) await recordSelectedWorkflow(childSource.anchor.root, childWorkflow.name);
+    childWorkflow = workflows.find(w => w.workflow === resolved);
+    if (!childWorkflow) loadError = findWorkflowLoadError(errors, childWorkflowName);
+    if (childWorkflow) {
+      await recordSelectedWorkflow(childSource.anchor.root, childWorkflow.workflow.name);
+    }
   } catch (err) {
     if (isSourceReadFailure(err)) throw parentSourceUnreadable(childSource.anchor.root, err);
     return refuse(`Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`);
   }
-  if (!childWorkflow) return refuse(`Unknown sub-run workflow '${childWorkflowName}'.`);
+  if (!childWorkflow) {
+    return refuse(
+      loadError
+        ? `Sub-run workflow '${childWorkflowName}' failed to load: ${loadError.error}`
+        : `Unknown sub-run workflow '${childWorkflowName}'.`
+    );
+  }
   return proceed(childWorkflow);
 }
 
@@ -319,9 +345,9 @@ function resolveChildInputs(
   childWorkflow: ResolvedWorkflow
 ): ChildPhase<Record<string, JsonValue> | undefined> {
   try {
-    const resolved = resolveDeclaredInputs(
+    const resolved = resolveCallerInputs(
       inputs ?? {},
-      childWorkflow.inputs,
+      childWorkflow,
       `Node '${nodeId}'`,
       `sub-run workflow '${childWorkflow.name}'`
     );
@@ -576,29 +602,11 @@ function childRunMetadata(
     // alongside so resume can WARN on a non-deterministic producer (same index, new item).
     ...(childIndex !== undefined ? { [SUBRUN_METADATA_KEYS.childIndex]: childIndex } : {}),
     ...(itemHash !== undefined ? { [SUBRUN_METADATA_KEYS.fanOutItemHash]: itemHash } : {}),
-    ...(inputs !== undefined ? childInputsMetadata(inputs) : {}),
+    // Named inputs (#2470): the CONTRACT-RESOLVED `with:` map (declared defaults
+    // applied), stamped at spawn. The child's own run start layers its pack's settings
+    // under it and rewrites the row's inputs with the result, which a cold resume reads.
+    ...(inputs !== undefined ? runInputsMetadata(inputs) : {}),
     ...(placement.isolationEnv ? childIsolationMetadata(placement.isolationEnv) : {}),
-  };
-}
-
-// Named inputs (#2470) — persisted at spawn so the child's `$INPUTS.<name>`
-// resolves from metadata at runtime (resolveRunInputs) and survives a COLD
-// resume: both resume paths (hydrateResumableRun and the zero-completed-node
-// resumeWorkflowRun fallback) reload THIS run row, so the map is intact without
-// re-resolving parent refs that may be out of scope. Stamped only when non-empty.
-// This is the CONTRACT-RESOLVED map (declared defaults applied), not the raw
-// caller map — the child must see exactly what its `inputs:` block promises.
-// `inputs` stays canonical TEXT forever (shipped binaries read a non-string map
-// as corrupt/unset); the logical map rides the additive `inputs_values` sibling
-// (#2637), written only when a value is actually non-string.
-function childInputsMetadata(inputs: Record<string, JsonValue>): Record<string, unknown> {
-  return {
-    [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
-      Object.entries(inputs).map(([k, v]) => [k, canonicalValueText(v)])
-    ),
-    ...(Object.values(inputs).some(v => typeof v !== 'string')
-      ? { [SUBRUN_METADATA_KEYS.inputsValues]: inputs }
-      : {}),
   };
 }
 
@@ -615,6 +623,8 @@ function childIsolationMetadata(isolationEnv: ChildIsolationResult): Record<stri
 
 interface ChildExecution {
   readonly workflow: ResolvedWorkflow;
+  /** The child's discovery scope, recorded on its dispatch like a top-level run's. */
+  readonly source: WorkflowSource;
   readonly prepared: PreparedRunAiConfiguration;
   readonly cwd: string;
   readonly start: ChildRunStart;
@@ -626,7 +636,7 @@ interface ChildExecution {
 async function executeChildRun(
   { deps, platform, args, resolvedModelOverrides }: ChildLaunch,
   owner: CapturedSourceOwner,
-  { workflow, prepared, cwd, start }: ChildExecution
+  { workflow, source, prepared, cwd, start }: ChildExecution
 ): Promise<ChildWorkflowOutcome> {
   const { resumeChild, childWorkflowName } = args;
   try {
@@ -640,6 +650,7 @@ async function executeChildRun(
       args.parentRun.origin ?? undefined,
       {
         ...start.opts,
+        source,
         ...(resumeChild ? {} : { preparedAiConfiguration: prepared }),
         capturedSourceOwner: owner,
         modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },

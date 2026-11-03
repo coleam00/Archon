@@ -14,6 +14,7 @@ import { materializeBlockCommandPrompts } from './command-prompts';
 import { IncludeExpansionError } from './expansion-error';
 import { applyInputsMacro, resolveIncludeInputs } from './inputs-macro';
 import { rewriteNodeOutputRefs } from './output-refs';
+import { findUnpassedPackSettingReads, type ExecInputSource } from '../exec-input-validation';
 
 export interface ExpandedInclude {
   /** The child's nodes, deep-cloned, id-namespaced, edges + refs rewired. */
@@ -103,7 +104,8 @@ interface InlineScope {
 function inlineInclude(
   includeNode: IncludeDirective,
   child: ResolvedWorkflow,
-  commandContents: ReadonlyMap<string, IncludeCommandContent>
+  commandContents: ReadonlyMap<string, IncludeCommandContent>,
+  namedScripts: ReadonlyMap<string, ExecInputSource>
 ): ExpandedInclude {
   // Prove the child's lexical boundary before its nodes share the parent's flat id/output
   // maps. Discovery already parsed each file independently; this repeat is intentional so
@@ -124,6 +126,8 @@ function inlineInclude(
     );
   }
 
+  assertPackSettingReadsPassed(scope, namedScripts);
+
   const sinkOriginalIds = child.plan.sinks;
   return {
     namespaced,
@@ -136,6 +140,40 @@ function inlineInclude(
     // A valid non-empty DAG always has ≥1 sink; sinkOriginalIds[0] is defined.
     primarySink: scope.prefix + (child.returns ?? sinkOriginalIds[0] ?? ''),
   };
+}
+
+/**
+ * Settings belong to the run: an included block reads only what its includer passes.
+ * A raw `INPUTS_<NAME>` read of one of the block's own pack settings would get the
+ * including run's value at run time, so it fails here like a missing `$INPUTS.<name>`.
+ */
+function assertPackSettingReadsPassed(
+  scope: InlineScope,
+  namedScripts: ReadonlyMap<string, ExecInputSource>
+): void {
+  const { includeNode, child, resolvedInputs } = scope;
+  const settings = Object.keys(child.pack?.settings ?? {});
+  if (settings.length === 0) return;
+  const reads = findUnpassedPackSettingReads(
+    child.nodes,
+    settings,
+    name => Object.hasOwn(resolvedInputs, name),
+    namedScripts
+  );
+  if (reads.length === 0) return;
+  const details = reads
+    .map(
+      read =>
+        `included node '${read.nodeId}' ${read.path} (${read.location}) reads '${read.envName}' (pack setting '${read.setting}')`
+    )
+    .join('; ');
+  const fix =
+    child.inputs === undefined
+      ? "Pass the setting through 'with:'."
+      : "Declare the setting under the block's 'inputs:' and pass it through 'with:'.";
+  throw new IncludeExpansionError(
+    `Node '${includeNode.id}': included block '${includeNode.include}' reads pack settings this include does not pass: ${details}. An included block reads only what its includer passes, never the including run's settings. ${fix}`
+  );
 }
 
 function inlineScope(
@@ -268,7 +306,11 @@ function attachIncludeGate(scope: InlineScope, clone: DagNode, cn: DagNode): voi
 export function instantiateResolvedInclude(
   includeNode: IncludeDirective,
   child: ResolvedWorkflow,
-  commandContents: ReadonlyMap<string, IncludeCommandContent> = new Map()
+  commandContents: ReadonlyMap<string, IncludeCommandContent> = new Map(),
+  // Named script sources by reference, read by discovery. A runtime compose_fan_out
+  // instance passes none: the load-time instantiation of the same block already checked
+  // its named scripts' pack-setting reads.
+  namedScripts: ReadonlyMap<string, ExecInputSource> = new Map()
 ): ExpandedInclude {
-  return inlineInclude(includeNode, child, commandContents);
+  return inlineInclude(includeNode, child, commandContents, namedScripts);
 }

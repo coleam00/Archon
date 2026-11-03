@@ -23,15 +23,18 @@ type ScriptReader = (path: string) => Promise<string>;
 /**
  * Validate exec inputs that name a script file against that file's text. A file whose
  * script cannot be found, read, or validated is removed from `files` with its error;
- * validation warnings join the file's parse warnings.
+ * validation warnings join the file's parse warnings. Returns the source read for each
+ * script reference of a file that passed, so include expansion can check an included
+ * block's named scripts against what its includer passes.
  */
 export async function validateNamedScripts(
   context: DiscoveryContext,
   files: Map<string, ScopeFile>,
   errors: ParsedWorkflowLoadError[]
-): Promise<void> {
+): Promise<Map<string, ExecInputSource>> {
+  const namedScripts = new Map<string, ExecInputSource>();
   const targetsByFile = collectNamedScriptTargets(files);
-  if (targetsByFile.size === 0) return;
+  if (targetsByFile.size === 0) return namedScripts;
 
   const discoveryRoot = context.roots.project ?? context.cwd ?? archonPaths.getArchonHome();
   const readScript = cachedScriptReader();
@@ -42,6 +45,7 @@ export async function validateNamedScripts(
       files.delete(filename);
       continue;
     }
+    for (const [target, source] of outcome.sources) namedScripts.set(target.slot.value, source);
     const parsed = files.get(filename);
     if (outcome.warnings.length > 0 && parsed !== undefined) {
       files.set(filename, {
@@ -50,6 +54,7 @@ export async function validateNamedScripts(
       });
     }
   }
+  return namedScripts;
 }
 
 function collectNamedScriptTargets(
@@ -90,7 +95,12 @@ interface ScriptsError {
   error: Omit<ParsedWorkflowLoadError, 'filename'>;
 }
 
-type FileScriptsOutcome = ScriptsError | { warnings: readonly string[] };
+type FileScriptsOutcome =
+  | ScriptsError
+  | {
+      warnings: readonly string[];
+      sources: ReadonlyMap<ExecInputValidationTarget, ExecInputSource>;
+    };
 
 async function validateFileScripts(
   context: DiscoveryContext,
@@ -133,7 +143,7 @@ async function validateFileScripts(
       },
     };
   }
-  return { warnings: validation.warnings };
+  return { warnings: validation.warnings, sources };
 }
 
 async function readTargetSources(

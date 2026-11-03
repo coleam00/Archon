@@ -26,8 +26,11 @@ import {
   isWaitNode,
   readContinuationMode,
   readRunDispatchMetadata,
+  readSubrunMetadata,
   type RunDispatchMetadata,
 } from './schemas';
+import type { JsonValue } from './output-ref';
+import { resolveRunStartInputs } from './pack-settings';
 import { isContainerRun, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { executionClaim } from './store';
@@ -50,6 +53,12 @@ export interface RunDispatch {
   /** Discovery source for telemetry attribution, as recorded at the run's start. */
   runSource: WorkflowSource | undefined;
   dispatchMetadata: RunDispatchMetadata;
+  /**
+   * A fresh run's complete `$INPUTS`, resolved now and written to its row: its pack's
+   * settings, the workflow's declared defaults, then the supplied values. Undefined on a
+   * continuation, which keeps the inputs its row holds, and when the run has none.
+   */
+  startInputs: Record<string, JsonValue> | undefined;
   docsDir: string;
 }
 
@@ -122,9 +131,11 @@ export async function resolveRunDispatch(
    * original. Only a run with no record at all (warned above) takes the live value.
    */
   const runSource = recordedDispatch ? recordedDispatch.source : opts.source;
+  const packs = await resolveRunPacks(cwd, workflow, opts, isContinuation, recordedDispatch);
   const dispatchMetadata: RunDispatchMetadata = {
     base_branch: baseBranch,
     ...(runSource ? { source: runSource } : {}),
+    ...packs.metadata,
   };
 
   const docsDir = config.docsPath ?? 'docs/';
@@ -147,8 +158,51 @@ export async function resolveRunDispatch(
       baseBranch,
       runSource,
       dispatchMetadata,
+      startInputs: packs.startInputs,
       docsDir,
     },
+  };
+}
+
+/**
+ * The run's pack and its inputs. A fresh run resolves them now, from its
+ * working directory's `.archon/packs/` file, before its row exists or any node spends.
+ * A continuation keeps what its record says, exactly as it keeps `source`: a record
+ * without a pack is a run that had none, and a project file edited since the start
+ * reaches no resumed run.
+ */
+async function resolveRunPacks(
+  cwd: string,
+  workflow: ResolvedWorkflow,
+  opts: ExecuteWorkflowOptions,
+  isContinuation: boolean,
+  recordedDispatch: RunDispatchMetadata | undefined
+): Promise<{
+  metadata: Pick<RunDispatchMetadata, 'pack' | 'inputs_resolved'>;
+  startInputs: Record<string, JsonValue> | undefined;
+}> {
+  if (isContinuation) {
+    const { pack, inputs_resolved } = recordedDispatch ?? {};
+    return {
+      metadata: {
+        ...(pack !== undefined ? { pack } : {}),
+        ...(inputs_resolved !== undefined ? { inputs_resolved } : {}),
+      },
+      startInputs: undefined,
+    };
+  }
+  // A pre-created row already carries what its launcher supplied (`--input`, a parent's
+  // `with:`); a run the executor creates itself is supplied through `opts.inputs`.
+  const supplied =
+    (opts.preCreatedRun ? readSubrunMetadata(opts.preCreatedRun.metadata).inputs : undefined) ??
+    opts.inputs;
+  const { inputs } = await resolveRunStartInputs(cwd, workflow, supplied);
+  return {
+    metadata: {
+      ...(workflow.pack !== undefined ? { pack: workflow.pack.key } : {}),
+      inputs_resolved: true,
+    },
+    startInputs: inputs,
   };
 }
 
