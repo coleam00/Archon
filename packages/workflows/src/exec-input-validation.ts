@@ -1,6 +1,7 @@
-import type { ExecNode, WorkflowDefinition } from './schemas';
+import type { DagNode, ExecNode, WorkflowDefinition } from './schemas';
 import { inputEnvKey, isExecNode, isIncludeDirective } from './schemas';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
+import { readComposedMeta } from './compiled-command';
 import { isInlineScript } from './executor-shared';
 import type { TemplateSlot } from './template-walker';
 import { visitNodeTemplateSlots } from './template-walker';
@@ -145,7 +146,9 @@ export function validateExecInputTargets(
 ): ExecInputValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
-  // A pack setting reaches every node of the pack's workflows as an input.
+  // A pack setting reaches every node of the pack's workflows as an input when the
+  // workflow runs directly. Included, the block reads only what its includer passes:
+  // `findUnpassedPackSettingReads` checks that at include expansion.
   const declaredInputs = [
     ...new Set([
       ...Object.keys(workflow.inputs ?? {}),
@@ -181,6 +184,70 @@ export function validateInlineExecInputs(
     inlineExecInputSource,
     configuredEnvNames
   );
+}
+
+/** A raw `INPUTS_<NAME>` read of a pack setting that nothing passes to the included node. */
+export interface UnpassedPackSettingRead {
+  readonly nodeId: string;
+  readonly path: string;
+  readonly location: string;
+  readonly envName: string;
+  readonly setting: string;
+}
+
+/**
+ * Raw `INPUTS_<NAME>` reads, in an included block's own nodes, of the block's pack
+ * settings that neither the includer (`passed`) nor the node's own `with:` supplies.
+ * At run time such a read gets the INCLUDING run's value, so it is refused at load like
+ * the `$INPUTS.<name>` form. Nodes that arrived through a deeper include carry composed
+ * metadata and were checked against their own file when that include was expanded.
+ * A named script with no source in `namedScripts` (a flat name discovery did not
+ * resolve) cannot be read here and is not checked.
+ */
+export function findUnpassedPackSettingReads(
+  nodes: readonly DagNode[],
+  settingNames: readonly string[],
+  passed: (name: string) => boolean,
+  namedScripts: ReadonlyMap<string, ExecInputSource>
+): readonly UnpassedPackSettingRead[] {
+  const settingByEnv = new Map(settingNames.map(name => [inputEnvKey(name), name]));
+  const found: UnpassedPackSettingRead[] = [];
+  for (const node of nodes) {
+    visitNodeTemplateSlots(node, slot => {
+      if (slot.surface !== 'shell' && slot.surface !== 'script') return;
+      if (readComposedMeta(slot.owner) !== undefined) return;
+      const source = packSettingReadSource(slot, namedScripts);
+      if (source === undefined) return;
+      // Mirrors inputEnvVars: only a non-shell exec node's own `with:` reaches its env.
+      const owner = slot.owner;
+      const bound = new Set(
+        isExecNode(owner) && owner.runtime !== 'sh' ? Object.keys(owner.with ?? {}) : []
+      );
+      for (const read of scanEnvironmentReads(source.text, source.runtime)) {
+        const setting = settingByEnv.get(read.name);
+        if (setting === undefined || passed(setting) || bound.has(setting)) continue;
+        found.push({
+          nodeId: owner.id,
+          path: slot.path,
+          location: `${source.label} line ${String(read.line)}`,
+          envName: read.name,
+          setting,
+        });
+      }
+    });
+  }
+  return found;
+}
+
+function packSettingReadSource(
+  slot: TemplateSlot,
+  namedScripts: ReadonlyMap<string, ExecInputSource>
+): ExecInputSource | undefined {
+  if (slot.surface === 'shell') return { text: slot.value, label: 'bash', runtime: 'sh' };
+  if (!isExecNode(slot.owner)) return undefined;
+  if (isInlineScript(slot.value))
+    return { text: slot.value, label: 'script', runtime: slot.owner.runtime };
+  return namedScripts.get(slot.value);
 }
 
 function scanEnvironmentReads(

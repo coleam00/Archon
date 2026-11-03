@@ -379,6 +379,76 @@ nodes:
     expect(dispatchOf(run)).toMatchObject({ pack: 'alpha', inputs_resolved: true });
   });
 
+  it("refuses an included block's raw $INPUTS_<setting> read its includer does not pass", async () => {
+    await writePackWorkflow(
+      'beta',
+      'beta-raw',
+      'name: beta-raw\ndescription: raw read\nnodes:\n  - id: shell\n    bash: echo "beta-env=$INPUTS_TONE"\n'
+    );
+    await writePackWorkflow(
+      'beta',
+      'beta-script',
+      'name: beta-script\ndescription: named script read\nnodes:\n  - id: speak\n    script: speak\n    runtime: bun\n'
+    );
+    await mkdir(join(cwd, '.archon', 'workflows', 'beta', 'beta-script', 'scripts'), {
+      recursive: true,
+    });
+    await writeFile(
+      join(cwd, '.archon', 'workflows', 'beta', 'beta-script', 'scripts', 'speak.ts'),
+      'console.log(`beta-env=${process.env.INPUTS_TONE}`);\n'
+    );
+    for (const block of ['beta-raw', 'beta-script']) {
+      await writePackWorkflow(
+        'alpha',
+        `alpha-${block}`,
+        `name: alpha-${block}\ndescription: passes nothing\nnodes:\n  - id: blk\n    include: ${block}\n`
+      );
+    }
+
+    const { workflows, errors } = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
+    const loaded = workflows.map(w => w.workflow.name);
+    expect(loaded).not.toContain('alpha-beta-raw');
+    expect(loaded).not.toContain('alpha-beta-script');
+    const rawError = errors.find(e => e.filename === 'alpha-beta-raw.yaml')?.error;
+    expect(rawError).toContain("Node 'blk'");
+    expect(rawError).toContain("included node 'shell'");
+    expect(rawError).toContain("'INPUTS_TONE'");
+    const scriptError = errors.find(e => e.filename === 'alpha-beta-script.yaml')?.error;
+    expect(scriptError).toContain("included node 'speak'");
+    expect(scriptError).toContain("'INPUTS_TONE'");
+    // The blocks themselves still load: run directly, a workflow reads its pack raw.
+    expect(loaded).toContain('beta-raw');
+    expect(loaded).toContain('beta-script');
+  });
+
+  it('a workflow run directly reads its own pack setting raw', async () => {
+    await writePackWorkflow(
+      'beta',
+      'beta-raw',
+      'name: beta-raw\ndescription: raw read\nnodes:\n  - id: shell\n    bash: echo "beta-env=$INPUTS_TONE"\n'
+    );
+
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('beta-raw'),
+      'goal',
+      { conversationId: 'conv-db' },
+      { baseBranch: 'main' }
+    );
+
+    expect(result.success).toBe(true);
+    expect(nodeOutput(store, runNamed(store, 'beta-raw')?.id, 'shell')).toContain(
+      'beta-env=beta-project'
+    );
+  });
+
   it("refuses a workflow: with: that sets the child's pack setting, typed or not", async () => {
     await writePackWorkflow(
       'beta',

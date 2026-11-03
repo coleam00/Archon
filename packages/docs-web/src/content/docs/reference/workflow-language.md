@@ -2060,14 +2060,14 @@ result on its row; a resumed run keeps those values even if the project file cha
       forge: $INPUTS.forge   # the including run's setting, passed in
   ```
 
-  Load checks a block's `$INPUTS.<name>` references against what its includer passes. It does
-  not check a `bash:`/`script:` node's raw `$INPUTS_<NAME>` env reads that way: those are
-  checked only against the block's own file, where its pack's settings count as declared. Every
-  node, an included one too, gets the including run's inputs as `INPUTS_*` env vars, so such a
-  read of a name the includer does not pass gets the including run's value of that name (its
-  pack setting or input) if the run has one, and is empty otherwise; never the block's own
-  pack's value. A block meant to be included should declare the name under its own `inputs:`
-  and have the includer pass it through `with:`.
+  A `bash:` or `script:` node's raw `$INPUTS_<NAME>` env read of one of the block's pack
+  settings is checked the same way,
+  in `bash:`, inline and named `script:`, `until_bash` and `loop_group` body nodes: a read that
+  neither the includer's `with:` nor the node's own `with:` passes fails the load, naming the
+  node and the read. A block that declares `inputs:` must declare the name there too. Run
+  directly, the same workflow reads its pack settings raw. A raw read of a name that is not one
+  of the block's pack settings is not checked: it gets the including run's input of that name,
+  if the run has one.
 - **A `workflow:` child is a run of its own**: it resolves its own pack's settings when it
   starts, under the `with:` values its parent passes. The parent's `with:` cannot set one of the
   child's pack settings (unless the child also declares an input of that name); the node fails,
