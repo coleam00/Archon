@@ -23,10 +23,7 @@ sweep:
 record:
   merged: [42]
   summary: "stub: merged PR 42"
-  attention: ""
-  options: []
-  class: ""
-  asked: null
+  asks: []
 retriage:
   retriaged: [7]
   summary: "stub: Sent 1 of 1 merged issue(s) back to intake."

@@ -11,6 +11,7 @@ facts:
   brief: ""
   rounds: []
   at_cap: false
+  approved: false
   policy_defaults: "/stub/policy"
   pull_request: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-old", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
   continues: 1

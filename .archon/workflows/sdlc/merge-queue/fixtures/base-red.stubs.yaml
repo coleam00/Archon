@@ -34,20 +34,18 @@ sweep:
 record:
   merged: []
   summary: "stub: dev is red; merged nothing"
-  attention: "stub: the attention message"
-  options: [{ id: hold, label: "stub: hold merges" }]
-  class: base
-  asked: { by: base, attention: {} }
-ask: { decision: hold, text: "" }
-ruling:
-  decision: hold
-  section: ""
-  summary: "stub: the queue holds merges while dev is red"
+  asks:
+    - attention: "stub: the attention message"
+      options: [{ id: hold, label: "stub: hold merges" }]
+      class: base
+      asked: { by: base, attention: {} }
+      owner_run_id: stub-parent
+questions: []
 retriage:
   retriaged: []
   summary: "stub: Sent 0 of 0 merged issue(s) back to intake."
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
-  reached: [facts, sweep, record, retriage, ask, ruling]
+  reached: [facts, sweep, record, retriage, questions]
 exec-code: true

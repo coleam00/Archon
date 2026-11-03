@@ -18,7 +18,8 @@
  * next queue run picks the item up as before.
  *
  * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE and INPUTS_TEXT, the
- * attention answer; INPUTS_LIMIT, INPUTS_MERGE_METHOD and INPUTS_RETRIAGE_AS, the workflow's inputs.
+ * attention answer; INPUTS_OWNER_RUN_ID, the parent claim owner; and the merge queue's
+ * follow-up input selections.
  */
 
 import { withBuild } from '../../.shared/build.ts';
@@ -28,7 +29,7 @@ import { launchDetached, type MergeQueueSelections } from '../../.shared/launch.
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
 import { chosen, rulingHeading } from '../../.shared/queue.ts';
-import { updateClaimed } from '../../.shared/workitem.ts';
+import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 
 const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<
   MergeAttention['choices'][number]['effect'],
@@ -43,8 +44,7 @@ function continueNow(effect: string, item: QualifiedPr, runId: string, selection
     const next =
       effect === 'merge'
         ? launchDetached('archon-merge-queue', { ...selections, ...repo }, { configFromRun: runId })
-        : // The build queue declares none of the merge queue's selections, so a returned
-          // round runs on the build queue's defaults.
+        : // Returned work uses the destination queue's input defaults.
           launchDetached('archon-build-queue', { ...repo, number: String(item.number) }, { configFromRun: runId });
     return `; run ${next} acts on it now`;
   } catch (error) {
@@ -87,6 +87,7 @@ function main(): void {
   const choice = chosen(asked.attention, id);
   const at = new Date().toISOString();
   const selections: MergeQueueSelections = {
+    auto_merge_queue: process.env.INPUTS_AUTO_MERGE_QUEUE ?? 'true',
     limit: text(process.env.INPUTS_LIMIT),
     merge_method: text(process.env.INPUTS_MERGE_METHOD),
     retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
@@ -94,6 +95,11 @@ function main(): void {
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')
     .join('\n\n');
+  const ownerRunId = trimmed(process.env.INPUTS_OWNER_RUN_ID);
+  if (ownerRunId === '') throw new Error('owner_run_id is required');
+  if (readWorkItem(asked.item.number)?.claim?.run_id !== ownerRunId) {
+    throw new Error(`work/${String(asked.item.number)} is no longer claimed by this run`);
+  }
   const heading = writeRuling(asked, ruling, at);
 
   const entry: MergeDecisionEntry = {
@@ -106,7 +112,7 @@ function main(): void {
     head: asked.head,
     reran: false,
   };
-  updateClaimed(asked.item, runId, doc => {
+  updateClaimed(asked.item, ownerRunId, doc => {
     const recorded = withMerge(doc, {
       at,
       run_id: runId,

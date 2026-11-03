@@ -21,6 +21,7 @@ import {
   MERGE_QUEUE_FORGE_OPERATIONS,
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
+import type { MergeQuestion } from '../../workflows/sdlc/merge-queue/scripts/record';
 import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
 import { withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
@@ -204,8 +205,9 @@ describe('the merge record and the gate', () => {
         workflow.nodes.find(node => node.id === id)?.output_format
       );
     expect((at('facts', 'path') as Enum).enum).toEqual([...MERGE_PATHS]);
-    expect(at('record', 'class')?.enum).toEqual(['', ...MERGE_ASKED_BY]);
-    expect(at('ruling', 'decision')?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
+    const child = Bun.YAML.parse(readFileSync(join(PACK, 'merge-question/archon-merge-question.yaml'), 'utf8')) as typeof workflow;
+    expect(child.nodes.find(node => node.id === 'question')?.output_format?.properties?.class?.enum).toEqual([...MERGE_ASKED_BY]);
+    expect(child.nodes.find(node => node.id === 'ruling')?.output_format?.properties?.decision?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
   });
 });
 
@@ -408,7 +410,7 @@ function run(
   inputs: Record<string, string>,
   options: { pr?: FakePr; comments?: readonly GhCommentRow[]; args?: readonly string[]; artifacts?: Record<string, string>; preload?: string; issues?: readonly GhIssue[]; source?: 'gh' | 'forge' } = {}
 ): ScriptRun {
-  return runPackScript(`merge-queue/scripts/${script}`, {
+  return runPackScript(`${script === 'ruling' ? 'merge-question' : 'merge-queue'}/scripts/${script}`, {
     cwd: at.checkout,
     source: options.source,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
@@ -419,6 +421,7 @@ function run(
     inputs: {
       ...at.env,
       WORKFLOW_ID: 'run-1',
+      INPUTS_OWNER_RUN_ID: 'run-1',
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
       INPUTS_LIMIT: '10',
@@ -596,10 +599,10 @@ describe('the merge queue scripts', () => {
       const attention = { ...ATTENTION, choices: ATTENTION.choices.filter(entry => entry.effect !== 'return') };
       const askAt = (head: string) => {
         const inputs = recordInputs([decision({ action: 'ask', head, attention })]);
-        const recorded = ok(run(at, 'record', {
+        const recorded = (ok(run(at, 'record', {
           ...inputs,
           INPUTS_ITEMS: JSON.stringify([{ item: PR, pr: PR, url: PR_URL, facts: { ...FACTS, head_revision: head }, record: null, own_pr: true }]),
-        }, { pr: { headRefOid: head } })) as { asked: { attention: MergeAttention } };
+        }, { pr: { headRefOid: head } })).asks as MergeQuestion[])[0]!;
         // The queue owns `other`'s text; the sweep writes what its own `park` does.
         if (choice === 'other') expect(recorded.asked.attention.choices.find(entry => entry.id === 'other')?.does).toContain('different head');
         const ruled = run(at, 'ruling', { INPUTS_ASKED: JSON.stringify(recorded.asked), INPUTS_CHOICE: choice, INPUTS_TEXT: 'repair it' });
@@ -1085,7 +1088,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   test('a merge the forge reads back is recorded and released at its head, whatever the sweep says', () => {
     const at = install();
     const merged = { state: 'MERGED' } as const;
-    const released = { merged: [42], attention: '', class: '', asked: null };
+    const released = { merged: [42], asks: [] };
     // Declared merged; declared at another head; merged by hand, declared wait; merged by hand under an ask.
     const cases = [
       [decision({}), BASE_GREEN],
@@ -1132,8 +1135,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     const inputs = { ...recordInputs([], BASE_RED, FACTS_BASE_RED), INPUTS_ITEMS: '[]' };
     const raised = ok(run(at, 'record', inputs));
-    expect(raised).toMatchObject({ merged: [], class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } });
-    expect(raised.attention).toContain('dev is red since PR 43 merged');
+    expect(raised).toMatchObject({ merged: [], asks: [{ class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } }] });
+    expect((raised.asks as MergeQuestion[])[0]?.attention).toContain('dev is red since PR 43 merged');
   }, 60_000);
 
   test('a rerun is recorded at its head, for the next sweep to read', () => {
@@ -1158,7 +1161,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   test('an ask keeps the claim and raises one attention item with every field and the declared choices', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
-    const asked = ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' })])));
+    const asks = ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' })]))).asks as MergeQuestion[];
+    expect(asks).toHaveLength(1);
+    const asked = asks[0]!;
     expect(asked).toMatchObject({
       class: 'pr',
       options: [
@@ -1205,10 +1210,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const attention: MergeAttention = { ...ATTENTION, choices: ATTENTION.choices.filter(choice => choice.effect !== 'return') };
-    const output = ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief: '' })]))) as {
-      attention: string;
-      asked: { attention: MergeAttention };
-    };
+    const output = (ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief: '' })]))).asks as MergeQuestion[])[0]!;
+    if (output.asked.by !== 'pr') throw new Error('expected PR question');
     expect(output).toMatchObject({ class: 'pr', asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: '' } });
     // The sweep's own words reach the operator unchanged; only the queue's `other` is added.
     expect(output.asked.attention).toMatchObject({ why: attention.why, recommendation: attention.recommendation });
@@ -1266,16 +1269,71 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(buildWaits(doc)).toBe(false);
   }, 60_000);
 
-  test('a red default branch takes the run\'s one question, and the pull request\'s ask waits for the next sweep', () => {
+  test('a red default branch and a pull request each raise a question', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
     const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' })], BASE_RED);
     const raised = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: BOTH_ITEMS }, { pr: { merged: [43] } }));
-    expect(raised).toMatchObject({ merged: [43], class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } });
-    expect(raised.attention).toContain('dev is red since PR 43 merged');
-    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ decision: 'ask (not raised this run) (unclear)' }] } } });
+    expect(raised).toMatchObject({ merged: [43], asks: [{ class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } }, { class: 'pr', asked: { pr: PR } }] });
+    expect((raised.asks as MergeQuestion[])[0]?.attention).toContain('dev is red since PR 43 merged');
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking', decisions: [{ decision: 'ask (unclear)' }] } } });
     expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+  }, 60_000);
+
+  test('three questions hold independent parent claims; one child answer is immediately claimable by a later sweep', () => {
+    const at = install();
+    const subjects = [7, 8, 9].map(number => ({ ...SUBJECT, number }));
+    const prs = [42, 43, 44].map(number => ({ ...PR, number }));
+    const items = subjects.map((subject, index) => {
+      const pr = prs[index]!;
+      const url = PR_URL.replace(/42$/, String(pr.number));
+      seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: url })) }, undefined, CLAIMED), subject });
+      return { item: subject, pr, url, facts: { ...FACTS, pr, url }, record: null, own_pr: false };
+    });
+    const output = ok(run(at, 'record', {
+      ...recordInputs(prs.map(pr => decision({ number: pr.number, action: 'ask', class: 'unclear', attention: ATTENTION, brief: `rework PR ${pr.number}` }))),
+      INPUTS_ITEMS: JSON.stringify(items),
+    }));
+    const asks = output.asks as MergeQuestion[];
+    expect(asks).toHaveLength(3);
+    expect(asks.map(question => question.asked.by === 'pr' && question.asked.pr.number)).toEqual([42, 43, 44]);
+    for (const question of asks) {
+      expect(question.owner_run_id).toBe('run-1');
+      expect(question.options.map(option => option.id)).toEqual(['merge', 'return', 'park', 'other']);
+      expect(question.attention).toContain(ATTENTION.what);
+    }
+    const siblings = subjects.slice(1).map(subject => stored(at, subject.number));
+    const ruled = run(at, 'ruling', {
+      WORKFLOW_ID: 'child-1', INPUTS_OWNER_RUN_ID: asks[0]!.owner_run_id,
+      INPUTS_ASKED: JSON.stringify(asks[0]!.asked), INPUTS_CHOICE: 'merge', INPUTS_TEXT: '',
+      INPUTS_AUTO_MERGE_QUEUE: 'false',
+    });
+    expect(ok(ruled).decision).toBe('merge');
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { approval: { head: HEAD }, decisions: [expect.anything(), { run_id: 'child-1' }] } } });
+    expect(subjects.slice(1).map(subject => stored(at, subject.number))).toEqual(siblings);
+    const later = ok(run(at, 'facts', { WORKFLOW_ID: 'later-sweep', INTAKE_RUN_STATUSES: '{"run-1":"paused"}', INPUTS_AUTO_MERGE_QUEUE: 'false' }));
+    expect(later).toMatchObject({ path: 'sweep', items: [{ item: SUBJECT, record: { approval: { head: HEAD } } }] });
+    expect(stored(at).value?.claim?.run_id).toBe('later-sweep');
+    expect(subjects.slice(1).map(subject => stored(at, subject.number))).toEqual(siblings);
+    const before = stored(at);
+    const stale = run(at, 'ruling', { WORKFLOW_ID: 'stale-child', INPUTS_OWNER_RUN_ID: 'run-1', INPUTS_ASKED: JSON.stringify(asks[0]!.asked), INPUTS_CHOICE: 'return', INPUTS_TEXT: 'change scope' });
+    expect(stale.code).toBe(1);
+    expect(stale.stderr).toContain('no longer claimed');
+    expect(stale.bodies).toEqual([]);
+    expect(stored(at)).toEqual(before);
+  }, 60_000);
+
+  test.each(['merged', 'closed', 'unreadable', 'changed-head', 'lost-claim'] as const)('record raises no actionable question after %s', kind => {
+    const at = install();
+    seed(at, item(BUILT, undefined, kind === 'lost-claim' ? { claim: { run_id: 'someone-else', at: AT, requests: [] } } : CLAIMED));
+    const result = run(at, 'record', recordInputs([decision({ action: 'ask', attention: ATTENTION, brief: 'rework PR 42' })]), {
+      pr: kind === 'merged' ? { state: 'MERGED' } : kind === 'closed' ? { state: 'CLOSED' } : kind === 'unreadable' ? { unreadable: true } : kind === 'changed-head' ? { headRefOid: OLD } : {},
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout).asks).toEqual([]);
+    if (kind === 'lost-claim') expect(result.stderr).toContain('not recorded');
+    else expect(stored(at).value?.claim).toBeNull();
   }, 60_000);
 
   test('a decision for a pull request the run did not claim is noted and skipped, and the rest is still recorded', () => {
@@ -1331,7 +1389,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }, 60_000);
 
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
-  const SELECTED = { INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge', INPUTS_RETRIAGE_AS: 'maintainer' };
+  const SELECTED = { INPUTS_AUTO_MERGE_QUEUE: 'false', INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge', INPUTS_RETRIAGE_AS: 'maintainer' };
   const launchOf = (calls: string): string[] | undefined =>
     readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
 
@@ -1345,7 +1403,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(mergeWaits(doc)).toBe(true);
     // The approval is acted on at once: a sweep starts on the answered run's config and input selections.
     expect(launchOf(calls)).toEqual(
-      expect.arrayContaining(['archon-merge-queue', 'limit=2', 'merge_method=merge', 'retriage_as=maintainer', '--config-from-run', 'run-1', '--detach'])
+      expect.arrayContaining(['archon-merge-queue', 'auto_merge_queue=false', 'limit=2', 'merge_method=merge', 'retriage_as=maintainer', '--config-from-run', 'run-1', '--detach'])
     );
   }, 60_000);
 
@@ -1404,6 +1462,9 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
     expect(output.path).toBe('sweep');
     expect(output.items[0]?.facts).toEqual(FACTS);
     expect(output.gate).toContain('gate.ts');
+    expect(output.gate).toContain("INPUTS_AUTO_MERGE_QUEUE='true'");
+    const disabled = ok(on(at, 'facts', {}, { INPUTS_AUTO_MERGE_QUEUE: 'false', WORKFLOW_ID: 'idle-sweep', INTAKE_RUN_STATUSES: '{"run-1":"paused"}' }));
+    expect(disabled.gate).toContain("INPUTS_AUTO_MERGE_QUEUE='false'");
     expect(stored(at).value?.claim?.run_id).toBe('run-1');
     expect(ok(on(at, 'facts', {}, { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
   }, 60_000);
@@ -1428,6 +1489,44 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
     const forged = { ...REVIEWED, author: 'outsider' };
     const output = ok(on(at, 'facts', { comments: [forged] })) as { items: { facts: PrFacts }[] };
     expect(output.items[0]?.facts.verdict.state).toBe('none');
+  }, 60_000);
+
+  test('disabled autonomy refuses a technically ready merge without head approval', () => {
+    const at = install();
+    seed(at, item());
+    const gated = on(at, 'gate', { args: [...args, '--item', '7'] }, { INPUTS_AUTO_MERGE_QUEUE: 'false' });
+    expect(gated.code).toBe(1);
+    expect(JSON.parse(gated.stdout).refusals).toContain('maintainer approval is required at this head');
+    expect(merges(gated)).toEqual([]);
+  }, 60_000);
+
+  test.each(['matching', 'stale', 'other-pr', 'other-repo', 'record-repo', 'current-pr', 'missing-item', 'missing-state', 'unreadable-state'] as const)('disabled autonomy checks %s approval against the qualified work item', kind => {
+    const at = install();
+    const approved = { ...merge('waiting'), approval: { head: kind === 'stale' ? OLD : HEAD, at: AT },
+      pr: kind === 'other-pr' ? { ...PR, number: 99 } : kind === 'record-repo' ? { ...PR, repo: { ...PR.repo, path: 'someone/else' } } : PR };
+    if (kind !== 'missing-state') seed(at, item(kind === 'current-pr' ? { ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: PR_URL.replace(/42$/, '99') })) } : BUILT, approved, kind === 'other-repo' ? { subject: { ...SUBJECT, repo: { ...PR.repo, path: 'someone/else' } } } : {}));
+    if (kind === 'unreadable-state') inProcess(at, () => expect(statePut('work/7', { version: 0 }, stateGet('work/7').revision)).toBe('ok'));
+    const gated = on(at, 'gate', { args: kind === 'missing-item' ? args : [...args, '--item', '7'] }, { INPUTS_AUTO_MERGE_QUEUE: 'false' });
+    expect(gated.code).toBe(kind === 'matching' ? 0 : 1);
+    expect(merges(gated)).toHaveLength(kind === 'matching' ? 1 : 0);
+    if (kind === 'unreadable-state') expect(gated.stderr).toContain('merge-queue gate:');
+    else if (kind !== 'matching') expect(JSON.parse(gated.stdout).refusals).toContain('maintainer approval is required at this head');
+    const inspect = on(at, 'gate', { args: ['--method', 'squash', '--pr', PR_URL, '--head', HEAD] }, { INPUTS_AUTO_MERGE_QUEUE: 'false' });
+    expect(ok(inspect).refusals).toEqual([]);
+    expect(merges(inspect)).toEqual([]);
+  }, 60_000);
+
+  test('invalid autonomy refuses before claims or forge mutations', () => {
+    const at = install();
+    seed(at, item());
+    const before = stored(at);
+    for (const script of ['facts', 'gate'] as const) {
+      const invalid = on(at, script, { args }, { INPUTS_AUTO_MERGE_QUEUE: 'FALSE' });
+      expect(invalid.code).toBe(1);
+      expect(invalid.stderr).toContain('auto_merge_queue must be true or false');
+      expect(merges(invalid)).toEqual([]);
+      expect(stored(at)).toEqual(before);
+    }
   }, 60_000);
 
   test('the gate merges pinned to the head it passed', () => {

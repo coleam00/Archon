@@ -9,8 +9,7 @@ description: |
   red, and merges pinned to that head. The queue never pushes and never waits for CI:
   a conflict, a stale verdict or red the change caused goes back to the build queue,
   and the default branch's CI after a merge is the next sweep's first fact. A clear
-  case acts on its own; anything unclear pauses as one attention item whose answer is
-  a declared choice.
+  case acts on its own by default; each question waits in an independent child run.
 
   Use when: a trigger binding the operator installed starts it (see the SDLC pack
   README, "Merge queue").
@@ -20,6 +19,9 @@ description: |
 requires: [github]
 
 inputs:
+  auto_merge_queue:
+    default: 'true'
+    description: Whether the queue acts without a maintainer answer. Accepts true or false.
   repo_host:
     description: The forge host of the repository whose pull requests the queue merges.
   repo_path:
@@ -74,6 +76,7 @@ nodes:
       base: { from: "$facts.output.base" }
       items: { from: "$facts.output.items" }
       gate: "$facts.output.gate"
+      auto_merge_queue: "$INPUTS.auto_merge_queue"
     output_format:
       type: object
       properties:
@@ -162,7 +165,7 @@ nodes:
       required: [decisions, base, summary]
 
   # Checks the decisions, reads back every pull request and records one decision per
-  # item; raises at most one attention item. It also runs when no sweep was due.
+  # item; returns every eligible question. It also runs when no sweep was due.
   - id: record
     script: record
     runtime: bun
@@ -180,20 +183,8 @@ nodes:
       properties:
         merged: { type: array, items: { type: integer } }
         summary: { type: string }
-        # The attention message; empty when nothing is asked.
-        attention: { type: string }
-        options:
-          type: array
-          items:
-            type: object
-            properties:
-              id: { type: string }
-              label: { type: string }
-            required: [id, label]
-        class: { type: string, enum: ['', pr, base] }
-        # What the ruling node needs to act on the answer; null when nothing is asked.
-        asked: { type: [object, 'null'] }
-      required: [merged, summary, attention, options, class, asked]
+        asks: { type: array, items: { type: object } }
+      required: [merged, summary, asks]
 
   # An issue its merged pull request left open (`Refs #N`) goes back to intake, the
   # judge of whether the work is delivered. Writes nothing on the work item.
@@ -212,30 +203,15 @@ nodes:
         summary: { type: string }
       required: [retriaged, summary]
 
-  # A paused run gives its resource slot back, so the next scheduled sweep can merge
-  # other pull requests while this one waits.
-  - id: ask
+  - id: questions
     depends_on: [record]
-    when: "$record.output.attention != ''"
-    wait:
-      attention: "$record.output.attention"
-      form: select
-      options: "$record.output.options"
-      labels:
-        merge: "$record.output.class"
-
-  - id: ruling
-    script: ruling
-    runtime: bun
-    depends_on: [record, ask]
+    workflow: archon-merge-question
     with:
-      asked: { from: "$record.output.asked" }
-      choice: "$ask.output.decision"
-      text: "$ask.output.text"
-    output_format:
-      type: object
-      properties:
-        decision: { type: string, enum: [merge, return, park, hold] }
-        section: { type: string }
-        summary: { type: string }
-      required: [decision, section, summary]
+      limit: "$INPUTS.limit"
+      merge_method: "$INPUTS.merge_method"
+      retriage_as: "$INPUTS.retriage_as"
+      auto_merge_queue: "$INPUTS.auto_merge_queue"
+    fan_out:
+      items: "$record.output.asks"
+      as: question
+      max_parallel: all

@@ -504,6 +504,20 @@ person. It acts on its own when a case is clear and asks when it is not; the def
 policy for which is which is [`.shared/policy/build.md`](.shared/policy/build.md),
 which a project extends with its own `.archon/sdlc/policy/build.md`.
 
+`auto_build_queue` defaults to `'true'`. Set `--input auto_build_queue=false`
+to require an answer before each round. The agent still judges policy and asks with
+`continue` recommended and the brief it would launch. A `continue` answer starts
+one round, preserving the false setting on follow-ups. Checkout consumes that answer
+before ship starts; a failed attempt after consumption needs another answer. An
+already-ready pull request can still be handed to the merge queue without a round.
+
+```bash
+archon workflow run archon-build-queue --input repo_host=github.com --input repo_path=acme/widgets --input auto_build_queue=false
+```
+
+Until pack config supplies settings as the lowest input layer, set this ordinary
+workflow input directly or in a trigger binding. It never rewrites policy files.
+
 - **Pickup.** A run claims one item with intake's claim and order. An item waits for the build queue when its work item's stage is a READY
   route (`deliver`, `continue`, `plan` or `investigate`) and the queue has not
   recorded it, or recorded it as waiting for its next round. A re-triage after the
@@ -621,7 +635,7 @@ changes its checkout, so every run needs its own worktree:
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-build-queue",
-      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets", "auto_build_queue": "false" },
       "isolation": { "kind": "worktree" }
     }
   },
@@ -641,6 +655,22 @@ merges on its own when a case is clear and asks when it is not; the default poli
 which is which is [`.shared/policy/merge.md`](.shared/policy/merge.md), which a project
 extends with its own `.archon/sdlc/policy/merge.md`: the sweep reads the default and
 then the project's file, whose lines win where the two conflict.
+
+`auto_merge_queue` defaults to `'true'`. Set `--input auto_merge_queue=false`
+to ask before merging even a clear, technically ready pull request, with `merge`
+recommended. The gate refuses `--merge` without `--item <work-item-number>` and a
+stored maintainer approval for that qualified pull request at that exact head.
+A `merge` answer pins approval to the asked head; a later sweep merges only once
+the gate passes there. A changed head needs another answer, including after merges
+of the default branch. Read-only gate checks still report technical readiness.
+
+```bash
+archon workflow run archon-merge-queue --input repo_host=github.com --input repo_path=acme/widgets --input auto_merge_queue=false
+```
+
+Until pack config supplies settings as the lowest input layer, pass this ordinary
+input directly or in a trigger binding. Policy still decides the case; the setting
+governs whether the queue may act, and never changes policy text.
 
 - **Pickup.** A run claims every waiting item, up to `limit` (default 10), with
   intake's claim and order. An item waits for the merge queue when its build record is
@@ -697,7 +727,7 @@ then the project's file, whose lines win where the two conflict.
   with git against the merge base, not the forge's counts. An unclear pull request is
   asked as soon as its verdict is Ready at its head, even while its CI is pending or it
   conflicts; the approval is pinned to that head and a later sweep merges it once the
-  gate passes. An approval carries to a later head only when the sweep judges that
+  gate passes. With `auto_merge_queue=true`, an approval carries to a later head only when the sweep judges that
   everything since the approved head is merges of the default branch and their
   conflict resolutions, and the verdict is Ready at the later head; any doubt voids it.
 - **Gate.** The sweep merges only through
@@ -751,9 +781,11 @@ then the project's file, whose lines win where the two conflict.
   request, which has no issue, are left alone. A failed read, label write or launch
   is named in the node's summary and stops nothing else. Empty `retriage_as`
   re-triages nothing.
-- **Attention.** A run raises at most one attention item: a red default branch, whose
-  one choice holds merges until it is green, or else the first pull request the sweep
-  asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
+- **Attention.** A sweep raises every eligible question, including a red default
+  branch and each asked pull request, labelled `merge: base` or `merge: pr`. Each
+  runs in an `archon-merge-question` child with `max_parallel: all`. The child applies
+  its answer and releases only that item's parent claim immediately, so a later sweep
+  can act on it while sibling questions remain open. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
   links. A build-owned ask with a blank brief still raises its question when it
@@ -763,7 +795,7 @@ then the project's file, whose lines win where the two conflict.
   queue readies the item again; no build round starts. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
   a sweep the answer starts at once (on the answered run's config and its
-  `limit`, `merge_method` and `retriage_as`) merges it once the
+  `limit`, `merge_method`, `retriage_as` and `auto_merge_queue`) merges it once the
   gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
   back to the build queue, whose next round starts at once on the build queue's own
@@ -772,8 +804,9 @@ then the project's file, whose lines win where the two conflict.
   observes a different head from the one asked about. The `other` answer stays on
   the work item as its ruling; it writes no issue body and starts no build round.
   New CI or review results at the same head do not unpark it. Approval remains pinned
-  to its approved head, subject to the existing conflict-only carry rule. Any other
-  ask waits for a later sweep, which decides it again.
+  to its approved head, subject to the conflict-only carry rule only when autonomy is true.
+  Only open pull requests that read back at the asked head and whose claim update
+  succeeds receive an actionable question.
 
 The pack installs no binding. A schedule sweeps the queue. A run never changes its
 checkout, and the claim keeps two runs off the same item:
@@ -793,7 +826,7 @@ checkout, and the claim keeps two runs off the same item:
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-merge-queue",
-      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" }
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets", "auto_merge_queue": "false" }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }

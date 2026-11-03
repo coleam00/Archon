@@ -1,6 +1,5 @@
 # Dry-run fixture, an unclear pull request: it changes the SDLC pack, so the sweep asks
-# instead of merging. The run pauses as one attention item whose answer is a declared
-# choice, and the ruling node records the approval. The queue's scripts are stubbed
+# instead of merging. Each question runs in a child that applies its answer independently. The queue's scripts are stubbed
 # here and proved by .archon/scripts/__tests__/merge-queue.test.ts.
 facts:
   path: sweep
@@ -38,20 +37,18 @@ sweep:
 record:
   merged: []
   summary: "stub: asked about PR 42"
-  attention: "stub: the attention message"
-  options: [{ id: merge, label: "stub: merge it" }, { id: park, label: "stub: park it" }]
-  class: pr
-  asked: { by: pr, attention: {} }
-ask: { decision: merge, text: "" }
-ruling:
-  decision: merge
-  section: ""
-  summary: "stub: PR 42: the maintainer chose merge"
+  asks:
+    - attention: "stub: the attention message"
+      options: [{ id: merge, label: "stub: merge it" }, { id: park, label: "stub: park it" }]
+      class: pr
+      asked: { by: pr, attention: {} }
+      owner_run_id: stub-parent
+questions: []
 retriage:
   retriaged: []
   summary: "stub: Sent 0 of 0 merged issue(s) back to intake."
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
-  reached: [facts, sweep, record, retriage, ask, ruling]
+  reached: [facts, sweep, record, retriage, questions]
 exec-code: true

@@ -29,14 +29,31 @@
  * `none` needs its own value.
  */
 
+import { buildApproved, withBuild } from '../../.shared/build.ts';
 import type { PrRecord, QualifiedPr } from '../../.shared/forge.ts';
 import { forgeSource } from '../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
-import { emit, nullableJson, refuse } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, text } from '../../.shared/io.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { reviewedHead } from '../../.shared/merge.ts';
 import { viewPr } from '../../.shared/pr.ts';
+import { queueAutonomy } from '../../.shared/queue.ts';
 import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
+import { updateClaimed } from '../../.shared/workitem.ts';
+
+function consumeApproval(): void {
+  if (queueAutonomy('auto_build_queue')) return;
+  const item = nullableJson(process.env.INPUTS_ITEM) as QualifiedPr;
+  const runId = text(process.env.WORKFLOW_ID);
+  const at = new Date().toISOString();
+  updateClaimed(item, runId, doc => {
+    if (!buildApproved(doc)) throw new Error('an unused continue answer is required for this round');
+    return withBuild(doc, {
+      at, run_id: runId, round: null, status: 'next', brief: doc.facts.build?.brief ?? '', release: false,
+      entry: { at, run_id: runId, decision: 'launch', reason: 'consumed the continuation answer for this round', links: [] },
+    });
+  });
+}
 
 /** A fresh round stays on the base and tells ship `none` for any pull request the item has. */
 function fresh(known: PrRecord | null): void {
@@ -44,6 +61,7 @@ function fresh(known: PrRecord | null): void {
   const base = fetchDefaultBranch(item.repo);
   if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
     throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
+  consumeApproval();
   emit({ head: null, reviewed: null, pull_request: known === null ? null : 'none' });
 }
 
@@ -73,7 +91,9 @@ function main(): void {
   const branch = gitOrThrow('branch', '--show-current');
   gitOrThrow('checkout', '-q', ...(branch === '' ? ['--detach'] : ['-B', branch]), head);
   const ref = { repo: pr.repo, number: continues };
-  emit({ head, reviewed: reviewedHead(ref, readMaintainers(pr.repo)), pull_request: continues });
+  const reviewed = reviewedHead(ref, readMaintainers(pr.repo));
+  consumeApproval();
+  emit({ head, reviewed, pull_request: continues });
 }
 
 try {

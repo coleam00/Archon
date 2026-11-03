@@ -14,6 +14,7 @@ import {
   type BuildRecord,
   type BuildRound,
   buildBranch,
+  buildApproved,
   buildWaits,
   countedRounds,
   itemPullRequest,
@@ -321,14 +322,14 @@ const ENDING = { delivered: false, reason: 'review_open', pr_url: 'https://ghe.e
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
 
 /** Non-default selections on a run that named no item, so its own `number` is empty. */
-const SELECTED = { INPUTS_RETRIAGE_AS: 'maintainer', INPUTS_ROUND_LIMIT: '5', INPUTS_NUMBER: '' };
+const SELECTED = { INPUTS_AUTO_BUILD_QUEUE: 'false', INPUTS_RETRIAGE_AS: 'maintainer', INPUTS_ROUND_LIMIT: '5', INPUTS_NUMBER: '' };
 
 /** The next round keeps the run's config and selections, and targets the item it continues. */
 function expectNextRound(calls: string): void {
   const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
   expect(launch).toEqual(
     expect.arrayContaining([
-      'archon-build-queue', 'retriage_as=maintainer', 'round_limit=5', 'number=7',
+      'archon-build-queue', 'auto_build_queue=false', 'retriage_as=maintainer', 'round_limit=5', 'number=7',
       '--config-from-run', 'run-1', '--detach',
     ])
   );
@@ -515,6 +516,27 @@ describe('the build queue scripts', () => {
       });
     }
   });
+
+  test.each(['unused', 'retriaged', 'released', 'round', 'ordinary-continue', 'consumed'] as const)('facts recognizes only an unused continuation answer: %s', kind => {
+    const at = install();
+    const answered = { at: LATER, run_id: 'answer-run', decision: 'answered: continue', reason: 'go', links: [], answer: { choice: 'relax', text: '', at: LATER } };
+    const newer = '2026-10-17T00:00:00.000Z';
+    const build = record({ decisions: kind === 'ordinary-continue' ? [{ ...answered, decision: 'continue' }] : kind === 'consumed' ? [answered, { at: newer, run_id: 'launched', decision: 'launch', reason: 'go', links: [] }] : [answered], rounds: kind === 'round' ? [round('newer', newer)] : [] });
+    const doc = triaged({}, build);
+    seed(at, { ...doc, facts: { ...doc.facts, triage: { ...TRIAGE, at: kind === 'retriaged' ? newer : AT } },
+      history: kind === 'released' ? [{ at: newer, run_id: 'pickup', stage: 'build', outcome: 'released', summary: 'terminal owner' }] : doc.history });
+    expect(ok(run(at, 'facts', { INPUTS_AUTO_BUILD_QUEUE: 'false' })).approved).toBe(kind === 'unused');
+  }, 60_000);
+
+  test('invalid build autonomy fails before claiming an item', () => {
+    const at = install();
+    seed(at, triaged());
+    const before = stored(at);
+    const invalid = run(at, 'facts', { INPUTS_AUTO_BUILD_QUEUE: 'yes' });
+    expect(invalid.code).toBe(1);
+    expect(invalid.stderr).toContain('auto_build_queue must be true or false');
+    expect(stored(at)).toEqual(before);
+  }, 60_000);
 
   test("facts claims a triaged item without taking intake's requests, and writes the issue the agents read", () => {
     const at = install();
@@ -978,6 +1000,30 @@ describe('the build queue checkout', () => {
     expect(Object.keys(output).sort()).toEqual([...(required ?? [])].sort());
     return output;
   }
+
+  test.each(['fresh', 'continued'] as const)('disabled autonomy consumes one answer at %s checkout and refuses another launch', kind => {
+    const at = install();
+    git(at.checkout, 'checkout', '-q', 'dev');
+    mkdirSync(join(at.checkout, '.archon/sdlc/policy'), { recursive: true });
+    writeFileSync(join(at.checkout, '.archon/sdlc/policy/maintainers.json'), '["Maintainer"]\n');
+    git(at.checkout, 'add', '.archon/sdlc/policy/maintainers.json');
+    git(at.checkout, 'commit', '-q', '-m', 'maintainers');
+    git(at.checkout, 'push', '-q', 'upstream', 'HEAD:dev');
+    git(at.checkout, 'push', '-q', 'upstream', 'feature');
+    const head = git(at.checkout, 'rev-parse', 'feature');
+    const answered = { at: LATER, run_id: 'answer-run', decision: 'answered: continue', reason: 'go', links: [], answer: { choice: 'relax', text: '', at: LATER } };
+    seed(at, triaged(CLAIMED, record({ decisions: [answered] })));
+    const inputs = { INPUTS_AUTO_BUILD_QUEUE: 'false', INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: kind === 'fresh' ? 'null' : '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) };
+    expect(buildApproved(stored(at).value!)).toBe(true);
+    expect(run(at, 'checkout', inputs, { pr: { headRefOid: head } }).code).toBe(0);
+    const consumed = stored(at);
+    expect(consumed.value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { build: { status: 'next', brief: 'continue', rounds: [], decisions: [answered, { decision: 'launch' }] } } });
+    expect(buildApproved(consumed.value!)).toBe(false);
+    const refused = run(at, 'checkout', inputs, { pr: { headRefOid: head } });
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain('an unused continue answer is required');
+    expect(stored(at)).toEqual(consumed);
+  }, 60_000);
 
   test('a continued round starts at the PR head on its queue branch and reports the head its last review named', () => {
     const at = install();

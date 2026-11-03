@@ -299,3 +299,14 @@ export function withReleasedRound(doc: WorkItem, claim: Claim, status: string, a
     facts: { ...doc.facts, build: { ...build, rounds: [...build.rounds, round].slice(-KEPT_ROUNDS) } },
   };
 }
+
+/** A continuation answer authorizes one round until checkout consumes it. */
+export function buildApproved(doc: WorkItem): boolean {
+  const build = doc.facts.build;
+  const decision = build?.decisions.at(-1);
+  if (build?.status !== 'next' || decision?.decision !== 'answered: continue' || decision.answer === undefined) return false;
+  const at = decision.at;
+  return (doc.facts.triage?.at ?? '') <= at &&
+    !build.rounds.some(round => round.at >= at) &&
+    !doc.history.some(entry => entry.outcome === 'released' && entry.at >= at);
+}

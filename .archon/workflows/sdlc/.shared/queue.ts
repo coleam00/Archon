@@ -151,3 +151,11 @@ export function renderAttention<Effect extends string>(
 export function rulingHeading(at: string, about: string): string {
   return `Current scope (maintainer ruling on ${about}, ${at.slice(0, 10)})`;
 }
+
+/** Queue switches are exact input values; absence preserves automatic operation. */
+export function queueAutonomy(name: 'auto_build_queue' | 'auto_merge_queue'): boolean {
+  const value = process.env[`INPUTS_${name.toUpperCase()}`];
+  if (value === undefined || value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error(`${name} must be true or false`);
+}

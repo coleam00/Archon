@@ -11,7 +11,7 @@ Archon bundles one workflow pack, `sdlc`. It covers the software lifecycle from 
 
 ## How the factory runs
 
-`archon-intake` triages each new issue, `archon-build-queue` works it to a reviewed pull request, `archon-merge-queue` merges it, and `archon-discoveries` files what runs noticed on the way. Anything unclear pauses as one attention item with a recommendation. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs them on your repository; the pack binds no trigger by default.
+`archon-intake` triages each new issue, `archon-build-queue` works it to a reviewed pull request, `archon-merge-queue` merges it, and `archon-discoveries` files what runs noticed on the way. Unclear decisions raise attention items with recommendations; merge questions run in independent children. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs them on your repository; the pack binds no trigger by default.
 
 `archon-ship` itself is a graph of the stage workflows below. Triage picks a route; investigate or plan runs when the route needs it; then the delivery rounds implement, open a draft pull request, review it through specialist lenses, fix the findings and wait for CI. Stages hand each other files in `$ARTIFACTS_DIR`, such as `triage.md`, `plan.md` and `implementation.md`, not conversation history.
 
@@ -73,13 +73,53 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 The stage after intake, started by a schedule binding. Each run claims the triaged item that sorts first, or the issue `--input number=<n>` names, launches `archon-ship` on it from a brief, and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, unless only a check no round can run remains, which it asks for once at that head (a maintainer's `ready` answer also hands it to the merge queue, whose gate still checks it), and a correctable finding or a stop the issue already answers starts the item's next round at once (never when the pull request changed nothing material since its last review), as a detached `archon-build-queue --input number=<n>` run on the same run config. An unclear one, a correction that would add machinery the issue does not ask for, a Ready pull request waiting only on a check no round can run, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
 
+`auto_build_queue` defaults to `'true'`. With `--input auto_build_queue=false`,
+the route still judges policy but asks before launching, recommending `continue`
+with its brief. One answer authorizes one round; checkout consumes it before ship.
+A failure after consumption needs a new answer. Follow-up rounds preserve false and
+ask again; an already-ready pull request can still advance without a round.
+
+```bash
+archon workflow run archon-build-queue --input repo_host=github.com --input repo_path=acme/widgets --input auto_build_queue=false
+```
+
+For a trigger binding, add `"auto_build_queue": "false"` to its `launch.inputs`:
+
+```json
+{ "repo_host": "github.com", "repo_path": "acme/widgets", "auto_build_queue": "false" }
+```
+
+These are ordinary workflow inputs until pack config supplies settings as the lowest
+input layer. They never rewrite policy text. Omit them to keep automatic action.
+
 **When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
 
 **What it produces**: Pull requests from `archon-ship`, the queue's record on each work item (`facts.build`: status, rounds and decisions), and attention items for the decisions that need a person.
 
 #### `archon-merge-queue`
 
-The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges each Ready, green pull request that merges cleanly into the base branch, hands back to the build queue what it can fix (a conflict, a stale or missing verdict, a review thread that raises a defect, red the change caused), and never pushes or waits for CI itself. Every merge goes through a gate script that refuses unless the review verdict says Ready for the head, CI is green there, the base branch's CI is not red and the head contains the base branch or merges into it cleanly (open review threads are the sweep's judgment), and merges pinned to that head. The base branch's CI on a merge is the next sweep's first fact. An unclear pull request, such as a very large change, is asked as soon as its review is Ready, as a `merge: pr` attention item with the agent's recommendation and declared choices. A red base branch raises a `merge: base` item whose one choice is `hold`. A run raises at most one attention item: the red base branch first, otherwise the first pull request the sweep asked about; a later sweep decides the rest again.
+The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges each Ready, green pull request that merges cleanly into the base branch, hands back to the build queue what it can fix (a conflict, a stale or missing verdict, a review thread that raises a defect, red the change caused), and never pushes or waits for CI itself. Every merge goes through a gate script that refuses unless the review verdict says Ready for the head, CI is green there, the base branch's CI is not red and the head contains the base branch or merges into it cleanly (open review threads are the sweep's judgment), and merges pinned to that head. The base branch's CI on a merge is the next sweep's first fact. An unclear pull request, such as a very large change, is asked as soon as its review is Ready, as a `merge: pr` attention item with the agent's recommendation and declared choices. A red base branch raises a `merge: base` item whose one choice is `hold`. Every eligible question runs in its own `archon-merge-question` child, fanned out with `max_parallel: all`. Each child applies its answer immediately and releases only the answered item's parent claim. A later sweep can act on that item while sibling questions remain unanswered.
+
+`auto_merge_queue` defaults to `'true'`. With `--input auto_merge_queue=false`,
+even a clear, passing pull request is asked with `merge` recommended. The gate itself
+refuses `--merge` unless `--item <work-item-number>` resolves a stored maintainer
+approval for that qualified pull request at that exact head. A `merge` answer pins
+approval; a later sweep merges when the gate passes. Any changed head requires a new
+answer. Read-only gate checks remain available without approval. With autonomy true,
+the existing policy judgment about carrying approval across base merges still applies.
+
+```bash
+archon workflow run archon-merge-queue --input repo_host=github.com --input repo_path=acme/widgets --input auto_merge_queue=false
+```
+
+For a trigger binding, add `"auto_merge_queue": "false"` to its `launch.inputs`:
+
+```json
+{ "repo_host": "github.com", "repo_path": "acme/widgets", "auto_merge_queue": "false" }
+```
+
+These are ordinary workflow inputs until pack config supplies settings as the lowest
+input layer. They never rewrite policy text. Omit them to keep automatic action.
 
 **When to use it**: You want reviewed, green pull requests merged without merging each by hand, while changes that need a person still wait for one. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
 

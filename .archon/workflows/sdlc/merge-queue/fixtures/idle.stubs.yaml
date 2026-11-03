@@ -12,10 +12,7 @@ facts:
 record:
   merged: []
   summary: "stub: No pull request waits for the merge queue."
-  attention: ""
-  options: []
-  class: ""
-  asked: null
+  asks: []
 retriage:
   retriaged: []
   summary: "stub: Sent 0 of 0 merged issue(s) back to intake."

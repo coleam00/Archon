@@ -44,3 +44,8 @@ Only on ask; null on launch or ready. A maintainer reads it without opening the 
 - `links`: the issue, and any pull request, report or run the decision rests on.
 
 Declare `reason`: one line a maintainer can check.
+
+## Queue autonomy
+
+The setting is `$INPUTS.auto_build_queue`; an unused continuation answer is `$INPUTS.approved`.
+Judge the item normally. When the setting is false and approved is false, convert a would-launch decision into `ask`, recommending a choice with effect `continue` and carrying the brief you would launch. Supply the complete attention item, including confidence, evidence, alternatives and what would change the recommendation. A ready disposition remains available. When approved is true, launch the authorized round from the recorded brief; that approval is consumed at checkout and does not authorize later rounds.

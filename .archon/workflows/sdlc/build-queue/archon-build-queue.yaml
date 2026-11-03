@@ -20,6 +20,9 @@ description: |
 requires: [github]
 
 inputs:
+  auto_build_queue:
+    default: 'true'
+    description: Whether the queue acts without a maintainer answer. Accepts true or false.
   repo_host:
     description: The forge host of the repository whose work items the queue builds.
   repo_path:
@@ -76,6 +79,7 @@ nodes:
         rounds: { type: array, items: { type: object } }
         # Whether this run's round reaches round_limit rounds since the scope changed.
         at_cap: { type: boolean }
+        approved: { type: boolean }
         policy_defaults: { type: string }
         # The item's pull request as the forge reports it now: the latest round's that
         # recorded one, or the one triage routed it to continue; else null.
@@ -87,7 +91,7 @@ nodes:
         # The branch the round opens its pull request from when route continues none: a
         # new build/<issue>-<slug>-<run>. Empty with no item.
         branch: { type: string }
-      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch]
+      required: [path, item, url, record, brief, rounds, at_cap, approved, policy_defaults, pull_request, continues, branch]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -104,6 +108,8 @@ nodes:
       url: "$facts.output.url"
       record: { from: "$facts.output.record" }
       brief: "$facts.output.brief"
+      approved: "$facts.output.approved"
+      auto_build_queue: "$INPUTS.auto_build_queue"
       pull_request: { from: "$facts.output.pull_request" }
       continues: "$facts.output.continues"
     output_format:
@@ -163,7 +169,7 @@ nodes:
     script: checkout
     runtime: bun
     depends_on: [facts, route]
-    when: "$route.output.decision == 'launch'"
+    when: "$route.output.decision == 'launch' && $INPUTS.auto_build_queue == 'true' || $route.output.decision == 'launch' && $facts.output.approved == true"
     with:
       item: { from: "$facts.output.item" }
       pull_request: { from: "$facts.output.pull_request" }
@@ -190,7 +196,7 @@ nodes:
   - id: ship
     include: archon-ship-block
     depends_on: [facts, route, checkout]
-    when: "$route.output.decision == 'launch'"
+    when: "$route.output.decision == 'launch' && $INPUTS.auto_build_queue == 'true' || $route.output.decision == 'launch' && $facts.output.approved == true"
     with:
       target: "$route.output.brief"
       pull_request: "$checkout.output.pull_request"
@@ -200,7 +206,7 @@ nodes:
     command: answer
     depends_on: [facts, checkout, ship]
     trigger_rule: none_failed_min_one_success
-    when: "$facts.output.path == 'route' && $route.output.decision == 'launch'"
+    when: "$facts.output.path == 'route' && $route.output.decision == 'launch' && $INPUTS.auto_build_queue == 'true' || $facts.output.path == 'route' && $route.output.decision == 'launch' && $facts.output.approved == true"
     model: large
     mutates_checkout: false
     with:
