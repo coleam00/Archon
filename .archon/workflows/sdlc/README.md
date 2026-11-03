@@ -798,9 +798,9 @@ governs whether the queue may act, and never changes policy text.
   `limit`, `merge_method`, `retriage_as` and `auto_merge_queue`) merges it once the
   gate passes there; `return` writes the choice's
   ruling into the issue body as a dated "Current scope" section and hands the item
-  back to the build queue, whose next round starts at once on the build queue's own
-  input defaults; `park` stops working it until the build queue readies it
-  again. For an own PR, both `park` and `other` stop queue work until a later sweep
+  back to the build queue as `next` and releases its claim. Its configured build
+  trigger or a manual launch owns the next run's autonomy input; `park` stops working
+  it until the build queue readies it again. For an own PR, both `park` and `other` stop queue work until a later sweep
   observes a different head from the one asked about. The `other` answer stays on
   the work item as its ruling; it writes no issue body and starts no build round.
   New CI or review results at the same head do not unpark it. Approval remains pinned

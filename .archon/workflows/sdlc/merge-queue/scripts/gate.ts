@@ -1,7 +1,7 @@
 /**
  * The merge queue's gate: the sweep agent's one way to merge.
  *
- *   gate.ts --method <squash|merge> --pr <url> --head <sha> [--item <work-item-number>] [--merge]
+ *   INPUTS_AUTO_MERGE_QUEUE=<true|false> gate.ts --method <squash|merge> --pr <url> --head <sha> [--item <work-item-number>] [--merge]
  *
  * It reads the pull request and the default branch fresh and refuses unless the trusted
  * review verdict says Ready at `head`, CI is green at `head`, the default branch's CI is
@@ -9,7 +9,8 @@
  * `head`, and `head` contains the default branch's head or the forge reports it merges
  * cleanly. Without
  * `--merge` it only reports. With it, a passing gate merges pinned to `head` and reads the
- * merge back. With auto_merge_queue=false it also requires a stored exact-head approval.
+ * merge back. Mutating calls require an explicit auto_merge_queue value. With false,
+ * it also requires a stored exact-head approval.
  * A pull request that reads back unmerged, as on a branch whose merges the forge queues,
  * fails the gate. The record node reads every pull request back itself.
  *
@@ -54,8 +55,11 @@ function approvedAtHead(args: readonly string[], pr: QualifiedPr, head: string):
 }
 
 function main(): void {
-  const automatic = queueAutonomy('auto_merge_queue');
   const args = process.argv.slice(2);
+  if (args.includes('--merge') && process.env.INPUTS_AUTO_MERGE_QUEUE === undefined) {
+    throw new Error('auto_merge_queue must be true or false on a mutating gate call');
+  }
+  const automatic = queueAutonomy('auto_merge_queue');
   const method = MERGE_METHODS.find(candidate => candidate === flag(args, '--method'));
   if (method === undefined) throw new Error(`--method must be one of ${MERGE_METHODS.join(', ')}`);
   const url = flag(args, '--pr');

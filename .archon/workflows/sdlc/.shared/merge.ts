@@ -14,7 +14,7 @@
  */
 
 import { itemPullRequest } from './build.ts';
-import { forgeSource, invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
+import { forgeSource, invokeForge, record, REMEDY, samePr, type QualifiedPr } from './forge.ts';
 import { isOwnPr } from './own-prs.ts';
 import { ghGraphql, ghIssueComments, viewPr } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
@@ -166,7 +166,7 @@ export interface MergeChange {
   readonly entry: MergeDecisionEntry;
   readonly status: MergeStatus;
   readonly pr: QualifiedPr | null;
-  /** Undefined keeps the approval already recorded. */
+  /** Undefined keeps the recorded approval only for the same qualified pull request. */
   readonly approval?: MergeRecord['approval'];
   /** Clear the claim in the same write: nothing is left for this run to do. */
   readonly release: boolean;
@@ -179,7 +179,9 @@ export function withMerge(doc: WorkItem, change: MergeChange): WorkItem {
   const merge: MergeRecord = {
     status: change.status,
     pr: change.pr,
-    approval: change.approval === undefined ? (prior?.approval ?? null) : change.approval,
+    approval: change.approval === undefined
+      ? (prior?.pr != null && change.pr !== null && samePr(prior.pr, change.pr) ? prior.approval : null)
+      : change.approval,
     decisions: [
       ...(prior?.decisions ?? []),
       { ...change.entry, reason: reason.length <= KEPT_TEXT ? reason : `${reason.slice(0, KEPT_TEXT)}…` },

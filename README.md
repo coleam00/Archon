@@ -32,7 +32,7 @@ Ask a coding agent to fix a bug and the result depends on the run. It may skip t
 Archon turns your process into a workflow you own. The workflow fixes the steps, the checks and the gates. The agent supplies the judgment inside each step. That gives you:
 
 - **The same process every time.** Plan, implement, review, validate, open the PR, in the order you wrote down.
-- **Human on the loop, not in it.** Queues take work forward on their own. When a run reaches a decision it can't make, it pauses as one attention item: what it is, why it matters, a recommendation and the choices. You answer and it carries on.
+- **Human on the loop, not in it.** Queues take work forward on their own. When a run reaches a decision it can't make, it raises an attention item: what it is, why it matters, a recommendation and the choices. A merge sweep can raise several independent questions. Use `archon workflow attention --all` to see them and answer each one.
 - **Governance built in.** Approval gates, a full event log and transcript for every run, and the cost of every run, all stored in your own database.
 - **Your agents, your subscriptions.** Archon is not another coding agent. It runs Claude Code, Codex and Pi through their own CLIs and SDKs, with the accounts and project guidance you already have.
 - **Self-hosted.** One install on your machine or server. SQLite by default, PostgreSQL if you want it.
@@ -97,7 +97,7 @@ The bundled `sdlc` pack is a working factory for a repository:
 1. **You open an issue.** `archon-intake` checks it against the current code and decides what it needs: a plan, an investigation, straight to delivery, or a maintainer's look.
 2. **The build queue picks it up.** `archon-build-queue` claims the next ready issue, writes the brief and runs `archon-ship`: plan, implement, review through specialist lenses, fix the findings, wait for CI. It stops at a pull request whose review says Ready, asking once for any check no round can run, or at one a maintainer's `ready` answer hands on; the merge gate checks either the same way.
 3. **The merge queue lands it.** `archon-merge-queue` merges the clear ready pull requests that merge cleanly, through a gate that checks the review verdict and CI at the head commit and that the base branch is not red. The queue judges open review threads itself and sends a pull request that conflicts back to the build queue.
-4. **You answer what's unclear.** A scope question, a schema change or a stuck round becomes one attention item with a recommendation. Your answer is written into the issue as the new scope.
+4. **You answer what's unclear.** Each scope question, schema change or stuck round becomes an attention item with a recommendation. A merge sweep can ask about several pull requests independently; list open questions with `archon workflow attention --all`. Your answer is written into the issue as the new scope.
 5. **Nothing found along the way is lost.** `archon-discoveries` reads what runs noticed outside their task and files it, tracks it on an existing issue, or drops it.
 
 Archon builds Archon: of the 524 pull requests merged into this repository between 1 and 19 October 2026, Archon runs built 363.

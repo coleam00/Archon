@@ -7,7 +7,7 @@ sidebar:
   order: 4
 ---
 
-The bundled `sdlc` pack is a software factory made of four queues. You write an issue; intake triages it, the build queue works it to a reviewed pull request, and the merge queue merges it. When a run reaches a decision it can't make, it pauses as one attention item for you to answer. This page sets that up on one GitHub repository, runs it by hand once, and then shows how to let it run on its own.
+The bundled `sdlc` pack is a software factory made of four queues. You write an issue; intake triages it, the build queue works it to a reviewed pull request, and the merge queue merges it. When a run reaches a decision it can't make, it raises an attention item for you to answer. A merge sweep can ask about several pull requests independently; use `archon workflow attention --all` to see every open question. This page sets that up on one GitHub repository, runs it by hand once, and then shows how to let it run on its own.
 
 | Queue | What it does |
 |---|---|

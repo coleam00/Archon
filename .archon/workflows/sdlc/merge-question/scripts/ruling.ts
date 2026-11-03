@@ -13,9 +13,8 @@
  * stays on its work item. On a red default branch the only answer is `hold`: the queue
  * merges nothing while the branch is red, which every sweep reads from the forge, so
  * nothing is written. A `merge` then starts a sweep at once, on the run config and input
- * selections this run started with, and a `return` the item's next build-queue round, on
- * this run's config and the build queue's own input defaults; if that launch fails, the
- * next queue run picks the item up as before.
+ * selections this run started with. A `return` releases the item for the configured
+ * build queue or a manual launch, which owns its build autonomy input.
  *
  * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE and INPUTS_TEXT, the
  * attention answer; INPUTS_OWNER_RUN_ID, the parent claim owner; and the merge queue's
@@ -38,14 +37,11 @@ const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const
 
 /** Act on the answer now; on failure the released item waits for the next queue run. */
 function continueNow(effect: string, item: QualifiedPr, runId: string, selections: MergeQueueSelections): string {
-  if (effect !== 'merge' && effect !== 'return') return '';
+  if (effect === 'return') return '; the configured build queue or a manual launch picks it up';
+  if (effect !== 'merge') return '';
   const repo = { repo_host: item.repo.host, repo_path: item.repo.path };
   try {
-    const next =
-      effect === 'merge'
-        ? launchDetached('archon-merge-queue', { ...selections, ...repo }, { configFromRun: runId })
-        : // Returned work uses the destination queue's input defaults.
-          launchDetached('archon-build-queue', { ...repo, number: String(item.number) }, { configFromRun: runId });
+    const next = launchDetached('archon-merge-queue', { ...selections, ...repo }, { configFromRun: runId });
     return `; run ${next} acts on it now`;
   } catch (error) {
     note(`issue ${String(item.number)}: the follow-up run did not start, so the next queue run picks it up: ${error instanceof Error ? error.message : String(error)}`);

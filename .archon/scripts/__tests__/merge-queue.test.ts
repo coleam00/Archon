@@ -16,6 +16,7 @@ import {
   type MergeRecord,
   type MergeSettled,
   mergeWaits,
+  withMerge,
   type PrFacts,
   prFromUrl,
   MERGE_QUEUE_FORGE_OPERATIONS,
@@ -185,6 +186,22 @@ describe('the merge record and the gate', () => {
     expect(readReviewStamp('Verdict: ready')).toBeNull();
   });
 
+  test('implicit approval survives only the same qualified pull request; explicit approval replaces it', () => {
+    const approval = { head: HEAD, at: AT };
+    const doc = item(BUILT, { ...merge('waiting'), approval });
+    const change = {
+      at: LATER, run_id: 'run-1', status: 'waiting', pr: PR, release: false,
+      entry: { at: LATER, run_id: 'run-1', decision: 'wait', reason: 'CI pending', links: [], head: HEAD, reran: false },
+    } as const;
+    for (const pr of [PR, { ...PR, number: 99 }, { ...PR, repo: { ...PR.repo, host: 'other.example' } },
+      { ...PR, repo: { ...PR.repo, path: 'other/repo' } }, null]) {
+      expect(withMerge(doc, { ...change, pr }).facts.merge?.approval).toEqual(pr === PR ? approval : null);
+    }
+    expect(withMerge(doc, { ...change, approval: null }).facts.merge?.approval).toBeNull();
+    const renewed = { head: OLD, at: LATER };
+    expect(withMerge(doc, { ...change, pr: { ...PR, number: 99 }, approval: renewed }).facts.merge?.approval).toEqual(renewed);
+  });
+
   test('a pull request URL names its repository and number; anything else refuses', () => {
     expect(prFromUrl(PR_URL)).toEqual(PR);
     expect(() => prFromUrl('https://ghe.example.com/example/repo/issues/42')).toThrow('not a pull request URL');
@@ -195,7 +212,7 @@ describe('the merge record and the gate', () => {
     type Schema = { enum?: string[]; properties?: Record<string, Schema>; items?: Schema };
     const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'merge-queue/archon-merge-queue.yaml'), 'utf8')) as {
       inputs: Record<string, unknown>;
-      nodes: { id: string; output_format?: Schema }[];
+      nodes: { id: string; output_format?: Schema; with?: Record<string, string> }[];
     };
     // A new input fails here until someone decides whether a follow-up sweep keeps it.
     expect(Object.keys(workflow.inputs).sort()).toEqual([...MERGE_QUEUE_SELECTIONS, 'repo_host', 'repo_path'].sort());
@@ -206,6 +223,10 @@ describe('the merge record and the gate', () => {
       );
     expect((at('facts', 'path') as Enum).enum).toEqual([...MERGE_PATHS]);
     const child = Bun.YAML.parse(readFileSync(join(PACK, 'merge-question/archon-merge-question.yaml'), 'utf8')) as typeof workflow;
+    expect(Object.keys(child.inputs).sort()).toEqual([...MERGE_QUEUE_SELECTIONS, 'question'].sort());
+    expect(workflow.nodes.find(node => node.id === 'questions')?.with).toEqual(
+      Object.fromEntries(MERGE_QUEUE_SELECTIONS.map(key => [key, `$INPUTS.${key}`]))
+    );
     expect(child.nodes.find(node => node.id === 'question')?.output_format?.properties?.class?.enum).toEqual([...MERGE_ASKED_BY]);
     expect(child.nodes.find(node => node.id === 'ruling')?.output_format?.properties?.decision?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
   });
@@ -426,6 +447,7 @@ function run(
       INPUTS_REPO_PATH: PR.repo.path,
       INPUTS_LIMIT: '10',
       INPUTS_MERGE_METHOD: 'squash',
+      INPUTS_AUTO_MERGE_QUEUE: 'true',
       ...inputs,
     },
   });
@@ -1407,17 +1429,14 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     );
   }, 60_000);
 
-  test('a return writes its ruling into the issue body and the build round starts from it', () => {
+  test('a return writes its ruling and releases the item for configured build pickup', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'return', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
     const heading = ok(ruled).section as string;
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the merge queue's question on PR 42, \d{4}-\d{2}-\d{2}\)$/);
-    // The returned round starts at once on the build queue's own selections: no merge-queue selection crosses over.
-    const launch = launchOf(calls);
-    expect(launch).toEqual(expect.arrayContaining(['archon-build-queue', 'number=7', '--config-from-run', 'run-1', '--detach']));
-    expect(launch?.filter(arg => /^(limit|merge_method)=/.test(arg))).toEqual([]);
+    expect(existsSync(calls)).toBe(false);
     expect(ruled.bodies).toEqual([`The contract.\n\n\n## ${heading}\n\nKeep the old prompt wording.\n`]);
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });
@@ -1489,6 +1508,27 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
     const forged = { ...REVIEWED, author: 'outsider' };
     const output = ok(on(at, 'facts', { comments: [forged] })) as { items: { facts: PrFacts }[] };
     expect(output.items[0]?.facts.verdict.state).toBe('none');
+  }, 60_000);
+
+  test.each([undefined, '', 'FALSE'])('a mutating gate refuses missing or invalid explicit mode %j', mode => {
+    const gated = on(install(), 'gate', { args, preload: mode === undefined ? 'delete process.env.INPUTS_AUTO_MERGE_QUEUE;' : '' }, { INPUTS_AUTO_MERGE_QUEUE: mode ?? 'true' });
+    expect(gated.code).toBe(1);
+    expect(gated.stderr).toContain('auto_merge_queue must be true or false');
+    expect(merges(gated)).toEqual([]);
+  }, 60_000);
+
+  test('approval does not follow a replacement pull request at the same head', () => {
+    const at = install();
+    const oldPr = { ...PR, number: 41 };
+    const doc = item(BUILT, { ...merge('waiting'), pr: oldPr, approval: { head: HEAD, at: AT } }, CLAIMED);
+    seed(at, withMerge(doc, {
+      at: LATER, run_id: 'run-1', status: 'waiting', pr: PR, release: false,
+      entry: { at: LATER, run_id: 'run-1', decision: 'wait', reason: 'CI pending', links: [], head: HEAD, reran: false },
+    }));
+    const gated = on(at, 'gate', { args: [...args, '--item', '7'] }, { INPUTS_AUTO_MERGE_QUEUE: 'false' });
+    expect(gated.code).toBe(1);
+    expect(merges(gated)).toEqual([]);
+    expect(stored(at).value?.facts.merge?.approval).toBeNull();
   }, 60_000);
 
   test('disabled autonomy refuses a technically ready merge without head approval', () => {

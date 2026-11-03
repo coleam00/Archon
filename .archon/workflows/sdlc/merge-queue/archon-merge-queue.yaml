@@ -94,7 +94,7 @@ nodes:
               reran: { type: boolean }
               reason: { type: string, pattern: '\S' }
               # On return, what the build queue's next round starts from; on ask, what a
-              # return choice launches. Empty otherwise.
+              # return choice records for build pickup. Empty otherwise.
               brief: { type: string }
               attention:
                 type: [object, 'null']
