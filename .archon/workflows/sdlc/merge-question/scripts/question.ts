@@ -3,7 +3,8 @@ import { attentionOptions, checkAttention, renderAttention } from '../../.shared
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 import type { MergeQuestion } from '../../merge-queue/scripts/record.ts';
 
-export type PreparedMergeQuestion = MergeQuestion & {
+type PreparedMergeQuestion = {
+  readonly asked: MergeQuestion['asked'];
   readonly attention: string;
   readonly options: { id: string; label: string }[];
 };
@@ -25,7 +26,6 @@ try {
   }
   emit({
     asked,
-    owner_run_id: runId,
     attention: renderAttention(asked.by === 'base'
       ? 'Merge queue: the default branch is red'
       : `Merge queue, PR ${String(asked.pr.number)}: merge decision`, asked.attention),

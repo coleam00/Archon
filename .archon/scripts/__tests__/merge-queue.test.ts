@@ -1643,10 +1643,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, { ...item(BUILT, merge('asking'), { claim: { run_id: 'child-2', at: AT, requests: [] } }), subject: { ...SUBJECT, number: 8 } });
     const sibling = stored(at, 8);
     const asked = { by: 'pr', item: subject, pr: PR, head: HEAD, brief: '', attention: ATTENTION };
-    const question = ok(run(at, 'question', {
+    ok(run(at, 'question', {
       WORKFLOW_ID: 'child-1', INPUTS_QUESTION: JSON.stringify({ asked, owner_run_id: 'run-1' }),
     }));
-    expect(question.owner_run_id).toBe('child-1');
     expect(stored(at, subject.number).value?.claim?.run_id).toBe('child-1');
     const failed = run(at, 'ruling', {
       WORKFLOW_ID: 'child-1', INPUTS_OWNER_RUN_ID: 'child-1',
@@ -1743,7 +1742,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     for (const [index, question] of asks.entries()) {
       const childId = `child-${index + 1}`;
       const prepared = ok(run(at, 'question', { WORKFLOW_ID: childId, INPUTS_QUESTION: JSON.stringify(question) }));
-      expect(prepared.owner_run_id).toBe(childId);
       expect(prepared.options).toEqual([
         { id: 'merge', label: 'Merge it' }, { id: 'return', label: 'Rework it' },
         { id: 'park', label: 'Park it' }, { id: 'other', label: 'Something else' },

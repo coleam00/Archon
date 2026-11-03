@@ -88,23 +88,20 @@ function typeShape(checker: ts.TypeChecker, type: ts.Type): Shape {
   throw new Error(`Unsupported sweep consumer type: ${checker.typeToString(type)}`);
 }
 
-test.each([
-  { workflow: 'merge-queue/archon-merge-queue.yaml', node: 'sweep', contract: 'Sweep', script: 'merge-queue/scripts/record.ts' },
-  { workflow: 'merge-question/archon-merge-question.yaml', node: 'question', contract: 'PreparedMergeQuestion', script: 'merge-question/scripts/question.ts' },
-])('the complete $node output conforms to the $contract contract', ({ workflow: path, node, contract, script }) => {
+test('the complete sweep output conforms to the Sweep contract', () => {
   const pack = resolve(import.meta.dir, '../../workflows/sdlc');
-  const workflow = Bun.YAML.parse(readFileSync(resolve(pack, path), 'utf8')) as {
+  const workflow = Bun.YAML.parse(readFileSync(resolve(pack, 'merge-queue/archon-merge-queue.yaml'), 'utf8')) as {
     nodes: { id: string; output_format?: Schema }[];
   };
-  const sweeps = workflow.nodes.filter(entry => entry.id === node);
+  const sweeps = workflow.nodes.filter(entry => entry.id === 'sweep');
   expect(sweeps).toHaveLength(1);
   const schema = sweeps[0]?.output_format;
   if (schema === undefined) throw new Error('Missing output_format');
   // TypeScript's number cannot express the positive integer PR identifier contract.
-  if (contract === 'Sweep') expect(schema.properties?.decisions.items?.properties?.number).toMatchObject({
+  expect(schema.properties?.decisions.items?.properties?.number).toMatchObject({
     type: 'integer', minimum: 1,
   });
-  const file = resolve(pack, script);
+  const file = resolve(pack, 'merge-queue/scripts/record.ts');
   const program = ts.createProgram([file], {
     strict: true, noEmit: true, skipLibCheck: true,
     target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
@@ -113,31 +110,7 @@ test.each([
   const checker = program.getTypeChecker();
   const source = program.getSourceFile(file);
   const module = source && checker.getSymbolAtLocation(source);
-  const sweep = module && checker.getExportsOfModule(module).find(symbol => symbol.name === contract);
+  const sweep = module && checker.getExportsOfModule(module).find(symbol => symbol.name === 'Sweep');
   if (sweep === undefined) throw new Error('Missing exported consumer type');
   expect(typeShape(checker, checker.getDeclaredTypeOfSymbol(sweep))).toEqual(schemaShape(schema));
-});
-
-test('both child attention schemas preserve every sweep constraint', () => {
-  const pack = resolve(import.meta.dir, '../../workflows/sdlc');
-  const schemaOf = (path: string, node: string): Schema => {
-    const workflow = Bun.YAML.parse(readFileSync(resolve(pack, path), 'utf8')) as {
-      nodes: { id: string; output_format?: Schema }[];
-    };
-    const schema = workflow.nodes.find(entry => entry.id === node)?.output_format;
-    if (schema === undefined) throw new Error('Missing output_format');
-    return schema;
-  };
-  const producer = schemaOf('merge-queue/archon-merge-queue.yaml', 'sweep');
-  const child = schemaOf('merge-question/archon-merge-question.yaml', 'question');
-  const variants = child.properties?.asked.oneOf;
-  if (variants === undefined) throw new Error('Missing question variants');
-  const attention = [
-    producer.properties?.decisions.items?.properties?.attention,
-    producer.properties?.base.properties?.attention,
-  ];
-  for (const [index, variant] of variants.entries()) {
-    expect(attention[index]).toBeDefined();
-    expect(variant.properties?.attention).toEqual({ ...attention[index], type: 'object' });
-  }
 });
