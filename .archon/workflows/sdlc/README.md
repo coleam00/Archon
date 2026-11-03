@@ -959,7 +959,7 @@ run per pull request, and records per pull request:
 | Metric | Kind | Unit | Meaning |
 |---|---|---|---|
 | `sdlc.tests_added` | count | `tests` | tests the pull request added or changed, as the judge listed them |
-| `sdlc.tests_unprotective` | count | `tests` | those that no plausible regression would fail |
+| `sdlc.tests_unprotective` | count | `tests` | those that protect nothing on their own merits: no plausible regression fails them that another test would not catch |
 
 Both are the judge's counts: a test the judge leaves out is in neither, and calibration
 scores such omissions as disagreements. Both are attributed to the build-queue runs that
