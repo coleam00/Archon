@@ -126,7 +126,8 @@ input layer. They never rewrite policy text. Omit them to keep automatic action.
 Contradictory sweep decisions are reported in the record summary and diagnostic output.
 Eligible questions and merged-issue retriage still proceed, including issues settled as
 already merged, even when no question remains. Only successful work-item writes
-count as merged handoffs and reach retriage. With no question or merged handoff,
+count as merged handoffs and reach retriage, identified by the work item rather
+than its PR so items sharing a PR cannot authorize each other. With no question or merged handoff,
 record fails. Failure to release a claim after a write error also fails the run.
 
 **What it produces**: Merged pull requests, the queue's record on each work item (`facts.merge`: status and decisions), and attention items for the decisions that need a person.

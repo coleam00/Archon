@@ -757,7 +757,8 @@ governs whether the queue may act, and never changes policy text.
   request waits for the next sweep. After writing every other decision, the record
   reports each problem in its summary and diagnostic output while emitting independent
   eligible questions and merged-issue handoffs, including already merged settlements.
-  A merge is handed to retriage only after its work-item write succeeds; a failed
+  Each merged work item is handed to retriage by its qualified identity only after
+  its own write succeeds, even when several items name the same PR; a failed
   write is reported and releases only a claim this run still owns.
   If neither remains, it fails with the diagnostic. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item

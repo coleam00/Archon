@@ -1012,7 +1012,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const inputs = (base: Record<string, unknown>) => ({ ...recordInputs([decision({ number: 43 }), decision({})], base), INPUTS_ITEMS: BOTH_ITEMS });
     const unmerged = run(at, 'record', inputs(BASE_GREEN), { pr: { merged: [43] } });
     expect(unmerged.code).toBe(0);
-    expect(JSON.parse(unmerged.stdout)).toMatchObject({ merged: [43], asks: [] });
+    expect(JSON.parse(unmerged.stdout)).toMatchObject({ merged: [OTHER], asks: [] });
     expect(unmerged.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back open; every other decision is recorded`);
     expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ decision: 'merged (clear)' }] } } });
     const claimed = stored(at).value as WorkItem;
@@ -1102,7 +1102,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     writeFileSync(lock, 'held by another fetch\n');
 
     seed(at, item(BUILT, undefined, CLAIMED));
-    expect(ok(run(at, 'record', recordInputs([decision({})]), { pr: { state: 'MERGED' } }))).toMatchObject({ merged: [42] });
+    expect(ok(run(at, 'record', recordInputs([decision({})]), { pr: { state: 'MERGED' } }))).toMatchObject({ merged: [SUBJECT] });
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ head: HEAD }] } } });
     expect(readFileSync(lock, 'utf8')).toBe('held by another fetch\n');
   }, 60_000);
@@ -1110,7 +1110,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   test('a merge the forge reads back is recorded and released at its head, whatever the sweep says', () => {
     const at = install();
     const merged = { state: 'MERGED' } as const;
-    const released = { merged: [42], asks: [] };
+    const released = { merged: [SUBJECT], asks: [] };
     // Declared merged; declared at another head; merged by hand, declared wait; merged by hand under an ask.
     const cases = [
       [decision({}), BASE_GREEN],
@@ -1224,7 +1224,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       INPUTS_ITEMS: BOTH_ITEMS,
     }, { pr: { merged: [43] } });
     expect(refused.code).toBe(0);
-    expect(JSON.parse(refused.stdout)).toMatchObject({ merged: [43], asks: [] });
+    expect(JSON.parse(refused.stdout)).toMatchObject({ merged: [OTHER], asks: [] });
     expect(refused.stderr).toContain(`${refusal}; it waits for the next sweep`);
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
@@ -1302,7 +1302,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
     const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' })], BASE_RED);
     const raised = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: BOTH_ITEMS }, { pr: { merged: [43] } }));
-    expect(raised).toMatchObject({ merged: [43], asks: [{ asked: { by: 'base' } }, { asked: { by: 'pr', pr: PR } }] });
+    expect(raised).toMatchObject({ merged: [OTHER], asks: [{ asked: { by: 'base' } }, { asked: { by: 'pr', pr: PR } }] });
     const prepared = ok(run(at, 'question', { INPUTS_QUESTION: JSON.stringify((raised.asks as MergeQuestion[])[0]) }));
     expect(prepared.options).toEqual([{ id: 'hold', label: 'Hold merges' }]);
     expect(prepared.attention).toContain('dev is red since PR 43 merged');
@@ -1355,8 +1355,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         return;
       }
       expect(result.code).toBe(0);
-      const output = JSON.parse(result.stdout) as { merged: number[]; asks: MergeQuestion[]; summary: string };
-      expect(output.merged).toEqual([44]);
+      const output = JSON.parse(result.stdout) as { merged: typeof SUBJECT[]; asks: MergeQuestion[]; summary: string };
+      expect(output.merged).toEqual([SUBJECT]);
       expect(output.asks).toHaveLength(handoff === 'question' ? 1 : 0);
       expect(result.stderr).toContain(diagnostic);
       expect(output.summary).toContain(diagnostic);
@@ -1426,6 +1426,50 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       });
       expect(ok(retriaged).retriaged).toEqual([]);
       expect(retriaged.gh).toEqual([]);
+    }, 60_000);
+
+  test.each(['settled-first', 'settled-last', 'sweep'] as const)(
+    'shared PR retriage requires each work item write: %s', kind => {
+      const at = install();
+      seed(at, item());
+      seed(at, { ...item(), subject: OTHER });
+      const picked = ok(run(at, 'facts', {}, { pr: kind === 'sweep' ? {} : { merged: [42] } }));
+      const before = stored(at, 8).value!;
+      const inputs = recordFacts(picked);
+      expect((kind === 'sweep' ? picked.items : picked.settled) as unknown[]).toHaveLength(2);
+      if (kind === 'settled-last') {
+        inputs.INPUTS_SETTLED = JSON.stringify((picked.settled as MergeSettled[]).toReversed());
+      }
+      if (kind === 'sweep') {
+        inputs.INPUTS_SWEEP = recordInputs([decision({})]).INPUTS_SWEEP!;
+      }
+      const recorded = run(at, 'record', inputs, { pr: { merged: [42] }, preload: `
+const beforeWrite = Bun.spawnSync.bind(Bun);
+let conflicts = ${kind === 'sweep' ? 3 : 0};
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const state = argv.indexOf('state');
+  if (state >= 0 && argv[state + 1] === 'put' && argv[state + 2] === 'work/8' && conflicts++ < 3) {
+    return { exitCode: 3, stdout: Buffer.from('{}'), stderr: Buffer.from('') };
+  }
+  return beforeWrite(argv, settings);
+} });` });
+      expect(recorded.code).toBe(0);
+      const output = JSON.parse(recorded.stdout);
+      expect(output.merged).toEqual([SUBJECT]);
+      if (kind !== 'sweep') {
+        expect(recorded.stderr).toContain('three conditional writes conflicted');
+        expect(stored(at, 8).value).toEqual({ ...before, claim: null });
+        expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+      } else {
+        expect(stored(at, 8).value?.claim?.run_id).toBe('run-1');
+        expect(stored(at, 8).value?.facts.merge).toBeUndefined();
+      }
+      const sent = run(at, 'retriage', {
+        INPUTS_ITEMS: inputs.INPUTS_ITEMS!, INPUTS_SETTLED: inputs.INPUTS_SETTLED!,
+        INPUTS_MERGED: JSON.stringify(output.merged), INPUTS_RETRIAGE_AS: 'maintainer',
+      }, { issues: [{ number: 8, title: 'Done', body: 'Refs only.', state: 'CLOSED' }] });
+      expect(ok(sent).retriaged).toEqual([7]);
+      expect(sent.gh.some(call => call.includes('/issues/8'))).toBe(false);
     }, 60_000);
 
   test.each(['pr', 'settled'] as const)('a failed %s record releases its claim while a sibling question waits', kind => {
@@ -1759,7 +1803,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       INPUTS_ITEMS: JSON.stringify([listed(9, 44), listed(8, 43), { ...listed(45, 45), own_pr: true }, listed(10, 46)]),
       // Issue 7's pull request was found merged before the sweep.
       INPUTS_SETTLED: JSON.stringify([{ item: SUBJECT, pr: PR, status: 'merged', decision: 'merged', reason: 'merged before this sweep' }]),
-      INPUTS_MERGED: JSON.stringify([42, 44, 43, 45]),
+      INPUTS_MERGED: JSON.stringify([7, 9, 8, 45].map(issue)),
     };
     const issues: GhIssue[] = [
       { number: 8, title: 'Done', body: 'Closes it.', state: 'CLOSED' },

@@ -13,7 +13,8 @@
  * go; the merge record is already written.
  *
  * Bound inputs: INPUTS_ITEMS and INPUTS_SETTLED from facts; INPUTS_MERGED from record
- * lists successfully recorded merges from both. INPUTS_RETRIAGE_AS is a workflow input.
+ * lists the qualified work items successfully recorded as merged from both.
+ * INPUTS_RETRIAGE_AS is a workflow input.
  */
 
 import { type QualifiedPr, samePr } from '../../.shared/forge.ts';
@@ -50,10 +51,11 @@ function main(): void {
   }
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
-  const merged = new Set((nullableJson(process.env.INPUTS_MERGED) ?? []) as number[]);
+  const merged = (nullableJson(process.env.INPUTS_MERGED) ?? []) as QualifiedPr[];
+  const recorded = (item: QualifiedPr | null): boolean => item !== null && merged.some(subject => samePr(subject, item));
   const done = [
-    ...items.filter(entry => merged.has(entry.pr.number)),
-    ...settled.filter(entry => entry.status === 'merged' && entry.pr !== null && merged.has(entry.pr.number)),
+    ...items.filter(entry => recorded(entry.item)),
+    ...settled.filter(entry => entry.status === 'merged' && entry.pr !== null && recorded(entry.item)),
   ].flatMap(({ item, pr }) => (item === null || pr === null || samePr(item, pr) ? [] : [{ issue: item, pr }]));
 
   const retriaged: number[] = [];

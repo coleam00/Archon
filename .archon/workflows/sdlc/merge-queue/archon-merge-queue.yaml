@@ -181,7 +181,7 @@ nodes:
     output_format:
       type: object
       properties:
-        merged: { type: array, items: { type: integer } }
+        merged: { type: array, items: { type: object } }
         summary: { type: string }
         asks: { type: array, items: { type: object } }
       required: [merged, summary, asks]

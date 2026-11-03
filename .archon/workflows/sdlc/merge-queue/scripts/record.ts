@@ -267,14 +267,14 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   });
 }
 
-function recordSettled(writes: Writes, settled: readonly MergeSettled[]): number[] {
-  const merged: number[] = [];
+function recordSettled(writes: Writes, settled: readonly MergeSettled[]): QualifiedPr[] {
+  const merged: QualifiedPr[] = [];
   for (const done of settled) {
     const entry = { at: writes.at, run_id: writes.runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false };
     const recorded = write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
       withMerge(doc, { at: writes.at, run_id: writes.runId, entry, status: done.status, pr: done.pr, release: true })
     );
-    if (recorded && done.status === 'merged' && done.pr !== null) merged.push(done.pr.number);
+    if (recorded && done.status === 'merged' && done.pr !== null) merged.push(done.item);
   }
   return merged;
 }
@@ -333,7 +333,7 @@ function main(): void {
       decision.attention !== null && outcome.status === 'waiting' &&
       outcome.askable;
     if (!recordPr(writes, item, outcome, raised)) continue;
-    if (outcome.status === 'merged') merged.push(decision.number);
+    if (outcome.status === 'merged') merged.push(item.item);
     if (raised && decision.attention !== null) {
       asks.push(question({ by: 'pr', item: item.item, pr: item.pr, head: decision.head,
         brief: decision.brief, attention: withQueueOther(decision.attention, item, decision.brief) }));
