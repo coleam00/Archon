@@ -241,8 +241,6 @@ async function readProjectValues(
 export interface RunStartInputs {
   /** The run's `$INPUTS`; undefined when it has none. */
   inputs: Record<string, JsonValue> | undefined;
-  /** Its pack's settings (declaration default < project file); empty for a flat workflow. */
-  packSettings: Record<string, string>;
 }
 
 /**
@@ -265,7 +263,7 @@ export async function resolveRunStartInputs(
     ...supplied,
   };
   if (pack !== undefined) assertRequiredSettings(cwd, pack, inputs);
-  return { inputs: Object.keys(inputs).length > 0 ? inputs : undefined, packSettings };
+  return { inputs: Object.keys(inputs).length > 0 ? inputs : undefined };
 }
 
 /**

@@ -165,7 +165,7 @@ export async function resolveRunDispatch(
 }
 
 /**
- * The run's pack and its settings. A fresh run resolves them now, from its
+ * The run's pack and its inputs. A fresh run resolves them now, from its
  * working directory's `.archon/packs/` file, before its row exists or any node spends.
  * A continuation keeps what its record says, exactly as it keeps `source`: a record
  * without a pack is a run that had none, and a project file edited since the start
@@ -178,15 +178,15 @@ async function resolveRunPacks(
   isContinuation: boolean,
   recordedDispatch: RunDispatchMetadata | undefined
 ): Promise<{
-  metadata: Pick<RunDispatchMetadata, 'pack' | 'pack_settings'>;
+  metadata: Pick<RunDispatchMetadata, 'pack' | 'inputs_resolved'>;
   startInputs: Record<string, JsonValue> | undefined;
 }> {
   if (isContinuation) {
-    const { pack, pack_settings } = recordedDispatch ?? {};
+    const { pack, inputs_resolved } = recordedDispatch ?? {};
     return {
       metadata: {
         ...(pack !== undefined ? { pack } : {}),
-        ...(pack_settings !== undefined ? { pack_settings } : {}),
+        ...(inputs_resolved !== undefined ? { inputs_resolved } : {}),
       },
       startInputs: undefined,
     };
@@ -196,11 +196,11 @@ async function resolveRunPacks(
   const supplied =
     (opts.preCreatedRun ? readSubrunMetadata(opts.preCreatedRun.metadata).inputs : undefined) ??
     opts.inputs;
-  const { inputs, packSettings } = await resolveRunStartInputs(cwd, workflow, supplied);
+  const { inputs } = await resolveRunStartInputs(cwd, workflow, supplied);
   return {
     metadata: {
       ...(workflow.pack !== undefined ? { pack: workflow.pack.key } : {}),
-      pack_settings: packSettings,
+      inputs_resolved: true,
     },
     startInputs: inputs,
   };

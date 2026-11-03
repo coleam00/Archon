@@ -516,18 +516,18 @@ async function recordRunGraph(
  * Declared-input defaults for a run started before runs fixed their inputs at start.
  *
  * A fresh run resolves its complete `$INPUTS` when it starts (pack settings, declared
- * defaults, supplied values) and writes them to its row with a `dispatch.pack_settings`
- * record, so the row is the whole answer and a resume keeps it. A row without that record
- * holds only what its caller supplied; for it the defaults are still layered under the row
- * here, from the definition, as such runs always had them. The overlay rides the LOGICAL
- * sibling key (#2637) and is never persisted.
+ * defaults, supplied values) and marks its row `dispatch.inputs_resolved`, so the row is
+ * the whole answer and a resume keeps it. A row without that mark holds only what its
+ * caller supplied; for it the defaults are still layered under the row here, from the
+ * definition, as such runs always had them. The overlay rides the LOGICAL sibling key
+ * (#2637) and is never persisted.
  */
 function withDeclaredInputDefaults(
   workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun
 ): WorkflowRun {
   const metadata = workflowRun.metadata as Record<string, unknown> | undefined;
-  if (readRunDispatchMetadata(metadata)?.pack_settings !== undefined) return workflowRun;
+  if (readRunDispatchMetadata(metadata)?.inputs_resolved === true) return workflowRun;
   const declaredDefaults = defaultRunInputs(workflow.inputs);
   if (!declaredDefaults) return workflowRun;
   return {

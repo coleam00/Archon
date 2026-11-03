@@ -348,15 +348,18 @@ export const runDispatchMetadataSchema = z.object({
   base_branch: z.string(),
   /** Discovery source, for run attribution and telemetry categorization. */
   source: workflowSourceSchema.optional(),
-  /** Key of the pack the run's workflow was loaded from; absent for a flat workflow. */
+  /**
+   * Key of the pack the run's workflow was loaded from; absent for a flat workflow. How a
+   * run knows its pack: a continuation carries it forward, and reporting where each of a
+   * run's settings came from reads it.
+   */
   pack: z.string().min(1).optional(),
   /**
-   * The run's pack settings, resolved when it started (declaration default < project
-   * file); already layered into the row's `inputs`. Written by every fresh run, even empty:
-   * its presence says the row's `inputs` are the run's complete, fixed `$INPUTS`, so a
-   * resume layers no declared defaults over them. Absent on rows from older builds.
+   * Written by every fresh run: the row's `inputs` are the run's complete, fixed `$INPUTS`
+   * (pack settings, declared defaults, supplied values), so a resume layers no declared
+   * defaults over them. Absent on rows from older builds.
    */
-  pack_settings: z.record(z.string(), z.string()).optional(),
+  inputs_resolved: z.literal(true).optional(),
 });
 
 export type RunDispatchMetadata = z.infer<typeof runDispatchMetadataSchema>;

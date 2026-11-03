@@ -374,10 +374,9 @@ nodes:
     expect(prompts.some(p => p.includes('beta says passed'))).toBe(true);
     const run = runNamed(store, 'alpha-host');
     expect(nodeOutput(store, run?.id, 'blk__shell')).toContain('beta-env=passed');
-    expect(dispatchOf(run)).toMatchObject({
-      pack: 'alpha',
-      pack_settings: { tone: 'alpha-project' },
-    });
+    // The run itself reads its own pack's setting.
+    expect(run?.metadata?.inputs).toMatchObject({ tone: 'alpha-project' });
+    expect(dispatchOf(run)).toMatchObject({ pack: 'alpha', inputs_resolved: true });
   });
 
   it("refuses a workflow: with: that sets the child's pack setting, typed or not", async () => {
