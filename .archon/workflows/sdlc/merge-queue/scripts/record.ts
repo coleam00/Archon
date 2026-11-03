@@ -13,9 +13,10 @@
  * its item's parent claim until its child applies the answer.
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
- * that cannot be written is reported and left for the next sweep; neither stops the
- * rest of the batch from being recorded. If facts could not read the default branch
- * or the maintainer refresh fails, record settlements without further forge reads,
+ * that cannot be written releases this run's claim for the next sweep. If that release
+ * also fails, the run fails rather than holding the item while sibling questions wait.
+ * If facts could not read the default branch or the maintainer refresh fails,
+ * record settlements without further forge reads,
  * leaving open companions untouched, then fail with the original diagnostic.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
@@ -46,7 +47,7 @@ import { attentionOptions, renderAttention, withOther } from '../../.shared/queu
 
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { readWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 /**
  * The asked item with the queue's `other`, whose effect is what the item can take: a
@@ -235,6 +236,13 @@ function write(writes: Writes, subject: QualifiedPr, name: string, label: string
     note(`merge-queue record: ${failure}`);
     writes.lines.push(failure);
     writes.failed.push(failure);
+    try {
+      if (readWorkItem(subject.number)?.claim?.run_id === writes.runId) {
+        updateClaimed(subject, writes.runId, doc => ({ ...doc, claim: null }));
+      }
+    } catch (releaseError) {
+      throw new Error(`${failure}; could not release its claim: ${message(releaseError)}`);
+    }
     return false;
   }
 }

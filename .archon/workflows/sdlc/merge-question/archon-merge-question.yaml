@@ -1,5 +1,5 @@
 name: archon-merge-question
-description: Apply one independent merge queue answer while sibling questions wait.
+description: Building block for archon-merge-queue. Apply one independent answer while sibling questions wait.
 requires: [github]
 worktree:
   enabled: false

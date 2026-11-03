@@ -1324,6 +1324,88 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at, 8).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
+  test.each(['pr', 'settled'] as const)('a failed %s record releases its claim while a sibling question waits', kind => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: OTHER_URL })) }, undefined, CLAIMED), subject: OTHER });
+    const before = stored(at).value!;
+    const preload = `
+const beforeWrite = Bun.spawnSync.bind(Bun);
+let conflicts = 0;
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const state = argv.indexOf('state');
+  if (state >= 0 && argv[state + 1] === 'put' && argv[state + 2] === 'work/7' && conflicts++ < 3) {
+    return { exitCode: 3, stdout: Buffer.from('{}'), stderr: Buffer.from('') };
+  }
+  return beforeWrite(argv, settings);
+} });`;
+    const result = run(at, 'record', {
+      ...recordInputs([
+        ...(kind === 'pr' ? [decision({ action: 'ask', attention: ATTENTION, brief: 'rework PR 42' })] : []),
+        decision({ number: 43, action: 'ask', attention: ATTENTION, brief: 'rework PR 43' }),
+      ]),
+      INPUTS_ITEMS: kind === 'pr' ? BOTH_ITEMS : JSON.stringify(JSON.parse(BOTH_ITEMS).slice(0, 1)),
+      INPUTS_SETTLED: JSON.stringify(kind === 'pr' ? [] : [{ item: SUBJECT, pr: PR, status: 'waiting', decision: UNREADABLE, reason: 'forge unavailable' }]),
+    }, { preload });
+    expect(result.code).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.asks).toMatchObject([{ asked: { by: 'pr', pr: OTHER_PR } }]);
+    expect(output.asks).toHaveLength(1);
+    expect(output.summary).toContain('three conditional writes conflicted');
+    expect(result.stderr).toContain('three conditional writes conflicted');
+    expect(stored(at).value).toEqual({ ...before, claim: null });
+    const sibling = stored(at, 8);
+    expect(sibling.value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
+    const later = ok(run(at, 'facts', { WORKFLOW_ID: 'later-sweep', INTAKE_RUN_STATUSES: '{"run-1":"paused"}' }));
+    expect(later).toMatchObject({ path: 'sweep', items: [{ item: SUBJECT }] });
+    expect(stored(at).value?.claim?.run_id).toBe('later-sweep');
+    expect(stored(at, 8)).toEqual(sibling);
+  }, 60_000);
+
+  test.each(['concurrent-edit', 'competing-owner', 'release-fails'] as const)('failed record claim release handles %s', kind => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
+    const before = stored(at).value!;
+    const changed: WorkItem = {
+      ...before, links: { runs: ['concurrent-run'] },
+      ...(kind === 'competing-owner' ? { claim: { ...CLAIMED.claim, run_id: 'another-run' } } : {}),
+    };
+    const preload = `
+const beforeWrite = Bun.spawnSync.bind(Bun);
+let conflicts = 0;
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const state = argv.indexOf('state');
+  if (state >= 0 && argv[state + 1] === 'put' && argv[state + 2] === 'work/7') {
+    conflicts++;
+    if (conflicts === ${kind === 'concurrent-edit' ? 4 : 3} && ${JSON.stringify(kind)} !== 'release-fails') {
+      const concurrent = beforeWrite(argv, { ...settings, stdin: Buffer.from(${JSON.stringify(JSON.stringify(changed))}) });
+      if (concurrent.exitCode !== 0) throw new Error('concurrent write failed: ' + concurrent.stderr.toString());
+    }
+    if (conflicts <= 3 || ${JSON.stringify(kind)} === 'release-fails') {
+      return { exitCode: 3, stdout: Buffer.from('{}'), stderr: Buffer.from('') };
+    }
+  }
+  return beforeWrite(argv, settings);
+} });`;
+    const result = run(at, 'record', {
+      ...recordInputs([decision({ action: 'wait' }), decision({ number: 43, action: 'ask', attention: ATTENTION, brief: 'rework PR 43' })]),
+      INPUTS_ITEMS: BOTH_ITEMS,
+    }, { preload });
+    expect(result.stderr).toContain('three conditional writes conflicted');
+    if (kind === 'release-fails') {
+      expect(result.code).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('could not release its claim');
+      expect(stored(at).value).toEqual(before);
+    } else {
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout).asks).toMatchObject([{ asked: { by: 'pr', pr: OTHER_PR } }]);
+      expect(stored(at).value).toEqual(kind === 'competing-owner' ? changed : { ...changed, claim: null });
+      expect(stored(at, 8).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
+    }
+  }, 60_000);
+
   test('three questions hold independent parent claims; one child answer is immediately claimable by a later sweep', () => {
     const at = install();
     const subjects = [7, 8, 9].map(number => ({ ...SUBJECT, number }));
