@@ -17,7 +17,7 @@
  * INPUTS_RETRIAGE_AS is a workflow input.
  */
 
-import { type QualifiedPr, samePr } from '../../.shared/forge.ts';
+import { parseQualifiedPr, type QualifiedPr, samePr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { launchDetached } from '../../.shared/launch.ts';
@@ -51,7 +51,9 @@ function main(): void {
   }
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
-  const merged = (nullableJson(process.env.INPUTS_MERGED) ?? []) as QualifiedPr[];
+  const mergedInput = nullableJson(process.env.INPUTS_MERGED) ?? [];
+  if (!Array.isArray(mergedInput)) throw new Error('merged work items must be an array');
+  const merged = mergedInput.map((subject: unknown) => parseQualifiedPr(JSON.stringify(subject)));
   const recorded = (item: QualifiedPr | null): boolean => item !== null && merged.some(subject => samePr(subject, item));
   const done = [
     ...items.filter(entry => recorded(entry.item)),

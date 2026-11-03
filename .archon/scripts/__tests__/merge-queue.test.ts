@@ -1794,6 +1794,49 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ reason: 'CI pending' }] } } });
   }, 60_000);
 
+  test.each([
+    ['empty object', {}],
+    ['missing repo', { number: 7 }],
+    ['missing host', { repo: { path: PR.repo.path }, number: 7 }],
+    ['blank host', { repo: { ...PR.repo, host: ' ' }, number: 7 }],
+    ['missing path', { repo: { host: PR.repo.host }, number: 7 }],
+    ['blank path', { repo: { ...PR.repo, path: ' ' }, number: 7 }],
+    ['missing number', { repo: PR.repo }],
+    ['string number', { repo: PR.repo, number: '7' }],
+    ['nonpositive number', { repo: PR.repo, number: 0 }],
+    ['fractional number', { repo: PR.repo, number: 7.5 }],
+    ['null', null],
+  ])('retriage refuses a malformed merged identity before any issue work: %s', (_name, malformed) => {
+    const at = install();
+    const calls = join(at.checkout, 'intake-calls.jsonl');
+    const sent = run(at, 'retriage', {
+      INPUTS_ITEMS: JSON.stringify([{ item: SUBJECT, pr: PR }]),
+      INPUTS_SETTLED: JSON.stringify([{ item: OTHER, pr: OTHER_PR, status: 'merged' }]),
+      INPUTS_MERGED: JSON.stringify([SUBJECT, OTHER, malformed]),
+      INPUTS_RETRIAGE_AS: 'maintainer',
+      ARCHON_CALL_LOG: calls,
+    });
+    expect(sent.code).toBe(1);
+    expect(sent.stdout).toBe('');
+    expect(sent.stderr).toContain('the bound pull request has no qualified repo and positive number');
+    expect(sent.gh).toEqual([]);
+    expect(existsSync(calls)).toBe(false);
+  });
+
+  test('retriage refuses a merged handoff that is not an array', () => {
+    const at = install();
+    const sent = run(at, 'retriage', {
+      INPUTS_ITEMS: JSON.stringify([{ item: SUBJECT, pr: PR }]),
+      INPUTS_SETTLED: '[]',
+      INPUTS_MERGED: JSON.stringify(SUBJECT),
+      INPUTS_RETRIAGE_AS: 'maintainer',
+    });
+    expect(sent.code).toBe(1);
+    expect(sent.stdout).toBe('');
+    expect(sent.stderr).toContain('merged work items must be an array');
+    expect(sent.gh).toEqual([]);
+  });
+
   test('an issue its merged pull request left open goes back to intake; a closed issue, an own pull request and an unmerged one do not, and one failure stops nothing', () => {
     const at = install();
     const issue = (number: number) => ({ repo: PR.repo, number });
