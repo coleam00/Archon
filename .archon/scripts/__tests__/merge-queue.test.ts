@@ -9,7 +9,6 @@ import {
   checksOf,
   BASE_EFFECTS,
   gateRefusals,
-  MERGE_ASKED_BY,
   MERGE_EFFECTS,
   MERGE_PATHS,
   type MergeAttention,
@@ -227,7 +226,6 @@ describe('the merge record and the gate', () => {
     expect(workflow.nodes.find(node => node.id === 'questions')?.with).toEqual(
       Object.fromEntries(MERGE_QUEUE_SELECTIONS.map(key => [key, `$INPUTS.${key}`]))
     );
-    expect(child.nodes.find(node => node.id === 'question')?.output_format?.properties?.class?.enum).toEqual([...MERGE_ASKED_BY]);
     expect(child.nodes.find(node => node.id === 'ruling')?.output_format?.properties?.decision?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
 
   });
@@ -1025,7 +1023,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, { ...item(BUILT, undefined, { claim: { run_id: 'another-run', at: AT, requests: [] } }), subject: OTHER });
     const closed = run(at, 'record', inputs(BASE_RED), { pr: { state: 'CLOSED', merged: [43] } });
     expect(closed.code).toBe(0);
-    expect(JSON.parse(closed.stdout).asks).toMatchObject([{ class: 'base' }]);
+    expect(JSON.parse(closed.stdout).asks).toMatchObject([{ asked: { by: 'base' } }]);
     expect(closed.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back closed`);
     expect(closed.stderr).toContain('PR 43: not recorded, the next sweep decides it again (work/8 is no longer claimed by this run); every other decision is recorded');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
@@ -1158,7 +1156,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     const inputs = { ...recordInputs([], BASE_RED, FACTS_BASE_RED), INPUTS_ITEMS: '[]' };
     const raised = ok(run(at, 'record', inputs));
-    expect(raised).toMatchObject({ merged: [], asks: [{ class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } }] });
+    expect(raised).toMatchObject({ merged: [], asks: [{ options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } }] });
     expect((raised.asks as MergeQuestion[])[0]?.attention).toContain('dev is red since PR 43 merged');
   }, 60_000);
 
@@ -1188,7 +1186,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(asks).toHaveLength(1);
     const asked = asks[0]!;
     expect(asked).toMatchObject({
-      class: 'pr',
       options: [
         { id: 'merge', label: 'Merge it' },
         { id: 'return', label: 'Rework it' },
@@ -1235,7 +1232,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const attention: MergeAttention = { ...ATTENTION, choices: ATTENTION.choices.filter(choice => choice.effect !== 'return') };
     const output = (ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief: '' })]))).asks as MergeQuestion[])[0]!;
     if (output.asked.by !== 'pr') throw new Error('expected PR question');
-    expect(output).toMatchObject({ class: 'pr', asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: '' } });
+    expect(output).toMatchObject({ asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: '' } });
     // The sweep's own words reach the operator unchanged; only the queue's `other` is added.
     expect(output.asked.attention).toMatchObject({ why: attention.why, recommendation: attention.recommendation });
     expect(output.asked.attention.choices.map(choice => [choice.id, choice.effect])).toEqual([['merge', 'merge'], ['park', 'park'], ['other', 'park']]);
@@ -1298,7 +1295,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
     const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' })], BASE_RED);
     const raised = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: BOTH_ITEMS }, { pr: { merged: [43] } }));
-    expect(raised).toMatchObject({ merged: [43], asks: [{ class: 'base', options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } }, { class: 'pr', asked: { pr: PR } }] });
+    expect(raised).toMatchObject({ merged: [43], asks: [{ options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } }, { asked: { by: 'pr', pr: PR } }] });
     expect((raised.asks as MergeQuestion[])[0]?.attention).toContain('dev is red since PR 43 merged');
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking', decisions: [{ decision: 'ask (unclear)' }] } } });
     expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
@@ -1317,7 +1314,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     });
     expect(result.code).toBe(0);
     const output = JSON.parse(result.stdout);
-    expect(output.asks).toMatchObject([{ class: 'pr', asked: { pr: { number: 43 } } }]);
+    expect(output.asks).toMatchObject([{ asked: { by: 'pr', pr: { number: 43 } } }]);
     expect(output.asks).toHaveLength(1);
     const diagnostic = kind === 'invalid-decision' ? 'with no brief'
       : kind === 'claimed-merge' ? 'reads back open' : 'neither reran it nor raised it';

@@ -25,15 +25,9 @@ nodes:
             type: object
             properties: {id: {type: string}, label: {type: string}}
             required: [id, label]
-        class: {type: string, enum: [pr, base]}
-        asked: {type: object}
-        owner_run_id: {type: string}
-      required: [attention, options, class, asked, owner_run_id]
-      oneOf:
-        - properties:
-            class: {const: pr}
-            asked:
-              type: object
+        asked:
+          oneOf:
+            - type: object
               properties:
                 by: {type: string, const: pr}
                 item:
@@ -85,10 +79,7 @@ nodes:
                     links: {type: array, items: {type: string}}
                   required: [what, why, recommendation, choices, if_unanswered, links]
               required: [by, item, pr, head, brief, attention]
-        - properties:
-            class: {const: base}
-            asked:
-              type: object
+            - type: object
               properties:
                 by: {type: string, const: base}
                 attention:
@@ -120,6 +111,8 @@ nodes:
                     links: {type: array, items: {type: string}}
                   required: [what, why, recommendation, choices, if_unanswered, links]
               required: [by, attention]
+        owner_run_id: {type: string}
+      required: [attention, options, asked, owner_run_id]
   - id: ask
     depends_on: [question]
     wait:
@@ -127,7 +120,7 @@ nodes:
       form: select
       options: "$question.output.options"
       labels:
-        merge: "$question.output.class"
+        merge: "$question.output.asked.by"
   - id: ruling
     script: ruling
     runtime: bun

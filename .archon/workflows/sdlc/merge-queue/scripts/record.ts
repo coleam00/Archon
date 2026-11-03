@@ -66,10 +66,8 @@ export type MergeQuestion = {
   readonly attention: string;
   readonly options: { id: string; label: string }[];
   readonly owner_run_id: string;
-} & { [By in MergeAsked['by']]: {
-  readonly class: By;
-  readonly asked: Extract<MergeAsked, { by: By }>;
-} }[MergeAsked['by']];
+  readonly asked: MergeAsked;
+};
 
 interface Decision {
   readonly number: number;
@@ -304,16 +302,14 @@ function main(): void {
 
   const baseAttention = sweep?.base.attention ?? null;
   const asks: MergeQuestion[] = [];
-  const question = (asked: MergeAsked): MergeQuestion => {
-    const common = {
-      attention: asked.by === 'base'
-        ? renderAttention('Merge queue: the default branch is red', asked.attention)
-        : renderAttention(`Merge queue, PR ${String(asked.pr.number)}: merge decision`, asked.attention),
-      options: attentionOptions<string>(asked.attention),
-      owner_run_id: runId,
-    };
-    return asked.by === 'base' ? { ...common, class: 'base', asked } : { ...common, class: 'pr', asked };
-  };
+  const question = (asked: MergeAsked): MergeQuestion => ({
+    attention: asked.by === 'base'
+      ? renderAttention('Merge queue: the default branch is red', asked.attention)
+      : renderAttention(`Merge queue, PR ${String(asked.pr.number)}: merge decision`, asked.attention),
+    options: attentionOptions<string>(asked.attention),
+    owner_run_id: runId,
+    asked,
+  });
 
   // Settlements are independent of the policy refresh and the sweep's decisions.
   recordSettled(writes, settled);
