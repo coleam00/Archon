@@ -89,9 +89,9 @@ function typeShape(checker: ts.TypeChecker, type: ts.Type): Shape {
 }
 
 test.each([
-  { workflow: 'merge-queue/archon-merge-queue.yaml', node: 'sweep', contract: 'Sweep' },
-  { workflow: 'merge-question/archon-merge-question.yaml', node: 'question', contract: 'MergeQuestion' },
-])('the complete $node output conforms to the $contract contract', ({ workflow: path, node, contract }) => {
+  { workflow: 'merge-queue/archon-merge-queue.yaml', node: 'sweep', contract: 'Sweep', script: 'merge-queue/scripts/record.ts' },
+  { workflow: 'merge-question/archon-merge-question.yaml', node: 'question', contract: 'PreparedMergeQuestion', script: 'merge-question/scripts/question.ts' },
+])('the complete $node output conforms to the $contract contract', ({ workflow: path, node, contract, script }) => {
   const pack = resolve(import.meta.dir, '../../workflows/sdlc');
   const workflow = Bun.YAML.parse(readFileSync(resolve(pack, path), 'utf8')) as {
     nodes: { id: string; output_format?: Schema }[];
@@ -104,7 +104,7 @@ test.each([
   if (contract === 'Sweep') expect(schema.properties?.decisions.items?.properties?.number).toMatchObject({
     type: 'integer', minimum: 1,
   });
-  const file = resolve(pack, 'merge-queue/scripts/record.ts');
+  const file = resolve(pack, script);
   const program = ts.createProgram([file], {
     strict: true, noEmit: true, skipLibCheck: true,
     target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,

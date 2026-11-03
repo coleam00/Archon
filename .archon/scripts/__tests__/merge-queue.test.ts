@@ -1156,8 +1156,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     const inputs = { ...recordInputs([], BASE_RED, FACTS_BASE_RED), INPUTS_ITEMS: '[]' };
     const raised = ok(run(at, 'record', inputs));
-    expect(raised).toMatchObject({ merged: [], asks: [{ options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } }] });
-    expect((raised.asks as MergeQuestion[])[0]?.attention).toContain('dev is red since PR 43 merged');
+    expect(raised).toMatchObject({ merged: [], asks: [{ asked: { by: 'base' } }] });
+    const prepared = ok(run(at, 'question', { INPUTS_QUESTION: JSON.stringify((raised.asks as MergeQuestion[])[0]) }));
+    expect(prepared.options).toEqual([{ id: 'hold', label: 'Hold merges' }]);
+    expect(prepared.attention).toContain('dev is red since PR 43 merged');
   }, 60_000);
 
   test('a rerun is recorded at its head, for the next sweep to read', () => {
@@ -1185,7 +1187,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const asks = ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' })]))).asks as MergeQuestion[];
     expect(asks).toHaveLength(1);
     const asked = asks[0]!;
-    expect(asked).toMatchObject({
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
+    const prepared = ok(run(at, 'question', { WORKFLOW_ID: 'child-1', INPUTS_QUESTION: JSON.stringify(asked) }));
+    expect(prepared).toMatchObject({
       options: [
         { id: 'merge', label: 'Merge it' },
         { id: 'return', label: 'Rework it' },
@@ -1195,9 +1199,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42' },
     });
     for (const part of [ATTENTION.what, ATTENTION.why, 'Recommendation: `merge`** (medium confidence)', ATTENTION.if_unanswered, PR_URL]) {
-      expect(asked.attention).toContain(part);
+      expect(prepared.attention).toContain(part);
     }
-    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'child-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
   test.each([
@@ -1236,7 +1240,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     // The sweep's own words reach the operator unchanged; only the queue's `other` is added.
     expect(output.asked.attention).toMatchObject({ why: attention.why, recommendation: attention.recommendation });
     expect(output.asked.attention.choices.map(choice => [choice.id, choice.effect])).toEqual([['merge', 'merge'], ['park', 'park'], ['other', 'park']]);
-    expect(output.attention).toContain('until the build queue readies the item again');
+    const prepared = ok(run(at, 'question', { INPUTS_QUESTION: JSON.stringify(output) }));
+    expect(prepared.attention).toContain('until the build queue readies the item again');
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
 
     const calls = join(at.checkout, 'calls.jsonl');
@@ -1295,13 +1300,15 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
     const inputs = recordInputs([decision({ number: 43 }), decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' })], BASE_RED);
     const raised = ok(run(at, 'record', { ...inputs, INPUTS_ITEMS: BOTH_ITEMS }, { pr: { merged: [43] } }));
-    expect(raised).toMatchObject({ merged: [43], asks: [{ options: [{ id: 'hold', label: 'Hold merges' }], asked: { by: 'base' } }, { asked: { by: 'pr', pr: PR } }] });
-    expect((raised.asks as MergeQuestion[])[0]?.attention).toContain('dev is red since PR 43 merged');
+    expect(raised).toMatchObject({ merged: [43], asks: [{ asked: { by: 'base' } }, { asked: { by: 'pr', pr: PR } }] });
+    const prepared = ok(run(at, 'question', { INPUTS_QUESTION: JSON.stringify((raised.asks as MergeQuestion[])[0]) }));
+    expect(prepared.options).toEqual([{ id: 'hold', label: 'Hold merges' }]);
+    expect(prepared.attention).toContain('dev is red since PR 43 merged');
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking', decisions: [{ decision: 'ask (unclear)' }] } } });
     expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
   }, 60_000);
 
-  test.each(['invalid-decision', 'claimed-merge', 'unraised-base'] as const)('an eligible question survives an unrelated %s failure', kind => {
+  test.each(['invalid-decision', 'claimed-merge', 'unraised-base'] as const)('a %s contradiction fails record even with an eligible sibling question', kind => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
@@ -1312,14 +1319,11 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         BASE_GREEN, kind === 'unraised-base' ? FACTS_BASE_RED : undefined),
       INPUTS_ITEMS: BOTH_ITEMS,
     });
-    expect(result.code).toBe(0);
-    const output = JSON.parse(result.stdout);
-    expect(output.asks).toMatchObject([{ asked: { by: 'pr', pr: { number: 43 } } }]);
-    expect(output.asks).toHaveLength(1);
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
     const diagnostic = kind === 'invalid-decision' ? 'with no brief'
       : kind === 'claimed-merge' ? 'reads back open' : 'neither reran it nor raised it';
     expect(result.stderr).toContain(diagnostic);
-    expect(output.summary).toContain(diagnostic);
     expect(stored(at).value?.claim).toBeNull();
     expect(stored(at, 8).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
@@ -1590,13 +1594,17 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(asks.map(question => question.asked.by === 'pr' && question.asked.pr.number)).toEqual([42, 43, 44]);
     for (const question of asks) {
       expect(question.owner_run_id).toBe('run-1');
-      expect(question.options.map(option => option.id)).toEqual(['merge', 'return', 'park', 'other']);
-      expect(question.attention).toContain(ATTENTION.what);
+      expect(Object.keys(question).sort()).toEqual(['asked', 'owner_run_id']);
     }
     for (const [index, question] of asks.entries()) {
       const childId = `child-${index + 1}`;
       const prepared = ok(run(at, 'question', { WORKFLOW_ID: childId, INPUTS_QUESTION: JSON.stringify(question) }));
       expect(prepared.owner_run_id).toBe(childId);
+      expect(prepared.options).toEqual([
+        { id: 'merge', label: 'Merge it' }, { id: 'return', label: 'Rework it' },
+        { id: 'park', label: 'Park it' }, { id: 'other', label: 'Something else' },
+      ]);
+      expect(prepared.attention).toContain(ATTENTION.what);
     }
     const siblings = subjects.slice(1).map(subject => stored(at, subject.number));
     const ruled = run(at, 'ruling', {

@@ -43,7 +43,7 @@ import {
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
+import { withOther } from '../../.shared/queue.ts';
 
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -64,8 +64,6 @@ function withQueueOther(attention: MergeAttention, item: Item, brief: string): M
 }
 
 export type MergeQuestion = {
-  readonly attention: string;
-  readonly options: { id: string; label: string }[];
   readonly owner_run_id: string;
   readonly asked: MergeAsked;
 };
@@ -139,7 +137,6 @@ function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decis
       decided.set(decision.number, decision.action === 'ask' ? decision : { ...decision, attention: null });
       continue;
     }
-    // Refused output waits for the next sweep; independent questions still reach their children.
     const refusal = `${invalid}; it waits for the next sweep`;
     refused.push(refusal);
     decided.set(decision.number, { ...decision, action: 'wait', brief: '', attention: null, reason: `${refusal} (the sweep said: ${decision.reason})` });
@@ -311,10 +308,6 @@ function main(): void {
   const baseAttention = sweep?.base.attention ?? null;
   const asks: MergeQuestion[] = [];
   const question = (asked: MergeAsked): MergeQuestion => ({
-    attention: asked.by === 'base'
-      ? renderAttention('Merge queue: the default branch is red', asked.attention)
-      : renderAttention(`Merge queue, PR ${String(asked.pr.number)}: merge decision`, asked.attention),
-    options: attentionOptions<string>(asked.attention),
     owner_run_id: runId,
     asked,
   });
@@ -342,10 +335,7 @@ function main(): void {
     }
   }
   if (contradictions.length > 0) {
-    const diagnostic = [...contradictions, ...writes.failed, 'every other decision is recorded'].join('; ');
-    if (asks.length === 0) throw new Error(diagnostic);
-    note(`merge-queue record: ${diagnostic}`);
-    writes.lines.push(diagnostic);
+    throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
   }
 
   emit({

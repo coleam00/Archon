@@ -3,9 +3,14 @@ import { attentionOptions, checkAttention, renderAttention } from '../../.shared
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 import type { MergeQuestion } from '../../merge-queue/scripts/record.ts';
 
-let question: Pick<MergeQuestion, 'asked' | 'owner_run_id'> | null = null;
+export type PreparedMergeQuestion = MergeQuestion & {
+  readonly attention: string;
+  readonly options: { id: string; label: string }[];
+};
+
+let question: MergeQuestion | null = null;
 try {
-  question = nullableJson(process.env.INPUTS_QUESTION) as Pick<MergeQuestion, 'asked' | 'owner_run_id'> | null;
+  question = nullableJson(process.env.INPUTS_QUESTION) as MergeQuestion | null;
   if (question === null) throw new Error('question is required');
   const { asked } = question;
   checkAttention<string>(asked.attention);
@@ -25,7 +30,7 @@ try {
       ? 'Merge queue: the default branch is red'
       : `Merge queue, PR ${String(asked.pr.number)}: merge decision`, asked.attention),
     options: attentionOptions<string>(asked.attention),
-  } satisfies MergeQuestion);
+  } satisfies PreparedMergeQuestion);
 } catch (error) {
   let failure = `merge question: ${error instanceof Error ? error.message : String(error)}`;
   try {
