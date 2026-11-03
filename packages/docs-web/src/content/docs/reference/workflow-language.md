@@ -2028,10 +2028,12 @@ settings:
 
 `<pack>` is the pack's folder name; for an installed pack it is `<owner>.<manifest name>`
 (`acme.review-kit`), never its install path. The file is read from the run's own checkout
-(its worktree, for an isolated run) when the run starts. An unknown key, a value of the wrong
-type, or any top-level key other than `settings:` refuses the run at that point, before any
-node runs, naming the file and the key; for an isolated run that is after its worktree was
-created. A `required` setting must be set there, given a default by a workflow `inputs:` entry
+(its worktree, for an isolated run) when the run starts. An isolated run sees the file only if
+it is committed or listed under
+[`worktree.copyFiles`](/reference/configuration/#worktree-file-copying-worktreecopyfiles).
+An unknown key, a value of the wrong type, or any top-level key other than `settings:` refuses
+the run at that point, before any node runs, naming the file and the key; for an isolated run
+that is after its worktree was created. A `required` setting must be set there, given a default by a workflow `inputs:` entry
 of the same name, or passed with `--input`.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each

@@ -74,9 +74,9 @@ export interface DryRunContext
   /** Nodes whose execution record some binding reads (`$<node>.execution.checkoutStart`). */
   checkoutProducers: ReadonlySet<string>;
   /**
-   * The run's EFFECTIVE `$INPUTS` map — declared defaults layered under caller-supplied
-   * values, the same merge a real run performs at executor.ts (`defaultRunInputs`).
-   * Undefined when the workflow declares no inputs and the caller supplied none.
+   * The run's EFFECTIVE `$INPUTS` map — pack settings, then declared defaults, then
+   * caller-supplied values: the same merge a real run performs at start
+   * (`resolveRunStartInputs` in pack-settings.ts). Undefined when that merge is empty.
    * Values are logical JSON values (#2637 — a typed declared default stays typed).
    */
   inputs?: Record<string, JsonValue>;

@@ -4,11 +4,14 @@
  * A workflow's `inputs:` block is one contract with three callers:
  *   - `include:` resolves it at LOAD time (include/inputs-macro.ts), splicing values into
  *     `$INPUTS.<name>` before the DAG is ever persisted;
- *   - `workflow:` resolves it at RUN time (executor.ts), persisting the resolved map to
- *     the child's `metadata.inputs`;
+ *   - `workflow:` resolves a child's `with:` at RUN time (`resolveCallerInputs` in
+ *     child-runs.ts), persisting the resolved map to the child's `metadata.inputs`;
  *   - a DIRECT top-level invocation resolves it at the invocation gate (#2554) —
  *     `resolveTopLevelInputs` in utils/workflow-requirements.ts — from values supplied
  *     by the CLI's `--input name=value` or the run route's `inputs` map.
+ *
+ * Every fresh run's complete `$INPUTS` (pack settings, declared defaults, supplied
+ * values) is then merged once at start by `resolveRunStartInputs` in pack-settings.ts.
  *
  * They must agree — a map accepted by one and rejected by another would make the same
  * workflow behave differently depending on how it was called. This module is the single

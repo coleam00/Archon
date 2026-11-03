@@ -138,8 +138,8 @@ export async function runDryRun(
   // The IDENTICAL invocation gate a real run passes through (#2610): parse
   // `--input name=value`, validate against the declared `inputs:` contract, and fail
   // with the same errors (undeclared key, missing required) before any trace output.
-  // Only the supplied entries travel; the simulator derives declared defaults itself,
-  // mirroring the executor's `defaultRunInputs` merge at run start.
+  // Only the supplied entries travel; the simulator layers pack settings and declared
+  // defaults under them through `resolveRunStartInputs`, the merge a real run starts with.
   const dryRunInputs = resolveTopLevelInputs(
     workflow,
     options.inputs ? parseInputAssignments(options.inputs) : undefined
