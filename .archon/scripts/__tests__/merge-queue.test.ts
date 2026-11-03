@@ -1005,7 +1005,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(after.claim?.run_id).toBe('next-run');
   }, 60_000);
 
-  test('a claimed merge the forge does not show is reported after recording; a base question still reaches its child', () => {
+  test('a claimed merge the forge does not show fails after recording, even with a base question', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
@@ -1022,8 +1022,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, { claim: { run_id: 'another-run', at: AT, requests: [] } }), subject: OTHER });
     const closed = run(at, 'record', inputs(BASE_RED), { pr: { state: 'CLOSED', merged: [43] } });
-    expect(closed.code).toBe(0);
-    expect(JSON.parse(closed.stdout).asks).toMatchObject([{ asked: { by: 'base' } }]);
+    expect(closed.code).not.toBe(0);
+    expect(closed.stdout).toBe('');
     expect(closed.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back closed`);
     expect(closed.stderr).toContain('PR 43: not recorded, the next sweep decides it again (work/8 is no longer claimed by this run); every other decision is recorded');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
