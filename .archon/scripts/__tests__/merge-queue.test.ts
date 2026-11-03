@@ -426,11 +426,11 @@ const REVIEWED: GhCommentRow = { id: 1, author: 'Maintainer', body: reviewCommen
 
 function run(
   at: Install,
-  script: 'facts' | 'gate' | 'record' | 'ruling' | 'retriage',
+  script: 'facts' | 'gate' | 'record' | 'question' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
   options: { pr?: FakePr; comments?: readonly GhCommentRow[]; args?: readonly string[]; artifacts?: Record<string, string>; preload?: string; issues?: readonly GhIssue[]; source?: 'gh' | 'forge' } = {}
 ): ScriptRun {
-  return runPackScript(`${script === 'ruling' ? 'merge-question' : 'merge-queue'}/scripts/${script}`, {
+  return runPackScript(`${script === 'ruling' || script === 'question' ? 'merge-question' : 'merge-queue'}/scripts/${script}`, {
     cwd: at.checkout,
     source: options.source,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
@@ -1406,7 +1406,92 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     }
   }, 60_000);
 
-  test('three questions hold independent parent claims; one child answer is immediately claimable by a later sweep', () => {
+  test.each(['issue', 'own-pr'] as const)('a failed or abandoned %s question is picked up while its parent and sibling wait', kind => {
+    const at = install();
+    const subject = kind === 'issue' ? SUBJECT : PR;
+    seed(at, kind === 'issue' ? item(BUILT, merge('asking'), CLAIMED) : {
+      ...newWorkItem(PR, AT), ...CLAIMED,
+      facts: { own_pr: { url: PR_URL, at: AT }, merge: merge('asking') },
+    });
+    seed(at, { ...item(BUILT, merge('asking'), { claim: { run_id: 'child-2', at: AT, requests: [] } }), subject: { ...SUBJECT, number: 8 } });
+    const sibling = stored(at, 8);
+    const asked = { by: 'pr', item: subject, pr: PR, head: HEAD, brief: '', attention: ATTENTION };
+    const question = ok(run(at, 'question', {
+      WORKFLOW_ID: 'child-1', INPUTS_QUESTION: JSON.stringify({ asked, owner_run_id: 'run-1' }),
+    }));
+    expect(question.owner_run_id).toBe('child-1');
+    expect(stored(at, subject.number).value?.claim?.run_id).toBe('child-1');
+    const failed = run(at, 'ruling', {
+      WORKFLOW_ID: 'child-1', INPUTS_OWNER_RUN_ID: 'child-1',
+      INPUTS_ASKED: JSON.stringify(asked), INPUTS_CHOICE: 'park', INPUTS_TEXT: 'hold',
+    }, { preload: `
+const beforeFailure = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  if (argv.includes('state') && argv.includes('put')) return { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('state unavailable') };
+  if (argv[0] === 'gh' && argv.includes('PATCH') && argv.includes('--input')) return { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('HTTP 503') };
+  return beforeFailure(argv, settings);
+} });
+` });
+    expect(failed.code).toBe(1);
+    expect(failed.stderr).toContain(kind === 'issue' ? 'HTTP 503' : 'archon state put work/42 failed (exit 1)');
+    expect(failed.bodies).toEqual([]);
+    expect(stored(at, subject.number).value?.claim?.run_id).toBe('child-1');
+    for (const status of ['failed', 'cancelled']) {
+      const held = stored(at, subject.number).value!;
+      seed(at, { ...held, claim: { run_id: 'child-1', at: AT, requests: [] } });
+      const later = ok(run(at, 'facts', {
+        WORKFLOW_ID: 'later-sweep', INTAKE_RUN_STATUSES: JSON.stringify({ 'run-1': 'paused', 'child-1': status, 'child-2': 'paused' }),
+      }));
+      expect(later).toMatchObject({ path: 'sweep', items: [expect.objectContaining({ item: subject })] });
+      expect(stored(at, subject.number).value?.claim?.run_id).toBe('later-sweep');
+      expect(stored(at, 8)).toEqual(sibling);
+    }
+  }, 60_000);
+
+  test.each(['pr', 'base'] as const)('the %s child derives displayed options from its ruling choices', by => {
+    const at = install();
+    const attention = by === 'pr' ? ATTENTION : BASE_RED.attention;
+    if (by === 'pr') seed(at, item(BUILT, merge('asking'), CLAIMED));
+    const asked = by === 'pr' ? { by, item: SUBJECT, pr: PR, head: HEAD, brief: '', attention } : { by, attention };
+    const output = ok(run(at, 'question', {
+      WORKFLOW_ID: 'child-1', INPUTS_QUESTION: JSON.stringify({ asked, owner_run_id: 'run-1', attention: 'stale', options: [{ id: 'invalid', label: 'Invalid' }] }),
+    }));
+    expect(output.options).toEqual(attention.choices.map(({ id, label }) => ({ id, label })));
+    expect(output.attention).toContain(attention.what);
+    if (by === 'base') expect(stored(at).value).toBeNull();
+  }, 60_000);
+
+  test.each(['pr', 'base'] as const)('the %s child refuses unanswerable choices before changing a claim', by => {
+    const at = install();
+    seed(at, item(BUILT, merge('asking'), CLAIMED));
+    const before = stored(at);
+    const attention = by === 'pr' ? ATTENTION : BASE_RED.attention;
+    for (const invalid of [
+      { ...attention, choices: [] },
+      { ...attention, choices: [attention.choices[0], attention.choices[0]] },
+      { ...attention, recommendation: { ...attention.recommendation, choice: 'missing' } },
+    ]) {
+      const asked = by === 'pr' ? { by, item: SUBJECT, pr: PR, head: HEAD, brief: '', attention: invalid } : { by, attention: invalid };
+      const refused = run(at, 'question', { WORKFLOW_ID: 'child-1', INPUTS_QUESTION: JSON.stringify({ asked, owner_run_id: 'run-1' }) });
+      expect(refused.code).toBe(1);
+      expect(refused.stdout).toBe('');
+      expect(stored(at)).toEqual(before);
+    }
+  }, 60_000);
+
+  test('a question cannot take a competing claim', () => {
+    const at = install();
+    seed(at, item(BUILT, merge('asking'), { claim: { run_id: 'competing-run', at: AT, requests: [] } }));
+    const before = stored(at);
+    const asked = { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: '', attention: ATTENTION };
+    const refused = run(at, 'question', { WORKFLOW_ID: 'child-1', INPUTS_QUESTION: JSON.stringify({ asked, owner_run_id: 'run-1' }) });
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain('no longer claimed');
+    expect(refused.stdout).toBe('');
+    expect(stored(at)).toEqual(before);
+  }, 60_000);
+
+  test('three questions transfer independent claims to children; one child answer is immediately claimable by a later sweep', () => {
     const at = install();
     const subjects = [7, 8, 9].map(number => ({ ...SUBJECT, number }));
     const prs = [42, 43, 44].map(number => ({ ...PR, number }));
@@ -1428,25 +1513,32 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       expect(question.options.map(option => option.id)).toEqual(['merge', 'return', 'park', 'other']);
       expect(question.attention).toContain(ATTENTION.what);
     }
+    for (const [index, question] of asks.entries()) {
+      const childId = `child-${index + 1}`;
+      const prepared = ok(run(at, 'question', { WORKFLOW_ID: childId, INPUTS_QUESTION: JSON.stringify(question) }));
+      expect(prepared.owner_run_id).toBe(childId);
+    }
     const siblings = subjects.slice(1).map(subject => stored(at, subject.number));
     const ruled = run(at, 'ruling', {
-      WORKFLOW_ID: 'child-1', INPUTS_OWNER_RUN_ID: asks[0]!.owner_run_id,
+      WORKFLOW_ID: 'child-1',
       INPUTS_ASKED: JSON.stringify(asks[0]!.asked), INPUTS_CHOICE: 'merge', INPUTS_TEXT: '',
       INPUTS_AUTO_MERGE_QUEUE: 'false',
     });
     expect(ok(ruled).decision).toBe('merge');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { approval: { head: HEAD }, decisions: [expect.anything(), { run_id: 'child-1' }] } } });
     expect(subjects.slice(1).map(subject => stored(at, subject.number))).toEqual(siblings);
-    const later = ok(run(at, 'facts', { WORKFLOW_ID: 'later-sweep', INTAKE_RUN_STATUSES: '{"run-1":"paused"}', INPUTS_AUTO_MERGE_QUEUE: 'false' }));
+    const later = ok(run(at, 'facts', { WORKFLOW_ID: 'later-sweep', INTAKE_RUN_STATUSES: '{"run-1":"paused","child-2":"paused","child-3":"paused"}', INPUTS_AUTO_MERGE_QUEUE: 'false' }));
     expect(later).toMatchObject({ path: 'sweep', items: [{ item: SUBJECT, record: { approval: { head: HEAD } } }] });
     expect(stored(at).value?.claim?.run_id).toBe('later-sweep');
     expect(subjects.slice(1).map(subject => stored(at, subject.number))).toEqual(siblings);
     const before = stored(at);
-    const stale = run(at, 'ruling', { WORKFLOW_ID: 'stale-child', INPUTS_OWNER_RUN_ID: 'run-1', INPUTS_ASKED: JSON.stringify(asks[0]!.asked), INPUTS_CHOICE: 'return', INPUTS_TEXT: 'change scope' });
-    expect(stale.code).toBe(1);
-    expect(stale.stderr).toContain('no longer claimed');
-    expect(stale.bodies).toEqual([]);
-    expect(stored(at)).toEqual(before);
+    for (const effect of ['merge', 'return', 'park']) {
+      const stale = run(at, 'ruling', { WORKFLOW_ID: 'stale-child', INPUTS_OWNER_RUN_ID: 'later-sweep', INPUTS_ASKED: JSON.stringify(asks[0]!.asked), INPUTS_CHOICE: effect, INPUTS_TEXT: 'change scope' });
+      expect(stale.code).toBe(1);
+      expect(stale.stderr).toContain('no longer claimed');
+      expect(stale.bodies).toEqual([]);
+      expect(stored(at)).toEqual(before);
+    }
   }, 60_000);
 
   test.each(['merged', 'closed', 'unreadable', 'changed-head', 'lost-claim'] as const)('record raises no actionable question after %s', kind => {

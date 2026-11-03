@@ -17,8 +17,7 @@
  * build queue or a manual launch, which owns its build autonomy input.
  *
  * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE and INPUTS_TEXT, the
- * attention answer; INPUTS_OWNER_RUN_ID, the parent claim owner; and the merge queue's
- * follow-up input selections.
+ * attention answer; and the merge queue's follow-up input selections.
  */
 
 import { withBuild } from '../../.shared/build.ts';
@@ -91,9 +90,7 @@ function main(): void {
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')
     .join('\n\n');
-  const ownerRunId = trimmed(process.env.INPUTS_OWNER_RUN_ID);
-  if (ownerRunId === '') throw new Error('owner_run_id is required');
-  if (readWorkItem(asked.item.number)?.claim?.run_id !== ownerRunId) {
+  if (readWorkItem(asked.item.number)?.claim?.run_id !== runId) {
     throw new Error(`work/${String(asked.item.number)} is no longer claimed by this run`);
   }
   const heading = writeRuling(asked, ruling, at);
@@ -108,7 +105,7 @@ function main(): void {
     head: asked.head,
     reran: false,
   };
-  updateClaimed(asked.item, ownerRunId, doc => {
+  updateClaimed(asked.item, runId, doc => {
     const recorded = withMerge(doc, {
       at,
       run_id: runId,

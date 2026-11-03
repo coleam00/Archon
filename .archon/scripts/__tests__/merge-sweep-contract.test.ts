@@ -117,3 +117,27 @@ test.each([
   if (sweep === undefined) throw new Error('Missing exported consumer type');
   expect(typeShape(checker, checker.getDeclaredTypeOfSymbol(sweep))).toEqual(schemaShape(schema));
 });
+
+test('both child attention schemas preserve every sweep constraint', () => {
+  const pack = resolve(import.meta.dir, '../../workflows/sdlc');
+  const schemaOf = (path: string, node: string): Schema => {
+    const workflow = Bun.YAML.parse(readFileSync(resolve(pack, path), 'utf8')) as {
+      nodes: { id: string; output_format?: Schema }[];
+    };
+    const schema = workflow.nodes.find(entry => entry.id === node)?.output_format;
+    if (schema === undefined) throw new Error('Missing output_format');
+    return schema;
+  };
+  const producer = schemaOf('merge-queue/archon-merge-queue.yaml', 'sweep');
+  const child = schemaOf('merge-question/archon-merge-question.yaml', 'question');
+  const variants = child.properties?.asked.oneOf;
+  if (variants === undefined) throw new Error('Missing question variants');
+  const attention = [
+    producer.properties?.decisions.items?.properties?.attention,
+    producer.properties?.base.properties?.attention,
+  ];
+  for (const [index, variant] of variants.entries()) {
+    expect(attention[index]).toBeDefined();
+    expect(variant.properties?.attention).toEqual({ ...attention[index], type: 'object' });
+  }
+});

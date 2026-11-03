@@ -784,9 +784,10 @@ governs whether the queue may act, and never changes policy text.
   re-triages nothing.
 - **Attention.** A sweep raises every eligible question, including a red default
   branch and each asked pull request, labelled `merge: base` or `merge: pr`. Each
-  runs in an `archon-merge-question` child with `max_parallel: all`. The child applies
-  its answer and releases only that item's parent claim immediately, so a later sweep
-  can act on it while sibling questions remain open. It carries the build queue's
+  runs in an `archon-merge-question` child with `max_parallel: all`. The child takes
+  ownership of its item's claim before waiting and releases it when applying the
+  answer. A later sweep can act on an answered item or recover a failed or cancelled
+  child's claim while sibling questions remain open. It carries the build queue's
   fields: what it is, why it matters, the recommendation with its evidence, confidence
   and what would change it, the declared choices, what happens if nobody answers, and
   links. A build-owned ask with a blank brief still raises its question when it

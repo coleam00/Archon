@@ -10,7 +10,7 @@
  * back to the build queue with its brief; on an own pull request, which no build round
  * owns, it waits for the next sweep instead, and so does an ask offering a return the
  * item cannot take (an own pull request, or no brief). Every eligible question retains
- * its item's parent claim until its child applies the answer.
+ * its item's claim until its child takes ownership before waiting.
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written releases this run's claim for the next sweep. If that release
