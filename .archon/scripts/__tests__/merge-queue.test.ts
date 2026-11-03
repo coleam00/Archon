@@ -1356,7 +1356,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       }
       expect(result.code).toBe(0);
       const output = JSON.parse(result.stdout) as { merged: number[]; asks: MergeQuestion[]; summary: string };
-      expect(output.merged).toEqual(handoff === 'settled' ? [] : [44]);
+      expect(output.merged).toEqual([44]);
       expect(output.asks).toHaveLength(handoff === 'question' ? 1 : 0);
       expect(result.stderr).toContain(diagnostic);
       expect(output.summary).toContain(diagnostic);
@@ -1373,6 +1373,59 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         INPUTS_RETRIAGE_AS: 'maintainer',
       }));
       expect(retriaged.retriaged).toEqual([7]);
+    }, 60_000);
+
+  test.each((['pr', 'settled'] as const).flatMap(kind => [false, true].map(question => ({ kind, question }))))(
+    'a failed $kind merge write is no handoff with sibling question=$question',
+    ({ kind, question }) => {
+      const at = install();
+      const subjects = [7, 8, 9].map(number => ({ ...SUBJECT, number }));
+      const items = subjects.map((subject, index) => {
+        const pr = { ...PR, number: 42 + index };
+        seed(at, { ...item(BUILT, undefined, CLAIMED), subject });
+        return { item: subject, pr, url: PR_URL.replace(/42$/, String(pr.number)), facts: { ...FACTS, pr }, record: null, own_pr: false };
+      });
+      const before = stored(at).value!;
+      const inputs = {
+        ...recordInputs([
+          ...(kind === 'pr' ? [decision({})] : []),
+          decision({ number: 43, action: 'return', brief: '' }),
+          ...(question ? [decision({ number: 44, action: 'ask', attention: ATTENTION, brief: 'rework' })] : []),
+        ]),
+        INPUTS_ITEMS: JSON.stringify(items.filter(entry => (entry.pr.number !== 42 || kind === 'pr') && (entry.pr.number !== 44 || question))),
+        INPUTS_SETTLED: JSON.stringify(kind === 'settled' ? [{ item: SUBJECT, pr: PR, status: 'merged', decision: 'merged', reason: 'merged before the sweep' }] : []),
+      };
+      const result = run(at, 'record', inputs, { pr: { merged: [42] }, preload: `
+const beforeWrite = Bun.spawnSync.bind(Bun);
+let conflicts = 0;
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const state = argv.indexOf('state');
+  if (state >= 0 && argv[state + 1] === 'put' && argv[state + 2] === 'work/7' && conflicts++ < 3) {
+    return { exitCode: 3, stdout: Buffer.from('{}'), stderr: Buffer.from('') };
+  }
+  return beforeWrite(argv, settings);
+} });` });
+      expect(result.stderr).toContain('three conditional writes conflicted');
+      expect(result.stderr).toContain('with no brief');
+      expect(stored(at).value).toEqual({ ...before, claim: null });
+      expect(result.code).toBe(question ? 0 : 1);
+      if (!question) {
+        expect(result.stdout).toBe('');
+        return;
+      }
+      const output = JSON.parse(result.stdout);
+      expect(output.merged).toEqual([]);
+      expect(output.asks).toHaveLength(1);
+      expect(output.summary).toContain('three conditional writes conflicted');
+      expect(ok(run(at, 'question', { WORKFLOW_ID: 'child-44', INPUTS_QUESTION: JSON.stringify(output.asks[0]) })).asked).toMatchObject({ pr: { number: 44 } });
+      const retriaged = run(at, 'retriage', {
+        INPUTS_ITEMS: inputs.INPUTS_ITEMS,
+        INPUTS_SETTLED: inputs.INPUTS_SETTLED,
+        INPUTS_MERGED: JSON.stringify(output.merged),
+        INPUTS_RETRIAGE_AS: 'maintainer',
+      });
+      expect(ok(retriaged).retriaged).toEqual([]);
+      expect(retriaged.gh).toEqual([]);
     }, 60_000);
 
   test.each(['pr', 'settled'] as const)('a failed %s record releases its claim while a sibling question waits', kind => {
@@ -1706,7 +1759,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       INPUTS_ITEMS: JSON.stringify([listed(9, 44), listed(8, 43), { ...listed(45, 45), own_pr: true }, listed(10, 46)]),
       // Issue 7's pull request was found merged before the sweep.
       INPUTS_SETTLED: JSON.stringify([{ item: SUBJECT, pr: PR, status: 'merged', decision: 'merged', reason: 'merged before this sweep' }]),
-      INPUTS_MERGED: JSON.stringify([44, 43, 45]),
+      INPUTS_MERGED: JSON.stringify([42, 44, 43, 45]),
     };
     const issues: GhIssue[] = [
       { number: 8, title: 'Done', body: 'Closes it.', state: 'CLOSED' },

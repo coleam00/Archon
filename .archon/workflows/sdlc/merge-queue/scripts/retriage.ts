@@ -12,8 +12,8 @@
  * A failed read, label write or launch is reported for that issue and the rest still
  * go; the merge record is already written.
  *
- * Bound inputs: INPUTS_ITEMS and INPUTS_SETTLED from facts, INPUTS_MERGED from record,
- * and the workflow input INPUTS_RETRIAGE_AS.
+ * Bound inputs: INPUTS_ITEMS and INPUTS_SETTLED from facts; INPUTS_MERGED from record
+ * lists successfully recorded merges from both. INPUTS_RETRIAGE_AS is a workflow input.
  */
 
 import { type QualifiedPr, samePr } from '../../.shared/forge.ts';
@@ -53,7 +53,7 @@ function main(): void {
   const merged = new Set((nullableJson(process.env.INPUTS_MERGED) ?? []) as number[]);
   const done = [
     ...items.filter(entry => merged.has(entry.pr.number)),
-    ...settled.filter(entry => entry.status === 'merged'),
+    ...settled.filter(entry => entry.status === 'merged' && entry.pr !== null && merged.has(entry.pr.number)),
   ].flatMap(({ item, pr }) => (item === null || pr === null || samePr(item, pr) ? [] : [{ issue: item, pr }]));
 
   const retriaged: number[] = [];

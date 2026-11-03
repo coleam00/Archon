@@ -267,13 +267,16 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   });
 }
 
-function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
+function recordSettled(writes: Writes, settled: readonly MergeSettled[]): number[] {
+  const merged: number[] = [];
   for (const done of settled) {
     const entry = { at: writes.at, run_id: writes.runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false };
-    write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
+    const recorded = write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
       withMerge(doc, { at: writes.at, run_id: writes.runId, entry, status: done.status, pr: done.pr, release: true })
     );
+    if (recorded && done.status === 'merged' && done.pr !== null) merged.push(done.pr.number);
   }
+  return merged;
 }
 
 function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], baseError: string): never {
@@ -313,7 +316,7 @@ function main(): void {
   });
 
   // Settlements are independent of the policy refresh and the sweep's decisions.
-  recordSettled(writes, settled);
+  const merged = recordSettled(writes, settled);
   const maintainers = items.length > 0 ? readMaintainers(items[0]?.pr.repo as QualifiedPr['repo']) : new Set<string>();
 
   const outcomes = decisions.map(decision => ({ decision, ...readBack(decision, itemOf(decision.number), maintainers) }));
@@ -329,16 +332,16 @@ function main(): void {
     const raised = decision.action === 'ask' &&
       decision.attention !== null && outcome.status === 'waiting' &&
       outcome.askable;
-    if (recordPr(writes, item, outcome, raised) && raised && decision.attention !== null) {
+    if (!recordPr(writes, item, outcome, raised)) continue;
+    if (outcome.status === 'merged') merged.push(decision.number);
+    if (raised && decision.attention !== null) {
       asks.push(question({ by: 'pr', item: item.item, pr: item.pr, head: decision.head,
         brief: decision.brief, attention: withQueueOther(decision.attention, item, decision.brief) }));
     }
   }
-  const merged = outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : []));
-  const mergedSettlement = settled.some(done => done.status === 'merged');
   if (contradictions.length > 0) {
     const diagnostic = [...contradictions, ...writes.failed, 'every other decision is recorded'].join('; ');
-    if (asks.length === 0 && merged.length === 0 && !mergedSettlement) throw new Error(diagnostic);
+    if (asks.length === 0 && merged.length === 0) throw new Error(diagnostic);
     note(`merge-queue record: ${diagnostic}`);
     writes.lines.push(diagnostic);
   }
