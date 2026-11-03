@@ -335,7 +335,10 @@ function main(): void {
     }
   }
   if (contradictions.length > 0) {
-    throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
+    const diagnostic = [...contradictions, ...writes.failed, 'every other decision is recorded'].join('; ');
+    if (asks.length === 0) throw new Error(diagnostic);
+    note(`merge-queue record: ${diagnostic}`);
+    writes.lines.push(diagnostic);
   }
 
   emit({

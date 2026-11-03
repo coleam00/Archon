@@ -1005,7 +1005,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(after.claim?.run_id).toBe('next-run');
   }, 60_000);
 
-  test('a claimed merge the forge does not show fails after recording, even with a base question', () => {
+  test('a claimed merge the forge does not show fails without questions and reports alongside a base question', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
@@ -1022,8 +1022,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, item(BUILT, undefined, CLAIMED));
     seed(at, { ...item(BUILT, undefined, { claim: { run_id: 'another-run', at: AT, requests: [] } }), subject: OTHER });
     const closed = run(at, 'record', inputs(BASE_RED), { pr: { state: 'CLOSED', merged: [43] } });
-    expect(closed.code).not.toBe(0);
-    expect(closed.stdout).toBe('');
+    expect(closed.code).toBe(0);
+    expect(JSON.parse(closed.stdout)).toMatchObject({ asks: [{ asked: { by: 'base' } }] });
     expect(closed.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back closed`);
     expect(closed.stderr).toContain('PR 43: not recorded, the next sweep decides it again (work/8 is no longer claimed by this run); every other decision is recorded');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
@@ -1308,24 +1308,48 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at, 8).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
   }, 60_000);
 
-  test.each(['invalid-decision', 'claimed-merge', 'unraised-base'] as const)('a %s contradiction fails record even with an eligible sibling question', kind => {
+  test.each([
+    { name: 'blank return', first: decision({ action: 'return', brief: '' }), diagnostic: 'with no brief' },
+    { name: 'own return', first: decision({ action: 'return', brief: 'rework' }), diagnostic: 'own pull request', own: true },
+    { name: 'missing question', first: decision({ action: 'ask', attention: null }), diagnostic: 'with no question' },
+    { name: 'blank ask return', first: decision({ action: 'ask', attention: ATTENTION, brief: '' }), diagnostic: 'with no brief' },
+    { name: 'own ask return', first: decision({ action: 'ask', attention: ATTENTION, brief: 'rework' }), diagnostic: 'own pull request', own: true },
+    { name: 'claimed open', first: decision({ action: 'merged' }), diagnostic: 'reads back open' },
+    { name: 'claimed closed', first: decision({ action: 'merged' }), diagnostic: 'reads back closed', closed: [42] },
+    { name: 'unraised base', first: decision({ action: 'wait' }), diagnostic: 'neither reran it nor raised it', base: FACTS_BASE_RED },
+  ])('a $name contradiction preserves sibling question and merged-issue handoffs', ({ first, diagnostic, own = false, closed = [], base = FACTS_BASE_GREEN }) => {
     const at = install();
-    seed(at, item(BUILT, undefined, CLAIMED));
-    seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
-    const first = kind === 'invalid-decision' ? decision({ action: 'return', brief: '' })
-      : kind === 'claimed-merge' ? decision({ action: 'merged' }) : decision({ action: 'wait' });
-    const result = run(at, 'record', {
-      ...recordInputs([first, decision({ number: 43, action: 'ask', attention: ATTENTION, brief: 'rework PR 43' })],
-        BASE_GREEN, kind === 'unraised-base' ? FACTS_BASE_RED : undefined),
-      INPUTS_ITEMS: BOTH_ITEMS,
+    const subjects = [9, 8, 7].map(number => ({ ...SUBJECT, number }));
+    const items = subjects.map((issue, index) => {
+      const pr = { ...PR, number: 42 + index };
+      const subject = index === 0 && own ? pr : issue;
+      const url = PR_URL.replace(/42$/, String(pr.number));
+      seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: url })) }, undefined, CLAIMED), subject });
+      return { item: subject, pr, url, facts: { ...FACTS, pr, url }, record: null, own_pr: index === 0 && own };
     });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    const diagnostic = kind === 'invalid-decision' ? 'with no brief'
-      : kind === 'claimed-merge' ? 'reads back open' : 'neither reran it nor raised it';
+    const inputs = {
+      ...recordInputs([first, decision({ number: 43, action: 'ask', attention: ATTENTION, brief: 'rework PR 43' }), decision({ number: 44 })],
+        BASE_GREEN, base),
+      INPUTS_ITEMS: JSON.stringify(items),
+    };
+    const result = run(at, 'record', inputs, { pr: { merged: [44], closed } });
+    expect(result.code).toBe(0);
+    const output = JSON.parse(result.stdout) as { merged: number[]; asks: MergeQuestion[]; summary: string };
+    expect(output).toMatchObject({ merged: [44], asks: [{ asked: { by: 'pr', pr: { number: 43 } } }] });
+    expect(output.asks).toHaveLength(1);
     expect(result.stderr).toContain(diagnostic);
-    expect(stored(at).value?.claim).toBeNull();
+    expect(output.summary).toContain(diagnostic);
+    expect(stored(at, own ? 42 : 9).value?.claim).toBeNull();
     expect(stored(at, 8).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged' } } });
+    expect(ok(run(at, 'question', { WORKFLOW_ID: 'child-43', INPUTS_QUESTION: JSON.stringify(output.asks[0]) })).asked).toMatchObject({ pr: { number: 43 } });
+    const retriaged = ok(run(at, 'retriage', {
+      INPUTS_ITEMS: inputs.INPUTS_ITEMS,
+      INPUTS_SETTLED: '[]',
+      INPUTS_MERGED: JSON.stringify(output.merged),
+      INPUTS_RETRIAGE_AS: 'maintainer',
+    }));
+    expect(retriaged.retriaged).toEqual([7]);
   }, 60_000);
 
   test.each(['pr', 'settled'] as const)('a failed %s record releases its claim while a sibling question waits', kind => {
