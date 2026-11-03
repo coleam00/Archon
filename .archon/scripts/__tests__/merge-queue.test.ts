@@ -1438,7 +1438,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       const inputs = recordFacts(picked);
       expect((kind === 'sweep' ? picked.items : picked.settled) as unknown[]).toHaveLength(2);
       if (kind === 'settled-last') {
-        inputs.INPUTS_SETTLED = JSON.stringify((picked.settled as MergeSettled[]).toReversed());
+        inputs.INPUTS_SETTLED = JSON.stringify([...(picked.settled as MergeSettled[])].reverse());
       }
       if (kind === 'sweep') {
         inputs.INPUTS_SWEEP = recordInputs([decision({})]).INPUTS_SWEEP!;
