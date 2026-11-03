@@ -123,6 +123,11 @@ input layer. They never rewrite policy text. Omit them to keep automatic action.
 
 **When to use it**: You want reviewed, green pull requests merged without merging each by hand, while changes that need a person still wait for one. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
 
+Contradictory sweep decisions are reported in the record summary and diagnostic output.
+Eligible questions and merged-issue retriage still proceed, including issues settled as
+already merged, even when no question remains. With no question or merged handoff,
+record fails. Failure to release a claim after a write error also fails the run.
+
 **What it produces**: Merged pull requests, the queue's record on each work item (`facts.merge`: status and decisions), and attention items for the decisions that need a person.
 
 #### `archon-discoveries`

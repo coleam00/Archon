@@ -756,13 +756,15 @@ governs whether the queue may act, and never changes policy text.
   brief, and a red default branch the sweep neither re-ran nor raised: the pull
   request waits for the next sweep. After writing every other decision, the record
   reports each problem in its summary and diagnostic output while emitting independent
-  eligible questions; if there are none, it fails with the diagnostic. A claimed pull request
+  eligible questions and merged-issue handoffs, including already merged settlements.
+  If neither remains, it fails with the diagnostic. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
   waits the same way. It reads every pull request back: the forge, not the sweep, says
   what merged, at the head the forge merged. A sweep that says it merged a pull
   request the forge does not show merged is reported the same way: that pull request
   is recorded as waiting, or parked if it was closed. Independent base and pull-request
-  questions still reach their children. The diagnostic also names any work item it
+  questions still reach their children, and merged issues still reach retriage even
+  when no question remains. The diagnostic also names any work item it
   could not write. A pull
   request that cannot be read waits for the next sweep; a work item that cannot be written is reported, so one bad item never loses
   the rest of the batch's record.

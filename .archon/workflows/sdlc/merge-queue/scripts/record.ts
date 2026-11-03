@@ -334,15 +334,17 @@ function main(): void {
         brief: decision.brief, attention: withQueueOther(decision.attention, item, decision.brief) }));
     }
   }
+  const merged = outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : []));
+  const mergedSettlement = settled.some(done => done.status === 'merged');
   if (contradictions.length > 0) {
     const diagnostic = [...contradictions, ...writes.failed, 'every other decision is recorded'].join('; ');
-    if (asks.length === 0) throw new Error(diagnostic);
+    if (asks.length === 0 && merged.length === 0 && !mergedSettlement) throw new Error(diagnostic);
     note(`merge-queue record: ${diagnostic}`);
     writes.lines.push(diagnostic);
   }
 
   emit({
-    merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
+    merged,
     summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
     asks,
   });
