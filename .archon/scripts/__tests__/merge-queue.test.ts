@@ -1406,6 +1406,85 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     }
   }, 60_000);
 
+  test.each(['issue', 'own-pr'] as const)('a failed %s question transfer releases the paused parent claim', kind => {
+    const at = install();
+    const subject = kind === 'issue' ? SUBJECT : PR;
+    seed(at, kind === 'issue' ? item(BUILT, merge('asking'), CLAIMED) : {
+      ...newWorkItem(PR, AT), ...CLAIMED,
+      facts: { own_pr: { url: PR_URL, at: AT }, merge: merge('asking') },
+    });
+    seed(at, { ...item(BUILT, merge('asking'), { claim: { run_id: 'child-2', at: AT, requests: [] } }), subject: OTHER });
+    const before = stored(at, subject.number).value!;
+    const sibling = stored(at, OTHER.number);
+    const asked = { by: 'pr', item: subject, pr: PR, head: HEAD, brief: '', attention: ATTENTION };
+    const failed = run(at, 'question', {
+      WORKFLOW_ID: 'child-1', INPUTS_QUESTION: JSON.stringify({ asked, owner_run_id: 'run-1' }),
+    }, { preload: `
+const beforeWrite = Bun.spawnSync.bind(Bun);
+let conflicts = 0;
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const state = argv.indexOf('state');
+  if (state >= 0 && argv[state + 1] === 'put' && argv[state + 2] === 'work/${subject.number}' && conflicts++ < 3) {
+    return { exitCode: 3, stdout: Buffer.from('{}'), stderr: Buffer.from('') };
+  }
+  return beforeWrite(argv, settings);
+} });` });
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toBe('');
+    expect(failed.stderr).toContain('three conditional writes conflicted');
+    expect(stored(at, subject.number).value).toEqual({ ...before, claim: null });
+    const later = ok(run(at, 'facts', {
+      WORKFLOW_ID: 'later-sweep', INTAKE_RUN_STATUSES: '{"run-1":"paused","child-1":"failed","child-2":"paused"}',
+    }));
+    expect(later).toMatchObject({ path: 'sweep', items: [expect.objectContaining({ item: subject })] });
+    expect(stored(at, subject.number).value?.claim?.run_id).toBe('later-sweep');
+    expect(stored(at, OTHER.number)).toEqual(sibling);
+  }, 60_000);
+
+  test.each(['concurrent-edit', 'competing-owner', 'competing-on-release', 'release-fails'] as const)('failed question transfer cleanup handles %s', kind => {
+    const at = install();
+    seed(at, item(BUILT, merge('asking'), CLAIMED));
+    const before = stored(at).value!;
+    const changed: WorkItem = {
+      ...before, links: { runs: ['concurrent-run'] },
+      ...(kind.startsWith('competing-') ? { claim: { ...CLAIMED.claim, run_id: 'another-run' } } : {}),
+    };
+    const asked = { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: '', attention: ATTENTION };
+    const failed = run(at, 'question', {
+      WORKFLOW_ID: 'child-1', INPUTS_QUESTION: JSON.stringify({ asked, owner_run_id: 'run-1' }),
+    }, { preload: `
+const beforeWrite = Bun.spawnSync.bind(Bun);
+let conflicts = 0;
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const state = argv.indexOf('state');
+  if (state >= 0 && argv[state + 1] === 'put' && argv[state + 2] === 'work/7') {
+    conflicts++;
+    if (conflicts === ${kind === 'competing-owner' ? 3 : 4} && ${JSON.stringify(kind)} !== 'release-fails') {
+      const concurrent = beforeWrite(argv, { ...settings, stdin: Buffer.from(${JSON.stringify(JSON.stringify(changed))}) });
+      if (concurrent.exitCode !== 0) throw new Error('concurrent write failed: ' + concurrent.stderr.toString());
+    }
+    if (conflicts <= 3 || ${JSON.stringify(kind)} === 'release-fails') {
+      return { exitCode: 3, stdout: Buffer.from('{}'), stderr: Buffer.from('') };
+    }
+  }
+  return beforeWrite(argv, settings);
+} });` });
+    expect(failed.code).toBe(1);
+    expect(failed.stdout).toBe('');
+    expect(failed.stderr).toContain('three conditional writes conflicted');
+    if (kind === 'release-fails') {
+      expect(failed.stderr).toContain('could not release its parent claim');
+      expect(failed.stderr.match(/three conditional writes conflicted/g)).toHaveLength(2);
+      expect(stored(at).value).toEqual(before);
+    } else if (kind === 'competing-on-release') {
+      expect(failed.stderr).toContain('could not release its parent claim: work/7 is no longer claimed by this run');
+      expect(stored(at).value).toEqual(changed);
+    } else {
+      expect(failed.stderr).not.toContain('could not release');
+      expect(stored(at).value).toEqual(kind === 'competing-owner' ? changed : { ...changed, claim: null });
+    }
+  }, 60_000);
+
   test.each(['issue', 'own-pr'] as const)('a failed or abandoned %s question is picked up while its parent and sibling wait', kind => {
     const at = install();
     const subject = kind === 'issue' ? SUBJECT : PR;
@@ -1461,21 +1540,22 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (by === 'base') expect(stored(at).value).toBeNull();
   }, 60_000);
 
-  test.each(['pr', 'base'] as const)('the %s child refuses unanswerable choices before changing a claim', by => {
+  test.each(['pr', 'base'] as const)('the %s child refuses unanswerable choices and releases only its parent claim', by => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
-    const before = stored(at);
+    const before = stored(at).value!;
     const attention = by === 'pr' ? ATTENTION : BASE_RED.attention;
     for (const invalid of [
       { ...attention, choices: [] },
       { ...attention, choices: [attention.choices[0], attention.choices[0]] },
       { ...attention, recommendation: { ...attention.recommendation, choice: 'missing' } },
     ]) {
+      seed(at, before);
       const asked = by === 'pr' ? { by, item: SUBJECT, pr: PR, head: HEAD, brief: '', attention: invalid } : { by, attention: invalid };
       const refused = run(at, 'question', { WORKFLOW_ID: 'child-1', INPUTS_QUESTION: JSON.stringify({ asked, owner_run_id: 'run-1' }) });
       expect(refused.code).toBe(1);
       expect(refused.stdout).toBe('');
-      expect(stored(at)).toEqual(before);
+      expect(stored(at).value).toEqual(by === 'pr' ? { ...before, claim: null } : before);
     }
   }, 60_000);
 

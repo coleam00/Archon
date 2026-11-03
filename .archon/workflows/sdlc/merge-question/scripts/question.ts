@@ -1,10 +1,11 @@
 import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 import { attentionOptions, checkAttention, renderAttention } from '../../.shared/queue.ts';
-import { updateClaimed } from '../../.shared/workitem.ts';
+import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 import type { MergeQuestion } from '../../merge-queue/scripts/record.ts';
 
+let question: Pick<MergeQuestion, 'asked' | 'owner_run_id'> | null = null;
 try {
-  const question = nullableJson(process.env.INPUTS_QUESTION) as Pick<MergeQuestion, 'asked' | 'owner_run_id'> | null;
+  question = nullableJson(process.env.INPUTS_QUESTION) as Pick<MergeQuestion, 'asked' | 'owner_run_id'> | null;
   if (question === null) throw new Error('question is required');
   const { asked } = question;
   checkAttention<string>(asked.attention);
@@ -26,5 +27,13 @@ try {
     options: attentionOptions<string>(asked.attention),
   } satisfies MergeQuestion);
 } catch (error) {
-  refuse(`merge question: ${error instanceof Error ? error.message : String(error)}`);
+  let failure = `merge question: ${error instanceof Error ? error.message : String(error)}`;
+  try {
+    if (question?.asked.by === 'pr' && readWorkItem(question.asked.item.number)?.claim?.run_id === question.owner_run_id) {
+      updateClaimed(question.asked.item, question.owner_run_id, doc => ({ ...doc, claim: null }));
+    }
+  } catch (releaseError) {
+    failure += `; could not release its parent claim: ${releaseError instanceof Error ? releaseError.message : String(releaseError)}`;
+  }
+  refuse(failure);
 }
