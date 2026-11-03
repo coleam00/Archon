@@ -88,6 +88,7 @@ describe('parsePackDeclaration', () => {
     ['inputs:\n  strict:\n    type: bool\n    default: maybe\n', "input 'strict' default"],
     ['inputs:\n  x:\n    required: true\n    default: a\n', "input 'x' sets both"],
     ['inputs:\n  foo-bar: {}\n  foo_bar: {}\n', "both map to env var 'INPUTS_FOO_BAR'"],
+    ['inputs:\n  __proto__:\n    default: a\n', "'__proto__' cannot be a setting name"],
   ])('refuses %p, naming the file and key', (yaml, reason) => {
     expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow(PackSettingsError);
     expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow(reason);

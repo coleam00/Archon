@@ -123,6 +123,8 @@ function parseSettingSpec(name: string, rawSpec: unknown, fail: Fail): PackSetti
       `input '${name}' is not a valid name: start with a letter or underscore, then letters, digits, underscores or hyphens`
     );
   }
+  // Assigning `__proto__` to a plain object sets its prototype, so the value would vanish.
+  if (name === '__proto__') fail(`'__proto__' cannot be a setting name`);
   const parsed = packSettingSpecSchema.safeParse(rawSpec ?? {});
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
@@ -266,7 +268,10 @@ export async function resolveRunStartInputs(
   return { inputs: Object.keys(inputs).length > 0 ? inputs : undefined, packSettings };
 }
 
-/** A `required` setting has no default, so only a value set for this run satisfies it. */
+/**
+ * A `required` setting has no default of its own: the project file, a same-named workflow
+ * input default, or a value supplied to the run must set it.
+ */
 function assertRequiredSettings(
   cwd: string,
   pack: WorkflowPack,

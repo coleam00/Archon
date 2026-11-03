@@ -357,9 +357,7 @@ export type { SessionCursor } from './workflow-run';
 export { canSuspend, isInteractiveSink } from './node-suspension';
 
 export {
-  PACK_SETTING_TYPES,
   packSettingSpecSchema,
-  type PackSettingType,
   type PackSettingSpec,
   type WorkflowPack,
 } from './pack-settings';

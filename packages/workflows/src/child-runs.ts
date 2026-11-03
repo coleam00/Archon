@@ -22,7 +22,14 @@ import {
   type CapturedSourceOwner,
   type PreparedWorkflowSource,
 } from './run-source';
-import type { ResolvedWorkflow, WorkflowRun, WorkflowSource, WorkflowWithSource } from './schemas';
+import type {
+  ResolvedWorkflow,
+  WorkflowLoadError,
+  WorkflowRun,
+  WorkflowSource,
+  WorkflowWithSource,
+} from './schemas';
+import { findWorkflowLoadError } from './schemas/workflow';
 import { SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { requireTerminalStatusWrite } from './terminal-status-write';
@@ -259,6 +266,8 @@ async function resolveChildWorkflow(
 ): Promise<ChildPhase<WorkflowWithSource>> {
   const { childWorkflowName } = args;
   let childWorkflow: WorkflowWithSource | undefined;
+  // Why the child is missing, when discovery refused it (an invalid pack declaration, say).
+  let loadError: WorkflowLoadError | undefined;
   try {
     // DELIBERATE AFFORDANCE — do not "fix" this by adding a load-time existence
     // check for `workflow:` targets. Discovery runs HERE, when the node executes,
@@ -268,7 +277,7 @@ async function resolveChildWorkflow(
     // table (.archon/workflow-language-constitution.md) and locked by
     // `describe('workflow: late resolution is a deliberate affordance')` in
     // child-runs.late-resolution.test.ts.
-    const { workflows } = await discoverWorkflowsWithConfig(
+    const { workflows, errors } = await discoverWorkflowsWithConfig(
       args.cwd,
       deps.loadConfig,
       deps.providers,
@@ -279,6 +288,7 @@ async function resolveChildWorkflow(
       workflows.map(w => w.workflow)
     );
     childWorkflow = workflows.find(w => w.workflow === resolved);
+    if (!childWorkflow) loadError = findWorkflowLoadError(errors, childWorkflowName);
     if (childWorkflow) {
       await recordSelectedWorkflow(childSource.anchor.root, childWorkflow.workflow.name);
     }
@@ -286,7 +296,13 @@ async function resolveChildWorkflow(
     if (isSourceReadFailure(err)) throw parentSourceUnreadable(childSource.anchor.root, err);
     return refuse(`Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`);
   }
-  if (!childWorkflow) return refuse(`Unknown sub-run workflow '${childWorkflowName}'.`);
+  if (!childWorkflow) {
+    return refuse(
+      loadError
+        ? `Sub-run workflow '${childWorkflowName}' failed to load: ${loadError.error}`
+        : `Unknown sub-run workflow '${childWorkflowName}'.`
+    );
+  }
   return proceed(childWorkflow);
 }
 

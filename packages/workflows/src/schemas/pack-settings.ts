@@ -9,9 +9,6 @@
  */
 import { z } from 'zod';
 
-export const PACK_SETTING_TYPES = ['string', 'bool', 'enum', 'list'] as const;
-export type PackSettingType = (typeof PACK_SETTING_TYPES)[number];
-
 const settingBase = {
   description: z.string().optional(),
   required: z.boolean().optional(),

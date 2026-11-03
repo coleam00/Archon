@@ -440,4 +440,35 @@ nodes:
     expect(nodeOutput(store, child?.id, 'emit')).toContain('child-tone=beta-project');
     expect(dispatchOf(runNamed(store, 'alpha-parent'))?.pack).toBe('alpha');
   });
+
+  it('a workflow: child whose pack declaration is invalid fails naming the declaration', async () => {
+    await writePackDeclaration('gamma', 'inputs:\n  strict:\n    type: bool\n    default: maybe\n');
+    await writePackWorkflow(
+      'gamma',
+      'gamma-child',
+      'name: gamma-child\ndescription: child\nnodes:\n  - id: emit\n    bash: echo hi\n'
+    );
+    await writePackWorkflow(
+      'alpha',
+      'alpha-parent',
+      'name: alpha-parent\ndescription: parent\nnodes:\n  - id: sub\n    workflow: gamma-child\n'
+    );
+
+    const store = new InMemoryStore();
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('alpha-parent'),
+      'goal',
+      { conversationId: 'conv-db' },
+      { baseBranch: 'main' }
+    );
+
+    expect(result.success).toBe(false);
+    const failed = store.events.find(e => e.event_type === 'node_failed' && e.step_name === 'sub');
+    expect(String(failed?.data?.error)).toContain("Sub-run workflow 'gamma-child' failed to load");
+    expect(String(failed?.data?.error)).toContain('.pack/pack.yaml');
+  });
 });
