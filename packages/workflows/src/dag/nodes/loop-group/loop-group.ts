@@ -147,7 +147,10 @@ async function recordGroupResult(
       costPartial: result.costPartial,
       tokens: result.tokens,
       tokensUnknown: result.tokensUnknown,
-      diagnostics: { loopIterations: result.loopIterations },
+      diagnostics: {
+        loopIterations: result.loopIterations,
+        ...(result.maxIterations !== undefined ? { maxIterations: result.maxIterations } : {}),
+      },
     })
   );
 }
@@ -238,5 +241,6 @@ async function executeLoopGroupBody(
     failureKind: 'max_iterations',
     ...progress.usage,
     loopIterations: iterations,
+    maxIterations: iterationLimit,
   };
 }

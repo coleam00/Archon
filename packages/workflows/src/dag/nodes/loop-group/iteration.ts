@@ -665,6 +665,7 @@ export async function completeLoopGroup(
     output: state.lastOutput,
     ...run.progress.usage,
     loopIterations: i,
+    ...(exhaustedAt !== undefined ? { maxIterations: exhaustedAt } : {}),
     // The final iteration's sink payload, so downstream `$group.output.field`
     // resolves from the logical value (#2637). No declaredOutputPaths: a group's
     // own output_format is ignored, so field access stays tier-2 lenient.

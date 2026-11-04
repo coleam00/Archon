@@ -1802,7 +1802,12 @@ describe('interactive loop node', () => {
   });
 
   describe('at max_iterations (#4290)', () => {
-    const runAtCap = async (loopUserInput: string, feedbackGiven: boolean, iteration = 1) => {
+    const runAtCap = async (
+      loopUserInput: string,
+      feedbackGiven: boolean,
+      iteration = 1,
+      exhausted: { onExhausted?: 'complete'; iterationOutput?: string } = {}
+    ) => {
       const mockDeps = createMockDeps();
       await executeDagWorkflow(
         dagOptions({
@@ -1822,6 +1827,7 @@ describe('interactive loop node', () => {
                   max_iterations: 1,
                   interactive: true,
                   gate_message: 'Review.',
+                  ...(exhausted.onExhausted ? { on_exhausted: exhausted.onExhausted } : {}),
                 },
               },
             ],
@@ -1836,6 +1842,9 @@ describe('interactive loop node', () => {
                 message: 'gate',
                 completionSignaled: false,
                 signaledOutput: null,
+                ...(exhausted.iterationOutput !== undefined
+                  ? { iterationOutput: exhausted.iterationOutput }
+                  : {}),
               },
               loop_user_input: loopUserInput,
               loop_feedback_given: feedbackGiven,
@@ -1876,6 +1885,17 @@ describe('interactive loop node', () => {
       expect(mockSendQueryDag.mock.calls.length).toBe(0);
       expect(completed).toBeUndefined();
       expect(failed?.data).toMatchObject({ failure_kind: 'max_iterations' });
+    });
+
+    it('completes with the paused output when the final gate is approved without feedback under on_exhausted: complete', async () => {
+      const { completed, failed } = await runAtCap('Approved', false, 1, {
+        onExhausted: 'complete',
+        iterationOutput: 'draft 1',
+      });
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      expect(failed).toBeUndefined();
+      expect(completed?.data).toMatchObject({ node_output: 'draft 1', maxIterations: 1 });
     });
 
     it('runs exactly one iteration past max_iterations per feedback answer when it does not complete', async () => {

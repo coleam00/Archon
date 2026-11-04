@@ -108,12 +108,15 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
-  it('completes an exhausted loop_group with its last output under on_exhausted: complete', async () => {
+  it('completes an exhausted loop_group with its last payload under on_exhausted: complete', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       callCount++;
-      yield { type: 'agent_message_chunk', text: `round ${String(callCount)} not finished` };
-      yield { type: 'result', sessionId: `lg-sess-${String(callCount)}` };
+      yield {
+        type: 'result',
+        sessionId: `lg-sess-${String(callCount)}`,
+        structuredOutput: { done: false, note: `round ${String(callCount)}` },
+      };
     });
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
@@ -140,6 +143,11 @@ describe('executeDagWorkflow -- loop_group node', () => {
                     id: 'work',
                     kind: 'agent',
                     source: { kind: 'inline', prompt: 'do work until it is done' },
+                    output_format: {
+                      type: 'object',
+                      properties: { done: { type: 'boolean' }, note: { type: 'string' } },
+                      required: ['done', 'note'],
+                    },
                     depends_on: [],
                   },
                 ],
@@ -150,7 +158,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
               id: 'report',
               kind: 'exec',
               runtime: 'sh',
-              script: 'echo "last=$fixer.output"',
+              script: 'echo "done=$fixer.output.done note=$fixer.output.note"',
               depends_on: ['fixer'],
             },
           ],
@@ -159,10 +167,15 @@ describe('executeDagWorkflow -- loop_group node', () => {
       })
     );
 
+    // The group's last payload reaches downstream by field; `done` says it ran out.
     expect(callCount).toBe(2);
-    expect(result).toContain('round 2 not finished');
+    expect(result).toContain("done=false note='round 2'");
     expect(mockDeps.store.persistWorkflowEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: 'node_completed', step_name: 'fixer' })
+      expect.objectContaining({
+        event_type: 'node_completed',
+        step_name: 'fixer',
+        data: expect.objectContaining({ maxIterations: 2 }),
+      })
     );
     expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
     const sent = (platform.sendMessage as Mock<(...args: unknown[]) => unknown>).mock.calls

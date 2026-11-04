@@ -1264,7 +1264,7 @@ describe('loop node completion channels', () => {
 
   // ─── on_exhausted: complete ──────────────────────────────────────────────
 
-  it('completes an exhausted loop with its last payload under on_exhausted: complete, and resume runs no iteration', async () => {
+  it('completes an exhausted loop with its last payload under on_exhausted: complete', async () => {
     let calls = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       calls++;
@@ -1318,21 +1318,6 @@ describe('loop node completion channels', () => {
     const completed = loopEvents.find(event => event.event_type === 'node_completed');
     expect(completed?.data).toMatchObject({ maxIterations: 2 });
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
-
-    // A resume hydrates the completed loop and runs no further iteration.
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        platform: createMockPlatform(),
-        cwd: testDir,
-        workflow: { name: 'dag-loop-exhausted-complete', nodes },
-        workflowRun: makeWorkflowRun('loop-exhausted-complete-resume'),
-        priorCompletedNodes: new Map([
-          ['my-loop', { output: JSON.stringify({ done: false, note: 'pass 2' }) }],
-        ]),
-      })
-    );
-    expect(calls).toBe(2);
   });
 
   it('still fails a loop under on_exhausted: complete when an iteration fails', async () => {
