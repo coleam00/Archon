@@ -128,8 +128,6 @@ export interface ScriptRun {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
-  /** Every `gh` argv the script tried to spawn. The harness refuses each one: no pack script may call gh. */
-  readonly gh: readonly string[];
   /** Every `archon` argv the fake forge received. */
   readonly forge: readonly string[];
   /** Every JSON request body the fake forge was handed through `--data-file`. */
@@ -144,6 +142,12 @@ export interface ScriptRun {
   readonly bodies: readonly string[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
+}
+
+/** Fails the test when the script spawned `gh`: no pack script may call it. */
+function refuseGhSpawns(ghLog: string): void {
+  const spawned = existsSync(ghLog) ? readFileSync(ghLog, 'utf8').trim() : '';
+  if (spawned !== '') throw new Error(`the pack script spawned gh: ${spawned.split('\n').join('; ')}`);
 }
 
 /** A Bun preload that records and refuses every `gh` spawn. */
@@ -242,7 +246,11 @@ function answer(op, request) {
     case 'workitem.view': return view(request.ref);
     case 'repo.labels.list': return done({ repo: request.repo, labels: [...labels].map(name => ({ name })) });
     case 'repo.label.ensure': return write(op, () => labels.add(request.name), () => ({}));
-    case 'workitem.label.add': return write(op, () => issueLabels.push(request.name), () => ({}));
+    case 'workitem.label.add': {
+      // The forge adds only a label the repository has; the pack ensures its own first.
+      if (!labels.has(request.name)) return refused(op, 'the repository has no label ' + request.name);
+      return write(op, () => issueLabels.push(request.name), () => ({}));
+    }
     case 'workitem.label.remove': return write(op, () => { issueLabels = issueLabels.filter(name => name !== request.name); }, () => ({}));
     case 'workitem.create': {
       const marked = issues.filter(row => !row.pull && row.body.split(/\\r?\\n/, 1)[0] === request.marker);
@@ -308,6 +316,7 @@ function answer(op, request) {
     case 'pr.ready':
     case 'pr.draft': {
       if (fake.readyFail !== undefined) return refused(op, fake.readyFail);
+      if (pr.state !== 'OPEN') return refused(op, 'the pull request is ' + pr.state.toLowerCase());
       return write(op, () => { pr.isDraft = op === 'pr.draft'; }, () => ({ pr: record(request.ref.repo) }));
     }
     default: return refused(op, 'the fake forge has no ' + op);
@@ -460,6 +469,7 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
     env,
     encoding: 'utf8',
   });
+  refuseGhSpawns(ghLog);
   const lines = (path: string): string[] =>
     existsSync(path)
       ? readFileSync(path, 'utf8')
@@ -470,7 +480,6 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
     code: result.status ?? -1,
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
-    gh: lines(ghLog),
     forge: lines(forgeLog),
     forgeRequests: lines(requestLog),
     createdIssues: lines(`${sideLog}.issues`).map(line => JSON.parse(line) as TrackerIssue),

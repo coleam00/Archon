@@ -622,7 +622,7 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
   });
 }
 
-/** The PR head the fake gh and forge report, and so the commit a passing round reviewed. */
+/** The PR head the fake forge reports, and so the commit a passing round reviewed. */
 const REVIEWED = 'deadbeef';
 
 function atCommit(commit: string): string {
@@ -681,7 +681,7 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(forgeCalls(result).find(call => call.op === 'comment.upsert')?.request.ref).toEqual(PR);
   });
 
-  it('upserts through the plugin on the forge source, with the report in the request file', () => {
+  it('upserts through the plugin, with the report in the request file', () => {
     const forge: ScriptOptions['forge'] = {
       kind: 'fake',
       response: [

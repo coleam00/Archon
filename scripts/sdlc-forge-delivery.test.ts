@@ -150,7 +150,6 @@ describe('delivery goes through plugin operations', () => {
         code: 0,
       });
       // The forge path never reaches for gh, not even to read.
-      expect(run.gh).toEqual([]);
       return run;
     };
     const github = (): FakeGitHubState =>
@@ -392,7 +391,6 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
   const options = { forge: { kind: 'command' as const, argv: host.argv } };
   const triage = runPackScript('triage/scripts/verdict', { ...options, inputs });
   expect({ code: triage.code, stderr: triage.stderr }).toMatchObject({ code: 0 });
-  expect(triage.gh).toEqual([]);
   expect(JSON.parse(triage.stdout)).toMatchObject({
     published: true,
     labels: ['archon-ready', 'archon-size-s', 'archon-type-feature', 'area', 'constructor'],

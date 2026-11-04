@@ -24,7 +24,8 @@ You need:
 
 - Archon with at least one provider, from the [Quickstart](/getting-started/quick-start/).
 - A local clone of a GitHub repository you can push to.
-- The GitHub CLI signed in as the account the pack will act as: `gh auth login`. Every label, comment, push and merge is made as that account.
+- The forge plugin: `archon plugin add coleam00/Archon/plugins/forge-github`.
+- A GitHub credential for the account the pack will act as: `gh auth login`, or `GH_TOKEN` or `GITHUB_TOKEN` in Archon's env file. The plugin uses it, and every label, comment, push and merge is made as that account.
 - CI that reports checks on pull requests. The merge queue merges only when the checks at the pull request's head are green, so a repository with no checks never merges.
 
 ## 1. Check the forge
@@ -118,7 +119,7 @@ One sweep agent decides every pull request the build queue made ready. It never 
 - the default branch's CI is not red (pending does not hold a merge);
 - the head contains the default branch, or GitHub reports it merges cleanly.
 
-The gate merges pinned to that head (`gh pr merge --match-head-commit`, squash by default; `--input merge_method=merge` for a merge commit). A conflict, a stale verdict, a review thread that raises a defect, or red the change caused goes back to the build queue with a brief. Red CI in code the pull request doesn't touch gets one rerun of its failed jobs. If the default branch is red, nothing merges, and the queue raises one `merge: base` item whose only choice is `hold`. A pull request it fails to read twice in a row is parked until the build queue readies it again.
+The gate merges pinned to that head through the forge's `pr.merge` (squash by default; `--input merge_method=merge` for a merge commit). A conflict, a stale verdict, a review thread that raises a defect, or red the change caused goes back to the build queue with a brief. Red CI in code the pull request doesn't touch gets one rerun of its failed jobs. If the default branch is red, nothing merges, and the queue raises one `merge: base` item whose only choice is `hold`; the forge can't rerun a commit with no pull request, so a flaky default branch is rerun by hand. A pull request it fails to read twice in a row is parked until the build queue readies it again.
 
 Drain what the runs noticed outside their task:
 

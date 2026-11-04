@@ -436,6 +436,10 @@ describe('the build queue scripts', () => {
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
     expect(ok(run(at, 'facts', cancelled))).toMatchObject({ pull_request: null, continues: null });
     expect(stored(at).value?.facts.build).toBeUndefined();
+    // The forge finds only an open pull request on the branch, so a closed one leaves no round either.
+    seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
+    expect(ok(run(at, 'facts', cancelled, { pr: { state: 'CLOSED', headRefName: branch } }))).toMatchObject({ continues: null });
+    expect(stored(at).value?.facts.build).toBeUndefined();
   }, 60_000);
 
   test('items intake has not routed, and items the queue finished, are never picked up', () => {
@@ -747,8 +751,7 @@ describe('the build queue checkout', () => {
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
 
-    // On the forge source the review is read through `archon forge`; gh holds no comments,
-    // so a non-null baseline can only come from the forge.
+    // The review is read through `archon forge`, from this preload's comments.
     const forgeComments = [{ id: '1', body: review.body, url: 'https://ghe.example.com/example/repo/pull/42#issuecomment-1', author: { host: PR.repo.host, id: '1', login: 'Maintainer' } }];
     const forge = `
 const harness = Bun.spawnSync.bind(Bun);

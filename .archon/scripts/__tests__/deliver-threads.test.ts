@@ -84,4 +84,42 @@ describe("deliver's review threads", () => {
     expect(ok(result).open).toBe(1);
     expect(result.forge.map(argv => argv.split(' ')[1])).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
   });
+
+  const ops = (result: ScriptRun): string[] => result.forge.map(argv => argv.split(' ')[1] ?? '');
+  const drafted = forgeOperation('pr.draft', { pr: forgePrRecord({ is_draft: true }) });
+
+  it('refuses an answer for a thread the pull request does not have, before writing anything', () => {
+    const result = runPackScript('deliver/scripts/threads', {
+      forge: { kind: 'fake', response: [view(false), threads(false), drafted] },
+      inputs: { INPUTS_ANSWERS: JSON.stringify([{ thread: 'T9', reply: 'Fixed.' }]) },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('answers name threads');
+    expect(result.stderr).toContain('T9');
+    expect(ops(result)).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
+  });
+
+  it('fails and puts the pull request back to draft when an answered thread does not read back resolved', () => {
+    const result = runPackScript('deliver/scripts/threads', {
+      forge: {
+        kind: 'fake',
+        response: [view(false), threads(false), applied('pr.thread.reply'), applied('pr.thread.resolve'), view(false), threads(false), drafted],
+      },
+      inputs: { INPUTS_ANSWERS: JSON.stringify([{ thread: 'T1', reply: 'Fixed in 1a2b3c4.' }]) },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('threads T1 were answered but do not read back resolved');
+    expect(ops(result).at(-1)).toBe('pr.draft');
+  });
+
+  it('fails rather than reading clear when pr.threads returns no thread list, and puts the pull request back to draft', () => {
+    const result = runPackScript('deliver/scripts/threads', {
+      forge: { kind: 'fake', response: [view(false), forgeOperation('pr.threads', { ref }), drafted] },
+      inputs: { INPUTS_ANSWERS: 'null' },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('forge pr.threads returned no thread list');
+    expect(ops(result)).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
+  });
 });

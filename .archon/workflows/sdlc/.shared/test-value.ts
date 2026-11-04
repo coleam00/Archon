@@ -45,7 +45,7 @@ export interface Case {
   readonly tests: readonly LabeledTest[];
 }
 
-/** A merged factory pull request, as the metric workflow hands it on; `runs` is already capped by `prRuns`. */
+/** A merged factory pull request, as the metric workflow hands it on, with the build-queue runs that built it. */
 export interface MergedPr {
   readonly url: string;
   readonly merged_at: string;

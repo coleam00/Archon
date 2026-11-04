@@ -184,8 +184,8 @@ pushes its own commit to the pull request's branch with `git`, and CI pushes a
 head that was left behind before it judges anything, ending `other` if it cannot;
 `update-pr-body` edits the description, because judging which claims are stale and
 rewriting them is the whole job; and `ci` marks the pull request ready and back to
-draft around its CI wait. The last two act through the source the `forge` node
-certified, bound to them as a typed input. PR publication reads the agent-authored
+draft around its CI wait. The last two act through `archon forge`, after the `forge`
+node checked the plugin can. PR publication reads the agent-authored
 `pr-body.md` and `pr-description.md` content through certified artifact pointers;
 the publisher owns the writes and verifies the description edit.
 
@@ -368,7 +368,8 @@ request, never the state.
   open pull requests in the merge queue, except one a work item already names or one
   from a `build/` branch in the repository itself, so a hand-made pull request on a
   `build/` branch does not enroll (see Pickup there). Enrollment needs a forge
-  operation the contract does not have yet, so it refuses today (see Forge). No file means an empty list, so every author is outside. Any other
+  operation the contract does not have yet, so it refuses today (see Forge); the merge
+  queue notes the refusal on stderr and goes on with the items it already has. No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
@@ -670,7 +671,8 @@ then the project's file, whose lines win where the two conflict.
   the default branch (the round merges it in and resolves the conflict, regenerating
   generated files with their owning script), an unresolved thread that raises a defect
   in the change, and red the change caused. Red CI in code a pull request does not touch
-  gets one rerun of its failed jobs; the record stores the head it re-ran at, and the
+  gets one rerun of its failed jobs through `checks.rerun`, counted only when the forge
+  reports it applied; the record stores the head it re-ran at, and the
   sweep reads it so it never reruns twice at one head. The sweep measures each diff
   with git against the merge base, not the forge's counts. An unclear pull request is
   asked as soon as its verdict is Ready at its head, even while its CI is pending or it
@@ -684,14 +686,15 @@ then the project's file, whose lines win where the two conflict.
   green at the head, the default branch's CI is not red (pending does not hold a
   merge), and the pull request is open, not a draft, into the default branch, at the
   head the sweep named, and that head contains the default branch's head or the forge
-  reports it merges cleanly. Open review threads are the sweep's judgment. It merges with `--match-head-commit`
-  and reads the merge back. A pull request that reads back unmerged, as when the forge
+  reports it merges cleanly. Open review threads are the sweep's judgment. It merges
+  through `pr.merge` pinned to that head and reads the merge back. A pull request that reads back unmerged, as when the forge
   queues merges, fails the gate.
 - **The default branch.** The sweep judges it first. While its CI is red the gate
-  refuses every merge. Red in code no recent merge touched gets one rerun of its failed
-  jobs; red after that, or red in code a recent merge touched, is raised to a
-  maintainer, naming the pull requests merged since it was last green, with a revert
-  or fix-forward recommendation. An unreadable default branch permits no sweep or merge;
+  refuses every merge, and the sweep always raises it to a maintainer, naming the pull
+  requests merged since it was last green. It recommends a revert or fix-forward, or,
+  when no recent merge touched the red code, a rerun of the failed jobs by hand: the
+  forge's `checks.rerun` acts only on a pull request, so the pack never reruns the
+  default branch and never reports that it did. An unreadable default branch permits no sweep or merge;
   independent bookkeeping completes before the run fails with the read diagnostic.
 - **Record.** When the default branch could not be read, `record` writes the independent
   settlements, releasing only claims it still owns. Open companions remain unchanged;
