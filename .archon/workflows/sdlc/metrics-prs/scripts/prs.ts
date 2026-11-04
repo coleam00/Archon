@@ -4,8 +4,7 @@
  *
  * The records need each pull request's creation, merge and close times, which no forge
  * operation reports yet (`PR_TIMESTAMPS`), so the node refuses with that missing
- * operation named. `prMetricRecords` turns the facts into records once the forge
- * reports them.
+ * operation named.
  */
 
 import { PR_TIMESTAMPS } from '../../.shared/factory-prs.ts';

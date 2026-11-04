@@ -146,8 +146,6 @@ nodes:
           additionalProperties: false
           properties:
             summary: { type: string }
-            # True when the sweep re-ran the default branch's failed jobs this run.
-            reran: { type: boolean }
             attention:
               type: [object, 'null']
               additionalProperties: false
@@ -171,7 +169,7 @@ nodes:
                 if_unanswered: *if_unanswered
                 links: *links
               required: [what, why, recommendation, choices, if_unanswered, links]
-          required: [summary, reran, attention]
+          required: [summary, attention]
         summary: { type: string }
       required: [decisions, base, summary]
 

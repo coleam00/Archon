@@ -106,8 +106,9 @@ execution receives no `ARCHON_CLI_COMMAND`, so a pack run in a container refuses
 its forge check.
 
 The merge queue's facts, gate and record read through `pr.view`, `pr.merge-state`,
-`checks.state`, `checks.commit`, `pr.threads` and `workitem.comments`, and the gate
-merges through `pr.merge` pinned to the head; `facts` refuses a plugin missing any of
+`checks.state`, `checks.commit`, `pr.threads` and `workitem.comments`, the sweep reruns
+a pull request's failed checks through `checks.rerun`, and the gate merges through
+`pr.merge` pinned to the head; `facts` refuses a plugin missing any of
 them before it claims an item. The gate itself doesn't refuse over threads; the sweep
 holds a merge only for a thread that raises a defect in code the pull request changes
 or makes reachable. Delivery reads, answers and resolves review threads through
@@ -122,8 +123,9 @@ the missing operation:
 - `archon-metrics-test-value-judge` needs a pull request's changed files and a file's
   text at a revision.
 
-Agents read CI job logs, and the sweep re-runs a red default branch's failed jobs, with
-the tools the run has, since the contract has no operation for either.
+Agents read CI job logs with the tools the run has, since the contract has no operation
+for them. A red default branch is always raised as a `merge: base` item: `checks.rerun`
+acts only on a pull request, so the pack never reruns it.
 
 `archon-ship-block`, `archon-deliver-block`, `archon-upkeep` and `archon-pr` start with a `forge` node
 ([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the plugin can act

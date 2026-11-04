@@ -91,8 +91,6 @@ export interface Sweep {
   readonly decisions: readonly Decision[];
   readonly base: {
     readonly summary: string;
-    /** The sweep re-ran the default branch's failed jobs this run. */
-    readonly reran: boolean;
     readonly attention: BaseAttention | null;
   };
   readonly summary: string;
@@ -169,10 +167,10 @@ function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decis
 /** The default branch as facts read it. */
 type Base = ReturnType<typeof readBase>;
 
-/** A red default branch the sweep neither re-ran nor raised would hold every merge in silence. */
+/** A red default branch the sweep did not raise would hold every merge in silence. */
 function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null {
-  if (sweep === null || base?.checks.state !== 'red' || sweep.base.attention !== null || sweep.base.reran) return null;
-  return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep neither reran it nor raised it`;
+  if (sweep === null || base?.checks.state !== 'red' || sweep.base.attention !== null) return null;
+  return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep did not raise it`;
 }
 
 interface Outcome {

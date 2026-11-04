@@ -246,6 +246,7 @@ export const MERGE_QUEUE_FORGE_OPERATIONS = [
   'pr.threads',
   'checks.state',
   'checks.commit',
+  'checks.rerun',
   'pr.merge-state',
   'workitem.comments',
 ] as const;

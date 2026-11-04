@@ -360,7 +360,7 @@ function merges(result: ScriptRun): string[] {
 
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
 const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null }]);
-const BASE_GREEN = { summary: 'dev is green', reran: false, attention: null };
+const BASE_GREEN = { summary: 'dev is green', attention: null };
 
 const ATTENTION: MergeAttention = {
   what: 'PR 42 changes the SDLC pack; merge it?',
@@ -414,8 +414,7 @@ const BOTH_ITEMS = JSON.stringify([
 ]);
 const HOLD = { id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', effect: 'hold', ruling: '' };
 const BASE_RED = {
-  summary: 'lint red on dev after a rerun',
-  reran: false,
+  summary: 'lint red on dev',
   attention: { ...ATTENTION, what: 'dev is red since PR 43 merged', choices: [HOLD], recommendation: { ...ATTENTION.recommendation, choice: 'hold' } },
 };
 
@@ -782,7 +781,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const closed = run(at, 'record', inputs(BASE_RED), { pr: { state: 'CLOSED', merged: [43] } });
     expect(closed.code).not.toBe(0);
     expect(closed.stderr).toContain(`the sweep says it merged ${PR_URL}, but it reads back closed`);
-    expect(closed.stderr).toContain('the default branch is red and was not raised (lint red on dev after a rerun)');
+    expect(closed.stderr).toContain('the default branch is red and was not raised (lint red on dev)');
     expect(closed.stderr).toContain('PR 43: not recorded, the next sweep decides it again (work/8 is no longer claimed by this run); every other decision is recorded');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
   }, 60_000);
@@ -897,15 +896,13 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     }
   }, 60_000);
 
-  test('a red default branch the sweep neither reran nor raised fails the record; a rerun waits for its result', () => {
+  test('a red default branch the sweep did not raise fails the record', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const silent = run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'dev is red' })], BASE_GREEN, FACTS_BASE_RED));
     expect(silent.code).not.toBe(0);
-    expect(silent.stderr).toContain(`the default branch dev is red at ${OLD} (test), and the sweep neither reran it nor raised it`);
+    expect(silent.stderr).toContain(`the default branch dev is red at ${OLD} (test), and the sweep did not raise it`);
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
-    seed(at, item(BUILT, undefined, CLAIMED));
-    ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'dev is red; reran' })], { ...BASE_GREEN, reran: true }, FACTS_BASE_RED)));
   }, 60_000);
 
   test('a red default branch with no pull request waiting raises its hold question', () => {
@@ -1265,7 +1262,7 @@ describe('the merge queue on the forge', () => {
     expect(stored(at).value?.facts.merge).toBeUndefined();
   }, 60_000);
 
-  test('the facts and the merge use exactly the operations the plugin must advertise', () => {
+  test('the facts and the merge use exactly the operations the plugin must advertise, besides the sweep agent\'s rerun', () => {
     const at = install();
     seed(at, item());
     const args = ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'];
@@ -1274,7 +1271,8 @@ describe('the merge queue on the forge', () => {
     expect([facts.code, gate.code]).toEqual([0, 0]);
     const used = [...forgeCalls(facts), ...forgeCalls(gate)];
     expect(new Set(used.filter(call => call.startsWith('forge ') && call !== 'forge metadata').map(call => call.split(' ')[1]))).toEqual(
-      new Set(MERGE_QUEUE_FORGE_OPERATIONS)
+      // The sweep agent, not a script, reruns a pull request's failed checks.
+      new Set(MERGE_QUEUE_FORGE_OPERATIONS.filter(op => op !== 'checks.rerun'))
     );
   }, 60_000);
 
