@@ -456,16 +456,20 @@ each one of three shapes:
 
 Every figure on a card comes from one instrument identity: the card's metric's newest
 instrument and its `measured_by`. A breakdown count or a denominator recorded only by another
-instrument shows "not recorded", never 0, and so does a `cost_of` metric. A calibration is a score metric that `calibrates`
+instrument shows "not recorded", never 0, and so does a `cost_of` metric. Every metric a card
+counts (`metric`, `breakdown`, `numerator`, `denominator`, `cost_of`) must be a `count`; a
+`score` there shows "not recorded" too. A calibration is a score metric that `calibrates`
 the numerator with one record per labelled case, 1 when caught and 0 when missed; it counts
-only at exactly the numerator's identity, otherwise the card says "not calibrated". Cost per
-item is a floor, shown as `≥ $…`, and stays a dash until more than half of the producing runs
-record a cost.
+only at exactly the numerator's identity and with a mean between 0 and 1, otherwise the card
+says "not calibrated". The calibration is read from the last 365 days of records, which load
+separately: until they do, the pill says "calibration loading", and if they fail it says
+"calibration unavailable" while the other cards still show. Cost per item is a floor, shown
+as `≥ $…`, and stays a dash until more than half of the producing runs record a cost.
 
 Declarations are read from every place a pack lives: bundled packs (unless
 `defaults.loadDefaultWorkflows` is `false`), `~/.archon/workflows/<pack>/`,
 `<project>/.archon/workflows/<pack>/` and installed packs. A same-named pack folder's
 declaration at a higher scope replaces a lower one's (bundled < global < project). A file
-that is not JSON or does not match the shapes is reported by
+that is not JSON or does not match the shapes, or a scope that cannot be read, is reported by
 [`GET /api/metric-views`](/reference/api/#metrics) and on the overview, and the other packs'
 cards still show.

@@ -7,6 +7,8 @@ import {
   formatNumber,
   formatShare,
   formatUsd,
+  type Calibrations,
+  type Calibration,
   type CardModel,
   type CostPerCard,
   type CountCard,
@@ -15,7 +17,7 @@ import {
 
 interface MetricsOverviewProps {
   report: MetricsReport;
-  calibrations: MetricsReport;
+  calibrations: Calibrations;
   views: MetricViews;
   detailsPath: string;
 }
@@ -142,11 +144,7 @@ function RatioBody({ card }: { card: RatioCard }): ReactElement {
     <>
       <div className="flex items-center gap-2">
         <Figure>{card.share === null ? '—' : formatShare(card.share)}</Figure>
-        {calibration?.state === 'calibrated' && calibration.rough ? (
-          <Pill>rough</Pill>
-        ) : calibration?.state === 'not_calibrated' ? (
-          <Pill>not calibrated</Pill>
-        ) : null}
+        {calibration === null ? null : <CalibrationPill calibration={calibration} />}
       </div>
       {card.share === null ? null : (
         <div className="h-1.5 overflow-hidden rounded-full bg-surface-inset">
@@ -168,9 +166,19 @@ function RatioBody({ card }: { card: RatioCard }): ReactElement {
   );
 }
 
-function Pill({ children }: { children: ReactNode }): ReactElement {
+function CalibrationPill({ calibration }: { calibration: Calibration }): ReactElement | null {
+  if (calibration.state === 'calibrated') return calibration.rough ? <Pill>rough</Pill> : null;
+  if (calibration.state === 'not_calibrated') return <Pill>not calibrated</Pill>;
+  if (calibration.state === 'loading') return <Pill>calibration loading</Pill>;
+  return <Pill title={calibration.message}>calibration unavailable</Pill>;
+}
+
+function Pill({ children, title }: { children: ReactNode; title?: string }): ReactElement {
   return (
-    <span className="rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[11px] text-warning">
+    <span
+      title={title}
+      className="rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[11px] text-warning"
+    >
       {children}
     </span>
   );

@@ -93,6 +93,12 @@ function find(report: MetricsReport, name: string): MetricReport | undefined {
   return report.metrics.find(metric => metric.name === name);
 }
 
+/** A card's counted slots read only counts: a score's mean is not a number of items. */
+function findCount(report: MetricsReport, name: string): MetricReport | undefined {
+  const metric = find(report, name);
+  return metric?.kind === 'count' ? metric : undefined;
+}
+
 /** Two decimals, except a nonzero value below 0.01 keeps two significant digits rather than showing 0. */
 export const formatNumber = (value: number): string =>
   value !== 0 && Math.abs(value) < 0.01
@@ -107,9 +113,17 @@ export type CountCard = { shape: 'count'; title: string } & (
   | { state: 'value'; value: number; breakdown: { label: string; value: number | null }[] }
 );
 
+/** The year of calibration records loads apart from the window, so cards that need none never wait. */
+export type Calibrations =
+  | { state: 'loading' }
+  | { state: 'failed'; message: string }
+  | { state: 'loaded'; report: MetricsReport };
+
 export type Calibration =
   | { state: 'calibrated'; label: string; caught: number; of: number; rough: boolean }
-  | { state: 'not_calibrated' };
+  | { state: 'not_calibrated' }
+  | { state: 'loading' }
+  | { state: 'unavailable'; message: string };
 
 export type RatioCard = { shape: 'ratio'; title: string; denominatorLabel: string } & (
   | { state: 'not_recorded' }
@@ -137,7 +151,7 @@ export type CardModel = CountCard | RatioCard | CostPerCard;
 export function buildCard(
   view: MetricView,
   report: MetricsReport,
-  calibrations: MetricsReport
+  calibrations: Calibrations
 ): CardModel {
   if (view.shape === 'count') return countCard(view, report);
   if (view.shape === 'ratio') return ratioCard(view, report, calibrations);
@@ -145,12 +159,12 @@ export function buildCard(
 }
 
 export function countCard(view: ViewOf<'count'>, report: MetricsReport): CountCard {
-  const metric = find(report, view.metric);
+  const metric = findCount(report, view.metric);
   const main = metric === undefined ? undefined : headlineOf(metric);
   if (main === undefined) return { shape: 'count', title: view.title, state: 'not_recorded' };
   const breakdown = (view.breakdown ?? []).map(({ metric: name, label }) => ({
     label,
-    value: instrumentAt(find(report, name), main)?.value ?? null,
+    value: instrumentAt(findCount(report, name), main)?.value ?? null,
   }));
   return { shape: 'count', title: view.title, state: 'value', value: main.value, breakdown };
 }
@@ -158,35 +172,18 @@ export function countCard(view: ViewOf<'count'>, report: MetricsReport): CountCa
 export function ratioCard(
   view: ViewOf<'ratio'>,
   report: MetricsReport,
-  calibrations: MetricsReport
+  calibrations: Calibrations
 ): RatioCard {
   const base = {
     shape: 'ratio',
     title: view.title,
     denominatorLabel: view.denominator_label,
   } as const;
-  const numeratorMetric = find(report, view.numerator);
+  const numeratorMetric = findCount(report, view.numerator);
   const numerator = numeratorMetric === undefined ? undefined : headlineOf(numeratorMetric);
-  const denominator = numerator && instrumentAt(find(report, view.denominator), numerator);
+  const denominator = numerator && instrumentAt(findCount(report, view.denominator), numerator);
   if (numerator === undefined || denominator === undefined) {
     return { ...base, state: 'not_recorded' };
-  }
-  let calibration: Calibration | null = null;
-  if (view.calibration !== undefined) {
-    const calibrator = find(calibrations, view.calibration.metric);
-    const score =
-      calibrator?.calibrates === view.numerator ? instrumentAt(calibrator, numerator) : undefined;
-    calibration =
-      score === undefined
-        ? { state: 'not_calibrated' }
-        : {
-            state: 'calibrated',
-            label: view.calibration.label,
-            // A calibration scores each labelled case 1 or 0, so its mean times n counts the catches.
-            caught: Math.round(score.value * score.n),
-            of: score.n,
-            rough: score.value < view.calibration.rough_below,
-          };
   }
   return {
     ...base,
@@ -194,17 +191,47 @@ export function ratioCard(
     numerator: numerator.value,
     denominator: denominator.value,
     share: denominator.value === 0 ? null : numerator.value / denominator.value,
-    calibration,
+    calibration:
+      view.calibration === undefined
+        ? null
+        : calibrationOf(view.numerator, view.calibration, numerator, calibrations),
+  };
+}
+
+function calibrationOf(
+  numerator: string,
+  declared: NonNullable<ViewOf<'ratio'>['calibration']>,
+  identity: Identity,
+  calibrations: Calibrations
+): Calibration {
+  if (calibrations.state === 'loading') return { state: 'loading' };
+  if (calibrations.state === 'failed') {
+    return { state: 'unavailable', message: calibrations.message };
+  }
+  const calibrator = find(calibrations.report, declared.metric);
+  const score =
+    calibrator?.calibrates === numerator ? instrumentAt(calibrator, identity) : undefined;
+  // A calibration scores each labelled case 1 or 0; a mean outside 0-1 breaks that contract
+  // and would count more catches than cases.
+  if (score === undefined || score.value < 0 || score.value > 1) {
+    return { state: 'not_calibrated' };
+  }
+  return {
+    state: 'calibrated',
+    label: declared.label,
+    caught: Math.round(score.value * score.n),
+    of: score.n,
+    rough: score.value < declared.rough_below,
   };
 }
 
 export function costPerCard(view: ViewOf<'cost_per'>, report: MetricsReport): CostPerCard {
   const base = { shape: 'cost_per', title: view.title } as const;
-  const metric = find(report, view.metric);
+  const metric = findCount(report, view.metric);
   const counted = metric === undefined ? undefined : headlineOf(metric);
   if (counted === undefined) return { ...base, state: 'not_recorded' };
   const costed =
-    view.cost_of === undefined ? counted : instrumentAt(find(report, view.cost_of), counted);
+    view.cost_of === undefined ? counted : instrumentAt(findCount(report, view.cost_of), counted);
   if (costed === undefined) return { ...base, state: 'not_recorded' };
   if (counted.value === 0) return { ...base, state: 'nothing_counted' };
   const { usd, runs, runs_without_cost } = costed.cost;

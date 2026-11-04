@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { MetricsPage } from './MetricsPage';
-import { costPerCard, countCard, metricsRequests, parseWindow, ratioCard } from './model';
+import {
+  costPerCard,
+  countCard,
+  metricsRequests,
+  parseWindow,
+  ratioCard,
+  type Calibrations,
+} from './model';
 import { invalidate, set } from '../../store/cache';
 import { K } from '../../store/keys';
 import type { MetricViews, MetricsReport } from '../../skills/metrics';
@@ -79,6 +86,10 @@ const report = (patch: Partial<MetricsReport> = {}): MetricsReport => ({
   refused: [],
   ...patch,
 });
+const loaded = (calibrations: MetricsReport): Calibrations => ({
+  state: 'loaded',
+  report: calibrations,
+});
 
 const VIEWS: MetricViews = {
   packs: [
@@ -117,11 +128,15 @@ if (RATIO?.shape !== 'ratio') throw new Error('fixture');
 
 function render(
   path: string,
-  data: { report?: MetricsReport; calibrations?: MetricsReport; views?: MetricViews } = {}
+  data: {
+    report?: MetricsReport;
+    calibrations?: MetricsReport | 'loading';
+    views?: MetricViews;
+  } = {}
 ): string {
   const days = path.match(/window=(\d+)d/)?.[1] ?? '7';
   set(K.metrics('all', `${days}d`), data.report ?? report());
-  set(K.metrics('all', '365d'), data.calibrations ?? report());
+  if (data.calibrations !== 'loading') set(K.metrics('all', '365d'), data.calibrations ?? report());
   set(K.metricViews('all'), data.views ?? VIEWS);
   return renderToStaticMarkup(
     <MemoryRouter initialEntries={[path]}>
@@ -149,6 +164,18 @@ describe('overview', () => {
     expect(html).toContain('≥ $0.13');
     expect(html).toContain('aria-current="true"');
     expect(html).toContain('href="/console/metrics/details?window=30d"');
+  });
+
+  test('the cards render before the calibration loads; Details waits for it', () => {
+    const data = {
+      report: report({ metrics: [shipped, flagged, checked] }),
+      calibrations: 'loading',
+    } as const;
+    const html = render('/console/metrics', data);
+    expect(html).toContain('3 of 12 checked items');
+    expect(html).toContain('calibration loading');
+    expect(html).not.toContain('Loading…');
+    expect(render('/console/metrics/details', data)).toContain('Loading…');
   });
 
   test('with no declared cards, says so; a declaration error is named', () => {
@@ -187,16 +214,16 @@ describe('cards', () => {
 
   test('a ratio whose denominator was counted only by another instrument is not recorded', () => {
     const otherJudge = metric(checked.name, [instrument(12, { ...JUDGE, instrument: 'judge-v1' })]);
-    expect(ratioCard(RATIO, report({ metrics: [flagged, otherJudge] }), report()).state).toBe(
-      'not_recorded'
-    );
+    expect(
+      ratioCard(RATIO, report({ metrics: [flagged, otherJudge] }), loaded(report())).state
+    ).toBe('not_recorded');
   });
 
   test('a calibration below the declared threshold makes the share rough', () => {
     const card = ratioCard(
       RATIO,
       report({ metrics: [flagged, checked] }),
-      report({ metrics: [catchRate([JUDGE], 0.5)] })
+      loaded(report({ metrics: [catchRate([JUDGE], 0.5)] }))
     );
     expect(card.state === 'value' && card.calibration).toEqual({
       state: 'calibrated',
@@ -205,6 +232,42 @@ describe('cards', () => {
       of: 10,
       rough: true,
     });
+  });
+
+  test('a calibration mean outside 0-1 breaks the 0/1 contract and is not calibrated', () => {
+    for (const value of [1.2, -0.1]) {
+      const card = ratioCard(
+        RATIO,
+        report({ metrics: [flagged, checked] }),
+        loaded(report({ metrics: [catchRate([JUDGE], value)] }))
+      );
+      expect(card.state === 'value' && card.calibration?.state).toBe('not_calibrated');
+    }
+  });
+
+  test('a calibration still loading or failed says so instead of not calibrated', () => {
+    const counts = report({ metrics: [flagged, checked] });
+    const failed = ratioCard(RATIO, counts, { state: 'failed', message: 'HTTP 500' });
+    expect(failed.state === 'value' && failed.calibration).toEqual({
+      state: 'unavailable',
+      message: 'HTTP 500',
+    });
+    const loading = ratioCard(RATIO, counts, { state: 'loading' });
+    expect(loading.state === 'value' && loading.calibration).toEqual({ state: 'loading' });
+  });
+
+  test('a score in a counted slot is not read as a count', () => {
+    const mean = metric(shipped.name, [instrument(0.5, NONE)], score);
+    const counts = report({ metrics: [mean] });
+    expect(
+      countCard({ shape: 'count', title: 'Shipped', metric: shipped.name }, counts).state
+    ).toBe('not_recorded');
+    const view = { shape: 'cost_per', title: 'Cost', metric: shipped.name } as const;
+    expect(costPerCard(view, counts).state).toBe('not_recorded');
+    const meanFlagged = metric(flagged.name, [instrument(0.5, JUDGE)], score);
+    expect(
+      ratioCard(RATIO, report({ metrics: [meanFlagged, checked] }), loaded(report())).state
+    ).toBe('not_recorded');
   });
 
   // R2: the calibration must match the numerator's headline identity exactly.
@@ -242,7 +305,7 @@ describe('cards', () => {
     const card = ratioCard(
       RATIO,
       report({ metrics: [numerator, denominator] }),
-      report({ metrics: [catchRate([calibratedBy])] })
+      loaded(report({ metrics: [catchRate([calibratedBy])] }))
     );
     expect(card.state === 'value' && card.calibration?.state).toBe(
       calibrated ? 'calibrated' : 'not_calibrated'
@@ -373,6 +436,11 @@ describe('details', () => {
     });
     expect(html).toContain('demo.items_flagged_catch_rate: not calibrated for this version');
     expect(html).not.toContain('0.9 from');
+  });
+
+  test('a calibration whose metric has no records anywhere still shows its score', () => {
+    const html = details({ report: report({ metrics: [catchRate([JUDGE])] }) });
+    expect(html).toContain('which has no records in this window: 0.9 from 10 records.');
   });
 
   test('older instruments are named as hidden', () => {

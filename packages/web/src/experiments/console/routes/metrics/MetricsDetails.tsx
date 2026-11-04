@@ -358,13 +358,19 @@ function UnmatchedCalibrations({ report }: { report: MetricsReport }): ReactElem
   if (orphans.length === 0) return null;
   return (
     <ul className="flex flex-col gap-1 text-[12px] text-text-tertiary">
-      {orphans.map(metric => (
-        <li key={metric.name}>
-          <span className="font-mono">{metric.name}</span> calibrates{' '}
-          <span className="font-mono">{metric.calibrates}</span>, which has no records in this
-          window.
-        </li>
-      ))}
+      {orphans.map(metric => {
+        const score = headlineOf(metric);
+        return (
+          <li key={metric.name}>
+            <span className="font-mono">{metric.name}</span> calibrates{' '}
+            <span className="font-mono">{metric.calibrates}</span>, which has no records in this
+            window
+            {score === undefined
+              ? '.'
+              : `: ${formatNumber(score.value)} from ${score.n.toString()} records.`}
+          </li>
+        );
+      })}
     </ul>
   );
 }
