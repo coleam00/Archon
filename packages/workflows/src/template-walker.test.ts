@@ -129,6 +129,14 @@ const STRING_FIELD_CLASSIFICATIONS = {
     kind: 'literal',
     reason: 'Loop completion field names an output-schema property',
   },
+  'loop.on_exhausted': {
+    kind: 'literal',
+    reason: 'Loop exhaustion policy is an enum the executor reads',
+  },
+  'loop_group.on_exhausted': {
+    kind: 'literal',
+    reason: 'Loop-group exhaustion policy is an enum the executor reads',
+  },
   'loop_group.until': {
     kind: 'literal',
     reason: 'Loop-group completion signal is matched verbatim',

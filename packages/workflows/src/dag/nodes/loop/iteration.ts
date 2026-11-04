@@ -30,7 +30,11 @@ import { declaredOutputPathsFromSchema, canonicalValueText } from '../../../outp
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import { logNodeComplete } from '../../../logger';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
-import { detectCompletionSignal, stripCompletionTags } from '../../../executor-shared';
+import {
+  describeUnmetCompletion,
+  detectCompletionSignal,
+  stripCompletionTags,
+} from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { nodeTemplateReferences, buildNodeShellEnvironment } from '../../references';
@@ -465,10 +469,16 @@ function recordIterationCompleted(
     });
 }
 
-async function completeLoop(
+/**
+ * Complete the loop with its last iteration's output. `exhaustedAt` is the iteration
+ * limit when the loop ran out under `on_exhausted: complete`; the record then keeps it
+ * as `maxIterations`, as an exhaustion failure does.
+ */
+export async function completeLoop(
   run: LoopRun,
   state: LoopState,
-  i: number
+  i: number,
+  exhaustedAt?: number
 ): Promise<NodeExecutionResult> {
   const { ctx, node } = run;
   if (state.sessionId !== undefined) {
@@ -477,7 +487,9 @@ async function completeLoop(
   await safeSendMessage(
     ctx.platform,
     ctx.conversationId,
-    `Loop node '${node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`,
+    exhaustedAt === undefined
+      ? `Loop node '${node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`
+      : `Loop node '${node.id}' reached max iterations (${String(exhaustedAt)}) ${describeUnmetCompletion(node.loop)} and completed with its last output`,
     run.msgContext
   );
   // Write node_completed event so resume hydration knows this
@@ -503,6 +515,7 @@ async function completeLoop(
         sessionId: state.sessionId,
         diagnostics: {
           loopIterations: i,
+          ...(exhaustedAt !== undefined ? { maxIterations: exhaustedAt } : {}),
           ...(state.backgroundTasksIncomplete.size > 0
             ? { backgroundTasksIncomplete: [...state.backgroundTasksIncomplete] }
             : {}),

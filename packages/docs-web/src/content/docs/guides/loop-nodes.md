@@ -62,7 +62,8 @@ A loop node iterates its prompt until one of these conditions is met:
 2. **Deterministic bash check** — an `until_bash` script exits with code 0
 3. **Structured field** — the iteration's validated `output_format` payload has the
    `until_field` property set to `true`
-4. **Max iterations reached** — the node fails with a clear error
+4. **Max iterations reached** — the node fails with a clear error, unless it sets
+   [`on_exhausted: complete`](#on_exhausted)
 
 A loop must declare **at least one** of `until` / `until_bash` / `until_field` — none
 is required on its own. They are OR'd: whichever fires first ends the loop, and the
@@ -94,6 +95,7 @@ Declaring more than one is fine and means "whichever fires first ends it".
     #                       # Never combine with `prompt` — the loader rejects both together.
     until: COMPLETE         # Prose completion signal.
     max_iterations: 10      # Required. Bounds autonomous iterations — node fails if exceeded.
+    on_exhausted: fail      # Optional. `complete` ends an exhausted loop with its last output.
     fresh_context: true     # Optional. Default: false.
     until_bash: "..."       # Bash script checked after each iteration; exit 0 = complete.
     until_field: done       # Property in this node's `output_format` whose validated
@@ -209,6 +211,38 @@ Only an explicit answer runs an iteration past the bound: a comment on a legacy
 [terminal attention wait](#pausing-to-ask-inside-the-body).
 Each accepted answer permits one more iteration, and each further iteration needs
 another accepted answer. A changed question can pause again in the same iteration.
+
+### `on_exhausted`
+
+What reaching `max_iterations` without meeting a completion channel does. The default,
+`fail`, fails the node as described above. `complete` completes the node with the last
+iteration's output instead, in the same shape a normal completion has: `$loop.output` and
+`$loop.output.<field>` read the last iteration's payload. Use it when running out of
+rounds is a normal ending of the work, not a crash.
+
+The node's output carries no extra flag. Tell an exhausted loop apart by its own
+completion field: when the loop ran out, the field its completion channel tests
+(`until_field`, or the value `until_bash` reads) is not met, so a downstream node can
+branch on it:
+
+```yaml
+- id: rounds
+  loop_group:
+    until_bash: 'test "$round.output.done" = "true"'
+    max_iterations: 4
+    on_exhausted: complete
+    nodes: [...]
+- id: report
+  depends_on: [rounds]
+  when: "$rounds.output.done == 'false'"
+  bash: echo "stopped at the round limit"
+```
+
+The conversation receives a message saying the loop reached its limit and completed, and
+a `loop:` node's completion record keeps `maxIterations`, as an exhaustion failure does.
+Only exhaustion completes: an iteration or body node that fails still fails the node.
+`max_iterations` stays required, and `on_exhausted` never runs an extra iteration. It
+applies to both `loop:` and `loop_group:`.
 
 Choose based on the work scope:
 - Simple refinement loops: 3–5

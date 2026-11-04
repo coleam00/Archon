@@ -108,6 +108,71 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('completes an exhausted loop_group with its last output under on_exhausted: complete', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      callCount++;
+      yield { type: 'agent_message_chunk', text: `round ${String(callCount)} not finished` };
+      yield { type: 'result', sessionId: `lg-sess-${String(callCount)}` };
+    });
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        conversationId: 'conv-lg',
+        cwd: testDir,
+        workflow: {
+          name: 'dag-loopgroup-exhausted-complete',
+          nodes: [
+            {
+              id: 'fixer',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 2,
+                on_exhausted: 'complete',
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'work',
+                    kind: 'agent',
+                    source: { kind: 'inline', prompt: 'do work until it is done' },
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+            {
+              id: 'report',
+              kind: 'exec',
+              runtime: 'sh',
+              script: 'echo "last=$fixer.output"',
+              depends_on: ['fixer'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('dag-loopgroup-exhausted-complete'),
+      })
+    );
+
+    expect(callCount).toBe(2);
+    expect(result).toContain('round 2 not finished');
+    expect(mockDeps.store.persistWorkflowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'node_completed', step_name: 'fixer' })
+    );
+    expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+    const sent = (platform.sendMessage as Mock<(...args: unknown[]) => unknown>).mock.calls
+      .map(call => String(call[1]))
+      .join('\n');
+    expect(sent).toContain(
+      "Loop-group node 'fixer' reached max iterations (2) without completion signal 'DONE' and completed with its last output"
+    );
+  });
+
   it('INSTANCE 1: multi-node body (implement→test→review) completes on iteration 2', async () => {
     // The body has 3 nodes; only `review` is AI (calls sendQuery). implement+test are
     // bash. On iteration 1 review does NOT emit DONE; on iteration 2 it does.
