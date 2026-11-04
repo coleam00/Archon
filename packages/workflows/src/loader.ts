@@ -446,8 +446,9 @@ function yamlParseFailure(filename: string, err: Error): ParseResult {
 function includePassingPackDir(nodes: WorkflowDefinition['nodes']): string | undefined {
   for (const node of nodes) {
     if (isIncludeDirective(node)) {
-      const passes = Object.values(node.with ?? {}).some(
-        value => typeof value === 'string' && PACK_DIR_REFERENCE.test(value)
+      // Stringified so a reference nested in an array or object value is caught too.
+      const passes = Object.values(node.with ?? {}).some(value =>
+        PACK_DIR_REFERENCE.test(JSON.stringify(value))
       );
       if (passes) return node.id;
     } else if (isLoopGroupNode(node)) {

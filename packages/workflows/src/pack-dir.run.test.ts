@@ -270,7 +270,7 @@ nodes:
     await writePackWorkflow(
       'alpha',
       'host',
-      'name: host\ndescription: d\nnodes:\n  - id: blk\n    include: beta-block\n    with: { doc: "$PACK_DIR/.shared/doc.md" }\n'
+      'name: host\ndescription: d\nnodes:\n  - id: blk\n    include: beta-block\n    with: { doc: ["$PACK_DIR/.shared/doc.md"] }\n'
     );
     const result = await discoverWorkflows(cwd, {
       providers: providerRegistry,
