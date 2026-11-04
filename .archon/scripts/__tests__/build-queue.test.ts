@@ -14,7 +14,7 @@ import {
 } from '../../workflows/sdlc/.shared/build';
 import { reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { mergeWaits } from '../../workflows/sdlc/.shared/merge';
-import { renderAttention, withOther } from '../../workflows/sdlc/.shared/queue';
+import { attentionWait, withOther } from '../../workflows/sdlc/.shared/queue';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
   newWorkItem,
@@ -538,21 +538,18 @@ describe('the build queue scripts', () => {
     expect(applied).toMatchObject({
       decision: 'asked',
       class: 'stop',
-      options: [
-        { id: 'relax', label: 'Relax it' },
-        { id: 'park', label: 'Park it' },
-        { id: 'other', label: 'Something else' },
-      ],
       asked: { attention: withOther(ATTENTION, 'continue'), brief: 'continue PR 42 under the ruling', by: 'stop' },
     });
-    expect(applied.attention).toBe(renderAttention('Build queue, issue 7: stop decision', withOther(ATTENTION, 'continue')));
+    // The wait carries the choices and the recommendation; the message carries the rest.
+    const wait = attentionWait('Build queue, issue 7: stop decision', withOther(ATTENTION, 'continue'));
+    expect(applied).toMatchObject({ attention: wait.message, options: wait.options, recommendation: wait.recommendation });
+    expect((applied.options as { id: string }[]).map(option => option.id)).toEqual(['relax', 'park', 'other']);
+    expect(applied.recommendation).toEqual({ option: 'relax', why: ATTENTION.recommendation.why, confidence: 'medium' });
     for (const part of [
       ATTENTION.what,
       ATTENTION.why,
-      'Recommendation: `relax`** (medium confidence)',
       ATTENTION.recommendation.evidence,
       ATTENTION.recommendation.would_change,
-      '`park` (Park it): stops working the item',
       ATTENTION.if_unanswered,
       ATTENTION.links[0],
     ])
@@ -624,6 +621,11 @@ describe('the build queue scripts', () => {
   }, 60_000);
 
   const ASKED = JSON.stringify({ attention: ATTENTION, brief: 'continue PR 42 under the ruling', by: 'stop' });
+  /** The answer's value: the wait returns the chosen choice itself. */
+  const choiceOf = (asked: string, id: string): string =>
+    JSON.stringify(
+      (JSON.parse(asked) as { attention: { choices: { id: string }[] } }).attention.choices.find(choice => choice.id === id)
+    );
 
   test("a maintainer's choice is written into the issue body as a dated scope section, and the next launch starts from it", () => {
     const at = install();
@@ -632,7 +634,7 @@ describe('the build queue scripts', () => {
     const ruled = run(at, 'ruling', {
       INPUTS_ITEM: JSON.stringify(SUBJECT),
       INPUTS_ASKED: ASKED,
-      INPUTS_CHOICE: 'relax',
+      INPUTS_CHOICE: choiceOf(ASKED, 'relax'),
       INPUTS_TEXT: 'Only for this item.',
       ...SELECTED,
       ARCHON_CALL_LOG: calls,
@@ -656,7 +658,7 @@ describe('the build queue scripts', () => {
   test('a park with no ruling and no words writes no section and stops working the item', () => {
     const at = install();
     seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
-    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'park', INPUTS_TEXT: '' });
+    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'park'), INPUTS_TEXT: '' });
     expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
     expect(ruled.bodies).toEqual([]);
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'parked', brief: '' } } });
@@ -668,7 +670,7 @@ describe('the build queue scripts', () => {
   test('a ready answer releases the item to the merge queue with the PR triage named', () => {
     const at = install();
     seed(at, triaged({ ...CLAIMED, facts: { triage: { ...TRIAGE, pull_request: 42 } } }, record({ status: 'asking', brief: '' })));
-    expect(ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: READY_ASKED, INPUTS_CHOICE: 'operator-finishes', INPUTS_TEXT: '' })).decision).toBe('ready');
+    expect(ok(run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: READY_ASKED, INPUTS_CHOICE: choiceOf(READY_ASKED, 'operator-finishes'), INPUTS_TEXT: '' })).decision).toBe('ready');
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { build: { status: 'ready' } } });
     expect(buildWaits(doc)).toBe(false);
@@ -680,24 +682,21 @@ describe('the build queue scripts', () => {
     seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
     const before = stored(at);
     const asked = JSON.stringify({ attention: { ...ATTENTION, choices: [...ATTENTION.choices, { ...READY, ruling: 'Done by hand.' }] }, brief: 'b', by: 'stop' });
-    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: asked, INPUTS_CHOICE: 'operator-finishes', INPUTS_TEXT: '' });
+    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: asked, INPUTS_CHOICE: choiceOf(asked, 'operator-finishes'), INPUTS_TEXT: '' });
     expect(ruled.code).not.toBe(0);
     expect(ruled.stderr).toContain('has no pull request');
     expect(ruled.bodies).toEqual([]);
     expect(stored(at)).toEqual(before);
   }, 60_000);
 
-  test('an answer that is not a declared choice, or a section that does not read back, records nothing', () => {
+  test('a section that does not read back records nothing', () => {
     const at = install();
     seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
     const before = stored(at).revision;
-    const unknown = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'approve', INPUTS_TEXT: '' });
-    expect(unknown.code).not.toBe(0);
-    expect(unknown.stderr).toContain('"approve" is not one of the choices');
     const lost = run(
       at,
       'ruling',
-      { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'relax', INPUTS_TEXT: '' },
+      { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'relax'), INPUTS_TEXT: '' },
       { writeLost: true }
     );
     expect(lost.code).not.toBe(0);

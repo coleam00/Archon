@@ -60,7 +60,11 @@ function answer(previous: Settled | null, choice: string | null, outcome: unknow
     inputs: {
       INPUTS_OUTCOME: outcome === null ? '' : JSON.stringify(outcome),
       INPUTS_PREVIOUS: previous === null ? '' : JSON.stringify(previous),
-      INPUTS_ANSWER: choice === null ? '' : JSON.stringify({ decision: choice, text: 'my note' }),
+      // The wait's output: the chosen option's value is the choice itself.
+      INPUTS_ANSWER:
+        choice === null
+          ? ''
+          : JSON.stringify({ decision: choice, text: 'my note', value: previous?.options.find(option => option.id === choice)?.value }),
     },
   });
 }
@@ -68,7 +72,7 @@ function answer(previous: Settled | null, choice: string | null, outcome: unknow
 describe('settle', () => {
   it('ends the loop on a done decision, with nothing asked', () => {
     expect(settled({ decision: 'done', reason: 'ready', pull_request: null, attention: null })).toEqual({
-      done: true, outcome: OUTCOME, message: '', options: [], asked: null, brief: '',
+      done: true, outcome: OUTCOME, message: '', options: [], recommendation: null, asked: null, brief: '',
     });
   });
 
@@ -120,11 +124,5 @@ describe('answer', () => {
     const run = answer(previous, choice, outcome);
     expect(run.code, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toMatchObject({ judge: false, outcome });
-  });
-
-  it('refuses an answer the item never offered', () => {
-    const run = answer(settled(ask([RERUN, FINISH], 'rerun')), 'ready', null);
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('the answer "ready" is not one of the choices');
   });
 });

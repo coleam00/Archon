@@ -6,8 +6,9 @@
  * one attention item that a person can decide without opening the run. The answer is
  * one of the choices the agent declared, or `other`, which every item offers: the
  * person's text is then the ruling, and the queue does what that choice's effect says
- * with it. The queue acts on an id, never on the answer's prose. A choice's effect
- * vocabulary belongs to the queue that declares it.
+ * with it. Each choice rides on its wait option as the option's `value`, so the answer
+ * returns the chosen choice itself and the queue acts on it, never on the answer's
+ * prose. A choice's effect vocabulary belongs to the queue that declares it.
  */
 
 /** One answer the person can give, and what the queue does when it is chosen. */
@@ -63,7 +64,8 @@ export interface DecisionEntry {
 /**
  * Refuse an attention item a person could not answer: no choices, two choices with one
  * id, or a recommendation of a choice that was never offered. The schema the agent
- * answered already certified each field's shape.
+ * answered already certified each field's shape. The wait refuses the same item, but
+ * only when it pauses, after the queue has recorded the ask; this check runs before.
  */
 export function checkAttention<Effect extends string>(attention: Attention<Effect>): void {
   const ids = attention.choices.map(choice => choice.id);
@@ -103,48 +105,69 @@ export function withOther<Effect extends string>(
   };
 }
 
-/** The declared choice an answer named; an id that was never offered refuses. */
-export function chosen<Effect extends string>(
-  attention: Attention<Effect>,
-  id: string
-): Choice<Effect> {
-  const choice = attention.choices.find(entry => entry.id === id);
-  if (choice === undefined) throw new Error(`the answer "${id}" is not one of the choices`);
-  return choice;
+/** What a `select` attention wait asks with: its message, its options and its recommendation. */
+export interface AttentionWait<Effect extends string> {
+  readonly message: string;
+  /** Each choice, carried whole as the option's `value` so the answer returns it. */
+  readonly options: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly does: string;
+    readonly value: Choice<Effect>;
+  }[];
+  readonly recommendation: {
+    readonly option: string;
+    readonly why: string;
+    readonly confidence: Recommendation['confidence'];
+  };
 }
 
-/** The options of the `select` attention wait. */
-export function attentionOptions<Effect extends string>(
-  attention: Attention<Effect>
-): { id: string; label: string }[] {
-  return attention.choices.map(({ id, label }) => ({ id, label }));
-}
-
-/** The attention message: every field, in the order a person reads them. */
-export function renderAttention<Effect extends string>(
+/**
+ * The wait's fields for an attention item. The engine shows the recommendation and what
+ * each choice does; the message carries the rest, in the order a person reads it.
+ */
+export function attentionWait<Effect extends string>(
   title: string,
   attention: Attention<Effect>
-): string {
+): AttentionWait<Effect> {
   const { recommendation } = attention;
-  return [
-    `**${title}**`,
-    '',
-    `**What it is.** ${attention.what}`,
-    '',
-    `**Why it matters.** ${attention.why}`,
-    '',
-    `**Recommendation: \`${recommendation.choice}\`** (${recommendation.confidence} confidence). ${recommendation.why}`,
-    `Evidence: ${recommendation.evidence}`,
-    `What would change it: ${recommendation.would_change}`,
-    '',
-    '**Choices.**',
-    ...attention.choices.map(choice => `- \`${choice.id}\` (${choice.label}): ${choice.does}`),
-    '',
-    `**If nobody answers.** ${attention.if_unanswered}`,
-    '',
-    '**Evidence links.**',
-    ...attention.links.map(link => `- ${link}`),
-  ].join('\n');
+  return {
+    message: [
+      `**${title}**`,
+      '',
+      `**What it is.** ${attention.what}`,
+      '',
+      `**Why it matters.** ${attention.why}`,
+      '',
+      `**Evidence for the recommendation.** ${recommendation.evidence}`,
+      `What would change it: ${recommendation.would_change}`,
+      '',
+      `**If nobody answers.** ${attention.if_unanswered}`,
+      '',
+      '**Evidence links.**',
+      ...attention.links.map(link => `- ${link}`),
+    ].join('\n'),
+    options: attention.choices.map(choice => ({
+      id: choice.id,
+      label: choice.label,
+      does: choice.does,
+      value: choice,
+    })),
+    recommendation: {
+      option: recommendation.choice,
+      why: recommendation.why,
+      confidence: recommendation.confidence,
+    },
+  };
+}
+
+/** A queue's ask node fields: the wait's, or empty ones when nothing is asked. */
+export function askFields<Effect extends string>(wait: AttentionWait<Effect> | null) {
+  return {
+    attention: wait?.message ?? '',
+    options: wait?.options ?? [],
+    recommendation: wait?.recommendation ?? null,
+  };
 }
 
 /** The heading of the dated section a ruling is written under. */

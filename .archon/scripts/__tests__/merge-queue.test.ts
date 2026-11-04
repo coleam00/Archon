@@ -407,6 +407,12 @@ function run(
   });
 }
 
+/** The answer's value: the wait returns the chosen choice itself. */
+function choiceOf(asked: string, id: string): string {
+  const { attention } = JSON.parse(asked) as { attention: { choices: { id: string }[] } };
+  return JSON.stringify(attention.choices.find(choice => choice.id === id));
+}
+
 function ok(result: ScriptRun): Record<string, unknown> {
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
   return JSON.parse(result.stdout) as Record<string, unknown>;
@@ -581,7 +587,8 @@ describe('the merge queue scripts', () => {
         }, { pr: { headRefOid: head } })) as { asked: { attention: MergeAttention } };
         // The queue owns `other`'s text; the sweep writes what its own `park` does.
         if (choice === 'other') expect(recorded.asked.attention.choices.find(entry => entry.id === 'other')?.does).toContain('different head');
-        const ruled = run(at, 'ruling', { INPUTS_ASKED: JSON.stringify(recorded.asked), INPUTS_CHOICE: choice, INPUTS_TEXT: 'repair it' });
+        const askedJson = JSON.stringify(recorded.asked);
+        const ruled = run(at, 'ruling', { INPUTS_ASKED: askedJson, INPUTS_CHOICE: choiceOf(askedJson, choice), INPUTS_TEXT: 'repair it' });
         expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
         expect(ruled.bodies).toEqual([]);
       };
@@ -1110,7 +1117,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       ],
       asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42' },
     });
-    for (const part of [ATTENTION.what, ATTENTION.why, 'Recommendation: `merge`** (medium confidence)', ATTENTION.if_unanswered, PR_URL]) {
+    expect(asked.recommendation).toMatchObject({ option: 'merge', confidence: 'medium' });
+    for (const part of [ATTENTION.what, ATTENTION.why, ATTENTION.if_unanswered, PR_URL]) {
       expect(asked.attention).toContain(part);
     }
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
@@ -1148,19 +1156,20 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const attention: MergeAttention = { ...ATTENTION, choices: ATTENTION.choices.filter(choice => choice.effect !== 'return') };
     const output = ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief: '' })]))) as {
       attention: string;
+      options: { id: string; does: string }[];
       asked: { attention: MergeAttention };
     };
     expect(output).toMatchObject({ class: 'pr', asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: '' } });
     // The sweep's own words reach the operator unchanged; only the queue's `other` is added.
     expect(output.asked.attention).toMatchObject({ why: attention.why, recommendation: attention.recommendation });
     expect(output.asked.attention.choices.map(choice => [choice.id, choice.effect])).toEqual([['merge', 'merge'], ['park', 'park'], ['other', 'park']]);
-    expect(output.attention).toContain('until the build queue readies the item again');
+    expect(output.options.find(option => option.id === 'other')?.does).toContain('until the build queue readies the item again');
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
 
     const calls = join(at.checkout, 'calls.jsonl');
     const words = 'Hold this while I reconsider the scope.';
     const ruled = run(at, 'ruling', {
-      INPUTS_ASKED: JSON.stringify(output.asked), INPUTS_CHOICE: 'other', INPUTS_TEXT: words, ARCHON_CALL_LOG: calls,
+      INPUTS_ASKED: JSON.stringify(output.asked), INPUTS_CHOICE: choiceOf(JSON.stringify(output.asked), 'other'), INPUTS_TEXT: words, ARCHON_CALL_LOG: calls,
     });
     expect(ok(ruled).decision).toBe('park');
     expect(ruled.bodies[0]).toContain(words);
@@ -1280,7 +1289,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'merge', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
+    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'merge'), INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', approval: { head: HEAD } } } });
     expect(mergeWaits(doc)).toBe(true);
@@ -1294,7 +1303,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'return', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'return'), INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
     const heading = ok(ruled).section as string;
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the merge queue's question on PR 42, \d{4}-\d{2}-\d{2}\)$/);
     // The returned round starts at once on the build queue's own selections: no merge-queue selection crosses over.
@@ -1313,7 +1322,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const own = { repo: PR.repo, number: PR.number };
     seed(at, { ...item(undefined, merge('asking'), CLAIMED), subject: own });
     const asked = JSON.stringify({ by: 'pr', item: own, pr: PR, head: HEAD, brief: '', attention: withOther(ATTENTION, 'park') });
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: 'other', INPUTS_TEXT: 'I will fix R1 on the branch.' });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: choiceOf(asked, 'other'), INPUTS_TEXT: 'I will fix R1 on the branch.' });
     expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
     expect(ruled.bodies).toEqual([]);
     expect(stored(at, PR.number).value?.facts.merge?.decisions.at(-1)?.answer?.text).toBe('I will fix R1 on the branch.');
@@ -1323,7 +1332,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const asked = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: withOther(ATTENTION, 'return') });
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: 'other', INPUTS_TEXT: 'Split the contract change out first.' });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: choiceOf(asked, 'other'), INPUTS_TEXT: 'Split the contract change out first.' });
     expect(ok(ruled).decision).toBe('return');
     expect(ruled.bodies[0]).toContain("The maintainer's words: Split the contract change out first.");
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });
