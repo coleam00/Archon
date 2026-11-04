@@ -10,6 +10,10 @@ import { toBranchName, toRepoPath } from '@archon/git';
 import { configureIsolation, WorktreeProvider } from '@archon/isolation';
 import { setPlatformPolicies } from '../platforms/registry';
 
+import { stubVerificationImageRelease } from '../test/stub-verification-image-release';
+
+const releaseImages = stubVerificationImageRelease();
+
 setLogLevel('silent');
 const sqlOpen = mock(() => {
   throw new Error('SQL open trap');
@@ -34,6 +38,7 @@ afterEach(() => {
     else process.env[key] = value;
   }
   sqlOpen.mockClear();
+  releaseImages.mockClear();
 });
 async function git(cwd: string, ...args: string[]): Promise<void> {
   const child = Bun.spawn(['git', '-C', cwd, ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -150,6 +155,7 @@ test.each(['none', 'path', 'proof', 'partial-proof', 'env', 'completed'] as cons
     });
     const other = await createClaimant({ host, codebase, created, env }, claimant, proof);
     const result = await host.operations.abandonWorkflow(run.id, { kind: 'operator' });
+    expect(releaseImages).toHaveBeenCalledWith(run.id, undefined);
     if (claimant === 'none' || claimant === 'completed') {
       expect(result.releasedWorktrees, JSON.stringify(result)).toHaveLength(1);
       expect(result.cleanupWarnings ?? []).toEqual([]);

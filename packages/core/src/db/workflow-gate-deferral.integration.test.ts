@@ -15,6 +15,10 @@ import { isApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
 import { getWorkflowRun, createWorkflowRun, pauseWorkflowRun } from './workflows';
 
+import { stubVerificationImageRelease } from '../test/stub-verification-image-release';
+
+stubVerificationImageRelease();
+
 const { approveWorkflow, rejectWorkflow } = createSqlWorkflowOperations();
 
 const originalHome = process.env.ARCHON_HOME;
