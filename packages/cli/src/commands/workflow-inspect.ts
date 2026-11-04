@@ -29,6 +29,7 @@ import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
 import { formatRunUsage } from './workflow-usage';
+import { printRequestedBy, type RequestedBy } from '../utils/requested-by';
 import {
   formatFanOutOutcome,
   fetchVerboseEvents,
@@ -435,11 +436,13 @@ export function printRunDetail(
     leaveBehind: LeaveBehind | undefined;
     events: WorkflowEventRow[];
     verbose: boolean | undefined;
+    requestedBy?: RequestedBy;
   }
 ): void {
   const { transcriptPath, terminalRecord, leaveBehind, events, verbose } = detail;
   console.log(`  ID:     ${run.id}`);
   console.log(`  Name:   ${run.workflow_name}`);
+  printRequestedBy(detail.requestedBy);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
   console.log(`  Start:  ${describeCheckoutBaseline(run.checkout_baseline)}`);
   console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);

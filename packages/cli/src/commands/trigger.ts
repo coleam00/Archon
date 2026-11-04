@@ -19,7 +19,11 @@ import {
 } from '@archon/paths/credential-redaction';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
-import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
+import {
+  resourceStartBindingIntentSchema,
+  RUN_SOURCE_ACTOR,
+  type SourceReceiptInput,
+} from '@archon/workflows/schemas/resource-start';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
@@ -31,6 +35,8 @@ import {
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { installMacosNativeSchedule, removeMacosNativeSchedule } from '../triggers/native-schedule';
 import { resolveCliUserId } from './auth';
+import { readCallingNode } from '../utils/calling-node';
+import { requestedBy } from '../utils/requested-by';
 
 export const timerTriggerConfigSchema = z
   .object({
@@ -157,6 +163,23 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
   );
 }
 
+/**
+ * A fire from inside a workflow node records that run and node as the receipt's source
+ * actor, so the started run and an operator can follow the chain. Outside a run: none.
+ */
+async function requestingSourceActor(
+  host: WorkflowHost,
+  env: NodeJS.ProcessEnv
+): Promise<SourceReceiptInput['sourceActor']> {
+  if (!env.WORKFLOW_ID) return null;
+  const caller = readCallingNode(env.WORKFLOW_ID, env);
+  if (!(await host.deps.store.getWorkflowRun(caller.runId)))
+    throw new Error(
+      `The CLI opened a different store than the engine: it does not know WORKFLOW_ID ${caller.runId}`
+    );
+  return { source: RUN_SOURCE_ACTOR, id: caller.runId, display: caller.nodePath };
+}
+
 async function triggerFire(
   host: WorkflowHost,
   options: TriggerOptions,
@@ -179,6 +202,7 @@ async function triggerFire(
     }
   }
   const config = await loadTimerConfig(options.config);
+  const sourceActor = await requestingSourceActor(host, process.env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
   // must not turn a recorded delivery into a failure; the store answers replay or
   // conflict for it. This lookup is the only run-as gate before persistence. It holds
@@ -204,7 +228,7 @@ async function triggerFire(
           .digest('hex'),
         receivedAt: new Date().toISOString(),
         occurredAt: null,
-        sourceActor: null,
+        sourceActor,
       },
       outcome: 'matched',
       bindings: [binding],
@@ -332,6 +356,7 @@ async function triggerInspect(host: WorkflowHost, args: string[]): Promise<void>
         : null;
   await writeJsonLine({
     ...value,
+    requestedBy: await requestedBy(host, value.launch.run.metadata),
     run: runId
       ? {
           id: runId,

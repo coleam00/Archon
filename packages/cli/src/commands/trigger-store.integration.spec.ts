@@ -34,6 +34,7 @@ import {
 } from '../test-support/workflow-store';
 import { registerFolder } from '@archon/core/handlers/clone';
 import { triggerCommand } from './trigger';
+import { workflowGetCommand } from './workflow-query';
 import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
 
 const tempRoots = trackTempRoots();
@@ -1203,5 +1204,68 @@ test('a triggered run pauses at a gate and an attention wait and continues after
   } finally {
     if (previousHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = previousHome;
+  }
+});
+
+test('a fire from inside a run records that run, and the started run and its request show it', async () => {
+  const { host, configPath, restore } = await fireFixture();
+  const requester = await host.deps.store.createWorkflowRun({
+    workflow_name: 'requester',
+    user_message: '',
+  });
+  const env = {
+    WORKFLOW_ID: process.env.WORKFLOW_ID,
+    ARCHON_NODE_EXECUTION: process.env.ARCHON_NODE_EXECUTION,
+  };
+  const output: string[] = [];
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: unknown,
+    callback?: () => void
+  ) => {
+    output.push(String(chunk));
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    // A node identity the store does not know is refused before any receipt is written.
+    process.env.WORKFLOW_ID = randomUUID();
+    process.env.ARCHON_NODE_EXECUTION = JSON.stringify({
+      runId: process.env.WORKFLOW_ID,
+      path: 'follow-up',
+    });
+    await expect(
+      triggerCommand(host, 'fire', [], { config: configPath }, noDispatch)
+    ).rejects.toThrow('does not know WORKFLOW_ID');
+    expect(await host.deps.store.listStartReceipts(10)).toEqual([]);
+
+    process.env.WORKFLOW_ID = requester.id;
+    process.env.ARCHON_NODE_EXECUTION = JSON.stringify({ runId: requester.id, path: 'follow-up' });
+    await triggerCommand(host, 'fire', [], { config: configPath }, noDispatch);
+    const [receipt] = await host.deps.store.listStartReceipts(10);
+    const stored = await host.deps.store.getStartReceipt(receipt.id);
+    expect(stored?.sourceActor).toEqual({
+      source: 'archon-run',
+      id: requester.id,
+      display: 'follow-up',
+    });
+    const disposition = stored?.bindings[0]?.disposition;
+    if (disposition?.status !== 'admitted') throw new Error('Expected the start to be admitted');
+
+    const origin = { runId: requester.id, nodePath: 'follow-up' };
+    output.length = 0;
+    await triggerCommand(host, 'inspect', [disposition.requestId], {});
+    expect(JSON.parse(output.join(''))).toMatchObject({ requestedBy: origin });
+    output.length = 0;
+    expect(await workflowGetCommand(host, disposition.runId, true)).toBe(0);
+    expect(JSON.parse(output.join(''))).toMatchObject({
+      id: disposition.runId,
+      requested_by: origin,
+    });
+  } finally {
+    stdout.mockRestore();
+    for (const [key, value] of Object.entries(env))
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    restore();
   }
 });
