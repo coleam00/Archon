@@ -1313,6 +1313,67 @@ Properties worth knowing:
 
 Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a best-effort file sidecar that may contain the full output and is not required for ordinary bash audit retention.
 
+### Reading what other nodes did: `$NODE_OUTCOMES_FILE`
+
+A node joined past a failure with `trigger_rule: all_done` can run, but a binding to the
+failed producer fails it, and the typed-artifact listing only names nodes that completed. To
+report what happened, read the node-outcome listing instead. Every executable invocation that
+receives `$TYPED_ARTIFACTS_FILE` also receives `$NODE_OUTCOMES_FILE` (and the
+`NODE_OUTCOMES_FILE` environment variable in `bash:` and `script:` nodes), written at the
+same moment from the run's recorded node events:
+
+```json
+{
+  "run_id": "…",
+  "first_failed_node": "rounds.pr__publish",
+  "nodes": [
+    { "node_id": "plan", "state": "completed", "output": { "steps": 3 } },
+    { "node_id": "rounds", "state": "failed", "error": "…" },
+    { "node_id": "outcome", "state": "skipped", "reason": "trigger_rule",
+      "cause": { "kind": "upstream_failed", "origin": "rounds" } },
+    { "node_id": "report", "state": "running" },
+    { "node_id": "rounds.pr__publish", "state": "completed",
+      "loop_group_path": [{ "groupId": "rounds", "iteration": 1 }], "output": { "url": "https://…/pull/43" } },
+    { "node_id": "rounds.pr__publish", "state": "failed",
+      "loop_group_path": [{ "groupId": "rounds", "iteration": 2 }], "error": "…" }
+  ]
+}
+```
+
+```yaml
+  - id: report
+    script: report
+    runtime: bun
+    depends_on: [outcome]
+    trigger_rule: all_done
+```
+
+```ts
+const outcomes = JSON.parse(readFileSync(process.env.NODE_OUTCOMES_FILE!, 'utf8'));
+if (outcomes.run_id !== process.env.WORKFLOW_ID) throw new Error('listing is for another run');
+const failed = outcomes.nodes.filter(node => node.state === 'failed');
+```
+
+Properties worth knowing:
+
+- **Same per-node shape as the terminal record.** Each entry carries the fields of the
+  terminal record's `nodes` (`node_id`, `state`, `error`, `reason`, `cause`, `fan_out_outcome`)
+  and `first_failed_node` means the same thing, so a node can say during the run what
+  `archon workflow get` says after it. `node_id` is the step path: a `loop_group` body node is
+  `<group>.<id>`, and a node expanded from an `include:` keeps its load-time `<include>__<node>`
+  id, so the publish node of an included `pr` block inside `rounds` is `rounds.pr__publish`.
+- **One entry per invocation.** A `loop_group` body node appears once per iteration, with
+  `loop_group_path` in the same shape as a typed artifact's `loopGroupPath`. Graph nodes that
+  have recorded nothing yet are `pending`; the reading node itself is `running`. Top-level
+  nodes keep the run graph's order, loop iterations follow in the order they first recorded a
+  state, and a retry or resume updates an entry in place.
+- **A failed node's output is never listed.** `output` appears only on a `completed` entry
+  whose node produced structured output (`output_format`); a failed entry carries only its
+  `error`, under the same rule that fails a binding to a failed producer.
+- **Observation, not a ledger.** Like the typed-artifact listing, each file freezes what was
+  recorded when it was written. A resumed run's listing includes nodes replayed from the
+  earlier attempt as `completed`.
+
 ### Retained subprocess evidence
 
 Separately from the value channel above, the engine retains **what each subprocess printed** in

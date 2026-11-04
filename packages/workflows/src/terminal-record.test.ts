@@ -9,6 +9,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { writeNodeArtifact } from './artifacts-index';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import {
+  buildNodeOutcomes,
   buildRunNodeStates,
   buildTerminalRecord,
   getTerminalRecord,
@@ -555,5 +556,28 @@ describe('durable terminal projection', () => {
         [WORKTREE_DISPOSITION_METADATA_KEY]: { disposition: 'release' },
       })
     ).toBeUndefined();
+  });
+});
+
+describe('node outcomes observation', () => {
+  it('reflects a resumed run: replayed nodes keep their output, a re-run failure clears', () => {
+    const listing = buildNodeOutcomes(run, [
+      node('node_completed', 'discover', { node_output: '{}', structured_output: { n: 1 } }),
+      node('node_failed', 'build', { error: 'boom' }),
+      // The resume replays `discover` from its prior success and re-runs `build`.
+      node('node_skipped_prior_success', 'discover', { structured_output: { n: 1 } }),
+      node('node_started', 'build'),
+      node('node_completed', 'build', { node_output: 'ok' }),
+    ]);
+    expect(listing).toEqual({
+      run_id: 'run-1',
+      first_failed_node: null,
+      nodes: [
+        { node_id: 'discover', state: 'completed', output: { n: 1 } },
+        { node_id: 'build', state: 'completed' },
+        { node_id: 'report', state: 'pending' },
+        { node_id: 'untouched', state: 'pending' },
+      ],
+    });
   });
 });

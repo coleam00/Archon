@@ -18,7 +18,7 @@ import type { ApprovalContext, GateNode, NodeOutput, WaitNode } from '../../../s
 import { canSuspend, isGateNode } from '../../../schemas';
 import { planGraph } from '../../../graph-plan';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
-import { writeNodeArtifactsListing } from '../../../artifacts-index';
+import { writeInvocationListings } from '../../../invocation-listings';
 import {
   aggregateProviderFailure,
   describeUnmetCompletion,
@@ -561,10 +561,10 @@ async function iterationUntilBash(
   // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
   // to the caller instead of being swallowed by the per-iteration catch.
   const groupBashPath = resolveBashPath();
-  // Observed after the body ran, so the condition sees the typed artifacts this
-  // iteration published. Outside the try: a materialization fault is a
+  // Observed after the body ran, so the condition sees the typed artifacts and node
+  // outcomes this iteration recorded. Outside the try: a materialization fault is a
   // provisioning error, not an unreachable bash binary.
-  const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
+  const listings = await writeInvocationListings(ctx);
   // Resolve this group's own cross-iteration refs against the snapshot captured
   // before its body ran. `loopPrevOutputs` now contains the CURRENT iteration, so
   // using it here would collapse `$LOOP_PREV` into `$node.output` semantics. Only
@@ -592,7 +592,7 @@ async function iterationUntilBash(
       {
         shellSafe: true,
         stateDir: ctx.stateDir,
-        typedArtifactsFile,
+        ...listings,
         references: nodeTemplateReferences(
           untilBash,
           {
@@ -612,7 +612,7 @@ async function iterationUntilBash(
     script: substitute,
     loopUserInput: i === resume.startIteration ? resume.loopUserInput : '',
     loopPrevOutput: iteration.prevIterationOutput,
-    typedArtifactsFile,
+    listings,
   });
 }
 

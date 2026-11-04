@@ -11,7 +11,8 @@ import {
   persistedSessionHandling,
 } from '../../../schemas';
 import { spellWorkflowCommand } from '../../../deps';
-import { readNodeArtifacts, writeNodeArtifactsListing } from '../../../artifacts-index';
+import { readNodeArtifacts } from '../../../artifacts-index';
+import { writeInvocationListings } from '../../../invocation-listings';
 import { readComposedMeta } from '../../../compiled-command';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
@@ -47,7 +48,7 @@ export async function dispatchAgentNode(
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
   // Agent nodes reach a provider, so AI-configuration text gets this
   // observation; the body prompt is substituted per attempt below.
-  const typedArtifactsFile = await writeNodeArtifactsListing(ctx.artifactsDir, ctx.workflowRun.id);
+  const listings = await writeInvocationListings(ctx);
   const {
     provider,
     model: resolvedNodeModel,
@@ -55,7 +56,7 @@ export async function dispatchAgentNode(
     tier: resolvedTier,
     effort: resolvedEffort,
   } = await resolveNodeProviderAndModel(ctx, node, {
-    resolveAiText: aiConfigTextResolver(ctx, typedArtifactsFile),
+    resolveAiText: aiConfigTextResolver(ctx, listings),
     warnedProviderConflicts: ctx.warnedProviderConflicts,
   });
 
@@ -111,10 +112,7 @@ export async function dispatchAgentNode(
         // Fresh per attempt: an attempt after a transient failure observes
         // artifacts published in the interval, and never reuses the
         // listing handed to AI-configuration substitution above.
-        const attemptTypedArtifactsFile = await writeNodeArtifactsListing(
-          ctx.artifactsDir,
-          ctx.workflowRun.id
-        );
+        const attemptListings = await writeInvocationListings(ctx);
         return executeAgentNode(
           ctx,
           node,
@@ -128,7 +126,7 @@ export async function dispatchAgentNode(
           ctx.stepNamePrefix,
           iteration,
           sessionCheckpoint(ctx, node, provider),
-          attemptTypedArtifactsFile,
+          attemptListings,
           session.resumeIntent
         );
       }),

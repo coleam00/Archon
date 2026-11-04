@@ -1,3 +1,4 @@
+import type { InvocationListings } from '../invocation-listings';
 import {
   type WorkflowRun,
   type NodeOutput,
@@ -653,7 +654,7 @@ export function resolveAttentionOptions(
  * Resolve a node's AI-configuration text (`systemPrompt:`, `agents.*`), which goes
  * straight to the provider, exactly as a `prompt:` resolves (#2476). Inside a loop_group
  * body this reads the body's scoped `nodeOutputs` and loop scopes, matching every other
- * surface. `typedArtifactsFile` is the listing the node materialized before it resolves
+ * surface. `listings` are the observations the node materialized before it resolves
  * its provider.
  */
 export function aiConfigTextResolver(
@@ -668,7 +669,7 @@ export function aiConfigTextResolver(
     | 'nodeOutputs'
     | 'loopBodyScopes'
   >,
-  typedArtifactsFile: string
+  listings: InvocationListings
 ): (text: string) => string {
   return text =>
     substituteWorkflowVariables(
@@ -685,7 +686,7 @@ export function aiConfigTextResolver(
       {
         stateDir: ctx.stateDir,
         inputs: resolveRunInputs(ctx.workflowRun),
-        typedArtifactsFile,
+        ...listings,
         references: nodeTemplateReferences(text, ctx),
       }
     ).prompt;
