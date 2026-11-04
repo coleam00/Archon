@@ -942,7 +942,9 @@ the host the run recorded and says when it is not this one. The console applies 
   merely still running wakes nobody.
 - `attention`: a `wait: attention` needs an answer to `message`, in its `form`
   (`message`, `approval`, `select` or `multi_select`). `options` lists the ids an answer may
-  choose (none for `message`, `approve` and `reject` for `approval`), and `occurrence`
+  choose (none for `message`, `approve` and `reject` for `approval`), each with its `does`
+  text and `value` when the wait declares them; `recommendation` is the option the wait
+  recommends, when it declares one; and `occurrence`
   identifies this pause. A wait paused before attention waits took answers reports a
   `legacy:<node>` occurrence and the `message` form; it takes no answer and continues
   with `workflow resume <run-id>`.

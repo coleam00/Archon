@@ -21,7 +21,7 @@ import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { type Choice, rulingHeading } from '../../.shared/queue.ts';
+import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 
 interface Asked {
@@ -56,7 +56,7 @@ function main(): void {
   const asked = nullableJson(process.env.INPUTS_ASKED) as Asked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
   const choice = nullableJson(process.env.INPUTS_CHOICE) as Choice<BuildEffect> | null;
-  if (choice === null) throw new Error('the answer carried no choice');
+  if (choice === null) throw new Error(PRE_VALUE_ANSWER);
   const words = trimmed(process.env.INPUTS_TEXT);
   const at = new Date().toISOString();
   const selections: BuildQueueSelections = {

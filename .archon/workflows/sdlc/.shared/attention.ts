@@ -16,6 +16,7 @@ import {
   attentionWait,
   checkAttention,
   type Choice,
+  PRE_VALUE_ANSWER,
   type Recommendation,
 } from './queue.ts';
 
@@ -95,7 +96,8 @@ export function previousAnswer(
     throw new Error('the previous pass recorded an answer but raised no attention item');
   }
   // The wait returns the chosen choice as the answer's value.
-  const { value } = JSON.parse(answer) as { value: Choice<StageEffect> };
+  const { value } = JSON.parse(answer) as { value?: Choice<StageEffect> };
+  if (value === undefined) throw new Error(PRE_VALUE_ANSWER);
   return { asked: settled.asked, choice: value.effect, outcome: settled.outcome };
 }
 
@@ -138,6 +140,9 @@ export function settle(stage: string, outcome: unknown, decision: StageDecision)
       'This run already stopped once at this stage and asked a person:',
       '',
       message,
+      // The wait shows these beside the message; the next pass reads them here.
+      `Recommended: \`${attention.recommendation.choice}\` (${attention.recommendation.confidence} confidence). ${attention.recommendation.why}`,
+      ...attention.choices.map(choice => `- \`${choice.id}\` (${choice.label}): ${choice.does}`),
       '',
       'They chose `rerun`: run this stage again. Their note follows, and where it conflicts with the work above, the note decides (empty when they wrote none):',
       '',

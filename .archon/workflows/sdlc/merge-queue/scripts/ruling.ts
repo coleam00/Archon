@@ -27,7 +27,7 @@ import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/i
 import { launchDetached, type MergeQueueSelections } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
-import { type Choice, rulingHeading } from '../../.shared/queue.ts';
+import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
 const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<
@@ -71,7 +71,7 @@ function main(): void {
   const asked = nullableJson(process.env.INPUTS_ASKED) as MergeAsked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
   const answered = nullableJson(process.env.INPUTS_CHOICE) as Choice<string> | null;
-  if (answered === null) throw new Error('the answer carried no choice');
+  if (answered === null) throw new Error(PRE_VALUE_ANSWER);
   const words = trimmed(process.env.INPUTS_TEXT);
   if (asked.by === 'base') {
     emit({

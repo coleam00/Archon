@@ -491,7 +491,7 @@ function noticeControls(notice: OpenNotice): KnownBlock[] | undefined {
   }
 }
 
-/** What an attention notice recommends and what each option does, under its message. */
+/** What an attention notice recommends and what each option does, ahead of its message. */
 function noticeChoices(notice: OpenNotice): string {
   if (notice.type !== 'attention') return '';
   const { recommendation } = notice;
@@ -514,7 +514,8 @@ function noticeIntro(notice: OpenNotice, header: string): KnownBlock {
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: truncate(`${header}\n\n${notice.message}${noticeChoices(notice)}`, 3000),
+      // The choices lead, so the cut falls on a long message, not on what to choose.
+      text: truncate(`${header}${noticeChoices(notice)}\n\n${notice.message}`, 3000),
     },
   };
 }

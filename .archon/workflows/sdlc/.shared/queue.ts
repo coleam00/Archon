@@ -161,6 +161,14 @@ export function attentionWait<Effect extends string>(
   };
 }
 
+/**
+ * Why an answer carries no chosen choice: its wait paused before options carried their
+ * choice as a value, so the answer cannot be acted on. The operator starts the stage or
+ * queue run again, which asks afresh.
+ */
+export const PRE_VALUE_ANSWER =
+  'the answer carries no chosen choice: its wait paused before options carried one. Abandon this run and start the stage or queue again; it asks the question afresh';
+
 /** A queue's ask node fields: the wait's, or empty ones when nothing is asked. */
 export function askFields<Effect extends string>(wait: AttentionWait<Effect> | null) {
   return {

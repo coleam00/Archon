@@ -1,6 +1,7 @@
 import { waitMessageRenderer } from './attention-message';
 import { runOrStagePause, sendPauseNotice, statusAfterPauseFailure } from '../../pause';
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { nodeInvocationKey } from '../../../node-record-reader';
 import { finishNodeExecution } from '../../../node-execution';
 import type { NodeExecutionRecord } from '../../../schemas/node-execution';
@@ -108,8 +109,9 @@ function staleAnswer(
   const same =
     render(condition.message).trim() === persisted.message &&
     condition.form === attentionForm(persisted) &&
-    JSON.stringify(options) === JSON.stringify(persisted.options ?? []) &&
-    JSON.stringify(recommendation) === JSON.stringify(persisted.recommendation);
+    // Key order is not part of the question: a store may reorder object keys (jsonb does).
+    isDeepStrictEqual(options, persisted.options ?? []) &&
+    isDeepStrictEqual(recommendation, persisted.recommendation);
   if (same) return undefined;
   const changed =
     ctx.priorCompletedNodes === undefined

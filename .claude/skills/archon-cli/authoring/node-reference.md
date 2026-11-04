@@ -314,14 +314,17 @@ and `payload`.
     attention: "$plan.output.question"
     form: select              # message (default) | approval | select | multi_select
     options:                  # select and multi_select only; or one whole "$plan.output.options"
-      - { id: use-main, label: "Base on main" }
+      - { id: use-main, label: "Base on main", does: "Rebases onto main.", value: { base: main } }
       - { id: use-dev }
+    recommendation: { option: use-main, why: "Main has the fix.", confidence: high }  # select and approval
     labels:                   # optional; plain strings, runtime refs resolved at pause
       about: "$plan.output.topic"
 ```
 
-The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`
-and `select`, `{decisions, text}` for `multi_select`. In the `approval` form `reject` is
+The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`,
+`{decision, text, value?}` for `select` (the chosen option's `value`, read whole), and
+`{decisions, text}` for `multi_select`. `does` and the recommendation are shown to whoever
+answers; `value` is not shown but is returned in JSON output, so keep secrets out of it. In the `approval` form `reject` is
 an answer and never cancels the run; branch on `$ask.output.decision` with `when:`:
 
 ```yaml

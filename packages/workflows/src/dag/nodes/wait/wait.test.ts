@@ -615,6 +615,78 @@ describe('executeDagWorkflow -- durable wait node', () => {
     expect(afterRan).toBe(false);
   });
 
+  // A persisted wait round-trips through the store, which may reorder object keys
+  // (PostgreSQL jsonb does); the question is the same unless what it offers changed.
+  const resumeAnsweredMerge = async (
+    persistedOption: { does: string; value: Record<string, string> },
+    currentOption: { does: string; value: Record<string, string> }
+  ) => {
+    const store = createMockStore();
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Merge it?',
+      pauseId: 'ask-1',
+      form: 'select',
+      options: [{ id: 'merge', ...persistedOption }],
+      answer: { decision: 'merge', text: '' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        conversationId: 'conv-attention-key-order',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-key-order-test',
+          nodes: [
+            {
+              id: 'ask',
+              kind: 'wait',
+              wait: {
+                attention: 'Merge it?',
+                form: 'select',
+                options: [{ id: 'merge', ...currentOption }],
+              },
+            },
+          ],
+        },
+        priorCompletedNodes: new Map([['unrelated', { output: 'x' }]]),
+        workflowRun: makeWorkflowRun('attention-key-order', { metadata: { wait: persisted } }),
+      })
+    );
+    return store;
+  };
+
+  it('applies an answer whose stored option value has its keys in another order', async () => {
+    const store = await resumeAnsweredMerge(
+      { does: 'Merges it.', value: { ruling: '', effect: 'merge' } },
+      { does: 'Merges it.', value: { effect: 'merge', ruling: '' } }
+    );
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.clearWorkflowWaitContext).toHaveBeenCalled();
+  });
+
+  it.each([
+    ['does', { does: 'Parks it.', value: { effect: 'merge' } }],
+    ['value', { does: 'Merges it.', value: { effect: 'park' } }],
+  ])("asks again when an option's %s changed before the first answer", async (_field, current) => {
+    const store = await resumeAnsweredMerge(
+      { does: 'Merges it.', value: { effect: 'merge' } },
+      current
+    );
+    expect(store.clearWorkflowWaitContext).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'attention-key-order',
+      expect.objectContaining({ reaskedFrom: 'ask-1' }),
+      { kind: 'started', stepName: 'ask' }
+    );
+  });
+
   it('applies an answer on resume when every dependency replays its prior success', async () => {
     const store = createMockStore();
     const persisted: WorkflowWaitContext = {
