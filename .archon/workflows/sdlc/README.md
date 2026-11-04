@@ -799,7 +799,7 @@ checkout, and the claim keeps two runs off the same item:
     "runAsUserId": "<archon user id>",
     "resource": "forge:github.com/acme/widgets:merge",
     "capacity": 1,
-    "overlap": "skip",
+    "overlap": "queue",
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-merge-queue",
@@ -816,12 +816,14 @@ checkout, and the claim keeps two runs off the same item:
 ```
 
 `merge_queue_binding` names this file and `build_queue_binding` the build queue's, so
-an answer's follow-up starts through the operator's own binding. The answered run
-still holds the merge queue's only slot when it fires the sweep, so with
-`"overlap": "skip"` that sweep is skipped and the next scheduled sweep merges the pull
-request; `"overlap": "queue"` starts it after the answered run ends, at the host's next drain (a
-server drains every few seconds; a CLI-only host needs `archon trigger drain` scheduled). Without the
-inputs, follow-ups wait for the next scheduled run.
+an answer's follow-up starts through the operator's own binding. The answering run
+still holds the merge queue's only slot when it fires the sweep, so the binding uses
+`"overlap": "queue"`: the sweep a "merge" answer fires waits in line and starts as soon
+as the answering run ends, at the host's next drain (a server drains every few seconds;
+a CLI-only host needs `archon trigger drain` scheduled). A scheduled tick that finds a
+sweep running also waits in line instead of being dropped. With `"overlap": "skip"`
+the answer's sweep would be skipped and the next scheduled sweep would merge the pull
+request. Without the inputs, follow-ups wait for the next scheduled run.
 
 ## Discoveries
 

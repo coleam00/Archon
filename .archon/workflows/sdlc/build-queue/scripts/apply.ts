@@ -8,20 +8,26 @@
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
  * its claim until the ruling node records the answer. A continue then starts the item's
- * next round at once, on the run config and input selections this run started with; if
- * that launch fails, the item waits for the next queue run.
+ * next round at once through the operator's build-queue binding; if it does not start,
+ * the item waits for the next queue run.
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
- * INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
-import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
-import { withBuild } from '../../.shared/build.ts';
+import {
+  type ApplyDecision,
+  type AskedBy,
+  type BuildAttention,
+  type BuildRound,
+  type BuildStatus,
+  nextRound,
+  withBuild,
+} from '../../.shared/build.ts';
 import { forgeSource, parseQualifiedPr, type ForgeSource, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { nextRound } from '../../.shared/build.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';

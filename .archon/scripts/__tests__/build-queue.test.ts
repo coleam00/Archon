@@ -541,7 +541,7 @@ describe('the build queue scripts', () => {
     });
     expect(applied.code).toBe(0);
     expect(applied.stderr).toContain('its next round did not start');
-    expect((JSON.parse(applied.stdout) as { summary: string }).summary).toContain('the next queue run picks up its next round');
+    expect((JSON.parse(applied.stdout) as { summary: string }).summary).toContain('its next round did not start (refused), so the next queue run picks it up');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'next', brief: 'continue PR 42 on R1' } } });
   }, 60_000);
 

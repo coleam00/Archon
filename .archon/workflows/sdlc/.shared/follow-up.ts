@@ -40,7 +40,11 @@ export function followUp(binding: string, deliveryId: string, inputs: Record<str
   const admitted = result.exitCode === 0 ? disposition(result.stdout.toString()) : undefined;
   if (admitted?.status === 'admitted') return `${what} started at once (run ${String(admitted.runId)})`;
   if (admitted?.status === 'queued') return `${what} waits for the queue's capacity (request ${String(admitted.requestId)})`;
-  const why = result.exitCode === 0 ? `its binding ${String(admitted?.status ?? 'admitted nothing')}` : result.stderr.toString().trim();
+  // The summary says why, so a refused fire (a mistyped binding path) does not read like a full queue.
+  const why =
+    result.exitCode === 0
+      ? `its binding ${String(admitted?.status ?? 'admitted nothing')}`
+      : (result.stderr.toString().trim().split('\n')[0] ?? '') || `trigger fire exited ${String(result.exitCode)}`;
   note(`${what} did not start, so the next queue run picks it up: ${why}`);
-  return `the next queue run picks up ${what}`;
+  return `${what} did not start (${why}), so the next queue run picks it up`;
 }
