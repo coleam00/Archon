@@ -8,6 +8,7 @@ import {
   type MetricsSplit,
   type MetricsStore,
 } from '@archon/workflows/metrics';
+import type { WorkflowConfig } from '@archon/workflows/deps';
 import { liveSourceRoots, workflowSourceConfigFrom } from '@archon/workflows/workflow-source';
 import {
   apiError,
@@ -101,7 +102,7 @@ export function registerMetricViewsRoute(
   app: OpenAPIHono,
   deps: {
     codebaseCwd: (id: string) => Promise<string | null>;
-    loadConfig: (cwd: string) => Promise<Parameters<typeof workflowSourceConfigFrom>[0]>;
+    loadConfig: (cwd: string) => Promise<WorkflowConfig>;
   }
 ): void {
   openApiRouteRegistrar(app)(getMetricViewsRoute, async c => {

@@ -163,7 +163,11 @@ describe('GET /api/metric-views', () => {
     const app = new OpenAPIHono();
     registerMetricViewsRoute(app, {
       codebaseCwd: async id => (id === 'cb-1' ? project : null),
-      loadConfig: async () => ({}),
+      loadConfig: async () => ({
+        assistant: undefined,
+        commands: {},
+        assistants: { claude: {}, codex: {} },
+      }),
     });
     return app;
   }
