@@ -125,7 +125,7 @@ test('blocked pickup emits identified items admitted by its workflow schema', ()
   const output = admitted(
     runPackScript('build-queue/scripts/blocked', {
       cwd: at.checkout,
-      forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
+      forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
       inputs: { ...at.env, INPUTS_NUMBER: '', INPUTS_RETRIAGE_AS: 'maintainer' },
     }),
     'build-queue/archon-build-queue.yaml',
@@ -396,8 +396,8 @@ describe('discoveries', () => {
     ): ScriptRun =>
       runPackScript(`discoveries/scripts/${name}`, {
         cwd: at.checkout,
-        forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-        gh: { issue: { number: 7, state: 'open' }, issues: [] },
+        forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+        tracker: { issue: { number: 7, state: 'open' }, issues: [] },
         artifacts: files,
         inputs: {
           ...at.env,

@@ -1,5 +1,5 @@
 /**
- * The forge source, end to end: the pack's publishing scripts drive the real
+ * The forge, end to end: the pack's publishing scripts drive the real
  * `archon forge` command, its dispatch, and the real GitHub plugin
  * process, which talks to a fake GitHub (./fixtures/sdlc-fake-github.ts).
  *
@@ -128,7 +128,7 @@ process.exitCode = await forgeCommand(
   return { argv: [process.execPath, '--no-env-file', cli], statePath };
 }
 
-describe('the forge source delivers through plugin operations', () => {
+describe('delivery goes through plugin operations', () => {
   it('creates a draft and upserts one review comment', () => {
     // A real checkout whose recorded remote is a local bare repository: publish-pr pushes
     // it before it creates.
@@ -144,7 +144,6 @@ describe('the forge source delivers through plugin operations', () => {
       const run = runPackScript(relative, {
         cwd: CHECKOUT,
         ...options,
-        source: 'forge',
         forge: { kind: 'command', argv: host.argv },
       });
       expect({ script: relative, code: run.code, stderr: run.stderr }).toMatchObject({
@@ -251,7 +250,6 @@ it('a description-only round publishes prepared content before review and finish
     const host = forgeHost(false, HEAD_SHA);
     const initial = runPackScript('pr/scripts/publish-pr', {
       cwd: CHECKOUT,
-      source: 'forge',
       forge: { kind: 'command', argv: host.argv },
       inputs: {
         INPUTS_REPO: JSON.stringify(PR.repo),
@@ -305,8 +303,7 @@ console.log(${JSON.stringify(JSON.stringify(prepared))});`,
                     return {
                       ...body,
                       with: loseBinding ? { ...body.with, description: null } : body.with,
-                      script: `process.env.ARCHON_SDLC_FORGE = 'forge';
-process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify(host.argv))};
+                      script: `process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify(host.argv))};
 await import(${JSON.stringify(join(REPO_ROOT, '.archon/workflows/sdlc/pr/scripts/publish-pr.ts'))});`,
                     };
                   if (body.id === 'review__scope')
@@ -392,7 +389,7 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
     INPUTS_RELATED: '[]',
     INPUTS_REPORT: '{"path":"triage.md"}',
   };
-  const options = { source: 'forge', forge: { kind: 'command' as const, argv: host.argv } };
+  const options = { forge: { kind: 'command' as const, argv: host.argv } };
   const triage = runPackScript('triage/scripts/verdict', { ...options, inputs });
   expect({ code: triage.code, stderr: triage.stderr }).toMatchObject({ code: 0 });
   expect(triage.gh).toEqual([]);
@@ -426,7 +423,6 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
 function throughForge(host: { argv: string[] }, body: () => void): void {
   const saved = { ...process.env };
   Object.assign(process.env, {
-    ARCHON_SDLC_FORGE: 'forge',
     ARCHON_CLI_COMMAND: JSON.stringify(host.argv),
   });
   try {

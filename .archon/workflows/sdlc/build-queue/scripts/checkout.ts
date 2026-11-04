@@ -30,7 +30,6 @@
  */
 
 import type { PrRecord, QualifiedPr } from '../../.shared/forge.ts';
-import { forgeSource } from '../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
 import { emit, nullableJson, refuse } from '../../.shared/io.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -59,7 +58,7 @@ function main(): void {
     throw new Error(`route continues pull request ${String(continues)}, but only ${String(candidate ?? 'none')} can be continued`);
   if (known === null || known.number !== continues)
     throw new Error(`route continues pull request ${String(continues)} but reports ${String(known?.number ?? 'none')}`);
-  const pr = viewPr({ repo: known.repo, number: continues }, forgeSource()).pr;
+  const pr = viewPr({ repo: known.repo, number: continues }).pr;
   if (pr.state !== 'open' || pr.head_revision === null)
     throw new Error(`${pr.url} is ${pr.state}; the round cannot continue it`);
 

@@ -9,7 +9,6 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { ghTokenKeysForHost } from '@archon/paths/github-token-env';
 import {
   cliForgeMetadataRequestSchema,
   cliForgeResponseSchema,
@@ -43,10 +42,7 @@ import {
   REMEDY,
   type ReviewsResult,
 } from '../.archon/workflows/sdlc/.shared/forge';
-import {
-  ghTokenNames,
-  REQUIRED_FORGE_OPERATIONS,
-} from '../.archon/workflows/sdlc/.shared/forge-check';
+import { REQUIRED_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/forge-check';
 import { MERGE_QUEUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/merge';
 import { CLOSE_REASONS } from '../.archon/workflows/sdlc/.shared/issue';
 
@@ -214,15 +210,9 @@ test('the pack reads host responses with credential attribution and metadata int
   }
 });
 
-test('forge-check names the token env vars @archon/paths assigns to each gh host', () => {
-  for (const host of ['github.com', 'acme.ghe.com', 'git.example.com'])
-    expect(ghTokenNames(host)).toEqual(ghTokenKeysForHost(host));
-});
-
 test("forge-check's metadata request conforms to the CLI host input", () => {
   const run = runPackScript('deliver/scripts/forge-check', {
     cwd: gitCheckout({}, trackTempRoot),
-    source: 'forge',
     forge: {
       kind: 'fake',
       response: [

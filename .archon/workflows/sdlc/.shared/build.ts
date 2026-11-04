@@ -7,7 +7,7 @@
  * know whether the item waits for it.
  */
 
-import { forgeSource, type QualifiedPr, sameRepo } from './forge.ts';
+import { type QualifiedPr, sameRepo } from './forge.ts';
 import { followUp } from './follow-up.ts';
 import { note, text } from './io.ts';
 import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
@@ -297,7 +297,7 @@ export function nextRound(item: QualifiedPr, runId: string): string {
 export function withReleasedRound(doc: WorkItem, claim: Claim, at: string): WorkItem {
   const prior = doc.facts.build;
   if (claim.branch === undefined || prior?.rounds.some(round => round.run_id === claim.run_id)) return doc;
-  const pr = findPrByHead(doc.subject.repo, claim.branch, forgeSource());
+  const pr = findPrByHead(doc.subject.repo, claim.branch);
   if (pr === undefined) return doc;
   const round: BuildRound = {
     run_id: claim.run_id,

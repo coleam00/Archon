@@ -10,7 +10,8 @@ description: |
   Use when: an operator wants current PR counts and merge rate (`archon metrics
   sdlc.pr_merge_rate`), or a schedule binding the operator installed starts it
   (see the SDLC pack README, "Metrics"). The pack installs no binding.
-  NOT for: pull requests opened by hand, or a forge other than GitHub through gh.
+  NOT for: pull requests opened by hand. It needs pull request timestamps that
+  no forge operation reports yet, so it refuses today, naming the operation.
 
 # It reads the state store and the forge, not a checkout, so it runs beside any
 # other run on the same checkout.

@@ -33,7 +33,7 @@ You need:
 archon workflow run archon-forge-check     # from the clone
 ```
 
-It proves that `gh` is signed in and can read the repository the clone's remotes name. It proves read access only; the first write proves the rest. The pack talks to GitHub through `gh` by default. Setting `ARCHON_SDLC_FORGE=forge` routes it through `archon forge` and an installed [forge plugin](/reference/forge/) instead, and `archon-forge-check` then also checks that the plugin offers every operation the delivery workflows use. It does not check the merge queue's operations: the merge queue checks those itself when it starts and refuses a plugin without them before it claims any work. Stay on `gh` for the factory until the installed plugin offers them too.
+The pack talks to the forge only through `archon forge` and an installed [forge plugin](/reference/forge/); for GitHub, `archon plugin add coleam00/Archon/plugins/forge-github`. The check proves the plugin offers every operation the delivery workflows use and can read the repository the clone's remotes name. It proves read access only; the first write proves the rest. It does not check the merge queue's operations: the merge queue checks those itself when it starts and refuses a plugin without them before it claims any work.
 
 ## 2. Name your maintainers
 
@@ -46,8 +46,8 @@ Create `.archon/sdlc/policy/maintainers.json` and commit it to the default branc
 Each entry is a GitHub login, or an object naming one. With no file, every author is outside. The list decides three things:
 
 - **Whose issues get triaged.** An issue from anyone else gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label to it.
-- **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. **The login that authors the pack's published review comment must be on the list on the default branch**, or that verdict is ignored. With the default `gh` source, this is the identity `gh` acts as; with the opt-in `forge` source, it is the forge plugin's credential identity, which may differ. Check the published comment's author when choosing which login to list.
-- **Whose own pull requests enroll.** `"merge_queue": "own-prs"` enrolls that maintainer's own open, non-draft pull requests in the merge queue. A pull request a work item already names, such as one the build queue delivered, is not enrolled again. Neither is one from a `build/` branch in the repository, the build queue's branch namespace, so a hand-made pull request on a `build/` branch does not enroll.
+- **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. **The login that authors the pack's published review comment must be on the list on the default branch**, or that verdict is ignored. This is the forge plugin's credential identity. Check the published comment's author when choosing which login to list.
+- **Whose own pull requests enroll.** `"merge_queue": "own-prs"` asks to enroll that maintainer's own open, non-draft pull requests in the merge queue. Enrollment needs a forge operation that lists open pull requests by author, which the forge contract does not have yet, so today it refuses and the merge queue notes why; it goes on merging the work items that already exist.
 
 ## 3. Adjust policy and models (optional)
 

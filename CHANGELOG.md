@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- The bundled SDLC pack reaches the forge only through `archon forge` and an installed forge plugin (forge-github v0.13.0 or later for GitHub). `ARCHON_SDLC_FORGE` and the pack's `gh` path are gone, and nothing falls back to `gh`. A pack run in a container refuses at its forge check, since a container has no host command. The merge queue's own-PR enrollment, `archon-metrics-prs`, `archon-metrics-test-value` and the test-value judge refuse with the forge operation they still need named. (#5222)
+
 ## [0.13.2] - 2026-10-29
 
 Upgrading from 0.13.0 with providers installed works in one command again.

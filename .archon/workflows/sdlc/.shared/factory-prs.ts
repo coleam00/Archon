@@ -12,17 +12,11 @@
  * per name and subject, so a re-run replaces rather than adds.
  */
 
-import { type QualifiedPr, record } from './forge.ts';
-import { note } from './io.ts';
-import { prFromUrl } from './merge.ts';
 import { isQueueBuilt } from './own-prs.ts';
-import { ghGraphql } from './pr.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */
 const MAX_RUNS = 20;
-/** Pull requests read per GraphQL request. */
-const BATCH = 50;
 
 /** One pull request's facts as GitHub reports them. */
 export interface PrFacts {
@@ -67,66 +61,12 @@ export function factoryPrRuns(items: readonly WorkItem[]): Map<string, string[]>
   return runs;
 }
 
-const PR_SELECTION = 'url state createdAt mergedAt closedAt headRefName isCrossRepository';
-const STATES = ['OPEN', 'CLOSED', 'MERGED'] as const;
-
-function prFacts(url: string, value: unknown): PrFacts {
-  const row = record(value);
-  const state = STATES.find(known => known === row?.state);
-  const time = (field: string): string | null => (typeof row?.[field] === 'string' ? (row[field] as string) : null);
-  const createdAt = time('createdAt');
-  if (
-    state === undefined ||
-    createdAt === null ||
-    typeof row?.headRefName !== 'string' ||
-    typeof row.isCrossRepository !== 'boolean'
-  ) {
-    throw new Error(`GitHub reported no readable pull request for ${url}`);
-  }
-  return {
-    url,
-    state,
-    createdAt,
-    mergedAt: time('mergedAt'),
-    closedAt: time('closedAt'),
-    headRefName: row.headRefName,
-    isCrossRepository: row.isCrossRepository,
-  };
-}
-
 /**
- * Read each pull request by number, in batches per repository, so no list limit can drop
- * an old one. A recorded URL that is not a pull request URL is noted and left out.
+ * The forge operation PR metrics need and the contract does not have yet: a pull
+ * request's creation, merge and close times. `pr.view` reports a pull request's state
+ * but not when it changed.
  */
-export function readPrFacts(urls: Iterable<string>): PrFacts[] {
-  const byRepo = new Map<string, { host: string; owner: string; name: string; prs: { url: string; number: number }[] }>();
-  for (const url of urls) {
-    let parsed: QualifiedPr;
-    try {
-      parsed = prFromUrl(url);
-    } catch (error) {
-      note(`PR metrics skip a round's URL: ${error instanceof Error ? error.message : String(error)}`);
-      continue;
-    }
-    const [owner = '', name = ''] = parsed.repo.path.split('/');
-    const key = `${parsed.repo.host}/${parsed.repo.path}`.toLowerCase();
-    const repo = byRepo.get(key) ?? { host: parsed.repo.host, owner, name, prs: [] };
-    repo.prs.push({ url, number: parsed.number });
-    byRepo.set(key, repo);
-  }
-  const facts: PrFacts[] = [];
-  for (const repo of byRepo.values()) {
-    for (let start = 0; start < repo.prs.length; start += BATCH) {
-      const batch = repo.prs.slice(start, start + BATCH);
-      const aliases = batch.map((pr, index) => `p${String(index)}: pullRequest(number: ${String(pr.number)}) { ${PR_SELECTION} }`);
-      const query = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${aliases.join(' ')} } }`;
-      const repository = record(ghGraphql(repo.host, query, { owner: repo.owner, name: repo.name }).repository);
-      if (repository === undefined) throw new Error(`GitHub reported no repository ${repo.owner}/${repo.name}`);
-      batch.forEach((pr, index) => facts.push(prFacts(pr.url, repository[`p${String(index)}`])));
-    }
-  }
-  return facts;
-}
+export const PR_TIMESTAMPS = 'pr.view with createdAt, mergedAt and closedAt (or pr.list with a merged-since filter)';
 
 /** The pull requests the queue opened, and the URLs of the ones a round only continued. */
 export function factoryPrs(prs: readonly PrFacts[]): { factory: PrFacts[]; skipped: string[] } {

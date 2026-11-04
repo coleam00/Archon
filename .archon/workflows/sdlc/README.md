@@ -90,72 +90,51 @@ above have not happened either, and both are worth their few lines. The question
 whether the guard is protecting *this node's own action*, or restating something
 that was already true when the node started.
 
-## Forge source
+## Forge
 
-One switch selects the source for every pull-request, issue and check read and
-write this pack makes. [`.shared/forge.ts`](.shared/forge.ts) owns which one a run
-selected, [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes,
-and [`.shared/issue.ts`](.shared/issue.ts) owns the issue read, each returning the
-same shapes from either source:
+Every pull-request, issue and check read and write this pack makes goes through
+`archon forge`. [`.shared/forge.ts`](.shared/forge.ts) is the client,
+[`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes, and
+[`.shared/issue.ts`](.shared/issue.ts) owns the issue reads and writes. A run needs a
+forge plugin installed for the repository's host, a credential that plugin accepts
+(for GitHub, the host tries `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth login`; GitHub
+App mode supplies a run token; see the forge reference in the docs), and the
+`ARCHON_CLI_COMMAND` host command that the CLI and server publish at startup. When the
+plugin cannot answer (no host command, no plugin for the host, no credential, a failed
+operation), the node refuses; nothing falls back to another tool. A container
+execution receives no `ARCHON_CLI_COMMAND`, so a pack run in a container refuses at
+its forge check.
 
-- **`forge` (opt-in).** Set `ARCHON_SDLC_FORGE=forge`. Operations go through `archon forge`, which needs a forge
-  plugin installed for the repository's host, a credential that plugin accepts
-  (for GitHub, the host tries `GH_TOKEN`, `GITHUB_TOKEN`, then `gh auth login`;
-  GitHub App mode supplies a run token; see the forge
-  reference in the docs), and the `ARCHON_CLI_COMMAND` host command that the CLI
-  and server publish at startup.
-- **`gh` (default).** Optionally set `ARCHON_SDLC_FORGE=gh` in the environment Archon runs
-  with, for example `~/.archon/.env`. The GitHub CLI then acts on the recorded
-  qualified PR, with the authenticated `gh` login.
+The merge queue's facts, gate and record read through `pr.view`, `pr.merge-state`,
+`checks.state`, `checks.commit`, `pr.threads` and `workitem.comments`, and the gate
+merges through `pr.merge` pinned to the head; `facts` refuses a plugin missing any of
+them before it claims an item. The gate itself doesn't refuse over threads; the sweep
+holds a merge only for a thread that raises a defect in code the pull request changes
+or makes reachable. Delivery reads, answers and resolves review threads through
+`pr.threads`, `pr.thread.reply` and `pr.thread.resolve`.
 
-The preflight names every forge operation the delivery workflows use, and a plugin
-missing any of them is refused before an agent spends. The merge queue checks its own
-operations when it starts (below). Keep `gh` as the default until a released plugin
-with all of them passes a real-PR check.
+Some reads have no forge operation yet, and the nodes that need them refuse, naming
+the missing operation:
 
-The merge queue reads and merges through the run's source. On `forge` its facts,
-gate and record read through `pr.view`, `pr.merge-state`, `checks.state`,
-`checks.commit`, `pr.threads` and `workitem.comments`, and the gate merges through
-`pr.merge` pinned to the head; `facts` refuses a plugin missing any of them before it
-claims an item. Own-PR enrollment does not run on `forge`, because the contract has
-no read for a maintainer's open pull requests, and the sweep agent's issue read,
-failed-job reruns, log reads and closing-reference body edit still use `gh`. The gate itself
-doesn't refuse over threads; the sweep holds a merge only for a thread that raises a defect in code the
-pull request changes or makes reachable. Delivery reads, answers and resolves review
-threads through the run's source: on `forge`, its `threads` node uses `pr.threads`,
-`pr.thread.reply` and `pr.thread.resolve`.
+- Own-PR enrollment lists a maintainer's open pull requests by author.
+- `archon-metrics-prs` and `archon-metrics-test-value` need each pull request's
+  creation, merge and close times.
+- `archon-metrics-test-value-judge` needs a pull request's changed files and a file's
+  text at a revision.
 
-The switch does not cover standalone `archon-review`: given a pull-request number,
-URL or branch, or run on a branch with an open pull request, it reads that pull
-request with `gh pr view` and `gh pr diff`. Inside delivery it reviews the recorded
-pull request and reads nothing from the forge.
-
-The source is never picked from what happens to be installed. When the selected
-source cannot answer (no host command, no plugin for the host, no credential, a
-failed operation), the node refuses; neither source falls back to the other. Any
-other value of `ARCHON_SDLC_FORGE` refuses too. A container execution receives no
-`ARCHON_CLI_COMMAND`, so the forge source refuses there. A container also receives
-only the project's configured env, never `~/.archon/.env`, so select `gh` for it in
-the repository's `.archon/config.yaml` with `env: { ARCHON_SDLC_FORGE: gh }`.
+Agents read CI job logs, and the sweep re-runs a red default branch's failed jobs, with
+the tools the run has, since the contract has no operation for either.
 
 `archon-ship-block`, `archon-deliver-block`, `archon-upkeep` and `archon-pr` start with a `forge` node
-([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the selected source
-can act after worktree setup and before any agent spends: on `forge`, host metadata
-must advertise every operation in `REQUIRED_FORGE_OPERATIONS` in `.shared/forge-check.ts`,
-then one authenticated repository read for
-the repositories the checkout's remotes name, at least one of which must answer
-(`pr.view` by head, which every released GitHub plugin supports; it proves read
-access, not write access); on
-`gh`, active authentication (`gh auth status --active --hostname <host>`) plus a
-repository read (`gh api --hostname <host> repos/<path>`) for the repositories the
-remotes name. One readable repository is sufficient, including a readable mirror;
-this proves read access, not write access, which is first proven by the first write.
-The gh check first refuses a run whose `GH_TOKEN` is empty with no `GITHUB_TOKEN` set (gh would
-otherwise act as the host's login): per-user GitHub mode scrubbed it, or an env file
-has an empty `GH_TOKEN=` line to remove. The operations still refuse on their own. The node's typed
-`source` is what the `ci` and `update-pr-body` agents act through.
-Run `archon workflow run archon-forge-check` from a checkout to see the same check's
-result without starting delivery.
+([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the plugin can act
+after worktree setup and before any agent spends: host metadata must advertise every
+operation in `REQUIRED_FORGE_OPERATIONS` in `.shared/forge-check.ts`, then one
+authenticated repository read for the repositories the checkout's remotes name, at
+least one of which must answer (`pr.view` by head, which every released GitHub plugin
+supports). One readable repository is sufficient, including a readable mirror; this
+proves read access, not write access, which is first proven by the first write. The
+operations still refuse on their own. Run `archon workflow run archon-forge-check` from
+a checkout to see the same check's result without starting delivery.
 
 ## Public writes belong to a script
 
@@ -198,7 +177,7 @@ discoveries: the run's terminal report relays them to the operator, and
 workflow that includes `archon-deliver-block` runs after a failed delivery and must gate
 on `$deliver.output.ready`. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
-the selected source, and fails unless the result reads back — so "the write
+the forge, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in
 the forge contract. Three agents write directly: the structure pass's implementer
 pushes its own commit to the pull request's branch with `git`, and CI pushes a
@@ -214,14 +193,6 @@ Which remote holds a repository is decided by its configured URL, never by the
 remote's name (`.shared/remote.ts`), so a fork checkout whose `origin` is the fork
 and whose `upstream` is the canonical repository fetches the base and pushes the
 head where they belong.
-
-That split is also what keeps the source switch out of the prompts. A prompt that
-branched on `ARCHON_SDLC_FORGE` would be an invented protocol; `forge.ts` reads it,
-and an agent that acts on the forge receives the certified `source` value instead.
-The two exceptions are triage's read of the repository's labels and implement's
-check that it sits on the pull request it was launched onto, which name the switch
-because `archon-triage` and `archon-implement` also run without a `forge` node
-before them.
 
 ## Deterministic scripts
 
@@ -396,7 +367,8 @@ request, never the state.
   login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
   open pull requests in the merge queue, except one a work item already names or one
   from a `build/` branch in the repository itself, so a hand-made pull request on a
-  `build/` branch does not enroll (see Pickup there); on the `gh` source only. No file means an empty list, so every author is outside. Any other
+  `build/` branch does not enroll (see Pickup there). Enrollment needs a forge
+  operation the contract does not have yet, so it refuses today (see Forge). No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
@@ -443,10 +415,7 @@ request, never the state.
   outcome writes the work item and labels, then comments on the issue with a link to
   the original or the change and closes it as `duplicate` or `completed`. A
   duplicate's original gets a comment linking back. Each comment is one marked
-  comment, so a repeated run edits it rather than adding another. The one exception, on
-  the `gh` source only: a comment write that lands but returns a retryable response (5xx, or a rate limit) or no response
-  is repeated, and if the listing lags it posts a second marked comment; the next upsert then refuses on the two, and an
-  operator deletes one. An item already
+  comment, so a repeated run edits it rather than adding another. An item already
   closed for the verdict's reason (an earlier run that stopped after its close)
   still records the work item and its labels, but posts no comment and doesn't close
   it again; one closed for another reason fails the run before any comment. A demoted item and every other verdict close nothing.
@@ -558,9 +527,9 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   after publishing still records its pull request. A round that continues none opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused, and facts records
   that branch on the claim. When a pickup releases the claim of a run that ended before
-  recording its round, a pull request from that branch, in any state, is recorded as the
+  recording its round, the open pull request from that branch is recorded as the
   run's round with reason `ended_undecided`, and the next round sees it as its
-  candidate. On the forge source only an open one is found. A closed or
+  candidate. A closed or
   merged pull request, or one from a fork, is asked about; a round launched anyway
   never continues it, since ship gets `none` for it too.
 - **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
@@ -574,7 +543,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   When route finds the pull request already reviewed at its current head, apply
   checks that head before and after taking it out of draft. A changed read-back
   head fails readiness and, unless already draft, triggers one draft correction
-  through the selected forge source. The failure reports the observed head, state
+  through the forge. The failure reports the observed head, state
   and draft status; a failed correction preserves its error and attempts one
   diagnostic read. If verification fails, inspect the PR, restore draft if still
   open and ready, and review its current head before readiness. These observations
@@ -681,8 +650,7 @@ then the project's file, whose lines win where the two conflict.
   (`.archon/sdlc/policy/maintainers.json` on the default branch) counts; verdicts
   from other authors are ignored. The login that authors the pack's published review comment
   must be listed in that file on the default branch for its verdict to count.
-  With the default `gh` source, this is the identity `gh` acts as; with the opt-in
-  `forge` source, it is the forge plugin's credential identity, which may differ.
+  This is the forge plugin's credential identity.
   Check the published comment's author when choosing which login to list.
   A failed PR read waits once; a second consecutive failure
   parks the item with the read error recorded until the build queue readies it again.
@@ -944,8 +912,8 @@ merging, so the abandoned count is low and the merge rate high:
   only, so it can land in a later cohort with a lower cost.
 
 The workflow holds no state and reads every pull request again on each run; a re-run
-replaces the earlier records. It reads pull request timestamps through the GitHub CLI and
-refuses on `ARCHON_SDLC_FORGE=forge`. Run it on demand:
+replaces the earlier records. It needs pull request timestamps, which no forge operation
+reports yet, so it refuses today, naming the missing operation. Run it on demand:
 
 ```bash
 archon workflow run archon-metrics-prs

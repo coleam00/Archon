@@ -1,29 +1,12 @@
 /**
  * The factory pull requests merged at or after `since` (an ISO time, or `<n>d` back from
  * now), with the build-queue runs that built each, for the judge to fan out over.
+ *
+ * Choosing them needs each pull request's merge time, which no forge operation reports
+ * yet (`PR_TIMESTAMPS`), so the node refuses with that missing operation named.
  */
 
-import { factoryPrRuns, factoryPrs, prRuns, readPrFacts } from '../../.shared/factory-prs.ts';
-import { forgeSource } from '../../.shared/forge.ts';
-import { emit, refuse, trimmed } from '../../.shared/io.ts';
-import { stateDocuments } from '../../.shared/state.ts';
-import { read } from '../../.shared/workitem.ts';
+import { PR_TIMESTAMPS } from '../../.shared/factory-prs.ts';
+import { refuse } from '../../.shared/io.ts';
 
-const since = trimmed(process.env.INPUTS_SINCE);
-
-try {
-  const days = /^(\d+)d$/.exec(since)?.[1];
-  const from = days === undefined ? Date.parse(since) : Date.now() - Number(days) * 86_400_000;
-  if (Number.isNaN(from)) throw new Error(`since must be an ISO date or time, or a number of days such as 7d; received ${JSON.stringify(since)}`);
-  if (forgeSource() === 'forge') {
-    throw new Error('test-value metrics read pull requests through the GitHub CLI; run them with ARCHON_SDLC_FORGE=gh');
-  }
-  const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
-  const runsByUrl = factoryPrRuns(items);
-  const prs = factoryPrs(readPrFacts(runsByUrl.keys()))
-    .factory.filter(pr => pr.state === 'MERGED' && pr.mergedAt !== null && Date.parse(pr.mergedAt) >= from)
-    .map(pr => ({ url: pr.url, merged_at: pr.mergedAt as string, runs: prRuns(runsByUrl, pr.url) }));
-  emit({ prs, urls: prs.map(pr => pr.url) });
-} catch (error) {
-  refuse(`prs: ${error instanceof Error ? error.message : String(error)}`);
-}
+refuse(`prs: test-value metrics need the forge operation ${PR_TIMESTAMPS}, which the forge plugin does not provide`);
