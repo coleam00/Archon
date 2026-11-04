@@ -88,6 +88,19 @@ test('a broken declaration is an error naming its pack, and other packs still li
   expect(listing.errors[1]?.error).toContain('is not JSON');
 });
 
+test('a scope root that cannot be read is an error, and other scopes still list', async () => {
+  await write(roots.globalWorkflows, 'not a folder');
+  await write(declaration(join(roots.project ?? '', '.archon', 'workflows', 'good')), {
+    cards: [card('Good')],
+  });
+
+  const listing = await discoverMetricViews(roots);
+  expect(listing.packs.map(p => p.pack)).toEqual(['good']);
+  expect(listing.errors.map(({ pack, source }) => [pack, source])).toEqual([
+    [roots.globalWorkflows, 'global'],
+  ]);
+});
+
 test('an installed pack lists as owner/name', async () => {
   const pluginsDir = join(root, 'home', 'plugins');
   const id = 'acme/packs/factory-kit';

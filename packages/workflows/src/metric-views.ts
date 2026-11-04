@@ -27,8 +27,9 @@ const SOURCE_ORDER: readonly WorkflowSource[] = ['bundled', 'global', 'project',
 
 /**
  * Every pack's declaration under `roots`. The bundled scope follows the roots' config, as
- * workflow discovery does. A declaration that cannot be read or does not validate is
- * listed under `errors`; one broken pack never hides the others.
+ * workflow discovery does. A declaration or scope root that cannot be read, or a
+ * declaration that does not validate, is listed under `errors`; one broken pack never
+ * hides the others.
  */
 export async function discoverMetricViews(
   roots: LiveWorkflowSourceRoots = liveSourceRoots(null)
@@ -88,7 +89,7 @@ async function folderDeclarations(root: string, source: WorkflowSource): Promise
     folders = await readdir(root);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
+    return [{ pack: root, source, error: (error as Error).message }];
   }
   const listed: Listed[] = [];
   for (const pack of folders.sort()) {
