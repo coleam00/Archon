@@ -183,7 +183,8 @@ async function requestingSourceActor(
 async function triggerFire(
   host: WorkflowHost,
   options: TriggerOptions,
-  dispatch: TriggerDispatch
+  dispatch: TriggerDispatch,
+  env: NodeJS.ProcessEnv
 ): Promise<void> {
   if (!options.config) throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
   if (options.deliveryId !== undefined && options.deliveryId.length === 0)
@@ -202,7 +203,7 @@ async function triggerFire(
     }
   }
   const config = await loadTimerConfig(options.config);
-  const sourceActor = await requestingSourceActor(host, process.env);
+  const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
   // must not turn a recorded delivery into a failure; the store answers replay or
   // conflict for it. This lookup is the only run-as gate before persistence. It holds
@@ -455,21 +456,30 @@ async function scheduleTrigger(
   await writeJsonLine({ bindingId: config.binding.bindingId, schedule: args[0] });
 }
 
+export interface TriggerDependencies {
+  /** Hands an admitted request to its executor; by default `trigger execute` in this process. */
+  dispatch?: TriggerDispatch;
+  /** The environment `fire` reads the calling node's identity from; by default `process.env`. */
+  env?: NodeJS.ProcessEnv;
+}
+
 export async function triggerCommand(
   host: WorkflowHost,
   action: string | undefined,
   args: string[],
   options: TriggerOptions,
-  dispatch: TriggerDispatch = (requestId, hostId) =>
-    triggerCommand(host, 'execute', [requestId], { host: hostId })
+  dependencies: TriggerDependencies = {}
 ): Promise<void> {
+  const dispatch: TriggerDispatch =
+    dependencies.dispatch ??
+    ((requestId, hostId) => triggerCommand(host, 'execute', [requestId], { host: hostId }));
   switch (action) {
     case 'whoami':
       return triggerWhoami(host);
     case 'list':
       return triggerList(host, options);
     case 'fire':
-      return triggerFire(host, options, dispatch);
+      return triggerFire(host, options, dispatch, dependencies.env ?? process.env);
     case 'drain':
       return triggerDrain(host, options, dispatch);
     case 'execute':

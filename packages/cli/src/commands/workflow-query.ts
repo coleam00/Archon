@@ -30,7 +30,7 @@ import {
   withRunDetail,
 } from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { type RequestedBy, requestedBy, withRequestedBy } from '../utils/requested-by';
+import { type RequestedBy, requestedBy } from '../utils/requested-by';
 import {
   formatAge,
   getLog,
@@ -568,7 +568,7 @@ export async function workflowGetCommand(
   const origin = await requestedBy(host, run.metadata);
   if (json) {
     return writeWorkflowGetJson(
-      withRequestedBy(run, origin),
+      { ...run, requested_by: origin },
       transcriptPath,
       terminalRecord,
       leaveBehind,
@@ -584,7 +584,7 @@ export async function workflowGetCommand(
 }
 
 async function writeWorkflowGetJson(
-  run: WorkflowRun & { requested_by?: RequestedBy },
+  run: WorkflowRun & { requested_by: RequestedBy },
   transcriptPath: string | null,
   terminalRecord: ReturnType<typeof getTerminalRecord>,
   leaveBehind: LeaveBehind | undefined,

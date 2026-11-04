@@ -30,14 +30,6 @@ export async function requestedBy(
   }
 }
 
-/** A run's JSON view, with `requested_by` when another run asked for its start. */
-export function withRequestedBy<Run extends object>(
-  run: Run,
-  origin: RequestedBy
-): Run & { requested_by?: RequestedBy } {
-  return origin ? { ...run, requested_by: origin } : run;
-}
-
 /** Print the plain-view line naming the requesting run, when there is one. */
 export function printRequestedBy(origin: RequestedBy | undefined): void {
   if (!origin) return;

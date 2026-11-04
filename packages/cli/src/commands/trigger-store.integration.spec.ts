@@ -544,7 +544,7 @@ test('receipt preparation and real engine execution use supplied ports without S
         schedule: { intervalSeconds: 60, runAtLoad: false },
       })
     );
-    await triggerCommand(host, 'fire', [], { config: configPath });
+    await triggerCommand(host, 'fire', [], { config: configPath }, { env: NO_RUN });
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\nexecuted\nexecuted\n');
     expect(accesses).toBe(0);
   } finally {
@@ -726,6 +726,8 @@ async function fireFixture(fileStore = false): Promise<{
 }
 
 const noDispatch = async (): Promise<void> => {};
+/** An environment with no calling node, whatever the shell running the tests exports. */
+const NO_RUN: NodeJS.ProcessEnv = {};
 
 test('fire reports why preparation refused while the receipt keeps only the stage', async () => {
   const { host, configPath, inputsPath, restore } = await fireFixture();
@@ -736,7 +738,7 @@ test('fire reports why preparation refused while the receipt keeps only the stag
       'fire',
       [],
       { config: configPath, inputs: inputsPath },
-      noDispatch
+      { dispatch: noDispatch, env: NO_RUN }
     ).then(
       () => undefined,
       (error: unknown) => error as Error
@@ -768,7 +770,7 @@ test('fire redacts credential values from the refusal it prints', async () => {
       'fire',
       [],
       { config: configPath, inputs: inputsPath },
-      noDispatch
+      { dispatch: noDispatch, env: NO_RUN }
     ).then(
       () => undefined,
       (error: unknown) => error as Error
@@ -816,7 +818,13 @@ test("fire does not blame its receipt for another binding's preparation failure"
   }) as typeof process.stdout.write);
   try {
     // The fired binding prepares and admits; only the other one fails.
-    await triggerCommand(host, 'fire', [], { config: configPath }, noDispatch);
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath },
+      { dispatch: noDispatch, env: NO_RUN }
+    );
     const written = stderr.mock.calls.map(call => String(call[0])).join('');
     expect(written).toContain("cannot pass event-mapped input 'order_id'");
     const receipts = await host.deps.store.listStartReceipts(10);
@@ -855,7 +863,13 @@ test.each([true, false])(
       return true;
     }) as typeof process.stdout.write);
     try {
-      await triggerCommand(host, 'fire', [], { config: configPath }, noDispatch);
+      await triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        { dispatch: noDispatch, env: NO_RUN }
+      );
       const [older] = await store.listStartReceipts(10);
       if (!older) throw new Error('Expected older receipt');
       const [request] = await store.listQueuedResourceStartsForHost('host');
@@ -878,9 +892,18 @@ test.each([true, false])(
       await writeFile(configPath, JSON.stringify(config));
       stdout.mockClear();
       const started: string[] = [];
-      await triggerCommand(host, 'fire', [], { config: configPath }, async requestId => {
-        started.push(requestId);
-      });
+      await triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        {
+          dispatch: async requestId => {
+            started.push(requestId);
+          },
+          env: NO_RUN,
+        }
+      );
       expect(started).toHaveLength(1);
       expect(await store.getWorkflowRun(started[0]!)).toMatchObject({ status: 'pending' });
       const output = stdout.mock.calls
@@ -893,9 +916,9 @@ test.each([true, false])(
       expect(stderr.mock.calls.map(call => String(call[0])).join('')).toContain(
         `Queued request '${request.id}' is invalid`
       );
-      await expect(triggerCommand(host, 'drain', [], { host: 'host' }, noDispatch)).rejects.toThrow(
-        'resource start operation'
-      );
+      await expect(
+        triggerCommand(host, 'drain', [], { host: 'host' }, { dispatch: noDispatch })
+      ).rejects.toThrow('resource start operation');
     } finally {
       stderr.mockRestore();
       stdout.mockRestore();
@@ -973,7 +996,13 @@ test('keyed replays fail for every receipt queued on a resource whose drain fail
   try {
     const deliveries = ['first', 'second'];
     for (const deliveryId of deliveries)
-      await triggerCommand(host, 'fire', [], { config: configPath, deliveryId }, noDispatch);
+      await triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath, deliveryId },
+        { dispatch: noDispatch, env: NO_RUN }
+      );
     const queued = await store.listQueuedResourceStartsForHost('host');
     expect(queued).toHaveLength(2);
     const receipts = await store.listStartReceipts(10);
@@ -990,7 +1019,13 @@ test('keyed replays fail for every receipt queued on a resource whose drain fail
     stdout.mockClear();
     for (const deliveryId of deliveries)
       await expect(
-        triggerCommand(host, 'fire', [], { config: configPath, deliveryId }, noDispatch)
+        triggerCommand(
+          host,
+          'fire',
+          [],
+          { config: configPath, deliveryId },
+          { dispatch: noDispatch, env: NO_RUN }
+        )
       ).rejects.toThrow("Resource 'portable' drain failed");
     const failure = await drainResourceStartHost({
       ...host,
@@ -1213,10 +1248,10 @@ test('a fire from inside a run records that run, and the started run and its req
     workflow_name: 'requester',
     user_message: '',
   });
-  const env = {
-    WORKFLOW_ID: process.env.WORKFLOW_ID,
-    ARCHON_NODE_EXECUTION: process.env.ARCHON_NODE_EXECUTION,
-  };
+  const node = (runId: string): NodeJS.ProcessEnv => ({
+    WORKFLOW_ID: runId,
+    ARCHON_NODE_EXECUTION: JSON.stringify({ runId, path: 'follow-up' }),
+  });
   const output: string[] = [];
   const stdout = spyOn(process.stdout, 'write').mockImplementation(((
     chunk: unknown,
@@ -1228,19 +1263,24 @@ test('a fire from inside a run records that run, and the started run and its req
   }) as typeof process.stdout.write);
   try {
     // A node identity the store does not know is refused before any receipt is written.
-    process.env.WORKFLOW_ID = randomUUID();
-    process.env.ARCHON_NODE_EXECUTION = JSON.stringify({
-      runId: process.env.WORKFLOW_ID,
-      path: 'follow-up',
-    });
     await expect(
-      triggerCommand(host, 'fire', [], { config: configPath }, noDispatch)
+      triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        { dispatch: noDispatch, env: node(randomUUID()) }
+      )
     ).rejects.toThrow('does not know WORKFLOW_ID');
     expect(await host.deps.store.listStartReceipts(10)).toEqual([]);
 
-    process.env.WORKFLOW_ID = requester.id;
-    process.env.ARCHON_NODE_EXECUTION = JSON.stringify({ runId: requester.id, path: 'follow-up' });
-    await triggerCommand(host, 'fire', [], { config: configPath }, noDispatch);
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath },
+      { dispatch: noDispatch, env: node(requester.id) }
+    );
     const [receipt] = await host.deps.store.listStartReceipts(10);
     const stored = await host.deps.store.getStartReceipt(receipt.id);
     expect(stored?.sourceActor).toEqual({
@@ -1263,9 +1303,6 @@ test('a fire from inside a run records that run, and the started run and its req
     });
   } finally {
     stdout.mockRestore();
-    for (const [key, value] of Object.entries(env))
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
     restore();
   }
 });
