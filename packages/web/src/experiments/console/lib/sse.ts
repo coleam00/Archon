@@ -242,6 +242,10 @@ export function useConversationSSE(
           scheduleFlush();
           break;
         case 'conversation_lock':
+          // The server persists the assistant reply right before releasing the
+          // lock, so text events earlier in the turn refetch an empty history.
+          // Refetch once more on unlock or the reply stays hidden.
+          if (ev.locked === false) invalidate(K.messages(conversationPlatformId));
           if (typeof ev.locked === 'boolean') onLockChange?.(ev.locked);
           break;
         // No run-detail cache here; ignore workflow_* and everything else.
