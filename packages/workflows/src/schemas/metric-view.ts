@@ -34,9 +34,11 @@ const ratioViewSchema = z.strictObject({
   denominator_label: labelSchema,
   calibration: z
     .strictObject({
-      /** A score metric whose records calibrate the numerator, read as a catch rate. */
+      /**
+       * A score metric that calibrates the numerator with one record per labelled case,
+       * scored 1 when caught and 0 when missed; shown as "<label> 9 of 10".
+       */
       metric: metricNameSchema,
-      /** Precedes the rate: "<label> 1 in K". */
       label: labelSchema,
       /** The card marks its share rough while the calibration is below this. */
       rough_below: z.number().gt(0).max(1),
