@@ -7,6 +7,8 @@ import type { WorkflowPack } from './schemas/pack-settings';
 import { sandboxSettingsSchema } from './schemas/dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { validateInlineExecInputs } from './exec-input-validation';
+import { isIncludeDirective, isLoopGroupNode } from './schemas';
+import { PACK_DIR_REFERENCE } from './workflow-variables';
 import { getLog } from './loader/log';
 import {
   validateLoopGroupProseCompletion,
@@ -402,6 +404,10 @@ function workflowContractError(
     ]);
     if (collision !== null) return `${collision} (workflow inputs and pack settings)`;
   }
+  const packDirInclude = includePassingPackDir(workflow.nodes);
+  if (packDirInclude !== undefined) {
+    return `Node '${packDirInclude}' passes $PACK_DIR through 'with:'. An included block resolves its text in its own pack, so the value would name the block's pack, not this file's. Reference $PACK_DIR inside the block instead.`;
+  }
   const execInputValidation = validateInlineExecInputs(workflow, configuredEnvNames);
   parseWarnings.push(...execInputValidation.warnings);
   if (execInputValidation.errors.length > 0) return execInputValidation.errors.join(' ');
@@ -430,4 +436,24 @@ function yamlParseFailure(filename: string, err: Error): ParseResult {
       errorType: 'parse_error',
     },
   };
+}
+
+/**
+ * The id of an `include:` node whose `with:` passes `$PACK_DIR`. The value is spliced into
+ * the block and resolved in the block's pack at run time, so it would silently name the
+ * wrong pack; refusing it keeps "text resolves in the pack of the file that wrote it".
+ */
+function includePassingPackDir(nodes: WorkflowDefinition['nodes']): string | undefined {
+  for (const node of nodes) {
+    if (isIncludeDirective(node)) {
+      const passes = Object.values(node.with ?? {}).some(
+        value => typeof value === 'string' && PACK_DIR_REFERENCE.test(value)
+      );
+      if (passes) return node.id;
+    } else if (isLoopGroupNode(node)) {
+      const nested = includePassingPackDir(node.loop_group.nodes);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
 }

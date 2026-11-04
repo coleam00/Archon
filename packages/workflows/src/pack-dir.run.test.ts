@@ -203,6 +203,85 @@ nodes:
     expect(text('blk__ask')).toBe(`Read ${packRoot('beta')}`);
   });
 
+  it('keeps each node on its own pack through nested includes and loop bodies', async () => {
+    await writePackWorkflow(
+      'gamma',
+      'gamma-block',
+      'name: gamma-block\ndescription: d\nnodes:\n  - id: read\n    bash: cat "$PACK_DIR/.shared/doc.md"\n'
+    );
+    await writePackWorkflow(
+      'beta',
+      'beta-block',
+      `
+name: beta-block
+description: a loop body and a nested include
+nodes:
+  - id: loop
+    loop_group:
+      max_iterations: 1
+      until_bash: "true"
+      nodes:
+        - id: body
+          bash: cat "$PACK_DIR/.shared/doc.md"
+  - id: nested
+    include: gamma-block
+`
+    );
+    // A block outside any pack: its command file has no pack to read.
+    await mkdir(join(cwd, '.archon', 'commands'), { recursive: true });
+    await writeFile(join(cwd, '.archon', 'commands', 'flat-read.md'), 'Read $PACK_DIR/x');
+    await writeFile(
+      join(cwd, '.archon', 'workflows', 'flat-block.yaml'),
+      'name: flat-block\ndescription: d\nnodes:\n  - id: ask\n    command: flat-read\n'
+    );
+    await writePackWorkflow(
+      'alpha',
+      'host',
+      'name: host\ndescription: d\nnodes:\n  - id: blk\n    include: beta-block\n  - id: flat\n    include: flat-block\n'
+    );
+
+    const store = new InMemoryStore();
+    const { deps } = recordingDeps(store);
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      await discover('host'),
+      'goal',
+      { conversationId: 'conv-db' },
+      { baseBranch: 'main' }
+    );
+
+    expect(nodeOutput(store, 'blk__loop.body')).toBe('doc of beta');
+    expect(nodeOutput(store, 'blk__nested__read')).toBe('doc of gamma');
+    const failed = store.events.find(
+      e => e.event_type === 'node_failed' && e.step_name === 'flat__ask'
+    );
+    expect(String(failed?.data?.error)).toContain('not loaded from a pack');
+  });
+
+  it("refuses $PACK_DIR passed through an include's with:, which the block would resolve in its own pack", async () => {
+    await writePackWorkflow(
+      'beta',
+      'beta-block',
+      'name: beta-block\ndescription: d\ninputs:\n  doc: {}\nnodes:\n  - id: read\n    bash: cat "$INPUTS.doc"\n'
+    );
+    await writePackWorkflow(
+      'alpha',
+      'host',
+      'name: host\ndescription: d\nnodes:\n  - id: blk\n    include: beta-block\n    with: { doc: "$PACK_DIR/.shared/doc.md" }\n'
+    );
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
+    expect(result.workflows.find(w => w.workflow.name === 'host')).toBeUndefined();
+    expect(result.errors.find(e => e.filename.includes('host'))?.error).toContain(
+      "Node 'blk' passes $PACK_DIR through 'with:'"
+    );
+  });
+
   it('fails the load of a workflow that is not in a pack, naming the node', async () => {
     await writeFile(
       join(cwd, '.archon', 'workflows', 'flat.yaml'),

@@ -224,10 +224,19 @@ describe('substituteWorkflowVariables', () => {
         { shellSafe: true }
       );
     expect(substitute).toThrow(/not loaded from a pack/);
-    await runWithPackDir(undefined, async () => {
+    await runWithPackDir({ kind: 'none' }, async () => {
       expect(substitute).toThrow(/not loaded from a pack/);
     });
-    await runWithPackDir('/packs/alpha', async () => {
+    // A pack the run's source does not hold is a broken source, not a workflow outside a pack.
+    await runWithPackDir(
+      { kind: 'unlocated', pack: { source: 'installed', key: 'acme.kit' } },
+      async () => {
+        expect(substitute).toThrow(
+          "pack 'acme.kit' (installed) is not in this run's workflow source"
+        );
+      }
+    );
+    await runWithPackDir({ kind: 'dir', dir: '/packs/alpha' }, async () => {
       expect(substitute()).toEqual({ prompt: 'cat /packs/alpha/x', contextSubstituted: false });
     });
   });

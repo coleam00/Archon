@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { packDirOrThrow, type PackDirScope } from './pack-dir';
 import { createLogger } from '@archon/paths';
 import {
   USER_CONTROLLED_VARIABLES,
@@ -46,13 +47,14 @@ export function currentAdoptedRunDir(): string | undefined {
  * the same reason, but entered per node at dispatch (`nodePackDir`), so an included
  * block reads its own pack, never its includer's. `undefined` is a node outside any pack.
  */
-const packDirContext = new AsyncLocalStorage<string | undefined>();
+const packDirContext = new AsyncLocalStorage<PackDirScope>();
 
-export function runWithPackDir<T>(packDir: string | undefined, fn: () => Promise<T>): Promise<T> {
-  return packDirContext.run(packDir, fn);
+export function runWithPackDir<T>(scope: PackDirScope, fn: () => Promise<T>): Promise<T> {
+  return packDirContext.run(scope, fn);
 }
 
-export function currentPackDir(): string | undefined {
+/** The executing node's `$PACK_DIR` scope; undefined outside node dispatch. */
+export function currentPackDir(): PackDirScope | undefined {
   return packDirContext.getStore();
 }
 
@@ -175,20 +177,9 @@ export function substituteWorkflowVariables(
       }
       return options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '';
     }),
-    // Engine-controlled like $ARTIFACTS_DIR, so substituted under shellSafe too. A
-    // workflow outside a pack has no pack directory; an empty path would point a read at
-    // the checkout instead.
-    variable('PACK_DIR', () => {
-      const packDir = currentPackDir();
-      if (packDir === undefined) {
-        throw new Error(
-          "$PACK_DIR is referenced but this node's workflow was not loaded from a pack. " +
-            '$PACK_DIR names the pack folder of a packaged workflow ' +
-            '(.archon/workflows/<pack>/<workflow>/).'
-        );
-      }
-      return packDir;
-    }),
+    // Engine-controlled like $ARTIFACTS_DIR, so substituted under shellSafe too. A node
+    // with no pack directory fails: an empty path would point a read at the checkout.
+    variable('PACK_DIR', () => packDirOrThrow(currentPackDir())),
     // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
     // script, agent prompt, loop attempt), and to exec subprocesses as TYPED_ARTIFACTS_FILE.
     // A context that never supplied one must fail loudly: substituting '' would read as

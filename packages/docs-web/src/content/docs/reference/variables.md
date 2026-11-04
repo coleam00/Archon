@@ -146,7 +146,12 @@ Each node reads the pack of the workflow file that authored it. A node inside an
 a block that is not in a pack has no `$PACK_DIR`. Referencing it from a workflow outside
 a pack is a load error for the workflow's own YAML; a command file that references it in
 such a workflow fails the node instead of reading an empty path. In a `bash:` or
-`script:` node of such a workflow, the `PACK_DIR` environment variable is empty.
+`script:` node of such a workflow, the `PACK_DIR` environment variable is empty. A pack
+the run's source does not hold fails the node with its own error.
+
+An `include:` node cannot pass `$PACK_DIR` through `with:`: the block resolves its text
+in its own pack, so the value would name the block's pack instead of the includer's. The
+load fails naming the include; reference `$PACK_DIR` inside the block instead.
 
 ## Positional Arguments (not supported)
 
