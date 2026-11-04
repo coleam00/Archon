@@ -254,15 +254,10 @@ nodes:
     depends_on: [scope, route, seams, code, tests, errors, docs]
     trigger_rule: all_done
     when: "$scope.output.head_matches == true"
+    # One recorded state per lens; lens-outcomes.ts owns the lens names.
     output_format:
       type: object
-      properties:
-        seams: { type: string }
-        code: { type: string }
-        tests: { type: string }
-        errors: { type: string }
-        docs: { type: string }
-      required: [seams, code, tests, errors, docs]
+      additionalProperties: { type: string }
 
   # A failed specialist (a provider stream dying mid-review, say) must not kill
   # the review: synthesize detects the missing completion for a selected lens and
