@@ -346,7 +346,7 @@ async function readRepoConfig(configPath: string): Promise<RepoConfig> {
  *
  * Every other failure throws, naming the file: an unreadable file, invalid
  * YAML, a top level that is not a mapping, or a refused `workflows`, `tiers`,
- * `aliases`, `assistants.*` or `worktree.postCreate` value.
+ * `aliases`, `assistants.*`, `worktree.postCreate` or `env` value.
  */
 export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
   const configPath = join(repoPath, '.archon', 'config.yaml');
@@ -356,6 +356,10 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new InvalidConfigError('Invalid worktree config', configPath, detail, { cause: error });
+  }
+  // A list or scalar would spread into envVars as keys '0', '1', ...
+  if (parsed.env !== undefined && !isConfigRecord(parsed.env)) {
+    throw new InvalidConfigError('Invalid env config', configPath, 'env must be a map of names');
   }
   validateAssistantDefaults(parsed, configPath);
   return parsed;

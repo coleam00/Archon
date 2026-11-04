@@ -1919,7 +1919,7 @@ archon project list --json   # { "projects": [ { ...project row, "key" } ] }
 
 ### `project config`
 
-`archon project config <id|name>` shows one registered project's merged config: defaults, `~/.archon/config.yaml` and the project's own `.archon/config.yaml`, in that order of precedence. It prints the view `GET /api/codebases/{id}/config` serves, plus a `project` field with the matched project's ID and name. Secrets are removed: assistant settings are limited to their safe fields, paths are left out, and `envKeys` lists the keys of the project's `env:` block without their values. The command writes nothing, not even a missing `~/.archon/config.yaml`, and needs no server.
+`archon project config <id|name>` shows one registered project's merged config: defaults, `~/.archon/config.yaml` and the project's own `.archon/config.yaml`, in that order of precedence. It prints the view `GET /api/codebases/{id}/config` serves, plus a `project` field with the matched project's ID and name. Secrets are removed: assistant settings are limited to their safe fields, paths are left out, and `envKeys` lists the keys of the project's `env:` block without their values. The command writes no config file, not even a missing `~/.archon/config.yaml`, and needs no server. Like every CLI command, it opens the project store, so on a fresh install it creates `~/.archon/archon.db`.
 
 ```bash
 archon project config acme/widget          # YAML

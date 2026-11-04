@@ -90,7 +90,10 @@ export const projectConfigResponseSchema = z
   .object({
     config: safeConfigSchema,
     envKeys: z.array(z.string()),
-  } satisfies Record<keyof SafeProjectConfig, z.ZodType>)
+  } satisfies {
+    config: typeof safeConfigSchema;
+    envKeys: z.ZodType<SafeProjectConfig['envKeys']>;
+  })
   .openapi('ProjectConfigResponse');
 
 /** @deprecated Use configResponseSchema instead. */

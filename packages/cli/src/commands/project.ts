@@ -59,7 +59,8 @@ export async function projectListCommand(
  * `archon project config <id|name>`: one registered project's merged config, its
  * own `.archon/config.yaml` included: the view `GET /api/codebases/{id}/config`
  * serves, plus a `project` field naming the match. Env values are never printed,
- * only their keys. Writes nothing, not even a missing global config.
+ * only their keys. Writes no config file, not even a missing global config; like
+ * every CLI command it opens the project store, which a fresh install creates.
  */
 export async function projectConfigCommand(
   codebases: Pick<IWorkflowHostStore['codebases'], 'listCodebaseClaims' | 'getCodebase'>,
