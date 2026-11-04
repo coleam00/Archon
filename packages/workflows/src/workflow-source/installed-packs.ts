@@ -9,6 +9,7 @@ import {
 } from '@archon/plugin-manifest';
 import { packTreePath, scanReceipts } from '@archon/plugin-manifest/store';
 import type { WorkflowResourceOwner } from '../packaged-workflow';
+import type { WorkflowSource } from '../schemas/workflow';
 import { INSTALLED_SCOPE_DIR, type InstalledPacksRoot, type WorkflowSourceRoots } from './roots';
 
 /** Where an installed pack came from, as its receipt recorded it. */
@@ -182,24 +183,34 @@ export async function packagedWorkflowDirectory(
   roots: WorkflowSourceRoots,
   owner: WorkflowResourceOwner
 ): Promise<string | null> {
-  switch (owner.source) {
+  const packDir = await packDirectory(roots, { source: owner.source, key: owner.pack });
+  return packDir === null ? null : join(packDir, owner.workflow);
+}
+
+/**
+ * The directory of one pack under `roots`, or null when its scope has no source here.
+ * `key` is the pack's folder name in a project, home or bundled scope, and the installed
+ * pack's key (`<owner>.<name>`) in the installed scope.
+ */
+export async function packDirectory(
+  roots: WorkflowSourceRoots,
+  pack: { source: WorkflowSource; key: string }
+): Promise<string | null> {
+  switch (pack.source) {
     case 'project':
-      return roots.project === null
-        ? null
-        : join(roots.project, '.archon', 'workflows', owner.pack, owner.workflow);
+      return roots.project === null ? null : join(roots.project, '.archon', 'workflows', pack.key);
     case 'global':
-      return join(roots.globalWorkflows, owner.pack, owner.workflow);
+      return join(roots.globalWorkflows, pack.key);
     case 'bundled':
-      return join(roots.bundledWorkflows, owner.pack, owner.workflow);
+      return join(roots.bundledWorkflows, pack.key);
     case 'installed': {
       const { packs, errors } = await listInstalledPacks(roots.installed);
       if (roots.installed.kind === 'captured') {
-        const packPath = join(roots.installed.captureRoot, INSTALLED_SCOPE_DIR, owner.pack);
+        const packPath = join(roots.installed.captureRoot, INSTALLED_SCOPE_DIR, pack.key);
         const failure = errors.find(error => error.path === packPath);
         if (failure) throw failure.cause ?? new Error(failure.message);
       }
-      const pack = packs.find(p => p.key === owner.pack);
-      return pack ? join(pack.dir, owner.workflow) : null;
+      return packs.find(p => p.key === pack.key)?.dir ?? null;
     }
   }
 }

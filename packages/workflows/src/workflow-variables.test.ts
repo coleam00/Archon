@@ -19,7 +19,11 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { substituteWorkflowVariables, buildPromptWithContext } from './workflow-variables';
+import {
+  substituteWorkflowVariables,
+  buildPromptWithContext,
+  runWithPackDir,
+} from './workflow-variables';
 import { buildExecNodeEnvironment, EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
 import {
   USER_CONTROLLED_VARIABLES,
@@ -87,6 +91,7 @@ describe('user-controlled runtime variable delivery', () => {
         STATE_DIR: '/state',
         LOG_DIR: '/logs',
         ADOPTED_RUN_DIR: '',
+        PACK_DIR: '',
         WORKFLOW_ID: 'run-1',
         BASE_BRANCH: 'dev',
         USER_MESSAGE: value('message'),
@@ -199,6 +204,32 @@ describe('substituteWorkflowVariables', () => {
       { adoptedRunDir: '/root/artifacts/runs/run-1' }
     );
     expect(prompt).toBe('Read /root/artifacts/runs/run-1/report.md');
+  });
+
+  // A node outside a pack has no $PACK_DIR. An empty value would point a read at the
+  // checkout, so the reference fails instead, in a shell body as in a prompt.
+  it('throws when $PACK_DIR is referenced outside a pack', async () => {
+    const substitute = (): unknown =>
+      substituteWorkflowVariables(
+        'cat $PACK_DIR/x',
+        'run-2',
+        'msg',
+        '/a',
+        'main',
+        'docs/',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { shellSafe: true }
+      );
+    expect(substitute).toThrow(/not loaded from a pack/);
+    await runWithPackDir(undefined, async () => {
+      expect(substitute).toThrow(/not loaded from a pack/);
+    });
+    await runWithPackDir('/packs/alpha', async () => {
+      expect(substitute()).toEqual({ prompt: 'cat /packs/alpha/x', contextSubstituted: false });
+    });
   });
 
   it('throws when $ADOPTED_RUN_DIR is referenced without an adoption active', () => {

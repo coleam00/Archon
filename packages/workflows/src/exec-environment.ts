@@ -1,5 +1,6 @@
 import type { NodeExecutionMetadata } from './schemas/node-execution';
 import { USER_CONTROLLED_VARIABLES } from './user-controlled-variables';
+import { currentPackDir } from './workflow-variables';
 
 /** The part of a node's execution record its own process may read. */
 export type NodeExecutionIdentity = Pick<
@@ -46,6 +47,9 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
     STATE_DIR: context.stateDir,
     LOG_DIR: context.logDir,
     ADOPTED_RUN_DIR: context.adoptedRunDir ?? '',
+    // Read from the dispatch scope rather than passed by each caller, so no exec path can
+    // forget it. Empty for a workflow outside a pack, as ADOPTED_RUN_DIR is without one.
+    PACK_DIR: currentPackDir() ?? '',
     // $WORKFLOW_ID substitutes into the body, but a heredoc'd python/node block
     // reads os.environ and found it missing while its siblings above were all
     // present. Deliver it the same way.
