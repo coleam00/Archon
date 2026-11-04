@@ -303,6 +303,23 @@ describe('substituteWorkflowVariables', () => {
     ).toThrow(/has no typed-artifact listing/);
   });
 
+  it("replaces $NODE_OUTCOMES_FILE with this invocation's listing", () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read $NODE_OUTCOMES_FILE',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { nodeOutcomesFile: '/tmp/artifacts/.archon/node-outcomes/o.json' }
+    );
+    expect(prompt).toBe('Read /tmp/artifacts/.archon/node-outcomes/o.json');
+  });
+
   it('throws when $NODE_OUTCOMES_FILE is referenced without a materialized listing', () => {
     expect(() =>
       substituteWorkflowVariables(

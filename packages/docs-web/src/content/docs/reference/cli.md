@@ -760,8 +760,8 @@ filesystem when you query it.
 `leave_behind.artifactFiles` lists the files a person or an agent would open, capped at
 200 for display. Each directory contributes its own files before its subdirectories,
 sorted by name, so a run's top-level reports lead the list. It excludes the engine's
-own `$ARTIFACTS_DIR/.archon/` child: the typed-artifact listings and node-output
-spills the engine writes for itself, which on a long run outnumber the reports.
+own `$ARTIFACTS_DIR/.archon/` child: the typed-artifact and node-outcome listings and
+node-output spills the engine writes for itself, which on a long run outnumber the reports.
 Nothing leaves the list quietly: `leave_behind.artifactFilesOmitted` reports how many
 engine-internal files were skipped (`internalFiles`), whether the display cap was
 reached (`truncated`), and any directory the walk could not read (`unreadable`). Human

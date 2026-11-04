@@ -201,11 +201,13 @@ export function buildNodeOutcomes(
   const { nodes, outputs, failureOrder } = foldNodeEvents(run, events, nodeInvocationKey);
   const outcomes = [...nodes].map(([key, state]): NodeOutcome => {
     const { loopPath } = parseNodeInvocationKey(key);
+    // The fold keeps output only for a completed entry and drops it on every later
+    // state, so a failed, running or reset node never lists one.
     const data = outputs.get(key);
     return {
       ...state,
       ...(loopPath.length > 0 ? { loop_group_path: loopPath } : {}),
-      ...(state.state === 'completed' && data && Object.hasOwn(data, 'structured_output')
+      ...(data && Object.hasOwn(data, 'structured_output')
         ? { output: data.structured_output }
         : {}),
     };

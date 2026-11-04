@@ -94,7 +94,7 @@ describe('executeDagWorkflow -- node outcomes listing', () => {
       reason: 'trigger_rule',
       cause: { kind: 'upstream_failed', origin: 'broken' },
     });
-    // The reader sees itself mid-flight.
+    // A bash node records its start before its listing is written, so it sees itself running.
     expect(byId.get('report')?.state).toBe('running');
   });
 
@@ -121,8 +121,9 @@ describe('executeDagWorkflow -- node outcomes listing', () => {
                     id: 'work',
                     kind: 'exec',
                     runtime: 'sh',
-                    // Completes in iteration 1, fails in iteration 2.
-                    script: `n=$(cat "${counterFile}" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${counterFile}"; [ $n -lt 2 ] || exit 4; echo "{\\"n\\":$n}"`,
+                    // Keeps the listing each iteration saw, then completes in
+                    // iteration 1 and fails in iteration 2.
+                    script: `n=$(cat "${counterFile}" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${counterFile}"; cp "\${NODE_OUTCOMES_FILE}" "$ARTIFACTS_DIR/iteration-$n.json"; [ $n -lt 2 ] || exit 4; echo "{\\"n\\":$n}"`,
                     output_format: {
                       type: 'object',
                       properties: { n: { type: 'number' } },
@@ -158,6 +159,24 @@ describe('executeDagWorkflow -- node outcomes listing', () => {
       }),
     ]);
     expect(listing.nodes.find(entry => entry.node_id === 'rounds')?.state).toBe('failed');
+
+    // Iteration 2 already sees iteration 1's completed entry beside its own.
+    const second = nodeOutcomesListingSchema.parse(
+      JSON.parse(await readFile(join(testDir, 'artifacts', 'iteration-2.json'), 'utf8'))
+    );
+    expect(second.nodes.filter(entry => entry.node_id === 'rounds.work')).toEqual([
+      {
+        node_id: 'rounds.work',
+        state: 'completed',
+        loop_group_path: [{ groupId: 'rounds', iteration: 1 }],
+        output: { n: 1 },
+      },
+      {
+        node_id: 'rounds.work',
+        state: 'running',
+        loop_group_path: [{ groupId: 'rounds', iteration: 2 }],
+      },
+    ]);
     expect(listing.first_failed_node).toBe('rounds.work');
   });
 });

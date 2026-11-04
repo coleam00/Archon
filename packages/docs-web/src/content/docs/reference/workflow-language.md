@@ -1357,22 +1357,36 @@ const failed = outcomes.nodes.filter(node => node.state === 'failed');
 Properties worth knowing:
 
 - **Same per-node shape as the terminal record.** Each entry carries the fields of the
-  terminal record's `nodes` (`node_id`, `state`, `error`, `reason`, `cause`, `fan_out_outcome`)
-  and `first_failed_node` means the same thing, so a node can say during the run what
-  `archon workflow get` says after it. `node_id` is the step path: a `loop_group` body node is
-  `<group>.<id>`, and a node expanded from an `include:` keeps its load-time `<include>__<node>`
-  id, so the publish node of an included `pr` block inside `rounds` is `rounds.pr__publish`.
+  terminal record's `nodes` (`node_id`, `state`, `error`, `reason`, `cause`, `fan_out_outcome`),
+  so a node can say during the run what `archon workflow get` says after it. `node_id` is the
+  step path: a `loop_group` body node is `<group>.<id>`, and a node expanded from an `include:`
+  keeps its load-time `<include>__<node>` id, so the publish node of an included `pr` block
+  inside `rounds` is `rounds.pr__publish`.
+- **Joining with the typed-artifact listing.** A typed artifact names its producer by the bare
+  node id (`nodeId: "pr__publish"`) plus `loopGroupPath`; the outcome entry for the same
+  invocation is `node_id: "rounds.pr__publish"` with an equal `loop_group_path`. Match an
+  artifact to its outcome by equal loop frames and a `node_id` that ends in `.` plus the
+  artifact's `nodeId` (or equals it, for a top-level node). Comparing `nodeId` with `node_id`
+  directly finds nothing for a loop body node.
 - **One entry per invocation.** A `loop_group` body node appears once per iteration, with
   `loop_group_path` in the same shape as a typed artifact's `loopGroupPath`. Graph nodes that
-  have recorded nothing yet are `pending`; the reading node itself is `running`. Top-level
-  nodes keep the run graph's order, loop iterations follow in the order they first recorded a
-  state, and a retry or resume updates an entry in place.
+  have recorded nothing yet are `pending`. Top-level nodes keep the run graph's order, loop
+  iterations follow in the order they first recorded a state, and a retry or resume updates an
+  entry in place.
+- **Find yourself by `node_id`, not by state.** A node's own entry shows what was recorded
+  before its listing was written. A `bash:` node records its start first, so it sees itself
+  `running`. A `script:` node and an agent attempt write the listing first, so they see
+  themselves `pending`, or the state an earlier attempt left.
+- **`first_failed_node` is the earliest failure across all invocations.** It is the step path
+  of the first failure the run recorded, even when a later iteration of the same node
+  completed. To find the failing entry, filter `nodes` by `state === "failed"`.
 - **A failed node's output is never listed.** `output` appears only on a `completed` entry
   whose node produced structured output (`output_format`); a failed entry carries only its
   `error`, under the same rule that fails a binding to a failed producer.
 - **Observation, not a ledger.** Like the typed-artifact listing, each file freezes what was
   recorded when it was written. A resumed run's listing includes nodes replayed from the
-  earlier attempt as `completed`.
+  earlier attempt as `completed`. A `loop_group` body node is never replayed: a resumed group
+  runs its body again, and each run updates the entry for its iteration.
 
 ### Retained subprocess evidence
 
