@@ -36,6 +36,22 @@ inputs:
       The maintainer login a merged item's re-triage is requested as. Set, an issue
       still open after its pull request merged gets archon-triage and an intake run
       with that label event. Empty re-triages nothing.
+  merge_queue_binding:
+    default: ""
+    description: >-
+      The absolute path of the operator's timer-binding config for this repository's
+      merge queue. A maintainer's merge answer fires it with `archon trigger fire`, so
+      the sweep that merges is admitted under that binding's resource, capacity and
+      overlap policy, at most once per answer. Empty starts no follow-up; the next
+      sweep merges it.
+  build_queue_binding:
+    default: ""
+    description: >-
+      The absolute path of the operator's timer-binding config for this repository's
+      build queue. A return answer fires it for the item's next round with
+      `archon trigger fire`, so the round is admitted under that binding's resource,
+      capacity and overlap policy, at most once per decision. Empty starts no
+      follow-up; the next queue run picks the item up.
 
 returns: record
 

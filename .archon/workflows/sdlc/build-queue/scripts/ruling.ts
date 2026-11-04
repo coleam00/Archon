@@ -8,18 +8,17 @@
  * work item as the item's next owner, and the claim is released: `continue` keeps it in
  * the build queue, `ready` hands its pull request to the merge queue, and `park` stops
  * all work until a re-triage. A `continue` then starts the item's next build-queue run
- * at once, on the run config and input selections this run started with; if that
- * launch fails, the item waits for the next queue run as before.
+ * at once through the operator's build-queue binding; if it does not start, the item
+ * waits for the next queue run as before.
  *
  * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE,
- * the chosen choice (the answer's value), and INPUTS_TEXT, the answer's text; INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT,
- * the workflow's inputs.
+ * the chosen choice (the answer's value), and INPUTS_TEXT, the answer's text;
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
-import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, withBuild } from '../../.shared/build.ts';
+import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
@@ -59,10 +58,6 @@ function main(): void {
   if (choice === null) throw new Error(PRE_VALUE_ANSWER);
   const words = trimmed(process.env.INPUTS_TEXT);
   const at = new Date().toISOString();
-  const selections: BuildQueueSelections = {
-    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
-    round_limit: text(process.env.INPUTS_ROUND_LIMIT),
-  };
 
   if (choice.effect === 'ready') requireReadyPr(item, choice.id);
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
@@ -94,7 +89,7 @@ function main(): void {
     })
   );
   const next = {
-    continue: () => launchNextRound(item, runId, selections),
+    continue: () => nextRound(item, runId),
     ready: () => 'its pull request waits for the merge queue',
     park: () => 'the queue stops working it until a re-triage',
   }[choice.effect]();

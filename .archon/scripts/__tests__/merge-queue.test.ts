@@ -1179,7 +1179,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         expect.objectContaining({ answer: expect.objectContaining({ choice: 'other', text: words }) }),
       ]) } },
     });
-    expect(launchOf(calls)).toBeUndefined();
+    // An `other` that parks starts no follow-up.
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('"trigger"');
   }, 60_000);
 
   test.each([
@@ -1281,9 +1282,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }, 60_000);
 
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
-  const SELECTED = { INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge', INPUTS_RETRIAGE_AS: 'maintainer' };
-  const launchOf = (calls: string): string[] | undefined =>
-    readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+  const SELECTED = { INPUTS_MERGE_QUEUE_BINDING: '/bindings/merge-queue.json', INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json' };
+  const fireOf = (calls: string): string[] | undefined =>
+    readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
+  const inputsOf = (fire: string[] | undefined): unknown => JSON.parse(readFileSync(fire?.[fire.indexOf('--inputs') + 1] ?? '', 'utf8'));
 
   test("a maintainer's merge approves the pull request at the head they were asked about", () => {
     const at = install();
@@ -1293,10 +1295,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', approval: { head: HEAD } } } });
     expect(mergeWaits(doc)).toBe(true);
-    // The approval is acted on at once: a sweep starts on the answered run's config and input selections.
-    expect(launchOf(calls)).toEqual(
-      expect.arrayContaining(['archon-merge-queue', 'limit=2', 'merge_method=merge', 'retriage_as=maintainer', '--config-from-run', 'run-1', '--detach'])
-    );
+    // The approval is acted on at once: a sweep starts through the merge queue's binding, once per answer.
+    const fire = fireOf(calls);
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/merge-queue.json', '--delivery-id', 'merge-sweep:ghe.example.com/example/repo#7:run-1']);
+    expect(inputsOf(fire)).toEqual({});
   }, 60_000);
 
   test('a return writes its ruling into the issue body and the build round starts from it', () => {
@@ -1306,10 +1308,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'return'), INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
     const heading = ok(ruled).section as string;
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the merge queue's question on PR 42, \d{4}-\d{2}-\d{2}\)$/);
-    // The returned round starts at once on the build queue's own selections: no merge-queue selection crosses over.
-    const launch = launchOf(calls);
-    expect(launch).toEqual(expect.arrayContaining(['archon-build-queue', 'number=7', '--config-from-run', 'run-1', '--detach']));
-    expect(launch?.filter(arg => /^(limit|merge_method)=/.test(arg))).toEqual([]);
+    // The returned round starts at once through the build queue's binding, for the item.
+    const fire = fireOf(calls);
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-round:ghe.example.com/example/repo#7:run-1']);
+    expect(inputsOf(fire)).toEqual({ number: '7', repo_host: 'ghe.example.com', repo_path: 'example/repo' });
     expect(ruled.bodies).toEqual([`The contract.\n\n\n## ${heading}\n\nKeep the old prompt wording.\n`]);
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });

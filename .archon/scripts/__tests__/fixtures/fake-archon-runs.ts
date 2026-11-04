@@ -1,7 +1,8 @@
 /**
  * The host CLI for queue and discoveries script tests: `workflow runs --json` answers from
- * the rows in `RUN_LISTING`, and `workflow run <name>` acknowledges `launched-<name>`
- * without starting anything (or refuses, exit 1, when `ARCHON_RUN_REFUSES` is set); every
+ * the rows in `RUN_LISTING`, `workflow run <name>` acknowledges `launched-<name>` and
+ * `trigger fire` a receipt whose binding was admitted as run `fired-run`, without
+ * starting anything (either refuses, exit 1, when `ARCHON_RUN_REFUSES` is set); every
  * other command runs the real CLI, whose argv the test passes as a JSON array in
  * `INTAKE_HOST_CLI` (`ARCHON_CLI_COMMAND` names this fake).
  *
@@ -31,6 +32,14 @@ if (argv[0] === 'workflow' && argv[1] === 'runs') {
     process.stderr.write('refused');
     process.exitCode = 1;
   } else process.stdout.write(JSON.stringify({ runId: `launched-${argv[2]}` }));
+} else if (argv[0] === 'trigger' && argv[1] === 'fire') {
+  if (process.env.ARCHON_RUN_REFUSES) {
+    process.stderr.write('refused');
+    process.exitCode = 1;
+  } else {
+    const disposition = { status: 'admitted', requestId: 'fired-run', runId: 'fired-run' };
+    process.stdout.write(JSON.stringify({ bindings: [{ status: 'complete', disposition }] }));
+  }
 } else if (argv[0] === 'state') {
   state();
 } else {
