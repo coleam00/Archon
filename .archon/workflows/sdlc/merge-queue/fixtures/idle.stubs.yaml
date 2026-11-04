@@ -8,7 +8,6 @@ facts:
   items: []
   settled: []
   gate: ""
-  policy_defaults: "/stub/policy"
 record:
   merged: []
   summary: "stub: No pull request waits for the merge queue."

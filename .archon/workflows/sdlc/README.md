@@ -316,14 +316,10 @@ merge queue's sweep names `merge.md`, which pull requests merge on their own.
 Agents interpret
 them; anything that must be exact, such as label names, stays typed configuration.
 
-A node reaches the defaults through a script node of its workflow: its `policy` node,
-or the build or merge queue's `facts`. A run
-captures its source before it starts, from a binary's embedded bundle as from a
-source checkout, and runs its scripts from that capture, so
-[`.shared/policy-defaults.ts`](.shared/policy-defaults.ts) finds `.shared/policy/`
-from its own location and the node binds that directory into the prompt with `with:`. The script hands over
-the directory only; the agent reads the default and the project's file, and no
-script opens either. The default is a file rather than text in the prompt, so a node
+A node's prompt names the defaults as `$PACK_DIR/.shared/policy/`: the engine's
+`$PACK_DIR` is this pack's directory in the run's captured source, the same from a
+binary's embedded bundle as from a source checkout. The agent reads the default and
+the project's file, and no script opens either. The default is a file rather than text in the prompt, so a node
 whose decision names no policy carries none of it.
 
 ## A stage pauses where nothing takes it forward

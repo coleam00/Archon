@@ -9,7 +9,6 @@ facts:
   brief: ""
   rounds: []
   at_cap: false
-  policy_defaults: "/stub/policy"
   pull_request: null
   continues: null
   branch: ""

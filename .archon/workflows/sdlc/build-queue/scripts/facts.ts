@@ -25,7 +25,6 @@ import {
 import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
-import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { claimNext, updateClaimed, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
 
@@ -88,7 +87,6 @@ function emitItem(
     brief: doc?.facts.build?.brief ?? '',
     rounds,
     at_cap: atCap,
-    policy_defaults: POLICY_DEFAULTS,
     ...itemPr,
   });
 }
@@ -117,7 +115,6 @@ function main(): void {
       brief: '',
       rounds: [],
       at_cap: false,
-      policy_defaults: POLICY_DEFAULTS,
       ...NO_ITEM_PR,
     });
     return;
