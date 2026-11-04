@@ -25,7 +25,10 @@ nodes:
             type: object
             properties: {id: {type: string}, label: {type: string}}
             required: [id, label]
-        asked: {type: object}
+        asked:
+          type: object
+          properties: {by: {type: string, enum: [pr, base]}}
+          required: [by]
       required: [attention, options, asked]
   - id: ask
     depends_on: [question]
