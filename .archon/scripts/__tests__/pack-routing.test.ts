@@ -9,6 +9,57 @@ import { PR, PR_URL, forgePrRecord, packScriptRunner } from './deliver-checks-ha
 
 const { runPackScript } = packScriptRunner();
 
+describe("ship's terminal outcome", () => {
+  interface ShipOutcome { delivered: boolean; reason: string; pr_url: string; summary: string }
+  const outcome = (inputs: Record<string, string>): ShipOutcome => {
+    const run = runPackScript('ship/scripts/outcome', {
+      inputs: {
+        INPUTS_ROUTE: 'no_action',
+        INPUTS_CONTRACT: 'NO_ACTION',
+        INPUTS_BLOCKED_REASON: '',
+        INPUTS_SUMMARY: 'triage summary',
+        INPUTS_INV_VERDICT: 'null',
+        INPUTS_INV_SUMMARY: 'null',
+        INPUTS_PLAN_SUMMARY: 'null',
+        INPUTS_OPEN_QUESTIONS: 'null',
+        INPUTS_DELIVERED: 'null',
+        INPUTS_DELIVERY: 'null',
+        INPUTS_DELIVERY_REASON: 'null',
+        INPUTS_PR_URL: 'null',
+        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
+        ...inputs,
+      },
+      artifacts: { 'listing.json': JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }) },
+    });
+    expect(run.code, run.stderr).toBe(0);
+    return JSON.parse(run.stdout) as ShipOutcome;
+  };
+
+  it('reports a refuted investigation as not delivered, with its summary', () => {
+    const result = outcome({
+      INPUTS_ROUTE: 'investigate',
+      INPUTS_CONTRACT: 'READY',
+      INPUTS_INV_VERDICT: 'refuted',
+      INPUTS_INV_SUMMARY: 'the cause is owned upstream in the provider SDK',
+    });
+    expect(result.delivered).toBe(false);
+    expect(result.summary).toContain('the cause is owned upstream in the provider SDK');
+  });
+
+  it("reports a deliver round that ended not ready as not delivered, with its reason and pull request", () => {
+    expect(
+      outcome({
+        INPUTS_ROUTE: 'deliver',
+        INPUTS_CONTRACT: 'READY',
+        INPUTS_PR_URL: PR_URL,
+        INPUTS_DELIVERED: 'false',
+        INPUTS_DELIVERY: 'Not ready, red: lint',
+        INPUTS_DELIVERY_REASON: 'ci_other',
+      })
+    ).toEqual({ delivered: false, reason: 'ci_other', pr_url: PR_URL, summary: 'Not ready, red: lint' });
+  });
+});
+
 describe("deliver's report after a node failure", () => {
   const failedReport = (listing: object, artifacts: Record<string, string> = {}): { reason: string; pr_url: string } =>
     JSON.parse(

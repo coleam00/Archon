@@ -223,4 +223,17 @@ describe("deliver's review threads on the forge source", () => {
     expect(JSON.parse(result.forgeRequests[2] ?? '{}')).toMatchObject({ thread: 'T1', body: reply });
     expect(JSON.parse(result.forgeRequests[3] ?? '{}')).toMatchObject({ thread: 'T1' });
   });
+
+  it('lists an open thread and puts a ready pull request back to draft through the forge', () => {
+    const result = runPackScript('deliver/scripts/threads', {
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        response: [view(false), threads(false), forgeOperation('pr.draft', { pr: forgePrRecord({ is_draft: true }) })],
+      },
+      inputs: { INPUTS_ANSWERS: 'null' },
+    });
+    expect(ok(result).open).toBe(1);
+    expect(result.forge.map(argv => argv.split(' ')[1])).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
+  });
 });

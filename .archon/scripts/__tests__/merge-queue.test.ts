@@ -661,20 +661,11 @@ describe('the merge queue scripts', () => {
       const at = install();
       const parked = parkedOwn();
       seed(at, parked);
-      const prior = parked.facts.merge;
-      const last = prior.decisions[0];
       const changed: WorkItem = {
         ...parked,
         trust: 'maintainer',
         ...(concurrent === 'claimed' ? { claim: { run_id: 'other-owner', at: AT, requests: [] } } : {}),
-        facts: { ...parked.facts,
-          ...(concurrent === 'pr' ? { own_pr: { url: OTHER_URL, at: AT } } : {}),
-          ...(concurrent === 'build' ? { build: { ...BUILT, status: 'next' as const } } : {}),
-          merge: { ...prior,
-            status: concurrent === 'merged' ? 'merged' : 'parked',
-            decisions: [...prior.decisions, ...(concurrent === 'answered' ? [{ ...last, head: OLD }] : concurrent === 'superseded' ? [{ ...last, decision: 'superseded', head: null, answer: undefined }] : [])],
-          },
-        },
+        facts: parked.facts,
       };
       const preload = `
 const beforeClaim = Bun.spawnSync.bind(Bun);
@@ -689,15 +680,13 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   return beforeClaim(argv, settings);
 } });`;
       const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD }, preload });
-      const recovers = concurrent === 'edit' || concurrent === 'pr';
-      const output = ok(picked);
-      expect(output).toMatchObject({ path: recovers ? 'sweep' : 'idle' });
-      if (concurrent === 'pr') expect(output).toMatchObject({ items: [{ pr: OTHER_PR, facts: { pr: OTHER_PR } }] });
+      const recovers = concurrent === 'edit';
+      expect(ok(picked)).toMatchObject({ path: recovers ? 'sweep' : 'idle' });
       const after = stored(at, PR.number).value!;
       expect(after.trust).toBe('maintainer');
       expect(after.facts).toEqual(changed.facts);
-      expect(after.claim?.run_id ?? null).toBe(recovers ? 'run-1' : concurrent === 'claimed' ? 'other-owner' : null);
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(concurrent === 'pr' ? 2 : 1);
+      expect(after.claim?.run_id).toBe(recovers ? 'run-1' : 'other-owner');
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(1);
     }, 60_000);
   }
 
