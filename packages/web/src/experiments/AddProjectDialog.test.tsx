@@ -43,6 +43,7 @@ mock.module('./console/skills', () => ({
   addProjectByUrl: addUrl,
   addProjectByPath: addPath,
   getMetrics: mock(),
+  getMetricViews: mock(),
 }));
 const addProjectDialogComponent = (await import('./console/components/AddProjectDialog'))
   .AddProjectDialog;
