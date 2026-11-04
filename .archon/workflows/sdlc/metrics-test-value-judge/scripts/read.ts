@@ -27,7 +27,7 @@ try {
   const head = record(record(JSON.parse(ghApi('read the pull request', [...host, base])))?.head)?.sha;
   if (typeof head !== 'string') throw new Error(`GitHub reported no head for ${url}`);
 
-  const files: { path: string; status: string; patch: string }[] = [];
+  const files: { path: string; status: string; patch: string | null }[] = [];
   for (let page = 1; ; page++) {
     const rows: unknown = JSON.parse(ghApi('list the pull request files', [...host, `${base}/files?per_page=100&page=${String(page)}`]));
     if (!Array.isArray(rows)) throw new Error('GitHub did not report a file list');
@@ -36,14 +36,14 @@ try {
       files.push({
         path: row.filename,
         status: typeof row.status === 'string' ? row.status : '',
-        patch: typeof row.patch === 'string' ? row.patch : '(no patch: binary or too large)',
+        patch: typeof row.patch === 'string' ? row.patch : null,
       });
     }
     if (rows.length < 100) break;
   }
 
   const sections = files.map(file => {
-    const parts = [`<patch>\n${file.patch}\n</patch>`];
+    const parts = [`<patch>\n${file.patch ?? '(no patch: binary or too large)'}\n</patch>`];
     if (holdsTestCode(file.path, file.patch) && file.status !== 'removed') {
       const text = ghApi('read a test file', [
         ...host,

@@ -134,8 +134,16 @@ describe('holdsTestCode', () => {
   it('reads a test suite defined outside test files, and not source or docs that only mention tests', () => {
     const suite = "+      const listed = await listQueue(source);\n+      expect(listed).toEqual([]);";
     expect(holdsTestCode('src/store-conformance/attention.ts', suite)).toBe(true);
+    expect(holdsTestCode('tools/check.py', '+def test_rejects_empty(tmp_path):')).toBe(true);
+    expect(holdsTestCode('pkg/store/conformance.go', '+func TestRoundTrip(t *testing.T) {')).toBe(true);
     expect(holdsTestCode('src/widget.test.ts', '+const x = 1;')).toBe(true);
     expect(holdsTestCode('src/keys.ts', '+  if (PLACEHOLDER.test(name)) return name;')).toBe(false);
     expect(holdsTestCode('docs/testing.md', "+test('keeps order', () => {});")).toBe(false);
+  });
+
+  it('counts added and unchanged lines, not hunk headers or removed lines', () => {
+    expect(holdsTestCode('src/queue.ts', '@@ -1,3 +1,3 @@ export function test(x) {\n-  expect(x);\n+  return x;')).toBe(false);
+    expect(holdsTestCode('src/suite.ts', '       expect(\n-        listed(run)\n+        listed(run).values\n       ).toContain(run.id);')).toBe(true);
+    expect(holdsTestCode('src/queue.ts', null)).toBe(false);
   });
 });
