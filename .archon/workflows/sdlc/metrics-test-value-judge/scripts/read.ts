@@ -12,7 +12,7 @@ import { prFromUrl } from '../../.shared/merge.ts';
 import { readCriteria } from '../../.shared/test-value.ts';
 import { holdsTestCode } from './test-code.ts';
 
-/** A test file's full text is inlined up to this size; beyond it the patch alone stands. */
+/** A file holding test code is inlined in full up to this size; beyond it the patch alone stands. */
 const MAX_FULL_TEXT = 120_000;
 
 const url = trimmed(process.env.INPUTS_PR);
@@ -45,7 +45,7 @@ try {
   const sections = files.map(file => {
     const parts = [`<patch>\n${file.patch ?? '(no patch: binary or too large)'}\n</patch>`];
     if (holdsTestCode(file.path, file.patch) && file.status !== 'removed') {
-      const text = ghApi('read a test file', [
+      const text = ghApi('read a file holding test code', [
         ...host,
         '-H',
         'Accept: application/vnd.github.raw',

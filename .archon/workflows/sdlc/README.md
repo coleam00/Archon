@@ -959,7 +959,7 @@ run per pull request, and records per pull request:
 | Metric | Kind | Unit | Meaning |
 |---|---|---|---|
 | `sdlc.tests_added` | count | `tests` | tests the pull request added or changed, as the judge listed them |
-| `sdlc.tests_unprotective` | count | `tests` | those that protect nothing on their own merits: no plausible regression fails them that another test would not catch |
+| `sdlc.tests_unprotective` | count | `tests` | those that protect nothing on their own merits: no plausible regression fails them that another test the judge was shown would not catch |
 
 Both are the judge's counts: a test the judge leaves out is in neither, and calibration
 scores such omissions as disagreements. Both are attributed to the build-queue runs that
@@ -969,7 +969,12 @@ request costs one judge run on the `large` tier, so the window sets the cost.
 
 The judge applies the review pack's test lens
 ([`review/commands/review-tests.md`](review/commands/review-tests.md)), read when it runs,
-plus the rules in its own prompt. It has no tools and records no metric of its own.
+for its standard of what a valuable test is. The lens anchors on what a change promises;
+the judge's prompt overrides that anchor and adds its own rules. The judge sees the pull
+request's patches and the full text of the files that hold changed test code, so
+redundancy is judged only against those tests: a duplicate of an unchanged test elsewhere
+in the suite counts as protective. It records no metric of its own. On Claude it runs
+with no tools; Codex does not enforce the restriction and can read the checkout.
 
 **Calibration.** A judged count is only as good as the judge.
 [`archon-metrics-test-value-calibrate`](metrics-test-value-calibrate/archon-metrics-test-value-calibrate.yaml)

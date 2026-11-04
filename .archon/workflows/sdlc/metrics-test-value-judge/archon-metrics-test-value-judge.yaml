@@ -2,9 +2,9 @@ name: archon-metrics-test-value-judge
 description: |
   Judge, for each test one pull request adds or changes, whether it protects
   behavior on its own merits as a test in the suite: whether a plausible
-  regression would make it fail where no other test would. It returns the
-  verdicts and records no metric, so calibrating it never changes the metric.
-  `archon-metrics-test-value` and
+  regression would make it fail where no other test it is shown would. It
+  returns the verdicts and records no metric, so calibrating it never changes
+  the metric. `archon-metrics-test-value` and
   `archon-metrics-test-value-calibrate` launch it once per pull request.
 
   Use when: one of those workflows judges a pull request.
@@ -33,10 +33,10 @@ nodes:
       You are judging the tests one pull request adds or changes. Judge each test on
       its own merits, as a test in the suite: does it protect behavior that matters,
       so that a plausible future edit breaking that behavior makes this test fail
-      where no other test would? Do not judge a test against what its pull request
-      promised. A test that confirms the change does what it set out to do still has
-      to earn its place in the suite. Judge a test the pull request changed the same
-      way, as the test it is now.
+      where no other test shown below would? Do not judge a test against what its
+      pull request promised. A test that confirms the change does what it set out to
+      do still has to earn its place in the suite. Judge a test the pull request
+      changed the same way, as the test it is now.
 
       The criteria below are this project's test-review lens. It reviews a change for
       missing tests, anchored on what the change promises; here, ignore that anchor
