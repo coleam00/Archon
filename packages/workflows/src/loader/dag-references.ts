@@ -95,7 +95,8 @@ const ATTENTION_OPTION_JSON_SCHEMA = z.toJSONSchema(attentionOptionSchema);
  * Why a producer's `output_format` cannot yield attention options at `options`'s field,
  * or undefined when it can or declares no schema (the pause-time check then owns it).
  * The field must be an array whose items declare only `attentionOptionSchema`'s
- * properties, with the same types, and require what it requires.
+ * properties, with the same types (any type for the untyped `value`), and require what it
+ * requires.
  */
 function referencedOptionsShapeError(
   options: string,
@@ -119,7 +120,8 @@ function referencedOptionsShapeError(
     ATTENTION_OPTION_JSON_SCHEMA;
   const expected = Object.entries(optionProperties)
     .map(([key, property]) => {
-      const type = isRecord(property) ? String(property.type) : 'unknown';
+      const type =
+        isRecord(property) && property.type !== undefined ? String(property.type) : 'any';
       return optionRequired.includes(key) ? `${key}: ${type}` : `${key}?: ${type}`;
     })
     .join('; ');
@@ -138,8 +140,11 @@ function isAttentionOptionsSchema(schema: unknown): boolean {
     isRecord(itemProperties) &&
     Object.entries(itemProperties).every(([key, property]) => {
       const optionProperty = optionProperties[key];
+      // An option property with no declared type (`value`) takes any producer type.
       return (
-        isRecord(property) && isRecord(optionProperty) && property.type === optionProperty.type
+        isRecord(property) &&
+        isRecord(optionProperty) &&
+        (optionProperty.type === undefined || property.type === optionProperty.type)
       );
     }) &&
     optionRequired.every(
@@ -449,6 +454,8 @@ function checkWaitReferences(node: DagNode | IncludeDirective, scope: DagScope):
   if (node.wait.attention !== undefined) waitSources.push(['wait.attention', node.wait.attention]);
   for (const [key, label] of Object.entries(node.wait.labels ?? {}))
     waitSources.push([`wait.labels.${key}`, label]);
+  if (typeof node.wait.recommendation === 'string')
+    waitSources.push(['wait.recommendation', node.wait.recommendation]);
   if (typeof node.wait.options === 'string') {
     waitSources.push(['wait.options', node.wait.options]);
     const shapeError = referencedOptionsShapeError(

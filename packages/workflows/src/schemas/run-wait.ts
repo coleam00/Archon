@@ -9,6 +9,7 @@ import {
   attentionFormSchema,
   attentionLabelsSchema,
   attentionOptionSchema,
+  attentionRecommendationSchema,
   type AttentionForm,
   type AttentionLabels,
   type AttentionOption,
@@ -63,10 +64,10 @@ export type AttentionAnswer = z.infer<typeof attentionAnswerSchema>;
 /**
  * An attention wait paused before answers existed has only `waitingSince` and `message`:
  * no `pauseId`, it reads as the `message` form, and only `resume` continues it. A newer
- * wait carries its occurrence, its form and resolved options, and once answered, the
- * answer with the surface it came through and when. `labels` holds the node's resolved
- * labels merged with every label write since, and `revision` counts those writes from 1;
- * a wait without them has no labels and is at revision 1.
+ * wait carries its occurrence, its form, resolved options and recommendation, and once
+ * answered, the answer with the surface it came through and when. `labels` holds the
+ * node's resolved labels merged with every label write since, and `revision` counts those
+ * writes from 1; a wait without them has no labels and is at revision 1.
  */
 const workflowWaitAttentionFields = {
   kind: z.literal('attention'),
@@ -75,6 +76,7 @@ const workflowWaitAttentionFields = {
   pauseId: z.string().min(1).optional(),
   form: attentionFormSchema.optional(),
   options: z.array(attentionOptionSchema).optional(),
+  recommendation: attentionRecommendationSchema.optional(),
   answer: attentionAnswerSchema.optional(),
   answeredVia: recordSurfaceSchema.optional(),
   answeredAt: z.string().datetime().optional(),

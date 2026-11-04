@@ -57,6 +57,10 @@ export function AttentionAnswerPanel({
   };
   const button =
     'rounded bg-warning/15 px-2 py-1 text-[12px] font-semibold text-warning hover:bg-warning/25 disabled:opacity-50';
+  const { recommendation } = attention;
+  const optionName = (id: string): string =>
+    attention.options.find(option => option.id === id)?.label ?? id;
+  const described = attention.options.filter(option => option.does !== undefined);
 
   return (
     <div
@@ -64,6 +68,25 @@ export function AttentionAnswerPanel({
       onClick={stopPropagation}
       onKeyDown={stopPropagation}
     >
+      {recommendation !== undefined ? (
+        <p className="text-[12px] text-text-primary">
+          <span className="font-semibold">Recommended: {optionName(recommendation.option)}</span>
+          {recommendation.confidence !== undefined
+            ? ` (${recommendation.confidence} confidence)`
+            : ''}
+          . {recommendation.why}
+        </p>
+      ) : null}
+      {described.length > 0 ? (
+        <ul className="flex flex-col gap-1 text-[12px] text-text-secondary">
+          {described.map(option => (
+            <li key={option.id}>
+              <span className="font-semibold text-text-primary">{option.label ?? option.id}</span>:{' '}
+              {option.does}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {attention.form === 'multi_select' ? (
         <div className="flex flex-wrap gap-3 text-[12px]">
           {attention.options.map(option => (
@@ -110,9 +133,11 @@ export function AttentionAnswerPanel({
               type="button"
               disabled={busy}
               onClick={() => void answer([option.id])}
-              className={button}
+              className={
+                recommendation?.option === option.id ? `${button} ring-1 ring-warning` : button
+              }
             >
-              {option.label ?? option.id}
+              {`${option.label ?? option.id}${recommendation?.option === option.id ? ' (recommended)' : ''}`}
             </button>
           ))
         )}

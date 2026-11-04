@@ -491,11 +491,31 @@ function noticeControls(notice: OpenNotice): KnownBlock[] | undefined {
   }
 }
 
+/** What an attention notice recommends and what each option does, under its message. */
+function noticeChoices(notice: OpenNotice): string {
+  if (notice.type !== 'attention') return '';
+  const { recommendation } = notice;
+  const lines = [
+    ...(recommendation === undefined
+      ? []
+      : [
+          `*Recommended:* ${recommendation.option}${recommendation.confidence === undefined ? '' : ` (${recommendation.confidence} confidence)`}. ${recommendation.why}`,
+        ]),
+    ...notice.options.flatMap(option =>
+      option.does === undefined ? [] : [`• *${option.label ?? option.id}*: ${option.does}`]
+    ),
+  ];
+  return lines.length === 0 ? '' : `\n\n${lines.join('\n')}`;
+}
+
 function noticeIntro(notice: OpenNotice, header: string): KnownBlock {
   // Slack rejects section text over 3000 characters.
   return {
     type: 'section',
-    text: { type: 'mrkdwn', text: truncate(`${header}\n\n${notice.message}`, 3000) },
+    text: {
+      type: 'mrkdwn',
+      text: truncate(`${header}\n\n${notice.message}${noticeChoices(notice)}`, 3000),
+    },
   };
 }
 

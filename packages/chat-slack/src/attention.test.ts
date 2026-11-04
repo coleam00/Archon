@@ -308,6 +308,19 @@ test('a finished run closes only its own notices, and another run keeps live con
   expect(sent()).toMatchObject({ action: 'answer', runId: 'run-2' });
 });
 
+test('a select wait shows its recommendation and what each option does', async () => {
+  await notify({
+    ...wait('select', [
+      { id: 'eu', label: 'Europe', does: 'Deploys to the Frankfurt region.' },
+      { id: 'us' },
+    ]),
+    recommendation: { option: 'eu', why: 'Most traffic is in Europe.', confidence: 'high' },
+  });
+  const text = JSON.stringify(blocksOf(-1));
+  expect(text).toContain('*Recommended:* eu (high confidence). Most traffic is in Europe.');
+  expect(text).toContain('*Europe*: Deploys to the Frankfurt region.');
+});
+
 test('options beyond Slack limits render the notice without controls', async () => {
   await notify(
     wait(

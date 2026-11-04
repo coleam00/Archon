@@ -227,6 +227,52 @@ describe('executeDagWorkflow -- durable wait node', () => {
     expect(messages.join('\n')).toContain('approve attention-wait <your answer>');
   });
 
+  it('persists the recommendation and sends it, with what each option does, in the pause notice', async () => {
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    const recommendation = {
+      option: 'merge',
+      why: 'Review is ready.',
+      confidence: 'high' as const,
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        conversationId: 'conv-attention-recommended',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-recommended-test',
+          nodes: [
+            {
+              id: 'ask',
+              kind: 'wait',
+              wait: {
+                attention: 'Merge it?',
+                form: 'select',
+                options: [{ id: 'merge', does: 'Squash-merges it.' }, { id: 'hold' }],
+                recommendation,
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-recommended'),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'attention-recommended',
+      expect.objectContaining({ recommendation }),
+      { kind: 'started', stepName: 'ask' }
+    );
+    const notice = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => String(call[1]))
+      .join('\n');
+    expect(notice).toContain('Recommended: merge (high confidence). Review is ready.');
+    expect(notice).toContain('merge: Squash-merges it.');
+  });
+
   it('keeps an attention pause paused when its notification cannot be delivered', async () => {
     const store = createEscalationStore('attention-delivery-failed');
     const platform = createMockPlatform();
@@ -368,6 +414,126 @@ describe('executeDagWorkflow -- durable wait node', () => {
       .map(([event]) => event)
       .find(event => event.step_name === 'after' && event.event_type === 'node_completed');
     expect(JSON.stringify(afterCompleted?.data)).toContain('use-dev');
+  });
+
+  it("returns the chosen select option's value with the answer, leaving the recorded answer as it was", async () => {
+    const store = createMockStore();
+    const options = [
+      { id: 'merge', does: 'Squash-merges it.', value: { effect: 'merge', ruling: '' } },
+      { id: 'hold', label: 'Hold' },
+    ];
+    const recommendation = { option: 'merge', why: 'Review is ready.' };
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Merge it?',
+      pauseId: 'ask-1',
+      form: 'select',
+      options,
+      recommendation,
+      answer: { decision: 'merge', text: 'go' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-attention-value',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-value-test',
+          nodes: [
+            {
+              id: 'ask',
+              kind: 'wait',
+              wait: { attention: 'Merge it?', form: 'select', options, recommendation },
+            },
+            {
+              id: 'after',
+              kind: 'exec',
+              runtime: 'sh',
+              script: 'printf "%s" $ask.output.value',
+              depends_on: ['ask'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-value', { metadata: { wait: persisted } }),
+      })
+    );
+
+    expect(store.clearWorkflowWaitContext).toHaveBeenCalledWith(
+      'attention-value',
+      persisted,
+      expect.objectContaining({ answer: { decision: 'merge', text: 'go' } })
+    );
+    expect(JSON.parse(String(result))).toEqual({ effect: 'merge', ruling: '' });
+  });
+
+  it('asks again when the recommendation changed before the first answer', async () => {
+    const store = createMockStore();
+    const options = [{ id: 'merge' }, { id: 'hold' }];
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Merge it?',
+      pauseId: 'ask-1',
+      form: 'select',
+      options,
+      recommendation: { option: 'merge', why: 'Review is ready.' },
+      answer: { decision: 'merge', text: '' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        conversationId: 'conv-attention-recommendation-stale',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-recommendation-stale-test',
+          nodes: [
+            {
+              id: 'review',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `printf '%s' '{"rec":{"option":"hold","why":"CI is red."}}'`,
+            },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['review'],
+              wait: {
+                attention: 'Merge it?',
+                form: 'select',
+                options,
+                recommendation: '$review.output.rec',
+              },
+            },
+          ],
+        },
+        priorCompletedNodes: new Map([['unrelated', { output: 'x' }]]),
+        workflowRun: makeWorkflowRun('attention-recommendation-stale', {
+          metadata: { wait: persisted },
+        }),
+      })
+    );
+
+    expect(store.clearWorkflowWaitContext).not.toHaveBeenCalled();
+    expect(store.pauseWorkflowRunForWait).toHaveBeenCalledWith(
+      'attention-recommendation-stale',
+      expect.objectContaining({
+        recommendation: { option: 'hold', why: 'CI is red.' },
+        reaskedFrom: 'ask-1',
+      }),
+      { kind: 'started', stepName: 'ask' }
+    );
   });
 
   // An answer belongs to the question it answered. When a dependency re-executes on
@@ -779,6 +945,48 @@ describe('executeDagWorkflow -- durable wait node', () => {
         error: expect.stringContaining("from 'plan' are not a valid option list"),
       });
     }
+  });
+
+  it('fails the wait at pause time when a referenced recommendation names an option not offered', async () => {
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        conversationId: 'conv-attention-bad-recommendation',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-bad-recommendation-test',
+          nodes: [
+            {
+              id: 'plan',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `printf '%s' '{"rec":{"option":"ship","why":"Ready."}}'`,
+            },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['plan'],
+              wait: {
+                attention: 'Merge it?',
+                form: 'select',
+                options: [{ id: 'merge' }, { id: 'hold' }],
+                recommendation: '$plan.output.rec',
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-bad-recommendation'),
+      })
+    );
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    const failed = store.createWorkflowEvent.mock.calls
+      .map(call => call[0])
+      .find(event => event.event_type === 'node_failed' && event.step_name === 'ask');
+    expect(String(failed?.data?.error)).toContain(
+      "'recommendation' names option 'ship', which the wait does not offer (merge, hold)"
+    );
   });
 
   it('completes an expired event wait with typed output on resume', async () => {

@@ -16,6 +16,7 @@ import {
   attentionForm,
   attentionOccurrence,
   attentionOptions,
+  type AttentionAnswer,
   type WorkflowAttentionWaitContext,
 } from '../../../schemas/workflow-run';
 import { waitOutputFormat } from '../../../schemas/wait-node';
@@ -27,6 +28,7 @@ import {
   declaredOutputPathsFromSchema,
   canonicalValueText,
   parseWholeInputsRef,
+  type JsonValue,
 } from '../../../output-ref';
 import { getLog } from '../../log';
 import { getStaleCachedDependencies } from '../../stale-dependencies';
@@ -34,7 +36,7 @@ import { beginExecution, type RunLayersContext } from '../../run-context';
 import {
   resolveRunInputs,
   substituteNodeOutputRefs,
-  resolveAttentionOptions,
+  resolveAttentionDeclaration,
 } from '../../references';
 
 export interface WaitLoopOwner {
@@ -98,11 +100,16 @@ function staleAnswer(
   if (persisted.owner === 'node' && ctx.priorCompletedNodes === undefined) return undefined;
   const condition = waitCondition(node.wait);
   if (condition.kind !== 'attention') return undefined;
-  const options = resolveAttentionOptions(node.id, condition.options, ctx.nodeOutputs) ?? [];
+  const { options = [], recommendation } = resolveAttentionDeclaration(
+    node.id,
+    condition,
+    ctx.nodeOutputs
+  );
   const same =
     render(condition.message).trim() === persisted.message &&
     condition.form === attentionForm(persisted) &&
-    JSON.stringify(options) === JSON.stringify(persisted.options ?? []);
+    JSON.stringify(options) === JSON.stringify(persisted.options ?? []) &&
+    JSON.stringify(recommendation) === JSON.stringify(persisted.recommendation);
   if (same) return undefined;
   const changed =
     ctx.priorCompletedNodes === undefined
@@ -256,7 +263,11 @@ function armAttention(pass: WaitPass, condition: Extract<WaitCondition, { kind: 
   if (message === '') {
     throw new Error(`Wait node '${node.id}' resolved 'attention' to an empty message`);
   }
-  const options = resolveAttentionOptions(node.id, condition.options, pass.ctx.nodeOutputs);
+  const { options, recommendation } = resolveAttentionDeclaration(
+    node.id,
+    condition,
+    pass.ctx.nodeOutputs
+  );
   const labels =
     condition.labels === undefined
       ? undefined
@@ -270,6 +281,7 @@ function armAttention(pass: WaitPass, condition: Extract<WaitCondition, { kind: 
     pauseId: randomUUID(),
     form: condition.form,
     ...(options !== undefined ? { options } : {}),
+    ...(recommendation !== undefined ? { recommendation } : {}),
     ...(labels !== undefined ? { labels } : {}),
     ...(discarded !== undefined ? { reaskedFrom: discarded.occurrence } : {}),
     ...pass.pauseFields,
@@ -378,7 +390,10 @@ async function settleWait(
   const result = waitResult(pass.now, context);
   // An attention wait's node output is its answer; the wait outcome row keeps `result`.
   const answer = context.kind === 'attention' ? (context.answer ?? { text: '' }) : undefined;
-  const nodeValue = answer ?? result;
+  const nodeValue =
+    context.kind === 'attention' && answer !== undefined
+      ? attentionOutput(context, answer)
+      : result;
   const output = JSON.stringify(nodeValue);
   const declaredOutputPaths = declaredOutputPathsFromSchema(waitOutputFormat(node.wait));
   const completed =
@@ -430,6 +445,20 @@ function waitResult(now: Date, context: WorkflowWaitContext) {
   } as const;
 }
 
+/**
+ * What the next node reads from an answered attention wait: the answer, plus the chosen
+ * option's `value` on a `select` wait whose option declares one. The value is read from
+ * the persisted options, so the recorded answer keeps its own shape.
+ */
+function attentionOutput(
+  wait: WorkflowAttentionWaitContext,
+  answer: AttentionAnswer
+): AttentionAnswer | (AttentionAnswer & { value: JsonValue }) {
+  if (!('decision' in answer) || attentionForm(wait) !== 'select') return answer;
+  const value = wait.options?.find(option => option.id === answer.decision)?.value;
+  return value === undefined ? answer : { ...answer, value };
+}
+
 /** The message an attention wait sends when it pauses: the question and how to answer it. */
 function attentionNotification(
   surface: IWorkflowPlatform,
@@ -441,6 +470,7 @@ function attentionNotification(
     runId,
     form: attentionForm(wait),
     options: [...attentionOptions(wait)],
+    ...(wait.recommendation !== undefined ? { recommendation: wait.recommendation } : {}),
     occurrence: attentionOccurrence(wait),
   });
   const changed =
