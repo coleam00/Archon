@@ -2,8 +2,8 @@
  * The pack's state store and run reads, through the host's `archon` command.
  *
  * A queue's work item is a state document claimed with a conditional write
- * (`statePut` at the revision read). A claim is released only when the engine reports
- * the claiming run terminal, never on age.
+ * (`statePut` at the revision read) that also takes the document's engine lease. A
+ * claim is released only when the engine reports that lease ended, never on age.
  */
 
 import { archonCommand, record } from './forge.ts';
@@ -34,9 +34,23 @@ function failed(what: string, result: { code: number; value: unknown }): Error {
   );
 }
 
+/** The engine's lease on a document: which run holds it, and whether that run still owns it. */
+export interface Lease {
+  readonly runId: string;
+  readonly live: boolean;
+}
+
 export interface Stored {
   readonly revision: number;
   readonly value: unknown;
+  readonly lease: Lease | null;
+}
+
+function lease(value: unknown): Lease | null {
+  const row = record(value);
+  return typeof row?.runId === 'string' && typeof row.live === 'boolean'
+    ? { runId: row.runId, live: row.live }
+    : null;
 }
 
 export function stateGet(name: string): Stored {
@@ -44,18 +58,45 @@ export function stateGet(name: string): Stored {
   const value = record(result.value);
   if (result.code !== 0 || typeof value?.revision !== 'number')
     throw failed(`state get ${name}`, result);
-  return { revision: value.revision, value: value.value ?? null };
+  return { revision: value.revision, value: value.value ?? null, lease: lease(value.lease) };
 }
 
-/** A conditional replace: `conflict` when the document moved past `ifRevision`. */
-export function statePut(name: string, value: unknown, ifRevision: number): 'ok' | 'conflict' {
+/**
+ * Whether the run holding a claim has ended without clearing it, as its lease reports.
+ * A claim with no lease of its run, written before claims took one, is never proven ended.
+ */
+export function claimEnded(claimRunId: string, stored: Pick<Stored, 'lease'>): boolean {
+  return stored.lease?.runId === claimRunId && !stored.lease.live;
+}
+
+/**
+ * A conditional replace: `conflict` when the document moved past `ifRevision`, or when
+ * `lease` is given and another run's lease is live. `take` claims the document's lease
+ * for this run; `release` gives it back.
+ */
+export function statePut(
+  name: string,
+  value: unknown,
+  ifRevision: number,
+  lease?: 'take' | 'release'
+): 'ok' | 'conflict' {
+  const flag = lease === 'take' ? ['--lease'] : lease === 'release' ? ['--release-lease'] : [];
   const result = archon(
-    ['state', 'put', name, '--if-revision', String(ifRevision)],
+    ['state', 'put', name, '--if-revision', String(ifRevision), ...flag],
     JSON.stringify(value)
   );
   if (result.code === STATE_CONFLICT) return 'conflict';
   if (result.code !== 0) throw failed(`state put ${name}`, result);
   return 'ok';
+}
+
+/** A conditional replace of a claimed document; clearing its claim gives its lease back in the same write. */
+export function statePutClaimed(
+  name: string,
+  value: { readonly claim: unknown },
+  ifRevision: number
+): 'ok' | 'conflict' {
+  return statePut(name, value, ifRevision, value.claim === null ? 'release' : undefined);
 }
 
 export type StatePatchOp =
@@ -82,20 +123,13 @@ export function stateDocuments(prefix: string): (Stored & { readonly name: strin
     const row = record(entry);
     if (typeof row?.name !== 'string' || typeof row.revision !== 'number')
       throw failed('state list', result);
-    return { name: row.name, revision: row.revision, value: row.value ?? null };
+    return {
+      name: row.name,
+      revision: row.revision,
+      value: row.value ?? null,
+      lease: lease(row.lease),
+    };
   });
-}
-
-/** One run as `archon workflow get --json` reports it, or undefined when it reports none. */
-export function runDetail(runId: string): Record<string, unknown> | undefined {
-  const result = archon(['workflow', 'get', runId, '--json']);
-  return result.code === 0 ? record(result.value) : undefined;
-}
-
-/** The run's status as the engine reports it, or null when it gives no status. */
-export function runStatus(runId: string): string | null {
-  const status = runDetail(runId)?.status;
-  return typeof status === 'string' ? status : null;
 }
 
 /**
@@ -113,9 +147,3 @@ export function listRuns(limit: number): Record<string, unknown>[] {
   return value.runs.map(record).filter((row): row is Record<string, unknown> => row !== undefined);
 }
 
-/** Whether a pickup may release a claim, from the claiming run's status. */
-export function claimDisposition(status: string | null): 'hold' | 'release' {
-  return status === 'completed' || status === 'failed' || status === 'cancelled'
-    ? 'release'
-    : 'hold';
-}

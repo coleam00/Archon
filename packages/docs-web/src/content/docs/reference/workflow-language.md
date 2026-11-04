@@ -1449,6 +1449,17 @@ or oversized values exit `4` and write nothing. Exit `5` means the CLI opened a 
 store than the run's. Exit `1` means usage or storage failure.
 The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.
 
+A run can claim a document with a lease: `put` or `patch` with `--lease` takes it in the
+same write that marks the document as claimed, and `--release-lease` gives it back in the
+write that records the outcome. Reads report the lease with `live`, so a workflow handing
+out work never reads another run's status to decide whether a claim still stands. The
+engine keeps a lease live while its run can still finish, including when the run is paused
+or failed and can resume, and ends it when the run completes, is cancelled or abandoned, or
+is deleted. A take while another run's lease is live exits `3`; taking over an ended lease is
+an ordinary conditional write. A lease does not block other writers: writes without a lease
+flag keep it. What a document means once its lease has ended stays with the workflow. See
+the [CLI reference](/reference/cli/#state) for the fields.
+
 Let the agent judge what to remember, then commit its structured output in a script node
 when the write must happen. For example, a review agent returns a completed PR identifier;
 its dependent host-side node appends that identifier to a ledger:

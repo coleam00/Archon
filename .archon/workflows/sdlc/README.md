@@ -427,12 +427,15 @@ request, never the state.
   open, edit or
   reopen adds no request while another one waits, since the pickup reads the live
   issue; label requests keep the newest 50. A run clears its
-  claim only after the item's labels are written. The next pickup releases a claim
-  whose run the engine reports completed, failed or cancelled and queues that run's
-  requests again; the item then sorts after every other waiting item until an
-  attempt finishes, so one item that cannot be read or labelled never starves the
-  rest. A claim whose run is pending, running, paused or unknown is never released,
-  and there is no age timeout.
+  claim only after the item's labels are written. A claim takes the work item's
+  engine lease (`archon state put --lease`), and the next pickup releases a claim whose
+  lease the engine reports ended: its run completed, was cancelled or abandoned, or was
+  deleted. It queues that run's requests again; the item then sorts after every other
+  waiting item until an attempt finishes, so one item that cannot be read or labelled
+  never starves the rest. A claim whose run is pending, running, paused or failed is
+  never released, because a failed run can resume; abandon the run to free its claim.
+  A claim with no lease of its run, written before claims took one, is held and named
+  by an idle pass. There is no age timeout.
 - **Closing.** When triage's verdict is `NO_ACTION`, the item is a duplicate of
   another open issue or a merged change already delivered it, and the triage policy
   lets it close without a person. Before writing anything, the outcome checks a
@@ -717,7 +720,8 @@ then the project's file, whose lines win where the two conflict.
   independent bookkeeping completes before the run fails with the read diagnostic.
 - **Record.** When the default branch could not be read, `record` writes the independent
   settlements, releasing only claims it still owns. Open companions remain unchanged;
-  the next pickup releases their claims after the run fails. It makes no further forge
+  the next pickup releases their claims once the run ends: a failed run keeps them
+  until it is resumed and finishes, or is abandoned. It makes no further forge
   reads and fails with the original diagnostic and any settlement write failures.
   Otherwise, the `record` script skips and reports a decision for a pull request this
   run did not claim, because that item belongs to another run. It refuses a
@@ -814,8 +818,10 @@ terminal report lists.
   `discoveries/runs/<run-id>` is its memory and its work item: the refs a pass decided
   for it, the questions a pass asked about it with their answers, and the claim of the
   pass working it. A record is decided once its run's document lists it. Every run
-  document is read in one call. A claim is released only when the claiming run is
-  completed, failed or cancelled, never on age. A run whose records cannot be read is
+  document is read in one call. A claim takes the document's engine lease and is
+  taken over only when the engine reports that lease ended (the claiming run
+  completed, was cancelled or abandoned, or was deleted), never on age. A failed pass
+  keeps its claims, since it can resume. A run whose records cannot be read is
   left queued and named on the pass's stderr.
 - **Decisions.** One agent decides every queued record, under the project's direction
   document and the policy files `discoveries.md`, `triage.md` and `rulings.md`. It

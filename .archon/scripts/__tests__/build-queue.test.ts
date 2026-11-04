@@ -261,10 +261,13 @@ function inProcess<T>(at: Install, body: () => T): T {
   }
 }
 
+/** Store the item; a claimed one takes its run's lease, as a real claim does. */
 function seed(at: Install, doc: WorkItem): void {
   inProcess(at, () => {
     const stored = stateGet('work/7');
-    expect(statePut('work/7', doc, stored.revision)).toBe('ok');
+    if (doc.claim !== null) process.env.WORKFLOW_ID = doc.claim.run_id;
+    const lease = doc.claim === null ? undefined : 'take';
+    expect(statePut('work/7', doc, stored.revision, lease)).toBe('ok');
   });
 }
 

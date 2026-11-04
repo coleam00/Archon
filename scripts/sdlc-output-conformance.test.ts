@@ -25,10 +25,6 @@ import {
   nodeExecutionMetadataSchema,
   unavailableMeasurementSchema,
 } from '../packages/workflows/src/schemas/node-execution';
-import {
-  TERMINAL_WORKFLOW_STATUSES,
-  workflowRunStatusSchema,
-} from '../packages/workflows/src/schemas/workflow-run';
 import { validateStructuredOutput } from '../packages/workflows/src/structured-output';
 import {
   gitCheckout,
@@ -51,7 +47,6 @@ import type { Closure } from '../.archon/workflows/sdlc/.shared/close';
 import { type AgentDecision, AGENT_OUTCOMES } from '../.archon/workflows/sdlc/.shared/discoveries';
 import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/forge';
 import { SIZE_LABEL, TYPE_LABEL } from '../.archon/workflows/sdlc/.shared/labels';
-import { claimDisposition } from '../.archon/workflows/sdlc/.shared/state';
 import { newWorkItem } from '../.archon/workflows/sdlc/.shared/workitem';
 
 const { runPackScript } = packScriptRunner();
@@ -307,16 +302,6 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
   // Guard against a vacuous match: the parser must accept the qualified PR.
   expect(verdicts[0]?.parserAccepts).toBe(true);
-});
-
-describe('intake', () => {
-  test("a claim is released only when its run's status is one the engine calls terminal", () => {
-    for (const status of workflowRunStatusSchema.options)
-      expect(claimDisposition(status)).toBe(
-        TERMINAL_WORKFLOW_STATUSES.includes(status) ? 'release' : 'hold'
-      );
-    expect(claimDisposition(null)).toBe('hold');
-  });
 });
 
 describe('discoveries', () => {

@@ -444,12 +444,14 @@ function addReceiptBindingColumns(db: Database): void {
   }
 }
 
-// The surface a state write outside a run came through; older rows came through the CLI.
+// writer_via: the surface a state write outside a run came through; older rows came
+// through the CLI. lease_*: a run's lease as of the revision; older rows have none.
 function addStateRevisionColumns(db: Database): void {
   const cols = columnNames(db, 'remote_agent_state_revisions');
-  if (cols.size && !cols.has('writer_via')) {
-    db.run('ALTER TABLE remote_agent_state_revisions ADD COLUMN writer_via TEXT');
-  }
+  if (!cols.size) return;
+  for (const column of ['writer_via', 'lease_run_id', 'lease_node_path', 'lease_taken_at'])
+    if (!cols.has(column))
+      db.run(`ALTER TABLE remote_agent_state_revisions ADD COLUMN ${column} TEXT`);
 }
 
 // The archive trigger copies an event row by position, and CREATE TABLE AS ran

@@ -279,7 +279,7 @@ export const ENDED_UNDECIDED = 'ended_undecided';
  * whose head is the branch the claim recorded. A run that opened none, and a run that
  * recorded its round before it stopped, such as one that asked, add nothing.
  */
-export function withReleasedRound(doc: WorkItem, claim: Claim, status: string, at: string): WorkItem {
+export function withReleasedRound(doc: WorkItem, claim: Claim, at: string): WorkItem {
   const prior = doc.facts.build;
   if (claim.branch === undefined || prior?.rounds.some(round => round.run_id === claim.run_id)) return doc;
   const pr = findPrByHead(doc.subject.repo, claim.branch, forgeSource());
@@ -290,7 +290,7 @@ export function withReleasedRound(doc: WorkItem, claim: Claim, status: string, a
     delivered: false,
     reason: ENDED_UNDECIDED,
     pr_url: pr.url,
-    summary: `The run ended ${status} after it opened ${pr.url} and before it recorded the round.`,
+    summary: `The run ended after it opened ${pr.url} and before it recorded the round.`,
     artifacts: '',
   };
   const build: BuildRecord = prior ?? { status: 'next', brief: '', rounds: [], decisions: [], at };

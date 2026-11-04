@@ -83,6 +83,7 @@ test('JSON commands preserve run attribution, audit, CAS and tombstone recreatio
     name: 'review/123',
     revision: 2,
     value: { seen: [123] },
+    lease: null,
   });
   expect(await invoke('log', '', { limit: '1' })).toBe(0);
   expect(output.at(-1)).toMatchObject({
@@ -91,6 +92,42 @@ test('JSON commands preserve run attribution, audit, CAS and tombstone recreatio
   });
   expect(await invoke('delete', '', { ifRevision: '2' })).toBe(0);
   expect(await invoke('put', '{}', { ifRevision: '3' })).toBe(0);
+});
+test('a run takes a lease in its write, another run is refused until the holder ends', async () => {
+  const { invoke, output, store, run } = await fixture();
+  expect(await invoke('get', '', { lease: true })).toBe(1);
+  expect(await invoke('put', '{}', { ifRevision: '0', lease: true, releaseLease: true })).toBe(1);
+  expect(await invoke('put', '{"stage":"next"}', { ifRevision: '0', lease: true })).toBe(0);
+  const lease = { runId: run.id, nodePath: 'review/commit', live: true };
+  expect(output.at(-1)).toMatchObject({ revision: 1, lease });
+  const other = await store.createWorkflowRun({ workflow_name: 'state', user_message: '' });
+  await store.updateWorkflowRun(other.id, {
+    output_root: getProjectStoragePaths({ kind: 'repo', owner: 'owner', repo: 'repo' }).root,
+  });
+  const otherEnv = {
+    WORKFLOW_ID: other.id,
+    ARCHON_NODE_EXECUTION: JSON.stringify({ runId: other.id, path: 'claim' }),
+  };
+  const ops = '{"ops":[{"op":"set","path":"/stage","value":"taken"}]}';
+  expect(await invoke('patch', ops, { lease: true }, otherEnv)).toBe(3);
+  expect(output.at(-1)).toMatchObject({ code: 3, error: expect.stringContaining(run.id) });
+  // A write that changes no lease is not fenced.
+  expect(await invoke('patch', ops, {}, otherEnv)).toBe(0);
+  expect(output.at(-1)).toMatchObject({ revision: 2, lease });
+  expect(
+    await invoke('put', '{}', { ifRevision: '2', lease: true, project: 'owner/repo' }, {})
+  ).toBe(1);
+  expect(output.at(-1)).toMatchObject({
+    error: '--lease and --release-lease are only valid inside a run',
+  });
+  await store.updateWorkflowRun(run.id, { status: 'running' });
+  await store.completeWorkflowRun(run.id, { duration_ms: 0 });
+  expect(await invoke('get', '', {}, otherEnv)).toBe(0);
+  expect(output.at(-1)).toMatchObject({ lease: { runId: run.id, live: false } });
+  expect(await invoke('patch', ops, { ifRevision: '2', lease: true }, otherEnv)).toBe(0);
+  expect(output.at(-1)).toMatchObject({ revision: 3, lease: { runId: other.id, live: true } });
+  expect(await invoke('put', '{}', { ifRevision: '3', releaseLease: true }, otherEnv)).toBe(0);
+  expect(output.at(-1)).toMatchObject({ revision: 4, lease: null });
 });
 test('get on a deleted document returns the revision a recreating put must name', async () => {
   const { invoke, output } = await fixture();
@@ -349,6 +386,7 @@ test('outside a run, --project and --install address scopes without the cwd', as
         revision: 1,
         updatedAt: expect.any(String),
         writer: { kind: 'surface', via: 'cli' },
+        lease: null,
         deleted: false,
       },
     ],
@@ -360,7 +398,7 @@ test('outside a run, --project and --install address scopes without the cwd', as
   expect(await call('list', { project: 'acme/widgets', prefix: 'notes/', values: true })).toBe(0);
   expect(output.at(-1)).toEqual({
     scope: { kind: 'project', key: 'acme/widgets' },
-    documents: [{ name: 'notes/a', revision: 1, value: { n: 1 } }],
+    documents: [{ name: 'notes/a', revision: 1, value: { n: 1 }, lease: null }],
   });
   expect(await call('get', { project: 'acme/widgets', values: true })).toBe(1);
   expect(await call('list', { install: true })).toBe(0);

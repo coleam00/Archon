@@ -568,6 +568,9 @@ export class SqliteAdapter implements IDatabase {
         writer_identity TEXT,
         writer_via TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        lease_run_id TEXT,
+        lease_node_path TEXT,
+        lease_taken_at TEXT,
         PRIMARY KEY (project_key, name, revision)
       );
 

@@ -251,10 +251,13 @@ function inProcess<T>(at: Install, body: () => T): T {
   }
 }
 
+/** Store the item; a claimed one takes its run's lease, as a real claim does. */
 function seed(at: Install, doc: WorkItem): void {
   const name = `work/${String(doc.subject.number)}`;
   inProcess(at, () => {
-    expect(statePut(name, doc, stateGet(name).revision)).toBe('ok');
+    if (doc.claim !== null) process.env.WORKFLOW_ID = doc.claim.run_id;
+    const lease = doc.claim === null ? undefined : 'take';
+    expect(statePut(name, doc, stateGet(name).revision, lease)).toBe('ok');
   });
 }
 
@@ -688,17 +691,17 @@ describe('the merge queue scripts', () => {
     expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(2);
   }, 60_000);
 
-  for (const status of ['running', 'unknown', 'failed']) {
+  // A failed owner can resume, so only a cancelled one gives its claim up.
+  for (const status of ['running', 'failed', 'cancelled']) {
     test(`recovery respects a ${status} claim owner`, () => {
       const at = install();
       seed(at, { ...parkedOwn(), claim: { run_id: 'owner', at: AT, requests: [] } });
-      const picked = run(at, 'facts', { INTAKE_RUN_STATUSES: JSON.stringify(status === 'unknown' ? {} : { owner: status }) }, { pr: { headRefOid: OLD } });
-      expect(picked.code).toBe(0);
-      if (status === 'unknown') expect(picked.stderr).toContain('the engine reports no status');
-      else expect(picked.stderr).toBe('');
-      expect(JSON.parse(picked.stdout)).toMatchObject({ path: status === 'failed' ? 'sweep' : 'idle' });
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(status === 'failed' ? 1 : 0);
-      expect(stored(at, PR.number).value?.claim?.run_id).toBe(status === 'failed' ? 'run-1' : 'owner');
+      const picked = run(at, 'facts', { INTAKE_RUN_STATUSES: JSON.stringify({ owner: status }) }, { pr: { headRefOid: OLD } });
+      const released = status === 'cancelled';
+      expect({ code: picked.code, stderr: picked.stderr }).toEqual({ code: 0, stderr: '' });
+      expect(JSON.parse(picked.stdout)).toMatchObject({ path: released ? 'sweep' : 'idle' });
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(released ? 1 : 0);
+      expect(stored(at, PR.number).value?.claim?.run_id).toBe(released ? 'run-1' : 'owner');
     }, 60_000);
   }
 
@@ -973,7 +976,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(reset.facts.merge?.decisions[0]).toEqual(before.facts.merge?.decisions[0]);
     const next = ok(run(at, 'facts', {
       WORKFLOW_ID: 'next-run',
-      INTAKE_RUN_STATUSES: JSON.stringify({ 'readable-run': failure === 'cancelled' ? 'cancelled' : 'failed' }),
+      INTAKE_RUN_STATUSES: JSON.stringify({ 'readable-run': 'cancelled' }),
     }, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
     expect(next.settled).toMatchObject([{ status: 'waiting', decision: UNREADABLE }]);
     const after = stored(at).value as WorkItem;
