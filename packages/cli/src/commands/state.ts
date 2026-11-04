@@ -215,8 +215,8 @@ async function getStateDocument(store: IStateDocumentStore, scope: StateScope, n
   // A deleted document's tombstone is the revision a recreating put must name.
   const [tombstone] = await store.listStateRevisions(scope, name, { limit: 1 });
   return tombstone
-    ? { scope, name, revision: tombstone.revision, value: null, deleted: true }
-    : { scope, name, revision: 0, value: null };
+    ? { scope, name, revision: tombstone.revision, value: null, lease: null, deleted: true }
+    : { scope, name, revision: 0, value: null, lease: null };
 }
 
 async function putStateDocument(

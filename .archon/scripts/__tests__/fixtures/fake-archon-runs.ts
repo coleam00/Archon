@@ -18,6 +18,7 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fakeLeaseLive } from './fake-lease.ts';
 
 const argv = process.argv.slice(2);
 if (process.env.ARCHON_CALL_LOG) appendFileSync(process.env.ARCHON_CALL_LOG, `${JSON.stringify(argv)}\n`);
@@ -52,8 +53,7 @@ function host(args: readonly string[]) {
 
 function live(runId: string): boolean {
   const statuses = JSON.parse(process.env.INTAKE_RUN_STATUSES ?? '{}') as Record<string, string>;
-  const status = statuses[runId];
-  return status !== undefined && status !== 'completed' && status !== 'cancelled';
+  return fakeLeaseLive(statuses[runId]);
 }
 
 /** The lease the documents' leases record after this successful write. */

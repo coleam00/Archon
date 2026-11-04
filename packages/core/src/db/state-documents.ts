@@ -91,12 +91,13 @@ function hydrate(row: RevisionRow): StateRevision {
 }
 /**
  * Revisions with their holder's current status. PostgreSQL stores run ids as UUID and
- * lease holders as text, so the join compares text.
+ * lease holders as text; the holder is cast, not the key, so the join uses the runs
+ * primary key. A holder is always a run id the CLI verified against this store.
  */
 function revisionsFrom(dialect: 'sqlite' | 'postgres', alias: string): string {
-  const holderId = dialect === 'postgres' ? 'holder.id::text' : 'holder.id';
+  const holder = dialect === 'postgres' ? `${alias}.lease_run_id::uuid` : `${alias}.lease_run_id`;
   return `remote_agent_state_revisions ${alias}
-    LEFT JOIN remote_agent_workflow_runs holder ON ${holderId} = ${alias}.lease_run_id`;
+    LEFT JOIN remote_agent_workflow_runs holder ON holder.id = ${holder}`;
 }
 function scope(target: StateScope, name: string): string {
   stateDocumentNameSchema.parse(name);

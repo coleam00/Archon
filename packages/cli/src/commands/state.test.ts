@@ -69,7 +69,13 @@ async function fixture() {
 test('JSON commands preserve run attribution, audit, CAS and tombstone recreation', async () => {
   const { invoke, output } = await fixture();
   expect(await invoke('get')).toBe(0);
-  expect(output.at(-1)).toEqual({ scope: project, name: 'review/123', revision: 0, value: null });
+  expect(output.at(-1)).toEqual({
+    scope: project,
+    name: 'review/123',
+    revision: 0,
+    value: null,
+    lease: null,
+  });
   expect(await invoke('put', '{"seen":[]}', { ifRevision: '0' })).toBe(0);
   expect(output.at(-1)).toMatchObject({
     revision: 1,
@@ -139,6 +145,7 @@ test('get on a deleted document returns the revision a recreating put must name'
     name: 'review/123',
     revision: 2,
     value: null,
+    lease: null,
     deleted: true,
   });
   const { revision } = output.at(-1) as { revision: number };

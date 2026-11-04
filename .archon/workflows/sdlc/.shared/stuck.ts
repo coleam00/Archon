@@ -32,7 +32,7 @@ export function stuckItems(runId: string): Stuck[] {
     if (claim !== null && claim.run_id !== runId && stored.lease?.runId !== claim.run_id) {
       stuck.push({
         name: stored.name,
-        reason: `claimed by run ${claim.run_id}, which holds no engine lease on it`,
+        reason: `claimed by run ${claim.run_id}, which holds no engine lease on it; clear the claim with a conditional \`archon state put\``,
       });
     }
   }

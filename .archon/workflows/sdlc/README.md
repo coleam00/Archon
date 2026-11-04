@@ -435,7 +435,9 @@ request, never the state.
   never starves the rest. A claim whose run is pending, running, paused or failed is
   never released, because a failed run can resume; abandon the run to free its claim.
   A claim with no lease of its run, written before claims took one, is held and named
-  by an idle pass. There is no age timeout.
+  by an idle pass; abandoning its run does not free it, so a person clears it by
+  writing the document back with `claim` set to `null` through a conditional
+  `archon state put <name> --if-revision <n>`. There is no age timeout.
 - **Closing.** When triage's verdict is `NO_ACTION`, the item is a duplicate of
   another open issue or a merged change already delivered it, and the triage policy
   lets it close without a person. Before writing anything, the outcome checks a

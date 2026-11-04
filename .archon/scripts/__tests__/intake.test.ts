@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
-import { statePut } from '../../workflows/sdlc/.shared/state';
+import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
   assertNoSelfPromotion,
   bodyDigest,
@@ -766,7 +766,7 @@ describe('the intake scripts', () => {
     expect(summary).toContain('work/3');
   }, 60_000);
 
-  test('a claim held by a run with no status stays held, and the idle pass names it and the run', () => {
+  test('a claim whose run holds no lease stays held, and the idle pass names it and the run', () => {
     const at = install();
     const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'ghost-run', at: AT, requests: [] } };
     inProcess(at, () => statePut('work/7', held, 0));
@@ -1200,5 +1200,7 @@ describe('the intake scripts', () => {
     const resumed = outcome(at, { runId: 'run-1', statuses: { 'run-1': 'running' } }, decided, READY_VERDICT);
     expect({ code: resumed.code, stderr: resumed.stderr }).toEqual({ code: 0, stderr: '' });
     expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null });
+    // Clearing the claim gave the run's lease back in the same write.
+    expect(inProcess(at, () => stateGet('work/7')).lease).toBeNull();
   }, 60_000);
 });

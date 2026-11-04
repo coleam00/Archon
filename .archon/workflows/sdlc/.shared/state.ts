@@ -46,7 +46,8 @@ export interface Stored {
   readonly lease: Lease | null;
 }
 
-function lease(value: unknown): Lease | null {
+/** The lease `archon state` reports, as the pack reads it; anything else reads as no lease. */
+export function parseLease(value: unknown): Lease | null {
   const row = record(value);
   return typeof row?.runId === 'string' && typeof row.live === 'boolean'
     ? { runId: row.runId, live: row.live }
@@ -58,7 +59,7 @@ export function stateGet(name: string): Stored {
   const value = record(result.value);
   if (result.code !== 0 || typeof value?.revision !== 'number')
     throw failed(`state get ${name}`, result);
-  return { revision: value.revision, value: value.value ?? null, lease: lease(value.lease) };
+  return { revision: value.revision, value: value.value ?? null, lease: parseLease(value.lease) };
 }
 
 /**
@@ -127,7 +128,7 @@ export function stateDocuments(prefix: string): (Stored & { readonly name: strin
       name: row.name,
       revision: row.revision,
       value: row.value ?? null,
-      lease: lease(row.lease),
+      lease: parseLease(row.lease),
     };
   });
 }
