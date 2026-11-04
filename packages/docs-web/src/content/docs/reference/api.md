@@ -561,6 +561,7 @@ a run whose owner is `unreachable` or `unknown` as not live and offers Abandon f
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/metrics` | Aggregate stored metric records as a `MetricsReport` |
+| GET | `/api/metric-views` | The overview cards workflow packs declare, as `MetricViews` |
 
 ```bash
 curl 'http://localhost:3090/api/metrics?name=factory.prs_merged&since=7d'
@@ -579,6 +580,11 @@ prints: per name, its definition and one entry per instrument and `measured_by` 
 did run in the error. The node is not checked when no producing run still exists: a window
 with no records returns an empty report, and records whose runs were all deleted are
 `unattributed`.
+
+`GET /api/metric-views` lists each pack's `.shared/metric-views.json` as `packs[]` (pack,
+source, `names` and `cards`) and the declarations that could not be read or did not
+validate as `errors[]`. With `codebaseId`, the codebase's project packs are included and its
+config decides whether bundled packs are; an unknown `codebaseId` returns **404**.
 See the [metrics guide](/guides/metrics/).
 
 ---
