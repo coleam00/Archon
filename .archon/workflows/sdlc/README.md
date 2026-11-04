@@ -707,7 +707,7 @@ then the project's file, whose lines win where the two conflict.
   run did not claim, because that item belongs to another run. It refuses a
   `return` without a brief, a `return` for an own pull request, an `ask` without its
   question, an `ask` that offers a `return` on an own pull request or with a blank
-  brief, and a red default branch the sweep neither re-ran nor raised: the pull
+  brief, and a red default branch the sweep did not raise: the pull
   request waits for the next sweep, and the record fails, naming each, once every
   other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
