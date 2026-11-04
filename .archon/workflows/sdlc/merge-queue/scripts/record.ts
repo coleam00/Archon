@@ -4,22 +4,19 @@
  * The forge, not the sweep, says which pull requests merged: one that reads back merged
  * is recorded merged at the head the forge merged, whatever the sweep declared, and one
  * that does not is never recorded merged. A sweep that claims a merge the forge does not
- * show fails the record, but only after every decision is written: that pull request is
+ * show is reported after every decision is written: that pull request is
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
  * back to the build queue with its brief; on an own pull request, which no build round
  * owns, it waits for the next sweep instead, and so does an ask offering a return the
- * item cannot take (an own pull request, or no brief). A run raises at most one attention item: the
- * sweep's item for a red default branch first, because it holds every merge, otherwise
- * the first pull request the sweep asked about, in its order. That item keeps its claim
- * while the run waits;
- * every other claim is released, and an ask that was not raised waits for the next sweep,
- * which decides it again.
+ * item cannot take (an own pull request, or no brief). Every eligible question retains
+ * its item's claim until its child takes ownership before waiting.
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
- * that cannot be written is reported and left for the next sweep; neither stops the
- * rest of the batch from being recorded. If facts could not read the default branch
- * or the maintainer refresh fails, record settlements without further forge reads,
+ * that cannot be written releases this run's claim for the next sweep. If that release
+ * also fails, the run fails rather than holding the item while sibling questions wait.
+ * If facts could not read the default branch or the maintainer refresh fails,
+ * record settlements without further forge reads,
  * leaving open companions untouched, then fail with the original diagnostic.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
@@ -27,6 +24,7 @@
  * the sweep's whole output, "null" when it was skipped.
  */
 
+import type { Item } from './facts.ts';
 import { withBuild } from '../../.shared/build.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
@@ -36,7 +34,6 @@ import {
   type MergeAsked,
   type MergeAttention,
   type MergeDecisionEntry,
-  type MergeRecord,
   type MergeSettled,
   type MergeStatus,
   type PolicyClass,
@@ -46,11 +43,11 @@ import {
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
+import { withOther } from '../../.shared/queue.ts';
 
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { readWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 /**
  * The asked item with the queue's `other`, whose effect is what the item can take: a
@@ -66,15 +63,10 @@ function withQueueOther(attention: MergeAttention, item: Item, brief: string): M
   return withOther(attention, 'return');
 }
 
-interface Item {
-  readonly item: QualifiedPr | null;
-  readonly pr: QualifiedPr;
-  readonly url: string;
-  readonly facts: PrFacts | null;
-  readonly record: MergeRecord | null;
-  /** An enrolled maintainer's own pull request: its work item has no build record of its own. */
-  readonly own_pr?: boolean;
-}
+export type MergeQuestion = {
+  readonly owner_run_id: string;
+  readonly asked: MergeAsked;
+};
 
 interface Decision {
   readonly number: number;
@@ -145,7 +137,6 @@ function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decis
       decided.set(decision.number, decision.action === 'ask' ? decision : { ...decision, attention: null });
       continue;
     }
-    // Refused output waits for the next sweep, and the record fails once the rest is written.
     const refusal = `${invalid}; it waits for the next sweep`;
     refused.push(refusal);
     decided.set(decision.number, { ...decision, action: 'wait', brief: '', attention: null, reason: `${refusal} (the sweep said: ${decision.reason})` });
@@ -156,7 +147,7 @@ function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decis
       number: item.pr.number,
       action: 'wait',
       class: 'unclear',
-      head: item.facts?.head_revision ?? '',
+      head: item.facts.head_revision,
       reran: false,
       reason: 'the sweep left it undecided; the next sweep decides it',
       brief: '',
@@ -212,14 +203,14 @@ function settle(decision: Decision, after: PrFacts): Outcome {
  * Read one pull request back. One that cannot be read waits for the next sweep, whose
  * facts settle it, a merge the gate made included: only the forge says it merged.
  */
-function readBack(decision: Decision, item: Item, maintainers: ReadonlySet<string>): Outcome {
+function readBack(decision: Decision, item: Item, maintainers: ReadonlySet<string>): Outcome & { readonly askable: boolean } {
   let after: PrFacts;
   try {
     after = readPr(item.pr, maintainers);
   } catch (error) {
-    return { status: 'waiting', reason: `${item.url} could not be read back: ${message(error)}`, head: decision.head, contradiction: null };
+    return { status: 'waiting', reason: `${item.url} could not be read back: ${message(error)}`, head: decision.head, contradiction: null, askable: false };
   }
-  return settle(decision, after);
+  return { ...settle(decision, after), askable: after.state === 'open' && after.head_revision === decision.head };
 }
 
 /** What one record run writes with, and the lines it reports. */
@@ -242,6 +233,13 @@ function write(writes: Writes, subject: QualifiedPr, name: string, label: string
     note(`merge-queue record: ${failure}`);
     writes.lines.push(failure);
     writes.failed.push(failure);
+    try {
+      if (readWorkItem(subject.number)?.claim?.run_id === writes.runId) {
+        updateClaimed(subject, writes.runId, doc => ({ ...doc, claim: null }));
+      }
+    } catch (releaseError) {
+      throw new Error(`${failure}; could not release its claim: ${message(releaseError)}`);
+    }
     return false;
   }
 }
@@ -249,7 +247,7 @@ function write(writes: Writes, subject: QualifiedPr, name: string, label: string
 function labelOf(decision: Decision, outcome: Outcome, raised: boolean): string {
   if (raised) return 'ask';
   if (outcome.status === 'merged') return 'merged';
-  if (decision.action === 'ask') return 'ask (not raised this run)';
+  if (decision.action === 'ask') return 'wait';
   return outcome.contradiction === null ? decision.action : 'claimed merged, not merged';
 }
 
@@ -261,10 +259,6 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   const decided = `${label} (${decision.class})`;
   const links = [item.url, ...(decision.attention?.links ?? [])];
   const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran };
-  if (item.item === null) {
-    writes.lines.push(`PR ${String(decision.number)}: ${label}, with no work item to record it on`);
-    return false;
-  }
   return write(writes, item.item, `PR ${String(decision.number)}`, label, doc => {
     const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr, release: !raised });
     if (status !== 'returned') return recorded;
@@ -273,13 +267,16 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   });
 }
 
-function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
+function recordSettled(writes: Writes, settled: readonly MergeSettled[]): QualifiedPr[] {
+  const merged: QualifiedPr[] = [];
   for (const done of settled) {
     const entry = { at: writes.at, run_id: writes.runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false };
-    write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
+    const recorded = write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
       withMerge(doc, { at: writes.at, run_id: writes.runId, entry, status: done.status, pr: done.pr, release: true })
     );
+    if (recorded && done.status === 'merged' && done.pr !== null) merged.push(done.item);
   }
+  return merged;
 }
 
 function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], baseError: string): never {
@@ -301,10 +298,7 @@ function main(): void {
     emit({
       merged: [],
       summary: idleSummary('No pull request waits for the merge queue.', stuckItems(text(process.env.WORKFLOW_ID))),
-      attention: '',
-      options: [],
-      class: '',
-      asked: null,
+      asks: [],
     });
     return;
   }
@@ -315,61 +309,47 @@ function main(): void {
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
   const baseAttention = sweep?.base.attention ?? null;
-  const firstAsk = decisions.find(decision => decision.attention !== null);
-  let asked: MergeAsked | null =
-    baseAttention !== null
-      ? { by: 'base', attention: baseAttention }
-      : firstAsk === undefined
-        ? null
-        : {
-            by: 'pr',
-            item: itemOf(firstAsk.number).item as QualifiedPr,
-            pr: itemOf(firstAsk.number).pr,
-            head: firstAsk.head,
-            brief: firstAsk.brief,
-            attention: withQueueOther(firstAsk.attention as MergeAttention, itemOf(firstAsk.number), firstAsk.brief),
-          };
-  const render = (raised: MergeAsked | null): string =>
-    raised === null
-      ? ''
-      : raised.by === 'base'
-        ? renderAttention('Merge queue: the default branch is red', raised.attention)
-        : renderAttention(`Merge queue, PR ${String(raised.pr.number)}: merge decision`, raised.attention);
+  const asks: MergeQuestion[] = [];
+  const question = (asked: MergeAsked): MergeQuestion => ({
+    owner_run_id: runId,
+    asked,
+  });
 
   // Settlements are independent of the policy refresh and the sweep's decisions.
-  recordSettled(writes, settled);
+  const merged = recordSettled(writes, settled);
   const maintainers = items.length > 0 ? readMaintainers(items[0]?.pr.repo as QualifiedPr['repo']) : new Set<string>();
 
   const outcomes = decisions.map(decision => ({ decision, ...readBack(decision, itemOf(decision.number), maintainers) }));
   const contradictions = [...refused, ...outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]))];
   const silentRed = unraisedRedBase(sweep, base);
   if (silentRed !== null) contradictions.push(silentRed);
-  // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for
-  // the next sweep, and a red default branch is named in the failure instead.
-  if (asked?.by === 'base' && contradictions.length > 0) {
-    contradictions.push(`the default branch is red and was not raised (${sweep?.base.summary ?? ''})`);
+  if (baseAttention !== null) {
+    asks.push(question({ by: 'base', attention: baseAttention }));
   }
-  // The asked pull request was merged or closed under the question: there is nothing to ask.
-  const askedPr = asked?.by === 'pr' ? asked.pr.number : null;
-  if (contradictions.length > 0 || outcomes.some(({ decision, status }) => decision.number === askedPr && status !== 'waiting')) {
-    asked = null;
-  }
-
   for (const outcome of outcomes) {
-    const raised = asked?.by === 'pr' && asked.pr.number === outcome.decision.number;
-    if (!recordPr(writes, itemOf(outcome.decision.number), outcome, raised) && raised) asked = null;
+    const decision = outcome.decision;
+    const item = itemOf(decision.number);
+    const raised = decision.action === 'ask' &&
+      decision.attention !== null && outcome.status === 'waiting' &&
+      outcome.askable;
+    if (!recordPr(writes, item, outcome, raised)) continue;
+    if (outcome.status === 'merged') merged.push(item.item);
+    if (raised && decision.attention !== null) {
+      asks.push(question({ by: 'pr', item: item.item, pr: item.pr, head: decision.head,
+        brief: decision.brief, attention: withQueueOther(decision.attention, item, decision.brief) }));
+    }
   }
   if (contradictions.length > 0) {
-    throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
+    const diagnostic = [...contradictions, ...writes.failed, 'every other decision is recorded'].join('; ');
+    if (asks.length === 0 && merged.length === 0) throw new Error(diagnostic);
+    note(`merge-queue record: ${diagnostic}`);
+    writes.lines.push(diagnostic);
   }
 
   emit({
-    merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
+    merged,
     summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
-    attention: render(asked),
-    options: asked === null ? [] : attentionOptions<string>(asked.attention),
-    class: asked?.by ?? '',
-    asked,
+    asks,
   });
 }
 

@@ -247,6 +247,7 @@ function main(): void {
   const selections: BuildQueueSelections = {
     retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
     round_limit: text(process.env.INPUTS_ROUND_LIMIT),
+    auto_build_queue: process.env.INPUTS_AUTO_BUILD_QUEUE ?? 'true',
   };
   emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId, selections) });
 }

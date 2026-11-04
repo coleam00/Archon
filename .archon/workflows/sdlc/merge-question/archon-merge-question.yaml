@@ -1,0 +1,55 @@
+name: archon-merge-question
+description: Building block for archon-merge-queue. Apply one independent answer while sibling questions wait.
+requires: [github]
+worktree:
+  enabled: false
+mutates_checkout: false
+inputs:
+  question: { required: true }
+  limit: { default: '10' }
+  merge_method: { default: squash }
+  retriage_as: { default: '' }
+  auto_merge_queue: { default: 'true' }
+returns: ruling
+nodes:
+  - id: question
+    script: question
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        attention: {type: string}
+        options:
+          type: array
+          items:
+            type: object
+            properties: {id: {type: string}, label: {type: string}}
+            required: [id, label]
+        asked:
+          type: object
+          properties: {by: {type: string, enum: [pr, base]}}
+          required: [by]
+      required: [attention, options, asked]
+  - id: ask
+    depends_on: [question]
+    wait:
+      attention: "$question.output.attention"
+      form: select
+      options: "$question.output.options"
+      labels:
+        merge: "$question.output.asked.by"
+  - id: ruling
+    script: ruling
+    runtime: bun
+    depends_on: [question, ask]
+    with:
+      asked: { from: "$question.output.asked" }
+      choice: "$ask.output.decision"
+      text: "$ask.output.text"
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [merge, return, park, hold] }
+        section: { type: string }
+        summary: { type: string }
+      required: [decision, section, summary]

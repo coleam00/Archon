@@ -15,6 +15,7 @@
  */
 
 import { join } from 'node:path';
+import { queueAutonomy } from '../../.shared/queue.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
@@ -38,7 +39,7 @@ import { readMaintainerList } from '../../.shared/maintainers.ts';
 import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
 import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
 
-interface Item {
+export interface Item {
   /** The issue whose work item the queue claimed. */
   readonly item: QualifiedPr;
   readonly pr: QualifiedPr;
@@ -180,6 +181,7 @@ function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: r
 }
 
 function main(): void {
+  const automatic = queueAutonomy('auto_merge_queue');
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
   const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
   const repo = { host: trimmed(process.env.INPUTS_REPO_HOST), path: trimmed(process.env.INPUTS_REPO_PATH) };
@@ -232,7 +234,7 @@ function main(): void {
   ]
     .map(quoted)
     .join(' ');
-  emitFacts(repo, items, settled, gate);
+  emitFacts(repo, items, settled, `INPUTS_AUTO_MERGE_QUEUE=${quoted(String(automatic))} ${gate}`);
 }
 
 try {

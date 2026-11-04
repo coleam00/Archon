@@ -16,6 +16,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   BUILD_PICKUP,
+  buildApproved,
   type BuildRound,
   buildBranch,
   claimNamed,
@@ -25,6 +26,7 @@ import {
 import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
+import { queueAutonomy } from '../../.shared/queue.ts';
 import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { claimNext, updateClaimed, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
@@ -82,6 +84,7 @@ function emitItem(
 ): void {
   emit({
     path,
+    approved: path === 'route' && doc !== null && buildApproved(doc),
     item: subject,
     url,
     record: doc === null ? null : withPlainReports(doc),
@@ -94,6 +97,7 @@ function emitItem(
 }
 
 function main(): void {
+  queueAutonomy('auto_build_queue');
   const limit = positive('round_limit', trimmed(process.env.INPUTS_ROUND_LIMIT));
   const repo = {
     host: trimmed(process.env.INPUTS_REPO_HOST),
@@ -111,6 +115,7 @@ function main(): void {
   if (doc === null) {
     emit({
       path: 'idle',
+      approved: false,
       item: null,
       url: '',
       record: null,

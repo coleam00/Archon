@@ -7,7 +7,7 @@ sidebar:
   order: 4
 ---
 
-The bundled `sdlc` pack is a software factory made of four queues. You write an issue; intake triages it, the build queue works it to a reviewed pull request, and the merge queue merges it. When a run reaches a decision it can't make, it pauses as one attention item for you to answer. This page sets that up on one GitHub repository, runs it by hand once, and then shows how to let it run on its own.
+The bundled `sdlc` pack is a software factory made of four queues. You write an issue; intake triages it, the build queue works it to a reviewed pull request, and the merge queue merges it. When a run reaches a decision it can't make, it raises an attention item for you to answer. A merge sweep can ask about several pull requests independently; use `archon workflow attention --all` to see every open question. This page sets that up on one GitHub repository, runs it by hand once, and then shows how to let it run on its own.
 
 | Queue | What it does |
 |---|---|
@@ -138,7 +138,7 @@ Each item says what is being decided, why it matters, the agent's recommendation
 archon workflow respond <run-id> <choice> "why"
 ```
 
-The reason matters. A build or merge queue answer is written into the issue body as a dated "Current scope" section, and later rounds work from it. Every build item and merge pull-request item offers `other`: its text says what to do instead and becomes the ruling. `park` stops the queue working that item. [Operate runs](/getting-started/operate/) covers answering, resuming and stopping runs in full.
+The reason matters. For issue-backed build and merge questions, the ruling and your words become a dated "Current scope" section in the issue body for later rounds. An enrolled own pull request has no issue body; its merge answer stays on its work item. A red-base `hold` writes no ruling; each sweep reads the branch status again. Every build item and merge pull-request item offers `other`: its text says what to do instead and becomes the ruling. `park` stops the queue working that item. [Operate runs](/getting-started/operate/) covers answering, resuming and stopping runs in full.
 
 ## 7. Let it run on its own
 
@@ -164,7 +164,7 @@ Everything below is written as the `gh` account, to the repository the queues na
 |---|---|---|
 | Labels | Creates the pack's own `archon-*` labels when missing. Adds and removes them on issues as a delta, so labels others add survive | Intake; `archon-triage` with `--input publish=true` |
 | Issues | Closes a duplicate of an open issue, or an issue a merged change already delivered, with one comment linking the cause, and a link-back comment on the original (on `gh`, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one; the next upsert then refuses: inspect both and delete one). Intake closes issues by triage verdict, as `triage.md` allows, and a merged pull request closes the issue it names with `Closes #N` | Intake; merges |
-| Issue bodies | Appends a dated "Current scope" section with your answer | Build queue, merge queue |
+| Issue bodies | Appends a dated "Current scope" section for issue-backed answers. Own-PR merge answers stay on the work item; red-base `hold` writes no ruling | Build queue, merge queue |
 | New issues | Files an issue for a verified discovery, marked so a rerun never files it twice. Adds one evidence comment (on `gh`, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one; the next upsert then refuses: inspect both and delete one) to an open issue it tracks | Discoveries |
 | Branches | Pushes `build/<issue>-<slug>-<run>`, or pushes onto an open pull request's existing head. Never force-pushes or rebases | Build queue rounds |
 | Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place (on `gh`, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one; the next upsert then refuses: inspect both and delete one), replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met and no dated ruling on the issue keeps it open. Before merging, the merge queue rechecks the keyword against the review's stamped coverage and the issue's latest ruling, and corrects it in either direction | Build queue rounds; merge queue |
