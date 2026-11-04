@@ -75,7 +75,13 @@ async function bundledDeclarations(roots: LiveWorkflowSourceRoots): Promise<List
     }
     return listed;
   }
-  for (const pack of await readBundleIndex()) {
+  let packs: string[];
+  try {
+    packs = await readBundleIndex();
+  } catch (error) {
+    return [{ pack: roots.bundledWorkflows, source: 'bundled', error: (error as Error).message }];
+  }
+  for (const pack of packs) {
     const declared = await readDeclaration(pack, 'bundled', join(roots.bundledWorkflows, pack));
     if (declared !== undefined) listed.push(declared);
   }

@@ -101,6 +101,21 @@ test('a scope root that cannot be read is an error, and other scopes still list'
   ]);
 });
 
+test('an unreadable bundle index is a bundled error, and other scopes still list', async () => {
+  indexSpy.mockRejectedValueOnce(new Error('bundle-index.json: Duplicate bundle pack'));
+  await write(declaration(join(roots.globalWorkflows, 'mine')), { cards: [card('Mine')] });
+
+  const listing = await discoverMetricViews(roots);
+  expect(listing.packs.map(p => p.pack)).toEqual(['mine']);
+  expect(listing.errors).toEqual([
+    {
+      pack: roots.bundledWorkflows,
+      source: 'bundled',
+      error: 'bundle-index.json: Duplicate bundle pack',
+    },
+  ]);
+});
+
 test('an installed pack lists as owner/name', async () => {
   const pluginsDir = join(root, 'home', 'plugins');
   const id = 'acme/packs/factory-kit';
