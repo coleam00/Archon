@@ -50,7 +50,7 @@ function history(): { cwd: string; older: string; newer: string } {
   return { cwd, older, newer };
 }
 
-/** The engine identity review-round passes through for synthesis to count lenses by. */
+/** The engine identity review-round reads its checkout start from. */
 function execution(head: string): object {
   return {
     path: 'review__mode',
@@ -98,7 +98,6 @@ describe('review-round', () => {
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
-      execution: execution(newer),
       seams: false, code: true, tests: false, errors: false, docs: false,
       part,
     });

@@ -100,8 +100,6 @@ nodes:
         # The previous round's reviewed commit; empty on a first round.
         cursor: { type: string }
         risks: { type: string, minLength: 1 }
-        # This node's engine identity, so synthesis counts only this round's lenses.
-        execution: { type: object }
         # The lenses a continuation reruns: code alone on every continuation. All
         # false on a first round, where route alone decides.
         seams: { type: boolean }
@@ -128,7 +126,7 @@ nodes:
                   items: { type: array, minItems: 1, items: { type: string, pattern: '\S' } }
                 required: [part, items]
           required: [delivers, parts]
-      required: [continuation, light, head, cursor, risks, execution, seams, code, tests, errors, docs, part]
+      required: [continuation, light, head, cursor, risks, seams, code, tests, errors, docs, part]
 
   # Every review node writes under review/, and a fresh run's artifacts directory
   # has none. Agents told to create it have skipped that step, so the declared
@@ -200,7 +198,6 @@ nodes:
   # mislead the others. `&&` binds tighter than `||` and short-circuits, so a
   # light round, which skips the route node, never reads it.
   - id: seams
-    output_type: review-lens
     model: ['@review-seams', '@reviewer', medium]
     command: review-seams
     context: fresh
@@ -211,7 +208,6 @@ nodes:
     when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.seams == true || $scope.output.head_matches == true && $mode.output.seams == true"
 
   - id: code
-    output_type: review-lens
     model: ['@review-code', '@reviewer', large]
     command: review-code
     context: fresh
@@ -221,7 +217,6 @@ nodes:
     when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.code == true || $scope.output.head_matches == true && $mode.output.code == true"
 
   - id: tests
-    output_type: review-lens
     model: ['@review-tests', '@reviewer', medium]
     command: review-tests
     context: fresh
@@ -231,7 +226,6 @@ nodes:
     when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.tests == true || $scope.output.head_matches == true && $mode.output.tests == true"
 
   - id: errors
-    output_type: review-lens
     model: ['@review-errors', '@reviewer', medium]
     command: review-errors
     context: fresh
@@ -241,7 +235,6 @@ nodes:
     when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.errors == true || $scope.output.head_matches == true && $mode.output.errors == true"
 
   - id: docs
-    output_type: review-lens
     model: ['@review-docs', '@reviewer', medium]
     command: review-docs
     context: fresh
@@ -251,14 +244,25 @@ nodes:
     when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.docs == true || $scope.output.head_matches == true && $mode.output.docs == true"
 
   # all_done lets this barrier settle after unselected lenses, or a lens whose
-  # retries were exhausted. The deciding
-  # agent can then tolerate specialist failures without also tolerating a failed
-  # mode/scope preflight: synthesize separately requires both to have succeeded.
+  # retries were exhausted, and report how each of this round's lenses ended
+  # (scripts/lens-outcomes.ts). The deciding agent can then tolerate specialist
+  # failures without also tolerating a failed mode/scope preflight: synthesize
+  # separately requires both to have succeeded.
   - id: review-complete
-    bash: "true"
+    script: lens-outcomes
+    runtime: bun
     depends_on: [scope, route, seams, code, tests, errors, docs]
     trigger_rule: all_done
     when: "$scope.output.head_matches == true"
+    output_format:
+      type: object
+      properties:
+        seams: { type: string }
+        code: { type: string }
+        tests: { type: string }
+        errors: { type: string }
+        docs: { type: string }
+      required: [seams, code, tests, errors, docs]
 
   # A failed specialist (a provider stream dying mid-review, say) must not kill
   # the review: synthesize detects the missing completion for a selected lens and

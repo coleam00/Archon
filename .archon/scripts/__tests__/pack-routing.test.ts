@@ -5,7 +5,7 @@
  * the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
-import { PR, PR_URL, forgePrRecord, packScriptRunner } from './deliver-checks-harness';
+import { PR, PR_URL, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -77,23 +77,29 @@ describe("deliver's report after a node failure", () => {
     expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL });
     expect(failedReport({ artifactsByType: {} })).toMatchObject({ reason: 'failed', pr_url: '' });
   });
-  it('selects the latest publication across typed output and the creation record', () => {
-    for (const recoveryIsLatest of [true, false]) {
+  it("lets the creation record decide once the publish node's latest invocation failed", () => {
+    // Round 1 published PR_URL; round 2's publish failed after its create started.
+    const outcomes = (state: string) => JSON.stringify({
+      run_id: 'run', first_failed_node: null,
+      nodes: [
+        { node_id: 'rounds.pr__publish', state: 'completed', loop_group_path: [{ groupId: 'rounds', iteration: 1 }] },
+        { node_id: 'rounds.pr__publish', state, loop_group_path: [{ groupId: 'rounds', iteration: 2 }] },
+      ],
+    });
+    for (const secondRound of ['failed', 'completed']) {
       const run = runPackScript('deliver/scripts/report', {
-        inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
+        inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json', NODE_OUTCOMES_FILE: '{ARTIFACTS}/outcomes.json' },
         artifacts: {
-          'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] }, errors: [] }),
+          'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json', nodeId: 'pr__publish', loopGroupPath: [{ groupId: 'rounds', iteration: 1 }] }] }, errors: [] }),
           'nodes/publish.json': JSON.stringify({ url: PR_URL }),
-          'pr-create-started': JSON.stringify({ pr: forgePrRecord({ number: 43, url: 'https://ghe.example.com/example/repo/pull/43' }) }),
+          'outcomes.json': outcomes(secondRound),
+          'pr-create-started': JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }),
         },
-        preload: `import { utimesSync } from 'node:fs';
-          utimesSync('{ARTIFACTS}/nodes/publish.json', 100, ${recoveryIsLatest ? 100 : 300});
-          utimesSync('{ARTIFACTS}/pr-create-started', 200, 200);`,
       });
       expect(run.code).toBe(0);
-      expect(JSON.parse(run.stdout)).toMatchObject({
-        reason: 'failed', pr_url: recoveryIsLatest ? 'https://ghe.example.com/example/repo/pull/43' : PR_URL,
-      });
+      expect(JSON.parse(run.stdout)).toMatchObject(
+        secondRound === 'failed' ? { reason: 'pr_create_unresolved', pr_url: '' } : { reason: 'failed', pr_url: PR_URL }
+      );
     }
   });
 

@@ -130,7 +130,7 @@ describe('failed', () => {
       JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
     );
     const listingFile = await writeNodeArtifactsListing(dir, 'run');
-    const text = failed(dir, { listingFile });
+    const text = failed(dir, { listingFile, outcomesFile: undefined });
     expect(text.startsWith('Not done:')).toBe(true);
     expect(text).toContain('- Guard refuses an empty diff [unreviewed]');
     expect(text).not.toContain('Ready');

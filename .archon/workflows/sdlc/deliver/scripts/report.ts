@@ -14,7 +14,10 @@
 import { artifactsDir, emit, nullableJson } from '../../.shared/io.ts';
 import { failed, failedPublication } from '../../.shared/report.ts';
 
-const options = { listingFile: process.env.TYPED_ARTIFACTS_FILE };
+const options = {
+  listingFile: process.env.TYPED_ARTIFACTS_FILE,
+  outcomesFile: process.env.NODE_OUTCOMES_FILE,
+};
 
 const outcome = nullableJson(process.env.INPUTS_OUTCOME);
 emit(
