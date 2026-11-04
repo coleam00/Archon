@@ -2,6 +2,7 @@ import { resolve } from 'path';
 import { stat } from 'fs/promises';
 import { rejectConfigOnContinue, RUN_PROJECT_CONFLICT_FLAGS } from '../dispatch-guards';
 import { DETACHED_RUN_OWNER_ENV, DETACHED_LAUNCH_TOKEN_ENV } from '../utils/detached-run-control';
+import { matchProjectClaim } from '../utils/project-selector';
 import { fail } from './context';
 import type { WorkflowRoute } from './workflow';
 
@@ -119,15 +120,7 @@ async function resolveRunProject(route: WorkflowRoute): Promise<string | undefin
     }
   }
   try {
-    const claims = await host.records.codebases.listCodebaseClaims();
-    const byId = claims.find(row => row.id === project);
-    const matches = byId ? [byId] : claims.filter(row => row.name === project);
-    if (matches.length > 1) {
-      throw new Error(
-        `Project name '${project}' matches ${matches.length} codebases (${matches.map(row => row.id).join(', ')}). Name one by id.`
-      );
-    }
-    const [selected] = matches;
+    const selected = matchProjectClaim(await host.records.codebases.listCodebaseClaims(), project);
     if (!selected) {
       return await refuse(
         `Error: Project '${project}' is not registered. Use archon project list to find a registered repository.`

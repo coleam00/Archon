@@ -2,6 +2,7 @@ import { projectKeyForCodebase } from '@archon/paths';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { toSafeProjectConfig } from '@archon/core/config';
 import type { IWorkflowHostStore } from '@archon/core/workflows/host-store';
+import { matchProjectClaim } from '../utils/project-selector';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 
 const USAGE = 'Usage: archon project list|config <id|name> [--json]';
@@ -67,16 +68,13 @@ export async function projectConfigCommand(
   selector: string,
   opts: { json?: boolean }
 ): Promise<number> {
-  const claims = await codebases.listCodebaseClaims();
-  const byId = claims.find(row => row.id === selector);
-  const matches = byId ? [byId] : claims.filter(row => row.name === selector);
-  if (matches.length > 1) {
-    return await refuse(
-      `Error: Project name '${selector}' matches ${matches.length} projects (${matches.map(row => row.id).join(', ')}). Name one by id.`,
-      opts.json
-    );
+  let id: string | undefined;
+  try {
+    id = matchProjectClaim(await codebases.listCodebaseClaims(), selector)?.id;
+  } catch (error) {
+    return await refuse(`Error: ${(error as Error).message}`, opts.json);
   }
-  const codebase = matches[0] ? await codebases.getCodebase(matches[0].id) : null;
+  const codebase = id ? await codebases.getCodebase(id) : null;
   if (!codebase) {
     return await refuse(
       `Error: Project '${selector}' is not registered. Use archon project list to find one.`,

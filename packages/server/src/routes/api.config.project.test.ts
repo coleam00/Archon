@@ -165,6 +165,17 @@ describe('GET /api/codebases/{id}/config', () => {
     expect(text).not.toContain(project);
   });
 
+  // Bun's YAML errors quote no source today; this fails if an upgrade starts to.
+  test('a malformed file holding a secret is 422 without the secret', async () => {
+    writeFileSync(
+      join(project, '.archon', 'config.yaml'),
+      `env:\n  SECRET_TOKEN: ${ENV_SECRET}\n  bad: [unclosed\n`
+    );
+    const response = await app().request('/api/codebases/cb-1/config');
+    expect(response.status).toBe(422);
+    expect(await response.text()).not.toContain(ENV_SECRET);
+  });
+
   test('a broken global config is 422 and says it is the global file', async () => {
     writeFileSync(join(home, 'config.yaml'), 'botName: [unclosed\n');
     const response = await app().request('/api/codebases/cb-1/config');
