@@ -100,7 +100,8 @@ nodes:
               On a later round, correct what that round left, within the work
               order. Judge every open finding recorded in
               $ARTIFACTS_DIR/review/report.md: read it and the work order in full
-              before editing. Fix every blocking finding, or decline it only with
+              before editing. A finding that asks for a test gets the one test it
+              asks for, not more. Fix every blocking finding, or decline it only with
               the evidence that it is not a finding: it is wrong, already
               satisfied, or its smaller shape changes behavior. Fix a note, or
               decline it with a one-line reason. The following review judges

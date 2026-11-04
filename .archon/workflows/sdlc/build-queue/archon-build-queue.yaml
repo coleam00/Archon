@@ -38,7 +38,7 @@ inputs:
       look blocked, and those get archon-triage and an intake run with that label
       event. Empty revisits nothing.
   round_limit:
-    default: "3"
+    default: "2"
     description: >-
       After this many rounds since the item's scope last changed, the answer to a round
       that ends wanting another also judges whether the rounds converge.
