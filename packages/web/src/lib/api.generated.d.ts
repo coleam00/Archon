@@ -3699,6 +3699,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/codebases/{id}/config': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get a project's merged configuration (safe subset)
+     * @description Defaults, ~/.archon/config.yaml and the project's .archon/config.yaml, merged and with secrets removed. `envKeys` names the keys of the `env:` block; values are never returned.
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The project's merged configuration */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProjectConfigResponse'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The global or project config file is invalid */
+        422: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/config/assistants': {
     parameters: {
       query?: never;
@@ -7558,6 +7626,10 @@ export interface components {
       small?: components['schemas']['TierEntry'];
       medium?: components['schemas']['TierEntry'];
       large?: components['schemas']['TierEntry'];
+    };
+    ProjectConfigResponse: {
+      config: components['schemas']['SafeConfig'];
+      envKeys: string[];
     };
     UpdateAssistantConfigBody: {
       assistant?: string;
