@@ -102,9 +102,11 @@ describe('the default branch snapshot', () => {
         import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
         const nativeGit = Bun.spawnSync.bind(Bun);
         const change = ${JSON.stringify(change)};
+        // Advance the remote inside the bare repository: a push from this checkout to its
+        // remote's URL updates the checkout's tracking ref under newer git.
         const mutate = () => {
           const argv = change === 'advance after fetch'
-            ? ['git', 'push', '-q', ${JSON.stringify(remote)}, 'HEAD:refs/heads/dev']
+            ? ['git', '--git-dir', ${JSON.stringify(remote)}, 'update-ref', 'refs/heads/dev', ${JSON.stringify(fresh)}]
             : ['git', '--git-dir', ${JSON.stringify(remote)}, 'symbolic-ref', 'HEAD', 'refs/heads/main'];
           const changed = nativeGit(argv);
           if (changed.exitCode !== 0) throw new Error(changed.stderr.toString());
