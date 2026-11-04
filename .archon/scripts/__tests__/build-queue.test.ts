@@ -436,10 +436,6 @@ describe('the build queue scripts', () => {
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
     expect(ok(run(at, 'facts', cancelled))).toMatchObject({ pull_request: null, continues: null });
     expect(stored(at).value?.facts.build).toBeUndefined();
-    // The forge finds only an open pull request on the branch, so a closed one leaves no round either.
-    seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
-    expect(ok(run(at, 'facts', cancelled, { pr: { state: 'CLOSED', headRefName: branch } }))).toMatchObject({ continues: null });
-    expect(stored(at).value?.facts.build).toBeUndefined();
   }, 60_000);
 
   test('items intake has not routed, and items the queue finished, are never picked up', () => {

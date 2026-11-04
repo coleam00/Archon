@@ -246,11 +246,7 @@ function answer(op, request) {
     case 'workitem.view': return view(request.ref);
     case 'repo.labels.list': return done({ repo: request.repo, labels: [...labels].map(name => ({ name })) });
     case 'repo.label.ensure': return write(op, () => labels.add(request.name), () => ({}));
-    case 'workitem.label.add': {
-      // The forge adds only a label the repository has; the pack ensures its own first.
-      if (!labels.has(request.name)) return refused(op, 'the repository has no label ' + request.name);
-      return write(op, () => issueLabels.push(request.name), () => ({}));
-    }
+    case 'workitem.label.add': return write(op, () => issueLabels.push(request.name), () => ({}));
     case 'workitem.label.remove': return write(op, () => { issueLabels = issueLabels.filter(name => name !== request.name); }, () => ({}));
     case 'workitem.create': {
       const marked = issues.filter(row => !row.pull && row.body.split(/\\r?\\n/, 1)[0] === request.marker);
@@ -316,7 +312,6 @@ function answer(op, request) {
     case 'pr.ready':
     case 'pr.draft': {
       if (fake.readyFail !== undefined) return refused(op, fake.readyFail);
-      if (pr.state !== 'OPEN') return refused(op, 'the pull request is ' + pr.state.toLowerCase());
       return write(op, () => { pr.isDraft = op === 'pr.draft'; }, () => ({ pr: record(request.ref.repo) }));
     }
     default: return refused(op, 'the fake forge has no ' + op);

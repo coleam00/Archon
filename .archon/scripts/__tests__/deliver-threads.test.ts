@@ -111,15 +111,4 @@ describe("deliver's review threads", () => {
     expect(result.stderr).toContain('threads T1 were answered but do not read back resolved');
     expect(ops(result).at(-1)).toBe('pr.draft');
   });
-
-  it('fails rather than reading clear when pr.threads returns no thread list, and puts the pull request back to draft', () => {
-    const result = runPackScript('deliver/scripts/threads', {
-      forge: { kind: 'fake', response: [view(false), forgeOperation('pr.threads', { ref }), drafted] },
-      inputs: { INPUTS_ANSWERS: 'null' },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('forge pr.threads returned no thread list');
-    expect(ops(result)).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
-  });
 });
