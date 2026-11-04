@@ -9,7 +9,8 @@
 import { forgeSource, ghApi, record } from '../../.shared/forge.ts';
 import { refuse, report, trimmed } from '../../.shared/io.ts';
 import { prFromUrl } from '../../.shared/merge.ts';
-import { holdsTestCode, readCriteria } from '../../.shared/test-value.ts';
+import { readCriteria } from '../../.shared/test-value.ts';
+import { holdsTestCode } from './test-code.ts';
 
 /** A test file's full text is inlined up to this size; beyond it the patch alone stands. */
 const MAX_FULL_TEXT = 120_000;

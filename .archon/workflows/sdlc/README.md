@@ -1008,7 +1008,8 @@ model drafted calibrate the judge against itself.
 judge workflow's files and the criteria text it inlines. The engine adds the models that
 ran the judge node, so `archon metrics` reports one entry per judge and model, and never
 averages two. Editing the judge's prompt, the test lens or anything in the judge's
-directory, or remapping the `large` tier to another model, starts a new identity. Run
+directory, including the rule in `scripts/test-code.ts` that picks which files it reads
+in full, or remapping the `large` tier to another model, starts a new identity. Run
 the calibration again before trusting the counts it produces. Compare the agreement the
 two models reached after calibrating with each:
 

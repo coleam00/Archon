@@ -6,12 +6,12 @@ import { describe, expect, it } from 'bun:test';
 import {
   type Case,
   type JudgeSlot,
-  holdsTestCode,
   judgeSlots,
   parseCases,
   scoreCalibration,
   testValueRecords,
 } from '../../workflows/sdlc/.shared/test-value';
+import { holdsTestCode } from '../../workflows/sdlc/metrics-test-value-judge/scripts/test-code';
 
 const PR_A = 'https://github.example.com/acme/widgets/pull/1';
 const PR_B = 'https://github.example.com/acme/widgets/pull/2';
