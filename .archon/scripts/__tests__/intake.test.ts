@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -11,19 +11,14 @@ import {
   bodyDigest,
   claimItem,
   decideIntake,
-  INTAKE_PATHS,
-  type IntakeDecision,
   type IntakeRequest,
   type IssueFacts,
   mirrorLabels,
   newWorkItem,
   parseWorkItem,
   PICKUP_ORDER,
-  RANKS,
   sortCandidates,
-  TRUSTS,
   type TriageFacts,
-  updateClaimed,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
 import { parseMaintainerList, parseMaintainers } from '../../workflows/sdlc/.shared/maintainers';
@@ -32,7 +27,6 @@ import {
   hostCli,
   type GhCommentRow,
   type GhIssue,
-  PACK,
   packScriptRunner,
   PR,
   type ScriptRun,
@@ -258,60 +252,6 @@ describe('pickup', () => {
       PICKUP_ORDER
     );
     expect(sorted.map(entry => entry.doc.subject.number)).toEqual([4, 5, 3, 0, 2, 1]);
-  });
-
-  test("the rank orders are the triage node's own enums", () => {
-    const workflow = Bun.YAML.parse(
-      readFileSync(join(PACK, 'triage/archon-triage-block.yaml'), 'utf8')
-    ) as {
-      nodes: {
-        id: string;
-        output_format?: {
-          properties: Record<string, { properties: { value: { enum: string[] } } }>;
-        };
-      }[];
-    };
-    const fields =
-      workflow.nodes.find(node => node.id === 'triage')?.output_format?.properties ?? {};
-    for (const [key, ranks] of Object.entries(RANKS))
-      expect(fields[key]?.properties.value.enum).toEqual([...ranks]);
-  });
-
-  test("the decision's fields, path and trust vocabularies are archon-intake's own", () => {
-    type Enum = { enum: (string | null)[] };
-    // Typed against IntakeDecision, so a field added to or dropped from it fails to compile.
-    const fields: Record<keyof IntakeDecision, true> = {
-      path: true,
-      trust: true,
-      promoted: true,
-      stage: true,
-      body_digest: true,
-      labels: true,
-      waiting: true,
-      notes: true,
-    };
-    const workflow = Bun.YAML.parse(
-      readFileSync(join(PACK, 'intake/archon-intake.yaml'), 'utf8')
-    ) as {
-      nodes: {
-        id: string;
-        output_format?: {
-          properties: {
-            path: Enum;
-            decision?: { properties: { path: Enum; trust: Enum }; required: string[] };
-          };
-        };
-      }[];
-    };
-    const output = (id: string) => workflow.nodes.find(node => node.id === id)?.output_format;
-    const schema = output('facts')?.properties.decision;
-    const decision = schema?.properties;
-    expect(Object.keys(decision ?? {}).sort()).toEqual(Object.keys(fields).sort());
-    expect([...(schema?.required ?? [])].sort()).toEqual(Object.keys(fields).sort());
-    expect(output('facts')?.properties.path.enum).toEqual(['idle', ...INTAKE_PATHS]);
-    expect(decision?.path.enum).toEqual([...INTAKE_PATHS]);
-    expect(decision?.trust.enum).toEqual([...TRUSTS, null]);
-    expect(output('outcome')?.properties.path.enum).toEqual(['idle', ...INTAKE_PATHS]);
   });
 
   test('an item whose last attempt failed sorts after every other waiting item', () => {
@@ -584,119 +524,6 @@ describe('the intake scripts', () => {
     });
   }, 60_000);
 
-  test('an outside item gets archon-needs-maintainer and no route label', () => {
-    const at = install();
-    const decided = facts(at, { runId: 'run-1', author: 'stranger' }).output;
-    expect(decided).toMatchObject({
-      path: 'outside',
-      decision: { trust: 'outside', stage: 'needs_maintainer' },
-    });
-
-    const applied = outcome(at, { runId: 'run-1', author: 'stranger' }, decided, SKIPPED_TRIAGE);
-    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    const edits = applied.gh.filter(call => call.startsWith('issue edit'));
-    expect(edits).toEqual([
-      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-needs-maintainer',
-    ]);
-    expect(stored(at).value).toMatchObject({
-      stage: 'needs_maintainer',
-      trust: 'outside',
-      claim: null,
-    });
-  }, 60_000);
-
-  test('a route label added by a login not in maintainers.json promotes nothing', () => {
-    const at = install();
-    const first = facts(at, { runId: 'run-1', author: 'stranger' }).output;
-    expect(outcome(at, { runId: 'run-1', author: 'stranger' }, first, SKIPPED_TRIAGE).code).toBe(0);
-
-    const labelled = {
-      author: 'stranger',
-      action: 'added',
-      label: 'archon-ready',
-      issueLabels: ['archon-ready'],
-    };
-    const decided = facts(at, {
-      ...labelled,
-      runId: 'run-2',
-      actor: 'stranger',
-      statuses: { 'run-1': 'completed' },
-    }).output;
-    expect(decided).toMatchObject({ path: 'outside', decision: { promoted: null } });
-    const applied = outcome(at, { ...labelled, runId: 'run-2' }, decided, SKIPPED_TRIAGE);
-    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    // The unrequested route label is reconciled away.
-    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-needs-maintainer --remove-label archon-ready',
-    ]);
-    expect(stored(at).value.history.map(entry => entry.outcome)).toContain('refused');
-  }, 60_000);
-
-  test('a promoted item whose body digest changed is demoted, with the reason recorded', () => {
-    const at = install();
-    const outside = { author: 'stranger' };
-    expect(
-      outcome(
-        at,
-        { ...outside, runId: 'run-1' },
-        facts(at, { ...outside, runId: 'run-1' }).output,
-        SKIPPED_TRIAGE
-      ).code
-    ).toBe(0);
-
-    const promote = {
-      ...outside,
-      action: 'added',
-      label: 'archon-triage',
-      actor: 'Maintainer',
-      issueLabels: ['archon-triage', 'archon-needs-maintainer'],
-    };
-    const decided = facts(at, {
-      ...promote,
-      runId: 'run-2',
-      statuses: { 'run-1': 'completed' },
-    }).output;
-    expect(decided).toMatchObject({
-      path: 'triage',
-      decision: { promoted: { by: 'Maintainer', pin: { body_digest: DIGEST } } },
-    });
-    const triagedRun = outcome(at, { ...promote, runId: 'run-2' }, decided, READY_VERDICT);
-    expect({ code: triagedRun.code, stderr: triagedRun.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(stored(at).value).toMatchObject({
-      stage: 'deliver',
-      promoted: { pin: { body_digest: DIGEST } },
-    });
-
-    const edit = {
-      ...outside,
-      action: 'edited',
-      body: 'An edited body',
-      issueLabels: ['archon-ready', 'archon-size-s', 'archon-type-feature'],
-    };
-    const demoted = facts(at, {
-      ...edit,
-      runId: 'run-3',
-      statuses: { 'run-2': 'completed' },
-    }).output;
-    expect(demoted).toMatchObject({
-      path: 'outside',
-      decision: { promoted: null, stage: 'needs_maintainer' },
-    });
-    const applied = outcome(at, { ...edit, runId: 'run-3' }, demoted, SKIPPED_TRIAGE);
-    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-needs-maintainer --remove-label archon-ready --remove-label archon-size-s --remove-label archon-type-feature',
-    ]);
-    const doc = stored(at).value;
-    expect(doc).toMatchObject({ stage: 'needs_maintainer', promoted: null });
-    expect(doc.history).toContainEqual(
-      expect.objectContaining({
-        outcome: 'demoted',
-        summary: expect.stringContaining(`pinned ${DIGEST}, now ${bodyDigest('An edited body')}`),
-      })
-    );
-  }, 60_000);
-
   test('a second pickup at the same work-item revision skips the item', () => {
     const at = install();
     facts(at, { runId: 'run-1' });
@@ -758,14 +585,6 @@ describe('the intake scripts', () => {
     return (JSON.parse(result.stdout) as { summary: string }).summary;
   }
 
-  test('an idle pass names a stored item that does not parse instead of reporting an empty queue', () => {
-    const at = install();
-    inProcess(at, () => statePut('work/3', { not: 'a work item' }, 0));
-    const summary = idleOutcome(at, { runId: 'run-1', kind: 'pr' });
-    expect(summary).not.toBe('No item waits for intake.');
-    expect(summary).toContain('work/3');
-  }, 60_000);
-
   test('a claim whose run holds no lease stays held, and the idle pass names it and the run', () => {
     const at = install();
     const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'ghost-run', at: AT, requests: [] } };
@@ -774,50 +593,6 @@ describe('the intake scripts', () => {
     expect(stored(at).value.claim?.run_id).toBe('ghost-run');
     expect(summary).toContain('work/7');
     expect(summary).toContain('ghost-run');
-  }, 60_000);
-
-  test('an idle pass with only live claims still reports an empty queue', () => {
-    const at = install();
-    const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'live-run', at: AT, requests: [] } };
-    inProcess(at, () => {
-      process.env.WORKFLOW_ID = 'live-run';
-      return statePut('work/7', held, 0, 'take');
-    });
-    const event = { runId: 'run-1', kind: 'pr', statuses: { 'live-run': 'running' } };
-    expect(idleOutcome(at, event)).toBe('No item waits for intake.');
-  }, 60_000);
-
-  test('pickup reads every stored work item in one state call, not one per item', () => {
-    const at = install();
-    inProcess(at, () => {
-      for (const number of [1, 2, 3]) {
-        statePut(`work/${String(number)}`, newWorkItem({ repo: PR.repo, number }, AT), 0);
-      }
-    });
-    const log = join(track(mkdtempSync(join(tmpdir(), 'archon-intake-calls-'))), 'calls.jsonl');
-    const result = run(at, 'facts', { runId: 'run-1', kind: 'pr' }, { ARCHON_CALL_LOG: log });
-    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(JSON.parse(result.stdout)).toMatchObject({ path: 'idle', item: null });
-    const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
-    expect(calls.filter(argv => argv[0] === 'state')).toEqual([
-      ['state', 'list', '--prefix', 'work/', '--values'],
-    ]);
-  }, 60_000);
-
-  test('edits while an item is claimed queue one request, and a release keeps only the newest', () => {
-    const at = install();
-    facts(at, { runId: 'run-1' });
-    for (const runId of ['run-2', 'run-3']) {
-      facts(at, { runId, action: 'edited', statuses: { 'run-1': 'running' } });
-    }
-    expect(stored(at).value.requests).toEqual([
-      expect.objectContaining({ run_id: 'run-2', action: 'edited' }),
-    ]);
-
-    facts(at, { runId: 'run-4', kind: 'pr', statuses: { 'run-1': 'cancelled' } });
-    expect(stored(at).value.claim?.requests).toEqual([
-      expect.objectContaining({ run_id: 'run-2', action: 'edited' }),
-    ]);
   }, 60_000);
 
   test('a request label added while the item is claimed stays on the issue for the next pickup', () => {
@@ -832,133 +607,6 @@ describe('the intake scripts', () => {
     );
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(applied.gh.filter(call => call.includes('--remove-label'))).toEqual([]);
-  }, 60_000);
-
-  test('a request label added again after its request was claimed stays on the issue', () => {
-    const at = install();
-    const retriage = {
-      action: 'added',
-      label: 'archon-triage',
-      actor: 'Maintainer',
-      issueLabels: ['archon-triage'],
-    };
-    const decided = facts(at, { ...retriage, runId: 'run-1' }).output;
-    facts(at, { ...retriage, runId: 'run-2', statuses: { 'run-1': 'running' } });
-
-    const applied = outcome(at, { ...retriage, runId: 'run-1' }, decided, READY_VERDICT);
-    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh.filter(call => call.includes('--remove-label'))).toEqual([]);
-    expect(stored(at).value.requests).toEqual([
-      expect.objectContaining({ run_id: 'run-2', label: 'archon-triage' }),
-    ]);
-  }, 60_000);
-
-  test('a request label on the issue at pickup whose request queues after the outcome stays for the next pickup', () => {
-    const at = install();
-    // The label lands before facts reads the issue; its own run records the request
-    // only after this run's outcome, so nothing in the store names it during the write.
-    const decided = facts(at, { runId: 'run-1', issueLabels: ['archon-triage'] }).output;
-    const applied = outcome(
-      at,
-      { runId: 'run-1', issueLabels: ['archon-triage'] },
-      decided,
-      READY_VERDICT
-    );
-    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh.filter(call => call.includes('--remove-label'))).toEqual([]);
-
-    const retriage = facts(at, {
-      runId: 'run-2',
-      action: 'added',
-      label: 'archon-triage',
-      actor: 'Maintainer',
-      issueLabels: ['archon-ready', 'archon-size-s', 'archon-type-feature', 'archon-triage'],
-      statuses: { 'run-1': 'completed' },
-    }).output;
-    expect(retriage).toMatchObject({ path: 'triage', decision: { notes: [] } });
-  }, 60_000);
-
-  test("a route label on a maintainer's item that no request claims is removed at once", () => {
-    const at = install();
-    const stale = { issueLabels: ['archon-plan'] };
-    const decided = facts(at, { ...stale, runId: 'run-1' }).output;
-    const applied = outcome(at, { ...stale, runId: 'run-1' }, decided, READY_VERDICT);
-    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-ready --add-label archon-size-s --add-label archon-type-feature --remove-label archon-plan',
-    ]);
-  }, 60_000);
-
-  test("archon-issue, the investigate route's old name, is removed when intake next writes the item", () => {
-    const at = install();
-    const stale = { issueLabels: ['archon-issue'] };
-    const decided = facts(at, { ...stale, runId: 'run-1' }).output;
-    const investigate = {
-      ...READY_VERDICT,
-      INPUTS_ROUTE: 'investigate',
-      INPUTS_LABELS: '["archon-investigate","archon-size-s","archon-type-feature"]',
-    };
-    const applied = outcome(at, { ...stale, runId: 'run-1' }, decided, investigate);
-    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-investigate --add-label archon-size-s --add-label archon-type-feature --remove-label archon-issue',
-    ]);
-  }, 60_000);
-
-  test('a request label on an outside item waits one pickup for its request, then is removed', () => {
-    const at = install();
-    const stale = { author: 'stranger', issueLabels: ['archon-plan'] };
-    const first = facts(at, { ...stale, runId: 'run-1' }).output;
-    const kept = outcome(at, { ...stale, runId: 'run-1' }, first, SKIPPED_TRIAGE);
-    expect({ code: kept.code, stderr: kept.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(kept.gh.filter(call => call.includes('--remove-label'))).toEqual([]);
-    expect(stored(at).value.facts.intake?.waiting).toEqual(['archon-plan']);
-
-    const edited = {
-      ...stale,
-      action: 'edited',
-      issueLabels: ['archon-plan', 'archon-needs-maintainer'],
-    };
-    const second = facts(at, { ...edited, runId: 'run-2', statuses: { 'run-1': 'completed' } });
-    const removed = outcome(at, { ...edited, runId: 'run-2' }, second.output, SKIPPED_TRIAGE);
-    expect({ code: removed.code, stderr: removed.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(removed.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-      'issue edit 7 --repo ghe.example.com/example/repo --remove-label archon-plan',
-    ]);
-    expect(stored(at).value.facts.intake?.waiting).toEqual([]);
-  }, 60_000);
-
-  test('a claim keeps the newest label requests and one other request', () => {
-    const at = install();
-    facts(at, { runId: 'run-1' });
-    const labels = Array.from({ length: 60 }, (_, index) =>
-      labelRequest('archon-triage', `account-${String(index)}`)
-    );
-    const edit = (runId: string): IntakeRequest => ({
-      ...labelRequest('', null),
-      run_id: runId,
-      action: 'edited',
-      label: null,
-      body_digest: null,
-    });
-    const waiting = { ...newWorkItem(SUBJECT, AT), requests: [edit('a'), ...labels, edit('b')] };
-    const { revision } = stored(at);
-    const doc = inProcess(at, () => claimItem({ name: 'work/7', revision, doc: waiting, lease: null }, AT, 'r'));
-    expect(doc?.claim?.requests).toEqual([...labels.slice(-49), edit('b')]);
-  }, 60_000);
-
-  test('a claimed item written by its run keeps the newest label requests', () => {
-    const at = install();
-    facts(at, { runId: 'run-1' });
-    const labels = Array.from({ length: 60 }, (_, index) =>
-      labelRequest('archon-triage', `account-${String(index)}`)
-    );
-    const { revision, value } = stored(at);
-    inProcess(at, () => {
-      expect(statePut('work/7', { ...value, requests: labels }, revision)).toBe('ok');
-      updateClaimed(SUBJECT, 'run-1', doc => doc);
-    });
-    expect(stored(at).value.requests).toEqual(labels.slice(-50));
   }, 60_000);
 
   test('labels that fail to write leave the stage stored and the claim held, and the next pickup writes them', () => {

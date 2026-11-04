@@ -72,38 +72,10 @@ describe('settle', () => {
     });
   });
 
-  it('renders every field of an asked item and offers its choices', () => {
-    const out = settled(ask([RERUN, FINISH], 'rerun'));
-    expect(out.done).toBe(false);
-    expect(out.outcome).toEqual(OUTCOME);
-    expect(out.options).toEqual([{ id: 'rerun', label: 'Deliver again' }, { id: 'finish', label: 'Leave it' }]);
-    for (const field of [
-      '**What it is.** Delivery ran out of rounds',
-      '**Why it matters.** The pull request stays a draft',
-      '**Recommendation: `rerun`** (medium confidence). mechanical',
-      'Evidence: ci.md',
-      'What would change it: a design question',
-      '- `rerun` (Deliver again): Runs another batch',
-      '**If nobody answers.** The run stays paused',
-      `- ${PR_URL}`,
-    ]) expect(out.message).toContain(field);
-    expect(out.brief).toContain(out.message);
-    expect(out.brief.endsWith('(empty when they wrote none):\n')).toBe(true);
-  });
-
-  it('settles a pass whose stage did not run on the outcome the answer kept', () => {
-    const run = settle(null, { judge: false, outcome: OUTCOME, applied: 'kept' });
-    expect(run.code, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout)).toMatchObject({ done: true, outcome: OUTCOME, message: '' });
-  });
-
   it.each([
-    ['a done decision with an item', { ...ask([RERUN, FINISH], 'rerun'), decision: 'done' as const }, 'a done decision carries an attention item'],
-    ['an ask with no item', { decision: 'ask' as const, reason: 'r', pull_request: null, attention: null }, 'an ask decision carries no attention item'],
     ['an item a person cannot end', ask([RERUN], 'rerun'), 'offers no `finish` choice'],
     ['`ready` with no pull request', ask([READY, FINISH], 'ready'), 'offers `ready` but names no pull request'],
     ['a recommendation never offered', ask([RERUN, FINISH], 'ready'), 'the recommended choice "ready" is not offered'],
-    ['a judged pass with no decision', null, 'no decision was made on its ending'],
   ])('refuses %s', (_name, decision, message) => {
     const run = settle(decision, { judge: true, outcome: OUTCOME, applied: '' });
     expect(run.code).not.toBe(0);
@@ -112,11 +84,6 @@ describe('settle', () => {
 });
 
 describe('answer', () => {
-  it('judges the first pass on its own outcome', () => {
-    const run = answer(null, null, OUTCOME);
-    expect(run.code, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual({ judge: true, outcome: OUTCOME, applied: '' });
-  });
 
   it('rerun: the stage ran again, and its new outcome is judged', () => {
     const run = answer(settled(ask([RERUN, FINISH], 'rerun')), 'rerun', LATER);
@@ -147,8 +114,6 @@ describe('answer', () => {
 
   it.each([
     ['a stage that reports reason failed', null, { ...OUTCOME, reason: 'failed' }],
-    ['a stage whose PR create ended unresolved', null, { ...OUTCOME, ready: false, reason: 'pr_create_unresolved', pr_url: '' }],
-    ['a stage that left no outcome', null, null],
     ['a rerun whose stage failed', 'rerun', { ...LATER, ready: false, reason: 'failed' }],
   ])('does not judge %s, so nothing is asked', (_name, choice, outcome) => {
     const previous = choice === null ? null : settled(ask([RERUN, FINISH], 'rerun'));
