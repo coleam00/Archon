@@ -7700,6 +7700,7 @@ export interface components {
               shape: 'cost_per';
               title: string;
               metric: string;
+              cost_of?: string;
             }
         )[];
       }[];

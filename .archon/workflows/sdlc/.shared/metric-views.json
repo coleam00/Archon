@@ -31,6 +31,11 @@
         "rough_below": 0.8
       }
     },
-    { "shape": "cost_per", "title": "Cost per PR", "metric": "sdlc.prs_merged" }
+    {
+      "shape": "cost_per",
+      "title": "Cost per PR",
+      "metric": "sdlc.prs_merged",
+      "cost_of": "sdlc.prs_opened"
+    }
   ]
 }

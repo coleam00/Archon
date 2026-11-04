@@ -203,8 +203,11 @@ export function costPerCard(view: ViewOf<'cost_per'>, report: MetricsReport): Co
   const metric = find(report, view.metric);
   const counted = metric === undefined ? undefined : headlineOf(metric);
   if (counted === undefined) return { ...base, state: 'not_recorded' };
+  const costed =
+    view.cost_of === undefined ? counted : instrumentAt(find(report, view.cost_of), counted);
+  if (costed === undefined) return { ...base, state: 'not_recorded' };
   if (counted.value === 0) return { ...base, state: 'nothing_counted' };
-  const { usd, runs, runs_without_cost } = counted.cost;
+  const { usd, runs, runs_without_cost } = costed.cost;
   if (usd === null || (runs - runs_without_cost) * 2 <= runs) {
     return { ...base, state: 'cost_unrecorded' };
   }

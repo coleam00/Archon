@@ -46,11 +46,16 @@ const ratioViewSchema = z.strictObject({
     .optional(),
 });
 
-/** The known cost of the runs behind a count, per counted item. */
+/**
+ * A known cost per counted item: the cost of `cost_of`'s producing runs, or of `metric`'s
+ * when absent, divided by `metric`'s value.
+ */
 const costPerViewSchema = z.strictObject({
   shape: z.literal('cost_per'),
   title: labelSchema,
   metric: metricNameSchema,
+  /** A count of the same instrument whose runs carry the whole cost, such as every PR opened. */
+  cost_of: metricNameSchema.optional(),
 });
 
 export const metricViewSchema = z.discriminatedUnion('shape', [

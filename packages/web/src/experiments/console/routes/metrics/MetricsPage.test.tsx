@@ -273,6 +273,27 @@ describe('cards', () => {
       usd: 0.5,
     });
   });
+  test('cost_of takes the cost from another count at the same identity', () => {
+    const view = {
+      shape: 'cost_per',
+      title: 'Cost',
+      metric: shipped.name,
+      cost_of: 'demo.items_started',
+    } as const;
+    const started = (identity: Identity): Metric => {
+      const base = instrument(20, identity);
+      return metric('demo.items_started', [{ ...base, cost: { ...base.cost, usd: 24 } }]);
+    };
+    expect(costPerCard(view, report({ metrics: [shipped, started(NONE)] }))).toEqual({
+      shape: 'cost_per',
+      title: 'Cost',
+      state: 'value',
+      usd: 2,
+    });
+    expect(costPerCard(view, report({ metrics: [shipped, started(JUDGE)] })).state).toBe(
+      'not_recorded'
+    );
+  });
 });
 
 describe('details', () => {

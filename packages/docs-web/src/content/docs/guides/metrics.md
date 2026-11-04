@@ -435,7 +435,12 @@ declared without knowing any pack's metric names.
         "rough_below": 0.8
       }
     },
-    { "shape": "cost_per", "title": "Cost per PR", "metric": "factory.prs_merged" }
+    {
+      "shape": "cost_per",
+      "title": "Cost per PR",
+      "metric": "factory.prs_merged",
+      "cost_of": "factory.prs_opened"
+    }
   ]
 }
 ```
@@ -447,11 +452,11 @@ each one of three shapes:
 |-------|-------|
 | `count` | The metric's value, and up to four `breakdown` counts as "12 opened". |
 | `ratio` | `numerator` as a share of `denominator`, with a bar and "3 of 12 new tests". With a `calibration`, adds "judge catches 9 of 10", and a "rough" pill while the calibration's mean is below `rough_below`. |
-| `cost_per` | The known cost of the metric's producing runs per counted item. |
+| `cost_per` | The known cost of the metric's producing runs per counted item. With `cost_of`, the cost is that metric's producing runs instead, so cost per merged PR can carry the cost of PRs that never merged. |
 
 Every figure on a card comes from one instrument identity: the card's metric's newest
 instrument and its `measured_by`. A breakdown count or a denominator recorded only by another
-instrument shows "not recorded", never 0. A calibration is a score metric that `calibrates`
+instrument shows "not recorded", never 0, and so does a `cost_of` metric. A calibration is a score metric that `calibrates`
 the numerator with one record per labelled case, 1 when caught and 0 when missed; it counts
 only at exactly the numerator's identity, otherwise the card says "not calibrated". Cost per
 item is a floor, shown as `≥ $…`, and stays a dash until more than half of the producing runs
