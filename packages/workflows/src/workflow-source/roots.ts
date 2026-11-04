@@ -77,7 +77,9 @@ export const DEFAULT_WORKFLOW_SOURCE_CONFIG: WorkflowSourceConfig = {
  * a repo pointing `commands.folder` outside `.archon/commands` would have its commands
  * captured by `workflow run` and missed by `workflow test`.
  */
-export function workflowSourceConfigFrom(config: WorkflowConfig): WorkflowSourceConfig {
+export function workflowSourceConfigFrom(
+  config: Partial<Pick<WorkflowConfig, 'defaults' | 'commands' | 'envVars'>>
+): WorkflowSourceConfig {
   return {
     load_default_workflows: config.defaults?.loadDefaultWorkflows ?? true,
     load_default_commands: config.defaults?.loadDefaultCommands ?? true,

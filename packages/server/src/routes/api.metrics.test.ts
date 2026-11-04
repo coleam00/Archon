@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdir, mkdtemp, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import type { MetricsStore } from '@archon/workflows/metrics';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { metricsReportSchema } from './schemas/metrics.schemas';
-import { registerMetricsRoute } from './api.metrics';
+import { metricsReportSchema, metricViewsSchema } from './schemas/metrics.schemas';
+import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
 
 const row = {
   eventId: 'event-1',
@@ -140,5 +144,49 @@ describe('GET /api/metrics', () => {
     const response = await app().request('/api/metrics?since=yesterday');
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toContain('since must be');
+  });
+});
+
+describe('GET /api/metric-views', () => {
+  const track = trackTempRoots();
+
+  async function viewsApp(): Promise<OpenAPIHono> {
+    const project = track(await mkdtemp(join(tmpdir(), 'archon-metric-views-route-')));
+    const shared = join(project, '.archon', 'workflows', 'factory', '.shared');
+    await mkdir(shared, { recursive: true });
+    await writeFile(
+      join(shared, 'metric-views.json'),
+      JSON.stringify({
+        cards: [{ shape: 'cost_per', title: 'Cost per item', metric: 'factory.items' }],
+      })
+    );
+    const app = new OpenAPIHono();
+    registerMetricViewsRoute(app, {
+      codebaseCwd: async id => (id === 'cb-1' ? project : null),
+      loadConfig: async () => ({}),
+    });
+    return app;
+  }
+
+  test("a codebase's project pack is served in the served schema", async () => {
+    const response = await (await viewsApp()).request('/api/metric-views?codebaseId=cb-1');
+    expect(response.status).toBe(200);
+    const listing = metricViewsSchema.parse(await response.json());
+    expect(listing.packs.find(pack => pack.pack === 'factory')).toMatchObject({
+      source: 'project',
+      cards: [{ shape: 'cost_per', title: 'Cost per item' }],
+    });
+  });
+
+  test('without a codebase, project packs are not served', async () => {
+    const response = await (await viewsApp()).request('/api/metric-views');
+    expect(response.status).toBe(200);
+    const listing = metricViewsSchema.parse(await response.json());
+    expect(listing.packs.some(pack => pack.source === 'project')).toBe(false);
+  });
+
+  test('an unknown codebase returns 404', async () => {
+    const response = await (await viewsApp()).request('/api/metric-views?codebaseId=missing');
+    expect(response.status).toBe(404);
   });
 });

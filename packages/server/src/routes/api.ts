@@ -1,9 +1,10 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
-import type { CloneOptions, ConversationLockManager } from '@archon/core';
+import { loadConfig, type CloneOptions, type ConversationLockManager } from '@archon/core';
 import { webPushPayloadSchema } from '@archon/core/schemas/web-push';
 import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
+import * as codebaseDb from '@archon/core/db/codebases';
 import type { WebAdapter } from '../adapters/web';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import { isApiGateEnabled } from '../auth';
@@ -19,7 +20,7 @@ import { registerConversationRoutes } from './api.conversations';
 import { registerConversationProcessingRoute } from './api.conversation-processing';
 import { registerHealthRoutes } from './api.health';
 import { registerMessageRoutes } from './api.messages';
-import { registerMetricsRoute } from './api.metrics';
+import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
 import { registerProviderKeyRoutes } from './api.provider-keys';
 import { registerProviderRoutes } from './api.providers';
 import { registerRunAttentionRoutes } from './api.run-attention';
@@ -107,6 +108,10 @@ export function registerApiRoutes(
   registerRunCleanupRoutes(app, operations);
   registerWorkflowRunReadRoutes(app);
   registerMetricsRoute(app, createWorkflowStore());
+  registerMetricViewsRoute(app, {
+    codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
+    loadConfig,
+  });
   registerWorkflowDefinitionRoutes(app);
   registerArtifactRoutes(app);
   registerConfigRoutes(app);
