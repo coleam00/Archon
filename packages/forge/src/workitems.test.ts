@@ -326,6 +326,40 @@ test('item and pull request views accept an author and still parse without one',
   }
 });
 
+test('pull request timestamps must agree with its state, and a view may omit them', () => {
+  const pr = {
+    schemaVersion: 1,
+    ...ref,
+    url: 'https://forge.example/group/team/repo/pull/3',
+    head: 'feature',
+    base: 'dev',
+    is_draft: false,
+    head_repo: repo,
+    head_revision: 'head',
+    base_revision: 'base',
+    maintainer_can_modify: null,
+  };
+  const created = '2026-11-01T09:00:00Z';
+  const later = '2026-11-02T09:00:00Z';
+  const parses = (state: string, timestamps?: object): boolean =>
+    forgeResponseSchema.safeParse({
+      operationId: 'view',
+      ok: true,
+      result: {
+        op: 'pr.view',
+        value: { pr: { ...pr, state }, title: '', body: '', timestamps },
+      },
+    }).success;
+  expect(parses('open')).toBe(true);
+  expect(parses('open', { created_at: created, merged_at: null, closed_at: null })).toBe(true);
+  expect(parses('merged', { created_at: created, merged_at: later, closed_at: later })).toBe(true);
+  expect(parses('closed', { created_at: created, merged_at: null, closed_at: later })).toBe(true);
+  // A resolved pull request with no resolution time would read as one that never resolved.
+  expect(parses('merged', { created_at: created, merged_at: null, closed_at: later })).toBe(false);
+  expect(parses('closed', { created_at: created, merged_at: null, closed_at: null })).toBe(false);
+  expect(parses('open', { created_at: created, merged_at: null, closed_at: later })).toBe(false);
+});
+
 test('close proof verifies the issue, its closed state and the requested reason', () => {
   const close = {
     operationId: 'close',

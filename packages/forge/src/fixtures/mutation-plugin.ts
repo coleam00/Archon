@@ -40,6 +40,8 @@ const OPS = [
   'workitem.comments',
   'checks.commit',
   'pr.merge-state',
+  'pr.files',
+  'repo.file',
 ] as const;
 
 if (command === 'metadata') {
@@ -85,6 +87,7 @@ else {
     method?: 'merge' | 'squash';
     conditions?: { head?: string };
     revision?: string;
+    path?: string;
     at?: { kind: 'revision'; revision: string } | { kind: 'default_branch' };
     units?: {
       unit: { kind: string; id: string; name: string };
@@ -226,6 +229,26 @@ else {
             : 'devsha'
       ),
     'pr.merge-state': () => mergeState(mode === 'mismatch' ? ref.number + 1 : ref.number),
+    'pr.files': () =>
+      read({
+        ref,
+        files: [
+          {
+            path: 'src/a.test.ts',
+            previous_path: null,
+            status: 'added',
+            patch: 'private patch',
+          },
+          { path: 'logo.png', previous_path: null, status: 'modified', patch: null },
+        ],
+      }),
+    'repo.file': () =>
+      read({
+        repo,
+        path: input.path,
+        revision: mode === 'mismatch' ? 'another-revision' : input.revision,
+        text: 'private file text',
+      }),
     'workitem.comments': () =>
       read({
         workitem: subject,

@@ -295,6 +295,11 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
       ? value.revision === request.at.revision && value.branch === null
       : value.branch !== null),
   'pr.merge-state': byRef,
+  'pr.files': byRef,
+  'repo.file': (request, value) =>
+    sameRepo(value.repo, request.repo) &&
+    value.path === request.path &&
+    value.revision === request.revision,
   'workitem.comments': (request, value) => sameSubject(value.workitem, request.subject),
   'workitem.view': byRef,
   'pr.view': matchesPrView,

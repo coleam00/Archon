@@ -545,6 +545,30 @@ describe('review threads and issue bodies', () => {
     expect(JSON.stringify(result.audit)).toContain(contentDigest('private conversation comment'));
   });
 
+  test('patches and file text reach callers and only their digests reach the audit', async () => {
+    const files = await dispatch({ operationId: 'files', op: 'pr.files', ref });
+    const file = await dispatch({
+      operationId: 'file',
+      op: 'repo.file',
+      repo: ref.repo,
+      path: 'src/a.test.ts',
+      revision: 'headsha',
+    });
+    for (const [result, content] of [
+      [files, 'private patch'],
+      [file, 'private file text'],
+    ] as const) {
+      expect(JSON.stringify(result.response)).toContain(content);
+      expect(JSON.stringify(result.audit)).not.toContain(content);
+      expect(JSON.stringify(result.audit)).toContain(contentDigest(content));
+    }
+    // A file the forge has no patch for stays distinguishable from an empty patch.
+    expect(files.audit.result).toMatchObject({
+      ok: true,
+      result: { value: { files: [{ path: 'src/a.test.ts' }, { path: 'logo.png', patch: null }] } },
+    });
+  });
+
   test.each([
     {
       operationId: 'checks-1',
@@ -553,6 +577,7 @@ describe('review threads and issue bodies', () => {
       at: { kind: 'revision', revision: 'asked' },
     },
     { operationId: 'merge-state-1', op: 'pr.merge-state', ref },
+    { operationId: 'file-1', op: 'repo.file', repo: ref.repo, path: 'src/a.ts', revision: 'asked' },
   ] satisfies ForgeRequest[])('a $op read that answers the request is accepted', async request => {
     expect((await dispatch(request)).response).toMatchObject({ ok: true });
   });
@@ -565,6 +590,7 @@ describe('review threads and issue bodies', () => {
       at: { kind: 'revision', revision: 'asked' },
     },
     { operationId: 'merge-state-1', op: 'pr.merge-state', ref },
+    { operationId: 'file-1', op: 'repo.file', repo: ref.repo, path: 'src/a.ts', revision: 'asked' },
   ] satisfies ForgeRequest[])(
     'a $op read about another commit or pull request is an invalid response',
     async request => {

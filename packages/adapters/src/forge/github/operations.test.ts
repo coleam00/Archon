@@ -82,6 +82,8 @@ describe('GitHub outbound producer', () => {
         'pr.reviews',
         'pr.threads',
         'pr.merge-state',
+        'pr.files',
+        'repo.file',
         'pr.thread.reply',
         'pr.thread.resolve',
       ],

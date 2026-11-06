@@ -84,6 +84,41 @@ describe('GitHub lifecycle reads', () => {
     expect(legacy.ok && legacy.result.value).not.toHaveProperty('author');
   });
 
+  test.each([
+    ['open', pull(), { merged_at: null, closed_at: null }],
+    [
+      'merged',
+      pull({
+        state: 'closed',
+        merged: true,
+        merged_at: '2026-11-03T10:00:00Z',
+        closed_at: '2026-11-03T10:00:00Z',
+      }),
+      { merged_at: '2026-11-03T10:00:00Z', closed_at: '2026-11-03T10:00:00Z' },
+    ],
+    [
+      'closed',
+      pull({ state: 'closed', merged: false, closed_at: '2026-11-04T10:00:00Z' }),
+      { merged_at: null, closed_at: '2026-11-04T10:00:00Z' },
+    ],
+  ] as const)('a %s pull request view carries its timestamps', async (state, observed, times) => {
+    const response = forgeResponseSchema.parse(
+      await run(
+        { operationId: 'times', op: 'pr.view', selector: { kind: 'number', ref } },
+        fakeGitHub({ pull: { ...observed } })
+      )
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        value: {
+          pr: { state },
+          timestamps: { created_at: '2026-11-01T09:00:00Z', ...times },
+        },
+      },
+    });
+  });
+
   test('reports no pull request for a head that has none', async () => {
     const github = fakeGitHub();
     const empty = { ...github, fetch: async () => json([]) };

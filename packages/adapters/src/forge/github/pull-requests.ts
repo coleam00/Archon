@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   contentDigest,
   forgePrRecordSchema,
+  prTimestampsSchema,
   reviewItemSchema,
   type ForgeMutationRequest,
   type ForgePrRecord,
@@ -35,6 +36,7 @@ const pullSchema = z.object({
   merge_commit_sha: z.string().nullable().optional(),
   maintainer_can_modify: z.boolean().nullable().optional(),
   user: userSchema.optional(),
+  ...prTimestampsSchema.shape,
   head: z.object({ ref: z.string().min(1), sha: z.string().min(1), repo: repoSchema.nullable() }),
   base: z.object({ ref: z.string().min(1), sha: z.string().min(1) }),
 });
@@ -294,6 +296,11 @@ export async function handleGithubPrView(
             title: pull.title,
             body: pull.body ?? '',
             ...authorField(repo.host, pull.user),
+            timestamps: {
+              created_at: pull.created_at,
+              merged_at: pull.merged_at,
+              closed_at: pull.closed_at,
+            },
           }
         : null,
     },
