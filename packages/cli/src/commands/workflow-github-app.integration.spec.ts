@@ -96,6 +96,8 @@ async function run(
 function fixtureEnvironment(home: string, mode: CredentialMode): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    WORKFLOW_ID: '',
+    ARCHON_NODE_EXECUTION: '',
     ARCHON_HOME: home,
     DATABASE_URL: '',
     ARCHON_TELEMETRY_DISABLED: '1',

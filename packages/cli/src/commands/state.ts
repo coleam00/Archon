@@ -8,7 +8,6 @@ import {
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { registerRepository } from '@archon/core/handlers/clone';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
-import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
 import {
   stateDocumentNameSchema,
   stateNamePrefixSchema,
@@ -26,6 +25,7 @@ import {
   type StateScope,
   type StateWriter,
 } from '@archon/workflows/state-document-store';
+import { readCallingNode } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
 
 export class StateProjectResolutionError extends Error {}
@@ -124,20 +124,7 @@ function parseStateArguments(
 }
 
 function resolveRunWriter(runId: string, env: NodeJS.ProcessEnv): StateWriter {
-  let supplied: unknown = null;
-  try {
-    supplied = JSON.parse(env.ARCHON_NODE_EXECUTION || 'null');
-  } catch {
-    // Reported below with the same message as a missing identity.
-  }
-  const parsedIdentity = nodeExecutionMetadataSchema
-    .pick({ runId: true, path: true })
-    .safeParse(supplied);
-  if (!parsedIdentity.success)
-    throw new Error('WORKFLOW_ID requires ARCHON_NODE_EXECUTION as JSON with runId and path');
-  const identity = parsedIdentity.data;
-  if (identity.runId !== runId) throw new Error('ARCHON_NODE_EXECUTION does not match WORKFLOW_ID');
-  return { kind: 'run', runId, nodePath: identity.path };
+  return { kind: 'run', ...readCallingNode(runId, env) };
 }
 
 async function resolveRunContext(

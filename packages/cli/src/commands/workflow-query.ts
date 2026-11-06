@@ -30,6 +30,7 @@ import {
   withRunDetail,
 } from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
+import { type RequestedBy, requestedBy } from '../utils/requested-by';
 import {
   formatAge,
   getLog,
@@ -564,9 +565,10 @@ export async function workflowGetCommand(
     getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_transcript_failed');
   }
 
+  const origin = await requestedBy(host, run.metadata);
   if (json) {
     return writeWorkflowGetJson(
-      run,
+      { ...run, requested_by: origin },
       transcriptPath,
       terminalRecord,
       leaveBehind,
@@ -576,12 +578,13 @@ export async function workflowGetCommand(
     );
   }
 
-  printRunDetail(run, { transcriptPath, terminalRecord, leaveBehind, events, verbose });
+  const detail = { transcriptPath, terminalRecord, leaveBehind, events, verbose };
+  printRunDetail(run, { ...detail, requestedBy: origin });
   return 0;
 }
 
 async function writeWorkflowGetJson(
-  run: WorkflowRun,
+  run: WorkflowRun & { requested_by: RequestedBy },
   transcriptPath: string | null,
   terminalRecord: ReturnType<typeof getTerminalRecord>,
   leaveBehind: LeaveBehind | undefined,

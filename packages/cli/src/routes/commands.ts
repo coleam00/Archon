@@ -147,7 +147,7 @@ export async function runTrigger({
       limit: typeof values.limit === 'string' ? values.limit : undefined,
       yes: values.yes === true,
     },
-    (requestId, hostId) => spawnAdmitted(host, requestId, hostId)
+    { dispatch: (requestId, hostId) => spawnAdmitted(host, requestId, hostId) }
   );
   return 0;
 }
