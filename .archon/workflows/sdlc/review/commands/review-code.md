@@ -35,7 +35,11 @@ When execution is practical, run the smallest command that can falsify a finding
 
 ## Use a user-facing change
 
-When the change adds or changes something a person sees or does in a browser, start the app from your scratch worktree and use the change the way its user would: exercise the new interactions and flows with the playwright-cli skill, invoked as `$playwright-cli` where skills are invoked that way, and otherwise by running the `playwright-cli` command, reading the skill's `SKILL.md` from the project's or your own skills directory for its usage. A flow that breaks, hangs without feedback, or shows wrong or misleading data is a finding held to the same bar, with a snapshot or screenshot under `$ARTIFACTS_DIR/review/ui/` as its evidence. The app you start never touches the user's real data: give it its own data directory, an unused port and no live credentials, and stop exactly the process you started. Before starting it, read the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `ui-check.md`; the pack's defaults are in `$PACK_DIR/.shared/policy/`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins. When the CLI is missing or the app will not start, say so in your output and review the code alone.
+When the change is something a person sees or does in a browser, find out whether it works for that person. Reading the code is not enough: start the app from your scratch worktree and use it, driving it with playwright-cli (`$playwright-cli` where skills are invoked that way, otherwise the `playwright-cli` command and its `SKILL.md` in the project's or your skills directory). A flow that is broken, stuck, wrong or misleading for its user is a finding, with a screenshot or snapshot under `$ARTIFACTS_DIR/review/ui/` as evidence.
+
+- Never run it on the user's real data or a live database. `ui-check.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`) says how this project starts safely.
+- Stop exactly what you started.
+- If you could not run it, say so and review the code alone.
 
 ## What a finding costs
 

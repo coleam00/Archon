@@ -1,15 +1,9 @@
 # UI check policy
 
-This is the SDLC pack's default policy for how a reviewer runs a project's app to use a
-user-facing change. A project adds to it with its own `.archon/sdlc/policy/ui-check.md`:
-the reviewer reads this default first and the project's file after it, and where the
-two conflict, the project's line wins.
+The SDLC pack's default rules for a reviewer running a project's app. A project's
+`.archon/sdlc/policy/ui-check.md` adds to them and wins where the two conflict.
 
-- Start the app the way the project documents it for development, from the reviewer's
-  scratch worktree.
-- Point every data directory, database and config home the app reads at a fresh
-  directory under `$ARTIFACTS_DIR`. Never start it against a user's real data or a
-  configured live database.
-- Bind an unused port, and pass empty values for credentials the app would use to reach
-  a live service.
-- Stop the process you started by its PID or port before you finish.
+- Every data directory, database and config home the app reads is a fresh one under
+  `$ARTIFACTS_DIR`, never a user's real data or a configured live database.
+- The app binds an unused port and gets empty values for credentials that reach a live
+  service.
