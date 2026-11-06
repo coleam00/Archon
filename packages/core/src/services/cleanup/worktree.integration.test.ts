@@ -955,6 +955,7 @@ test.each(['covered', 'head-ahead', 'branch-ahead', 'dirty', 'paused'] as const)
     await git(env.working_path, 'reset', '--hard', 'HEAD~1');
     if (mode === 'head-ahead' || mode === 'branch-ahead') {
       await git(env.working_path, 'reset', '--hard', prHead);
+      if (mode === 'head-ahead') await git(env.working_path, 'checkout', '--detach', prHead);
       await git(env.working_path, 'commit', '--allow-empty', '-qm', 'unpublished work');
       if (mode === 'branch-ahead') await git(env.working_path, 'checkout', '--detach', prHead);
     }
