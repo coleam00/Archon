@@ -1028,6 +1028,54 @@ test.each([
   }
 });
 
+test.each([false, true])(
+  'merged cleanup uses the configured repository despite GH_REPO (configured PR merged=%s)',
+  async merged => {
+    await git(repo, 'remote', 'rename', 'upstream', 'origin');
+    await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    const sharedTip = await git(env.working_path, 'rev-parse', 'HEAD');
+    const remoteUrl = 'git@github.com:test/repo.git';
+    const originalGhRepo = process.env.GH_REPO;
+    process.env.GH_REPO = 'other/repo';
+    const originalExec = gitModule.execFileAsync;
+    const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+      async (file, args, options) => {
+        if (file === 'git' && args.includes('get-url')) return { stdout: remoteUrl, stderr: '' };
+        if (file === 'gh') {
+          const repoFlag = args.indexOf('--repo');
+          const selectedRepo = repoFlag === -1 ? process.env.GH_REPO : args[repoFlag + 1];
+          const payload =
+            args[0] === 'pr'
+              ? selectedRepo === remoteUrl && !merged
+                ? []
+                : [{ state: 'MERGED', headRefOid: sharedTip }]
+              : args[0] === 'repo'
+                ? { nameWithOwner: 'test/repo' }
+                : [[]];
+          return { stdout: JSON.stringify(payload), stderr: '' };
+        }
+        return originalExec(file, args, options);
+      }
+    );
+    try {
+      const result = await cleanupMergedWorktrees(codebaseId, repo);
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual(merged ? [env.branch_name] : []);
+      expect(existsSync(env.working_path)).toBe(!merged);
+      expect(await status()).toBe(merged ? 'destroyed' : 'active');
+      if (!merged) {
+        expect(result.skipped).toEqual([
+          { branchName: env.branch_name, reason: 'no merged PR covers all local tips' },
+        ]);
+      }
+    } finally {
+      exec.mockRestore();
+      if (originalGhRepo === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = originalGhRepo;
+    }
+  }
+);
+
 test('merged cleanup retires locally and reports the retained published branch', async () => {
   await git(repo, 'remote', 'rename', 'upstream', 'origin');
   await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');

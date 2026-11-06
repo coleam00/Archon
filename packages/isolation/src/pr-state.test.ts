@@ -47,30 +47,32 @@ function setupGhResponse(remoteUrl: string, ghStdout: string | Error): void {
 }
 
 describe('getPrState', () => {
-  test('returns MERGED when gh reports MERGED', async () => {
-    setupGhResponse(
-      'https://github.com/owner/repo.git',
-      '[{"state":"MERGED","headRefOid":"abc123"}]'
-    );
-    const result = await getPrState(BRANCH, REPO);
-    expect(result).toEqual({ state: 'MERGED', headSha: 'abc123' });
-    expect(mockExecFileAsync).toHaveBeenCalledWith(
-      'gh',
-      [
-        'pr',
-        'list',
-        '--head',
-        BRANCH,
-        '--state',
-        'all',
-        '--json',
-        'state,headRefOid',
-        '--limit',
-        '1',
-      ],
-      expect.any(Object)
-    );
-  });
+  test.each(['https://github.com/owner/repo.git', 'git@github.com:owner/repo.git'])(
+    'returns MERGED from the explicit remote %s',
+    async remoteUrl => {
+      setupGhResponse(remoteUrl, '[{"state":"MERGED","headRefOid":"abc123"}]');
+      const result = await getPrState(BRANCH, REPO);
+      expect(result).toEqual({ state: 'MERGED', headSha: 'abc123' });
+      expect(mockExecFileAsync).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr',
+          'list',
+          '--repo',
+          remoteUrl,
+          '--head',
+          BRANCH,
+          '--state',
+          'all',
+          '--json',
+          'state,headRefOid',
+          '--limit',
+          '1',
+        ],
+        expect.any(Object)
+      );
+    }
+  );
 
   test('returns OPEN when gh reports OPEN', async () => {
     setupGhResponse(
@@ -103,18 +105,19 @@ describe('getPrState', () => {
     expect(result).toEqual({ state: 'NONE' });
   });
 
-  test('returns NONE for non-GitHub remote URL', async () => {
-    setupGhResponse(
-      'https://gitlab.com/owner/repo.git',
-      '[{"state":"MERGED","headRefOid":"abc123"}]'
-    );
-    const result = await getPrState(BRANCH, REPO);
-    expect(result).toEqual({ state: 'NONE' });
-  });
+  test.each(['https://gitlab.com/owner/repo.git', 'https://github.com.example.org/owner/repo'])(
+    'returns NONE for unsupported remote %s',
+    async remoteUrl => {
+      setupGhResponse(remoteUrl, '[{"state":"MERGED","headRefOid":"abc123"}]');
+      const result = await getPrState(BRANCH, REPO);
+      expect(result).toEqual({ state: 'NONE' });
+      expect(mockExecFileAsync).toHaveBeenCalledTimes(1);
+    }
+  );
 
   test('queries the custom remote when provided', async () => {
     setupGhResponse(
-      'https://github.com/owner/repo.git',
+      'https://github.com/owner/upstream.git',
       '[{"state":"MERGED","headRefOid":"abc123"}]'
     );
 
@@ -124,6 +127,11 @@ describe('getPrState', () => {
     expect(mockExecFileAsync).toHaveBeenCalledWith(
       'git',
       ['-C', REPO, 'remote', 'get-url', 'upstream'],
+      expect.any(Object)
+    );
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'gh',
+      expect.arrayContaining(['--repo', 'https://github.com/owner/upstream.git']),
       expect.any(Object)
     );
   });

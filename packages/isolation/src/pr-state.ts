@@ -75,7 +75,7 @@ export async function getPrState(
     return NO_PR;
   }
 
-  if (!remoteUrl.toLowerCase().includes('github.com')) {
+  if (!isGitHubRemote(remoteUrl)) {
     getLog().debug({ repoPath, branch, remoteUrl }, 'isolation.pr_state_github_only');
     cache?.set(cacheKey, NO_PR);
     return NO_PR;
@@ -89,6 +89,8 @@ export async function getPrState(
       [
         'pr',
         'list',
+        '--repo',
+        remoteUrl,
         '--head',
         branch,
         '--state',
