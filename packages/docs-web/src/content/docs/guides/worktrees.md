@@ -50,7 +50,6 @@ archon isolation list                         # active worktrees and containers
 archon isolation cleanup                      # remove eligible environments older than 7 days
 archon isolation cleanup 14                   # ... older than 14 days
 archon isolation cleanup --merged             # remove environments whose branches merged
-archon isolation cleanup --merged --include-closed   # also those whose PRs closed unmerged
 archon complete fix/login                     # remove a branch's worktree and local branch; retain its remote branch
 ```
 

@@ -283,13 +283,13 @@ function printMergedCleanupResult(result: MergedCleanupResult): void {
 }
 
 /**
- * Cleanup merged isolation environments (branches merged into each repo's base branch)
+ * Cleanup isolation environments whose local tips are covered by a merged PR
  * Retains remote branches for operator inspection
  */
 export async function isolationCleanupMergedCommand(
   options: { includeClosed?: boolean } = {}
 ): Promise<0 | 1> {
-  console.log('Finding environments with branches merged into their base branch...');
+  console.log('Finding environments covered by merged pull requests...');
 
   const { codebases } = await listEnvironments();
 

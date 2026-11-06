@@ -88,13 +88,8 @@ export async function sweepScheduledEnvironment(
   const pathExists = await worktreeExists(toWorktreePath(env.working_path));
   if (!pathExists && (await sweepMissingPath(env, sweep))) return;
 
-  // Same merged decision the `--merged` sweep uses, PR state included: this
-  // repository squash-merges every PR, and git alone cannot see that.
   const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-  const { remoteMainRef, remote } = await resolveRepoGitContext(
-    mainRepoPath,
-    env.codebase_default_cwd
-  );
+  const { remote } = await resolveRepoGitContext(mainRepoPath, env.codebase_default_cwd);
   // A throw here reaches the caller, which records the failure and leaves the
   // environment for the next cycle. It must not fall through to the staleness
   // sweep: an unresolved merge check would then be indistinguishable from
@@ -102,15 +97,13 @@ export async function sweepScheduledEnvironment(
   const verdict = await judgeBranchForRemoval({
     repoPath: mainRepoPath,
     branchName: toBranchName(env.branch_name),
-    baseRef: remoteMainRef,
     prStateCache: sweep.prStateCache,
-    includeClosed: false,
     remote,
     worktreePath: toWorktreePath(env.working_path),
   });
 
-  if (verdict === 'merged' || verdict === 'pr-closed') {
-    await sweepMerged(env, mainRepoPath, verdict, sweep);
+  if (verdict === 'merged') {
+    await sweepMerged(env, mainRepoPath, sweep);
     return;
   }
 
@@ -168,10 +161,9 @@ async function sweepMissingPath(env: SweptEnvironment, sweep: ScheduledSweep): P
 async function sweepMerged(
   env: SweptEnvironment,
   mainRepoPath: RepoPath,
-  verdict: 'merged' | 'pr-closed',
   sweep: ScheduledSweep
 ): Promise<void> {
-  const check = await checkRemoval(env, mainRepoPath, { kind: verdict });
+  const check = await checkRemoval(env, mainRepoPath, { kind: 'merged' });
   if (check.blocker) {
     const { blocker } = check;
     sweep.report.skipped.push({ id: env.id, reason: `merged but ${blocker.display}` });

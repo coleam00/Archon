@@ -3,8 +3,6 @@ import type { PrLookup } from '@archon/isolation';
 import {
   execFileAsync,
   getDefaultBranch,
-  isBranchMerged,
-  isPatchEquivalent,
   isRevCoveredBy,
   localBranchExists,
   toBranchName,
@@ -45,41 +43,13 @@ export function configuredRemote(repoConfig: Awaited<ReturnType<typeof loadRepoC
   return repoConfig.worktree?.remote?.trim() || 'origin';
 }
 
-/**
- * How a branch's merge state came out, from the union of signals both cleanup
- * sweeps share:
- *   (a) git ancestry  — `git branch --merged` (fast-forward / merge commit)
- *   (b) git cherry    — patch-equivalent commits (single-commit squash merge)
- *   (c) the PR's state — the only signal that sees a multi-commit squash merge,
- *       and the only one left once the local branch ref is gone
- *
- * A MERGED or CLOSED PR only speaks for the commits it carried. Run branch names
- * are derived from the run identifier and get reused, and removal deletes both the
- * worktree and the branch, so every local tip that still exists (the worktree's
- * HEAD, and the branch ref) must be the PR's head commit or an ancestor of it.
- * Anything past the PR head is unmerged work. With neither left, the PR's state
- * stands alone.
- *
- * 'unjudgeable' is the dead end the git signals hit when the branch ref has been
- * deleted and no PR answers for the branch; 'pr-unavailable' is a PR lookup that
- * failed. Either way the worktree stays, and the caller reports it rather than
- * letting it read as ordinary unmerged work. 'merged' and 'pr-closed' are the two
- * reclaimable verdicts; a closed PR is reclaimable only with `includeClosed`.
- */
-export type MergeVerdict =
-  | 'merged'
-  | 'pr-closed'
-  | 'open-pr'
-  | 'unmerged'
-  | 'unjudgeable'
-  | 'pr-unavailable';
+/** Removal requires one merged PR head covering every existing local tip. */
+export type MergeVerdict = 'merged' | 'open-pr' | 'unmerged' | 'unjudgeable' | 'pr-unavailable';
 
 export interface MergeJudgmentInput {
   repoPath: RepoPath;
   branchName: BranchName;
-  baseRef: BranchName;
   prStateCache: Map<string, PrLookup>;
-  includeClosed: boolean;
   remote: string;
   worktreePath: WorktreePath;
 }
@@ -91,69 +61,73 @@ interface LocalTips {
 }
 
 export async function judgeBranchForRemoval(input: MergeJudgmentInput): Promise<MergeVerdict> {
-  // Both git signals resolve the local branch ref, and `git cherry` fails outright
-  // once it is gone, so ask git only while the ref is there. The PR lookup keys off
-  // the branch name on the remote and needs no local ref at all.
-  const refExists = await localBranchExists(input.repoPath, input.branchName);
-  // Removal deletes the worktree too, so its HEAD must be covered by whatever proved
-  // the merge. It can differ from the branch tip (a detached HEAD, a branch renamed
-  // inside the worktree).
-  const hasWorktree = await worktreeExists(input.worktreePath);
-  const tips = { refExists, hasWorktree };
-  if (await gitProvesMerged(input, tips)) return 'merged';
-  return judgeByPr(input, tips);
-}
-
-async function gitProvesMerged(input: MergeJudgmentInput, tips: LocalTips): Promise<boolean> {
-  const { repoPath, branchName, baseRef, worktreePath } = input;
-  if (!tips.refExists) return false;
-  const branchMerged =
-    (await isBranchMerged(repoPath, branchName, baseRef)) ||
-    (await isPatchEquivalent(repoPath, branchName, baseRef));
-  if (!branchMerged) return false;
-  if (!tips.hasWorktree) return true;
-  // `git cherry <base> HEAD` answers for both git signals: an ancestor of the base
-  // lists no commits, and a squash-merged commit lists as '-'. A HEAD it cannot
-  // settle falls through to the PR, and an unanswerable one throws.
-  return isPatchEquivalent(worktreePath, 'HEAD', baseRef, { throwOnExpectedError: true });
-}
-
-async function judgeByPr(input: MergeJudgmentInput, tips: LocalTips): Promise<MergeVerdict> {
-  const { repoPath, branchName, prStateCache, includeClosed, remote } = input;
+  const tips = {
+    refExists: await localBranchExists(input.repoPath, input.branchName),
+    hasWorktree: await worktreeExists(input.worktreePath),
+  };
+  const { repoPath, branchName, prStateCache, remote } = input;
   const pr = await getPrState(branchName, repoPath, prStateCache, remote);
   if (pr.state === 'UNAVAILABLE') return 'pr-unavailable';
-  if (pr.state === 'OPEN') return 'open-pr';
-  if (
-    (pr.state === 'MERGED' || (pr.state === 'CLOSED' && includeClosed)) &&
-    (await prCoversTips(input, tips, pr.headSha))
-  ) {
-    return pr.state === 'CLOSED' ? 'pr-closed' : 'merged';
-  }
-  const commitVerdict = await judgeByCommit(input, tips);
-  return commitVerdict ?? (pr.state !== 'NONE' || tips.refExists ? 'unmerged' : 'unjudgeable');
+  const errors: unknown[] = [];
+  if (await mergedCandidateCovers(input, tips, pr, errors)) return 'merged';
+  const commitVerdict = await judgeByCommit(input, tips, errors);
+  if (commitVerdict === 'merged') return commitVerdict;
+  if (errors.length) throw errors[0];
+  if (commitVerdict === 'pr-unavailable') return commitVerdict;
+  if (pr.state === 'OPEN' || commitVerdict === 'open-pr') return 'open-pr';
+  return pr.state !== 'NONE' || tips.refExists ? 'unmerged' : 'unjudgeable';
 }
 
-async function judgeByCommit(
-  input: MergeJudgmentInput,
-  tips: LocalTips
-): Promise<MergeVerdict | null> {
-  if (!tips.hasWorktree && !tips.refExists) return null;
-  const { repoPath, branchName, remote, worktreePath } = input;
-  const path = tips.hasWorktree ? worktreePath : repoPath;
-  const rev = tips.hasWorktree ? 'HEAD' : `refs/heads/${branchName}`;
+async function resolveTip(path: string, rev: string): Promise<string> {
   const { stdout } = await execFileAsync(
     'git',
     ['-C', path, 'rev-parse', '--verify', `${rev}^{commit}`],
     { timeout: 10000 }
   );
-  const candidates = await getPrsForCommit(stdout.trim(), repoPath, remote);
-  if (candidates.state === 'UNAVAILABLE') return 'pr-unavailable';
-  if (candidates.state === 'NONE') return null;
-  for (const candidate of candidates.prs) {
-    if (candidate.state === 'MERGED' && (await prCoversTips(input, tips, candidate.headSha)))
-      return 'merged';
+  return stdout.trim();
+}
+
+async function judgeByCommit(
+  input: MergeJudgmentInput,
+  tips: LocalTips,
+  errors: unknown[]
+): Promise<MergeVerdict | null> {
+  const { repoPath, branchName, remote, worktreePath } = input;
+  const revisions: { path: string; rev: string }[] = [];
+  if (tips.hasWorktree) revisions.push({ path: worktreePath, rev: 'HEAD' });
+  if (tips.refExists) revisions.push({ path: repoPath, rev: `refs/heads/${branchName}` });
+  const queried = new Set<string>();
+  let hasOpenPr = false;
+  for (const { path, rev } of revisions) {
+    const sha = await resolveTip(path, rev);
+    if (queried.has(sha)) continue;
+    queried.add(sha);
+    const candidates = await getPrsForCommit(sha, repoPath, remote);
+    if (candidates.state === 'UNAVAILABLE') return 'pr-unavailable';
+    if (candidates.state === 'NONE') continue;
+    for (const candidate of candidates.prs) {
+      if (await mergedCandidateCovers(input, tips, candidate, errors)) return 'merged';
+      hasOpenPr ||= candidate.state === 'OPEN';
+    }
   }
-  return candidates.prs.some(candidate => candidate.state === 'OPEN') ? 'open-pr' : null;
+  return hasOpenPr ? 'open-pr' : null;
+}
+
+async function mergedCandidateCovers(
+  input: MergeJudgmentInput,
+  tips: LocalTips,
+  candidate: PrLookup,
+  errors: unknown[]
+): Promise<boolean> {
+  if (candidate.state !== 'MERGED') return false;
+  try {
+    return await prCoversTips(input, tips, candidate.headSha);
+  } catch (error) {
+    // A later PR may prove coverage independently; an unresolved failure must not
+    // fall through to the scheduled age sweep as ordinary unmerged work.
+    errors.push(error);
+    return false;
+  }
 }
 
 async function prCoversTips(
@@ -171,9 +145,7 @@ async function prCoversTips(
 }
 
 /** The operator-facing reason a kept environment is worth reporting, or null when it is ordinary unmerged work. */
-export function skipReasonFor(
-  verdict: Exclude<MergeVerdict, 'merged' | 'pr-closed'>
-): string | null {
+export function skipReasonFor(verdict: Exclude<MergeVerdict, 'merged'>): string | null {
   switch (verdict) {
     case 'open-pr':
       return 'PR is open (active review)';

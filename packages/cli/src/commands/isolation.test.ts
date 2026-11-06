@@ -1327,15 +1327,13 @@ describe('isolationCleanupMergedCommand', () => {
       skipped: [],
       warnings: [],
       errors: [],
-      releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'PR closed' }],
+      releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'merged' }],
       baseRef: toBranchName('origin/dev'),
     });
 
     await isolationCleanupMergedCommand({ includeClosed: true });
 
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      '  Released failed run run-fail (PR closed): settled'
-    );
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Released failed run run-fail (merged): settled');
   });
 
   it('shows retained remote branch warnings from merged cleanup', async () => {

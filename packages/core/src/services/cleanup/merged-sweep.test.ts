@@ -9,7 +9,6 @@ import {
   prAt,
   worktreeEnv,
   makeEnvironmentWithAge,
-  mockLogger,
   mockHasUncommittedChanges,
   mockWorktreeExists,
   mockGetDefaultBranch,
@@ -34,7 +33,7 @@ beforeEach(resetCleanupMocks);
 describe('cleanupMergedWorktrees', () => {
   test('continues merged cleanup when the settled owner query fails for one environment', async () => {
     mergedSweepFinds(...['before', 'broken', 'after'].map(name => worktreeEnv(name)));
-    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockGetLiveRunOwningEnv
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: 'failed-run', status: 'failed' })
@@ -61,7 +60,7 @@ describe('cleanupMergedWorktrees', () => {
     );
     mergedSweepFinds(...envs);
     mockListByCodebaseWithAge.mockResolvedValue(envs);
-    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
     if (failure === 'throw') mockDestroy.mockRejectedValueOnce(new Error('removal refused'));
     else
       mockDestroy.mockResolvedValueOnce({
@@ -87,9 +86,26 @@ describe('cleanupMergedWorktrees', () => {
     ]);
   });
 
+  test.each(['ancestry', 'patch', 'closed'] as const)(
+    '%s evidence alone never authorizes merged removal',
+    async evidence => {
+      mergedSweepFinds(worktreeEnv('unproven'));
+      mockWorktreeExists.mockResolvedValue(true);
+      mockIsBranchMerged.mockResolvedValue(evidence === 'ancestry');
+      mockIsPatchEquivalent.mockResolvedValue(evidence !== 'closed');
+      mockGetPrState.mockResolvedValue(evidence === 'closed' ? prAt('CLOSED') : NO_PR);
+      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo', {
+        includeClosed: true,
+      });
+      expect(result.removed).toEqual([]);
+      expect(result.skipped).toHaveLength(1);
+      expect(mockDestroy).not.toHaveBeenCalled();
+    }
+  );
+
   test('removes merged branches without uncommitted changes', async () => {
     mergedSweepFinds(worktreeEnv('merged-branch'));
-    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockWorktreeExists.mockResolvedValue(true);
 
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
@@ -103,27 +119,6 @@ describe('cleanupMergedWorktrees', () => {
     expect(mockDestroy).not.toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ deleteRemoteBranch: true })
-    );
-  });
-
-  // Git proves the branch merged, but the worktree's HEAD (detached, or a branch
-  // renamed inside it) holds commits the base never received. Removal would delete them.
-  test('keeps a worktree whose HEAD has commits git cannot find in the base', async () => {
-    mergedSweepFinds(worktreeEnv('head-ahead'));
-    mockIsBranchMerged.mockResolvedValue(true);
-    mockWorktreeExists.mockResolvedValue(true);
-    mockIsPatchEquivalent.mockResolvedValue(false);
-
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
-
-    expect(result.removed).toHaveLength(0);
-    // removeEnvironment's first step: the sweep never tried to remove it.
-    expect(mockGetById).not.toHaveBeenCalled();
-    expect(mockIsPatchEquivalent).toHaveBeenCalledWith(
-      '/workspace/repo/worktrees/head-ahead',
-      'HEAD',
-      'origin/main',
-      { throwOnExpectedError: true }
     );
   });
 
@@ -143,27 +138,9 @@ describe('cleanupMergedWorktrees', () => {
     expect(mockGetPrsForCommit).toHaveBeenCalledWith('a'.repeat(40), '/workspace/repo', 'upstream');
   });
 
-  test.each([
-    { check: 'isBranchMerged', mock: mockIsBranchMerged },
-    { check: 'isPatchEquivalent', mock: mockIsPatchEquivalent },
-  ])('logs a warning and reports an error when $check fails', async ({ mock }) => {
-    mergedSweepFinds(worktreeEnv('flaky-branch'));
-    mock.mockRejectedValue(new Error('network unreachable'));
-
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
-
-    expect(result.errors).toEqual([
-      { branchName: 'flaky-branch', error: 'merge check failed: network unreachable' },
-    ]);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ branchName: 'flaky-branch', repoPath: '/workspace/repo' }),
-      'cleanup.merge_check_failed'
-    );
-  });
-
   test('skips merged branches with uncommitted changes', async () => {
     mergedSweepFinds(worktreeEnv('dirty-branch'));
-    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockWorktreeExists.mockResolvedValue(true);
     mockHasUncommittedChanges.mockResolvedValue(true);
 
@@ -178,7 +155,7 @@ describe('cleanupMergedWorktrees', () => {
 
   test('skips merged branches with a live owning run', async () => {
     mergedSweepFinds(worktreeEnv('live-run-branch'));
-    mockIsBranchMerged.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
     mockGetLiveRunOwningEnv.mockResolvedValue({ id: 'run-abc12345-6789', status: 'running' });
 
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
@@ -188,27 +165,6 @@ describe('cleanupMergedWorktrees', () => {
       branchName: 'live-run-branch',
       reason: 'run run-abc1 is running',
     });
-  });
-
-  test('removes branch when git-cherry detects squash-merge', async () => {
-    mergedSweepFinds(worktreeEnv('squash-branch'));
-    mockIsPatchEquivalent.mockResolvedValueOnce(true);
-    mockWorktreeExists.mockResolvedValue(true);
-
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
-
-    expect(result.removed).toContain('squash-branch');
-    // Remote-qualified ref is passed to both signals — the local base may be stale (#3002).
-    expect(mockIsBranchMerged).toHaveBeenCalledWith(
-      '/workspace/repo',
-      'squash-branch',
-      'origin/main'
-    );
-    expect(mockIsPatchEquivalent).toHaveBeenCalledWith(
-      '/workspace/repo',
-      'squash-branch',
-      'origin/main'
-    );
   });
 
   test('keeps a branch with commits past its merged PR head', async () => {
@@ -263,14 +219,17 @@ describe('cleanupMergedWorktrees', () => {
     skipped: MergedCleanupResult['skipped'];
   }>([
     { pr: prAt('MERGED'), includeClosed: false, removed: ['pr-branch'], skipped: [] },
-    { pr: prAt('CLOSED'), includeClosed: true, removed: ['pr-branch'], skipped: [] },
+    {
+      pr: prAt('CLOSED'),
+      includeClosed: true,
+      removed: [],
+      skipped: [{ branchName: 'pr-branch', reason: 'no merged PR covers all local tips' }],
+    },
     {
       pr: prAt('CLOSED'),
       includeClosed: false,
       removed: [],
-      skipped: [
-        { branchName: 'pr-branch', reason: 'no merged PR or git proof covers all local tips' },
-      ],
+      skipped: [{ branchName: 'pr-branch', reason: 'no merged PR covers all local tips' }],
     },
     {
       pr: prAt('OPEN'),
@@ -282,9 +241,7 @@ describe('cleanupMergedWorktrees', () => {
       pr: NO_PR,
       includeClosed: false,
       removed: [],
-      skipped: [
-        { branchName: 'pr-branch', reason: 'no merged PR or git proof covers all local tips' },
-      ],
+      skipped: [{ branchName: 'pr-branch', reason: 'no merged PR covers all local tips' }],
     },
   ])(
     'judges a branch git calls unmerged by its $pr.state PR (includeClosed: $includeClosed)',
@@ -370,6 +327,91 @@ describe('commit-associated PR cleanup', () => {
     });
   });
 
+  test('an open branch PR does not suppress a covering merged commit PR', async () => {
+    mockGetPrState.mockResolvedValue(prAt('OPEN'));
+    expect((await cleanupMergedWorktrees('codebase-1', '/workspace/repo')).removed).toEqual([
+      'local-feature',
+    ]);
+  });
+
+  test.each(['NONE', 'OPEN', 'uncovered'] as const)(
+    'tries the other distinct tip after %s evidence',
+    async first => {
+      mockExecFileAsync
+        .mockResolvedValueOnce({ stdout: 'a'.repeat(40), stderr: '' })
+        .mockResolvedValueOnce({ stdout: 'b'.repeat(40), stderr: '' });
+      mockGetPrsForCommit
+        .mockResolvedValueOnce(
+          first === 'NONE'
+            ? { state: 'NONE' }
+            : {
+                state: 'FOUND',
+                prs: [{ state: first === 'OPEN' ? 'OPEN' : 'MERGED', headSha: 'wrong-head' }],
+              }
+        )
+        .mockResolvedValueOnce({
+          state: 'FOUND',
+          prs: [{ state: 'MERGED', headSha: 'covering-head' }],
+        });
+      mockIsRevCoveredBy.mockImplementation(async (_path, _rev, head) => head === 'covering-head');
+      expect((await cleanupMergedWorktrees('codebase-1', '/workspace/repo')).removed).toEqual([
+        'local-feature',
+      ]);
+      expect(mockGetPrsForCommit.mock.calls.map(call => call[0])).toEqual([
+        'a'.repeat(40),
+        'b'.repeat(40),
+      ]);
+    }
+  );
+
+  test.each(['branch', 'commit'] as const)(
+    'tries later proof after a failed %s candidate comparison',
+    async source => {
+      if (source === 'branch')
+        mockGetPrState.mockResolvedValue({ state: 'MERGED', headSha: 'missing-head' });
+      else
+        mockGetPrsForCommit.mockResolvedValue({
+          state: 'FOUND',
+          prs: [
+            { state: 'MERGED', headSha: 'missing-head' },
+            { state: 'MERGED', headSha: 'covering-head' },
+          ],
+        });
+      mockIsRevCoveredBy.mockImplementation(async (_path, _rev, head) => {
+        if (head === 'missing-head') throw new Error('cannot fetch missing head');
+        return true;
+      });
+      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+      expect(result.removed).toEqual(['local-feature']);
+      expect(result.errors).toEqual([]);
+    }
+  );
+
+  test('preserves a failed comparison when later candidates do not prove coverage', async () => {
+    mockGetPrsForCommit.mockResolvedValue({
+      state: 'FOUND',
+      prs: [
+        { state: 'MERGED', headSha: 'missing-head' },
+        { state: 'MERGED', headSha: 'wrong-head' },
+      ],
+    });
+    mockIsRevCoveredBy.mockImplementation(async (_path, _rev, head) => {
+      if (head === 'missing-head') throw new Error('cannot fetch missing head');
+      return false;
+    });
+    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    expect(result.removed).toEqual([]);
+    expect(result.errors).toEqual([
+      { branchName: 'local-feature', error: 'merge check failed: cannot fetch missing head' },
+    ]);
+    expect(mockIsRevCoveredBy).toHaveBeenCalledWith(
+      '/workspace/repo/worktrees/local-feature',
+      'HEAD',
+      'wrong-head',
+      'origin'
+    );
+  });
+
   test('tries later candidates, requiring both tips against the same merged head', async () => {
     mockGetPrsForCommit.mockResolvedValue({
       state: 'FOUND',
@@ -411,10 +453,9 @@ describe('commit-associated PR cleanup', () => {
     expect(mockDestroy).not.toHaveBeenCalled();
   });
 
-  test.each(['OPEN', 'UNAVAILABLE'] as const)('branch %s takes precedence', async state => {
-    mockGetPrState.mockResolvedValue(state === 'OPEN' ? prAt(state) : { state });
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
-    expect(result.removed).toEqual([]);
+  test('branch UNAVAILABLE retains precedence', async () => {
+    mockGetPrState.mockResolvedValue({ state: 'UNAVAILABLE' });
+    expect((await cleanupMergedWorktrees('codebase-1', '/workspace/repo')).removed).toEqual([]);
     expect(mockGetPrsForCommit).not.toHaveBeenCalled();
   });
 
@@ -446,6 +487,13 @@ describe('commit-associated PR cleanup', () => {
     );
   });
 
+  test('queries equal tips only once when no candidate covers them', async () => {
+    mockIsRevCoveredBy.mockResolvedValue(false);
+    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    expect(result.removed).toEqual([]);
+    expect(mockGetPrsForCommit).toHaveBeenCalledTimes(1);
+  });
+
   test('does not invent a commit when both tips are gone', async () => {
     mockLocalBranchExists.mockResolvedValue(false);
     mockWorktreeExists.mockResolvedValue(false);
@@ -465,9 +513,7 @@ describe('commit-associated PR cleanup', () => {
       });
       expect(result.removed).toEqual([]);
       expect(result.skipped[0]?.reason).toBe(
-        state === 'OPEN'
-          ? 'PR is open (active review)'
-          : 'no merged PR or git proof covers all local tips'
+        state === 'OPEN' ? 'PR is open (active review)' : 'no merged PR covers all local tips'
       );
     }
   );
