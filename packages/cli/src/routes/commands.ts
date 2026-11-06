@@ -93,6 +93,8 @@ export async function runState({
       ...(values.install === true ? { install: true } : {}),
       ...(values.raw === true ? { raw: true } : {}),
       ...(values.values === true ? { values: true } : {}),
+      ...(values.lease === true ? { lease: true } : {}),
+      ...(values['release-lease'] === true ? { releaseLease: true } : {}),
     },
     { storeKind }
   );

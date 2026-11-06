@@ -1947,19 +1947,34 @@ archon state list --prefix review/ --values
 archon state delete review/123 --if-revision 3
 archon state get notes --install --raw
 archon state list --project acme/widgets
+# inside a run: claim the document in the same write, and give it back with the outcome
+printf '{"stage":"building"}' | archon state put work/7 --if-revision 4 --lease
+printf '{"stage":"done"}' | archon state put work/7 --if-revision 5 --release-lease
 ```
 
 Every command writes JSON and names the scope it used: `{kind: "project", key}` or
-`{kind: "install"}`. `get` returns `{scope, name, revision, value}`; an absent document
+`{kind: "install"}`. `get` returns `{scope, name, revision, value, lease}`; an absent document
 returns revision `0` and value `null`. A deleted document returns value `null`,
 `deleted: true` and its tombstone revision, which is the revision a recreating `put` must
 name. `put`, `patch`, and `delete` return the scope and the new full revision. `log`
 returns `{scope, name, revisions}`, newest first (use a positive `--limit` to bound the
 result), including tombstones, operation, writer and timestamp. `list` returns
-`{scope, documents}`: each document's name, latest revision, `updatedAt`, writer and
+`{scope, documents}`: each document's name, latest revision, `updatedAt`, writer, lease and
 `deleted`, ordered by name, without values. `--prefix` keeps names that start with
 the given text. `list --values` reads every live document's value in one call instead:
-each entry is `{name, revision, value}`, and deleted documents are left out.
+each entry is `{name, revision, value, lease}`, and deleted documents are left out.
+
+**Leases.** Inside a run, `put` and `patch` accept `--lease`, which takes the document's
+lease for the calling run in the same write, or `--release-lease`, which gives it back. Every
+revision a read returns carries `lease`: `null`, or `{runId, nodePath, takenAt, live}`.
+`live` is computed when you read: a lease is live while its run is `pending`, `running`,
+`paused` or `failed`, and has ended once the run is `completed` or `cancelled` (including
+through `workflow abandon`) or has been deleted. A failed run keeps its leases because it
+can resume. Nothing ends a lease on age or inactivity; to free a lease held by a run that
+will not continue, abandon that run. A take or release while another run's lease is live
+exits `3` naming the holder and writes nothing. Taking an ended lease, or one the run
+already holds, succeeds. A write without a lease flag keeps the document's lease unchanged,
+whoever writes it, and `delete` clears it. The lease flags are refused outside a run.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
@@ -1982,7 +1997,7 @@ a string). Use plain `get` when you need the revision for a following `put`.
 
 Names contain 1–200 lowercase letters, digits, `.`, `_`, `-`, and slash-separated segments.
 Values are limited to 64 KiB of serialized UTF-8 JSON. Exit codes: `0` success, `1` usage
-or storage failure, `3` revision conflict, `4` oversized value, invalid patch or non-text
+or storage failure, `3` revision conflict or a lease another live run holds, `4` oversized value, invalid patch or non-text
 `--raw` value, `5` the CLI opened a store that does not know the calling run. Failures
 return `{ok:false, error, code}` and rejected writes append no revision.
 

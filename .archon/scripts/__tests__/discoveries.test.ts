@@ -333,7 +333,7 @@ describe('the discoveries scripts', () => {
         'which is not open',
       ],
       [
-        { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'failed' } },
+        { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } },
         refs => [{ outcome: 'drop', key: 'new-key', refs: refs.slice(1), title: 't', reason: 'r' }],
         'has no decision',
       ],
@@ -351,7 +351,8 @@ describe('the discoveries scripts', () => {
     const at = install();
     runArtifacts(at.outputRoot, RUN, { verdict: [record('one')] });
     expect(ok(script(at, 'facts', { runId: 'pass-1', runs: [RUN] }))).toMatchObject({ path: 'decide' });
-    for (const status of ['paused', 'running']) {
+    // A failed pass can resume, so it keeps its claim like a paused or running one.
+    for (const status of ['paused', 'running', 'failed']) {
       expect(ok(script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': status } }))).toMatchObject({ path: 'idle' });
     }
     const released = script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } });

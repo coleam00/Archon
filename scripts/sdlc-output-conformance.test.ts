@@ -25,11 +25,13 @@ import {
   nodeExecutionMetadataSchema,
   unavailableMeasurementSchema,
 } from '../packages/workflows/src/schemas/node-execution';
+import { workflowRunStatusSchema } from '../packages/workflows/src/schemas/run-status';
 import {
-  TERMINAL_WORKFLOW_STATUSES,
-  workflowRunStatusSchema,
-} from '../packages/workflows/src/schemas/workflow-run';
+  isStateLeaseHolderLive,
+  stateLeaseViewSchema,
+} from '../packages/workflows/src/state-document-store';
 import { validateStructuredOutput } from '../packages/workflows/src/structured-output';
+import { fakeLeaseLive } from '../.archon/scripts/__tests__/fixtures/fake-lease';
 import {
   gitCheckout,
   hostCli,
@@ -50,8 +52,8 @@ import {
 import type { Closure } from '../.archon/workflows/sdlc/.shared/close';
 import { type AgentDecision, AGENT_OUTCOMES } from '../.archon/workflows/sdlc/.shared/discoveries';
 import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/forge';
+import { parseLease } from '../.archon/workflows/sdlc/.shared/state';
 import { SIZE_LABEL, TYPE_LABEL } from '../.archon/workflows/sdlc/.shared/labels';
-import { claimDisposition } from '../.archon/workflows/sdlc/.shared/state';
 import { newWorkItem } from '../.archon/workflows/sdlc/.shared/workitem';
 
 const { runPackScript } = packScriptRunner();
@@ -309,13 +311,21 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
   expect(verdicts[0]?.parserAccepts).toBe(true);
 });
 
-describe('intake', () => {
-  test("a claim is released only when its run's status is one the engine calls terminal", () => {
+describe('claims', () => {
+  test("the pack reads the engine's lease view, and the test CLI's liveness is the engine's", () => {
+    for (const live of [true, false]) {
+      const view = stateLeaseViewSchema.parse({
+        runId: 'run-1',
+        nodePath: 'claim',
+        takenAt: '2026-11-04T00:00:00.000Z',
+        live,
+      });
+      expect(parseLease(view)).toEqual({ runId: 'run-1', live });
+    }
     for (const status of workflowRunStatusSchema.options)
-      expect(claimDisposition(status)).toBe(
-        TERMINAL_WORKFLOW_STATUSES.includes(status) ? 'release' : 'hold'
-      );
-    expect(claimDisposition(null)).toBe('hold');
+      expect(fakeLeaseLive(status)).toBe(isStateLeaseHolderLive(status));
+    // A run the store no longer has: deleted, so its lease has ended.
+    expect(fakeLeaseLive(undefined)).toBe(isStateLeaseHolderLive(null));
   });
 });
 

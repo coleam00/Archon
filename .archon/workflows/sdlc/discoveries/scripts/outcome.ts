@@ -32,7 +32,7 @@ import { forgeSource, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { createIssue, viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { stateGet, statePut } from '../../.shared/state.ts';
+import { stateGet, statePutClaimed } from '../../.shared/state.ts';
 
 const IDLE = 'No finished run has undecided discoveries.';
 
@@ -146,7 +146,7 @@ function main(): void {
         ...questions,
       ],
     };
-    if (statePut(name, next, read.revision) === 'conflict') {
+    if (statePutClaimed(name, next, read.revision) === 'conflict') {
       throw new Error(`${name} changed while this run held its claim`);
     }
   }

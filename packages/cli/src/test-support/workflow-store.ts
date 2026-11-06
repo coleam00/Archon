@@ -225,7 +225,7 @@ export function createInMemoryWorkflowStore(
     (...args) =>
       serialize(() => operation(...args));
   return {
-    ...createInMemoryStateDocumentStore(),
+    ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
     drainResourceStarts: admit(admission.drainResourceStarts.bind(admission)),
     hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
-import { statePut } from '../../workflows/sdlc/.shared/state';
+import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
   assertNoSelfPromotion,
   bodyDigest,
@@ -719,19 +719,23 @@ describe('the intake scripts', () => {
     };
     expect(
       inProcess(at, () =>
-        claimItem({ name: 'work/7', revision: claimedRevision - 1, doc: unclaimed }, AT, 'run-3')
+        claimItem({ name: 'work/7', revision: claimedRevision - 1, doc: unclaimed, lease: null }, AT, 'run-3')
       )
     ).toBeNull();
     expect(stored(at).value.claim?.run_id).toBe('run-1');
   }, 60_000);
 
-  test("the next pickup releases a failed run's claim and queues its requests again", () => {
+  test("a failed run keeps its claim; the next pickup releases a cancelled run's claim and queues its requests again", () => {
     const at = install();
     facts(at, { runId: 'run-1' });
+    // A failed run can resume, so its lease, and with it the claim, stands.
+    const held = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'failed' } }).output;
+    expect(held).toMatchObject({ path: 'idle', item: null });
+    expect(stored(at).value.claim?.run_id).toBe('run-1');
     const decided = facts(at, {
       runId: 'run-2',
       kind: 'pr',
-      statuses: { 'run-1': 'failed' },
+      statuses: { 'run-1': 'cancelled' },
     }).output;
     expect(decided).toMatchObject({ path: 'triage', item: SUBJECT });
     const doc = stored(at).value;
@@ -741,7 +745,7 @@ describe('the intake scripts', () => {
     });
     expect(doc.history.at(-1)).toMatchObject({
       outcome: 'released',
-      summary: expect.stringContaining('run-1, which ended failed'),
+      summary: expect.stringContaining('run-1, which ended without finishing'),
     });
   }, 60_000);
   function idleOutcome(at: Install, event: Event): string {
@@ -762,7 +766,7 @@ describe('the intake scripts', () => {
     expect(summary).toContain('work/3');
   }, 60_000);
 
-  test('a claim held by a run with no status stays held, and the idle pass names it and the run', () => {
+  test('a claim whose run holds no lease stays held, and the idle pass names it and the run', () => {
     const at = install();
     const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'ghost-run', at: AT, requests: [] } };
     inProcess(at, () => statePut('work/7', held, 0));
@@ -775,7 +779,10 @@ describe('the intake scripts', () => {
   test('an idle pass with only live claims still reports an empty queue', () => {
     const at = install();
     const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'live-run', at: AT, requests: [] } };
-    inProcess(at, () => statePut('work/7', held, 0));
+    inProcess(at, () => {
+      process.env.WORKFLOW_ID = 'live-run';
+      return statePut('work/7', held, 0, 'take');
+    });
     const event = { runId: 'run-1', kind: 'pr', statuses: { 'live-run': 'running' } };
     expect(idleOutcome(at, event)).toBe('No item waits for intake.');
   }, 60_000);
@@ -807,7 +814,7 @@ describe('the intake scripts', () => {
       expect.objectContaining({ run_id: 'run-2', action: 'edited' }),
     ]);
 
-    facts(at, { runId: 'run-4', kind: 'pr', statuses: { 'run-1': 'failed' } });
+    facts(at, { runId: 'run-4', kind: 'pr', statuses: { 'run-1': 'cancelled' } });
     expect(stored(at).value.claim?.requests).toEqual([
       expect.objectContaining({ run_id: 'run-2', action: 'edited' }),
     ]);
@@ -936,7 +943,7 @@ describe('the intake scripts', () => {
     });
     const waiting = { ...newWorkItem(SUBJECT, AT), requests: [edit('a'), ...labels, edit('b')] };
     const { revision } = stored(at);
-    const doc = inProcess(at, () => claimItem({ name: 'work/7', revision, doc: waiting }, AT, 'r'));
+    const doc = inProcess(at, () => claimItem({ name: 'work/7', revision, doc: waiting, lease: null }, AT, 'r'));
     expect(doc?.claim?.requests).toEqual([...labels.slice(-49), edit('b')]);
   }, 60_000);
 
@@ -964,7 +971,7 @@ describe('the intake scripts', () => {
       claim: { run_id: 'run-1' },
     });
 
-    const retried = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'failed' } });
+    const retried = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'cancelled' } });
     expect(retried.output).toMatchObject({ path: 'quiet', item: SUBJECT });
     expect(stored(at).value.claim).toMatchObject({
       run_id: 'run-2',
@@ -1186,14 +1193,14 @@ describe('the intake scripts', () => {
     expect(stored(at).revision).toBe(revision);
   }, 60_000);
 
-  test('a run whose claim a pickup released refuses to write its outcome', () => {
+  test('a failed run that resumes still holds its claim and writes its outcome', () => {
     const at = install();
     const decided = facts(at, { runId: 'run-1' }).output;
     facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'failed' } });
-    const late = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
-    expect(late.code).not.toBe(0);
-    expect(late.stderr).toContain('no longer claimed by this run');
-    expect(late.gh.filter(call => call.startsWith('issue edit'))).toEqual([]);
-    expect(stored(at).value).toMatchObject({ stage: 'new', claim: { run_id: 'run-2' } });
+    const resumed = outcome(at, { runId: 'run-1', statuses: { 'run-1': 'running' } }, decided, READY_VERDICT);
+    expect({ code: resumed.code, stderr: resumed.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null });
+    // Clearing the claim gave the run's lease back in the same write.
+    expect(inProcess(at, () => stateGet('work/7')).lease).toBeNull();
   }, 60_000);
 });
