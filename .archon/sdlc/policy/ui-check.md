@@ -11,6 +11,8 @@ default first and this file after it.
   credentials, and a server booted on a copy removes the real worktrees and resumes
   the paused runs it records. Seed what a flow needs through the server's own API or
   the CLI run with the same `ARCHON_HOME`.
+- Pass `DATABASE_URL` as `''`: when set, the server uses that database instead of
+  the SQLite file under `ARCHON_HOME`.
 - Pass `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`,
   `GH_TOKEN`, `GITHUB_TOKEN` and `WEBHOOK_SECRET` as `''` so no adapter connects to a
   live service.
