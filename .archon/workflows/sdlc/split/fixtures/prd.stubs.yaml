@@ -1,5 +1,5 @@
-# Dry-run fixture: a PRD triage routed `split`. The slice agent lists two issues,
-# the first measuring the signal, and publish files them. The facts and publish
+# Dry-run fixture: a PRD triage routed `split`. The slice agent files its first phase
+# and records the next one unfiled, and publish files it. The facts and publish
 # scripts reach the state store and the forge, so they are stubbed here and proved
 # by .archon/scripts/__tests__/split.test.ts.
 facts:
@@ -9,10 +9,11 @@ facts:
   filed: []
   reason: "stub: the measurement must collect data before the feature is judged"
 slice:
-  split: { kind: prd, signal_command: "bun run signal", window_days: 14 }
+  split: { kind: prd }
   issues:
-    - { key: measure, title: "Measure the signal", body: "stub: the measurement contract", size: s, depends_on: [] }
-    - { key: feature, title: "Ship the feature", body: "stub: the feature contract", size: m, depends_on: [measure] }
+    - { key: measure, title: "Measure the signal", body: "stub: the measurement contract" }
+  later:
+    - { title: "Ship the feature", signal: "stub: the signal is recording" }
   existing: []
   summary: "stub: measure first, then ship"
 publish:
@@ -21,9 +22,8 @@ publish:
   kind: prd
   issues:
     - { key: measure, number: 8, url: "https://github.com/example/repo/issues/8" }
-    - { key: feature, number: 9, url: "https://github.com/example/repo/issues/9" }
   adopted: []
-  summary: "stub: Issue 7: split as a prd into 2 issues"
+  summary: "stub: Issue 7: split as a prd"
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo, number: "7" }
   expect: completed

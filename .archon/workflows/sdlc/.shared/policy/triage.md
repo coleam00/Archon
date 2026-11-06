@@ -27,11 +27,21 @@ after it, and where the two conflict, the project's line wins.
     no single run could finish it and no reviewer could read it as one change.
 
   Length, a long acceptance list, size `l`, and a "PRD" or "epic" title are not
-  reasons on their own. A split item becomes one of three kinds: a PRD (below); an
-  epic, one larger outcome whose pieces depend on each other; or a bundle of separate
-  tasks with no shared outcome. A bundle is ready when each task is clear enough to
-  become its own item: the contract's six elements belong to each task and are judged
-  when that task comes back through triage, not on the bundle.
+  reasons on their own.
+- **How each kind splits.** A split breaks the item into the fewest pieces that each
+  prove something on their own, and files only the piece that comes next.
+  - A **PRD** splits into phases, not tasks. A phase proves a desired outcome: usually
+    a thin slice end to end, but it can be most of the thing, or all of it in one go.
+  - An **epic**, one larger outcome, splits into vertical increments, each leaving the
+    product working.
+  - A **bundle** of separate tasks with no shared outcome is not sliced: each task is
+    filed as it is. It is ready when each task is clear enough to become its own item;
+    the contract's six elements belong to each task and are judged when that task
+    comes back through triage.
+
+  Only the current phase or increment is filed. The later ones are recorded on the
+  item as a short plan, each with what the earlier work must show before it is filed,
+  and a later split files them.
 - **PRDs.** A PRD is a hypothesis-driven release: it says that shipping something will
   change something observable, and the work is how to find out. Tell it by what the
   item asks for, not by its headings or title. It is ready only when it states all

@@ -660,15 +660,17 @@ something no order chose.
 
 ## Split queue
 
-[`archon-split`](split/archon-split.yaml) files the issues a large item splits into.
-A large item, such as a PRD, an epic or a bundle of tasks, is built as one work item
-by default. Triage routes it `split` only when building it whole would not work, and
-its summary says why. The default triage policy,
-[`.shared/policy/triage.md`](.shared/policy/triage.md), says when splitting is right
-and what a PRD is: a release that tests a hypothesis, held to its hypothesis, its
-signal with the command that measures it, and its threshold and window, whether it is
-split or built whole. A PRD missing any of them gets `archon-needs-contract`, naming
-the gap.
+[`archon-split`](split/archon-split.yaml) breaks a large item into the fewest pieces
+that each prove something on their own, and files only the piece that comes next. A
+large item, such as a PRD, an epic or a bundle of tasks, is built as one work item by
+default. Triage routes it `split` only when building it whole would not work, and its
+summary says why. The default triage policy,
+[`.shared/policy/triage.md`](.shared/policy/triage.md), says when splitting is right,
+how each kind splits, and what a PRD is: a release that tests a hypothesis, held to
+its hypothesis, its signal with the command that measures it, and its threshold and
+window, whether it is split or built whole. A PRD missing any of them gets
+`archon-needs-contract`, naming the gap. A project refines the bar in its own
+`.archon/sdlc/policy/triage.md`.
 
 - **Pickup.** A run claims one item with intake's claim and order. An item waits for
   the split queue when its stage is `split` and no split finished on it, or a
@@ -678,29 +680,27 @@ the gap.
 - **Slice.** One agent reads the issue (written to `split/prd.md`), triage's reason,
   the triage policy, the project's direction and current code. It checks triage's
   judgment first: when one work item would work, it answers `whole` with a build
-  route (`plan` or `deliver`) and why, and files nothing. Otherwise it judges the item
-  a PRD, an epic (one outcome whose pieces depend on each other) or a bundle of
-  separate tasks, and lists at most twelve issues, each a contract of its
-  own with a key, a size and the keys it depends on. A PRD's first issue puts its
-  hypothesis in front of real data, adding the measurement when the signal has no
-  source or its command does not exist yet. In a product that already runs, no issue
-  rebuilds or sets up what exists. An epic's pieces are ordered by what each needs
-  merged first. A bundle is split as written, one issue per task.
-  An open issue that already owns a piece of the outcome is listed as existing, with
-  why the outcome depends on it, instead of being filed again. For a PRD the agent also
-  declares the signal command and the window in days.
+  route (`plan` or `deliver`) and why. Otherwise it judges the item a PRD, an epic or
+  a bundle. A PRD splits into phases, each proving a desired outcome; an epic into
+  vertical increments, each leaving the product working; a bundle is not sliced, and
+  every task is filed as written. Only the current phase or increment is filed. Each
+  later one is listed with what the earlier work must show before it is filed. An
+  open issue that already owns a piece is listed as existing instead of being filed
+  again.
 - **Publish.** The `publish` script files each issue with a hidden first line,
-  `<!-- archon-split: <item> <key> -->`, and a `Depends on: #n` line per dependency.
-  Each filed issue is recorded on the work item before the next is filed, and a key
-  already recorded is never filed again; a key whose issue was filed but not recorded
-  is recovered by its marker, from one scan of the repository's issues per run. So a
-  run that stops part way, or a split repeated after a re-triage, files no issue
-  twice. Each existing issue the agent listed is read to prove it is an issue of the
-  repository. The item then gets one marked comment listing its
-  issues. A PRD is labelled `archon-prd` and stays open until its hypothesis has a
-  verdict; an epic stays open until its pieces merge; a bundle is closed as completed.
-  The last write records the split done and releases the claim. An issue closed
-  before its split finishes is recorded and files nothing more.
+  `<!-- archon-split: <item> <key> -->`. Each filed issue is recorded on the work item
+  before the next is filed, and a key already recorded is never filed again; a key
+  whose issue was filed but not recorded is recovered by its marker. So a run that
+  stops part way, or the next phase's split after a re-triage, files no issue twice.
+  Each existing issue the agent listed is read to prove it is an open issue of the
+  repository. The item then gets one marked comment listing its issues and the later
+  phases. A PRD is labelled `archon-prd` and stays open until its hypothesis has a
+  verdict; an epic stays open until its increments merge; a bundle is closed as
+  completed. The last write records the split done and releases the claim. An issue
+  closed before its split finishes is recorded and files nothing more.
+- **Next phase.** When the earlier work shows its signal, re-triage the item. It
+  routes `split` again, and the agent files the next phase from the plan in the
+  comment, reusing the keys of what is already filed.
 - **Build whole.** On a `whole` answer, the item gets the same marked comment with the
   agent's reason, its route label in place of `archon-split`, and the last write moves
   its stage to that route, where the build queue picks it up as one work item.
@@ -708,9 +708,8 @@ the gap.
   filed issues from refuses a `whole` answer, since those pieces may be in flight.
 - **Record.** The work item's `facts.split` holds the status (`filing`, `done`,
   `whole` or `closed`), whether the item is a `prd`, an `epic` or a `bundle`, every
-  issue filed from it by key, the existing issues it adopted with why, and a PRD's
-  signal command and window. A `whole` record holds the route and the reason instead.
-  The comment on the item lists the issues or gives the reason.
+  issue filed from it by key, and the existing issues it adopted with why. A `whole`
+  record holds the route and the reason instead.
 - **The filed issues** come back through intake like any other issue. They are opened
   by the install's own identity, so intake trusts them only when that login is on the
   maintainer list.

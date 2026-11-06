@@ -6,7 +6,7 @@ import { trackTempRoots } from './temp-roots';
 import { SPLIT_KINDS, splitMarker } from '../../workflows/sdlc/.shared/split';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { mirrorLabels, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
-import { type GhIssue, gitCheckout, hostCli, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import { gitCheckout, hostCli, labelWrites, PACK, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -27,11 +27,11 @@ const TRIAGE: TriageFacts = {
   run_id: 'intake-run',
 };
 
-const PRD = { kind: 'prd', signal_command: 'bun run signal', window_days: 14 };
 const ISSUES = [
-  { key: 'measure', title: 'Measure the signal', body: 'The measurement contract.', size: 's', depends_on: [] },
-  { key: 'feature', title: 'Ship the feature', body: 'The feature contract.', size: 'm', depends_on: ['measure'] },
+  { key: 'measure', title: 'Measure the signal', body: 'The measurement contract.' },
+  { key: 'feature', title: 'Ship the thin slice', body: 'The slice contract.' },
 ];
+const LATER = [{ title: 'Widen to every route', signal: 'the slice moves the median' }];
 
 interface Install {
   readonly checkout: string;
@@ -88,14 +88,12 @@ function stored(at: Install): WorkItem {
 function publish(
   at: Install,
   split: unknown,
-  issues: readonly GhIssue[] = [],
-  existing: unknown[] = [],
-  planned: readonly unknown[] = ISSUES
+  { issues = [], existing = [], planned = ISSUES, later = [] }: { issues?: TrackerIssue[]; existing?: unknown[]; planned?: unknown[]; later?: unknown[] } = {}
 ): ScriptRun {
   return runPackScript('split/scripts/publish', {
     cwd: at.checkout,
-    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-    gh: { issue: { number: 7, author: 'Maintainer', body: 'The PRD.' }, issueLabels: ['archon-split'], repositoryLabels: [], issues, comments: [] },
+    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+    tracker: { issue: { number: 7, author: 'Maintainer', body: 'The PRD.' }, issueLabels: ['archon-split'], issues },
     inputs: {
       ...at.env,
       WORKFLOW_ID: 'run-1',
@@ -103,6 +101,7 @@ function publish(
       INPUTS_ITEM: JSON.stringify(SUBJECT),
       INPUTS_SPLIT: JSON.stringify(split),
       INPUTS_ISSUES: JSON.stringify(planned),
+      INPUTS_LATER: JSON.stringify(later),
       INPUTS_EXISTING: JSON.stringify(existing),
       INPUTS_SUMMARY: 'Measure first.',
     },
@@ -123,86 +122,73 @@ test("the split kinds are the slice node's own enum", () => {
 });
 
 describe('split publish', () => {
-  test('files each issue once with its marker and dependency, and a rerun files none again', () => {
+  test('files the current phase once, records later phases unfiled, and a rerun files none again', () => {
     const at = install();
     seed(at);
-    const first = publish(at, PRD);
+    const first = publish(at, { kind: 'prd' }, { later: LATER });
     expect(ok(first)).toMatchObject({ path: 'slice', item: 7, kind: 'prd' });
     expect(first.createdIssues.map(issue => [issue.number, issue.title])).toEqual([
       [100, 'Measure the signal'],
-      [101, 'Ship the feature'],
+      [101, 'Ship the thin slice'],
     ]);
-    expect(first.createdIssues[0]?.body.split('\n')[0]).toBe(splitMarker(7, 'measure'));
-    expect(first.createdIssues[1]?.body).toEndWith('The feature contract.\n\nDepends on: #100');
-    expect(first.comments).toEqual([{ issue: 7, body: expect.stringContaining('- #100 Measure the signal\n- #101 Ship the feature') }]);
-    expect(first.gh.some(call => call.includes('--add-label archon-prd'))).toBe(true);
+    expect(first.createdIssues[0]?.body).toBe(`${splitMarker(7, 'measure')}\n\nThe measurement contract.`);
+    expect(first.comments).toEqual([{ issue: 7, body: expect.stringContaining('- Widen to every route. Filed once the earlier work shows: the slice moves the median') }]);
+    expect(labelWrites(first, 7).add).toContain('archon-prd');
     expect(first.closes).toEqual([]);
-    const split = stored(at).facts.split;
-    expect(split).toMatchObject({ status: 'done', kind: 'prd', signal_command: 'bun run signal', window_days: 14 });
-    expect(split?.issues.map(issue => [issue.key, issue.number])).toEqual([['measure', 100], ['feature', 101]]);
-    expect(stored(at).claim).toBeNull();
+    expect(stored(at)).toMatchObject({ claim: null, facts: { split: { status: 'done', kind: 'prd' } } });
 
-    // A re-triage sends the item back; the second split lists the same keys.
+    // A re-triage sends the item back; the next split lists the same keys.
     seed(at);
-    expect(publish(at, PRD, first.createdIssues).createdIssues).toEqual([]);
+    expect(publish(at, { kind: 'prd' }, { issues: [...first.createdIssues] }).createdIssues).toEqual([]);
   });
 
-  test('an issue filed before a stop, but not recorded, is recovered by its marker from one scan', () => {
+  test('an issue filed before a stop, but not recorded, is recovered by its marker', () => {
     const at = install();
     seed(at);
-    const filed: GhIssue = {
-      number: 100,
-      title: 'Measure the signal',
-      body: `${splitMarker(7, 'measure')}\n\nThe measurement contract.`,
-      state: 'OPEN',
-    };
-    const run = publish(at, { kind: 'bundle' }, [filed]);
+    const filed: TrackerIssue = { number: 100, title: 'Measure the signal', body: `${splitMarker(7, 'measure')}\n\nThe measurement contract.`, state: 'OPEN' };
+    const run = publish(at, { kind: 'bundle' }, { issues: [filed] });
     ok(run);
-    expect(run.createdIssues.map(issue => issue.title)).toEqual(['Ship the feature']);
-    // Both unrecorded keys are looked up in one listing of the repository's issues.
-    expect(run.gh.filter(call => call.includes('issues?state=all'))).toHaveLength(1);
-    expect(run.createdIssues[0]?.body).toEndWith('Depends on: #100');
+    expect(run.createdIssues.map(issue => issue.title)).toEqual(['Ship the thin slice']);
     // A bundle is closed with its list; it gets no PRD label.
     expect(run.closes).toEqual([{ number: 7, state: 'closed', state_reason: 'completed' }]);
-    expect(run.gh.some(call => call.includes('archon-prd'))).toBe(false);
-    expect(stored(at).facts.split).toMatchObject({ status: 'done', kind: 'bundle', signal_command: null });
+    expect(labelWrites(run, 7).add).not.toContain('archon-prd');
+    expect(stored(at).facts.split?.issues.map(issue => issue.number)).toEqual([100, 101]);
   });
 
-  test('an existing issue the outcome depends on is recorded as adopted and never filed', () => {
-    const at = install();
-    seed(at);
-    const owner: GhIssue = { number: 50, title: 'The light route', body: 'Owned elsewhere.', state: 'OPEN' };
-    const run = publish(at, PRD, [owner], [{ number: 50, why: 'it owns the light route' }]);
-    expect(ok(run)).toMatchObject({ adopted: [{ number: 50, why: 'it owns the light route' }] });
-    expect(run.createdIssues.map(issue => issue.number)).toEqual([101, 102]);
-    expect(run.comments[0]?.body).toContain('- #50 it owns the light route');
-    const split = stored(at).facts.split;
-    expect(split?.issues.map(issue => issue.number)).toEqual([101, 102]);
-    expect(split?.status === 'done' ? split.adopted : null).toEqual([
-      { number: 50, url: 'https://ghe.example.com/example/repo/issues/50', why: 'it owns the light route' },
-    ]);
-  });
-
-  test('an epic stays open after its split and gets no PRD label', () => {
+  test('an epic stays open', () => {
     const at = install();
     seed(at);
     const run = publish(at, { kind: 'epic' });
-    expect(ok(run)).toMatchObject({ kind: 'epic' });
-    expect(run.createdIssues).toHaveLength(2);
+    ok(run);
     expect(run.closes).toEqual([]);
-    expect(run.gh.some(call => call.includes('archon-prd'))).toBe(false);
-    expect(run.comments[0]?.body).toContain('It stays open until they merge.');
+    expect(labelWrites(run, 7).add).not.toContain('archon-prd');
+  });
+
+  test('an open existing issue is adopted and never filed; a closed one files nothing', () => {
+    const at = install();
+    seed(at);
+    const owner: TrackerIssue = { number: 50, title: 'The light route', body: 'Owned elsewhere.', state: 'OPEN' };
+    const run = publish(at, { kind: 'prd' }, { issues: [owner], existing: [{ number: 50, why: 'it owns the light route' }], planned: [] });
+    expect(ok(run)).toMatchObject({ adopted: [{ number: 50, why: 'it owns the light route' }] });
+    expect(run.createdIssues).toEqual([]);
+    expect(run.comments[0]?.body).toContain('- #50 it owns the light route');
+
+    const other = install();
+    seed(other);
+    const closed = publish(other, { kind: 'prd' }, { issues: [{ ...owner, state: 'CLOSED' }], existing: [{ number: 50, why: 'w' }] });
+    expect(closed.code).not.toBe(0);
+    expect(closed.stderr).toContain('existing issue 50 is closed, not open');
+    expect(closed.createdIssues).toEqual([]);
   });
 
   test('an item judged one work item files nothing and moves to its build route', () => {
     const at = install();
     seed(at);
-    const run = publish(at, { kind: 'whole', route: 'plan' }, [], [], []);
+    const run = publish(at, { kind: 'whole', route: 'plan' }, { planned: [] });
     expect(ok(run)).toMatchObject({ kind: 'whole', issues: [] });
     expect(run.createdIssues).toEqual([]);
-    expect(run.closes).toEqual([]);
     expect(run.comments).toEqual([{ issue: 7, body: expect.stringContaining('Measure first.') }]);
-    expect(run.gh.some(call => call.includes('--add-label archon-plan') && call.includes('--remove-label archon-split'))).toBe(true);
+    expect(labelWrites(run, 7)).toEqual({ add: ['archon-plan'], remove: ['archon-split'] });
     const doc = stored(at);
     expect(doc).toMatchObject({ stage: 'plan', claim: null, facts: { split: { status: 'whole', route: 'plan', reason: 'Measure first.' } } });
     // Intake's mirror of the document agrees with the labels publish wrote.
@@ -210,59 +196,16 @@ describe('split publish', () => {
     expect(mirrorLabels(doc)).not.toContain('archon-split');
   });
 
-  test('an item judged one work item that still lists issues files nothing', () => {
-    const at = install();
-    seed(at);
-    const run = publish(at, { kind: 'whole', route: 'deliver' });
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('an item built whole lists no issues');
-    expect(run.createdIssues).toEqual([]);
-    expect(stored(at).stage).toBe('split');
-  });
-
   test('an item an earlier split filed issues from cannot be built whole', () => {
     const at = install();
     seed(at);
-    const first = publish(at, PRD);
+    const first = publish(at, { kind: 'prd' });
     ok(first);
     seed(at);
-    const run = publish(at, { kind: 'whole', route: 'plan' }, first.createdIssues, [], []);
+    const run = publish(at, { kind: 'whole', route: 'plan' }, { issues: [...first.createdIssues], planned: [] });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('the item is already split into #100, #101, so it cannot be built whole');
     expect(run.comments).toEqual([]);
     expect(stored(at).stage).toBe('split');
-  });
-
-  test('a closed issue listed as an existing dependency files nothing', () => {
-    const at = install();
-    seed(at);
-    const done: GhIssue = { number: 50, title: 'The light route', body: 'Closed.', state: 'CLOSED' };
-    const run = publish(at, PRD, [done], [{ number: 50, why: 'it owns the light route' }]);
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('existing issue 50 is closed, not open');
-    expect(run.createdIssues).toEqual([]);
-  });
-
-  test('a list whose dependency is neither filed nor listed earlier files nothing', () => {
-    const at = install();
-    seed(at);
-    const run = runPackScript('split/scripts/publish', {
-      cwd: at.checkout,
-      forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-      gh: { issue: { number: 7, body: 'The PRD.' }, issues: [] },
-      inputs: {
-        ...at.env,
-        WORKFLOW_ID: 'run-1',
-        INPUTS_PATH: 'slice',
-        INPUTS_ITEM: JSON.stringify(SUBJECT),
-        INPUTS_SPLIT: JSON.stringify(PRD),
-        INPUTS_ISSUES: JSON.stringify([...ISSUES].reverse()),
-        INPUTS_EXISTING: '[]',
-        INPUTS_SUMMARY: 's',
-      },
-    });
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('feature depends on measure, which is neither filed nor listed before it');
-    expect(run.createdIssues).toEqual([]);
   });
 });

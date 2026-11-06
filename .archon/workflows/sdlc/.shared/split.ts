@@ -2,10 +2,11 @@
  * The split queue's record on an item's work item: `facts.split`.
  *
  * Triage routes a large item to `split` when building it as one work item would not
- * work; archon-split files the issues it splits into, or hands it back to the build
- * queue whole when its agent finds one work item would work after all. The record lists every issue filed from the item by its key, written
- * as each one is filed, so a run that stops part way, or a split repeated after a
- * re-triage, finds them and files none of them again. It also lists the open issues
+ * work; archon-split files the issues for its current phase, or hands it back to the
+ * build queue whole when its agent finds one work item would work after all. The
+ * record lists every issue filed from the item by its key, written as each one is
+ * filed, so a run that stops part way, or the next phase's split after a re-triage,
+ * finds them and files none of them again. It also lists the open issues
  * the split adopted instead of filing, because they already own part of the outcome:
  * the item's outcome waits on those as much as on the filed ones.
  */
@@ -45,10 +46,6 @@ export type SplitRecord =
       readonly kind: SplitKind;
       readonly issues: readonly SplitIssue[];
       readonly adopted: readonly AdoptedIssue[];
-      /** A PRD's measurement: the command that prints its signal; null on an epic or a bundle. */
-      readonly signal_command: string | null;
-      /** How many days after release the PRD's threshold is judged; null on an epic or a bundle. */
-      readonly window_days: number | null;
       readonly at: string;
       readonly run_id: string;
     }

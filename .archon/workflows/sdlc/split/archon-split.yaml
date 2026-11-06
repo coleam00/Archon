@@ -1,18 +1,17 @@
 name: archon-split
 description: |
-  The split queue: files the issues a large item splits into, when triage judged that
-  building it as one work item would not work. Each run claims the waiting item
-  triage routed `split` with intake's claim, or the one the number input names. One
-  agent checks triage's reason first: when one work item would work after all, it
-  hands the item to the build queue whole, with why. Otherwise it lists the item's
-  issues, each a contract of its own: a PRD's first issue puts its hypothesis in
-  front of real data, adding the measurement when none exists; an epic's pieces are
-  ordered by what each needs merged first; a bundle is split as written. A script
-  files each issue once, linked to the issues it depends on, and records the split on
-  the item's work item. A PRD is labelled archon-prd and stays open until its
-  hypothesis has a verdict; an epic stays open until its pieces merge; a bundle is
-  closed with links to its issues. The filed issues come back through intake like
-  any other.
+  The split queue: breaks a large item into the fewest pieces that each prove
+  something on their own, when triage judged that building it as one work item would
+  not work. Each run claims the waiting item triage routed `split` with intake's
+  claim, or the one the number input names. One agent checks triage's reason first:
+  when one work item would work after all, it hands the item to the build queue
+  whole, with why. Otherwise it files only the current piece: a PRD's current phase,
+  an epic's current increment, or every task of a bundle. Later phases are recorded
+  on the item, each with what the earlier work must show first, and filed by a later
+  split. A script files each issue once and records it on the item's work item. A
+  PRD is labelled archon-prd and stays open until its hypothesis has a verdict; an
+  epic stays open until its increments merge; a bundle is closed with links to its
+  issues. The filed issues come back through intake like any other.
 
   Use when: a trigger binding the operator installed starts it (see the SDLC pack
   README, "Split queue").
@@ -81,28 +80,14 @@ nodes:
     output_format:
       type: object
       properties:
-        # What the item is, and for a PRD how its hypothesis is measured; or `whole`
-        # with the route it is built at, when one work item would work.
+        # What the item is, or `whole` with the route it is built at, when one work
+        # item would work.
         split:
           anyOf:
             - type: object
               additionalProperties: false
               properties:
-                kind: { type: string, enum: [prd] }
-                # The command that prints the PRD's signal.
-                signal_command: { type: string, pattern: '\S' }
-                # How many days after release the threshold is judged.
-                window_days: { type: integer, minimum: 1 }
-              required: [kind, signal_command, window_days]
-            - type: object
-              additionalProperties: false
-              properties:
-                kind: { type: string, enum: [epic] }
-              required: [kind]
-            - type: object
-              additionalProperties: false
-              properties:
-                kind: { type: string, enum: [bundle] }
+                kind: { type: string, enum: [prd, epic, bundle] }
               required: [kind]
             - type: object
               additionalProperties: false
@@ -110,10 +95,9 @@ nodes:
                 kind: { type: string, enum: [whole] }
                 route: { type: string, enum: [plan, deliver] }
               required: [kind, route]
-        # In filing order; each issue depends only on keys listed before it, or on
-        # keys already filed.
-        # Empty when nothing is left to file: every piece is done or already owned,
-        # and always empty when the item is built whole.
+        # The issues filed now: a PRD's current phase, an epic's current increment, or
+        # every task of a bundle. Empty when the item is built whole, or when nothing
+        # is left to file.
         issues:
           type: array
           maxItems: 12
@@ -124,11 +108,20 @@ nodes:
               key: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
               title: { type: string, pattern: '\S' }
               body: { type: string, pattern: '\S' }
-              size: { type: string, enum: [s, m, l] }
-              depends_on: { type: array, items: { type: string } }
-            required: [key, title, body, size, depends_on]
+            required: [key, title, body]
+        # Later phases or increments, recorded on the item and not filed yet, each
+        # with what the earlier work must show before it is filed.
+        later:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              title: { type: string, pattern: '\S' }
+              signal: { type: string, pattern: '\S' }
+            required: [title, signal]
         # Existing open issues that already own part of the outcome, listed instead
-        # of filed again; the outcome depends on them as on the filed issues.
+        # of filed again.
         existing:
           type: array
           items:
@@ -139,10 +132,11 @@ nodes:
               why: { type: string, pattern: '\S' }
             required: [number, why]
         summary: { type: string, pattern: '\S' }
-      required: [split, issues, existing, summary]
+      required: [split, issues, later, existing, summary]
 
-  # Files each issue once, records it on the work item as it goes, comments the list
-  # on the item, then labels a PRD or closes a bundle, and releases the claim. An item
+  # Files each current issue once, records it on the work item as it goes, comments
+  # the list and the later phases on the item, then labels a PRD or closes a bundle,
+  # and releases the claim. An item
   # built whole gets the comment with why and moves to its build route instead.
   - id: publish
     script: publish
@@ -154,6 +148,7 @@ nodes:
       item: { from: "$facts.output.item" }
       split: { from: "$slice.output.split", if_skipped: null }
       issues: { from: "$slice.output.issues", if_skipped: null }
+      later: { from: "$slice.output.later", if_skipped: null }
       existing: { from: "$slice.output.existing", if_skipped: null }
       summary: { from: "$slice.output.summary", if_skipped: null }
     output_format:
