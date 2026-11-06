@@ -69,6 +69,8 @@ A finding is **blocking** when merging would leave something wrong, untrue, undo
 
 Unneeded and doubly owned block only when the smaller shape preserves behavior and the evidence proves it; one nobody could falsify is a note.
 
+A UX finding blocks only when a person can't complete the task or would be misled by what the page shows; otherwise it is a note.
+
 Weigh the fix against the defect. When the smallest fix for a wrong or unproved finding adds machinery, state, a lock or protocol, or a runtime dependency that costs more than the defect it prevents, the finding names the subtractive option first — remove the cause, or document the behavior — and blocks only on that option; when no subtractive option exists, it is a note. A fix that changes an operator or API surface the contract does not name is `ask`, not a correction. Proportionality changes which fix is proposed and whether it blocks, never whether the defect is recorded.
 
 Prefer subtraction when the change caused the finding. A defect can sit in machinery this change added beyond what the contract needs: a new engine, a generalization, a new rule set or a new consumer. When a smaller shape without that machinery meets the contract, the correction removes or replaces it, and the finding names that correction first; the action stays `correct`. Extending the machinery to cover the new case is not that correction. When the contract cannot be met without the machinery, and the corrections keep surfacing new defect classes inside it, the action is `ask`, naming both designs: the machinery as built, and the smaller shape with the acceptance item it would leave unmet.
