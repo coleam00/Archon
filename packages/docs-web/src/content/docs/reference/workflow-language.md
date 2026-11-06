@@ -2505,6 +2505,11 @@ Consequences worth planning for:
 | `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
 | `first_success` | never (load error) | Racing: **rejected**, not deferred. See below. Rejected at load rather than silently treated as another join |
 
+Failure markers have `archon_failed: true`, a string `error`, and `status: "failed" | "cancelled"`.
+Collectors check `archon_failed === true`; `error` and `status` alone may also appear in a
+successful payload. The discriminator is reserved, so child payloads must avoid it.
+Paused children stay held until they finish and do not become aggregate slots.
+
 **Every child runs to its own terminal state before the join reduces, under both joins.** A
 child that fails does not stop its siblings, does not stop later items from being spawned,
 and does not change any other child's outcome. `all_success` still fails the node if any
@@ -2817,6 +2822,9 @@ Two hard limits, both enforced at load time before any upstream node can spend:
 Cancellation stops the pool from claiming new items. An in-flight item may still reach its
 own terminal event; under `all_done`, a cancelled slot is represented by the same reserved
 `{ archon_failed: true, error, status: "cancelled" }` marker used by child-run fan-out.
+Failed slots use `status: "failed"`; both statuses follow the
+[reserved failure-marker contract](#join-semantics). An instance with ambiguous
+non-terminal work blocks the join rather than becoming a failure-marker slot.
 Instance and wrapper events are aggregate accounting rows, so their rolled-up usage is not
 counted again during resume. Engine-managed artifact names also carry the enclosing
 `loop_group` iteration path, preventing later iterations from overwriting earlier sidecars.
