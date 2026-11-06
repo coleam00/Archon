@@ -1,11 +1,10 @@
 /**
  * PR state lookup via the `gh` CLI.
  *
- * Used by cleanup to detect squash-merged or closed PRs that git ancestry
- * checks miss. The `gh` CLI is a soft dependency: when it is not installed or the
- * remote is not GitHub there is no PR to ask about ('NONE'), and callers fall back
- * to git-only signals. When `gh` is there but fails (auth, rate limit, unreadable
- * output) the answer is 'UNAVAILABLE', which callers must not read as "no PR".
+ * The `gh` CLI is a soft dependency: when it is not installed or the remote is
+ * not GitHub, lookups return 'NONE'. A failed query returns 'UNAVAILABLE', which
+ * callers must not read as "no PR". Cleanup requires a merged PR head covering
+ * every existing local tip before removal.
  */
 import { execFileAsync } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
