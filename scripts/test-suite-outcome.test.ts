@@ -148,17 +148,20 @@ describe('CI wiring', () => {
     expect(record(jobs['test-pack']).if).toBe("needs.changes.outputs.run-tests == 'true'");
   });
 
-  test('publishes the workspace decision from the deciding step', () => {
-    const changes = record(jobs.changes);
-    expect(record(changes.outputs)['run-workspace-tests']).toBe(
-      '${{ steps.decision.outputs.run-workspace-tests }}'
-    );
-    const decision = jobSteps(changes).find(step => step.id === 'decision');
-    expect(decision?.run).toContain(
-      'run_workspace_tests=$(bun scripts/should-run-test-suite.ts --workspace-tests)'
-    );
-    expect(decision?.run).toContain(
-      'echo "run-workspace-tests=$run_workspace_tests" >> "$GITHUB_OUTPUT"'
-    );
-  });
+  // An undeclared or misspelled output reads as empty, and a step gated on it skips while the
+  // job, and so the aggregate, stays green.
+  test.each(['workspace-tests', 'pack-tests', 'pack-fixtures'])(
+    'publishes the %s decision from the deciding step',
+    mode => {
+      const output = `run-${mode}`;
+      const variable = output.replaceAll('-', '_');
+      const changes = record(jobs.changes);
+      expect(record(changes.outputs)[output]).toBe(`\${{ steps.decision.outputs.${output} }}`);
+      const decision = jobSteps(changes).find(step => step.id === 'decision');
+      expect(decision?.run).toContain(
+        `${variable}=$(bun scripts/should-run-test-suite.ts --${mode})`
+      );
+      expect(decision?.run).toContain(`echo "${output}=$${variable}" >> "$GITHUB_OUTPUT"`);
+    }
+  );
 });

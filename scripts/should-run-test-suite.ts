@@ -205,9 +205,14 @@ export function shouldRunWorkspaceTests(
  *   - The contracts the pack is written against: `@archon/cli` (the `state`, `workflow` and
  *     `forge` commands the pack shells to through `ARCHON_CLI_COMMAND`, which pack tests run for
  *     real), `@archon/workflows` (the workflow language, the script-node environment, and the dry
- *     run the fixtures use), and `@archon/forge` (the plugin protocol behind `archon forge`). The
- *     packages below them are implementation those contracts hide, and their own tests guard it.
+ *     run the fixtures use), `@archon/forge` (the plugin protocol behind `archon forge`), and
+ *     `@archon/paths` (where those commands and the test preload find the Archon home, config
+ *     and plugins). `@archon/core` stays out although `archon state` runs on it: it changes on
+ *     most pull requests, and its database and config behaviour is what its own tests guard.
+ *     The other packages below the contracts are likewise left to their own tests.
  *   - The gate and the install: `test.yml`, the root manifest and the lockfile.
+ *   - The root test configuration, which `packRunnerInputs` cannot reach because it is loaded
+ *     by configuration, not imported: `bunfig.toml` and the preload it names.
  */
 const PACK_INPUTS = [
   '.archon/workflows/',
@@ -217,9 +222,12 @@ const PACK_INPUTS = [
   'packages/cli/',
   'packages/workflows/',
   'packages/forge/',
+  'packages/paths/',
   '.github/workflows/test.yml',
   'package.json',
   'bun.lock',
+  'bunfig.toml',
+  'scripts/test-preload.ts',
 ];
 
 /** The root `scripts/` files that run the pack shard and the fixtures: the runner and its imports. */
