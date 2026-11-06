@@ -12,7 +12,8 @@ import {
 import type { RepoPath } from '@archon/git';
 import { retainsWorkspace, unknownPlatformReason } from '../../platforms/registry';
 import * as isolationEnvDb from '../../db/isolation-environments';
-import { judgeBranchForRemoval, resolveRepoGitContext, skipReasonFor } from './merge-verdict';
+import { loadRepoConfig } from '../../config/config-loader';
+import { configuredRemote, judgeBranchForRemoval, skipReasonFor } from './merge-verdict';
 import {
   checkRemoval,
   countUnpushedCommits,
@@ -89,7 +90,7 @@ export async function sweepScheduledEnvironment(
   if (!pathExists && (await sweepMissingPath(env, sweep))) return;
 
   const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-  const { remote } = await resolveRepoGitContext(mainRepoPath, env.codebase_default_cwd);
+  const remote = configuredRemote(await loadRepoConfig(env.codebase_default_cwd));
   // A throw here reaches the caller, which records the failure and leaves the
   // environment for the next cycle. It must not fall through to the staleness
   // sweep: an unresolved merge check would then be indistinguishable from

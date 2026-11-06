@@ -1,10 +1,8 @@
 // @archon-test-isolated
 import { clearPlatformPolicies } from '../platforms/registry';
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { toRepoPath } from '@archon/git';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import type { Conversation } from '../types';
-import type * as Git from '@archon/git';
 import {
   runScheduledCleanup,
   startCleanupScheduler,
@@ -613,35 +611,60 @@ describe('runScheduledCleanup', () => {
     expect(report.removed).toContain('env-stale-unmerged (stale)');
   });
 
-  // #1419: a configured worktree.baseBranch replaces default-branch detection.
-  const detection: Parameters<typeof Git.getDefaultBranch>[] = [
-    [toRepoPath('/workspace/myrepo'), 'origin'],
-  ];
-  test.each<[string | undefined, Parameters<typeof Git.getDefaultBranch>[]]>([
-    ['master', []],
-    ['  develop  ', []],
-    [undefined, detection],
-    ['   ', detection],
-  ])('worktree.baseBranch %p resolves repository context', async (baseBranch, detected) => {
-    mockLoadRepoConfig.mockResolvedValue({ worktree: { baseBranch } });
-    scheduledSweepFinds(
-      makeEnvironmentWithCodebase({
-        branch_name: 'feature/foo',
-        codebase_default_cwd: '/workspace/myrepo',
-      })
-    );
+  test.each([
+    [undefined, 'origin'],
+    ['   ', 'origin'],
+    ['  upstream  ', 'upstream'],
+  ])(
+    'scheduled cleanup uses remote %p without discovering a default branch',
+    async (remote, expected) => {
+      mockLoadRepoConfig.mockResolvedValue({ worktree: { remote } });
+      scheduledSweepFinds(
+        makeEnvironmentWithCodebase({
+          branch_name: 'feature/foo',
+          codebase_default_cwd: '/workspace/myrepo',
+        })
+      );
+      mockWorktreeExists.mockResolvedValue(true);
+      mockGetDefaultBranch.mockRejectedValue(new Error('remote does not advertise HEAD'));
+      mockGetPrState.mockResolvedValue(prAt('MERGED'));
+
+      const report = await runScheduledCleanup();
+
+      expect(report.errors).toEqual([]);
+      expect(report.removed).toHaveLength(1);
+      expect(mockDestroy).toHaveBeenCalledTimes(1);
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockLoadRepoConfig).toHaveBeenCalledWith('/workspace/myrepo');
+      expect(mockGetPrState).toHaveBeenCalledWith(
+        'feature/foo',
+        '/workspace/myrepo',
+        expect.any(Map),
+        expected
+      );
+      expect(mockIsRevCoveredBy).toHaveBeenCalledWith(
+        '/workspace/myrepo',
+        'refs/heads/feature/foo',
+        PR_HEAD_SHA,
+        expected
+      );
+    }
+  );
+
+  test('scheduled cleanup reports configuration failure without judging or removing work', async () => {
+    scheduledSweepFinds(sweptWorktreeEnv('config-failure', { created_at: daysAgo(30) }));
     mockWorktreeExists.mockResolvedValue(true);
+    mockLoadRepoConfig.mockRejectedValue(new Error('invalid repository configuration'));
 
     const report = await runScheduledCleanup();
 
-    expect(report.errors).toEqual([]);
-    expect(mockGetDefaultBranch.mock.calls).toEqual(detected);
-    expect(mockGetPrState).toHaveBeenCalledWith(
-      'feature/foo',
-      '/workspace/myrepo',
-      expect.any(Map),
-      'origin'
-    );
+    expect(report.errors).toEqual([
+      { id: 'env-config-failure', error: 'invalid repository configuration' },
+    ]);
+    expect(report.removed).toEqual([]);
+    expect(mockGetPrState).not.toHaveBeenCalled();
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockMarkWorktreeDestroyed).not.toHaveBeenCalled();
   });
 });
 
