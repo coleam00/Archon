@@ -232,6 +232,7 @@ else {
     'pr.files': () =>
       read({
         ref,
+        head_revision: 'headsha',
         files: [
           {
             path: 'src/a.test.ts',

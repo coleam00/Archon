@@ -4,7 +4,10 @@ import { z } from 'zod';
 import { prFileSchema, type ForgeRequest, type ForgeResponse } from '@archon/forge/operations';
 import { GitHubError, githubPages, githubRequest, location, type Fetch } from './api';
 
-const pullFileCountSchema = z.object({ changed_files: z.number().int().nonnegative() });
+const pullSchema = z.object({
+  changed_files: z.number().int().nonnegative(),
+  head: z.object({ sha: z.string().min(1) }),
+});
 const pullFileSchema = z.object({
   filename: z.string().min(1),
   previous_filename: z.string().min(1).optional(),
@@ -24,9 +27,8 @@ export async function handleGithubPrFiles(
 ): Promise<ForgeResponse> {
   const { root, path } = location(request.ref.repo);
   const base = `${root}/repos/${path}/pulls/${String(request.ref.number)}`;
-  const { changed_files: expected } = pullFileCountSchema.parse(
-    await githubRequest(fetchImpl, token, base)
-  );
+  const pull = pullSchema.parse(await githubRequest(fetchImpl, token, base));
+  const expected = pull.changed_files;
   const rows = await githubPages(fetchImpl, token, `${base}/files`, value =>
     z.array(pullFileSchema).parse(value)
   );
@@ -45,6 +47,7 @@ export async function handleGithubPrFiles(
       op: request.op,
       value: {
         ref: request.ref,
+        head_revision: pull.head.sha,
         files: rows.map(row => ({
           path: row.filename,
           previous_path: row.previous_filename ?? null,

@@ -302,7 +302,15 @@ export const prFileSchema = z.object({
   /** The unified diff hunk; null when the forge has none, such as for a binary or very large file. */
   patch: z.string().nullable(),
 });
-export const prFilesSchema = z.object({ ref: prRefSchema, files: z.array(prFileSchema) });
+/**
+ * `head_revision` is the head the forge reported as the list was read, so a caller
+ * reads `repo.file` at the commit the patches belong to.
+ */
+export const prFilesSchema = z.object({
+  ref: prRefSchema,
+  head_revision: gitObjectIdSchema,
+  files: z.array(prFileSchema),
+});
 /**
  * A repository-relative path. A `.` or `..` segment is refused rather than
  * normalized: a forge URL built from it would resolve to another endpoint.

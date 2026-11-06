@@ -38,7 +38,7 @@ describe('pr.files', () => {
 
   test('reads every page, keeping renames and files with no patch', async () => {
     const github = fakeGitHub(url => {
-      if (url === `${API}/pulls/7`) return { changed_files: 102 };
+      if (url === `${API}/pulls/7`) return { changed_files: 102, head: { sha: 'listed-head' } };
       if (url.endsWith('page=1')) return Array.from({ length: 100 }, (_, index) => changed(index));
       return [
         { filename: 'src/new.ts', previous_filename: 'src/old.ts', status: 'renamed' },
@@ -48,7 +48,9 @@ describe('pr.files', () => {
     const response = await run(request, github);
     if (!response.ok || response.result.op !== 'pr.files')
       throw new Error(JSON.stringify(response));
-    const { files } = response.result.value;
+    const { files, head_revision } = response.result.value;
+    // The head comes from the pull request read that counted the files.
+    expect(head_revision).toBe('listed-head');
     expect(files).toHaveLength(102);
     expect(files[0]).toEqual({
       path: 'src/file-0.ts',
@@ -65,7 +67,9 @@ describe('pr.files', () => {
 
   test('refuses a list GitHub cut short rather than returning part of the change', async () => {
     const github = fakeGitHub(url =>
-      url === `${API}/pulls/7` ? { changed_files: 3001 } : [changed(1)]
+      url === `${API}/pulls/7`
+        ? { changed_files: 3001, head: { sha: 'listed-head' } }
+        : [changed(1)]
     );
     expect(await run(request, github)).toMatchObject({
       ok: false,
