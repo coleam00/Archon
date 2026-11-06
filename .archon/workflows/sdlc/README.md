@@ -201,9 +201,11 @@ head where they belong.
 Every `script:` node here is TypeScript on Bun, under its own component's
 `scripts/` directory. Logic more than one of them needs lives once in
 [`.shared/`](.shared), imported by relative path with the extension written
-(`../../.shared/report.ts`). That directory is reserved for modules and for the
-pack's default policy documents under `.shared/policy/`: nothing in it is a workflow
-or a named script target, and a node that names one fails at load.
+(`../../.shared/report.ts`). That directory is reserved for modules, for the
+pack's default policy documents under `.shared/policy/`, and for `metric-views.json`, the
+overview cards the console metrics page shows (see the
+[metrics guide](https://archon.diy/guides/metrics/#overview-cards-a-pack-declares)): nothing
+in it is a workflow or a named script target, and a node that names one fails at load.
 
 The repository validates them where they live. `.archon/workflows/tsconfig.json`
 is the owning configuration — `bun run type-check` compiles that project. Lint
@@ -904,7 +906,7 @@ around the cut is mixed in.
 Cost per merged pull request is the cost `archon metrics sdlc.prs_opened` reports
 (`cost.usd` with `--json`), divided by the `sdlc.prs_merged` value over the same window.
 It covers the build-queue runs that built a pull request; queue runs that built none are
-not attributed to any. It is a floor: runs on a provider that reports no cost add nothing
+not attributed to any. The console metrics page's Cost per PR card shows this figure. It is a floor: runs on a provider that reports no cost add nothing
 and are counted instead.
 
 Two kinds of factory pull request are missed, and both are mostly ones closed without
