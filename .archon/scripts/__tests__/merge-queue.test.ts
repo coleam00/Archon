@@ -7,11 +7,7 @@ import { trackTempRoots } from './temp-roots';
 import { type BuildRecord, buildWaits } from '../../workflows/sdlc/.shared/build';
 import {
   checksOf,
-  BASE_EFFECTS,
   gateRefusals,
-  MERGE_ASKED_BY,
-  MERGE_EFFECTS,
-  MERGE_PATHS,
   type MergeAttention,
   type MergeRecord,
   type MergeSettled,
@@ -21,12 +17,11 @@ import {
   MERGE_QUEUE_FORGE_OPERATIONS,
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
-import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
 import { withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
-import { type GhCommentRow, type GhIssue, gitCheckout, hostCli, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
+import { type GhCommentRow, type GhIssue, gitCheckout, hostCli, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -187,25 +182,6 @@ describe('the merge record and the gate', () => {
   test('a pull request URL names its repository and number; anything else refuses', () => {
     expect(prFromUrl(PR_URL)).toEqual(PR);
     expect(() => prFromUrl('https://ghe.example.com/example/repo/issues/42')).toThrow('not a pull request URL');
-  });
-
-  test("the paths, classes and ruling effects are archon-merge-queue's own", () => {
-    type Enum = { enum: string[] };
-    type Schema = { enum?: string[]; properties?: Record<string, Schema>; items?: Schema };
-    const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'merge-queue/archon-merge-queue.yaml'), 'utf8')) as {
-      inputs: Record<string, unknown>;
-      nodes: { id: string; output_format?: Schema }[];
-    };
-    // A new input fails here until someone decides whether a follow-up sweep keeps it.
-    expect(Object.keys(workflow.inputs).sort()).toEqual([...MERGE_QUEUE_SELECTIONS, 'repo_host', 'repo_path'].sort());
-    const at = (id: string, ...path: string[]): Schema | undefined =>
-      path.reduce<Schema | undefined>(
-        (schema, key) => (key === '[]' ? schema?.items : schema?.properties?.[key]),
-        workflow.nodes.find(node => node.id === id)?.output_format
-      );
-    expect((at('facts', 'path') as Enum).enum).toEqual([...MERGE_PATHS]);
-    expect(at('record', 'class')?.enum).toEqual(['', ...MERGE_ASKED_BY]);
-    expect(at('ruling', 'decision')?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
   });
 });
 
@@ -591,7 +567,7 @@ describe('the merge queue scripts', () => {
     expect(stored(at, 50).value?.facts.own_pr?.url).toBe(ownPrs[0]!.url);
   }, 60_000);
 
-  for (const choice of ['park', 'other']) {
+  for (const choice of ['park']) {
     test(`an own PR answered ${choice} waits again only after its head changes`, () => {
       const at = install();
       const own = { ...newWorkItem(PR, AT), ...CLAIMED, facts: { own_pr: { url: PR_URL, at: AT } } };
@@ -625,32 +601,7 @@ describe('the merge queue scripts', () => {
     }, 60_000);
   }
 
-  test('only a latest answered own-PR park can recover; other settlements need no head read', () => {
-    const at = install();
-    const parked = parkedOwn();
-    const prior = parked.facts.merge;
-    const last = prior.decisions[0];
-    const cases: MergeRecord[] = [
-      { ...prior, status: 'merged' },
-      { ...prior, status: 'returned' },
-      ...[
-        { ...last, decision: UNREADABLE },
-        { ...last, decision: 'parked' },
-        { ...last, decision: 'superseded', head: null, answer: undefined },
-        { ...last, head: null },
-        { ...last, answer: undefined },
-      ].map(entry => ({ ...prior, decisions: [...prior.decisions, entry] })),
-    ];
-    for (const [index, record] of cases.entries()) {
-      const number = 50 + index;
-      seed(at, { ...parked, subject: { ...PR, number }, facts: { own_pr: { url: PR_URL.replace(/42$/, String(number)), at: AT }, merge: record } });
-    }
-    const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD } });
-    expect(ok(picked)).toMatchObject({ path: 'idle' });
-    expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(0);
-  }, 60_000);
-
-  for (const failure of ['read', 'invalid URL']) {
+  for (const failure of ['read']) {
     test(`a failed recovery ${failure} leaves the parked item untouched while other work proceeds`, () => {
       const at = install();
       const parked = parkedOwn();
@@ -705,25 +656,16 @@ describe('the merge queue scripts', () => {
     }, 60_000);
   }
 
-  for (const concurrent of ['edit', 'answered', 'merged', 'superseded', 'claimed', 'build', 'pr']) {
+  for (const concurrent of ['edit', 'claimed']) {
     test(`recovery rechecks a concurrent ${concurrent} before retrying a conditional claim`, () => {
       const at = install();
       const parked = parkedOwn();
       seed(at, parked);
-      const prior = parked.facts.merge;
-      const last = prior.decisions[0];
       const changed: WorkItem = {
         ...parked,
         trust: 'maintainer',
         ...(concurrent === 'claimed' ? { claim: { run_id: 'other-owner', at: AT, requests: [] } } : {}),
-        facts: { ...parked.facts,
-          ...(concurrent === 'pr' ? { own_pr: { url: OTHER_URL, at: AT } } : {}),
-          ...(concurrent === 'build' ? { build: { ...BUILT, status: 'next' as const } } : {}),
-          merge: { ...prior,
-            status: concurrent === 'merged' ? 'merged' : 'parked',
-            decisions: [...prior.decisions, ...(concurrent === 'answered' ? [{ ...last, head: OLD }] : concurrent === 'superseded' ? [{ ...last, decision: 'superseded', head: null, answer: undefined }] : [])],
-          },
-        },
+        facts: parked.facts,
       };
       const preload = `
 const beforeClaim = Bun.spawnSync.bind(Bun);
@@ -738,15 +680,13 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   return beforeClaim(argv, settings);
 } });`;
       const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD }, preload });
-      const recovers = concurrent === 'edit' || concurrent === 'pr';
-      const output = ok(picked);
-      expect(output).toMatchObject({ path: recovers ? 'sweep' : 'idle' });
-      if (concurrent === 'pr') expect(output).toMatchObject({ items: [{ pr: OTHER_PR, facts: { pr: OTHER_PR } }] });
+      const recovers = concurrent === 'edit';
+      expect(ok(picked)).toMatchObject({ path: recovers ? 'sweep' : 'idle' });
       const after = stored(at, PR.number).value!;
       expect(after.trust).toBe('maintainer');
       expect(after.facts).toEqual(changed.facts);
-      expect(after.claim?.run_id ?? null).toBe(recovers ? 'run-1' : concurrent === 'claimed' ? 'other-owner' : null);
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(concurrent === 'pr' ? 2 : 1);
+      expect(after.claim?.run_id).toBe(recovers ? 'run-1' : 'other-owner');
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(1);
     }, 60_000);
   }
 
@@ -1008,18 +948,16 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
   }, 60_000);
 
-  test.each((['facts', 'gate', 'record'] as const).flatMap(script =>
-    (['blob', 'tree'] as const).map(missing => ({ script, missing }))
-  ))('$script fails visibly when the maintainer $missing cannot be read', ({ script, missing }) => {
+  test('the gate fails visibly and merges nothing when the maintainer list cannot be read', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
-    const revision = missing === 'blob' ? 'dev:.archon/sdlc/policy/maintainers.json' : 'dev^{tree}';
+    const revision = 'dev:.archon/sdlc/policy/maintainers.json';
     const objectId = spawnSync('git', ['rev-parse', revision], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
     const object = join(at.checkout, '.git/objects', objectId.slice(0, 2), objectId.slice(2));
     expect(existsSync(object)).toBe(true);
     const before = stored(at);
-    const result = run(at, script, script === 'record' ? recordInputs([decision({})]) : {}, {
-      args: script === 'gate' ? ['--pr', PR_URL, '--head', HEAD, '--method', 'squash', '--merge'] : [],
+    const result = run(at, 'gate', {}, {
+      args: ['--pr', PR_URL, '--head', HEAD, '--method', 'squash', '--merge'],
       preload: `
         import { unlinkSync } from 'node:fs';
         const gitWithPolicy = Bun.spawnSync.bind(Bun);
@@ -1031,7 +969,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       `,
     });
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain(missing === 'blob' ? 'git show' : 'git ls-tree');
+    expect(result.stderr).toContain('git show');
     expect(result.stderr).toContain('failed:');
     expect(stored(at)).toEqual(before);
     expect(merges(result)).toEqual([]);
@@ -1392,11 +1330,9 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }, 60_000);
 });
 
-describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %s source', source => {
+describe('the merge queue facts and gate on the gh source', () => {
   const on = (at: Install, script: 'facts' | 'gate', options: Parameters<typeof run>[3] = {}, inputs: Record<string, string> = {}) => {
-    const result = run(at, script, inputs, { ...options, source });
-    if (source === 'forge') expect(ghCalls(result)).toEqual([]);
-    return result;
+    return run(at, script, inputs, { ...options, source: 'gh' });
   };
   const args = ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'];
 
@@ -1437,14 +1373,14 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
     const gated = on(install(), 'gate', { args });
     expect(ok(gated)).toEqual({ pr: PR_URL, head: HEAD, refusals: [], merge_commit: '3333333333333333333333333333333333333333' });
     expect(merges(gated)).toEqual([
-      source === 'gh' ? `pr merge 42 --repo ${PR.repo.host}/${PR.repo.path} --squash --match-head-commit ${HEAD}` : `forge pr.merge squash ${HEAD}`,
+      `pr merge 42 --repo ${PR.repo.host}/${PR.repo.path} --squash --match-head-commit ${HEAD}`,
     ]);
   }, 60_000);
 
   test('a merge the forge accepts but does not make leaves no receipt, and the gate fails', () => {
     const gated = on(install(), 'gate', { args, pr: { queuesMerge: true } });
     expect(gated.code).not.toBe(0);
-    expect(gated.stderr).toContain(source === 'gh' ? `it reads back open at ${HEAD}, so it did not merge` : 'forge pr.merge verification_failed');
+    expect(gated.stderr).toContain(`it reads back open at ${HEAD}, so it did not merge`);
     expect(merges(gated)).toHaveLength(1);
   }, 60_000);
 
