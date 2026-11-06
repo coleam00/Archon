@@ -348,12 +348,14 @@ export function mirrorLabels(doc: WorkItem): PackLabel[] {
   if (doc.stage === 'needs_maintainer') return ['archon-needs-maintainer'];
   const triage = doc.facts.triage;
   if (doc.stage === 'new' || triage === undefined) return [];
-  const wanted = wantedLabels(triage.verdict, triage.type.value, triage.size.value);
-  // A split PRD stays open, marked as one, until its hypothesis has a verdict. A
-  // re-triage after the split drops the mark until the split queue files it again.
-  const split = doc.facts.split;
-  if (doc.stage === 'split' && split?.status === 'done' && split.kind === 'prd' && split.at >= triage.at)
-    wanted.push('archon-prd');
+  // A re-triage after the split queue's record replaces what that record says here.
+  const split = doc.facts.split !== undefined && doc.facts.split.at >= triage.at ? doc.facts.split : undefined;
+  // An item the split queue handed back whole carries the route it now waits at.
+  const verdict: LabelVerdict =
+    split?.status === 'whole' ? { contract: 'READY', route: split.route } : triage.verdict;
+  const wanted = wantedLabels(verdict, triage.type.value, triage.size.value);
+  // A split PRD stays open, marked as one, until its hypothesis has a verdict.
+  if (doc.stage === 'split' && split?.status === 'done' && split.kind === 'prd') wanted.push('archon-prd');
   return wanted;
 }
 

@@ -4,8 +4,8 @@ description: |
   of work it needs. Reconciles tracker history, current code, moved branches,
   stale assumptions, and explicit direction; judges whether the item is a
   contract a run can start from; then routes to investigate, plan, deliver,
-  continue an open PR that already carries the outcome, split a PRD or a
-  bundle of tasks into issues, or no action.
+  continue an open PR that already carries the outcome, split a large item
+  into issues when building it whole would not work, or no action.
   Advisory: it leaves the checkout unchanged, and writes labels only when asked
   to publish.
 

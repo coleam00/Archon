@@ -1,14 +1,18 @@
 name: archon-split
 description: |
-  The split queue: files the issues a PRD or a bundle of tasks splits into. Each run
-  claims the waiting item triage routed `split` with intake's claim, or the one the
-  number input names. One agent reads the item and lists its issues, each a
-  contract of its own: a PRD's first issue puts its hypothesis in front of real
-  data, adding the measurement when none exists; a bundle is split as written. A
-  script files each issue once, linked to the issues it depends on, and records
-  the split on the item's work item. A PRD is labelled archon-prd and stays open
-  until its hypothesis has a verdict; a bundle is closed with links to its issues.
-  The filed issues come back through intake like any other.
+  The split queue: files the issues a large item splits into, when triage judged that
+  building it as one work item would not work. Each run claims the waiting item
+  triage routed `split` with intake's claim, or the one the number input names. One
+  agent checks triage's reason first: when one work item would work after all, it
+  hands the item to the build queue whole, with why. Otherwise it lists the item's
+  issues, each a contract of its own: a PRD's first issue puts its hypothesis in
+  front of real data, adding the measurement when none exists; an epic's pieces are
+  ordered by what each needs merged first; a bundle is split as written. A script
+  files each issue once, linked to the issues it depends on, and records the split on
+  the item's work item. A PRD is labelled archon-prd and stays open until its
+  hypothesis has a verdict; an epic stays open until its pieces merge; a bundle is
+  closed with links to its issues. The filed issues come back through intake like
+  any other.
 
   Use when: a trigger binding the operator installed starts it (see the SDLC pack
   README, "Split queue").
@@ -60,7 +64,10 @@ nodes:
         # The issues already filed from the item, by key, from its work item; empty
         # when none are.
         filed: { type: array, items: { type: object } }
-      required: [path, item, url, filed]
+        # Triage's summary from the run that routed the item `split`: why building it
+        # whole would not work. Empty when no such entry is recorded.
+        reason: { type: string }
+      required: [path, item, url, filed, reason]
 
   - id: slice
     command: slice
@@ -70,10 +77,12 @@ nodes:
     with:
       url: "$facts.output.url"
       filed: { from: "$facts.output.filed" }
+      reason: "$facts.output.reason"
     output_format:
       type: object
       properties:
-        # What the item is, and for a PRD how its hypothesis is measured.
+        # What the item is, and for a PRD how its hypothesis is measured; or `whole`
+        # with the route it is built at, when one work item would work.
         split:
           anyOf:
             - type: object
@@ -88,11 +97,23 @@ nodes:
             - type: object
               additionalProperties: false
               properties:
+                kind: { type: string, enum: [epic] }
+              required: [kind]
+            - type: object
+              additionalProperties: false
+              properties:
                 kind: { type: string, enum: [bundle] }
               required: [kind]
+            - type: object
+              additionalProperties: false
+              properties:
+                kind: { type: string, enum: [whole] }
+                route: { type: string, enum: [plan, deliver] }
+              required: [kind, route]
         # In filing order; each issue depends only on keys listed before it, or on
         # keys already filed.
-        # Empty when nothing is left to file: every piece is done or already owned.
+        # Empty when nothing is left to file: every piece is done or already owned,
+        # and always empty when the item is built whole.
         issues:
           type: array
           maxItems: 12
@@ -121,7 +142,8 @@ nodes:
       required: [split, issues, existing, summary]
 
   # Files each issue once, records it on the work item as it goes, comments the list
-  # on the item, then labels a PRD or closes a bundle, and releases the claim.
+  # on the item, then labels a PRD or closes a bundle, and releases the claim. An item
+  # built whole gets the comment with why and moves to its build route instead.
   - id: publish
     script: publish
     runtime: bun
@@ -139,6 +161,7 @@ nodes:
       properties:
         path: { type: string, enum: [idle, closed, slice] }
         item: { type: [integer, 'null'] }
+        # The split kind, `whole` when the item was handed back, null otherwise.
         kind: { type: [string, 'null'] }
         issues:
           type: array

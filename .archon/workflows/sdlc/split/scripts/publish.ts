@@ -11,9 +11,14 @@
  * prove each is an issue of the repository, and recorded beside the filed ones.
  *
  * Then the item gets one marked comment listing its issues. A PRD is labelled
- * `archon-prd` and stays open until its hypothesis has a verdict; a bundle is closed
- * as completed. The last write records the split done and releases the claim, so a
- * run that stops before it is retried, and every write before it repeats safely.
+ * `archon-prd` and stays open until its hypothesis has a verdict; an epic stays open
+ * until its pieces merge; a bundle is closed as completed. The last write records the
+ * split done and releases the claim, so a run that stops before it is retried, and
+ * every write before it repeats safely.
+ *
+ * When the agent judged the item one work item after all, nothing is filed: the item
+ * gets the same marked comment with why, its route label in place of `archon-split`,
+ * and the last write moves it to that build route, where the build queue picks it up.
  *
  * On `idle` this reports what is stuck; on `closed` it records that the item's issue
  * was closed before a split finished, files nothing, and releases the claim.
@@ -22,9 +27,15 @@
 import { forgeSource, parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { closeIssue, createIssue, markerScan, viewIssue } from '../../.shared/issue.ts';
-import { writeLabels } from '../../.shared/labels.ts';
+import { ROUTE_LABEL, writeLabels } from '../../.shared/labels.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { type AdoptedIssue, type SplitIssue, type SplitRecord, splitMarker } from '../../.shared/split.ts';
+import {
+  type AdoptedIssue,
+  type SplitIssue,
+  type SplitRecord,
+  splitMarker,
+  type WholeRoute,
+} from '../../.shared/split.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { newest, readWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
@@ -45,7 +56,7 @@ interface Existing {
 
 type Split =
   | { readonly kind: 'prd'; readonly signal_command: string; readonly window_days: number }
-  | { readonly kind: 'bundle' };
+  | { readonly kind: 'epic' | 'bundle' };
 
 const COMMENT_MARKER = '<!-- archon-split -->';
 
@@ -102,10 +113,11 @@ function comment(
     adopted.length > 0
       ? [`It also depends on these open issues, which already own part of it:\n${adopted.map(entry => `- #${String(entry.number)} ${entry.why}`).join('\n')}`]
       : [];
-  const lead =
-    split.kind === 'prd'
-      ? 'This PRD is split into these issues. It stays open until its hypothesis has a verdict.'
-      : 'This bundle of tasks is split into these issues and closed; follow the work there.';
+  const lead = {
+    prd: 'This PRD is split into these issues. It stays open until its hypothesis has a verdict.',
+    epic: 'This epic is split into these issues. It stays open until they merge.',
+    bundle: 'This bundle of tasks is split into these issues and closed; follow the work there.',
+  }[split.kind];
   const measure =
     split.kind === 'prd'
       ? [`The signal is measured with \`${split.signal_command}\`, ${String(split.window_days)} days after release.`]
@@ -158,7 +170,7 @@ function publish(
 
   upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(split, planned, numbers, adopted), forgeSource());
   if (split.kind === 'prd') writeLabels(item, ['archon-prd'], []);
-  else closeIssue(item, 'completed');
+  if (split.kind === 'bundle') closeIssue(item, 'completed');
 
   updateClaimed(item, runId, doc => finish(doc, recorded(issues, 'done'), runId, 'split', summary));
   emit({
@@ -168,6 +180,26 @@ function publish(
     issues,
     adopted,
     summary: `Issue ${String(item.number)}: split as a ${split.kind} into ${String(planned.length)} issues; ${summary}`,
+  });
+}
+
+/** Hand the item to the build queue as one work item, with the agent's reason. */
+function buildWhole(item: QualifiedPr, runId: string, route: WholeRoute, reason: string): void {
+  const at = new Date().toISOString();
+  const lead = 'The split queue found this item can be built as one work item, so it files no issues for it.';
+  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, [COMMENT_MARKER, lead, reason].join('\n\n'), forgeSource());
+  writeLabels(item, [ROUTE_LABEL[route]], ['archon-split']);
+  const doc = updateClaimed(item, runId, current => ({
+    ...finish(current, { status: 'whole', route, reason, issues: filedOn(current), at, run_id: runId }, runId, 'whole', reason),
+    stage: route,
+  }));
+  emit({
+    path: 'slice',
+    item: item.number,
+    kind: 'whole',
+    issues: filedOn(doc),
+    adopted: [],
+    summary: `Issue ${String(item.number)}: built whole at ${route}; ${reason}`,
   });
 }
 
@@ -190,11 +222,16 @@ function main(): void {
     emit({ path, item: item.number, kind: null, issues: filedOn(doc), adopted: [], summary: `Issue ${String(item.number)}: ${reason}` });
     return;
   }
-  const split = nullableJson(process.env.INPUTS_SPLIT) as Split | null;
+  const split = nullableJson(process.env.INPUTS_SPLIT) as Split | { kind: 'whole'; route: WholeRoute } | null;
   const planned = nullableJson(process.env.INPUTS_ISSUES) as Planned[] | null;
   const existing = nullableJson(process.env.INPUTS_EXISTING) as Existing[] | null;
   if (path !== 'slice' || split === null || planned === null || existing === null)
     throw new Error(`the ${path} path reached publish with no split`);
+  if (split.kind === 'whole') {
+    if (planned.length > 0 || existing.length > 0) throw new Error('nothing was filed: an item built whole lists no issues');
+    buildWhole(item, runId, split.route, text(process.env.INPUTS_SUMMARY));
+    return;
+  }
   publish(item, runId, split, planned, existing, text(process.env.INPUTS_SUMMARY));
 }
 

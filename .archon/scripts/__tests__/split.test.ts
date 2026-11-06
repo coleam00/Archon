@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { SPLIT_KINDS, splitMarker } from '../../workflows/sdlc/.shared/split';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
-import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
+import { mirrorLabels, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { type GhIssue, gitCheckout, hostCli, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -85,7 +85,13 @@ function stored(at: Install): WorkItem {
   return inProcess(at, () => parseWorkItem(stateGet('work/7').value));
 }
 
-function publish(at: Install, split: unknown, issues: readonly GhIssue[] = [], existing: unknown[] = []): ScriptRun {
+function publish(
+  at: Install,
+  split: unknown,
+  issues: readonly GhIssue[] = [],
+  existing: unknown[] = [],
+  planned: readonly unknown[] = ISSUES
+): ScriptRun {
   return runPackScript('split/scripts/publish', {
     cwd: at.checkout,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
@@ -96,7 +102,7 @@ function publish(at: Install, split: unknown, issues: readonly GhIssue[] = [], e
       INPUTS_PATH: 'slice',
       INPUTS_ITEM: JSON.stringify(SUBJECT),
       INPUTS_SPLIT: JSON.stringify(split),
-      INPUTS_ISSUES: JSON.stringify(ISSUES),
+      INPUTS_ISSUES: JSON.stringify(planned),
       INPUTS_EXISTING: JSON.stringify(existing),
       INPUTS_SUMMARY: 'Measure first.',
     },
@@ -113,7 +119,7 @@ test("the split kinds are the slice node's own enum", () => {
     nodes: { id: string; output_format?: { properties: { split: { anyOf: { properties: { kind: { enum: string[] } } }[] } } } }[];
   };
   const branches = workflow.nodes.find(node => node.id === 'slice')?.output_format?.properties.split.anyOf ?? [];
-  expect(branches.flatMap(branch => branch.properties.kind.enum)).toEqual([...SPLIT_KINDS]);
+  expect(branches.flatMap(branch => branch.properties.kind.enum)).toEqual([...SPLIT_KINDS, 'whole']);
 });
 
 describe('split publish', () => {
@@ -172,9 +178,46 @@ describe('split publish', () => {
     expect(run.comments[0]?.body).toContain('- #50 it owns the light route');
     const split = stored(at).facts.split;
     expect(split?.issues.map(issue => issue.number)).toEqual([101, 102]);
-    expect(split?.status === 'closed' ? null : split?.adopted).toEqual([
+    expect(split?.status === 'done' ? split.adopted : null).toEqual([
       { number: 50, url: 'https://ghe.example.com/example/repo/issues/50', why: 'it owns the light route' },
     ]);
+  });
+
+  test('an epic stays open after its split and gets no PRD label', () => {
+    const at = install();
+    seed(at);
+    const run = publish(at, { kind: 'epic' });
+    expect(ok(run)).toMatchObject({ kind: 'epic' });
+    expect(run.createdIssues).toHaveLength(2);
+    expect(run.closes).toEqual([]);
+    expect(run.gh.some(call => call.includes('archon-prd'))).toBe(false);
+    expect(run.comments[0]?.body).toContain('It stays open until they merge.');
+  });
+
+  test('an item judged one work item files nothing and moves to its build route', () => {
+    const at = install();
+    seed(at);
+    const run = publish(at, { kind: 'whole', route: 'plan' }, [], [], []);
+    expect(ok(run)).toMatchObject({ kind: 'whole', issues: [] });
+    expect(run.createdIssues).toEqual([]);
+    expect(run.closes).toEqual([]);
+    expect(run.comments).toEqual([{ issue: 7, body: expect.stringContaining('Measure first.') }]);
+    expect(run.gh.some(call => call.includes('--add-label archon-plan') && call.includes('--remove-label archon-split'))).toBe(true);
+    const doc = stored(at);
+    expect(doc).toMatchObject({ stage: 'plan', claim: null, facts: { split: { status: 'whole', route: 'plan', reason: 'Measure first.' } } });
+    // Intake's mirror of the document agrees with the labels publish wrote.
+    expect(mirrorLabels(doc)).toContain('archon-plan');
+    expect(mirrorLabels(doc)).not.toContain('archon-split');
+  });
+
+  test('an item judged one work item that still lists issues files nothing', () => {
+    const at = install();
+    seed(at);
+    const run = publish(at, { kind: 'whole', route: 'deliver' });
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('an item built whole lists no issues');
+    expect(run.createdIssues).toEqual([]);
+    expect(stored(at).stage).toBe('split');
   });
 
   test('a closed issue listed as an existing dependency files nothing', () => {

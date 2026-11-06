@@ -78,7 +78,7 @@ function stopped(): { readonly reason: Stop; readonly text: string; readonly rep
   if (route === 'split') {
     return {
       reason: 'split',
-      text: `Not done: the item is a PRD or a bundle of tasks, which archon-split files as separate issues. ${summary}`,
+      text: `Not done: triage judged that the item cannot be built as one work item, so archon-split files its pieces as separate issues. ${summary}`,
       report: 'triage.md',
     };
   }

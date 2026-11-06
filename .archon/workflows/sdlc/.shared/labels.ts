@@ -24,7 +24,7 @@ export const PACK_LABELS = {
   },
   'archon-split': {
     color: 'BFDADC',
-    description: 'Triage: ready; a PRD or a bundle of tasks to split into issues',
+    description: 'Triage: ready; a large item to split into issues, because one work item would not work',
   },
   'archon-prd': {
     color: '006B75',
@@ -95,8 +95,8 @@ export type Route = 'investigate' | 'plan' | 'deliver' | 'continue' | 'split';
 // Exactly one state label per item. A READY item's label names the route the run
 // takes on it: archon-ready delivers (a new pull request, or the open one it
 // continues), archon-plan plans then delivers, archon-investigate investigates
-// then delivers, and archon-split files the issues a PRD or a bundle of tasks splits
-// into.
+// then delivers, and archon-split files the issues a large item splits into when
+// building it as one work item would not work.
 export const STATE_LABEL = {
   NEEDS_CONTRACT_WORK: 'archon-needs-contract',
   BLOCKED: 'archon-blocked',

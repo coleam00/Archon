@@ -5,7 +5,9 @@
  * item the `number` input names, and writes only that claim. A named item that cannot
  * be claimed refuses the run with the reason. A closed issue goes to `closed`, which
  * publish records without an agent. The issues already filed from the item come from
- * its work item, where publish records each one as it files it.
+ * its work item, where publish records each one as it files it, and so does triage's
+ * summary of why building the item whole would not work, from the history entry of
+ * the intake run that routed it `split`.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -27,7 +29,7 @@ function main(): void {
   if (named !== '' && (!Number.isInteger(number) || number <= 0)) throw new Error('number must be a positive integer');
   const doc = named === '' ? claimNext(at, runId, SPLIT_PICKUP) : claimNamed(number, at, runId, SPLIT_PICKUP);
   if (doc === null) {
-    emit({ path: 'idle', item: null, url: '', filed: [] });
+    emit({ path: 'idle', item: null, url: '', filed: [], reason: '' });
     return;
   }
   const issue = viewIssue(doc.subject);
@@ -39,6 +41,7 @@ function main(): void {
     item: doc.subject,
     url: issue.url,
     filed: doc.facts.split?.issues ?? [],
+    reason: [...doc.history].reverse().find(entry => entry.stage === 'intake' && entry.outcome === 'split')?.summary ?? '',
   });
 }
 

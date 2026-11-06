@@ -7,6 +7,7 @@ facts:
   item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
   url: "https://github.com/example/repo/issues/7"
   filed: []
+  reason: "stub: the measurement must collect data before the feature is judged"
 slice:
   split: { kind: prd, signal_command: "bun run signal", window_days: 14 }
   issues:

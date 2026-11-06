@@ -648,25 +648,32 @@ resource, with intake's label selector narrowed to the route labels intake write
 
 ## Split queue
 
-[`archon-split`](split/archon-split.yaml) files the issues a PRD or a bundle of tasks
-splits into. Triage routes an item `split` when it asks for more than one run's work;
-the default triage policy, [`.shared/policy/triage.md`](.shared/policy/triage.md), says
-how triage tells a PRD (a release that tests a hypothesis) from a bundle of tasks and
-from a single work item, and holds a PRD to its hypothesis, its signal with the command
-that measures it, and its threshold and window. A PRD missing any of them gets
-`archon-needs-contract`, naming the gap.
+[`archon-split`](split/archon-split.yaml) files the issues a large item splits into.
+A large item, such as a PRD, an epic or a bundle of tasks, is built as one work item
+by default. Triage routes it `split` only when building it whole would not work, and
+its summary says why. The default triage policy,
+[`.shared/policy/triage.md`](.shared/policy/triage.md), says when splitting is right
+and what a PRD is: a release that tests a hypothesis, held to its hypothesis, its
+signal with the command that measures it, and its threshold and window, whether it is
+split or built whole. A PRD missing any of them gets `archon-needs-contract`, naming
+the gap.
 
 - **Pickup.** A run claims one item with intake's claim and order. An item waits for
   the split queue when its stage is `split` and no split finished on it, or a
   re-triage came after the last one. The `number` input claims that issue instead,
   and refuses the run with why when it cannot, as the build queue's does. The claim
   takes none of the item's intake requests.
-- **Slice.** One agent reads the issue (written to `split/prd.md`), the project's
-  direction and current code, and lists at most twelve issues, each a contract of its
+- **Slice.** One agent reads the issue (written to `split/prd.md`), triage's reason,
+  the triage policy, the project's direction and current code. It checks triage's
+  judgment first: when one work item would work, it answers `whole` with a build
+  route (`plan` or `deliver`) and why, and files nothing. Otherwise it judges the item
+  a PRD, an epic (one outcome whose pieces depend on each other) or a bundle of
+  separate tasks, and lists at most twelve issues, each a contract of its
   own with a key, a size and the keys it depends on. A PRD's first issue puts its
   hypothesis in front of real data, adding the measurement when the signal has no
   source or its command does not exist yet. In a product that already runs, no issue
-  rebuilds or sets up what exists. A bundle is split as written, one issue per task.
+  rebuilds or sets up what exists. An epic's pieces are ordered by what each needs
+  merged first. A bundle is split as written, one issue per task.
   An open issue that already owns a piece of the outcome is listed as existing, with
   why the outcome depends on it, instead of being filed again. For a PRD the agent also
   declares the signal command and the window in days.
@@ -679,13 +686,18 @@ that measures it, and its threshold and window. A PRD missing any of them gets
   twice. Each existing issue the agent listed is read to prove it is an issue of the
   repository. The item then gets one marked comment listing its
   issues. A PRD is labelled `archon-prd` and stays open until its hypothesis has a
-  verdict; a bundle is closed as completed. The last write records the split done and
-  releases the claim. An issue closed before its split finishes is recorded and
-  files nothing more.
-- **Record.** The work item's `facts.split` holds the status (`filing`, `done` or
-  `closed`), whether the item is a `prd` or a `bundle`, every issue filed from it by
-  key, the existing issues it adopted with why, and a PRD's signal command and window.
-  The comment on the item lists both.
+  verdict; an epic stays open until its pieces merge; a bundle is closed as completed.
+  The last write records the split done and releases the claim. An issue closed
+  before its split finishes is recorded and files nothing more.
+- **Build whole.** On a `whole` answer, the item gets the same marked comment with the
+  agent's reason, its route label in place of `archon-split`, and the last write moves
+  its stage to that route, where the build queue picks it up as one work item.
+  Triage reads that comment on a later re-triage.
+- **Record.** The work item's `facts.split` holds the status (`filing`, `done`,
+  `whole` or `closed`), whether the item is a `prd`, an `epic` or a `bundle`, every
+  issue filed from it by key, the existing issues it adopted with why, and a PRD's
+  signal command and window. A `whole` record holds the route and the reason instead.
+  The comment on the item lists the issues or gives the reason.
 - **The filed issues** come back through intake like any other issue. They are opened
   by the install's own identity, so intake trusts them only when that login is on the
   maintainer list.
