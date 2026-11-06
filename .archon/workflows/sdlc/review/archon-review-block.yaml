@@ -2,7 +2,7 @@ name: archon-review-block
 description: |
   Review a change through parallel specialist lenses and produce one evidence-based
   verdict. On every round but a light one, a quick route agent picks the lenses
-  the change earns — seams, code, tests, errors, docs — with seams on unless the
+  the change earns — seams, code, tests, errors, docs, ux — with seams on unless the
   change clearly touches no type, contract, state or boundary. Reviews the requested
   PR; empty scope selects the current branch's open PR first, otherwise the working
   diff. Every round also holds the change to the accepted contract: each stated
@@ -107,6 +107,7 @@ nodes:
         tests: { type: boolean }
         errors: { type: boolean }
         docs: { type: boolean }
+        ux: { type: boolean }
         # The run's part assignment, null when the run delivers the whole contract.
         # This schema is the one owner of the shape; ship and deliver forward the
         # input as-is.
@@ -126,7 +127,7 @@ nodes:
                   items: { type: array, minItems: 1, items: { type: string, pattern: '\S' } }
                 required: [part, items]
           required: [delivers, parts]
-      required: [continuation, light, head, cursor, risks, seams, code, tests, errors, docs, part]
+      required: [continuation, light, head, cursor, risks, seams, code, tests, errors, docs, ux, part]
 
   # Every review node writes under review/, and a fresh run's artifacts directory
   # has none. Agents told to create it have skipped that step, so the declared
@@ -189,8 +190,9 @@ nodes:
         tests: { type: boolean }
         errors: { type: boolean }
         docs: { type: boolean }
+        ux: { type: boolean }
         reason: { type: string, pattern: '\S' }
-      required: [seams, code, tests, errors, docs, reason]
+      required: [seams, code, tests, errors, docs, ux, reason]
 
   # ── Lenses ────────────────────────────────────────────────────────
   # Every reviewer is read-only by the engine's check, not only by its prompt:
@@ -243,6 +245,15 @@ nodes:
     trigger_rule: none_failed_min_one_success
     when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.docs == true || $scope.output.head_matches == true && $mode.output.docs == true"
 
+  - id: ux
+    model: ['@review-ux', '@reviewer', large]
+    command: review-ux
+    context: fresh
+    mutates_checkout: false
+    depends_on: [scope, route]
+    trigger_rule: none_failed_min_one_success
+    when: "$scope.output.head_matches == true && $mode.output.light == false && $route.output.ux == true || $scope.output.head_matches == true && $mode.output.ux == true"
+
   # all_done lets this barrier settle after unselected lenses, or a lens whose
   # retries were exhausted, and report how each of this round's lenses ended
   # (scripts/lens-outcomes.ts). The deciding agent can then tolerate specialist
@@ -251,7 +262,7 @@ nodes:
   - id: review-complete
     script: lens-outcomes
     runtime: bun
-    depends_on: [scope, route, seams, code, tests, errors, docs]
+    depends_on: [scope, route, seams, code, tests, errors, docs, ux]
     trigger_rule: all_done
     when: "$scope.output.head_matches == true"
     # One recorded state per lens; lens-outcomes.ts owns the lens names.
