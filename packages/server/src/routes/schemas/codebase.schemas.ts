@@ -75,6 +75,30 @@ export const envVarMutationResponseSchema = z
   .object({ success: z.boolean() })
   .openapi('EnvVarMutationResponse');
 
+/** What was last synced for one extra workflow source. */
+export const extraSourceSnapshotSchema = z
+  .object({
+    commit: z.string(),
+    synced_at: z.string().datetime(),
+    /** False when the repository had no remote and the ref was read locally. */
+    fetched: z.boolean(),
+  })
+  .openapi('ExtraWorkflowSourceSnapshot');
+
+export const extraSourceStatusSchema = z
+  .object({
+    ref: z.string(),
+    path: z.string(),
+    /** Null until the source is first synced. */
+    snapshot: extraSourceSnapshotSchema.nullable(),
+  })
+  .openapi('ExtraWorkflowSourceStatus');
+
+/** GET /api/codebases/:id/extra-sources and POST /api/codebases/:id/sync response. */
+export const extraSourcesResponseSchema = z
+  .object({ sources: z.array(extraSourceStatusSchema) })
+  .openapi('ExtraWorkflowSourcesResponse');
+
 export const inspectBaseBranchBodySchema = codebaseSourceSchema.openapi('InspectBaseBranchBody');
 
 export const inspectBaseBranchResponseSchema = projectBaseBranchInspectionSchema.openapi(

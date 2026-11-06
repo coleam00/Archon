@@ -1,5 +1,4 @@
-import { loadConfig } from '@archon/core/config/config-loader';
-import { syncExtraSource, type ExtraSourceSyncResult } from '@archon/workflows/extra-sources';
+import { syncConfiguredExtraSources } from '@archon/core/workflows/extra-sources';
 import { writeJsonLine, writeStdout } from '../utils/stdout';
 
 export interface WorkflowSyncOptions {
@@ -14,12 +13,7 @@ export async function workflowSyncCommand(
   projectRoot: string,
   options: WorkflowSyncOptions
 ): Promise<number> {
-  const config = await loadConfig(projectRoot);
-  const sources = config.extraWorkflowSources ?? [];
-  const results: ExtraSourceSyncResult[] = [];
-  for (const source of sources) {
-    results.push(await syncExtraSource(projectRoot, source, config.remote));
-  }
+  const results = await syncConfiguredExtraSources(projectRoot);
 
   if (options.json) {
     await writeJsonLine({

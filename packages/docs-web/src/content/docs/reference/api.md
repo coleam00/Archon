@@ -165,6 +165,8 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 | GET | `/api/codebases/{id}/env` | List a codebase's environment variable keys (values are never returned) |
 | PUT | `/api/codebases/{id}/env` | Set or update a codebase environment variable |
 | DELETE | `/api/codebases/{id}/env/{key}` | Delete a codebase environment variable |
+| GET | `/api/codebases/{id}/extra-sources` | List the project's `extraWorkflowSources` and the commit each was last synced to |
+| POST | `/api/codebases/{id}/sync` | Fetch the project's `extraWorkflowSources` and replace their snapshots. A run never does this; it uses the last snapshot |
 
 ### List Codebases
 

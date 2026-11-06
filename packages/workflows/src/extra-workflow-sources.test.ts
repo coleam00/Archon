@@ -7,7 +7,7 @@ import { execFileAsync } from '@archon/git';
 import { providerRegistry } from '@archon/providers';
 import { readBundleIndex } from './defaults/bundle-inventory';
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 
@@ -18,7 +18,7 @@ await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
 for (const pack of await readBundleIndex())
   await mkdir(join(bundledDefaultsRoot, pack), { recursive: true });
 afterAll(async () => {
-  await rm(bundledDefaultsRoot, { recursive: true, force: true }).catch(() => {});
+  await removeTempTree(bundledDefaultsRoot);
 });
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
@@ -34,7 +34,7 @@ import {
 } from './workflow-source/extra-sources';
 import { extraWorkflowSourceSchema, type ExtraWorkflowSource } from './schemas/run-metadata';
 import { discoverWorkflows } from './workflow-discovery';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
 const trackTempRoot = trackTempRoots();
 const PLANS: ExtraWorkflowSource = { ref: 'plans', path: '.' };

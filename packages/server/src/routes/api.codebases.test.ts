@@ -258,6 +258,13 @@ mock.module('@archon/core/utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
+const mockListExtraSources = mock(async (_projectRoot: string) => [] as unknown[]);
+const mockSyncExtraSources = mock(async (_projectRoot: string) => [] as unknown[]);
+mock.module('@archon/core/workflows/extra-sources', () => ({
+  listExtraSources: mockListExtraSources,
+  syncConfiguredExtraSources: mockSyncExtraSources,
+}));
+
 // Import the module under test AFTER all mock.module() calls
 import { registerApiRoutes } from './api';
 import * as registrationIdentity from '@archon/core/services/project-registration-identity';
@@ -1573,4 +1580,110 @@ test('registration reports typed branch and folder errors as bad requests', asyn
   });
   expect(response.status).toBe(400);
   expect(await response.text()).toContain('Folder projects have no base branch');
+});
+
+describe('extra workflow sources', () => {
+  const STATUS = {
+    source: { ref: 'plans', path: '.' },
+    snapshot: {
+      ref: 'plans',
+      path: '.',
+      commit: 'a'.repeat(40),
+      synced_at: '2026-11-04T12:00:00.000Z',
+      fetched: true,
+    },
+  };
+
+  beforeEach(() => {
+    mockGetCodebase.mockReset();
+    mockListExtraSources.mockReset();
+    mockSyncExtraSources.mockReset();
+  });
+
+  test('GET lists the configured sources with the commit each was synced to', async () => {
+    mockGetCodebase.mockImplementationOnce(async () => MOCK_CODEBASE);
+    mockListExtraSources.mockImplementationOnce(async () => [
+      STATUS,
+      { source: { ref: 'docs', path: 'site' }, snapshot: null },
+    ]);
+
+    const response = await makeApp().request('/api/codebases/codebase-uuid-1/extra-sources');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      sources: [
+        {
+          ref: 'plans',
+          path: '.',
+          snapshot: {
+            commit: 'a'.repeat(40),
+            synced_at: '2026-11-04T12:00:00.000Z',
+            fetched: true,
+          },
+        },
+        { ref: 'docs', path: 'site', snapshot: null },
+      ],
+    });
+    expect(mockListExtraSources).toHaveBeenCalledWith(MOCK_CODEBASE.default_cwd);
+  });
+
+  test('GET answers 404 for an unknown codebase', async () => {
+    mockGetCodebase.mockImplementationOnce(async () => null);
+    const response = await makeApp().request('/api/codebases/unknown/extra-sources');
+    expect(response.status).toBe(404);
+    expect(mockListExtraSources).not.toHaveBeenCalled();
+  });
+
+  test('POST syncs, then returns the sources as they now stand', async () => {
+    mockGetCodebase.mockImplementationOnce(async () => MOCK_CODEBASE);
+    mockSyncExtraSources.mockImplementationOnce(async () => []);
+    mockListExtraSources.mockImplementationOnce(async () => [STATUS]);
+
+    const response = await makeApp().request('/api/codebases/codebase-uuid-1/sync', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { sources: { snapshot: { commit: string } }[] };
+    expect(body.sources[0]?.snapshot.commit).toBe('a'.repeat(40));
+    expect(mockSyncExtraSources).toHaveBeenCalledWith(MOCK_CODEBASE.default_cwd);
+    expect(mockSyncExtraSources.mock.invocationCallOrder[0]).toBeLessThan(
+      mockListExtraSources.mock.invocationCallOrder[0] ?? 0
+    );
+  });
+
+  test('POST refuses a folder project, which has no git repository', async () => {
+    mockGetCodebase.mockImplementationOnce(async () => ({ ...MOCK_CODEBASE, kind: 'folder' }));
+    const response = await makeApp().request('/api/codebases/codebase-uuid-1/sync', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(400);
+    expect(mockSyncExtraSources).not.toHaveBeenCalled();
+  });
+
+  test('POST answers 404 for an unknown codebase', async () => {
+    mockGetCodebase.mockImplementationOnce(async () => null);
+    const response = await makeApp().request('/api/codebases/unknown/sync', { method: 'POST' });
+    expect(response.status).toBe(404);
+  });
+
+  test('POST reports a failed sync without leaking a remote URL credential', async () => {
+    mockGetCodebase.mockImplementationOnce(async () => MOCK_CODEBASE);
+    mockSyncExtraSources.mockImplementationOnce(async () => {
+      throw new Error(
+        'Could not fetch "plans" from remote "origin": fatal: unable to access ' +
+          "'https://x-access-token:secret-token@github.com/user/repo/'"
+      );
+    });
+
+    const response = await makeApp().request('/api/codebases/codebase-uuid-1/sync', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { error: string; detail: string };
+    expect(body.error).toBe('Failed to sync extra workflow sources');
+    expect(body.detail).toContain('Could not fetch "plans"');
+    expect(body.detail).not.toContain('secret-token');
+  });
 });

@@ -140,4 +140,44 @@ assistants:
       expect(mockFsWriteFile).not.toHaveBeenCalled();
     });
   });
+
+  describe('extraWorkflowSources validation', () => {
+    test('repo config applies the default path to each entry', async () => {
+      mockFsReadFile.mockResolvedValue(`
+extraWorkflowSources:
+  - ref: plans
+  - ref: docs
+    path: site
+`);
+
+      const config = await loadRepoConfig('/test/repo');
+
+      expect(config.extraWorkflowSources).toEqual([
+        { ref: 'plans', path: '.' },
+        { ref: 'docs', path: 'site' },
+      ]);
+    });
+
+    test('repo config refuses a path that leaves the repository', async () => {
+      mockFsReadFile.mockResolvedValue(`
+extraWorkflowSources:
+  - ref: plans
+    path: ../outside
+`);
+
+      await expect(loadRepoConfig('/test/repo')).rejects.toThrow(
+        /extraWorkflowSources.*0\.path.*inside/
+      );
+    });
+
+    test('repo config refuses an entry with an unknown key', async () => {
+      mockFsReadFile.mockResolvedValue(`
+extraWorkflowSources:
+  - ref: plans
+    branch: plans
+`);
+
+      await expect(loadRepoConfig('/test/repo')).rejects.toThrow(/extraWorkflowSources/);
+    });
+  });
 });

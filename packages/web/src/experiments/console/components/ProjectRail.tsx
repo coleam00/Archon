@@ -4,6 +4,7 @@ import { ChartLine, Settings, PenTool, type LucideIcon } from 'lucide-react';
 import { SessionMenu } from '@/components/auth/SessionMenu';
 import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
+import { WorkflowSourcesDialog } from './WorkflowSourcesDialog';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
@@ -128,6 +129,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
   const location = useLocation();
   const scope = extractProjectId(location.pathname) ?? 'all';
   const [envProject, setEnvProject] = useState<Project | null>(null);
+  const [sourcesProject, setSourcesProject] = useState<Project | null>(null);
   const [query, setQuery] = useState('');
   const [width, setWidth] = useState<number>(readRailWidth);
   const [resizing, setResizing] = useState(false);
@@ -331,6 +333,13 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
                 onEditEnv={() => {
                   setEnvProject(p);
                 }}
+                onEditSources={
+                  p.kind === 'folder'
+                    ? undefined
+                    : () => {
+                        setSourcesProject(p);
+                      }
+                }
               />
             ))}
           </div>
@@ -405,6 +414,14 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
         open={envProject !== null}
         onClose={() => {
           setEnvProject(null);
+        }}
+      />
+      <WorkflowSourcesDialog
+        projectId={sourcesProject?.id ?? ''}
+        projectName={sourcesProject?.name ?? ''}
+        open={sourcesProject !== null}
+        onClose={() => {
+          setSourcesProject(null);
         }}
       />
     </nav>
