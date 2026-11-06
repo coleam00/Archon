@@ -53,10 +53,9 @@ function settled(decision: StageDecision): Settled {
   return JSON.parse(run.stdout) as Settled;
 }
 
-function answer(previous: Settled | null, choice: string | null, outcome: unknown, gh = {}): ScriptRun {
+function answer(previous: Settled | null, choice: string | null, outcome: unknown, tracker = {}): ScriptRun {
   return runPackScript('attention/scripts/answer', {
-    source: 'gh',
-    gh,
+    tracker,
     inputs: {
       INPUTS_OUTCOME: outcome === null ? '' : JSON.stringify(outcome),
       INPUTS_PREVIOUS: previous === null ? '' : JSON.stringify(previous),
@@ -93,27 +92,27 @@ describe('answer', () => {
     const run = answer(settled(ask([RERUN, FINISH], 'rerun')), 'rerun', LATER);
     expect(run.code, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toMatchObject({ judge: true, outcome: LATER });
-    expect(run.gh).toEqual([]);
+    expect(run.forge).toEqual([]);
   });
 
   it('finish: the outcome the item was about stands, with no write', () => {
     const run = answer(settled(ask([RERUN, FINISH], 'rerun')), 'finish', null);
     expect(run.code, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toMatchObject({ judge: false, outcome: OUTCOME });
-    expect(run.gh).toEqual([]);
+    expect(run.forge).toEqual([]);
   });
 
   it('ready: takes the pull request out of draft, reads it back, and keeps the outcome', () => {
     const run = answer(settled(ask([READY, FINISH], 'ready', PR)), 'ready', null, { pr: { isDraft: true } });
     expect(run.code, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({ judge: false, outcome: OUTCOME, applied: `${PR_URL} is ready for review.` });
-    expect(run.gh).toContain(`pr ready 42 --repo ${PR.repo.host}/${PR.repo.path}`);
+    expect(run.forge.map(call => call.split(' ')[1])).toContain('pr.ready');
   });
 
   it('ready fails when the pull request does not read back out of draft', () => {
     const run = answer(settled(ask([READY, FINISH], 'ready', PR)), 'ready', null, { pr: { isDraft: true }, writeLost: true });
     expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('does not report an open pull request ready for review');
+    expect(run.stderr).toContain('forge pr.ready verification_failed');
   });
 
   it.each([

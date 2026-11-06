@@ -54,16 +54,11 @@ returns: report
 outcome_field: delivered
 
 nodes:
-  # Refuses the run before any agent spends when the selected forge source cannot
-  # act: no plugin for the host, no usable credential, or an unauthenticated gh.
+  # Refuses the run before any agent spends when the forge plugin cannot
+  # act: no plugin for the host, or no usable credential.
   - id: forge
     script: forge-check
     runtime: bun
-    output_format:
-      type: object
-      properties:
-        source: { type: string, enum: [gh, forge] }
-      required: [source]
 
   # The source is history, not a work order. Triage checks it against current
   # code and direction before deciding which kind of reasoning is still owed.

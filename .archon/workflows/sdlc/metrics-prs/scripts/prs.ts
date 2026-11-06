@@ -5,17 +5,11 @@
  */
 
 import { factoryPrRuns, factoryPrs, prMetricRecords, readPrFacts } from '../../.shared/factory-prs.ts';
-import { forgeSource } from '../../.shared/forge.ts';
 import { emit, refuse } from '../../.shared/io.ts';
 import { stateDocuments } from '../../.shared/state.ts';
 import { read } from '../../.shared/workitem.ts';
 
 try {
-  if (forgeSource() === 'forge') {
-    throw new Error(
-      'PR metrics read pull request timestamps through the GitHub CLI, which the forge contract does not report; run it with ARCHON_SDLC_FORGE=gh'
-    );
-  }
   const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
   const runsByUrl = factoryPrRuns(items);
   const { factory, skipped } = factoryPrs(readPrFacts(runsByUrl.keys()));

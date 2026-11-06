@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- The bundled SDLC pack reaches the forge only through `archon forge` and an installed forge plugin; the pack's `gh` path is gone and nothing falls back to `gh`. Install the plugin with `archon plugin add coleam00/Archon/plugins/forge-github` (v0.13.0 or later for delivery and the merge queue, whose forge checks refuse a plugin missing an operation they need; the metrics workflows and the build queue's lookup of a dead round's pull request need a release after v0.13.2, for `pr.view` timestamps, `pr.view` of a head in any state, `pr.files` and `repo.file`). Your existing `gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN` is still the credential, and a leftover `ARCHON_SDLC_FORGE` is ignored. A pack run in a container refuses at its forge check, since a container has no host command. The merge queue's own-PR enrollment notes that the forge cannot list a maintainer's pull requests and continues with the queue's other work. A red default branch is now always raised to a maintainer instead of rerun, because the forge reruns checks only on a pull request. (#5222)
+
 ## [0.13.2] - 2026-10-29
 
 Upgrading from 0.13.0 with providers installed works in one command again.

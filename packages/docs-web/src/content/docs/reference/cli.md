@@ -2092,7 +2092,7 @@ Run from inside a workflow node, `trigger fire` records the calling run and node
 
 `archon forge <operation> --data <json>` runs one forge operation through the installed forge plugin; `archon forge --help` lists the operations. Reads return structured observations. Writes report whether they were applied and verified, refused, applied but unverified, or left with an unknown outcome. Pass a request that carries authored text with `--data-file <path>` so it stays out of argv. `archon forge metadata --data '{"host":"github.com"}' --json` inspects the selected plugin's capabilities without credentials or a forge operation.
 
-See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack uses `gh` by default; set `ARCHON_SDLC_FORGE=forge` to opt into a plugin that implements every operation the pack needs. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
+See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack reaches the forge only through a plugin that implements every operation it needs. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
 ## Global options
 

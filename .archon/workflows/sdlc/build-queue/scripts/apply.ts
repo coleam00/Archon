@@ -26,7 +26,7 @@ import {
   nextRound,
   withBuild,
 } from '../../.shared/build.ts';
-import { forgeSource, parseQualifiedPr, type ForgeSource, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
+import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
@@ -101,7 +101,7 @@ function decide(
 
 /** Push the checkout's commits to the pull request's head; git refuses anything but a fast-forward. */
 function pushTo(pr: QualifiedPr): string {
-  const view = viewPr(pr, forgeSource());
+  const view = viewPr(pr);
   if (view.pr.state !== 'open') throw new Error(`${view.pr.url} is ${view.pr.state}; nothing is pushed to it`);
   if (view.pr.head_revision === gitOrThrow('rev-parse', 'HEAD')) return 'its head already holds the checkout';
   const pushed = pushHead({ repo: pr.repo, head_repo: view.pr.head_repo, head: view.pr.head });
@@ -112,18 +112,18 @@ function observedPr(pr: PrRecord): string {
   return `observed ${pr.state}, draft=${String(pr.is_draft)} at ${String(pr.head_revision)}`;
 }
 
-function rejectChangedHead(after: PrRecord, head: string, source: ForgeSource): never {
+function rejectChangedHead(after: PrRecord, head: string): never {
   const mismatch = `${after.url}: route judged ${head}; ready read-back ${observedPr(after)}`;
   if (after.is_draft) throw new Error(mismatch);
   const ref = { repo: after.repo, number: after.number };
   let corrected: PrRecord;
   try {
-    corrected = setPrDraft(ref, true, source);
+    corrected = setPrDraft(ref, true);
   } catch (error) {
     const correctionError = error instanceof Error ? error.message : String(error);
     let latest: string;
     try {
-      latest = observedPr(viewPr(ref, source).pr);
+      latest = observedPr(viewPr(ref).pr);
     } catch (readError) {
       latest = `final state unknown: ${readError instanceof Error ? readError.message : String(readError)}`;
     }
@@ -142,13 +142,12 @@ function rejectChangedHead(after: PrRecord, head: string, source: ForgeSource): 
 function markReady(pr: PrRecord | null, head: string | null | undefined): string {
   if (pr === null) throw new Error('route declared ready with no pull request');
   if (typeof head !== 'string' || head === '') throw new Error('route declared ready without the head it judged');
-  const source = forgeSource();
   const ref = { repo: pr.repo, number: pr.number };
-  const now = viewPr(ref, source).pr;
+  const now = viewPr(ref).pr;
   if (now.state !== 'open' || now.head_revision !== head)
     throw new Error(`${now.url} is ${now.state} at ${String(now.head_revision)}; route judged it at ${head}`);
-  const after = setPrDraft(ref, false, source);
-  if (after.head_revision !== head) rejectChangedHead(after, head, source);
+  const after = setPrDraft(ref, false);
+  if (after.head_revision !== head) rejectChangedHead(after, head);
   if (after.is_draft)
     throw new Error(`${after.url} reads back draft=${String(after.is_draft)} at ${String(after.head_revision)}`);
   return `${after.url} marked ready at ${head}`;

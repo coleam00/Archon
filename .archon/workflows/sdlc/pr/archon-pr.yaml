@@ -38,16 +38,11 @@ inputs:
 returns: publish
 
 nodes:
-  # Refuses the run before the agent spends when the selected forge source cannot
-  # act: no plugin for the host, no usable credential, or an unauthenticated gh.
+  # Refuses the run before the agent spends when the forge plugin cannot
+  # act: no plugin for the host, or no usable credential.
   - id: forge
     script: forge-check
     runtime: bun
-    output_format:
-      type: object
-      properties:
-        source: { type: string, enum: [gh, forge] }
-      required: [source]
 
   # The agent judges: which repository the work is proposed to, the base, whether
   # the run continues an existing pull request, and what the title and body say.
@@ -55,8 +50,6 @@ nodes:
   - id: prepare
     command: pr
     depends_on: [forge]
-    with:
-      source: "$forge.output.source"
     output_type: pull-request-intent
     output_format:
       type: object
@@ -94,7 +87,7 @@ nodes:
   # The durable ownership record for every later public action in delivery and
   # inbound forge event. It pushes the branch, then opens the pull request, or
   # reuses the one this work already has; consumers use this qualified identity,
-  # never gh's ambient branch lookup.
+  # never an ambient branch lookup.
   - id: publish
     script: publish-pr
     runtime: bun
