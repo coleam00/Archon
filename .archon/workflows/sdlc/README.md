@@ -621,6 +621,42 @@ To start a run as soon as intake routes an item, add a label binding on the same
 resource, with intake's label selector narrowed to the route labels intake writes
 (`archon-ready`, `archon-plan`, `archon-investigate`) and the same launch.
 
+### Work orders
+
+A work order is the set of work items an operator approved for the factory, so the
+queue's schedule can stay on while the operator chooses what builds. Set
+`"orders_only": "true"` in the binding's `launch.inputs`, and a run that names no item
+claims only a waiting item that is a member of an open order, in the usual pickup
+order. With no open order it claims nothing. A named item (`number`) is claimed either
+way, so a member's follow-up rounds still start. The default, `"false"`, picks from
+every waiting item.
+
+An order is one state document, `work-order/<id>`, in the project's state scope, whose
+key is the repository's `owner/repo`. The operator, or their agent, writes it; nothing
+in the pack proposes one yet:
+
+```bash
+printf '%s' '{
+  "version": 1,
+  "members": [123, 130, 131],
+  "approved": { "by": "<login>", "at": "2026-11-06T12:00:00Z" },
+  "status": "open",
+  "done_at": null
+}' | archon state put work-order/after-0.14 --if-revision 0 --project acme/widgets
+```
+
+`members` are issue numbers whose work items intake has recorded. A member is still
+built only once it waits for the build queue: triaged READY and not already decided.
+Each member merges on its own, through the merge queue. While `orders_only` is on,
+each run first marks done every open order whose members are all finished, setting
+`status` to `done` and `done_at`. A member is finished when its work item's latest
+decision is a merge: `facts.merge.status: merged`, with no build or re-triage recorded
+after it. A member closed without a merge, or with no work item, keeps its order open
+until the operator removes it from `members`. To drop an item, or add one, replace the
+document at its current revision. A malformed order, including an `open` one with a
+`done_at` or a `done` one without, refuses the run with its name, rather than building
+something no order chose.
+
 ## Merge queue
 
 [`archon-merge-queue`](merge-queue/archon-merge-queue.yaml) merges the pull requests
