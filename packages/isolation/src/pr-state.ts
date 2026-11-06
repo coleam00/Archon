@@ -68,21 +68,21 @@ export async function getPrState(
     remoteUrl = stdout.trim();
   } catch (error) {
     getLog().debug(
-      { err: error as Error, repoPath, branch },
+      { repoPath, branch, stage: 'remote', code: errorCode(error) },
       'isolation.pr_state_remote_lookup_failed'
     );
     cache?.set(cacheKey, NO_PR);
     return NO_PR;
   }
 
-  if (!isGitHubRemote(remoteUrl)) {
-    getLog().debug({ repoPath, branch, remoteUrl }, 'isolation.pr_state_github_only');
+  const selector = githubRemoteSelector(remoteUrl);
+  if (!selector) {
+    getLog().debug({ repoPath, branch }, 'isolation.pr_state_github_only');
     cache?.set(cacheKey, NO_PR);
     return NO_PR;
   }
 
   let result: PrLookup = NO_PR;
-  let ghStdout = '';
   try {
     const { stdout } = await execFileAsync(
       'gh',
@@ -90,7 +90,7 @@ export async function getPrState(
         'pr',
         'list',
         '--repo',
-        remoteUrl,
+        selector,
         '--head',
         branch,
         '--state',
@@ -102,7 +102,6 @@ export async function getPrState(
       ],
       { timeout: 15000, cwd: repoPath }
     );
-    ghStdout = stdout;
     const parsed = JSON.parse(stdout) as { state?: string; headRefOid?: string }[];
     const first = parsed[0];
     const state = first?.state;
@@ -112,19 +111,15 @@ export async function getPrState(
     } else if ((state === 'MERGED' || state === 'CLOSED' || state === 'OPEN') && headSha) {
       result = { state, headSha };
     } else {
-      getLog().warn({ branch, repoPath, ghStdout }, 'isolation.pr_state_unreadable');
+      getLog().warn({ branch, repoPath }, 'isolation.pr_state_unreadable');
       result = UNAVAILABLE;
     }
   } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    const isNotInstalled = err.code === 'ENOENT' || err.message.includes('command not found');
-    if (isNotInstalled) {
+    const code = errorCode(error);
+    if (code === 'ENOENT') {
       getLog().debug({ branch, repoPath }, 'isolation.pr_state_gh_not_installed');
     } else {
-      getLog().warn(
-        { err, branch, repoPath, ghStdout: ghStdout || undefined },
-        'isolation.pr_state_lookup_failed'
-      );
+      getLog().warn({ branch, repoPath, stage: 'query', code }, 'isolation.pr_state_lookup_failed');
       result = UNAVAILABLE;
     }
   }
@@ -141,12 +136,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isGitHubRemote(remoteUrl: string): boolean {
-  if (/^(?:[^@/]+@)?github\.com:/i.test(remoteUrl)) return true;
+function errorCode(error: unknown): string | number | undefined {
+  const code = isRecord(error) ? error.code : undefined;
+  return typeof code === 'string' || typeof code === 'number' ? code : undefined;
+}
+
+function githubRemoteSelector(remoteUrl: string): string | undefined {
+  if (/^(?:[^@/]+@)?github\.com:/i.test(remoteUrl)) {
+    return remoteUrl.replace(/^[^@/]+@/, 'git@');
+  }
   try {
-    return new URL(remoteUrl).hostname.toLowerCase() === 'github.com';
+    const url = new URL(remoteUrl);
+    if (url.hostname.toLowerCase() !== 'github.com') return undefined;
+    url.username = '';
+    url.password = '';
+    return url.href;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -199,11 +205,12 @@ export async function getPrsForCommit(
       { timeout: 10000 }
     );
     const remoteUrl = remoteOutput.trim();
-    if (!isGitHubRemote(remoteUrl)) return { state: 'NONE' };
+    const selector = githubRemoteSelector(remoteUrl);
+    if (!selector) return { state: 'NONE' };
     stage = 'repository';
     const { stdout: repositoryOutput } = await execFileAsync(
       'gh',
-      ['repo', 'view', remoteUrl, '--json', 'nameWithOwner'],
+      ['repo', 'view', selector, '--json', 'nameWithOwner'],
       { timeout: 15000, cwd: repoPath }
     );
     const repository: unknown = JSON.parse(repositoryOutput);
@@ -229,14 +236,14 @@ export async function getPrsForCommit(
     );
     return parseCommitPrs(stdout, repository.nameWithOwner);
   } catch (error) {
-    const code = isRecord(error) ? error.code : undefined;
+    const code = errorCode(error);
     if (stage !== 'remote' && code === 'ENOENT') return { state: 'NONE' };
     // Exec errors can embed remote credentials and response bodies; log only the stage and code.
     getLog().warn(
       {
         repoPath,
         stage,
-        code: typeof code === 'string' || typeof code === 'number' ? code : undefined,
+        code,
       },
       'isolation.commit_pr_lookup_failed'
     );

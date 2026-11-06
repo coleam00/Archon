@@ -74,6 +74,55 @@ describe('getPrState', () => {
     }
   );
 
+  test.each([
+    ['https://user:secret@github.com/owner/repo.git', 'https://github.com/owner/repo.git'],
+    ['ssh://user:secret@github.com/owner/repo.git', 'ssh://github.com/owner/repo.git'],
+    ['secret@github.com:owner/repo.git', 'git@github.com:owner/repo.git'],
+  ])('omits remote credentials from the branch selector: %s', async (remote, selector) => {
+    setupGhResponse(remote, '[]');
+    expect(await getPrState(BRANCH, REPO)).toEqual({ state: 'NONE' });
+    expect(mockExecFileAsync.mock.calls[1][1]).toContain(selector);
+    expect(JSON.stringify(mockExecFileAsync.mock.calls[1])).not.toContain('secret');
+  });
+
+  test.each(['remote', 'query', 'unreadable', 'malformed', 'unsupported'] as const)(
+    'omits credentials and response bodies from branch logs at %s',
+    async stage => {
+      mockLogger.debug.mockClear();
+      mockLogger.warn.mockClear();
+      const remote = `https://user:secret@${stage === 'unsupported' ? 'github.com.example.org' : 'github.com'}/owner/repo.git`;
+      const error = Object.assign(new Error(`command failed: ${remote}`), { code: 1 });
+      setupGhResponse(
+        remote,
+        stage === 'query' ? error : stage === 'unreadable' ? '[{"state":"secret"}]' : 'secret'
+      );
+      if (stage === 'remote') mockExecFileAsync.mockRejectedValue(error);
+      expect(await getPrState(BRANCH, REPO)).toEqual({
+        state: stage === 'remote' || stage === 'unsupported' ? 'NONE' : 'UNAVAILABLE',
+      });
+      const logs = [...mockLogger.debug.mock.calls, ...mockLogger.warn.mock.calls];
+      expect(logs.length).toBeGreaterThan(0);
+      expect(
+        JSON.stringify(logs, (_key, value: unknown) =>
+          value instanceof Error ? { message: value.message, ...value } : value
+        )
+      ).not.toContain('secret');
+      if (stage === 'remote' || stage === 'query') {
+        expect(logs).toContainEqual([
+          {
+            repoPath: REPO,
+            branch: BRANCH,
+            stage: stage === 'remote' ? 'remote' : 'query',
+            code: 1,
+          },
+          stage === 'remote'
+            ? 'isolation.pr_state_remote_lookup_failed'
+            : 'isolation.pr_state_lookup_failed',
+        ]);
+      }
+    }
+  );
+
   test('returns OPEN when gh reports OPEN', async () => {
     setupGhResponse(
       'https://github.com/owner/repo.git',
@@ -207,7 +256,8 @@ const mergedPr = {
 function setupCommitResponse(
   payload: unknown = [[mergedPr]],
   failure?: 'remote' | 'repository' | 'pulls',
-  error = new Error('lookup failed')
+  error = new Error('lookup failed'),
+  remoteUrl = 'git@github.com:owner/repo.git'
 ): void {
   mockExecFileAsync.mockReset().mockImplementation(async (cmd, args) => {
     const stage = cmd === 'git' ? 'remote' : args[0] === 'repo' ? 'repository' : 'pulls';
@@ -215,7 +265,7 @@ function setupCommitResponse(
     return {
       stdout:
         stage === 'remote'
-          ? 'git@github.com:owner/repo.git'
+          ? remoteUrl
           : stage === 'repository'
             ? JSON.stringify({ nameWithOwner: 'owner/repo' })
             : typeof payload === 'string'
@@ -265,6 +315,26 @@ describe('getPrsForCommit', () => {
       ],
       expect.any(Object)
     );
+  });
+
+  test('omits remote credentials from the commit repository selector', async () => {
+    setupCommitResponse(
+      undefined,
+      undefined,
+      undefined,
+      'https://user:secret@github.com/owner/repo.git'
+    );
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+      state: 'FOUND',
+      prs: [{ state: 'MERGED', headSha: HEAD }],
+    });
+    expect(mockExecFileAsync.mock.calls[1][1]).toEqual([
+      'repo',
+      'view',
+      'https://github.com/owner/repo.git',
+      '--json',
+      'nameWithOwner',
+    ]);
   });
 
   test('empty pages are successful absence', async () => {

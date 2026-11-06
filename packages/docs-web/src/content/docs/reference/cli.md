@@ -1713,8 +1713,8 @@ warning naming the path and what removing it would lose, and the run's
 when its run ends: `--merged` removes it once a merged PR covers its local tips.
 Nor is a worktree that belongs to a chat conversation, an issue or a pull request rather than to one run; the merged and age-based cleanups remove it. A
 workflow launched from the Web UI runs in its own per-run worktree on a generated branch,
-and completion removes it the same way. A failed run keeps its worktree so it
-can resume.
+and completion removes it the same way. A failed run keeps its worktree for resume
+until merged or stale cleanup removes it under the rules above.
 
 #### Recovering remote branch cleanup
 
