@@ -249,7 +249,7 @@ export function parseInputs(
     return { value: undefined };
   }
   const valid = validInputSpecs(raw as Record<string, unknown>, filename);
-  const collision = inputEnvKeyCollision(valid);
+  const collision = inputEnvKeyCollision(Object.keys(valid));
   if (collision !== null) return { error: collision };
   return { value: Object.keys(valid).length > 0 ? valid : undefined };
 }
@@ -284,16 +284,18 @@ function validInputSpecs(
 /**
  * Reject env-key mangling collisions: two names that fold to the same
  * INPUTS_<UPPER_SNAKE> env key would silently clobber each other for
- * bash/script sub-run nodes (Task 17). Catch it here where all names are
- * visible; a colliding pair is a hard load error, not a warn-and-drop.
+ * bash/script sub-run nodes (Task 17). Catch it where all names are visible: a
+ * workflow's own inputs, and those inputs together with its pack's settings. A
+ * colliding pair is a hard load error, not a warn-and-drop. The same name listed
+ * twice is one input, not a collision.
  */
-function inputEnvKeyCollision(valid: Record<string, WorkflowInputSpec>): string | null {
+export function inputEnvKeyCollision(names: Iterable<string>): string | null {
   const envKeyOwners = new Map<string, string>();
-  for (const name of Object.keys(valid)) {
+  for (const name of new Set(names)) {
     const envKey = inputEnvKey(name);
     const existing = envKeyOwners.get(envKey);
     if (existing !== undefined) {
-      return `Workflow inputs '${existing}' and '${name}' both map to env var '${envKey}' — rename one so each input has a unique env key`;
+      return `Inputs '${existing}' and '${name}' both map to env var '${envKey}' — rename one so each input has a unique env key`;
     }
     envKeyOwners.set(envKey, name);
   }

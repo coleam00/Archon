@@ -1,5 +1,6 @@
-import { resolveAttentionOptions, substituteWaitMessage } from '../../dag/references';
+import { resolveAttentionDeclaration, substituteWaitMessage } from '../../dag/references';
 import {
+  type AttentionAnswer,
   attentionAnswerSchema,
   attentionChoiceProblem,
   attentionOptions,
@@ -36,9 +37,10 @@ export function simulateWait(
       ? stubFor(node, ctx)
       : undefined;
   if (answer !== undefined) {
-    if (condition.kind === 'attention')
-      assertStubAnswerChoosesDeclared(node, condition, answer, outputs);
-    const hydrated = completedOutput(node, answer);
+    const hydrated = completedOutput(
+      node,
+      condition.kind === 'attention' ? stubAnswerOutput(node, condition, answer, outputs) : answer
+    );
     outputs.set(node.id, hydrated);
     ctx.trace.push({
       nodeId: node.id,
@@ -65,29 +67,42 @@ export function simulateWait(
 
 /**
  * Hold an authored answer to an attention wait to the options the wait declares, as
- * every answer surface does; the form's output contract alone accepts any decision.
+ * every answer surface does; the form's output contract alone accepts any decision. The
+ * output is what the real wait returns: the answer, plus the chosen `select` option's
+ * `value`. A stubbed `value` is dropped, because no answer supplies one in a real run.
  */
-function assertStubAnswerChoosesDeclared(
+function stubAnswerOutput(
   node: DagNode,
   condition: Extract<WaitCondition, { kind: 'attention' }>,
   answer: DryRunStubValue,
   outputs: ReadonlyMap<string, NodeOutput>
-): void {
-  const options = resolveAttentionOptions(node.id, condition.options, outputs);
+): DryRunStubValue {
+  const { options } = resolveAttentionDeclaration(node.id, condition, outputs);
   const declared = attentionOptions({ form: condition.form, options }).map(option => option.id);
-  // The output contract already held, so a string stub is one JSON document. A parse
-  // failure is an empty decision or decision list, which chooses nothing.
-  const parsed = attentionAnswerSchema.safeParse(
-    typeof answer === 'string' ? JSON.parse(answer) : answer
-  );
-  const choose = !parsed.success
-    ? []
-    : 'decisions' in parsed.data
-      ? parsed.data.decisions
-      : 'decision' in parsed.data
-        ? [parsed.data.decision]
-        : [];
-  const problem = attentionChoiceProblem(condition.form, declared, choose);
+  // The output contract already held, so a string stub is one JSON document.
+  const raw: unknown = typeof answer === 'string' ? JSON.parse(answer) : answer;
+  const { value: stubbed, ...fields } = isPlainRecord(raw) ? raw : {};
+  const parsed = attentionAnswerSchema.safeParse(fields);
+  const problem = attentionChoiceProblem(condition.form, declared, chosenIds(parsed.data));
   if (problem !== undefined)
     throw new Error(`Stub for node '${node.id}' (form '${condition.form}') ${problem}`);
+  if (parsed.data === undefined) return answer;
+  const { data } = parsed;
+  const value =
+    condition.form === 'select' && 'decision' in data
+      ? options?.find(option => option.id === data.decision)?.value
+      : undefined;
+  if (value === undefined) return stubbed === undefined ? answer : data;
+  return { ...data, value };
+}
+
+/** The option ids an answer chooses; an unparseable answer chooses nothing. */
+function chosenIds(answer: AttentionAnswer | undefined): readonly string[] {
+  if (answer === undefined) return [];
+  if ('decisions' in answer) return answer.decisions;
+  return 'decision' in answer ? [answer.decision] : [];
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

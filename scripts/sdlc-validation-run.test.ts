@@ -326,6 +326,7 @@ describe("the gate's environment", () => {
         loopPrevOutput: '',
         rejectionReason: '',
         typedArtifactsFile: '',
+        nodeOutcomesFile: '',
         nodeExecution: null,
       }
     );

@@ -575,6 +575,9 @@ CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
   writer_identity TEXT,
   writer_via TEXT,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  lease_run_id TEXT,
+  lease_node_path TEXT,
+  lease_taken_at TIMESTAMP WITH TIME ZONE,
   PRIMARY KEY (project_key, name, revision)
 );
 
@@ -726,6 +729,10 @@ ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS event_i
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;
+-- A run's lease on the document as of this revision; its liveness is read from the holder run.
+ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_run_id TEXT;
+ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_node_path TEXT;
+ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_taken_at TIMESTAMP WITH TIME ZONE;
 
 -- ============================================================================
 -- Indexes and column comments

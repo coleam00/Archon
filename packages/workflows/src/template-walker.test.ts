@@ -129,6 +129,14 @@ const STRING_FIELD_CLASSIFICATIONS = {
     kind: 'literal',
     reason: 'Loop completion field names an output-schema property',
   },
+  'loop.on_exhausted': {
+    kind: 'literal',
+    reason: 'Loop exhaustion policy is an enum the executor reads',
+  },
+  'loop_group.on_exhausted': {
+    kind: 'literal',
+    reason: 'Loop-group exhaustion policy is an enum the executor reads',
+  },
   'loop_group.until': {
     kind: 'literal',
     reason: 'Loop-group completion signal is matched verbatim',
@@ -157,6 +165,27 @@ const STRING_FIELD_CLASSIFICATIONS = {
   'wait.options.*.label': {
     kind: 'literal',
     reason: 'Display text is not an execution template',
+  },
+  'wait.options.*.does': {
+    kind: 'literal',
+    reason: 'Display text is not an execution template',
+  },
+  'wait.options.*.value': {
+    kind: 'literal',
+    reason: 'Option value is opaque and returned unchanged with the answer',
+  },
+  'wait.recommendation': { kind: 'template', slots: ['wait.recommendation'] },
+  'wait.recommendation.option': {
+    kind: 'literal',
+    reason: 'Recommended option id is an answer wire value',
+  },
+  'wait.recommendation.why': {
+    kind: 'literal',
+    reason: 'Display text is not an execution template',
+  },
+  'wait.recommendation.confidence': {
+    kind: 'literal',
+    reason: 'Recommendation confidence is a display enum',
   },
   'wait.labels.*': { kind: 'template', slots: ['wait.labels.*'] },
   cancel: { kind: 'template', slots: ['cancel.reason'] },
@@ -534,6 +563,7 @@ test('the slot catalogue rejects omitted fixed fields', () => {
     'wait.event': { surface: 'value' },
     'wait.attention': { surface: 'prompt' },
     'wait.options': { surface: 'value' },
+    'wait.recommendation': { surface: 'value' },
     'wait.labels.*': { surface: 'value' },
     'workflow.input': { surface: 'value' },
     'workflow.with.*': { surface: 'value' },

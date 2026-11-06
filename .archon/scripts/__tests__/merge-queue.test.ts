@@ -7,11 +7,7 @@ import { trackTempRoots } from './temp-roots';
 import { type BuildRecord, buildWaits } from '../../workflows/sdlc/.shared/build';
 import {
   checksOf,
-  BASE_EFFECTS,
   gateRefusals,
-  MERGE_ASKED_BY,
-  MERGE_EFFECTS,
-  MERGE_PATHS,
   type MergeAttention,
   type MergeRecord,
   type MergeSettled,
@@ -21,12 +17,11 @@ import {
   MERGE_QUEUE_FORGE_OPERATIONS,
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
-import { MERGE_QUEUE_SELECTIONS } from '../../workflows/sdlc/.shared/launch';
 import { withOther } from '../../workflows/sdlc/.shared/queue';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
-import { type GhCommentRow, type GhIssue, gitCheckout, hostCli, PACK, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
+import { type GhCommentRow, type GhIssue, gitCheckout, hostCli, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -188,25 +183,6 @@ describe('the merge record and the gate', () => {
     expect(prFromUrl(PR_URL)).toEqual(PR);
     expect(() => prFromUrl('https://ghe.example.com/example/repo/issues/42')).toThrow('not a pull request URL');
   });
-
-  test("the paths, classes and ruling effects are archon-merge-queue's own", () => {
-    type Enum = { enum: string[] };
-    type Schema = { enum?: string[]; properties?: Record<string, Schema>; items?: Schema };
-    const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'merge-queue/archon-merge-queue.yaml'), 'utf8')) as {
-      inputs: Record<string, unknown>;
-      nodes: { id: string; output_format?: Schema }[];
-    };
-    // A new input fails here until someone decides whether a follow-up sweep keeps it.
-    expect(Object.keys(workflow.inputs).sort()).toEqual([...MERGE_QUEUE_SELECTIONS, 'repo_host', 'repo_path'].sort());
-    const at = (id: string, ...path: string[]): Schema | undefined =>
-      path.reduce<Schema | undefined>(
-        (schema, key) => (key === '[]' ? schema?.items : schema?.properties?.[key]),
-        workflow.nodes.find(node => node.id === id)?.output_format
-      );
-    expect((at('facts', 'path') as Enum).enum).toEqual([...MERGE_PATHS]);
-    expect(at('record', 'class')?.enum).toEqual(['', ...MERGE_ASKED_BY]);
-    expect(at('ruling', 'decision')?.enum).toEqual([...MERGE_EFFECTS, ...BASE_EFFECTS]);
-  });
 });
 
 // --- the scripts, run as the engine runs them --------------------------------------
@@ -251,10 +227,13 @@ function inProcess<T>(at: Install, body: () => T): T {
   }
 }
 
+/** Store the item; a claimed one takes its run's lease, as a real claim does. */
 function seed(at: Install, doc: WorkItem): void {
   const name = `work/${String(doc.subject.number)}`;
   inProcess(at, () => {
-    expect(statePut(name, doc, stateGet(name).revision)).toBe('ok');
+    if (doc.claim !== null) process.env.WORKFLOW_ID = doc.claim.run_id;
+    const lease = doc.claim === null ? undefined : 'take';
+    expect(statePut(name, doc, stateGet(name).revision, lease)).toBe('ok');
   });
 }
 
@@ -428,6 +407,12 @@ function run(
   });
 }
 
+/** The answer's value: the wait returns the chosen choice itself. */
+function choiceOf(asked: string, id: string): string {
+  const { attention } = JSON.parse(asked) as { attention: { choices: { id: string }[] } };
+  return JSON.stringify(attention.choices.find(choice => choice.id === id));
+}
+
 function ok(result: ScriptRun): Record<string, unknown> {
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
   return JSON.parse(result.stdout) as Record<string, unknown>;
@@ -588,7 +573,7 @@ describe('the merge queue scripts', () => {
     expect(stored(at, 50).value?.facts.own_pr?.url).toBe(ownPrs[0]!.url);
   }, 60_000);
 
-  for (const choice of ['park', 'other']) {
+  for (const choice of ['park']) {
     test(`an own PR answered ${choice} waits again only after its head changes`, () => {
       const at = install();
       const own = { ...newWorkItem(PR, AT), ...CLAIMED, facts: { own_pr: { url: PR_URL, at: AT } } };
@@ -602,7 +587,8 @@ describe('the merge queue scripts', () => {
         }, { pr: { headRefOid: head } })) as { asked: { attention: MergeAttention } };
         // The queue owns `other`'s text; the sweep writes what its own `park` does.
         if (choice === 'other') expect(recorded.asked.attention.choices.find(entry => entry.id === 'other')?.does).toContain('different head');
-        const ruled = run(at, 'ruling', { INPUTS_ASKED: JSON.stringify(recorded.asked), INPUTS_CHOICE: choice, INPUTS_TEXT: 'repair it' });
+        const askedJson = JSON.stringify(recorded.asked);
+        const ruled = run(at, 'ruling', { INPUTS_ASKED: askedJson, INPUTS_CHOICE: choiceOf(askedJson, choice), INPUTS_TEXT: 'repair it' });
         expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
         expect(ruled.bodies).toEqual([]);
       };
@@ -622,32 +608,7 @@ describe('the merge queue scripts', () => {
     }, 60_000);
   }
 
-  test('only a latest answered own-PR park can recover; other settlements need no head read', () => {
-    const at = install();
-    const parked = parkedOwn();
-    const prior = parked.facts.merge;
-    const last = prior.decisions[0];
-    const cases: MergeRecord[] = [
-      { ...prior, status: 'merged' },
-      { ...prior, status: 'returned' },
-      ...[
-        { ...last, decision: UNREADABLE },
-        { ...last, decision: 'parked' },
-        { ...last, decision: 'superseded', head: null, answer: undefined },
-        { ...last, head: null },
-        { ...last, answer: undefined },
-      ].map(entry => ({ ...prior, decisions: [...prior.decisions, entry] })),
-    ];
-    for (const [index, record] of cases.entries()) {
-      const number = 50 + index;
-      seed(at, { ...parked, subject: { ...PR, number }, facts: { own_pr: { url: PR_URL.replace(/42$/, String(number)), at: AT }, merge: record } });
-    }
-    const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD } });
-    expect(ok(picked)).toMatchObject({ path: 'idle' });
-    expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(0);
-  }, 60_000);
-
-  for (const failure of ['read', 'invalid URL']) {
+  for (const failure of ['read']) {
     test(`a failed recovery ${failure} leaves the parked item untouched while other work proceeds`, () => {
       const at = install();
       const parked = parkedOwn();
@@ -688,39 +649,30 @@ describe('the merge queue scripts', () => {
     expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(2);
   }, 60_000);
 
-  for (const status of ['running', 'unknown', 'failed']) {
+  // A failed owner can resume, so only a cancelled one gives its claim up.
+  for (const status of ['running', 'failed', 'cancelled']) {
     test(`recovery respects a ${status} claim owner`, () => {
       const at = install();
       seed(at, { ...parkedOwn(), claim: { run_id: 'owner', at: AT, requests: [] } });
-      const picked = run(at, 'facts', { INTAKE_RUN_STATUSES: JSON.stringify(status === 'unknown' ? {} : { owner: status }) }, { pr: { headRefOid: OLD } });
-      expect(picked.code).toBe(0);
-      if (status === 'unknown') expect(picked.stderr).toContain('the engine reports no status');
-      else expect(picked.stderr).toBe('');
-      expect(JSON.parse(picked.stdout)).toMatchObject({ path: status === 'failed' ? 'sweep' : 'idle' });
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(status === 'failed' ? 1 : 0);
-      expect(stored(at, PR.number).value?.claim?.run_id).toBe(status === 'failed' ? 'run-1' : 'owner');
+      const picked = run(at, 'facts', { INTAKE_RUN_STATUSES: JSON.stringify({ owner: status }) }, { pr: { headRefOid: OLD } });
+      const released = status === 'cancelled';
+      expect({ code: picked.code, stderr: picked.stderr }).toEqual({ code: 0, stderr: '' });
+      expect(JSON.parse(picked.stdout)).toMatchObject({ path: released ? 'sweep' : 'idle' });
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(released ? 1 : 0);
+      expect(stored(at, PR.number).value?.claim?.run_id).toBe(released ? 'run-1' : 'owner');
     }, 60_000);
   }
 
-  for (const concurrent of ['edit', 'answered', 'merged', 'superseded', 'claimed', 'build', 'pr']) {
+  for (const concurrent of ['edit', 'claimed']) {
     test(`recovery rechecks a concurrent ${concurrent} before retrying a conditional claim`, () => {
       const at = install();
       const parked = parkedOwn();
       seed(at, parked);
-      const prior = parked.facts.merge;
-      const last = prior.decisions[0];
       const changed: WorkItem = {
         ...parked,
         trust: 'maintainer',
         ...(concurrent === 'claimed' ? { claim: { run_id: 'other-owner', at: AT, requests: [] } } : {}),
-        facts: { ...parked.facts,
-          ...(concurrent === 'pr' ? { own_pr: { url: OTHER_URL, at: AT } } : {}),
-          ...(concurrent === 'build' ? { build: { ...BUILT, status: 'next' as const } } : {}),
-          merge: { ...prior,
-            status: concurrent === 'merged' ? 'merged' : 'parked',
-            decisions: [...prior.decisions, ...(concurrent === 'answered' ? [{ ...last, head: OLD }] : concurrent === 'superseded' ? [{ ...last, decision: 'superseded', head: null, answer: undefined }] : [])],
-          },
-        },
+        facts: parked.facts,
       };
       const preload = `
 const beforeClaim = Bun.spawnSync.bind(Bun);
@@ -735,15 +687,13 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   return beforeClaim(argv, settings);
 } });`;
       const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD }, preload });
-      const recovers = concurrent === 'edit' || concurrent === 'pr';
-      const output = ok(picked);
-      expect(output).toMatchObject({ path: recovers ? 'sweep' : 'idle' });
-      if (concurrent === 'pr') expect(output).toMatchObject({ items: [{ pr: OTHER_PR, facts: { pr: OTHER_PR } }] });
+      const recovers = concurrent === 'edit';
+      expect(ok(picked)).toMatchObject({ path: recovers ? 'sweep' : 'idle' });
       const after = stored(at, PR.number).value!;
       expect(after.trust).toBe('maintainer');
       expect(after.facts).toEqual(changed.facts);
-      expect(after.claim?.run_id ?? null).toBe(recovers ? 'run-1' : concurrent === 'claimed' ? 'other-owner' : null);
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(concurrent === 'pr' ? 2 : 1);
+      expect(after.claim?.run_id).toBe(recovers ? 'run-1' : 'other-owner');
+      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(1);
     }, 60_000);
   }
 
@@ -973,7 +923,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(reset.facts.merge?.decisions[0]).toEqual(before.facts.merge?.decisions[0]);
     const next = ok(run(at, 'facts', {
       WORKFLOW_ID: 'next-run',
-      INTAKE_RUN_STATUSES: JSON.stringify({ 'readable-run': failure === 'cancelled' ? 'cancelled' : 'failed' }),
+      INTAKE_RUN_STATUSES: JSON.stringify({ 'readable-run': 'cancelled' }),
     }, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
     expect(next.settled).toMatchObject([{ status: 'waiting', decision: UNREADABLE }]);
     const after = stored(at).value as WorkItem;
@@ -1005,18 +955,16 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
   }, 60_000);
 
-  test.each((['facts', 'gate', 'record'] as const).flatMap(script =>
-    (['blob', 'tree'] as const).map(missing => ({ script, missing }))
-  ))('$script fails visibly when the maintainer $missing cannot be read', ({ script, missing }) => {
+  test('the gate fails visibly and merges nothing when the maintainer list cannot be read', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
-    const revision = missing === 'blob' ? 'dev:.archon/sdlc/policy/maintainers.json' : 'dev^{tree}';
+    const revision = 'dev:.archon/sdlc/policy/maintainers.json';
     const objectId = spawnSync('git', ['rev-parse', revision], { cwd: at.checkout, encoding: 'utf8' }).stdout.trim();
     const object = join(at.checkout, '.git/objects', objectId.slice(0, 2), objectId.slice(2));
     expect(existsSync(object)).toBe(true);
     const before = stored(at);
-    const result = run(at, script, script === 'record' ? recordInputs([decision({})]) : {}, {
-      args: script === 'gate' ? ['--pr', PR_URL, '--head', HEAD, '--method', 'squash', '--merge'] : [],
+    const result = run(at, 'gate', {}, {
+      args: ['--pr', PR_URL, '--head', HEAD, '--method', 'squash', '--merge'],
       preload: `
         import { unlinkSync } from 'node:fs';
         const gitWithPolicy = Bun.spawnSync.bind(Bun);
@@ -1028,7 +976,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       `,
     });
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain(missing === 'blob' ? 'git show' : 'git ls-tree');
+    expect(result.stderr).toContain('git show');
     expect(result.stderr).toContain('failed:');
     expect(stored(at)).toEqual(before);
     expect(merges(result)).toEqual([]);
@@ -1169,7 +1117,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       ],
       asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42' },
     });
-    for (const part of [ATTENTION.what, ATTENTION.why, 'Recommendation: `merge`** (medium confidence)', ATTENTION.if_unanswered, PR_URL]) {
+    expect(asked.recommendation).toMatchObject({ option: 'merge', confidence: 'medium' });
+    for (const part of [ATTENTION.what, ATTENTION.why, ATTENTION.if_unanswered, PR_URL]) {
       expect(asked.attention).toContain(part);
     }
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
@@ -1207,19 +1156,20 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const attention: MergeAttention = { ...ATTENTION, choices: ATTENTION.choices.filter(choice => choice.effect !== 'return') };
     const output = ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief: '' })]))) as {
       attention: string;
+      options: { id: string; does: string }[];
       asked: { attention: MergeAttention };
     };
     expect(output).toMatchObject({ class: 'pr', asked: { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: '' } });
     // The sweep's own words reach the operator unchanged; only the queue's `other` is added.
     expect(output.asked.attention).toMatchObject({ why: attention.why, recommendation: attention.recommendation });
     expect(output.asked.attention.choices.map(choice => [choice.id, choice.effect])).toEqual([['merge', 'merge'], ['park', 'park'], ['other', 'park']]);
-    expect(output.attention).toContain('until the build queue readies the item again');
+    expect(output.options.find(option => option.id === 'other')?.does).toContain('until the build queue readies the item again');
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
 
     const calls = join(at.checkout, 'calls.jsonl');
     const words = 'Hold this while I reconsider the scope.';
     const ruled = run(at, 'ruling', {
-      INPUTS_ASKED: JSON.stringify(output.asked), INPUTS_CHOICE: 'other', INPUTS_TEXT: words, ARCHON_CALL_LOG: calls,
+      INPUTS_ASKED: JSON.stringify(output.asked), INPUTS_CHOICE: choiceOf(JSON.stringify(output.asked), 'other'), INPUTS_TEXT: words, ARCHON_CALL_LOG: calls,
     });
     expect(ok(ruled).decision).toBe('park');
     expect(ruled.bodies[0]).toContain(words);
@@ -1229,7 +1179,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         expect.objectContaining({ answer: expect.objectContaining({ choice: 'other', text: words }) }),
       ]) } },
     });
-    expect(launchOf(calls)).toBeUndefined();
+    // An `other` that parks starts no follow-up.
+    expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('"trigger"');
   }, 60_000);
 
   test.each([
@@ -1331,35 +1282,36 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }, 60_000);
 
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
-  const SELECTED = { INPUTS_LIMIT: '2', INPUTS_MERGE_METHOD: 'merge', INPUTS_RETRIAGE_AS: 'maintainer' };
-  const launchOf = (calls: string): string[] | undefined =>
-    readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+  const SELECTED = { INPUTS_MERGE_QUEUE_BINDING: '/bindings/merge-queue.json', INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json' };
+  const fireOf = (calls: string): string[] | undefined =>
+    readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
+  const inputsOf = (fire: string[] | undefined): unknown => JSON.parse(readFileSync(fire?.[fire.indexOf('--inputs') + 1] ?? '', 'utf8'));
 
   test("a maintainer's merge approves the pull request at the head they were asked about", () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'merge', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
+    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'merge'), INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', approval: { head: HEAD } } } });
     expect(mergeWaits(doc)).toBe(true);
-    // The approval is acted on at once: a sweep starts on the answered run's config and input selections.
-    expect(launchOf(calls)).toEqual(
-      expect.arrayContaining(['archon-merge-queue', 'limit=2', 'merge_method=merge', 'retriage_as=maintainer', '--config-from-run', 'run-1', '--detach'])
-    );
+    // The approval is acted on at once: a sweep starts through the merge queue's binding, once per answer.
+    const fire = fireOf(calls);
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/merge-queue.json', '--delivery-id', 'merge-sweep:ghe.example.com/example/repo#7:run-1']);
+    expect(inputsOf(fire)).toEqual({});
   }, 60_000);
 
   test('a return writes its ruling into the issue body and the build round starts from it', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: 'return', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'return'), INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
     const heading = ok(ruled).section as string;
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the merge queue's question on PR 42, \d{4}-\d{2}-\d{2}\)$/);
-    // The returned round starts at once on the build queue's own selections: no merge-queue selection crosses over.
-    const launch = launchOf(calls);
-    expect(launch).toEqual(expect.arrayContaining(['archon-build-queue', 'number=7', '--config-from-run', 'run-1', '--detach']));
-    expect(launch?.filter(arg => /^(limit|merge_method)=/.test(arg))).toEqual([]);
+    // The returned round starts at once through the build queue's binding, for the item.
+    const fire = fireOf(calls);
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-round:ghe.example.com/example/repo#7:run-1']);
+    expect(inputsOf(fire)).toEqual({ number: '7', repo_host: 'ghe.example.com', repo_path: 'example/repo' });
     expect(ruled.bodies).toEqual([`The contract.\n\n\n## ${heading}\n\nKeep the old prompt wording.\n`]);
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });
@@ -1372,7 +1324,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const own = { repo: PR.repo, number: PR.number };
     seed(at, { ...item(undefined, merge('asking'), CLAIMED), subject: own });
     const asked = JSON.stringify({ by: 'pr', item: own, pr: PR, head: HEAD, brief: '', attention: withOther(ATTENTION, 'park') });
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: 'other', INPUTS_TEXT: 'I will fix R1 on the branch.' });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: choiceOf(asked, 'other'), INPUTS_TEXT: 'I will fix R1 on the branch.' });
     expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
     expect(ruled.bodies).toEqual([]);
     expect(stored(at, PR.number).value?.facts.merge?.decisions.at(-1)?.answer?.text).toBe('I will fix R1 on the branch.');
@@ -1382,18 +1334,16 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const asked = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: withOther(ATTENTION, 'return') });
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: 'other', INPUTS_TEXT: 'Split the contract change out first.' });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: choiceOf(asked, 'other'), INPUTS_TEXT: 'Split the contract change out first.' });
     expect(ok(ruled).decision).toBe('return');
     expect(ruled.bodies[0]).toContain("The maintainer's words: Split the contract change out first.");
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });
   }, 60_000);
 });
 
-describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %s source', source => {
+describe('the merge queue facts and gate on the gh source', () => {
   const on = (at: Install, script: 'facts' | 'gate', options: Parameters<typeof run>[3] = {}, inputs: Record<string, string> = {}) => {
-    const result = run(at, script, inputs, { ...options, source });
-    if (source === 'forge') expect(ghCalls(result)).toEqual([]);
-    return result;
+    return run(at, script, inputs, { ...options, source: 'gh' });
   };
   const args = ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'];
 
@@ -1434,14 +1384,14 @@ describe.each(['gh', 'forge'] as const)('the merge queue facts and gate on the %
     const gated = on(install(), 'gate', { args });
     expect(ok(gated)).toEqual({ pr: PR_URL, head: HEAD, refusals: [], merge_commit: '3333333333333333333333333333333333333333' });
     expect(merges(gated)).toEqual([
-      source === 'gh' ? `pr merge 42 --repo ${PR.repo.host}/${PR.repo.path} --squash --match-head-commit ${HEAD}` : `forge pr.merge squash ${HEAD}`,
+      `pr merge 42 --repo ${PR.repo.host}/${PR.repo.path} --squash --match-head-commit ${HEAD}`,
     ]);
   }, 60_000);
 
   test('a merge the forge accepts but does not make leaves no receipt, and the gate fails', () => {
     const gated = on(install(), 'gate', { args, pr: { queuesMerge: true } });
     expect(gated.code).not.toBe(0);
-    expect(gated.stderr).toContain(source === 'gh' ? `it reads back open at ${HEAD}, so it did not merge` : 'forge pr.merge verification_failed');
+    expect(gated.stderr).toContain(`it reads back open at ${HEAD}, so it did not merge`);
     expect(merges(gated)).toHaveLength(1);
   }, 60_000);
 

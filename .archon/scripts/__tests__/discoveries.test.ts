@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
-import { AGENT_OUTCOMES, type AgentDecision, checkDecisions, parseRunDocument } from '../../workflows/sdlc/.shared/discoveries';
+import { type AgentDecision, checkDecisions, parseRunDocument } from '../../workflows/sdlc/.shared/discoveries';
 import { latestVerdictOf, relayedDiscoveries } from '../../workflows/sdlc/.shared/report';
-import { type GhIssue, gitCheckout, hostCli, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import { type GhIssue, gitCheckout, hostCli, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -91,13 +91,6 @@ describe("a run's discoveries", () => {
 
 const ISSUE = { repo: REPO, number: 7 };
 
-function decideSchema(): Record<string, unknown> {
-  const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'discoveries/archon-discoveries.yaml'), 'utf8')) as {
-    nodes: { id: string; output_format?: Record<string, unknown> }[];
-  };
-  return workflow.nodes.find(node => node.id === 'decide')?.output_format ?? {};
-}
-
 describe("a drained run's document", () => {
   test('round-trips through its parser, and one that does not parse refuses, naming the document', () => {
     const name = `discoveries/runs/${RUN}`;
@@ -123,13 +116,6 @@ describe("a drained run's document", () => {
       'run:review#1 is decided under both first-key and second-key',
       'run:other#0 (key second-key) is not a queued ref',
     ]);
-  });
-
-  test("the decide node's output schema names exactly the agent's outcomes", () => {
-    const schema = decideSchema();
-    const items = (schema.properties as { decisions: { items: { anyOf: { properties: { outcome: { enum: string[] } } }[] } } })
-      .decisions.items.anyOf;
-    expect(items.map(branch => branch.properties.outcome.enum).flat().sort()).toEqual([...AGENT_OUTCOMES].sort());
   });
 });
 
@@ -238,14 +224,6 @@ function state(at: Install, name: string): unknown {
   return cli(at, ['state', 'get', name]).value.value ?? null;
 }
 
-function seed(at: Install, name: string, value: unknown): void {
-  expect(cli(at, ['state', 'put', name, '--if-revision', '0'], JSON.stringify(value)).status).toBe(0);
-}
-
-function documents(at: Install, prefix = 'discoveries/'): unknown[] {
-  return (cli(at, ['state', 'list', '--prefix', prefix]).value.documents as unknown[]) ?? [];
-}
-
 const fileIt = (key: string) => (refs: string[]): AgentDecision[] => [
   { outcome: 'file', key, refs, title: 'A new defect', body: 'The brief.', reason: 'real at the base' },
 ];
@@ -302,27 +280,6 @@ describe('the discoveries scripts', () => {
     expect(outcome.createdIssues).toEqual([]);
   }, 60_000);
 
-  test('a run drained before runs kept their own memory counts as decided', () => {
-    const at = install();
-    runArtifacts(at.outputRoot, RUN, { verdict: [record('old')] });
-    seed(at, `discoveries/runs/${RUN}`, { version: 1, claim: null });
-    expect(ok(script(at, 'facts', { runId: 'pass-1', runs: [RUN] }))).toMatchObject({ path: 'idle' });
-  }, 60_000);
-
-  test('facts reads every run document in one state call, not one per run', () => {
-    const at = install();
-    const ids = Array.from({ length: 4 }, (_, index) => `aaaaaaaa-0000-4000-8000-00000000001${String(index)}`);
-    for (const id of ids) {
-      runArtifacts(at.outputRoot, id, { verdict: [record('one')] });
-      seed(at, `discoveries/runs/${id}`, { version: 1, claim: null, decided: [`${id}:review#0`] });
-    }
-    const log = join(track(mkdtempSync(join(tmpdir(), 'archon-discoveries-calls-'))), 'calls.jsonl');
-    const facts = script(at, 'facts', { runId: 'pass-2', runs: ids }, { ARCHON_CALL_LOG: log });
-    expect(ok(facts)).toMatchObject({ path: 'idle' });
-    const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
-    expect(calls.filter(argv => argv[0] === 'state')).toEqual([['state', 'list', '--prefix', 'discoveries/runs/', '--values']]);
-  }, 60_000);
-
   test('a refused pass writes nothing: a closed tracking issue, a missing ref', () => {
     const at = install();
     runArtifacts(at.outputRoot, RUN, { verdict: [record('one'), record('two')] });
@@ -333,7 +290,7 @@ describe('the discoveries scripts', () => {
         'which is not open',
       ],
       [
-        { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'failed' } },
+        { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } },
         refs => [{ outcome: 'drop', key: 'new-key', refs: refs.slice(1), title: 't', reason: 'r' }],
         'has no decision',
       ],
@@ -351,21 +308,13 @@ describe('the discoveries scripts', () => {
     const at = install();
     runArtifacts(at.outputRoot, RUN, { verdict: [record('one')] });
     expect(ok(script(at, 'facts', { runId: 'pass-1', runs: [RUN] }))).toMatchObject({ path: 'decide' });
-    for (const status of ['paused', 'running']) {
+    // A failed pass can resume, so it keeps its claim like a paused or running one.
+    for (const status of ['paused', 'running', 'failed']) {
       expect(ok(script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': status } }))).toMatchObject({ path: 'idle' });
     }
     const released = script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } });
     expect(queued(released)).toEqual([`${RUN}:review#0`]);
     expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ claim: { run_id: 'pass-2' } });
-  }, 60_000);
-
-  test('limit caps the runs one pass claims, oldest first', () => {
-    const at = install();
-    const ids = [RUN, 'aaaaaaaa-0000-4000-8000-000000000002'];
-    for (const id of ids) runArtifacts(at.outputRoot, id, { verdict: [record('one')] });
-    const facts = script(at, 'facts', { runId: 'pass-1', runs: ids }, { INPUTS_LIMIT: '1' });
-    expect(queued(facts)).toEqual([`${RUN}:review#0`]);
-    expect(state(at, `discoveries/runs/${ids[1]}`)).toBeNull();
   }, 60_000);
 
   test('an asked record keeps its run claimed by the asking run, and the answer reaches the next pass', () => {
@@ -390,28 +339,4 @@ describe('the discoveries scripts', () => {
     expect(queued(next)).toEqual([`${RUN}:review#0`]);
     expect(readFileSync(join(next.artifacts, 'drain/queue.json'), 'utf8')).toContain('Out of scope.');
   }, 60_000);
-
-  test('an input outside its vocabulary refuses before anything is read', () => {
-    const at = install();
-    const refused: Record<string, string>[] = [{ INPUTS_SINCE: 'yesterday' }, { INPUTS_LIMIT: '0' }];
-    for (const inputs of refused) {
-      const result = script(at, 'facts', { runId: 'pass-1', runs: [] }, inputs);
-      expect(result.code).toBe(1);
-      expect(result.gh).toEqual([]);
-    }
-    expect(documents(at)).toEqual([]);
-  }, 60_000);
-});
-
-describe('the discoveries workflow', () => {
-  test('the pack ships no trigger binding: it runs only when started by hand or by a binding an operator adds', () => {
-    const files = (dir: string): string[] =>
-      readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
-        entry.isDirectory() ? files(join(dir, entry.name)) : [join(dir, entry.name)]
-      );
-    const binding = files(PACK).filter(
-      path => !path.endsWith('.md') && /"bindingId"|intervalSeconds|bindingId:/.test(readFileSync(path, 'utf8'))
-    );
-    expect(binding).toEqual([]);
-  });
 });

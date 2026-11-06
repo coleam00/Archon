@@ -47,6 +47,7 @@
       "src/backends/in-place.test.ts",
       "src/backends/container.test.ts",
       "src/container/docker-exec.test.ts",
+      "src/container/verification-images.test.ts",
       "src/container/overlay.test.ts",
       "src/container/overlay-scripts.test.ts"
     ]

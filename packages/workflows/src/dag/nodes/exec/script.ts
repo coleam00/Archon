@@ -16,7 +16,7 @@ import {
   isSourceReadFailure,
 } from '../../../workflow-source';
 import type { ExecNode } from '../../../schemas';
-import { writeNodeArtifactsListing } from '../../../artifacts-index';
+import { writeInvocationListings, type InvocationListings } from '../../../invocation-listings';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
 import {
   isInlineScript,
@@ -51,12 +51,12 @@ export async function executeScriptNode(
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
   const stepName = ctx.stepNamePrefix + node.id;
   // Fresh per call, same as executeBashNode: one attempt, one observation.
-  const typedArtifactsFile = await writeNodeArtifactsListing(ctx.artifactsDir, ctx.workflowRun.id);
-  const finalScript = substituteScript(ctx, node, typedArtifactsFile);
+  const listings = await writeInvocationListings(ctx);
+  const finalScript = substituteScript(ctx, node, listings);
   const source = await captureScriptSource(ctx, finalScript, stepName);
   await reserveBudget();
   const execution = await startScriptExecution(ctx, node);
-  const subprocessEnv = scriptEnvironment(ctx, node, typedArtifactsFile, execution);
+  const subprocessEnv = scriptEnvironment(ctx, node, listings, execution);
 
   const lookup = resolveScriptInvocation(ctx, node, finalScript, source.namedScripts);
   if ('errorMsg' in lookup) return recordScriptConfigFailure(ctx, node, execution, lookup.errorMsg);
@@ -88,7 +88,7 @@ interface ScriptSource {
 function substituteScript(
   ctx: RunLayersContext,
   node: ExecNode,
-  typedArtifactsFile: string
+  listings: InvocationListings
 ): string {
   const { workflowRun } = ctx;
   return substituteWorkflowVariables(
@@ -105,7 +105,7 @@ function substituteScript(
     {
       shellSafe: true,
       stateDir: ctx.stateDir,
-      typedArtifactsFile,
+      ...listings,
       references: nodeTemplateReferences(node.script, ctx, 'script'),
     }
   ).prompt;
@@ -167,7 +167,7 @@ async function startScriptExecution(
 function scriptEnvironment(
   ctx: RunLayersContext,
   node: ExecNode,
-  typedArtifactsFile: string,
+  listings: InvocationListings,
   execution: NodeExecutionRecord
 ): NodeJS.ProcessEnv {
   const { workflowRun } = ctx;
@@ -184,7 +184,7 @@ function scriptEnvironment(
       rejectionReason: '',
       issueContext: ctx.issueContext,
       adoptedRunDir: currentAdoptedRunDir(),
-      typedArtifactsFile,
+      ...listings,
       nodeExecution: execution,
     }),
     // Named Python scripts run from the frozen capture, and CPython writes bytecode
@@ -274,7 +274,7 @@ async function recheckNamedScriptSource(
 async function runScript(
   ctx: RunLayersContext,
   node: ExecNode,
-  { command, args }: ScriptInvocation,
+  { command, args, input }: ScriptInvocation,
   env: NodeJS.ProcessEnv
 ): Promise<ReturnType<typeof certifyExecOutput>> {
   const { workflowRun } = ctx;
@@ -289,6 +289,7 @@ async function runScript(
       cwd: ctx.cwd,
       timeout: node.timeout,
       endTreeOnTimeout: true,
+      input,
       env,
       protectedEnvKeys: ctx.config.protectedEnvKeys,
       protectedCredentialValues: ctx.config.protectedCredentialValues,

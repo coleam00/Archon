@@ -393,7 +393,9 @@ nodes:
           },
         });
         await host.deps.store.claimPendingWorkflowRun(blocker);
-        const queued = await commandResult(() => triggerCommand(host, 'fire', [], { config }));
+        const queued = await commandResult(() =>
+          triggerCommand(host, 'fire', [], { config }, { env: {} })
+        );
         expect(queued.code).toBe(0);
         expect(JSON.parse(queued.output).bindings[0].disposition.status).toBe('queued');
         await host.deps.store.completeWorkflowRun(blocker, { duration_ms: 1 });
@@ -1331,7 +1333,9 @@ nodes:
         },
       })
     );
-    const fired = await commandResult(() => triggerCommand(host, 'fire', [], { config }));
+    const fired = await commandResult(() =>
+      triggerCommand(host, 'fire', [], { config }, { env: {} })
+    );
     expect(fired, fired.output + fired.error).toMatchObject({ code: 0 });
     const store = host.deps.store;
     const {

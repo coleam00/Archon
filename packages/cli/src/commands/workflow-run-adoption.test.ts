@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import {
   mockGetCurrentBranchStrict,
   createTestWorkflowHost,
@@ -98,9 +99,12 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
         ...lane.environment,
       });
     }
+    (
+      require('@archon/core/db/workflows').getWorkflowRun as ReturnType<typeof mock>
+    ).mockImplementation(async (id: string) => makeContinuationRun({ id }));
     const adoption = require('@archon/core/operations/workflow-adoption');
     (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
-      adoptedRun: { id: 'run-old' },
+      adoptedRun: { id: '11111111-1111-4111-8111-111111111111' },
       lane,
     });
   }
@@ -164,7 +168,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       kind: 'folder',
     });
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: adoptedRunId },
+      makeContinuationRun({ id: adoptedRunId }),
     ]);
 
     await workflowRunCommand(createTestWorkflowHost(), '/test/path/subdir', 'assist', 'hello', {
@@ -249,7 +253,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       (executeWorkflow as ReturnType<typeof mock>).mockClear();
       await expect(
         workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-          adoptRunId: 'run-old',
+          adoptRunId: '11111111-1111-4111-8111-111111111111',
         })
       ).rejects.toThrow(
         reason === 'missing'
@@ -276,7 +280,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     const { executeWorkflow } = await import('@archon/workflows/executor');
 
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-      adoptRunId: 'run-old',
+      adoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     const prepareCalls = (prepareWorkflowSource as ReturnType<typeof mock>).mock.calls;
@@ -325,7 +329,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     });
 
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-      adoptRunId: 'run-old',
+      adoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(create).toHaveBeenCalledWith(
@@ -338,7 +342,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     const executed = (executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1) as unknown[];
     expect(executed[3]).toBe('/wt/recreated');
     const opts = executed.at(-1) as { adoptedFromRunId?: string };
-    expect(opts.adoptedFromRunId).toBe('run-old');
+    expect(opts.adoptedFromRunId).toBe('11111111-1111-4111-8111-111111111111');
   });
 
   it('preserves an explicit source when adoption recreates the prior branch checkout', async () => {
@@ -365,7 +369,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
 
     // Explicit selection matters even when it names the invoking checkout.
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-      adoptRunId: 'run-old',
+      adoptRunId: '11111111-1111-4111-8111-111111111111',
       discoveryCwd: '/test/path',
     });
 
@@ -406,7 +410,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
 
     await expect(
       workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-        adoptRunId: 'run-old',
+        adoptRunId: '11111111-1111-4111-8111-111111111111',
       })
     ).rejects.toThrow(/requires input/);
     expect(executeWorkflow).not.toHaveBeenCalled();
@@ -444,7 +448,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
           );
 
         await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-          adoptRunId: 'run-old',
+          adoptRunId: '11111111-1111-4111-8111-111111111111',
           detachedRunId: 'run-detached-child',
         });
 
@@ -491,7 +495,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       );
 
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
-      adoptRunId: 'run-old',
+      adoptRunId: '11111111-1111-4111-8111-111111111111',
     });
 
     expect(capturedRoots).toHaveLength(2);

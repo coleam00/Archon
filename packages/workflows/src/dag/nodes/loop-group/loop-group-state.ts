@@ -26,6 +26,8 @@ export type LoopGroupBodyResult = NodeExecutionResult &
     | { state: Exclude<NodeExecutionResult['state'], 'failed'> }
   ) & {
     suspensionPoint?: 'approval' | 'wait';
+    /** The iteration limit the group ran out at; set only when it exhausted. */
+    maxIterations?: number;
   };
 
 export interface LoopGroupProgress {

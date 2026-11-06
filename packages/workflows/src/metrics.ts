@@ -6,20 +6,52 @@
  */
 import { z } from 'zod';
 import {
+  meanInterval,
+  newcombeDifference,
+  welchDifference,
+  wilsonInterval,
+  type Interval,
+} from './metrics-stats';
+import {
+  readRunSteps,
+  readTerminalEvents,
+  type RunStep,
+  type RunStepIndex,
+  type TerminalEvents,
+} from './metrics-steps';
+import {
   metricRecordSchema,
+  type MetricByModel,
+  type MetricCohort,
+  type MetricCompare,
+  type MetricCost,
   type MetricDefinition,
   type MetricInstrumentReport,
+  type MetricModelGroup,
   type MetricRecord,
   type MetricRefusal,
   type MetricReport,
   type MetricsReport,
 } from './schemas/metric';
 import type { NodeDescriptor } from './schemas/node-execution';
+import { parseRunUsage } from './schemas/run-usage';
+import type { WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore, MetricRecordRow } from './store';
 
-export type MetricsStore = Pick<IWorkflowStore, 'listMetricRecords' | 'listEventsForRuns'>;
+export type MetricsStore = Pick<
+  IWorkflowStore,
+  'listMetricRecords' | 'listEventsForRuns' | 'getWorkflowRunsByIds' | 'listWorkflowRuns'
+>;
 
-export interface MetricsQuery {
+/** A query compares cohorts or models, never both. */
+export type MetricsSplit =
+  | { compareAt?: undefined; byModelNode?: undefined }
+  /** Split each group into runs started before and at or after this time. */
+  | { compareAt: Date; byModelNode?: undefined }
+  /** Split each group by the model label that ran this node in its producing runs. */
+  | { byModelNode: string; compareAt?: undefined };
+
+export type MetricsQuery = {
   /** Inclusive start of the window. */
   since: Date;
   /** Exclusive end of the window. */
@@ -27,9 +59,26 @@ export interface MetricsQuery {
   name?: string;
   subject?: string;
   codebaseId?: string;
+} & MetricsSplit;
+
+/** A malformed window, cut or split. */
+export class MetricsQueryError extends Error {}
+
+/** No producing run ran the `--by-model` node; `seenNodeIds` are the AI nodes they ran. */
+export class MetricsByModelNodeError extends MetricsQueryError {
+  constructor(
+    readonly node: string,
+    readonly seenNodeIds: readonly string[]
+  ) {
+    super(
+      `no producing run ran an AI node "${node}"; AI nodes they ran: ${
+        seenNodeIds.length === 0 ? 'none' : seenNodeIds.join(', ')
+      }`
+    );
+  }
 }
 
-export class MetricsWindowError extends Error {}
+const SEEN_NODE_LIMIT = 50;
 
 const DAY_MS = 86_400_000;
 export const DEFAULT_METRICS_WINDOW_DAYS = 30;
@@ -41,7 +90,7 @@ const INSTANT_FORMS =
 
 function parseInstant(field: string, value: string, forms = INSTANT_FORMS): Date {
   if (!instantSchema.safeParse(value).success) {
-    throw new MetricsWindowError(`${field} must be ${forms}; got "${value}"`);
+    throw new MetricsQueryError(`${field} must be ${forms}; got "${value}"`);
   }
   return new Date(value);
 }
@@ -59,9 +108,19 @@ export function resolveMetricsWindow(
   const until = input.until === undefined ? now : parseInstant('until', input.until);
   const since = resolveSince(input.since, until);
   if (since.getTime() >= until.getTime()) {
-    throw new MetricsWindowError('since must be before until');
+    throw new MetricsQueryError('since must be before until');
   }
   return { since, until };
+}
+
+/** Resolve the CLI's and API's split: a `compare` cut (an ISO date or time) or a `byModel` node. */
+export function resolveMetricsSplit(input: { compare?: string; byModel?: string }): MetricsSplit {
+  if (input.compare !== undefined && input.byModel !== undefined) {
+    throw new MetricsQueryError('compare and by-model cannot be combined; run one query for each');
+  }
+  if (input.compare !== undefined) return { compareAt: parseInstant('compare', input.compare) };
+  if (input.byModel === '') throw new MetricsQueryError('by-model needs a node id');
+  return input.byModel === undefined ? {} : { byModelNode: input.byModel };
 }
 
 function resolveSince(since: string | undefined, until: Date): Date {
@@ -73,7 +132,7 @@ function resolveSince(since: string | undefined, until: Date): Date {
   const unit = duration[2] as keyof typeof DURATION_UNIT_MS;
   const start = new Date(until.getTime() - Number(duration[1]) * DURATION_UNIT_MS[unit]);
   if (Number.isNaN(start.getTime())) {
-    throw new MetricsWindowError(`since "${since}" reaches before the earliest representable date`);
+    throw new MetricsQueryError(`since "${since}" reaches before the earliest representable date`);
   }
   return start;
 }
@@ -83,9 +142,21 @@ interface CountedRecord {
   record: MetricRecord;
   /** `at`, else the completion time, in ms. */
   time: number;
+  /** The run that returned the record. */
+  runId: string;
+  /** The sorted labels that ran `instrument_node`; with `instrument`, the record's instrument. */
+  measuredBy: readonly string[];
 }
 
-const RUN_CHUNK = 500;
+/** A record admitted by the definition rule, before its measured-by is read. */
+type AdmittedRecord = Omit<CountedRecord, 'measuredBy'>;
+
+/** The runs the report reads, by id, their AI steps, and how it splits groups. */
+interface ReportContext {
+  runs: ReadonlyMap<string, WorkflowRun>;
+  steps: RunStepIndex;
+  split: MetricsSplit;
+}
 
 /**
  * Nodes whose completion restates another node's structured output: a child workflow's
@@ -97,31 +168,6 @@ const RELAYING_NODE_TYPES: ReadonlySet<string> = new Set([
   'loop_group',
   'compose_fan_out_instance',
 ] satisfies NodeDescriptor['kind'][]);
-
-/**
- * Ids of the events that are their node's latest terminal event in their run. A
- * completion later amended to `node_failed`, or superseded by a re-execution, is not.
- */
-async function latestTerminalEventIds(
-  store: MetricsStore,
-  runIds: readonly string[]
-): Promise<Set<string>> {
-  const latest = new Set<string>();
-  for (let start = 0; start < runIds.length; start += RUN_CHUNK) {
-    const byRun = await store.listEventsForRuns(runIds.slice(start, start + RUN_CHUNK), [
-      'node_completed',
-      'node_failed',
-    ]);
-    for (const events of byRun.values()) {
-      const lastByNode = new Map<string, string>();
-      for (const event of events) {
-        if (event.step_name !== null) lastByNode.set(event.step_name, event.id);
-      }
-      for (const id of lastByNode.values()) latest.add(id);
-    }
-  }
-  return latest;
-}
 
 function definitionOf(record: MetricRecord): MetricDefinition {
   return {
@@ -150,24 +196,258 @@ function aggregate(kind: MetricDefinition['kind'], values: readonly number[]): n
   return kind === 'count' ? sum : sum / values.length;
 }
 
+/** A record's `runs`, or the run that returned it. */
+const producingRunIds = (entry: CountedRecord): readonly string[] =>
+  entry.record.runs ?? [entry.runId];
+
+const isRate = (values: readonly number[]): boolean =>
+  values.every(value => value === 0 || value === 1);
+
+const successes = (values: readonly number[]): number => values.filter(value => value === 1).length;
+
+function valueInterval(
+  kind: MetricDefinition['kind'],
+  rate: boolean,
+  values: readonly number[]
+): Interval | null {
+  if (kind === 'count' || values.length < 2) return null;
+  return rate ? wilsonInterval(successes(values), values.length) : meanInterval(values);
+}
+
+/** Sums over the distinct producing runs; a run without a figure is counted, never zero. */
+function costReport(records: readonly CountedRecord[], context: ReportContext): MetricCost {
+  const cost: MetricCost = {
+    usd: null,
+    input_tokens: null,
+    output_tokens: null,
+    runs: 0,
+    runs_without_cost: 0,
+    runs_without_tokens: 0,
+    runs_partial_cost: 0,
+    runs_missing: 0,
+  };
+  for (const id of new Set(records.flatMap(producingRunIds))) {
+    const run = context.runs.get(id);
+    if (run === undefined) {
+      cost.runs_missing += 1;
+      continue;
+    }
+    cost.runs += 1;
+    const usage = parseRunUsage(run.metadata);
+    if (usage.costUsd === undefined) {
+      cost.runs_without_cost += 1;
+    } else {
+      cost.usd = (cost.usd ?? 0) + usage.costUsd;
+      if (context.steps.treeSteps(id).some(step => step.costless)) cost.runs_partial_cost += 1;
+    }
+    if (usage.tokens === undefined) {
+      cost.runs_without_tokens += 1;
+    } else {
+      cost.input_tokens = (cost.input_tokens ?? 0) + usage.tokens.input;
+      cost.output_tokens = (cost.output_tokens ?? 0) + usage.tokens.output;
+    }
+  }
+  return cost;
+}
+
+type Cohort = 'before' | 'after' | 'straddling' | 'unattributed';
+
+/**
+ * A record belongs to the cohort of its producing runs' start, not to its `at`. A record
+ * with any named run gone is unattributed: the gone run's start is unknown, so neither
+ * cohort's rule can be checked, and crediting the run that returned it would place the
+ * record after any cut older than the metric run.
+ */
+function cohortOf(entry: CountedRecord, runs: ReportContext['runs'], cut: number): Cohort {
+  const starts = producingRunIds(entry).map(id => runs.get(id)?.started_at.getTime());
+  if (!starts.every(start => start !== undefined)) return 'unattributed';
+  if (starts.every(start => start < cut)) return 'before';
+  return starts.every(start => start >= cut) ? 'after' : 'straddling';
+}
+
+function compareReport(
+  kind: MetricDefinition['kind'],
+  records: readonly CountedRecord[],
+  runs: ReportContext['runs'],
+  cut: Date
+): MetricCompare {
+  const values: Record<Cohort, number[]> = {
+    before: [],
+    after: [],
+    straddling: [],
+    unattributed: [],
+  };
+  for (const entry of records)
+    values[cohortOf(entry, runs, cut.getTime())].push(entry.record.value);
+  const rate = isRate(records.map(({ record }) => record.value));
+  const cohort = (cohortValues: readonly number[]): MetricCohort => ({
+    value: cohortValues.length === 0 ? null : aggregate(kind, cohortValues),
+    n: cohortValues.length,
+    interval: valueInterval(kind, rate, cohortValues),
+  });
+  const before = cohort(values.before);
+  const after = cohort(values.after);
+  const deltaInterval = differenceInterval(kind, rate, values.after, values.before);
+  return {
+    at: cut.toISOString(),
+    before,
+    after,
+    delta: before.value === null || after.value === null ? null : after.value - before.value,
+    delta_interval: deltaInterval,
+    separated: separates(deltaInterval),
+    straddling: values.straddling.length,
+    unattributed: values.unattributed.length,
+  };
+}
+
+const separates = (interval: Interval | null): boolean =>
+  interval !== null && (interval.low > 0 || interval.high < 0);
+
+/** The interval of `after − before`: Newcombe's for a rate, Welch's for other scores. */
+function differenceInterval(
+  kind: MetricDefinition['kind'],
+  rate: boolean,
+  after: readonly number[],
+  before: readonly number[]
+): Interval | null {
+  if (kind === 'count' || after.length < 2 || before.length < 2) return null;
+  if (!rate) return welchDifference(after, before);
+  return newcombeDifference(
+    { successes: successes(after), n: after.length },
+    { successes: successes(before), n: before.length }
+  );
+}
+
+type ModelSplit = { split: 'model'; label: string } | { split: 'mixed' | 'none' };
+
+const splitKey = (split: ModelSplit): string =>
+  split.split === 'model' ? `model:${split.label}` : split.split;
+
+/**
+ * The model split of a record at `node`, with the steps that ran it, or `null` when a named
+ * run no longer exists.
+ */
+function modelSplitOf(
+  entry: CountedRecord,
+  context: ReportContext,
+  node: string
+): { split: ModelSplit; steps: RunStep[] } | null {
+  const ids = producingRunIds(entry);
+  if (!ids.every(id => context.runs.has(id))) return null;
+  const steps = ids.flatMap(id => context.steps.treeSteps(id)).filter(s => s.nodeId === node);
+  const labels = [...new Set(steps.map(step => step.label))];
+  const [label] = labels;
+  if (labels.length > 1) return { split: { split: 'mixed' }, steps };
+  return { split: label === undefined ? { split: 'none' } : { split: 'model', label }, steps };
+}
+
+interface ModelBucket {
+  split: ModelSplit;
+  records: CountedRecord[];
+  steps: RunStep[];
+}
+
+const SPLIT_ORDER = { model: 0, mixed: 1, none: 2 } as const;
+
+const byBucket = (a: ModelBucket, b: ModelBucket): number =>
+  SPLIT_ORDER[a.split.split] - SPLIT_ORDER[b.split.split] ||
+  splitKey(a.split).localeCompare(splitKey(b.split));
+
+const distinct = (values: readonly (string | null)[]): string[] =>
+  [...new Set(values.filter(value => value !== null))].sort();
+
+function modelGroup(
+  kind: MetricDefinition['kind'],
+  rate: boolean,
+  bucket: ModelBucket,
+  rest: readonly number[],
+  context: ReportContext
+): MetricModelGroup {
+  const values = bucket.records.map(({ record }) => record.value);
+  const value = aggregate(kind, values);
+  const deltaInterval = differenceInterval(kind, rate, values, rest);
+  const fields = {
+    value,
+    n: values.length,
+    interval: valueInterval(kind, rate, values),
+    cost: costReport(bucket.records, context),
+    requested_models: distinct(bucket.steps.map(step => step.requestedModel)),
+    resolved_models: distinct(bucket.steps.map(step => step.resolvedModel)),
+    delta_vs_rest: rest.length === 0 ? null : value - aggregate(kind, rest),
+    delta_interval_vs_rest: deltaInterval,
+    separated: separates(deltaInterval),
+  };
+  return { ...bucket.split, ...fields };
+}
+
+/** Split records by the model label that ran `node`; each group compares with the other models. */
+function byModelReport(
+  kind: MetricDefinition['kind'],
+  records: readonly CountedRecord[],
+  context: ReportContext,
+  node: string
+): MetricByModel {
+  const buckets = new Map<string, ModelBucket>();
+  let unattributed = 0;
+  for (const entry of records) {
+    const found = modelSplitOf(entry, context, node);
+    if (found === null) {
+      unattributed += 1;
+      continue;
+    }
+    const key = splitKey(found.split);
+    const bucket = buckets.get(key) ?? { split: found.split, records: [], steps: [] };
+    bucket.records.push(entry);
+    bucket.steps.push(...found.steps);
+    buckets.set(key, bucket);
+  }
+  const rate = isRate(records.map(({ record }) => record.value));
+  const sorted = [...buckets.values()].sort(byBucket);
+  const modelValues = (except: ModelBucket): number[] =>
+    sorted
+      .filter(bucket => bucket !== except && bucket.split.split === 'model')
+      .flatMap(bucket => bucket.records.map(({ record }) => record.value));
+  return {
+    node,
+    groups: sorted.map(bucket => modelGroup(kind, rate, bucket, modelValues(bucket), context)),
+    unattributed,
+  };
+}
+
+function splitReports(
+  kind: MetricDefinition['kind'],
+  records: readonly CountedRecord[],
+  context: ReportContext
+): Pick<MetricInstrumentReport, 'compare' | 'by_model'> {
+  const { compareAt, byModelNode } = context.split;
+  if (compareAt !== undefined) {
+    return { compare: compareReport(kind, records, context.runs, compareAt) };
+  }
+  return byModelNode === undefined
+    ? {}
+    : { by_model: byModelReport(kind, records, context, byModelNode) };
+}
+
 function instrumentReport(
   kind: MetricDefinition['kind'],
-  instrument: string | null,
-  records: readonly CountedRecord[]
+  records: readonly CountedRecord[],
+  context: ReportContext
 ): MetricInstrumentReport {
   const latest = newestOf(records);
+  const values = records.map(({ record }) => record.value);
   const byDay = new Map<string, number[]>();
   for (const { record, time } of records) {
     const day = new Date(time).toISOString().slice(0, 10);
     byDay.set(day, [...(byDay.get(day) ?? []), record.value]);
   }
   return {
-    instrument,
-    value: aggregate(
-      kind,
-      records.map(({ record }) => record.value)
-    ),
+    instrument: latest.record.instrument ?? null,
+    measured_by: [...latest.measuredBy],
+    value: aggregate(kind, values),
     n: records.length,
+    interval: valueInterval(kind, isRate(values), values),
+    cost: costReport(records, context),
+    ...splitReports(kind, records, context),
     latest: {
       value: latest.record.value,
       at: new Date(latest.time).toISOString(),
@@ -179,28 +459,52 @@ function instrumentReport(
   };
 }
 
-const byInstrument = (a: string | null, b: string | null): number =>
-  a === b ? 0 : a === null ? -1 : b === null ? 1 : a.localeCompare(b);
+type Identity = Pick<MetricInstrumentReport, 'instrument' | 'measured_by'>;
+
+/** Instruments by name, `null` first, then by the models that measured them. */
+const byIdentity = (a: Identity, b: Identity): number => {
+  if (a.instrument !== b.instrument) {
+    if (a.instrument === null) return -1;
+    return b.instrument === null ? 1 : a.instrument.localeCompare(b.instrument);
+  }
+  return a.measured_by.join(',').localeCompare(b.measured_by.join(','));
+};
 
 /**
  * Aggregate stored metric records over `[since, until)`.
  *
- * 1. Only a node's latest terminal event in its run counts, and only from the node that
- *    produced the output, not from a node that relays it.
+ * 1. Only the latest terminal event of a node position counts, a position being the node
+ *    and the loop iterations it ran in, and only from the node that produced the output,
+ *    not from a node that relays it.
  * 2. A name's earliest stored record on the install, in recorded order, fixes its
  *    definition (`kind`, `unit`, `calibrates`), whatever codebase is queried. A later
  *    record that disagrees is refused and reported with both definitions, so a name keeps
  *    one meaning.
- * 3. The latest record per `(name, subject, instrument)` replaces earlier ones for a
- *    non-null subject, so a re-measurement never double-counts. A `subject: null`
- *    record counts once per run and node, by rule 1.
- * 4. A record falls in the window by `at`, else by its completion time.
- * 5. Each name reports one entry per instrument, so two instruments are never averaged.
+ * 3. A record's instrument is its `instrument` with its measured-by: the model labels that
+ *    ran its `instrument_node` in the run that returned it and the runs below it. Only that
+ *    node counts, so another AI node in the metric workflow leaves the instrument as it is.
+ * 4. The latest record per `(name, subject, instrument, measured-by)` replaces earlier ones
+ *    for a non-null subject, so a re-measurement never double-counts and a second judge
+ *    model keeps the first one's records. A `subject: null` record counts once per run and
+ *    node position, by rule 1.
+ * 5. A record falls in the window by `at`, else by its completion time.
+ * 6. Each name reports one entry per instrument and measured-by, so two instruments are
+ *    never averaged.
+ * 7. A record's producing runs are its `runs`, else the run that returned it. Cost sums
+ *    each distinct producing run once. `compareAt` splits records by when those runs
+ *    started, not by `at`; `byModelNode` splits them by the model labels that ran that
+ *    node in those runs and the runs below them.
  *
  * Refusals are reported for the queried name and window. A stored output the record
  * schema rejects (written before the schema, or unreadable) has no trusted name, so it
  * is reported only when no name is queried. The stores skip a `metrics: null` output, which
  * holds no record; only an output written before the key was reserved can carry one.
+ *
+ * Throws {@link MetricsByModelNodeError} when `byModelNode` names a node that no found
+ * producing run ran, so a mistyped node is not reported as a table of `none`. The check
+ * needs at least one producing run that still exists: a window with no records reports
+ * none, and records whose producing runs were all deleted are reported `unattributed`
+ * without checking the node.
  */
 export async function queryMetrics(
   store: MetricsStore,
@@ -209,22 +513,31 @@ export async function queryMetrics(
   const rows = (await store.listMetricRecords()).filter(
     row => row.nodeType === null || !RELAYING_NODE_TYPES.has(row.nodeType)
   );
-  const counted = await latestTerminalEventIds(store, [...new Set(rows.map(row => row.runId))]);
+  const terminal = await readTerminalEvents(
+    store,
+    rows.map(row => row.runId)
+  );
+  const counted = new Set([...terminal.values()].flat().map(event => event.id));
   const since = query.since.getTime();
   const until = query.until.getTime();
   const inWindow = (time: number): boolean => time >= since && time < until;
-  const { records, refused } = collectRecords(
+  const { admitted, refused } = collectRecords(
     rows.filter(row => counted.has(row.eventId)),
     row => query.codebaseId === undefined || row.codebaseId === query.codebaseId
   );
+  const wanted = admitted.filter(
+    ({ record }) =>
+      (query.name === undefined || record.name === query.name) &&
+      (query.subject === undefined || record.subject === query.subject)
+  );
+  const records = latestPerSubject(await withMeasuredBy(store, wanted, terminal)).filter(
+    ({ time }) => inWindow(time)
+  );
+  const context = await reportContext(store, records, terminal, query);
 
   const byName = new Map<string, CountedRecord[]>();
   for (const entry of records) {
-    const { record, time } = entry;
-    if (!inWindow(time)) continue;
-    if (query.name !== undefined && record.name !== query.name) continue;
-    if (query.subject !== undefined && record.subject !== query.subject) continue;
-    byName.set(record.name, [...(byName.get(record.name) ?? []), entry]);
+    byName.set(entry.record.name, [...(byName.get(entry.record.name) ?? []), entry]);
   }
   const queried = (refusal: MetricRefusal): boolean =>
     query.name === undefined ||
@@ -234,11 +547,70 @@ export async function queryMetrics(
     window: { since: query.since.toISOString(), until: query.until.toISOString() },
     metrics: [...byName]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, named]) => nameReport(name, named)),
+      .map(([name, named]) => nameReport(name, named, context)),
     refused: refused
       .filter(({ refusal, time }) => inWindow(time) && queried(refusal))
       .map(({ refusal }) => refusal),
   };
+}
+
+/** Add each record's measured-by, read from the run that returned it and the runs below. */
+async function withMeasuredBy(
+  store: MetricsStore,
+  records: readonly AdmittedRecord[],
+  known: TerminalEvents
+): Promise<CountedRecord[]> {
+  const judged = records.filter(({ record }) => record.instrument_node !== undefined);
+  const steps = await readRunSteps(
+    store,
+    judged.map(({ runId }) => runId),
+    known
+  );
+  return records.map(entry => {
+    const node = entry.record.instrument_node;
+    const labels =
+      node === undefined
+        ? []
+        : steps
+            .treeSteps(entry.runId)
+            .filter(step => step.nodeId === node)
+            .map(step => step.label);
+    return { ...entry, measuredBy: [...new Set(labels)].sort() };
+  });
+}
+
+/** Read the producing runs of `records` and their steps; check a by-model node ran. */
+async function reportContext(
+  store: MetricsStore,
+  records: readonly CountedRecord[],
+  known: TerminalEvents,
+  split: MetricsSplit
+): Promise<ReportContext> {
+  const runs = await runsOf(store, records);
+  const context = { runs, steps: await readRunSteps(store, [...runs.keys()], known), split };
+  if (split.byModelNode !== undefined) assertNodeRan(context, split.byModelNode);
+  return context;
+}
+
+function assertNodeRan(context: ReportContext, node: string): void {
+  if (context.runs.size === 0) return;
+  const seen = new Set<string>();
+  for (const id of context.runs.keys()) {
+    const steps = context.steps.treeSteps(id);
+    if (steps.some(step => step.nodeId === node)) return;
+    for (const step of steps) seen.add(step.nodeId);
+  }
+  throw new MetricsByModelNodeError(node, [...seen].sort().slice(0, SEEN_NODE_LIMIT));
+}
+
+/** The producing runs of `records`, read once. */
+async function runsOf(
+  store: MetricsStore,
+  records: readonly CountedRecord[]
+): Promise<ReportContext['runs']> {
+  const ids = [...new Set(records.flatMap(producingRunIds))];
+  if (ids.length === 0) return new Map();
+  return new Map((await store.getWorkflowRunsByIds(ids)).map(run => [run.id, run]));
 }
 
 /** A refusal with the time it is placed in a window by. */
@@ -274,20 +646,19 @@ function admitDefinition(
 }
 
 /**
- * Apply the definition rule over every counted row in recorded order, then the
- * latest-per-subject rule over the `selected` ones. Returns every surviving record and
- * every refusal among the selected rows, at any time.
+ * Apply the definition rule over every counted row in recorded order. Returns every
+ * admitted record and every refusal among the `selected` rows, at any time.
  */
 function collectRecords(
   rows: readonly MetricRecordRow[],
   selected: (row: MetricRecordRow) => boolean
 ): {
-  records: CountedRecord[];
+  admitted: AdmittedRecord[];
   refused: Refused[];
 } {
   const definitions = new Map<string, MetricDefinition>();
   const refused: Refused[] = [];
-  const admitted: CountedRecord[] = [];
+  const admitted: AdmittedRecord[] = [];
   for (const row of rows) {
     // An unselected row still fixes the definitions of the names it carries.
     const result = admitRow(definitions, row);
@@ -295,22 +666,22 @@ function collectRecords(
     refused.push(...result.refused);
     admitted.push(...result.admitted);
   }
-  return { records: latestPerSubject(admitted), refused };
+  return { admitted, refused };
 }
 
 function admitRow(
   definitions: Map<string, MetricDefinition>,
   row: MetricRecordRow
-): { admitted: CountedRecord[]; refused: Refused[] } {
+): { admitted: AdmittedRecord[]; refused: Refused[] } {
   const parsed = z.array(metricRecordSchema).safeParse(row.metrics);
   if (!parsed.success) return { admitted: [], refused: [invalidRefusal(row, parsed.error)] };
-  const admitted: CountedRecord[] = [];
+  const admitted: AdmittedRecord[] = [];
   const refused: Refused[] = [];
   for (const record of parsed.data) {
     const time = Date.parse(record.at ?? row.completedAt);
     const conflict = admitDefinition(definitions, record);
     if (conflict === null) {
-      admitted.push({ record, time });
+      admitted.push({ record, time, runId: row.runId });
     } else {
       refused.push({
         time,
@@ -321,14 +692,17 @@ function admitRow(
   return { admitted, refused };
 }
 
-/** Records in recorded order, keeping only the latest per non-null subject. */
+const identityKey = (entry: CountedRecord): string =>
+  JSON.stringify([entry.record.instrument ?? null, entry.measuredBy]);
+
+/** Records in recorded order, keeping only the latest per non-null subject and instrument. */
 function latestPerSubject(records: readonly CountedRecord[]): CountedRecord[] {
   const bySubject = new Map<string, CountedRecord>();
   const unkeyed: CountedRecord[] = [];
   for (const entry of records) {
-    const { name, subject, instrument } = entry.record;
+    const { name, subject } = entry.record;
     if (subject === null) unkeyed.push(entry);
-    else bySubject.set(JSON.stringify([name, subject, instrument ?? null]), entry);
+    else bySubject.set(JSON.stringify([name, subject, identityKey(entry)]), entry);
   }
   return [...unkeyed, ...bySubject.values()];
 }
@@ -337,20 +711,25 @@ const newestOf = (records: readonly CountedRecord[]): CountedRecord =>
   records.reduce((a, b) => (b.time >= a.time ? b : a));
 
 /** `records` is non-empty, and every record carries the name's one definition. */
-function nameReport(name: string, records: readonly CountedRecord[]): MetricReport {
+function nameReport(
+  name: string,
+  records: readonly CountedRecord[],
+  context: ReportContext
+): MetricReport {
   const newest = newestOf(records);
   const definition = definitionOf(newest.record);
-  const groups = new Map<string | null, CountedRecord[]>();
+  const groups = new Map<string, CountedRecord[]>();
   for (const entry of records) {
-    const instrument = entry.record.instrument ?? null;
-    groups.set(instrument, [...(groups.get(instrument) ?? []), entry]);
+    const key = identityKey(entry);
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
   }
   return {
     name,
     ...definition,
     headline_instrument: newest.record.instrument ?? null,
-    instruments: [...groups]
-      .sort(([a], [b]) => byInstrument(a, b))
-      .map(([instrument, group]) => instrumentReport(definition.kind, instrument, group)),
+    headline_measured_by: [...newest.measuredBy],
+    instruments: [...groups.values()]
+      .map(group => instrumentReport(definition.kind, group, context))
+      .sort(byIdentity),
   };
 }

@@ -225,7 +225,7 @@ export function createInMemoryWorkflowStore(
     (...args) =>
       serialize(() => operation(...args));
   return {
-    ...createInMemoryStateDocumentStore(),
+    ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
     drainResourceStarts: admit(admission.drainResourceStarts.bind(admission)),
     hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),
@@ -260,6 +260,7 @@ export function createInMemoryWorkflowStore(
     getCodebaseEnvVars: async () => ({}),
     createWorkflowRun: input => write(view => view.createWorkflowRun(input)),
     getWorkflowRun: id => write(view => view.getWorkflowRun(id)),
+    getWorkflowRunsByIds: ids => write(view => view.getWorkflowRunsByIds(ids)),
     getWorkflowRunForAttention: id => write(view => view.getWorkflowRunForAttention(id)),
     getWorkflowRunStatus: id => write(view => view.getWorkflowRunStatus(id)),
     claimPendingWorkflowRun: (id, path) => write(view => view.claimPendingWorkflowRun(id, path)),

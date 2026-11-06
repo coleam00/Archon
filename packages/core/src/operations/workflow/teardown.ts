@@ -1,3 +1,4 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
@@ -12,7 +13,7 @@ import {
   DetachedRunOwnerUnavailableError,
   type DetachedRunStopTarget,
 } from '../../services/run-owner-stop';
-import { getLog, type OperationContext } from './context';
+import { getLog, releaseRunResources, type OperationContext } from './context';
 
 /** Maximum parent expansions in the abandon tree walks. */
 export const MAX_CASCADE_RUNS = 500;
@@ -285,15 +286,18 @@ export async function reclaimCancelledRunContainer(
   ctx: OperationContext,
   run: WorkflowRun
 ): Promise<string[]> {
-  if (!isContainerRun(run) || typeof run.metadata?.isolation_env_id !== 'string') {
+  if (!isContainerRun(run) || typeof run.metadata?.[ISOLATION_ENV_ID_METADATA_KEY] !== 'string') {
     return [];
   }
   try {
-    await ctx.reclaimContainerEnv(run.metadata.isolation_env_id, ctx.hostStore.isolation);
+    await ctx.reclaimContainerEnv(
+      run.metadata[ISOLATION_ENV_ID_METADATA_KEY],
+      ctx.hostStore.isolation
+    );
   } catch (err) {
     getLog().warn({ err, runId: run.id }, 'operations.workflow_abandon_container_reclaim_failed');
     return [
-      `Could not reclaim container environment ${run.metadata.isolation_env_id} for run ${run.id}; resources may remain allocated. Inspect the managed containers before retrying cleanup.`,
+      `Could not reclaim container environment ${run.metadata[ISOLATION_ENV_ID_METADATA_KEY]} for run ${run.id}; resources may remain allocated. Inspect the managed containers before retrying cleanup.`,
     ];
   }
   return [];
@@ -316,6 +320,7 @@ export async function cancelRunAndCleanup(
     throw new Error(`Failed to abandon workflow run ${run.id}: ${err.message}`);
   }
 
+  const imageWarnings: string[] = [];
   let cascadeFailures = 0;
   let cancelledDescendants: WorkflowRun[] = [];
   if (cancelled) {
@@ -324,13 +329,17 @@ export async function cancelRunAndCleanup(
     cancelledDescendants = cascade.cancelledDescendants;
     // An output holder the stop left running may still write a descendant's scratch.
     if (!stopWarnings.length)
-      for (const child of cascade.cancelledRuns) await releaseRunScratch(child);
+      for (const child of cascade.cancelledRuns) {
+        await releaseRunScratch(child);
+        imageWarnings.push(...(await releaseRunResources(ctx, child.id)));
+      }
   }
   const blockedParentRunId = cancelled ? await findParentBlockedOn(ctx, run) : null;
 
   // Reclaim only when our cancel won the CAS. A miss means another lifecycle
   // owner now controls the run and its environment.
   const cleanupWarnings = [
+    ...imageWarnings,
     ...stopWarnings,
     ...(cancelled ? await reclaimCancelledRunContainer(ctx, run) : []),
   ];

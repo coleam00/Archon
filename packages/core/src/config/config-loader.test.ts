@@ -378,6 +378,21 @@ ${field}:
       }
     );
 
+    test.each(['env: [A, B]', 'env: AB', 'env: 42'])(
+      'an env block that is not a map fails the load: %s',
+      async content => {
+        mockFsReadFile.mockResolvedValue(content);
+        const error = (await loadRepoConfig('/repo').catch(err => err)) as InvalidConfigError;
+        expect(error).toBeInstanceOf(InvalidConfigError);
+        expect(error.summary).toMatch(/^Invalid env config: /);
+      }
+    );
+
+    test('an env map loads as written', async () => {
+      mockFsReadFile.mockResolvedValue('env:\n  API_URL: https://x\n  REGION: eu');
+      expect((await loadRepoConfig('/repo')).env).toEqual({ API_URL: 'https://x', REGION: 'eu' });
+    });
+
     test('parses recommendedWorkflows as an ordered string array', async () => {
       mockFsReadFile.mockResolvedValue(`
 recommendedWorkflows:

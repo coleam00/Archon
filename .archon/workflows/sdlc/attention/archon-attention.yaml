@@ -125,6 +125,7 @@ nodes:
         done: { type: boolean }
         outcome: { type: [object, 'null'] }
         message: { type: string }
+        # Each choice as a wait option; its value is the choice the answer returns.
         options:
           type: array
           items:
@@ -132,10 +133,14 @@ nodes:
             properties:
               id: { type: string }
               label: { type: string }
-            required: [id, label]
+              does: { type: string }
+              value: { type: object }
+            required: [id, label, does, value]
+        # The wait's recommendation; null when nothing is asked.
+        recommendation: { type: [object, 'null'] }
         asked: { type: [object, 'null'] }
         brief: { type: string }
-      required: [done, outcome, message, options, asked, brief]
+      required: [done, outcome, message, options, recommendation, asked, brief]
 
   - id: ask
     depends_on: [settle]
@@ -144,5 +149,6 @@ nodes:
       attention: "$settle.output.message"
       form: select
       options: "$settle.output.options"
+      recommendation: "$settle.output.recommendation"
       labels:
         stage: "$INPUTS.stage"

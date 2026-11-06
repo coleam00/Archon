@@ -76,3 +76,22 @@ test('a select wait is answered with the chosen option at its occurrence, never 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('the recommendation and what each option does are shown before the choices', () => {
+  const recommended = {
+    ...attention,
+    options: [
+      { id: 'use-main', label: 'Use main', does: 'Rebases the branch onto main.' },
+      { id: 'use-dev' },
+    ],
+    recommendation: { option: 'use-main', why: 'Main has the fix.', confidence: 'medium' },
+  } as const satisfies NonNullable<Run['attention']>;
+  const html = renderToStaticMarkup(
+    <AttentionAnswerPanel run={{ ...run, attention: recommended }} attention={recommended} />
+  );
+  expect(html).toContain('Recommended: Use main');
+  expect(html).toContain('(medium confidence)');
+  expect(html).toContain('Main has the fix.');
+  expect(html).toContain('Rebases the branch onto main.');
+  expect(html).toContain('Use main (recommended)');
+});

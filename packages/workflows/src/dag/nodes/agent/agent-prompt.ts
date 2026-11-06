@@ -1,4 +1,5 @@
 import type { AgentNode } from '../../../schemas';
+import type { InvocationListings } from '../../../invocation-listings';
 import { readComposedBindings, resolveIncludeOutputAliases } from '../../../compiled-command';
 import { buildPromptWithContext } from '../../../workflow-variables';
 import { getLog } from '../../log';
@@ -26,7 +27,7 @@ export function loadAgentPrompt(
   stepName: string,
   commandPrompt: CommandPrompt | undefined,
   extras: {
-    typedArtifactsFile: string | undefined;
+    listings: InvocationListings | undefined;
     /** `$REJECTION_REASON` for an approval gate's rework prompt; undefined elsewhere. */
     rejectionReason: string | undefined;
   }
@@ -73,7 +74,7 @@ export function loadAgentPrompt(
       {
         stateDir: ctx.stateDir,
         inputs: promptInputs,
-        typedArtifactsFile: extras.typedArtifactsFile,
+        ...extras.listings,
         rejectionReason: extras.rejectionReason,
         references: nodeTemplateReferences(rawPrompt, ctx),
       }

@@ -71,7 +71,7 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 #### `archon-build-queue`
 
-The stage after intake, started by a schedule binding. Each run claims the triaged item that sorts first, or the issue `--input number=<n>` names, launches `archon-ship` on it from a brief, and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, unless only a check no round can run remains, which it asks for once at that head (a maintainer's `ready` answer also hands it to the merge queue, whose gate still checks it), and a correctable finding or a stop the issue already answers starts the item's next round at once, as a detached `archon-build-queue --input number=<n>` run on the same run config. An unclear one, a correction that would add machinery the issue does not ask for, a Ready pull request waiting only on a check no round can run, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
+The stage after intake, started by a schedule binding. Each run claims the triaged item that sorts first, or the issue `--input number=<n>` names, launches `archon-ship` on it from a brief, and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, unless only a check no round can run remains, which it asks for once at that head (a maintainer's `ready` answer also hands it to the merge queue, whose gate still checks it), and a correctable finding or a stop the issue already answers starts the item's next round at once (never when the pull request changed nothing material since its last review), as a detached `archon-build-queue --input number=<n>` run on the same run config. An unclear one, a correction that would add machinery the issue does not ask for, a Ready pull request waiting only on a check no round can run, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
 
 **When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
 
@@ -218,6 +218,33 @@ archon workflow run archon-upkeep "Address the undici advisory"
 
 **What it produces**: A PR marked ready for review, or an explained stop when the locked version is already current.
 
+#### `archon-metrics-prs`
+
+Records the outcomes of the pull requests the build queue opened as metrics: `sdlc.prs_opened`, `sdlc.prs_merged`, `sdlc.prs_abandoned` and `sdlc.pr_merge_rate`. Each record is attributed to the build-queue runs that built its pull request, so `archon metrics --compare` splits pull requests by when those runs started. Pull requests a round only continued count in no metric.
+
+**When to use it**: You want current factory PR counts and merge rate, or to compare them before and after a pack change. Run it on demand, or add the schedule binding the SDLC pack README's "Metrics" section shows; the pack installs none.
+
+```bash
+archon workflow run archon-metrics-prs
+archon metrics sdlc.pr_merge_rate --since 2026-10-01
+```
+
+**What it produces**: Metric records on the node's output, read with [`archon metrics`](/guides/metrics/). It changes no code.
+
+#### `archon-metrics-test-value`
+
+Judges the tests in each factory pull request merged since a date, one `archon-metrics-test-value-judge` run per pull request, and records `sdlc.tests_added` and `sdlc.tests_unprotective`: how many tests it added or changed, and how many of them no plausible regression would fail. Both counts name the judge's identity.
+
+**When to use it**: You want to see whether factory pull requests carry tests that protect nothing. Calibrate the judge first with `archon-metrics-test-value-calibrate`, which scores it against hand-labeled pull requests as `sdlc.tests_unprotective_judge_agreement` and `sdlc.tests_unprotective_judge_catch_rate`.
+
+```bash
+archon workflow run archon-metrics-test-value-calibrate
+archon workflow run archon-metrics-test-value --input since=7d
+archon metrics sdlc.tests_unprotective
+```
+
+**What it produces**: Metric records on the node's output. Each judged pull request costs one judge run on the `large` tier. It changes no code.
+
 ## Summary
 
 | Workflow | Use When | Creates PR? | Changes code? |
@@ -238,6 +265,9 @@ archon workflow run archon-upkeep "Address the undici advisory"
 | `archon-review` | Review a PR or the working diff | No (comments on a PR) | No |
 | `archon-validate` | Run the project's checks | No | No |
 | `archon-upkeep` | Update one dependency | Yes | Yes |
+| `archon-metrics-prs` | Count factory PRs and their merge rate | No | No |
+| `archon-metrics-test-value` | Count factory tests that protect no behavior | No | No |
+| `archon-metrics-test-value-calibrate` | Score the test-value judge against hand labels | No | No |
 
 ## Workflows that no longer ship
 

@@ -1,3 +1,4 @@
+import { createRunResourceRelease } from '../services/cleanup/run-verification-images';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
  * IWorkflowStore trait defined in @archon/workflows.
@@ -172,6 +173,7 @@ export function createWorkflowStore(): IWorkflowStore {
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,
     recordWorkflowRunCheckoutBaseline: workflowDb.recordWorkflowRunCheckoutBaseline,
     getWorkflowRun: workflowDb.getWorkflowRun,
+    getWorkflowRunsByIds: workflowDb.getWorkflowRunsByIds,
     getWorkflowRunForAttention: workflowDb.getWorkflowRunForAttention,
     findChildRuns: workflowDb.findChildRuns,
     getRunAncestry: workflowDb.getRunAncestry,
@@ -307,6 +309,7 @@ export function createWorkflowDeps(
   return {
     store,
     credentialStore,
+    releaseRunResources: createRunResourceRelease(store),
     providers: providerRegistry,
     getAgentProvider,
     loadConfig: loadMergedConfig,

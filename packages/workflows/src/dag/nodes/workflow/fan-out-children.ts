@@ -1,3 +1,4 @@
+import { CANCELLED_REASON_METADATA_KEY } from '../../../schemas/run-metadata';
 import type { WorkflowDeps } from '../../../deps';
 import type { WorkflowNode, WorkflowRun } from '../../../schemas';
 import { readSubrunMetadata, isTerminalRunStatus } from '../../../schemas';
@@ -35,7 +36,7 @@ const FAN_OUT_CHILD_STALE_MS = 5 * 60_000;
 
 /** The fan-out cancel reason stamped on a child, if any. */
 function fanOutCancelReason(run: WorkflowRun): string | undefined {
-  const reason = (run.metadata as Record<string, unknown> | undefined)?.cancelled_reason;
+  const reason = run.metadata[CANCELLED_REASON_METADATA_KEY];
   return typeof reason === 'string' ? reason : undefined;
 }
 

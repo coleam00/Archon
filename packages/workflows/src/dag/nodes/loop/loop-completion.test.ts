@@ -1262,6 +1262,101 @@ describe('loop node completion channels', () => {
     expect(result).toContain("note='shipped'");
   });
 
+  // ─── on_exhausted: complete ──────────────────────────────────────────────
+
+  it('completes an exhausted loop with its last payload under on_exhausted: complete', async () => {
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      yield {
+        type: 'result',
+        sessionId: `s-${String(calls)}`,
+        structuredOutput: { done: false, note: `pass ${String(calls)}` },
+      };
+    });
+    const nodes: DagNode[] = [
+      {
+        id: 'my-loop',
+        output_format: untilFieldSchema,
+        kind: 'loop',
+        loop: {
+          fresh_context: false,
+          prompt: 'go',
+          max_iterations: 2,
+          until_field: 'done',
+          on_exhausted: 'complete',
+        },
+      },
+      {
+        id: 'report',
+        depends_on: ['my-loop'],
+        kind: 'exec',
+        runtime: 'sh',
+        script: 'echo "done=$my-loop.output.done note=$my-loop.output.note"',
+      },
+    ];
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('loop-exhausted-complete');
+
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: { name: 'dag-loop-exhausted-complete', nodes },
+        workflowRun,
+      })
+    );
+
+    // The node completes with the last iteration's payload, read downstream by field;
+    // the workflow tells exhaustion apart by its own completion field.
+    expect(calls).toBe(2);
+    expect(result).toContain("done=false note='pass 2'");
+    const loopEvents = persistedEvents(store).filter(event => event.step_name === 'my-loop');
+    expect(loopEvents.map(event => event.event_type)).not.toContain('node_failed');
+    const completed = loopEvents.find(event => event.event_type === 'node_completed');
+    expect(completed?.data).toMatchObject({ maxIterations: 2 });
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('still fails a loop under on_exhausted: complete when an iteration fails', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'result', sessionId: 's1', structuredOutput: { done: 'true' } };
+    });
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: {
+          name: 'dag-loop-exhausted-iteration-fails',
+          nodes: [
+            {
+              id: 'my-loop',
+              output_format: untilFieldSchema,
+              kind: 'loop',
+              loop: {
+                fresh_context: false,
+                prompt: 'go',
+                max_iterations: 3,
+                until_field: 'done',
+                on_exhausted: 'complete',
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('loop-exhausted-iteration-fails'),
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(persistedEvents(store).map(event => event.event_type)).toContain('node_failed');
+    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
   it('detects plain completion signal (non-<promise> format)', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'All tasks done!\nCOMPLETE' };

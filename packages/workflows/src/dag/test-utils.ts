@@ -157,6 +157,10 @@ export function createMockStore(): MockWorkflowStore {
     async _data => undefined
   );
   const getWorkflowRunStatus = mock<IWorkflowStore['getWorkflowRunStatus']>(async _id => 'running');
+  const runEvents = (runId: string, types?: readonly string[]) =>
+    inMemoryEventRows(createWorkflowEvent.mock.calls.map(([event]) => event)).filter(
+      e => e.workflow_run_id === runId && (types?.includes(e.event_type) ?? true)
+    );
   return {
     getWorkflowEventHead: mock<IWorkflowStore['getWorkflowEventHead']>(() => {
       throw new Error('Unexpected event feed read');
@@ -285,14 +289,10 @@ export function createMockStore(): MockWorkflowStore {
     deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
-    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId =>
-      inMemoryEventRows(createWorkflowEvent.mock.calls.map(([event]) => event)).filter(
-        event => event.workflow_run_id === runId
-      )
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId => runEvents(runId)),
+    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(
+      async (ids, types) => new Map(ids.map(id => [id, runEvents(id, types)]))
     ),
-    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
     listMetricRecords: mock<IWorkflowStore['listMetricRecords']>(async () => []),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
@@ -306,6 +306,7 @@ export function createMockStore(): MockWorkflowStore {
       async (_id, baseline) => baseline
     ),
     getWorkflowRun: mock<IWorkflowStore['getWorkflowRun']>(async _id => null),
+    getWorkflowRunsByIds: mock<IWorkflowStore['getWorkflowRunsByIds']>(async _ids => []),
     findChildRuns: mock<IWorkflowStore['findChildRuns']>(async _parentRunId => []),
     getRunAncestry: mock<IWorkflowStore['getRunAncestry']>(async _runId => []),
     getActiveWorkflowRunByPath: mock<IWorkflowStore['getActiveWorkflowRunByPath']>(

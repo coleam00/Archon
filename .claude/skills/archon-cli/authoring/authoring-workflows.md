@@ -230,8 +230,11 @@ will maintain it. Declare Python dependencies inline (`deps:` for `uv`); keep
 Put shared `.ts`, `.js`, or `.py` modules and `.md` documents in
 `<pack>/.shared/` (subfolders are supported). This reserved directory supplies
 modules and documents, never workflow definitions or `script:` targets. Documents
-ship beside the modules in every build, so a script finds one relative to its own
-location and hands its path to a prompt node through `with:`. Missing packaged script targets fail at load time. From `<workflow>/scripts/publish.ts`, Bun can import
+ship beside the modules in every build. Any node reads one through `$PACK_DIR`, the
+pack's directory in the run's source: a prompt or command file names
+`$PACK_DIR/.shared/policy/triage.md`, and `bash:`/`script:` nodes also get `PACK_DIR` in
+their environment. No helper script or `with:` hop is needed; an `include:` cannot pass
+`$PACK_DIR` through `with:`, because the block would resolve it in its own pack. Missing packaged script targets fail at load time. From `<workflow>/scripts/publish.ts`, Bun can import
 `../../.shared/result.ts`. Python files can add
 `str(Path(__file__).resolve().parents[2] / ".shared")` to `sys.path` using
 `pathlib.Path`, then import normally; Archon does not inject `PYTHONPATH`.

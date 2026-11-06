@@ -222,6 +222,8 @@ export interface IWorkflowStore
     baseline: CheckoutObservation
   ): Promise<CheckoutObservation>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
+  /** The runs with these ids, in no particular order; an id with no run is absent. */
+  getWorkflowRunsByIds(ids: readonly string[]): Promise<WorkflowRun[]>;
   /**
    * Find the workflow run currently holding the lock on `workingPath`.
    *

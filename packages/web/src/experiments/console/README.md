@@ -6,6 +6,8 @@ name remains in place to avoid a mechanical move while the builder is changing.
 ## Routes
 
 - `/console` → all runs
+- `/console/metrics` → overview cards declared by packs, over `?window=7d|30d|90d`
+- `/console/metrics/details` → one row per metric, with calibration boxes
 - `/console/settings` → assistant, provider, system, and identity settings
 - `/console/builder` → experimental workflow builder and project picker
 - `/console/builder/:name` → edit a project workflow selected by
@@ -13,6 +15,8 @@ name remains in place to avoid a mechanical move while the builder is changing.
 - `/console/r/:runId` → run detail without requiring a project URL
 - `/console/p/:projectId` → project runs
 - `/console/p/:projectId/chat` → project operator chat
+- `/console/p/:projectId/metrics` → the project's overview cards
+- `/console/p/:projectId/metrics/details` → the project's metric details
 - `/console/p/:projectId/r/:runId` → project-scoped run detail
 
 ## Ownership

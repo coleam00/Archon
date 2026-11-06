@@ -93,6 +93,8 @@ export async function runState({
       ...(values.install === true ? { install: true } : {}),
       ...(values.raw === true ? { raw: true } : {}),
       ...(values.values === true ? { values: true } : {}),
+      ...(values.lease === true ? { lease: true } : {}),
+      ...(values['release-lease'] === true ? { releaseLease: true } : {}),
     },
     { storeKind }
   );
@@ -106,7 +108,7 @@ export async function runMetrics({ positionals, values }: CliRouteContext): Prom
   if (positionals[2] !== undefined) {
     return await fail(
       values.json === true,
-      'Usage: archon metrics [name] [--since <7d|24h|2w|ISO>] [--until <ISO>] [--subject <s>] [--project <id|name|key>] [--json]'
+      'Usage: archon metrics [name] [--since <7d|24h|2w|ISO>] [--until <ISO>] [--subject <s>] [--compare <ISO> | --by-model <node>] [--project <id|name|key>] [--json]'
     );
   }
   const option = (key: string): string | undefined =>
@@ -115,6 +117,8 @@ export async function runMetrics({ positionals, values }: CliRouteContext): Prom
     since: option('since'),
     until: option('until'),
     subject: option('subject'),
+    compare: option('compare'),
+    byModel: option('by-model'),
     project: option('project'),
     json: values.json === true,
   });
@@ -143,7 +147,7 @@ export async function runTrigger({
       limit: typeof values.limit === 'string' ? values.limit : undefined,
       yes: values.yes === true,
     },
-    (requestId, hostId) => spawnAdmitted(host, requestId, hostId)
+    { dispatch: (requestId, hostId) => spawnAdmitted(host, requestId, hostId) }
   );
   return 0;
 }
@@ -226,7 +230,9 @@ export async function runSetup({
 
 export async function runProject({ positionals, json }: CliRouteContext): Promise<number> {
   const { projectCommand } = await loadRoute(() => import('../commands/project'), {
-    providers: false,
+    // `project config` validates assistant settings and resolves tier defaults
+    // against the provider registry, as the server does.
+    ...(positionals[1] === 'config' ? {} : { providers: false as const }),
     database: await usesDatabaseStore(),
   });
   return await projectCommand(positionals.slice(1), json);

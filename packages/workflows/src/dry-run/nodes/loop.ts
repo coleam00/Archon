@@ -95,6 +95,7 @@ export async function simulateLoop(
   let previous = '';
   const template = await loadLoopTemplate(node, ctx);
   let resolvedText = template;
+  let last: NodeOutput | undefined;
   for (let current = 1; current <= node.loop.max_iterations; current++) {
     resolvedText = resolveText(template, ctx, outputs, 'prompt', previous);
     const stub = stubFor(node, ctx);
@@ -103,6 +104,7 @@ export async function simulateLoop(
       return;
     }
     const hydrated = completedOutput(node, stub);
+    last = hydrated;
     previous = hydrated.output;
     const completion = loopIterationCompletes(node.loop, hydrated);
     if (completion.kind !== 'incomplete') {
@@ -119,6 +121,20 @@ export async function simulateLoop(
       });
       return;
     }
+  }
+  if (node.loop.on_exhausted === 'complete' && last !== undefined) {
+    outputs.set(node.id, last);
+    ctx.trace.push({
+      nodeId: node.id,
+      nodeType: 'loop',
+      state: 'stubbed',
+      reason: `reached max iterations (${String(node.loop.max_iterations)}) ${describeUnmetCompletion(node.loop)}; completed with the last output (on_exhausted: complete)`,
+      resolvedText,
+      output: previous,
+      ...(iteration ? { iteration } : {}),
+      ...withResolution(node, ctx),
+    });
+    return;
   }
   recordFailed(
     node,

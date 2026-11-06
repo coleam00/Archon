@@ -292,7 +292,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (text.startsWith('pr list')) {
     // gh applies the head and state filters server side.
-    const listed = exists && pr.state === 'OPEN' && pr.headRefName === argv[argv.indexOf('--head') + 1];
+    const state = argv.includes('--state') ? argv[argv.indexOf('--state') + 1] : 'open';
+    const listed = exists && (state === 'all' || pr.state === 'OPEN') && pr.headRefName === argv[argv.indexOf('--head') + 1];
     return result(0, JSON.stringify(listed ? [project()] : []));
   }
   if (text.startsWith('pr view') && argv.includes('--jq')) return result(0, String(pr.headRefOid));

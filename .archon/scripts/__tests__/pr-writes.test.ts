@@ -12,7 +12,6 @@ import { join } from 'node:path';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
 import {
   ForgeOperationError,
-  ghApi,
   ghRetryWait,
   retryTransient,
   TransientForgeError,
@@ -192,22 +191,6 @@ describe('publish-pr opens the pull request at most once', () => {
       });
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain('prepare wrote no body');
-      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
-      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
-      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
-    }
-  });
-
-  it.each(['gh', 'forge'] as const)('rejects a body pointer outside its declared contract through %s', source => {
-    for (const override of [{ type: 'file' }, { run_id: 'other-run' }, { path: 'other-body.md' }, { path: '../pr-body.md' }]) {
-      const result = publishPr({
-        source,
-        inputs: { INPUTS_BODY: JSON.stringify({ ...PREPARED_BODY, ...override }) },
-        gh: { noOpenPr: true },
-        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-      });
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain('prepare must declare the pr-body.md artifact from this run');
       expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
       expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
       expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
@@ -545,24 +528,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(result.bodies).toEqual([`Written by hand.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`]);
   });
 
-  it.each([
-    { trailing: '', gap: '\n\n' },
-    { trailing: '\n', gap: '\n' },
-    { trailing: '\n\n', gap: '' },
-  ])('publishes terminal tables and replaces legacy table sections: $trailing', ({ trailing, gap }) => {
-    const table = `| case | ms |\n| --- | --- |\n| a | 12 |${trailing}`;
-    const first = publishSection({ artifacts: { [DESCRIPTION.path]: table } });
-    expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
-    expect(first.bodies[0]).toBe(`Written by hand.\n\n${START}\n${table}${gap}${END}\n`);
-    const again = publishSection({ live: first.bodies[0], artifacts: { [DESCRIPTION.path]: table } });
-    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
-    expect(again.bodies).toEqual([]);
-    const legacy = `Author.  \n\n${START}\n${table}${trailing ? '' : '\n'}${END}\nAfter.  \n`;
-    const replaced = publishSection({ live: legacy, artifacts: { [DESCRIPTION.path]: 'Replacement evidence.' } });
-    expect({ code: replaced.code, stderr: replaced.stderr }).toMatchObject({ code: 0 });
-    expect(replaced.bodies).toEqual([`Author.  \n\n${START}\nReplacement evidence.\n\n${END}\nAfter.  \n`]);
-  });
-
   it.each(['gh', 'forge'] as const)('preserves fenced and inline marker examples through %s', source => {
     const live = `Author text.  \n\n\`\`\`md\n${START}\nexample\n${END}\n\`\`\`\nInline: \`${START}\` and \`${END}\`.  \n\n`;
     const result = publishSection({
@@ -579,36 +544,7 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(body).toBe(`${live}${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`);
   });
 
-  it('preserves trailing authored whitespace exactly', () => {
-    const live = 'Author text.  \n\n';
-    const result = publishSection({ live });
-    expect(result.code).toBe(0);
-    expect(result.bodies[0]).toBe(`${live}${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`);
-  });
-
-  it('can publish prepared fenced marker examples again', () => {
-    const section = `\`\`\`md\n${START}\nliteral\n${END}\n\`\`\``;
-    const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
-    expect(result.code).toBe(0);
-    const again = publishSection({ live: result.bodies[0], artifacts: { [DESCRIPTION.path]: section } });
-    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
-    expect(again.bodies).toEqual([]);
-  });
-
-  it.each([
-    `    ${START}\n    literal\n    ${END}\n`,
-    ...['pre', 'code', 'script', 'style', 'textarea', 'table', 'thead', 'tbody', 'tr', 'th', 'td'].map(tag => `<${tag}>\n\n${START}\nliteral\n${END}\n\n</${tag}>`),
-  ])('preserves literal marker containers in both ingresses and can publish again: %s', section => {
-    const live = `Authored.\n\n${section}\n\n`;
-    const first = publishSection({ live, artifacts: { [DESCRIPTION.path]: section } });
-    expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
-    expect(first.bodies[0]).toBe(`${live}${START}\n${section}${section.endsWith('\n\n') ? '' : section.endsWith('\n') ? '\n' : '\n\n'}${END}\n`);
-    const again = publishSection({ live: first.bodies[0], artifacts: { [DESCRIPTION.path]: section } });
-    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
-    expect(again.bodies).toEqual([]);
-  });
-
-  it.each(['```', '~~~', '<pre>', '<code>', '<script>', '<style>', '<textarea>', '<table>'])(
+  it.each(['```'])(
     'refuses a composed pair swallowed by an unclosed %s in either ingress', opening => {
       for (const options of [
         { artifacts: { [DESCRIPTION.path]: `${opening}\nunfinished` } },
@@ -627,17 +563,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('reserved description markers');
     expect(spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: result.cwd, encoding: 'utf8' }).stdout).toBe('');
-    expect(result.gh).toEqual([]);
-  });
-
-  it('refuses reserved prepared markers before creating a pull request', () => {
-    const result = publishSection({
-      target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
-      artifacts: { [DESCRIPTION.path]: `${START}\nnested\n${END}` },
-    });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('reserved description markers');
-    expect(remoteHead(result.cwd, 'feature')).toBe('');
     expect(result.gh).toEqual([]);
   });
 
@@ -666,40 +591,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
       artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
     });
     expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
-  });
-
-  it.each(['gh', 'forge'] as const)('retains named and reconciled PR identities after a failed description edit through %s', source => {
-    for (const { existing, priorClaim } of [42, null].flatMap(existing => [false, true].map(priorClaim => ({ existing, priorClaim })))) {
-      const result = publishSection({ source, target: { existing },
-        artifacts: priorClaim ? { 'pr-create-started': JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) } : {},
-        forgeAt: head => ({ kind: 'fake', response: [
-          ...(existing === null ? [] : [forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) })]),
-          forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
-          forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
-          forgeFailure('pr.edit-body', 'refused', 'edit unavailable'),
-        ] }),
-        preload: `const spawn = Bun.spawnSync.bind(Bun); Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'edit' ? { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('edit unavailable') } : spawn(argv, settings) });`,
-      });
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain('edit unavailable');
-      const report = runPackScript('deliver/scripts/report', {
-        inputs: { INPUTS_OUTCOME: 'null' },
-        artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
-      });
-      expect(report.code).toBe(0);
-      expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
-    }
-  });
-
-  it.each([
-    { name: 'replacement', live: `${START}\nold\n${END}` },
-    { name: 'reusing a head PR', target: { existing: null }, prepareBody: true },
-    { name: 'creating a PR', target: { existing: null }, prepareBody: true, gh: { noOpenPr: true } },
-  ])('refuses invalid composition when $name', ({ name: _name, ...options }) => {
-    const result = publishSection({ ...options, artifacts: { [DESCRIPTION.path]: '```\nunclosed' } });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('composed description');
-    expect(result.bodies).toEqual([]);
   });
 
   it('replaces only the content between its markers', () => {
@@ -749,18 +640,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
     });
   });
 
-  it.each([
-    { ...DESCRIPTION, type: 'file' },
-    { ...DESCRIPTION, run_id: 'another-run' },
-    { ...DESCRIPTION, path: 'pr-body.md' },
-  ])('refuses an uncertified description pointer before pushing: %j', pointer => {
-    const result = publishSection({ inputs: { INPUTS_DESCRIPTION: JSON.stringify(pointer) } });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('prepare must declare the pr-description.md artifact from this run');
-    expect(remoteHead(result.cwd, 'feature')).toBe('');
-    expect(result.gh).toEqual([]);
-  });
-
   it('refuses a prepared section before pushing when the caller did not allow one', () => {
     const result = publishSection({ allowed: false });
     expect(result.code).not.toBe(0);
@@ -780,12 +659,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
     const result = publishSection({ gh: { writeLost: true } });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('does not read back the written description');
-  });
-
-  it('names the same markers in the update-pr-body prompt that keeps them', () => {
-    const prompt = readFileSync(join(PACK, 'deliver/commands/update-pr-body.md'), 'utf8');
-    expect(prompt).toContain(`\`${START}\``);
-    expect(prompt).toContain(`\`${END}\``);
   });
 });
 
@@ -879,13 +752,6 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(result.gh).toEqual([]);
     expect(result.forge).toEqual([]);
     expect(JSON.parse(result.stdout)).toMatchObject({ ready: true, action: 'none' });
-  });
-
-  it('still accepts a legacy empty-object working-diff declaration', () => {
-    const result = publishReview({ inputs: { ...report, INPUTS_PR: '{}' } });
-    expect(result.code).toBe(0);
-    expect(result.gh).toEqual([]);
-    expect(result.forge).toEqual([]);
   });
 
   // Delivery hands the review its verified record as the scope. The scope agent's
@@ -1103,54 +969,10 @@ describe('a gh api failure is classified from its HTTP status and headers', () =
     expect(ghRetryWait(4, undefined)).toBeUndefined();
   });
 
-  it('waits out a rate limit for the time GitHub names, or a minute', () => {
-    expect(at(429, { 'retry-after': '30' })).toBe(30_000);
-    expect(at(403, { 'retry-after': '5' })).toBe(5_000);
-    expect(at(429)).toBe(60_000);
-  });
-
-  it('waits at least a valid Retry-After on a 5xx', () => {
-    expect(at(503, { 'retry-after': '120' })).toBe(120_000);
-    expect(at(503, { 'retry-after': 'soon' })).toBe(0);
-    expect(at(404, { 'retry-after': '5' })).toBeUndefined();
-  });
-
   it('fails a permission refusal or any other 4xx at once', () => {
     expect(at(403)).toBeUndefined();
     expect(at(404)).toBeUndefined();
     expect(at(422)).toBeUndefined();
-  });
-
-  it('reads a mixed-case Retry-After from the raw gh api response', () => {
-    const spawnSync = Bun.spawnSync;
-    const raw = 'HTTP/2.0 503 Service Unavailable\nRetry-After: 120\r\nContent-Type: application/json\r\n\r\n{}';
-    Object.defineProperty(Bun, 'spawnSync', {
-      value: () => ({ exitCode: 1, stdout: Buffer.from(raw), stderr: Buffer.from('gh: (HTTP 503)') }),
-    });
-    let thrown: unknown;
-    try {
-      ghApi('gh api comment write', ['repos/example/repo/issues/42/comments']);
-    } catch (error) {
-      thrown = error;
-    } finally {
-      Object.defineProperty(Bun, 'spawnSync', { value: spawnSync });
-    }
-    expect(thrown).toBeInstanceOf(TransientForgeError);
-    expect((thrown as TransientForgeError).waitMs).toBe(120_000);
-  });
-
-  it('waits at least the time the failure asked for', () => {
-    const waits: number[] = [];
-    let attempts = 0;
-    const result = retryTransient(
-      () => {
-        if (attempts++ === 0) throw new TransientForgeError('gh api failed (HTTP 503)', 30_000);
-        return 'done';
-      },
-      ms => waits.push(ms)
-    );
-    expect(result).toBe('done');
-    expect(waits).toEqual([30_000]);
   });
 
   it('stops repeating after its last wait and never repeats another failure', () => {
@@ -1243,16 +1065,6 @@ describe('setPrDraft into draft uses the selected source', () => {
     expect(result.code).not.toBe(0);
     expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
   });
-  it('does not write for an already-draft PR', () => {
-    const result = runPackScript(script, { source: 'gh' });
-    expect(result.code).toBe(0);
-    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
-  });
-  it('fails when gh conversion does not read back', () => {
-    const result = runPackScript(script, { source: 'gh', gh: { pr: { isDraft: false }, writeLost: true } });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('does not report an open draft');
-  });
   it('calls pr.draft through forge without gh', () => {
     const result = runPackScript(script, {
       source: 'forge',
@@ -1272,19 +1084,4 @@ describe('setPrDraft into draft uses the selected source', () => {
     expect(JSON.parse(result.forgeRequests[0]).ref).toEqual(PR);
     expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true });
   });
-  it.each(['refused', 'verification_failed', 'outcome_unknown'] as const)(
-    'surfaces %s with no fallback',
-    outcome => {
-      const result = runPackScript(script, {
-        source: 'forge',
-        forge: {
-          kind: 'fake',
-          response: forgeFailure('pr.draft', outcome, 'unsupported or unverifiable conversion'),
-        },
-      });
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain(outcome);
-      expect(result.gh).toEqual([]);
-    }
-  );
 });

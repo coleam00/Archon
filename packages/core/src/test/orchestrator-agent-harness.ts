@@ -461,6 +461,8 @@ mock.module('../workflows/store-adapter', () => ({
     providers: providerRegistry,
     store: {
       getCodebaseEnvVars: async () => ({}),
+      getWorkflowRun: mockGetWorkflowRunDb,
+      findWorkflowRunsByIdPrefix: mockFindWorkflowRunsByIdPrefix,
       createWorkflowRun: mockCreateWorkflowRun,
       updateWorkflowRun: async () => {},
       failWorkflowRun: mockFailPreparedRun,
@@ -484,6 +486,8 @@ mock.module('../workflows/store-adapter', () => ({
 }));
 
 mock.module('../db/workflows', () => ({
+  getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
+  getWorkflowRunsByIds: mock(async () => []),
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
   getWorkflowRun: mockGetWorkflowRunDb,
   getWorkflowRunForAttention: mockGetWorkflowRunDb,
@@ -556,7 +560,14 @@ mock.module('../db/messages', () => ({
   listMessages: mock(() => Promise.resolve([])),
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
+const { VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } = await import(
+  '@archon/isolation'
+);
 mock.module('@archon/isolation', () => ({
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+  dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
+  releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,

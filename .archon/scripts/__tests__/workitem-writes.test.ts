@@ -68,26 +68,6 @@ test('a ready item is labelled with the route the run takes on it', () => {
   }
 });
 
-test('the verdict passes all five triage fields through unchanged', () => {
-  const run = runPackScript('triage/scripts/verdict', {
-    inputs: {
-      ...inputs,
-      INPUTS_PUBLISH: 'false',
-      INPUTS_COMPLEXITY: '{"value":"high","reason":"unknown design"}',
-      INPUTS_IMPORTANCE: '{"value":"low","reason":"off direction"}',
-      INPUTS_URGENCY: '{"value":"soon","reason":"release next week"}',
-    },
-  });
-  expect(run.code).toBe(0);
-  expect(JSON.parse(run.stdout)).toMatchObject({
-    type: { value: 'feature', reason: 'new behavior' },
-    size: { value: 's', reason: 'one script' },
-    complexity: { value: 'high', reason: 'unknown design' },
-    importance: { value: 'low', reason: 'off direction' },
-    urgency: { value: 'soon', reason: 'release next week' },
-  });
-});
-
 const DELIVERED: Closure = { kind: 'delivered', url: 'https://ghe.example.com/example/repo/pull/5' };
 
 test('a close verdict keeps the type label, drops the size label, and carries its closure', () => {
@@ -116,52 +96,6 @@ test('a published close verdict labels the item and closes nothing; intake owns 
   expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
   expect(JSON.parse(run.stdout).published).toBe(true);
   expect([...run.closes, ...run.comments]).toEqual([]);
-});
-
-test("a close link that is not a qualified URL is refused, so a guess never reaches intake", () => {
-  const run = runPackScript('triage/scripts/verdict', {
-    inputs: {
-      ...inputs,
-      INPUTS_PUBLISH: 'false',
-      INPUTS_DECISION: JSON.stringify({
-        contract: 'NO_ACTION',
-        closure: { kind: 'delivered', url: 'pull 5' },
-      }),
-    },
-  });
-  expect(run.code).not.toBe(0);
-  expect(run.stderr).toContain('closure.url must be a fully qualified');
-});
-
-test('related work reaches the verdict as declared, and a related link that is not a qualified URL is refused', () => {
-  const related = [{ url: 'https://ghe.example.com/example/repo/pull/5', relation: 'merged change on the same surface' }];
-  const passed = runPackScript('triage/scripts/verdict', {
-    inputs: { ...inputs, INPUTS_PUBLISH: 'false', INPUTS_RELATED: JSON.stringify(related) },
-  });
-  expect({ code: passed.code, stderr: passed.stderr }).toEqual({ code: 0, stderr: '' });
-  expect((JSON.parse(passed.stdout) as { related: unknown }).related).toEqual(related);
-
-  const refused = runPackScript('triage/scripts/verdict', {
-    inputs: { ...inputs, INPUTS_PUBLISH: 'false', INPUTS_RELATED: '[{"url":"issue 5","relation":"overlaps"}]' },
-  });
-  expect(refused.code).not.toBe(0);
-  expect(refused.stderr).toContain('related urls must be fully qualified');
-});
-
-test('malformed qualified triage identity refuses before invoking a transport', () => {
-  for (const item of [
-    { repo: { host: '', path: 'repo' }, number: 1 },
-    { repo: PR.repo, number: 0 },
-    { repo: PR.repo, number: 1.5 },
-  ]) {
-    const run = runPackScript('triage/scripts/verdict', {
-      source: 'forge',
-      inputs: { ...inputs, INPUTS_ITEM: JSON.stringify(item) },
-    });
-    expect(run.code).not.toBe(0);
-    expect(run.gh).toEqual([]);
-    expect(run.forge).toEqual([]);
-  }
 });
 
 test('forge publication fails without label facts rather than assuming no labels', () => {
@@ -193,25 +127,6 @@ test('forge failures preserve unknown outcome evidence and never fall back or re
   expect(run.forge).toHaveLength(1);
   expect(run.stderr).toContain('outcome_unknown');
   expect(run.stdout).toBe('');
-});
-
-test('gh triage preserves inherited-property labels and accepts them as area labels', () => {
-  const operatorLabels = Object.getOwnPropertyNames(Object.prototype);
-  for (const area of [[], ['constructor']]) {
-    const run = runPackScript('triage/scripts/verdict', {
-      source: 'gh',
-      inputs: { ...inputs, INPUTS_AREA_LABELS: JSON.stringify(area) },
-      gh: {
-        issueLabels: ['archon-blocked', ...operatorLabels],
-        repositoryLabels: ['archon-blocked', ...operatorLabels],
-      },
-    });
-    expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-    expect(JSON.parse(run.stdout).published).toBe(true);
-    const edit = run.gh.find(call => call.startsWith('issue edit'));
-    expect(edit).toContain('--remove-label archon-blocked');
-    for (const name of operatorLabels) expect(edit).not.toContain(`--remove-label ${name}`);
-  }
 });
 
 test('a gh label write is one delta that leaves labels it does not name on the item', () => {

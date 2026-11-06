@@ -28,7 +28,7 @@ export async function expandScope(
   files: Map<string, ScopeFile>
 ): Promise<{ workflows: WorkflowWithSource[]; errors: WorkflowLoadError[] }> {
   const errors: ParsedWorkflowLoadError[] = [];
-  await validateNamedScripts(context, files, errors);
+  const namedScripts = await validateNamedScripts(context, files, errors);
   const duplicateNames = reportDuplicateNames(files, errors);
   attachGlobalMcpDirectories(files);
 
@@ -52,7 +52,8 @@ export async function expandScope(
   const { workflows: expandedByName, errors: expansionErrors } = expandWorkflowIncludes(
     rawByName,
     commandContents,
-    [...context.allErrors, ...errors]
+    [...context.allErrors, ...errors],
+    namedScripts
   );
   // Re-key expansion errors from workflow name to the includer's real filename.
   errors.push(

@@ -65,8 +65,14 @@ export const loopControlSchema = z
       .string()
       .refine(isNonBlank, "'loop.until' must be a non-blank completion signal string")
       .optional(),
-    /** Maximum iterations allowed; exceeding this fails the node. */
+    /** Maximum iterations allowed; reaching it unmet fails the node unless `on_exhausted`. */
     max_iterations: z.number().int().positive("'loop.max_iterations' must be a positive integer"),
+    /**
+     * What reaching `max_iterations` without meeting a completion channel does: `fail`
+     * (the default) fails the node; `complete` completes it with the last iteration's
+     * output, unchanged in shape. Only exhaustion completes: a failing iteration still fails.
+     */
+    on_exhausted: z.enum(['fail', 'complete']).optional(),
     /** Whether to start fresh session each iteration (default: false). */
     fresh_context: z.boolean().default(false),
     /**

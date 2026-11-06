@@ -1778,7 +1778,7 @@ export interface paths {
     put?: never;
     /**
      * Run a workflow via the orchestrator (JSON or multipart with file uploads)
-     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected. JSON requests may supply `adopt_run_id` or `supersedes_run_id`, but not both. If dispatch would continue an existing run, either declaration is refused before continuation or its fresh fallback. The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or use a conversation with no open run. An accepted fresh supersede records `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
+     * @description Accepts `application/json` with `{ conversationId, message, inputs?, config?, tiers?, aliases? }` or `multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, and optional file attachments (max 5 files, 10 MB each). `inputs` supplies values for the workflow's declared `inputs:` (#2554); it is validated against the declaration before any worktree, clone, or AI cost, so a missing required input or an undeclared key is refused up front. `config` supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. Caller-supplied filesystem config paths are rejected. JSON requests may supply `adopt_run_id` or `supersedes_run_id`, but not both. Unique prefixes resolve in the conversation selected project; full IDs select the exact run. Missing project scope for a prefix, unknown or ambiguous IDs, and non-terminal targets return HTTP 400 before queuing; ambiguity errors list candidates. Execution rechecks targets after queuing. If dispatch would continue an existing run, either declaration is refused before continuation or its fresh fallback. Execution-time refusals arrive on conversation SSE after an HTTP 200 accepted response. The refusal names the existing run: resume it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or use a conversation with no open run. An accepted fresh supersede records `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
      */
     post: {
       parameters: {
@@ -3258,6 +3258,10 @@ export interface paths {
           subject?: string;
           /** @description Only records from this codebase. */
           codebaseId?: string;
+          /** @description An ISO date or time. Each group also reports records whose producing runs started before it against those started at or after it. */
+          compare?: string;
+          /** @description A node id. Each group also reports its records split by the model label that ran this node in their producing runs and the runs below them. Not combined with `compare`; a node no producing run ran is a 400 listing the AI nodes they ran. */
+          byModel?: string;
         };
         header?: never;
         path?: never;
@@ -3274,8 +3278,65 @@ export interface paths {
             'application/json': components['schemas']['MetricsReport'];
           };
         };
-        /** @description Malformed window */
+        /** @description Malformed window or compare cut, compare with byModel, or a byModel node no producing run ran */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/metric-views': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The overview cards workflow packs declare */
+    get: {
+      parameters: {
+        query?: {
+          /** @description Include this codebase's project packs. Without it, only bundled, home and installed packs. */
+          codebaseId?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['MetricViews'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
           headers: {
             [name: string]: unknown;
           };
@@ -3674,6 +3735,74 @@ export interface paths {
           };
           content: {
             'application/json': components['schemas']['ConfigResponse'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/codebases/{id}/config': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get a project's merged configuration (safe subset)
+     * @description Defaults, ~/.archon/config.yaml and the project's .archon/config.yaml, merged and with secrets removed. `envKeys` names the keys of the `env:` block; values are never returned.
+     */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The project's merged configuration */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProjectConfigResponse'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The global or project config file is invalid */
+        422: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
           };
         };
         /** @description Server error */
@@ -4722,7 +4851,15 @@ export interface components {
           options: {
             id: string;
             label?: string;
+            does?: string;
+            value?: unknown;
           }[];
+          recommendation?: {
+            option: string;
+            why: string;
+            /** @enum {string} */
+            confidence?: 'low' | 'medium' | 'high';
+          };
         }
       | {
           /** @enum {string} */
@@ -5380,6 +5517,8 @@ export interface components {
       loop?: {
         until?: string;
         max_iterations: number;
+        /** @enum {string} */
+        on_exhausted?: 'fail' | 'complete';
         /** @default false */
         fresh_context: boolean;
         until_bash?: string;
@@ -5393,6 +5532,8 @@ export interface components {
       loop_group?: {
         until?: string;
         max_iterations: number;
+        /** @enum {string} */
+        on_exhausted?: 'fail' | 'complete';
         /** @default false */
         fresh_context: boolean;
         until_bash?: string;
@@ -5432,7 +5573,17 @@ export interface components {
               | {
                   id: string;
                   label?: string;
+                  does?: string;
+                  value?: unknown;
                 }[]
+              | string;
+            recommendation?:
+              | {
+                  option: string;
+                  why: string;
+                  /** @enum {string} */
+                  confidence?: 'low' | 'medium' | 'high';
+                }
               | string;
             labels?: {
               [key: string]: string;
@@ -6209,7 +6360,15 @@ export interface components {
           options?: {
             id: string;
             label?: string;
+            does?: string;
+            value?: unknown;
           }[];
+          recommendation?: {
+            option: string;
+            why: string;
+            /** @enum {string} */
+            confidence?: 'low' | 'medium' | 'high';
+          };
           answer?:
             | {
                 text: string;
@@ -6343,7 +6502,15 @@ export interface components {
           options?: {
             id: string;
             label?: string;
+            does?: string;
+            value?: unknown;
           }[];
+          recommendation?: {
+            option: string;
+            why: string;
+            /** @enum {string} */
+            confidence?: 'low' | 'medium' | 'high';
+          };
           answer?:
             | {
                 text: string;
@@ -6421,7 +6588,15 @@ export interface components {
           options: {
             id: string;
             label?: string;
+            does?: string;
+            value?: unknown;
           }[];
+          recommendation?: {
+            option: string;
+            why: string;
+            /** @enum {string} */
+            confidence?: 'low' | 'medium' | 'high';
+          };
         }
       | {
           /** @enum {string} */
@@ -6596,7 +6771,15 @@ export interface components {
             options: {
               id: string;
               label?: string;
+              does?: string;
+              value?: unknown;
             }[];
+            recommendation?: {
+              option: string;
+              why: string;
+              /** @enum {string} */
+              confidence?: 'low' | 'medium' | 'high';
+            };
           }
         | {
             /** @enum {string} */
@@ -7297,10 +7480,144 @@ export interface components {
         unit: string;
         calibrates: string | null;
         headline_instrument: string | null;
+        headline_measured_by: string[];
         instruments: {
           instrument: string | null;
+          measured_by: string[];
           value: number;
           n: number;
+          interval: {
+            low: number;
+            high: number;
+          } | null;
+          cost: {
+            usd: number | null;
+            input_tokens: number | null;
+            output_tokens: number | null;
+            runs: number;
+            runs_without_cost: number;
+            runs_without_tokens: number;
+            runs_partial_cost: number;
+            runs_missing: number;
+          };
+          compare?: {
+            at: string;
+            before: {
+              value: number | null;
+              n: number;
+              interval: {
+                low: number;
+                high: number;
+              } | null;
+            };
+            after: {
+              value: number | null;
+              n: number;
+              interval: {
+                low: number;
+                high: number;
+              } | null;
+            };
+            delta: number | null;
+            delta_interval: {
+              low: number;
+              high: number;
+            } | null;
+            separated: boolean;
+            straddling: number;
+            unattributed: number;
+          };
+          by_model?: {
+            node: string;
+            groups: (
+              | {
+                  /** @enum {string} */
+                  split: 'model';
+                  label: string;
+                  value: number;
+                  n: number;
+                  interval: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  cost: {
+                    usd: number | null;
+                    input_tokens: number | null;
+                    output_tokens: number | null;
+                    runs: number;
+                    runs_without_cost: number;
+                    runs_without_tokens: number;
+                    runs_partial_cost: number;
+                    runs_missing: number;
+                  };
+                  requested_models: string[];
+                  resolved_models: string[];
+                  delta_vs_rest: number | null;
+                  delta_interval_vs_rest: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  separated: boolean;
+                }
+              | {
+                  /** @enum {string} */
+                  split: 'mixed';
+                  value: number;
+                  n: number;
+                  interval: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  cost: {
+                    usd: number | null;
+                    input_tokens: number | null;
+                    output_tokens: number | null;
+                    runs: number;
+                    runs_without_cost: number;
+                    runs_without_tokens: number;
+                    runs_partial_cost: number;
+                    runs_missing: number;
+                  };
+                  requested_models: string[];
+                  resolved_models: string[];
+                  delta_vs_rest: number | null;
+                  delta_interval_vs_rest: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  separated: boolean;
+                }
+              | {
+                  /** @enum {string} */
+                  split: 'none';
+                  value: number;
+                  n: number;
+                  interval: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  cost: {
+                    usd: number | null;
+                    input_tokens: number | null;
+                    output_tokens: number | null;
+                    runs: number;
+                    runs_without_cost: number;
+                    runs_without_tokens: number;
+                    runs_partial_cost: number;
+                    runs_missing: number;
+                  };
+                  requested_models: string[];
+                  resolved_models: string[];
+                  delta_vs_rest: number | null;
+                  delta_interval_vs_rest: {
+                    low: number;
+                    high: number;
+                  } | null;
+                  separated: boolean;
+                }
+            )[];
+            unattributed: number;
+          };
           latest: {
             value: number;
             at: string;
@@ -7345,6 +7662,54 @@ export interface components {
             };
           }
       )[];
+    };
+    MetricViews: {
+      packs: {
+        pack: string;
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        names: {
+          [key: string]: string;
+        };
+        cards: (
+          | {
+              /** @enum {string} */
+              shape: 'count';
+              title: string;
+              metric: string;
+              breakdown?: {
+                metric: string;
+                label: string;
+              }[];
+            }
+          | {
+              /** @enum {string} */
+              shape: 'ratio';
+              title: string;
+              numerator: string;
+              denominator: string;
+              denominator_label: string;
+              calibration?: {
+                metric: string;
+                label: string;
+                rough_below: number;
+              };
+            }
+          | {
+              /** @enum {string} */
+              shape: 'cost_per';
+              title: string;
+              metric: string;
+              cost_of?: string;
+            }
+        )[];
+      }[];
+      errors: {
+        pack: string;
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        error: string;
+      }[];
     };
     ValidateWorkflowResponse: {
       valid: boolean;
@@ -7420,6 +7785,10 @@ export interface components {
       small?: components['schemas']['TierEntry'];
       medium?: components['schemas']['TierEntry'];
       large?: components['schemas']['TierEntry'];
+    };
+    ProjectConfigResponse: {
+      config: components['schemas']['SafeConfig'];
+      envKeys: string[];
     };
     UpdateAssistantConfigBody: {
       assistant?: string;

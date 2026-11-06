@@ -607,3 +607,110 @@ describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
     expect(second.errors.find(e => e.filename === 'parent')?.error).toContain("binding 'mode'");
   });
 });
+
+// Settings belong to the run: an included block reads only what its includer passes.
+// A raw `INPUTS_<NAME>` read of one of the block's own pack settings would otherwise get
+// the including run's value, so it fails the load like the `$INPUTS.<name>` form.
+describe("expandWorkflowIncludes — an included block's raw reads of its pack settings", () => {
+  const betaPack = {
+    key: 'beta',
+    source: 'project' as const,
+    settings: { tone: { type: 'string' as const } },
+  };
+  const block = (nodes: unknown[]): ReturnType<typeof wf> =>
+    wf('beta-block', nodes, { pack: betaPack });
+  const expand = (
+    blockNodes: unknown[],
+    withMap?: Record<string, string>
+  ): ReturnType<typeof expandWorkflowIncludes> =>
+    expandWorkflowIncludes(
+      mapOf(
+        block(blockNodes),
+        wf('host', [
+          { id: 'blk', include: 'beta-block', ...(withMap !== undefined ? { with: withMap } : {}) },
+        ])
+      )
+    );
+
+  const surfaces: { surface: string; node: unknown; read: string }[] = [
+    { surface: 'bash', node: { id: 'shell', bash: 'echo "$INPUTS_TONE"' }, read: 'shell' },
+    {
+      surface: 'inline script',
+      node: { id: 'shell', runtime: 'bun', script: 'console.log(process.env.INPUTS_TONE)' },
+      read: 'shell',
+    },
+    {
+      surface: 'loop until_bash',
+      node: {
+        id: 'shell',
+        loop: {
+          prompt: 'go',
+          until: 'DONE',
+          max_iterations: 1,
+          until_bash: 'test -n "${INPUTS_TONE}"',
+        },
+      },
+      read: 'shell',
+    },
+    {
+      surface: 'loop_group until_bash',
+      node: {
+        id: 'shell',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          until_bash: 'test -n "$INPUTS_TONE"',
+          nodes: [{ id: 'body', bash: 'echo body' }],
+        },
+      },
+      read: 'shell',
+    },
+    {
+      surface: 'loop_group body',
+      node: {
+        id: 'group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 1,
+          nodes: [{ id: 'shell', bash: 'echo "$INPUTS_TONE"' }],
+        },
+      },
+      read: 'shell',
+    },
+  ];
+
+  for (const { surface, node, read } of surfaces) {
+    test(`a ${surface} read the includer does not pass fails the load`, () => {
+      const { workflows, errors } = expand([node]);
+      expect(workflows.has('host')).toBe(false);
+      const message = errors.find(error => error.filename === 'host')?.error;
+      expect(message).toContain("Node 'blk'");
+      expect(message).toContain(`included node '${read}'`);
+      expect(message).toContain("'INPUTS_TONE'");
+      expect(message).toContain("(pack setting 'tone')");
+    });
+
+    test(`a ${surface} read the includer passes loads`, () => {
+      const { workflows, errors } = expand([node], { tone: 'passed' });
+      expect(errors).toHaveLength(0);
+      expect(workflows.has('host')).toBe(true);
+    });
+  }
+
+  test("a script node's own with: binding of the setting loads", () => {
+    const { errors } = expand([
+      {
+        id: 'shell',
+        runtime: 'bun',
+        script: 'console.log(process.env.INPUTS_TONE)',
+        with: { tone: 'own' },
+      },
+    ]);
+    expect(errors).toHaveLength(0);
+  });
+
+  test('a raw read of a name that is not a pack setting is not this check', () => {
+    const { errors } = expand([{ id: 'shell', bash: 'echo "$INPUTS_MOOD"' }]);
+    expect(errors).toHaveLength(0);
+  });
+});

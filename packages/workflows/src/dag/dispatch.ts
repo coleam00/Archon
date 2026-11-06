@@ -12,7 +12,7 @@ import { runExecNode } from './nodes/exec/exec';
 import { dispatchAgentNode } from './nodes/agent/dispatch';
 import { snapshotBodySessionCursorAncestry } from './pause';
 import type { DagNode } from '../schemas';
-import { writeNodeArtifactsListing } from '../artifacts-index';
+import { writeInvocationListings } from '../invocation-listings';
 import { assistantModelDefaults, resolveNodeModelScope } from '../node-model-resolution';
 import { aiConfigTextResolver } from './references';
 import { resolveNodeProviderAndModel } from './provider-resolution';
@@ -39,10 +39,7 @@ export async function dispatchNode(
       // Materialized before provider resolution so AI-configuration text can
       // reference the listing. executeLoopNode materializes its own fresh
       // observation for each iteration's prompt and until_bash.
-      const typedArtifactsFile = await writeNodeArtifactsListing(
-        ctx.artifactsDir,
-        ctx.workflowRun.id
-      );
+      const listings = await writeInvocationListings(ctx);
       // Loop node dispatch — manages its own AI sessions and iteration
       const {
         provider: loopProvider,
@@ -51,7 +48,7 @@ export async function dispatchNode(
         tier: resolvedLoopTier,
         effort: resolvedLoopEffort,
       } = await resolveNodeProviderAndModel(ctx, node, {
-        resolveAiText: aiConfigTextResolver(ctx, typedArtifactsFile),
+        resolveAiText: aiConfigTextResolver(ctx, listings),
         warnedProviderConflicts: ctx.warnedProviderConflicts,
       });
 
@@ -74,10 +71,7 @@ export async function dispatchNode(
     case 'loop_group': {
       // Materialized before provider resolution for the group's AI-configuration
       // text. Body nodes re-enter runLayers and establish their own observation.
-      const typedArtifactsFile = await writeNodeArtifactsListing(
-        ctx.artifactsDir,
-        ctx.workflowRun.id
-      );
+      const listings = await writeInvocationListings(ctx);
       // Loop-group node dispatch — manages its own subgraph iteration
       // (body is a sealed sub-DAG re-executed per iteration; the loop is
       // encapsulated inside this one node, keeping the outer DAG acyclic).
@@ -105,7 +99,7 @@ export async function dispatchNode(
       } = groupScope.provider === undefined
         ? groupScope
         : await resolveNodeProviderAndModel(ctx, node, {
-            resolveAiText: aiConfigTextResolver(ctx, typedArtifactsFile),
+            resolveAiText: aiConfigTextResolver(ctx, listings),
             warnedProviderConflicts: ctx.warnedProviderConflicts,
           });
 

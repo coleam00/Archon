@@ -2,6 +2,10 @@ import { z } from 'zod';
 import { chatApprovalDecisionSchema, chatAuthoredOutcomeSchema } from './run-events';
 
 const id = z.string().min(1);
+/** An attention option: a decision plus what choosing it does, which a plugin may show. */
+const chatAttentionOptionSchema = chatApprovalDecisionSchema.extend({
+  does: z.string().optional(),
+});
 const pausedRun = { runId: id, workflowName: id, nodeId: id, pauseId: id.optional() };
 
 /**
@@ -22,7 +26,15 @@ export const chatAttentionNoticeSchema = z.discriminatedUnion('type', [
     ...pausedRun,
     message: z.string(),
     form: z.enum(['message', 'approval', 'select', 'multi_select']),
-    options: z.array(chatApprovalDecisionSchema),
+    options: z.array(chatAttentionOptionSchema),
+    /** The option the workflow recommends and why; display only. */
+    recommendation: z
+      .object({
+        option: id,
+        why: z.string(),
+        confidence: z.enum(['low', 'medium', 'high']).optional(),
+      })
+      .optional(),
   }),
   z.object({
     type: z.literal('terminal'),

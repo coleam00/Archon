@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { IWorkflowStore } from '../store';
 import type { WorkflowStoreHarness } from '../store-conformance';
@@ -82,6 +83,41 @@ export function describeMetricRecordsConformance(getHarness: () => WorkflowStore
         [scoped.id, CONFORMANCE_CODEBASE_ID, 'loop_group'],
         [other.id, null, null],
       ]);
+    });
+  });
+
+  describe('runs by id', () => {
+    let store: IWorkflowStore;
+    beforeEach(() => {
+      store = getHarness().store;
+    });
+
+    test('returns the existing runs with their metadata and leaves out missing ids', async () => {
+      const run = await create(store, { metadata: { total_cost_usd: 0.25 } });
+      const other = await create(store);
+      const runs = await store.getWorkflowRunsByIds([run.id, randomUUID(), other.id, run.id]);
+      expect(runs.map(found => [found.id, found.metadata.total_cost_usd]).sort()).toEqual(
+        [
+          [run.id, 0.25],
+          [other.id, undefined],
+        ].sort()
+      );
+      expect(runs.find(found => found.id === run.id)?.started_at).toBeInstanceOf(Date);
+    });
+
+    test('finds a run whose id predates dashes, as the store returned it', async () => {
+      const legacy = await create(store, { id: randomUUID().replaceAll('-', '') });
+      expect((await store.getWorkflowRunsByIds([legacy.id])).map(found => found.id)).toEqual([
+        legacy.id,
+      ]);
+    });
+
+    test('finds runs past the first thousand ids', async () => {
+      const first = await create(store);
+      const last = await create(store);
+      const missing = Array.from({ length: 1000 }, () => randomUUID());
+      const runs = await store.getWorkflowRunsByIds([first.id, ...missing, last.id]);
+      expect(runs.map(found => found.id).sort()).toEqual([first.id, last.id].sort());
     });
   });
 }

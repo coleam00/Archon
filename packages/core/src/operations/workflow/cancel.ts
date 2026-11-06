@@ -1,9 +1,10 @@
+import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
 import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
-import type { OperationContext } from './context';
+import { releaseRunResources, type OperationContext } from './context';
 import {
   cancelByOperator,
   describeAbandonOwner,
@@ -57,7 +58,7 @@ async function confirmedRunContainer(
   run: WorkflowRun
 ): Promise<string | undefined> {
   if (!isContainerRun(run)) return undefined;
-  const envId = run.metadata?.isolation_env_id;
+  const envId = run.metadata?.[ISOLATION_ENV_ID_METADATA_KEY];
   if (typeof envId !== 'string' || envId.trim().length === 0) {
     throw new CancelRefusedError(
       'not_stopped',
@@ -129,9 +130,18 @@ export async function cancelWorkflow(
         `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
     );
   }
+  const cleanupWarnings = [...(recorded.cleanupWarnings ?? [])];
   // An output holder the stop left running may still write scratch.
-  if (!owner.cleanupWarnings?.length) await releaseRunScratch(run);
-  return { kind: 'stopped', pid: owner.pid, ...recorded };
+  if (!owner.cleanupWarnings?.length) {
+    await releaseRunScratch(run);
+    cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
+  }
+  return {
+    kind: 'stopped',
+    pid: owner.pid,
+    ...recorded,
+    ...(cleanupWarnings.length ? { cleanupWarnings } : {}),
+  };
 }
 
 /**

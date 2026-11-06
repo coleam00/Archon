@@ -10,7 +10,10 @@
  * - `patch` and `set` are for the SSE dispatcher and skill-layer optimistic
  *   updates only.
  * - After the last unsubscribe, `cache`/`errors` are deliberately retained so
- *   a remount reads warm; only the per-key version counter is released.
+ *   a remount reads warm; only the per-key version counter is released. A key
+ *   whose value goes stale without any server push (a relative time window)
+ *   passes `revalidateOnSubscribe`: its first subscriber still reads warm, and
+ *   reloads it in place.
  *   `invalidate()` fully releases subscriber-less keys.
  * - A resubscribe that arrives while a previous, abandoned load for the key is
  *   still in flight starts its OWN loader; the orphaned load can no longer
@@ -167,20 +170,30 @@ export function keysStartingWith(prefix: string): string[] {
  * Exported for tests; production code subscribes via `useEntity`, whose
  * `useSyncExternalStore` wiring guarantees the returned cleanup runs.
  */
+export interface SubscribeOptions {
+  revalidateOnSubscribe?: boolean;
+}
+
 export function subscribeKey(
   key: string,
   onStoreChange: Listener,
-  loader: () => Promise<unknown>
+  loader: () => Promise<unknown>,
+  options: SubscribeOptions = {}
 ): () => void {
   let subs = listeners.get(key);
   if (subs === undefined) {
     subs = new Set();
     listeners.set(key, subs);
   }
+  const first = subs.size === 0;
   subs.add(onStoreChange);
 
   loaders.set(key, loader);
-  ensureLoad(key);
+  if (options.revalidateOnSubscribe === true && first && cache.has(key) && !inflight.has(key)) {
+    runLoad(key, loader);
+  } else {
+    ensureLoad(key);
+  }
 
   return (): void => {
     const remainingSubs = listeners.get(key);
@@ -233,14 +246,19 @@ export interface EntityView<T> {
  * remount. `notify` is the store's change signal; `getSnapshot` reads the per-key
  * version counter (see below) so error transitions re-render too.
  */
-export function useEntity<T>(key: string, loader: () => Promise<T>): EntityView<T> {
+export function useEntity<T>(
+  key: string,
+  loader: () => Promise<T>,
+  options: SubscribeOptions = {}
+): EntityView<T> {
   const loaderRef = useRef(loader);
   loaderRef.current = loader;
+  const { revalidateOnSubscribe } = options;
 
   const subscribe = useCallback(
     (onStoreChange: () => void): (() => void) =>
-      subscribeKey(key, onStoreChange, () => loaderRef.current()),
-    [key]
+      subscribeKey(key, onStoreChange, () => loaderRef.current(), { revalidateOnSubscribe }),
+    [key, revalidateOnSubscribe]
   );
 
   // Snapshot the per-key version counter (a number bumped on every `notify`), not

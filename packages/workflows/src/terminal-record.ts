@@ -21,11 +21,22 @@ import {
 } from './schemas/workflow-run';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import {
+  nodeInvocationKey,
+  parseNodeInvocationKey,
   readNodeRecordData,
   readNodeRecordEvent,
   type ReadNodeRecordEvent,
 } from './node-record-reader';
-import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
+import {
+  nodeOutcomesListingSchema,
+  type NodeOutcome,
+  type NodeOutcomesListing,
+} from './schemas/node-outcomes';
+import {
+  nodeFailureKindSchema,
+  type NodeFailureKind,
+  type NodeInvocation,
+} from './schemas/node-execution';
 import type { FanOutOutcome } from './schemas/fan-out-outcome';
 
 export interface TerminalRecordEvent {
@@ -52,9 +63,15 @@ interface NodeEventFold {
   failureOrder: Map<string, number>;
 }
 
+/**
+ * Fold node-state events into one state per key. The terminal record keys by step path,
+ * so a loop body node keeps only its latest iteration; the node-outcome observation keys
+ * by invocation, so each iteration keeps its own entry. `node_id` is the step path either way.
+ */
 function foldNodeEvents(
   run: Pick<WorkflowRun, 'id' | 'metadata'>,
-  events: readonly TerminalRecordEvent[]
+  events: readonly TerminalRecordEvent[],
+  keyOf: (path: string, loopPath: NodeInvocation['loopPath']) => string = path => path
 ): NodeEventFold {
   const parsed = runGraphSchema.safeParse(run.metadata?.[RUN_GRAPH_METADATA_KEY]);
   const graph = parsed.success ? parsed.data : undefined;
@@ -63,7 +80,8 @@ function foldNodeEvents(
   const failureOrder = new Map<string, number>();
   const folded = { graph, nodes, outputs, failureOrder };
   if (graph)
-    for (const nodeId of graph.node_ids) nodes.set(nodeId, { node_id: nodeId, state: 'pending' });
+    for (const nodeId of graph.node_ids)
+      nodes.set(keyOf(nodeId, []), { node_id: nodeId, state: 'pending' });
   for (const [index, event] of events.entries()) {
     const nodeId = event.step_name;
     if (!nodeId) continue;
@@ -74,7 +92,14 @@ function foldNodeEvents(
       data: event.data,
     });
     if (!record) continue;
-    foldNodeRecord(folded, record, nodeId, index);
+    // A cache record carries no invocation, so it folds with no loop frames: a loop
+    // body re-runs in full each iteration and never replays from the resume cache.
+    foldNodeRecord(
+      folded,
+      record,
+      keyOf(nodeId, record.metadata?.invocation.loopPath ?? []),
+      index
+    );
   }
   return folded;
 }
@@ -82,48 +107,46 @@ function foldNodeEvents(
 function foldNodeRecord(
   { nodes, outputs, failureOrder }: Omit<NodeEventFold, 'graph'>,
   record: ReadNodeRecordEvent,
-  nodeId: string,
+  key: string,
   index: number
 ): void {
+  const nodeId = record.path;
   switch (record.eventType) {
     case 'node_started':
     case 'node_suspended':
     case 'node_always_run_reset':
     case 'node_prior_cache_invalidated':
-      nodes.set(nodeId, {
+      nodes.set(key, {
         node_id: nodeId,
         state:
           record.eventType === 'node_started' || record.eventType === 'node_suspended'
             ? 'running'
             : 'pending',
       });
-      outputs.delete(nodeId);
-      failureOrder.delete(nodeId);
+      outputs.delete(key);
+      failureOrder.delete(key);
       break;
     case 'node_completed':
       nodes.set(
-        nodeId,
+        key,
         withFanOutOutcome({ node_id: nodeId, state: 'completed' }, record.data.fan_out_outcome)
       );
-      outputs.set(nodeId, record.data);
-      failureOrder.delete(nodeId);
+      outputs.set(key, record.data);
+      failureOrder.delete(key);
       break;
     case 'node_skipped_prior_success':
       // A replayed node keeps the slot record its earlier completion wrote.
       nodes.set(
-        nodeId,
-        withFanOutOutcome(
-          { node_id: nodeId, state: 'completed' },
-          nodes.get(nodeId)?.fan_out_outcome
-        )
+        key,
+        withFanOutOutcome({ node_id: nodeId, state: 'completed' }, nodes.get(key)?.fan_out_outcome)
       );
-      outputs.set(nodeId, record.data);
-      failureOrder.delete(nodeId);
+      outputs.set(key, record.data);
+      failureOrder.delete(key);
       break;
     case 'node_failed': {
       const data = record.data;
       nodes.set(
-        nodeId,
+        key,
         withFanOutOutcome(
           {
             node_id: nodeId,
@@ -133,22 +156,22 @@ function foldNodeRecord(
           data.fan_out_outcome
         )
       );
-      outputs.delete(nodeId);
-      failureOrder.set(nodeId, index);
+      outputs.delete(key);
+      failureOrder.set(key, index);
       break;
     }
     case 'node_skipped': {
       const data = record.data;
       const reason = nodeSkipReasonSchema.safeParse(data.reason);
       const cause = skipCauseSchema.safeParse(data.cause);
-      nodes.set(nodeId, {
+      nodes.set(key, {
         node_id: nodeId,
         state: 'skipped',
         ...(reason.success ? { reason: reason.data } : {}),
         ...(cause.success ? { cause: cause.data } : {}),
       });
-      outputs.delete(nodeId);
-      failureOrder.delete(nodeId);
+      outputs.delete(key);
+      failureOrder.delete(key);
       break;
     }
     default: {
@@ -164,6 +187,37 @@ export function buildRunNodeStates(
   events: readonly TerminalRecordEvent[]
 ): RunNodeState[] {
   return [...foldNodeEvents(run, events).nodes.values()];
+}
+
+/**
+ * What a running node observes as `$NODE_OUTCOMES_FILE`: every node invocation the run
+ * has recorded, in the order each first appeared, with a completed node's structured
+ * output. Graph nodes that have recorded nothing yet are `pending`.
+ */
+export function buildNodeOutcomes(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): NodeOutcomesListing {
+  const { nodes, outputs, failureOrder } = foldNodeEvents(run, events, nodeInvocationKey);
+  const outcomes = [...nodes].map(([key, state]): NodeOutcome => {
+    const { loopPath } = parseNodeInvocationKey(key);
+    // The fold keeps output only for a completed entry and drops it on every later
+    // state, so a failed, running or reset node never lists one.
+    const data = outputs.get(key);
+    return {
+      ...state,
+      ...(loopPath.length > 0 ? { loop_group_path: loopPath } : {}),
+      ...(data && Object.hasOwn(data, 'structured_output')
+        ? { output: data.structured_output }
+        : {}),
+    };
+  });
+  const firstFailed = [...failureOrder].sort((left, right) => left[1] - right[1])[0]?.[0];
+  return nodeOutcomesListingSchema.parse({
+    run_id: run.id,
+    first_failed_node: firstFailed === undefined ? null : parseNodeInvocationKey(firstFailed).path,
+    nodes: outcomes,
+  });
 }
 
 /**

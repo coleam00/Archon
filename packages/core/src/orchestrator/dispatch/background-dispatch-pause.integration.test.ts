@@ -16,6 +16,10 @@ import { createSqlWorkflowOperations } from '../../workflows/sql-host';
 import type { IPlatformAdapter } from '../../types';
 import { dispatchBackgroundWorkflow } from './background';
 
+import { stubVerificationImageRelease } from '../../test/stub-verification-image-release';
+
+stubVerificationImageRelease();
+
 const WORKFLOW = `name: bg-pause
 description: pauses twice in a background run
 worktree:
