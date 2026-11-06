@@ -65,6 +65,19 @@ describe('pr.files', () => {
     expect(github.urls.filter(url => url.includes('/files?'))).toHaveLength(2);
   });
 
+  test('refuses a list read while the head moved, even when the count still matches', async () => {
+    let reads = 0;
+    const github = fakeGitHub(url => {
+      if (url !== `${API}/pulls/7`) return [changed(1)];
+      reads++;
+      return { changed_files: 1, head: { sha: reads === 1 ? 'old-head' : 'new-head' } };
+    });
+    expect(await run(request, github)).toMatchObject({
+      ok: false,
+      error: { kind: 'forge_error', message: expect.stringContaining('new-head') },
+    });
+  });
+
   test('refuses a list GitHub cut short rather than returning part of the change', async () => {
     const github = fakeGitHub(url =>
       url === `${API}/pulls/7`
@@ -106,6 +119,27 @@ describe('repo.file', () => {
   test('refuses a file too large for the contents API instead of reading it as empty', async () => {
     const github = fakeGitHub(() => ({ type: 'file', encoding: 'none', content: '' }));
     expect(await run(request, github)).toMatchObject({
+      ok: false,
+      error: { kind: 'forge_error' },
+    });
+  });
+
+  test('a path that is a directory is not found, and a malformed file answer is a forge error', async () => {
+    expect(
+      await run(
+        request,
+        fakeGitHub(() => [{ type: 'file', name: 'a.ts' }])
+      )
+    ).toMatchObject({
+      ok: false,
+      error: { kind: 'not_found' },
+    });
+    expect(
+      await run(
+        request,
+        fakeGitHub(() => ({ type: 'file' }))
+      )
+    ).toMatchObject({
       ok: false,
       error: { kind: 'forge_error' },
     });

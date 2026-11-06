@@ -138,6 +138,7 @@ describe('GitHub lifecycle reads', () => {
     });
     const listing = github.calls.find(call => call.url.includes('/pulls?'))?.url ?? '';
     expect(new URL(listing).searchParams.get('state')).toBe('all');
+    expect(new URL(listing).searchParams.get('sort')).toBe('created');
     expect(new URL(listing).searchParams.get('direction')).toBe('desc');
   });
 
