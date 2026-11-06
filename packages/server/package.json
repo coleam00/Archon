@@ -71,6 +71,9 @@
       "src/routes/api.run-attention.test.ts"
     ],
     [
+      "src/routes/api.attention-stream.test.ts"
+    ],
+    [
       "src/routes/api.artifacts.test.ts"
     ],
     [
