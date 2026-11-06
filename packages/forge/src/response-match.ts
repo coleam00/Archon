@@ -246,9 +246,10 @@ function matchesPrView(request: OpRequest<'pr.view'>, value: OpValue<'pr.view'>)
   // Only a head selector may find nothing; an explicit number must resolve.
   if (!value) return selector.kind === 'head';
   if (selector.kind === 'number') return sameRef(value.pr, selector.ref);
-  // A head selector asks for the branch's open pull request, never a closed one.
+  // A head selector asks for the branch's open pull request, never a closed one,
+  // unless it asked for any state.
   return (
-    value.pr.state === 'open' &&
+    (selector.state === 'any' || value.pr.state === 'open') &&
     sameRepo(value.pr.repo, selector.repo) &&
     value.pr.head === selector.head &&
     value.pr.head_repo !== null &&
@@ -295,6 +296,11 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
       ? value.revision === request.at.revision && value.branch === null
       : value.branch !== null),
   'pr.merge-state': byRef,
+  'pr.files': byRef,
+  'repo.file': (request, value) =>
+    sameRepo(value.repo, request.repo) &&
+    value.path === request.path &&
+    value.revision === request.revision,
   'workitem.comments': (request, value) => sameSubject(value.workitem, request.subject),
   'workitem.view': byRef,
   'pr.view': matchesPrView,
