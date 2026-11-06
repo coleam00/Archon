@@ -12,8 +12,7 @@ description: |
 
   Use when: changes need judging — "review this PR", "review my changes",
   "is this ready to merge".
-  NOT for: fixing findings (implement), running the project's checks (validate),
-  or writing code.
+  NOT for: fixing findings (implement) or writing code.
 
 inputs:
   scope:

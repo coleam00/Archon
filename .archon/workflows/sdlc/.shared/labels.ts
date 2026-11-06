@@ -58,25 +58,10 @@ export const PACK_LABELS = {
 
 export type PackLabel = keyof typeof PACK_LABELS;
 
+export const PACK_LABEL_NAMES = Object.keys(PACK_LABELS) as PackLabel[];
+
 export function isPackLabel(name: string): name is PackLabel {
   return Object.hasOwn(PACK_LABELS, name);
-}
-
-// Labels an earlier version of the pack wrote. A write removes them from the item
-// and never creates them, so re-triaging an item clears its old size label, and
-// intake's next write on an item clears archon-issue, the investigate route's old name.
-const RETIRED_LABELS = ['archon-small', 'archon-risky', 'archon-large', 'archon-issue'] as const;
-
-/** A label the pack owns on an item: one it writes now, or one it retired. */
-export type OwnedLabel = PackLabel | (typeof RETIRED_LABELS)[number];
-
-export const OWNED_LABEL_NAMES: readonly OwnedLabel[] = [
-  ...(Object.keys(PACK_LABELS) as PackLabel[]),
-  ...RETIRED_LABELS,
-];
-
-export function isOwnedLabel(name: string): name is OwnedLabel {
-  return (OWNED_LABEL_NAMES as readonly string[]).includes(name);
 }
 
 export type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
@@ -173,12 +158,12 @@ function ghRepositoryLabels(repository: string): Set<string> {
 export function writeLabels(
   item: QualifiedPr,
   add: readonly string[],
-  remove: readonly OwnedLabel[]
+  remove: readonly PackLabel[]
 ): string[] {
   return forgeSource() === 'forge' ? forgeWrite(item, add, remove) : ghWrite(item, add, remove);
 }
 
-function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly OwnedLabel[]): string[] {
+function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly PackLabel[]): string[] {
   const repository = `${item.repo.host}/${item.repo.path}`;
   const current = new Set(viewIssue(item).labels);
   const present = ghRepositoryLabels(repository);
@@ -218,7 +203,7 @@ function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly Own
 function forgeWrite(
   item: QualifiedPr,
   add: readonly string[],
-  remove: readonly OwnedLabel[]
+  remove: readonly PackLabel[]
 ): string[] {
   const current = new Set(viewIssue(item).labels);
   const present = new Set(readRepositoryLabels(item.repo));

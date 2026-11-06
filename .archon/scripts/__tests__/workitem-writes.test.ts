@@ -157,13 +157,13 @@ test('a gh label write is one delta that leaves labels it does not name on the i
   ]);
 });
 
-test('re-triage replaces a changed type and removes a retired size label', () => {
+test('re-triage replaces a changed type', () => {
   const run = runPackScript('triage/scripts/verdict', {
     source: 'gh',
     inputs: { ...inputs, INPUTS_AREA_LABELS: '[]' },
     gh: {
-      issueLabels: ['operator', 'archon-ready', 'archon-risky', 'archon-type-bug'],
-      repositoryLabels: ['operator', 'archon-ready', 'archon-risky', 'archon-type-bug'],
+      issueLabels: ['operator', 'archon-ready', 'archon-type-bug'],
+      repositoryLabels: ['operator', 'archon-ready', 'archon-type-bug'],
     },
   });
   expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
@@ -172,7 +172,7 @@ test('re-triage replaces a changed type and removes a retired size label', () =>
     expect.stringContaining('label create archon-size-s'),
   ]);
   expect(run.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-    'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-size-s --add-label archon-type-feature --remove-label archon-risky --remove-label archon-type-bug',
+    'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-size-s --add-label archon-type-feature --remove-label archon-type-bug',
   ]);
   expect(JSON.parse(run.stdout).labels).toEqual([
     'archon-ready',
@@ -181,9 +181,9 @@ test('re-triage replaces a changed type and removes a retired size label', () =>
   ]);
 });
 
-test('a retired size label is never created and never accepted as an area label', () => {
+test('a pack label is never accepted as an area label', () => {
   const run = runPackScript('triage/scripts/verdict', {
-    inputs: { ...inputs, INPUTS_AREA_LABELS: '["archon-small"]' },
+    inputs: { ...inputs, INPUTS_AREA_LABELS: '["archon-ready"]' },
   });
   expect(run.code).not.toBe(0);
   expect(run.gh).toEqual([]);
