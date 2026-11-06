@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,11 @@ import {
 } from '@archon/workflows/attention-watch';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { workflowEventCursor, type IWorkflowStore } from '@archon/workflows/store';
+import type { AttentionWatchOptions } from '@archon/workflows/engine-port';
 import { attentionSseIds, registerAttentionStreamRoute } from './api.run-attention';
+
+// No registered codebases: `?project=` resolves only a project key.
+mock.module('@archon/core/db/codebases', () => ({ listCodebases: async () => [] }));
 
 const roots = trackTempRoots();
 
@@ -203,6 +207,36 @@ describe('GET /api/runs/attention/stream', () => {
       { id: undefined, line: { type: 'error', error: 'cursor_invalid' } },
     ]);
   });
+
+  test('scopes the watch by project and label as the list route does', async () => {
+    const seen: AttentionWatchOptions[] = [];
+    const app = new OpenAPIHono();
+    registerAttentionStreamRoute(app, async (listener, options) => {
+      seen.push(options);
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return { close: async () => undefined };
+    });
+    const open = async (query: string): Promise<number> => {
+      const response = await app.request(`/api/runs/attention/stream${query}`);
+      await response.text();
+      return response.status;
+    };
+
+    expect(await open('')).toBe(200);
+    expect(await open('?project=acme%2Fsite&label=ci%3Dred&label=team%3Dweb')).toBe(200);
+    expect(await open('?project=nowhere')).toBe(400);
+    expect(await open('?label=ci%3Dred&label=ci%3Dgreen')).toBe(400);
+    expect(seen.map(({ scope, labels }) => ({ scope, labels }))).toEqual([
+      { scope: { kind: 'all' }, labels: {} },
+      {
+        scope: {
+          kind: 'project',
+          project: { key: 'acme/site', codebaseId: null, name: 'site' },
+        },
+        labels: { ci: 'red', team: 'web' },
+      },
+    ]);
+  });
 });
 
 test('an SSE id names the last event all of whose lines were sent', () => {
@@ -221,9 +255,21 @@ test('an SSE id names the last event all of whose lines were sent', () => {
       outcome: null,
       cause: null,
     }),
+    idOf({ type: 'resolved', cursor: at('Y'), ...run, occurrence: 'o', reason: 'withdrawn' }),
+    // Position-stamped lines interleave at the cursor before the delivery in progress.
+    idOf({ type: 'owner_lost', cursor: at('X'), ...run, observedStatus: 'running' }),
+    idOf({ type: 'degraded', reason: 'run_unreadable', cursor: at('X') }),
     idOf({ type: 'resumed', cursor: at('Y'), ...run, status: 'running' }),
+    idOf({
+      type: 'terminal',
+      cursor: at('W'),
+      ...run,
+      status: 'failed',
+      outcome: null,
+      cause: null,
+    }),
     idOf({ type: 'bookmark', cursor: at('Z') }),
     idOf({ type: 'error', error: 'cursor_invalid' }),
   ];
-  expect(ids).toEqual([undefined, 'S', 'S', 'S', 'X', 'Z', undefined]);
+  expect(ids).toEqual([undefined, 'S', 'S', 'S', 'X', 'X', 'X', 'X', 'Y', 'Z', undefined]);
 });

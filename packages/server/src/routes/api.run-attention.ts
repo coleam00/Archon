@@ -158,6 +158,9 @@ export function attentionSseIds(): (line: AttentionStreamLine) => string | undef
   let pending: string | undefined;
   return line => {
     if (line.type === 'error') return undefined;
+    // Stamped with the position before the delivery in progress, so they say nothing
+    // about which events are complete. A reconnect re-arms what they report.
+    if (line.type === 'owner_lost' || line.type === 'degraded') return committed;
     // `ready` and `bookmark` follow every line at or before their cursor.
     if (line.type === 'ready' || line.type === 'bookmark') {
       committed = line.cursor;
