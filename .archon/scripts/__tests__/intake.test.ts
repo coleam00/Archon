@@ -25,8 +25,9 @@ import { parseMaintainerList, parseMaintainers } from '../../workflows/sdlc/.sha
 import {
   gitCheckout,
   hostCli,
-  type GhCommentRow,
-  type GhIssue,
+  type TrackerComment,
+  type TrackerIssue,
+  labelWrites,
   packScriptRunner,
   PR,
   type ScriptRun,
@@ -338,9 +339,9 @@ interface Event {
   readonly stateReason?: string;
   readonly writeLost?: boolean;
   /** Other issues on the tracker, such as the original a duplicate links to. */
-  readonly others?: readonly GhIssue[];
+  readonly others?: readonly TrackerIssue[];
   /** Comments already on the tracker's issues. */
-  readonly comments?: readonly GhCommentRow[];
+  readonly comments?: readonly TrackerComment[];
 }
 
 function run(
@@ -350,10 +351,9 @@ function run(
   inputs: Record<string, string> = {}
 ): ScriptRun {
   return runPackScript(`intake/scripts/${script}`, {
-    source: 'gh',
     cwd: at.checkout,
-    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-    gh: {
+    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+    tracker: {
       issue: {
         number: 7,
         author: event.author ?? 'Maintainer',
@@ -408,7 +408,7 @@ const SKIPPED_TRIAGE = Object.fromEntries(Object.keys(READY_VERDICT).map(key => 
 
 const ISSUE_URL = 'https://ghe.example.com/example/repo/issues/7';
 const ORIGINAL_URL = 'https://ghe.example.com/example/repo/issues/3';
-const ORIGINAL: GhIssue = { number: 3, title: 'The original', body: 'Its body', state: 'OPEN' };
+const ORIGINAL: TrackerIssue = { number: 3, title: 'The original', body: 'Its body', state: 'OPEN' };
 const MERGED_URL = 'https://ghe.example.com/example/repo/pull/5';
 
 function closeVerdict(closure: Closure): Record<string, string> {
@@ -430,9 +430,7 @@ const DUPLICATE_VERDICT = closeVerdict({
 function expectLeftToMaintainer(at: Install, applied: ScriptRun, refused: string): void {
   expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
   expect([...applied.closes, ...applied.comments]).toEqual([]);
-  expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-    'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-blocked --add-label archon-size-s --add-label archon-type-feature',
-  ]);
+  expect(labelWrites(applied, 7)).toEqual({ add: ['archon-blocked', 'archon-size-s', 'archon-type-feature'], remove: [] });
   const doc = stored(at).value;
   expect(doc).toMatchObject({
     stage: 'blocked',
@@ -497,9 +495,7 @@ describe('the intake scripts', () => {
 
     const applied = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh).toContain(
-      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-ready --add-label archon-size-s --add-label archon-type-feature'
-    );
+    expect(labelWrites(applied, 7)).toEqual({ add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] });
     const doc = stored(at).value;
     expect(doc).toMatchObject({ stage: 'deliver', trust: 'maintainer', claim: null, requests: [] });
     expect(doc.facts.triage).toMatchObject({
@@ -606,7 +602,7 @@ describe('the intake scripts', () => {
       READY_VERDICT
     );
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh.filter(call => call.includes('--remove-label'))).toEqual([]);
+    expect(labelWrites(applied, 7).remove).toEqual([]);
   }, 60_000);
 
   test('labels that fail to write leave the stage stored and the claim held, and the next pickup writes them', () => {
@@ -627,9 +623,7 @@ describe('the intake scripts', () => {
     });
     const applied = outcome(at, { runId: 'run-2' }, retried.output, SKIPPED_TRIAGE);
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh).toContain(
-      'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-ready --add-label archon-size-s --add-label archon-type-feature'
-    );
+    expect(labelWrites(applied, 7)).toEqual({ add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] });
     expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null, requests: [] });
   }, 60_000);
 
@@ -662,9 +656,7 @@ describe('the intake scripts', () => {
       DUPLICATE_VERDICT
     );
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-      'issue edit 7 --repo ghe.example.com/example/repo --remove-label archon-triage',
-    ]);
+    expect(labelWrites(applied, 7)).toEqual({ add: [], remove: ['archon-triage'] });
     expect([...applied.closes, ...applied.comments]).toEqual([]);
     const doc = stored(at).value;
     expect(doc).toMatchObject({ stage: 'needs_maintainer', promoted: null, claim: null });
@@ -720,7 +712,7 @@ describe('the intake scripts', () => {
     const closed = { ...event, state: 'closed' as const, stateReason: 'not_planned' };
     const applied = outcome(at, closed, decided, DUPLICATE_VERDICT);
     expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain(`${ISSUE_URL} is already closed for another reason`);
+    expect(applied.stderr).toContain('already closed for another reason');
     expect([...applied.closes, ...applied.comments]).toEqual([]);
   }, 60_000);
 
@@ -740,7 +732,7 @@ describe('the intake scripts', () => {
 
   test('a duplicate of a pull request closes nothing; an open pull request is continued', () => {
     const at = install();
-    const pull: GhIssue = { number: 5, title: 'A change', body: '', state: 'OPEN', pull: true };
+    const pull: TrackerIssue = { number: 5, title: 'A change', body: '', state: 'OPEN', pull: true };
     const event = { runId: 'run-1', others: [pull] };
     const applied = outcome(
       at,
@@ -748,7 +740,7 @@ describe('the intake scripts', () => {
       facts(at, event).output,
       closeVerdict({ kind: 'duplicate', url: MERGED_URL, original: { repo: PR.repo, number: 5 } })
     );
-    expectLeftToMaintainer(at, applied, 'issues/5 is a pull request, not an issue');
+    expectLeftToMaintainer(at, applied, 'repo#5 is a pull request, not an issue');
   }, 60_000);
 
   test('a NO_ACTION verdict that arrives without its closure is refused', () => {
@@ -761,7 +753,7 @@ describe('the intake scripts', () => {
     );
     expect(applied.code).not.toBe(0);
     expect(applied.stderr).toContain('only that one, carries a closure');
-    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([]);
+    expect(labelWrites(applied, 7)).toEqual({ add: [], remove: [] });
   }, 60_000);
 
   test('a delivered item is closed as completed, linked to the merged change', () => {
@@ -819,7 +811,7 @@ describe('the intake scripts', () => {
     expect(decided).toMatchObject({ path: 'closed', decision: { trust: null } });
     const applied = outcome(at, { ...closed, runId: 'run-1' }, decided, SKIPPED_TRIAGE);
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(applied.gh.filter(call => call.startsWith('issue edit'))).toEqual([]);
+    expect(labelWrites(applied, 7)).toEqual({ add: [], remove: [] });
     const doc = stored(at).value;
     expect(doc).toMatchObject({ stage: 'new', trust: null, claim: null, requests: [] });
     expect(doc.history.at(-1)).toMatchObject({ outcome: 'closed' });

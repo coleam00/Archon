@@ -49,7 +49,8 @@ such as one that arrived with a merge of the default branch, doesn't hold it.
 - **One rerun for red elsewhere.** CI red in code the pull request does not touch gets
   one rerun of the failed jobs. Red again after it counts as the change's.
 - **The default branch comes first.** Each sweep judges its CI before any pull
-  request, and while it is red nothing merges. Red in code no recent merge touched gets
-  one rerun; red after that, or red in code a recent merge touched, is raised to a
-  maintainer, naming the pull requests merged since it was last green, so one can be
-  reverted or fixed forward.
+  request, and while it is red nothing merges. Red on the default branch is always
+  raised to a maintainer, naming the pull requests merged since it was last green, so
+  one can be reverted or fixed forward, or its failed jobs rerun when no recent merge
+  touched the red code. The pack cannot rerun them itself: the forge reruns checks only
+  on a pull request.

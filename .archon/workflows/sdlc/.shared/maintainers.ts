@@ -58,7 +58,7 @@ export function parseMaintainers(text: string): Set<string> {
 
 /**
  * The maintainer list at the head of the repository's default branch, read with git
- * so it works on either forge source and whatever branch the checkout sits on. No
+ * so it works on any forge and whatever branch the checkout sits on. No
  * file means nobody: every author is outside.
  */
 export function readMaintainerList(repo: QualifiedPr['repo']): MaintainerList {

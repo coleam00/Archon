@@ -5,9 +5,7 @@
  * and ends with a `Depends on: #n` line per dependency. A key the work item already
  * records is not filed again; any other is created or, when an earlier attempt filed
  * it before stopping, recovered by its marker. Each filed issue is recorded on the
- * work item before the next is filed, so a rerun after a stop files none twice. On
- * the gh source the repository's issues are scanned for markers once per run, not
- * once per issue. The existing issues the agent listed instead of filing are read to
+ * work item before the next is filed, so a rerun after a stop files none twice. The existing issues the agent listed instead of filing are read to
  * prove each is an issue of the repository, and recorded beside the filed ones.
  *
  * Then the item gets one marked comment listing its issues. A PRD is labelled
@@ -25,9 +23,9 @@
  * was closed before a split finished, files nothing, and releases the claim.
  */
 
-import { forgeSource, parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { closeIssue, createIssue, markerScan, viewIssue } from '../../.shared/issue.ts';
+import { closeIssue, createIssue, viewIssue } from '../../.shared/issue.ts';
 import { ROUTE_LABEL, writeLabels } from '../../.shared/labels.ts';
 import { upsertComment } from '../../.shared/pr.ts';
 import {
@@ -155,11 +153,10 @@ function publish(
     return { number: entry.number, url: view.url, why: entry.why };
   });
   const numbers = new Map(issues.map(entry => [entry.key, entry.number]));
-  const scan = markerScan(item.repo);
   for (const entry of planned) {
     if (numbers.has(entry.key)) continue;
     const marker = splitMarker(item.number, entry.key);
-    const created = createIssue(item.repo, entry.title, body(item.number, entry, numbers), marker, scan);
+    const created = createIssue(item.repo, entry.title, body(item.number, entry, numbers), marker);
     numbers.set(entry.key, created.issue.number);
     const filed = { key: entry.key, number: created.issue.number, url: created.url };
     const doc = updateClaimed(item, runId, current => ({
@@ -169,7 +166,7 @@ function publish(
     issues = filedOn(doc);
   }
 
-  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(split, planned, numbers, adopted), forgeSource());
+  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(split, planned, numbers, adopted));
   if (split.kind === 'prd') writeLabels(item, ['archon-prd'], []);
   if (split.kind === 'bundle') closeIssue(item, 'completed');
 
@@ -188,7 +185,7 @@ function publish(
 function buildWhole(item: QualifiedPr, runId: string, route: WholeRoute, reason: string): void {
   const at = new Date().toISOString();
   const lead = 'The split queue found this item can be built as one work item, so it files no issues for it.';
-  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, [COMMENT_MARKER, lead, reason].join('\n\n'), forgeSource());
+  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, [COMMENT_MARKER, lead, reason].join('\n\n'));
   writeLabels(item, [ROUTE_LABEL[route]], ['archon-split']);
   const doc = updateClaimed(item, runId, current => ({
     ...finish(current, { status: 'whole', route, reason, issues: filedOn(current), at, run_id: runId }, runId, 'whole', reason),

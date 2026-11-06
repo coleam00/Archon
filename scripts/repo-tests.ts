@@ -23,8 +23,8 @@ import { runReportedGroup, writeCombinedReport } from './package-test-reports';
  * is what made a mistyped path look like a pass.
  *
  * `--plan <shard>` walks only the plan steps of that shard. CI runs each shard on its own
- * runner so they finish side by side, except `pack`: CI runs it only on a manual dispatch
- * that asks for it, and `bun run test --plan pack` runs it locally. A workspace shard too slow
+ * runner so they finish side by side; `pack` runs only when the change touches the pack
+ * (`PACK_INPUTS` in `should-run-test-suite.ts`). A workspace shard too slow
  * for one runner runs in parts across runners; `ARCHON_TEST_PART` in `package-tests.ts`.
  */
 

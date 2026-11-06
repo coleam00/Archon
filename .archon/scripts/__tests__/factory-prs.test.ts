@@ -1,9 +1,10 @@
 /**
  * The PR metrics' attribution and outcome mapping: which pull requests count, which
- * runs each is attributed to, and which records its state makes.
+ * runs each is attributed to, which records its state makes, and the forge view they
+ * are read from.
  */
 import { describe, expect, it } from 'bun:test';
-import { factoryPrs, prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
+import { factoryPrs, prFacts, prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
 
 const REPO = { host: 'github.example.com', path: 'acme/widgets' };
 const RUN_A = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -26,6 +27,35 @@ function pr(number: number, facts: Partial<PrFacts> = {}): PrFacts {
     ...facts,
   };
 }
+
+describe('prFacts', () => {
+  const view = (pr: Record<string, unknown>, timestamps?: Record<string, unknown>) => ({
+    pr: {
+      schemaVersion: 1, repo: REPO, number: 10, url: url(10), head: 'build/10-widget-aaaaaaaa', base: 'dev',
+      is_draft: false, state: 'merged', head_repo: REPO, head_revision: 'abc', base_revision: null,
+      maintainer_can_modify: null, ...pr,
+    },
+    title: 'A title',
+    body: '',
+    ...(timestamps === undefined ? {} : { timestamps }),
+  });
+  const times = { created_at: '2026-10-03T10:00:00Z', merged_at: '2026-10-05T12:00:00Z', closed_at: '2026-10-05T12:00:05Z' };
+
+  it('maps a pr.view to the facts the records read, with a fork head as cross-repository', () => {
+    expect(prFacts(url(10), view({}, times))).toEqual(
+      pr(10, { state: 'MERGED', mergedAt: times.merged_at, closedAt: times.closed_at })
+    );
+    const closed = view({ state: 'closed' }, { ...times, merged_at: null });
+    expect(prFacts(url(10), closed)).toEqual(pr(10, { state: 'CLOSED', mergedAt: null, closedAt: times.closed_at }));
+    const fork = view({ state: 'open', head_repo: { host: REPO.host, path: 'someone/widgets' } }, { ...times, merged_at: null, closed_at: null });
+    expect(prFacts(url(10), fork)).toMatchObject({ state: 'OPEN', isCrossRepository: true });
+  });
+
+  it('refuses a view without timestamps, naming them, and a view of no pull request', () => {
+    expect(() => prFacts(url(10), view({}))).toThrow(`forge pr.view reported no timestamps for ${url(10)}`);
+    expect(() => prFacts(url(10), null)).toThrow(`forge pr.view reported no pull request for ${url(10)}`);
+  });
+});
 
 describe('factoryPrs', () => {
   it('leaves continued pull requests out and reports them as skipped', () => {

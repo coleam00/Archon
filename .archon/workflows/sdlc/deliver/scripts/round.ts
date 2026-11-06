@@ -20,7 +20,7 @@
  *   previous round when this round ran no review.
  * - INPUTS_CI: the CI agent's state.
  * - INPUTS_THREADS_OPEN: how many review threads were still unresolved when the round
- *   ended; "null" when the threads node did not run (the forge source, or no pull request).
+ *   ended; "null" when the threads node did not run (no pull request).
  * - INPUTS_SETTLE_ASK: whether settle-threads found a thread that needs a decision this run cannot make.
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */

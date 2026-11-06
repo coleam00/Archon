@@ -25,7 +25,8 @@ You need:
 
 - Archon with at least one provider, from the [Quickstart](/getting-started/quick-start/).
 - A local clone of a GitHub repository you can push to.
-- The GitHub CLI signed in as the account the pack will act as: `gh auth login`. Every label, comment, push and merge is made as that account.
+- The forge plugin: `archon plugin add coleam00/Archon/plugins/forge-github`.
+- A GitHub credential for the account the pack will act as: `gh auth login`, or `GH_TOKEN` or `GITHUB_TOKEN` in Archon's env file. The plugin uses it, and every label, comment, push and merge is made as that account.
 - CI that reports checks on pull requests. The merge queue merges only when the checks at the pull request's head are green, so a repository with no checks never merges.
 
 ## 1. Check the forge
@@ -34,7 +35,7 @@ You need:
 archon workflow run archon-forge-check     # from the clone
 ```
 
-It proves that `gh` is signed in and can read the repository the clone's remotes name. It proves read access only; the first write proves the rest. The pack talks to GitHub through `gh` by default. Setting `ARCHON_SDLC_FORGE=forge` routes it through `archon forge` and an installed [forge plugin](/reference/forge/) instead, and `archon-forge-check` then also checks that the plugin offers every operation the delivery workflows use. It does not check the merge queue's operations: the merge queue checks those itself when it starts and refuses a plugin without them before it claims any work. Stay on `gh` for the factory until the installed plugin offers them too.
+The pack talks to the forge only through `archon forge` and an installed [forge plugin](/reference/forge/); for GitHub, `archon plugin add coleam00/Archon/plugins/forge-github`. The check proves the plugin offers every operation the delivery workflows use and can read the repository the clone's remotes name. It proves read access only; the first write proves the rest. It does not check the merge queue's operations: the merge queue checks those itself when it starts and refuses a plugin without them before it claims any work.
 
 ## 2. Name your maintainers
 
@@ -47,8 +48,8 @@ Create `.archon/sdlc/policy/maintainers.json` and commit it to the default branc
 Each entry is a GitHub login, or an object naming one. With no file, every author is outside. The list decides three things:
 
 - **Whose issues get triaged.** An issue from anyone else gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label to it.
-- **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. **The login that authors the pack's published review comment must be on the list on the default branch**, or that verdict is ignored. With the default `gh` source, this is the identity `gh` acts as; with the opt-in `forge` source, it is the forge plugin's credential identity, which may differ. Check the published comment's author when choosing which login to list.
-- **Whose own pull requests enroll.** `"merge_queue": "own-prs"` enrolls that maintainer's own open, non-draft pull requests in the merge queue. A pull request a work item already names, such as one the build queue delivered, is not enrolled again. Neither is one from a `build/` branch in the repository, the build queue's branch namespace, so a hand-made pull request on a `build/` branch does not enroll.
+- **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. **The login that authors the pack's published review comment must be on the list on the default branch**, or that verdict is ignored. This is the forge plugin's credential identity. Check the published comment's author when choosing which login to list.
+- **Whose own pull requests enroll.** `"merge_queue": "own-prs"` asks to enroll that maintainer's own open, non-draft pull requests in the merge queue. Enrollment needs a forge operation that lists open pull requests by author, which the forge contract does not have yet, so today it refuses and the merge queue notes why; it goes on merging the work items that already exist.
 
 ## 3. Adjust policy and models (optional)
 
@@ -76,8 +77,8 @@ Each stage picks its model from a concern alias, falling back to the tier it has
 | `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs` or `simplify` | `@reviewer`, then the lens's tier |
 
 ```bash
-archon ai alias set @reviewer codex gpt-5.5                                   # every run
-archon workflow run archon-build-queue --model @reviewer=codex/gpt-5.5 ...    # one run
+archon ai alias set @reviewer codex gpt-6.1-sol                                   # every run
+archon workflow run archon-build-queue --model @reviewer=codex/gpt-6.1-sol ...    # one run
 ```
 
 ## 4. Write an issue the factory can build
@@ -119,7 +120,7 @@ One sweep agent decides every pull request the build queue made ready. It never 
 - the default branch's CI is not red (pending does not hold a merge);
 - the head contains the default branch, or GitHub reports it merges cleanly.
 
-The gate merges pinned to that head (`gh pr merge --match-head-commit`, squash by default; `--input merge_method=merge` for a merge commit). A conflict, a stale verdict, a review thread that raises a defect, or red the change caused goes back to the build queue with a brief. Red CI in code the pull request doesn't touch gets one rerun of its failed jobs. If the default branch is red, nothing merges, and the queue raises one `merge: base` item whose only choice is `hold`. A pull request it fails to read twice in a row is parked until the build queue readies it again.
+The gate merges pinned to that head through the forge's `pr.merge` (squash by default; `--input merge_method=merge` for a merge commit). A conflict, a stale verdict, a review thread that raises a defect, or red the change caused goes back to the build queue with a brief. Red CI in code the pull request doesn't touch gets one rerun of its failed jobs. If the default branch is red, nothing merges, and the queue raises one `merge: base` item whose only choice is `hold`; the forge can't rerun a commit with no pull request, so a flaky default branch is rerun by hand. A pull request it fails to read twice in a row is parked until the build queue readies it again.
 
 Drain what the runs noticed outside their task:
 
@@ -164,12 +165,12 @@ Everything below is written as the `gh` account, to the repository the queues na
 | Where | What | Who |
 |---|---|---|
 | Labels | Creates the pack's own `archon-*` labels when missing. Adds and removes them on issues as a delta, so labels others add survive | Intake; `archon-triage` with `--input publish=true` |
-| Issues | Closes a duplicate of an open issue, or an issue a merged change already delivered, with one comment linking the cause, and a link-back comment on the original (on `gh`, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one; the next upsert then refuses: inspect both and delete one). Intake closes issues by triage verdict, as `triage.md` allows, and a merged pull request closes the issue it names with `Closes #N` | Intake; merges |
+| Issues | Closes a duplicate of an open issue, or an issue a merged change already delivered, with one comment linking the cause, and a link-back comment on the original. Intake closes issues by triage verdict, as `triage.md` allows, and a merged pull request closes the issue it names with `Closes #N` | Intake; merges |
 | Issue bodies | Appends a dated "Current scope" section with your answer | Build queue, merge queue |
-| New issues | Files an issue for a verified discovery, marked so a rerun never files it twice. Adds one evidence comment (on `gh`, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one; the next upsert then refuses: inspect both and delete one) to an open issue it tracks | Discoveries |
+| New issues | Files an issue for a verified discovery, marked so a rerun never files it twice. Adds one evidence comment to an open issue it tracks | Discoveries |
 | Branches | Pushes `build/<issue>-<slug>-<run>`, or pushes onto an open pull request's existing head. Never force-pushes or rebases | Build queue rounds |
-| Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place (on `gh`, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one; the next upsert then refuses: inspect both and delete one), replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met and no dated ruling on the issue keeps it open. Before merging, the merge queue rechecks the keyword against the review's stamped coverage and the issue's latest ruling, and corrects it in either direction | Build queue rounds; merge queue |
-| CI | Reruns the failed jobs of a run once, when red is outside the change or on the default branch | Build queue rounds, merge queue |
+| Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place, replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met and no dated ruling on the issue keeps it open. Before merging, the merge queue rechecks the keyword against the review's stamped coverage and the issue's latest ruling, and corrects it in either direction | Build queue rounds; merge queue |
+| CI | Reruns a pull request's failed jobs once, when the red is outside the change. A red default branch is never rerun: it is raised as a `merge: base` item | Build queue rounds, merge queue |
 | Merges | Merges through the gate, pinned to the reviewed head. Deletes no branch | Merge queue |
 | Worktrees and branches | If you schedule it, removes each merged worktree with its local branch, including a branch Archon adopted. Remote branches stay, with a warning | `archon-worktree-cleanup` |
 

@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { type AgentDecision, checkDecisions, parseRunDocument } from '../../workflows/sdlc/.shared/discoveries';
 import { latestVerdictOf, relayedDiscoveries } from '../../workflows/sdlc/.shared/report';
-import { type GhIssue, gitCheckout, hostCli, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import { type TrackerIssue, gitCheckout, hostCli, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -154,7 +154,7 @@ interface Pass {
   readonly runId: string;
   readonly runs: string[];
   readonly statuses?: Record<string, string>;
-  readonly issues?: GhIssue[];
+  readonly issues?: TrackerIssue[];
   readonly subject?: { state: 'open' | 'closed' };
 }
 
@@ -163,8 +163,8 @@ type Script = 'facts' | 'outcome' | 'answer';
 function script(at: Install, name: Script, pass: Pass, inputs: Record<string, string> = {}, artifacts: Record<string, string> = {}): ScriptRun {
   return runPackScript(`discoveries/scripts/${name}`, {
     cwd: at.checkout,
-    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-    gh: { issue: { number: 7, state: pass.subject?.state ?? 'open' }, issues: pass.issues ?? [] },
+    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+    tracker: { issue: { number: 7, state: pass.subject?.state ?? 'open' }, issues: pass.issues ?? [] },
     artifacts,
     inputs: {
       ...at.env,
@@ -274,7 +274,7 @@ describe('the discoveries scripts', () => {
   test('filing a key whose issue already exists recovers it by its marker, so nothing is filed twice', () => {
     const at = install();
     runArtifacts(at.outputRoot, RUN, { verdict: [record('new')] });
-    const existing: GhIssue = { number: 50, title: 'A defect', body: '<!-- archon-discovery new-defect -->\nThe brief.', state: 'OPEN' };
+    const existing: TrackerIssue = { number: 50, title: 'A defect', body: '<!-- archon-discovery new-defect -->\nThe brief.', state: 'OPEN' };
     const { outcome } = decide(at, { runId: 'pass-2', runs: [RUN], issues: [existing] }, fileIt('new-defect'));
     expect(ok(outcome).written).toEqual([{ key: 'new-defect', outcome: 'file', url: 'https://ghe.example.com/example/repo/issues/50' }]);
     expect(outcome.createdIssues).toEqual([]);

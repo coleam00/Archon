@@ -196,7 +196,7 @@ Everything above is also JSON, for scripts and agents. The list, the single read
 |---|---|---|
 | List | `archon workflow attention --json [--project <id\|name\|key> \| --all] [--label k=v]… [--sort age\|label:<key>]` | `GET /api/runs/attention?project=…&label=…&sort=…` |
 | Count | `archon workflow attention --json --count-by project\|label:<key>` | `GET /api/runs/attention?countBy=…` |
-| Stream | `archon workflow attention --watch --json [--project … \| --all] [--label k=v]… [--after <cursor>]` | Not yet |
+| Stream | `archon workflow attention --watch --json [--project … \| --all] [--label k=v]… [--after <cursor>]` | `GET /api/runs/attention/stream?project=…&label=…` (SSE) |
 | Read one | `archon workflow attention <run-id> --json` | `GET /api/runs/<run-id>/attention` |
 | Label | `archon workflow attention label <run-id> --occurrence <id> [--set k=v]… [--unset k]…` | `POST /api/runs/<run-id>/attention/labels` |
 | Answer | `archon workflow answer <run-id> --occurrence <id> …`, or `respond`, `approve`, `reject` | `POST /api/workflows/runs/<run-id>/answer` |
@@ -291,3 +291,11 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 - **Items report the row when the stream read it.** The stream reads about once a second, and PostgreSQL wakes it on each commit. A pause opened and answered between two reads may never appear.
 
 The stream only reads. Stopping it affects no run.
+
+### Stream over HTTP
+
+`GET /api/runs/attention/stream` is the same stream as server-sent events. Each line above is one event, and the event's `data` is the line exactly as `--watch --json` writes it, so switch on its `type`. Events have no `event` name, so one `onmessage` handler receives every line. The scope is the whole install unless `project` names one; `label=k=v` repeats as on the list route. It needs the same API access as the list route.
+
+The event `id` is a cursor to resume from. A browser `EventSource` sends the last one back as `Last-Event-ID` when it reconnects, which works as `--after` does: the new stream sends the snapshot and `ready`, then replays readable changes after that cursor. The id is the cursor of the last event whose lines were all sent, so a reconnect can repeat lines of the event in progress but never skips one. Dedupe repeats with the keys above. Some lines carry no `id`; the client keeps the one it has.
+
+On an `error` line the server ends the stream. Close the `EventSource` and open a new one without `Last-Event-ID`; the lines before `ready` are the open set. The stream ends when the client disconnects.

@@ -156,27 +156,25 @@ describe('validate check selection', () => {
     expect(job.strategy?.matrix.os).toEqual(['ubuntu-latest', 'windows-latest']);
   });
 
-  test('pack tests run in CI only on a dispatch that asks for them', () => {
-    // An unconditional `--only pack-tests` would put the slow pack tests back on every PR.
+  test.each([
+    ['pack-tests', 'run-pack-tests'],
+    ['workflow-fixtures', 'run-pack-fixtures'],
+  ])('%s runs in CI only when the %s decision selects it', (check, output) => {
+    // An unconditional `--only <check>` would put the slow pack checks back on every PR.
     const workflow = Bun.YAML.parse(
       readFileSync(resolve(import.meta.dir, '../.github/workflows/test.yml'), 'utf8')
-    ) as {
-      on: { workflow_dispatch: { inputs: Record<string, { type: string; default: unknown }> } };
-      jobs: Record<string, { steps?: { if?: string; run?: string }[] }>;
-    };
-    expect(workflow.on.workflow_dispatch.inputs['pack-tests']).toMatchObject({
-      type: 'boolean',
-      default: false,
-    });
-    const packSteps = Object.values(workflow.jobs)
+    ) as { jobs: Record<string, { steps?: { if?: string; run?: string }[] }> };
+    const steps = Object.values(workflow.jobs)
       .flatMap(job => job.steps ?? [])
       .filter(step =>
         [...(step.run ?? '').matchAll(/bun run validate --only (\S+)/g)].some(match =>
-          match[1].split(',').includes('pack-tests')
+          match[1].split(',').includes(check)
         )
       );
-    expect(packSteps.length).toBeGreaterThan(0);
-    for (const step of packSteps) expect(step.if ?? '').toContain('inputs.pack-tests');
+    expect(steps.length).toBeGreaterThan(0);
+    for (const step of steps) {
+      expect(step.if ?? '').toContain(`needs.changes.outputs.${output} == 'true'`);
+    }
   });
 
   test('the checks run every shard of the test plan and name no other', () => {
