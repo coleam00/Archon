@@ -108,6 +108,84 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('completes an exhausted loop_group with its last payload under on_exhausted: complete', async () => {
+    let callCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      callCount++;
+      yield {
+        type: 'result',
+        sessionId: `lg-sess-${String(callCount)}`,
+        structuredOutput: { done: false, note: `round ${String(callCount)}` },
+      };
+    });
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        conversationId: 'conv-lg',
+        cwd: testDir,
+        workflow: {
+          name: 'dag-loopgroup-exhausted-complete',
+          nodes: [
+            {
+              id: 'fixer',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 2,
+                on_exhausted: 'complete',
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'work',
+                    kind: 'agent',
+                    source: { kind: 'inline', prompt: 'do work until it is done' },
+                    output_format: {
+                      type: 'object',
+                      properties: { done: { type: 'boolean' }, note: { type: 'string' } },
+                      required: ['done', 'note'],
+                    },
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+            {
+              id: 'report',
+              kind: 'exec',
+              runtime: 'sh',
+              script: 'echo "done=$fixer.output.done note=$fixer.output.note"',
+              depends_on: ['fixer'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('dag-loopgroup-exhausted-complete'),
+      })
+    );
+
+    // The group's last payload reaches downstream by field; `done` says it ran out.
+    expect(callCount).toBe(2);
+    expect(result).toContain("done=false note='round 2'");
+    expect(mockDeps.store.persistWorkflowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'node_completed',
+        step_name: 'fixer',
+        data: expect.objectContaining({ maxIterations: 2 }),
+      })
+    );
+    expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+    const sent = (platform.sendMessage as Mock<(...args: unknown[]) => unknown>).mock.calls
+      .map(call => String(call[1]))
+      .join('\n');
+    expect(sent).toContain(
+      "Loop-group node 'fixer' reached max iterations (2) without completion signal 'DONE' and completed with its last output"
+    );
+  });
+
   it('INSTANCE 1: multi-node body (implement→test→review) completes on iteration 2', async () => {
     // The body has 3 nodes; only `review` is AI (calls sendQuery). implement+test are
     // bash. On iteration 1 review does NOT emit DONE; on iteration 2 it does.

@@ -21,6 +21,7 @@ import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { writeNodeArtifactsListing } from '../../../artifacts-index';
 import {
   aggregateProviderFailure,
+  describeUnmetCompletion,
   rootFailures,
   detectCompletionSignal,
   stripCompletionTags,
@@ -641,15 +642,22 @@ function recordIterationCompleted(
     });
 }
 
-async function completeLoopGroup(
+/**
+ * Complete the group with its last iteration's output. `exhaustedAt` is the iteration
+ * limit when the group ran out under `on_exhausted: complete`.
+ */
+export async function completeLoopGroup(
   run: LoopGroupRun,
   state: LoopGroupState,
-  i: number
+  i: number,
+  exhaustedAt?: number
 ): Promise<LoopGroupBodyResult> {
   await safeSendMessage(
     run.ctx.platform,
     run.ctx.conversationId,
-    `Loop-group node '${run.node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`,
+    exhaustedAt === undefined
+      ? `Loop-group node '${run.node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`
+      : `Loop-group node '${run.node.id}' reached max iterations (${String(exhaustedAt)}) ${describeUnmetCompletion(run.node.loop_group)} and completed with its last output`,
     run.msgContext
   );
   return {
@@ -657,6 +665,7 @@ async function completeLoopGroup(
     output: state.lastOutput,
     ...run.progress.usage,
     loopIterations: i,
+    ...(exhaustedAt !== undefined ? { maxIterations: exhaustedAt } : {}),
     // The final iteration's sink payload, so downstream `$group.output.field`
     // resolves from the logical value (#2637). No declaredOutputPaths: a group's
     // own output_format is ignored, so field access stays tier-2 lenient.

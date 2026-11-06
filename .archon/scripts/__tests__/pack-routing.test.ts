@@ -170,32 +170,47 @@ describe("deliver's terminal outcome", () => {
 
   it("reports the last round's ending with its pull request", () => {
     expect(
-      outcome({ ready: true, reason: 'delivered', pr_url: PR_URL, contract_left: [], summary: 'Round 1: delivered. all passed' })
+      outcome({ round: 1, done: true, ready: true, reason: 'delivered', pr_url: PR_URL, contract_left: [], summary: 'Round 1: delivered. all passed' })
     ).toMatchObject({ ready: true, reason: 'delivered', pr_url: PR_URL });
-    const blocked = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', contract_left: null, summary: 'Round 1: implement_blocked. x' });
+    const blocked = outcome({ round: 1, done: true, ready: false, reason: 'implement_blocked', pr_url: '', contract_left: null, summary: 'Round 1: implement_blocked. x' });
     expect(blocked).toMatchObject({ ready: false, reason: 'implement_blocked', pr_url: '' });
-      });
+  });
 
   it('says review threads were not checked on the forge source', () => {
     const forge = outcome(
-      { ready: true, reason: 'delivered', pr_url: PR_URL, contract_left: [], summary: 'Round 1: delivered. all passed' },
+      { round: 1, done: true, ready: true, reason: 'delivered', pr_url: PR_URL, contract_left: [], summary: 'Round 1: delivered. all passed' },
       'forge'
     );
     expect(forge.summary).toContain('Review threads');
-    const noPr = outcome({ ready: false, reason: 'implement_blocked', pr_url: '', contract_left: null, summary: 'x' }, 'forge');
+    const noPr = outcome({ round: 1, done: true, ready: false, reason: 'implement_blocked', pr_url: '', contract_left: null, summary: 'x' }, 'forge');
     expect(noPr.summary).not.toContain('Review threads');
   });
 
   it('lists the contract items the latest review left open', () => {
     const partial = outcome({
+      round: 1,
+      done: true,
       ready: true,
       reason: 'delivered',
       pr_url: PR_URL,
-     
       contract_left: ['acceptance: the console shows it (deferred)'],
       summary: 'Round 1: delivered. all passed',
     });
     expect(partial.summary).toContain('acceptance: the console shows it (deferred)');
+  });
+
+  it('reports a loop that ran out of rounds as round_cap', () => {
+    const capped = outcome({
+      round: 4,
+      done: false,
+      ready: false,
+      reason: 'ci_pr_caused',
+      pr_url: PR_URL,
+      contract_left: [],
+      summary: 'Round 4: ci_pr_caused. conflicts with dev',
+    });
+    expect(capped).toMatchObject({ ready: false, reason: 'round_cap', pr_url: PR_URL });
+    expect(capped.summary).toContain('Stopped at the 4-round cap.');
   });
 });
 
@@ -393,7 +408,6 @@ describe("deliver's round", () => {
   it('does not end ready while a review thread is open, and asks on one no round can settle', () => {
     const open = round({ INPUTS_THREADS_OPEN: '2', INPUTS_THREADS_SUMMARY: '2 review threads are unresolved' });
     expect(open).toMatchObject({ done: false, ready: false, reason: 'threads_open' });
-    expect(round({ INPUTS_PREVIOUS: '3', INPUTS_THREADS_OPEN: '1' })).toMatchObject({ done: true, ready: false, reason: 'round_cap' });
     const asked = round({
       INPUTS_THREADS_OPEN: '1',
       INPUTS_SETTLE_ASK: 'true',
@@ -403,15 +417,5 @@ describe("deliver's round", () => {
     expect(asked.summary).toContain('a person decides the API name');
     // A CI red decides the round before the threads do.
     expect(round({ INPUTS_THREADS_OPEN: '1', INPUTS_CI: 'other' })).toMatchObject({ reason: 'ci_other' });
-  });
-
-  it('ends typed at the round cap instead of exhausting the loop', () => {
-    expect(round({ INPUTS_PREVIOUS: '2', INPUTS_CI: 'pr_caused' })).toMatchObject({ round: 3, done: false });
-    expect(round({ INPUTS_PREVIOUS: '3', INPUTS_CI: 'pr_caused' })).toMatchObject({
-      round: 4,
-      done: true,
-      ready: false,
-      reason: 'round_cap',
-    });
   });
 });

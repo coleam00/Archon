@@ -180,8 +180,10 @@ Completion channels — declare at least one, pick by tier:
 
 Also: `fresh_context: true` (each iteration starts clean) and `$LOOP_PREV_OUTPUT`
 for previous-iteration state.
-A failed iteration fails the loop at `max_iterations` — bound exhaustion fails
-truthfully rather than blessing a bad last attempt.
+Reaching `max_iterations` unmet fails the loop by default, rather than blessing a bad
+last attempt. Set `on_exhausted: complete` (on `loop:` or `loop_group:`) when running out is a normal ending: the
+node then completes with the last iteration's output, and downstream tells exhaustion
+apart by the loop's own completion field.
 
 ### loop_group — repeat a sub-DAG
 

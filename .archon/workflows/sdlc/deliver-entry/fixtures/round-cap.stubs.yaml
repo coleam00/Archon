@@ -41,9 +41,9 @@ ci: { state: pr_caused, rerun: none, summary: "stub: conflicts with dev in src/a
 stage__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 round:
   round: 4
-  done: true
+  done: false
   ready: false
-  reason: round_cap
+  reason: ci_pr_caused
   pr_url: "https://github.com/example/repo/pull/1"
   prior_report: "review/report.md"
   light_review: false
