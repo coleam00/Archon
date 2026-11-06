@@ -8,7 +8,7 @@ import { mkdtemp } from 'fs/promises';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { LEGACY_VENDOR_ALIASES } from '@archon/providers/credential-catalog';
 import { getSchemaSQL } from '../bundled-schema';
-import { runEventsSql } from '../workflow-events';
+import { runEventsSql } from '../run-events-sql';
 import { metricRecordsSql } from '../workflow-metrics';
 import { SqliteAdapter, sqliteDialect } from './sqlite';
 import { isSqliteSchemaCurrent } from './sqlite-schema-state';
