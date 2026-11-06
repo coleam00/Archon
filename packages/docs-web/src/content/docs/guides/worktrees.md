@@ -49,7 +49,7 @@ Commands run in order in the new checkout, after submodules and copied files. A 
 archon isolation list                         # active worktrees and containers
 archon isolation cleanup                      # remove eligible environments older than 7 days
 archon isolation cleanup 14                   # ... older than 14 days
-archon isolation cleanup --merged             # remove environments whose branches merged
+archon isolation cleanup --merged             # remove environments whose local tips are covered by one merged PR head
 archon complete fix/login                     # remove a branch's worktree and local branch; retain its remote branch
 ```
 
