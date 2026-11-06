@@ -3,7 +3,7 @@
  *
  * It claims the waiting item that sorts first with intake's claim and order, or the
  * item the `number` input names, and writes only that claim. With `orders_only` on it
- * first marks done each open work order whose members all merged. A named item that cannot
+ * first marks done each open work order whose members all finished. A named item that cannot
  * be claimed refuses the run with the reason. A closed issue goes to `closed`, which
  * apply parks without an agent.
  *

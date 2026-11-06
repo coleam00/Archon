@@ -80,8 +80,8 @@ function inStore<T>(env: Record<string, string>, body: () => T): T {
 function facts(env: Record<string, string>, inputs: Record<string, string>, runId: string, serves = 0): Record<string, unknown> {
   const result: ScriptRun = runPackScript('build-queue/scripts/facts', {
     cwd: env.INTAKE_STATE_CWD,
-    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-    gh: {
+    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+    tracker: {
       issue: { number: serves, author: 'Maintainer', body: 'The contract.' },
       issueLabels: ['archon-ready'],
       repositoryLabels: [],
