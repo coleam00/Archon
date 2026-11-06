@@ -23,7 +23,7 @@ import {
   countedRounds,
   itemPullRequest,
 } from '../../.shared/build.ts';
-import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
+import { type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { openOrderMembers } from '../../.shared/order.ts';
@@ -64,7 +64,7 @@ function resolvePr(
   runId: string
 ): ItemPr {
   const ref = itemPullRequest(rounds, doc?.facts.triage, subject.repo);
-  const pr = ref === null ? null : viewPr(ref, forgeSource()).pr;
+  const pr = ref === null ? null : viewPr(ref).pr;
   const branch = buildBranch(subject.number, title, runId);
   if (pr !== null && pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.head_repo, subject.repo)) {
     return { pull_request: pr, continues: pr.number, branch };

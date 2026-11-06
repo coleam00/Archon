@@ -371,7 +371,7 @@ export function assertNoSelfPromotion(doc: WorkItem, add: readonly string[]): vo
 // --- the decision ---------------------------------------------------------------
 
 export interface IssueFacts {
-  /** Undefined when the selected source does not report authors. */
+  /** Undefined when the forge plugin does not report authors. */
   readonly author: string | null | undefined;
   readonly labels: readonly string[];
   readonly state: 'open' | 'closed';
@@ -430,7 +430,7 @@ export function decideIntake(
   if (trust === null) {
     if (issue.author === undefined) {
       throw new Error(
-        'the selected forge source does not report issue authors, so trust cannot be decided'
+        'the forge plugin does not report issue authors, so trust cannot be decided'
       );
     }
     trust = isMaintainer(issue.author, maintainers) ? 'maintainer' : 'outside';

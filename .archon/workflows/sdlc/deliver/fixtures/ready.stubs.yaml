@@ -70,5 +70,5 @@ fixture:
   reached: [reshape__implement, rereview__code, rereview__synthesize, ci, round, update-pr-body, outcome]
   resolved-text-contains:
     ci: '"repo":{"host":"github.com","path":"example/repo"},"number":1'
-    update-pr-body: "the source this run selected, `forge`:"
+    update-pr-body: "The pull request: https://github.com/example/repo/pull/1."
 exec-code: true

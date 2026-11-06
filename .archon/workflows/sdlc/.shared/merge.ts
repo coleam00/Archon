@@ -7,16 +7,14 @@
  * or, when none did, the one triage routed the item to continue. The queue claims them
  * with intake's claim, so an item has one owner at a time across the three queues.
  *
- * Every read and the merge go through the run's forge source (./forge.ts): GitHub's
- * GraphQL API and `gh pr merge` on `gh`, or on `forge` the operations in
- * `MERGE_QUEUE_FORGE_OPERATIONS`. Both sources fill the same `PrFacts`, so the gate's
- * refusals do not depend on which one answered.
+ * Every read and the merge go through the forge contract (./forge.ts), using the
+ * operations in `MERGE_QUEUE_FORGE_OPERATIONS`.
  */
 
 import { itemPullRequest } from './build.ts';
-import { forgeSource, invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
+import { invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
 import { isOwnPr } from './own-prs.ts';
-import { ghGraphql, ghIssueComments, viewPr } from './pr.ts';
+import { viewPr } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
@@ -241,76 +239,29 @@ export interface PrFacts {
   readonly verdict: Verdict;
 }
 
-function gh(...args: string[]): string {
-  const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
-  if (result.exitCode !== 0) {
-    throw new Error(`gh ${args.slice(0, 2).join(' ')} failed: ${result.stderr.toString().trim()}`);
-  }
-  return result.stdout.toString();
-}
-
-function graphql(host: string, query: string, fields: Record<string, string | number>): Record<string, unknown> {
-  const repository = record(ghGraphql(host, query, fields).repository);
-  if (repository === undefined) throw new Error('gh api graphql returned no repository');
-  return repository;
-}
-
-/** The forge operations the merge queue reads and merges through on the `forge` source. */
+/** The forge operations the merge queue reads and merges through. */
 export const MERGE_QUEUE_FORGE_OPERATIONS = [
   'pr.view',
   'pr.merge',
   'pr.threads',
   'checks.state',
   'checks.commit',
+  'checks.rerun',
   'pr.merge-state',
   'workitem.comments',
 ] as const;
 
 /**
- * On `forge`, refuse a plugin that lacks a merge-queue operation before anything is
+ * Refuse a plugin that lacks a merge-queue operation before anything is
  * claimed: every pull request it could not read would otherwise wait, then park.
  */
 export function requireMergeSource(repo: QualifiedPr['repo']): void {
-  if (forgeSource() !== 'forge') return;
   const capabilities = invokeForge('metadata', { host: repo.host })?.capabilities;
   if (!Array.isArray(capabilities)) throw new Error('forge metadata returned no operation capabilities');
   const missing = MERGE_QUEUE_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
   if (missing.length > 0) {
     throw new Error(`the forge plugin for ${repo.host} lacks the merge queue's ${missing.join(', ')}. ${REMEDY.unsupported_op}`);
   }
-}
-
-const ROLLUP = `statusCheckRollup { contexts(first: 100) { totalCount nodes {
-  __typename
-  ... on CheckRun { name status conclusion }
-  ... on StatusContext { context state }
-} } }`;
-
-const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
-
-/** Every check context on one commit, as the forge reports its machine states. */
-export function checksOf(rollup: unknown): Checks {
-  const contexts = record(record(rollup)?.contexts);
-  const nodes = Array.isArray(contexts?.nodes) ? contexts.nodes : [];
-  if (typeof contexts?.totalCount === 'number' && contexts.totalCount > nodes.length) {
-    throw new Error(`the commit has ${String(contexts.totalCount)} checks; the gate reads at most 100`);
-  }
-  const failing: string[] = [];
-  const pending: string[] = [];
-  for (const node of nodes) {
-    const check = record(node);
-    if (check?.__typename === 'CheckRun') {
-      const name = String(check.name);
-      if (check.status !== 'COMPLETED') pending.push(name);
-      else if (!PASSED.has(String(check.conclusion))) failing.push(name);
-    } else if (check?.__typename === 'StatusContext') {
-      const name = String(check.context);
-      if (check.state === 'PENDING' || check.state === 'EXPECTED') pending.push(name);
-      else if (check.state !== 'SUCCESS') failing.push(name);
-    }
-  }
-  const state = failing.length > 0 ? 'red' : pending.length > 0 ? 'pending' : nodes.length === 0 ? 'none' : 'green';
-  return { state, failing, pending };
 }
 
 export interface BaseFacts {
@@ -321,24 +272,11 @@ export interface BaseFacts {
 
 /** The default branch, its head commit and the checks on it. */
 export function readBase(repo: QualifiedPr['repo']): BaseFacts {
-  return forgeSource() === 'forge' ? readForgeBase(repo) : readGhBase(repo);
-}
-
-function readGhBase(repo: QualifiedPr['repo']): BaseFacts {
-  const [owner, name] = repo.path.split('/');
-  const repository = graphql(
-    repo.host,
-    `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {
-      defaultBranchRef { name target { ... on Commit { oid ${ROLLUP} } } }
-    } }`,
-    { owner: owner ?? '', name: name ?? '' }
-  );
-  const ref = record(repository.defaultBranchRef);
-  const target = record(ref?.target);
-  if (typeof ref?.name !== 'string' || typeof target?.oid !== 'string') {
+  const value = invokeForge('checks.commit', { repo, at: { kind: 'default_branch' } });
+  if (typeof value?.branch !== 'string' || typeof value.revision !== 'string') {
     throw new Error(`${repo.path} reports no default branch`);
   }
-  return { branch: ref.name, head: target.oid, checks: checksOf(target.statusCheckRollup) };
+  return { branch: value.branch, head: value.revision, checks: checksOf(value.units) };
 }
 
 interface Comment {
@@ -368,92 +306,16 @@ function trustedReview(comments: readonly Comment[], maintainers: ReadonlySet<st
 
 /** The commit the pull request's trusted review comment names, or null when it has none. */
 export function reviewedHead(pr: QualifiedPr, maintainers: ReadonlySet<string>): string | null {
-  const verdict = trustedReview(forgeSource() === 'forge' ? readForgeComments(pr) : ghIssueComments(pr), maintainers);
+  const verdict = trustedReview(readComments(pr), maintainers);
   if (verdict.state === 'duplicate') throw new Error(`pull request ${String(pr.number)} has more than one trusted review comment`);
   return verdict.reviewed;
 }
 
-const PR_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) {
-  defaultBranchRef { name }
-  pullRequest(number: $number) {
-    url title state isDraft baseRefName headRefName headRefOid mergeable
-    mergeCommit { oid }
-    commits(last: 1) { nodes { commit { oid ${ROLLUP} } } }
-    reviewThreads(first: 100) { totalCount nodes { isResolved comments(first: 1) { nodes { url } } } }
-  }
-} }`;
-
-const BEHIND_QUERY = `query($owner: String!, $name: String!, $head: String!) { repository(owner: $owner, name: $name) {
-  defaultBranchRef { target { oid } compare(headRef: $head) { behindBy } }
-} }`;
-
 /**
- * The default branch's head and how many of its commits `head` lacks. A head that
- * lacks some still merges when the forge reports it merges cleanly.
+ * The forge's check units on one commit: only a green unit passes, so a gated or
+ * unknown one is failing.
  */
-function readBehind(repo: QualifiedPr['repo'], head: string): { default_head: string; behind: number } {
-  const [owner, name] = repo.path.split('/');
-  const ref = record(graphql(repo.host, BEHIND_QUERY, { owner: owner ?? '', name: name ?? '', head }).defaultBranchRef);
-  const oid = record(ref?.target)?.oid;
-  const behind = record(ref?.compare)?.behindBy;
-  if (typeof oid !== 'string' || typeof behind !== 'number') {
-    throw new Error(`${repo.path} cannot compare ${head} with its default branch`);
-  }
-  return { default_head: oid, behind };
-}
-
-/** One snapshot of everything the gate and the sweep read about a pull request. */
-export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFacts {
-  return forgeSource() === 'forge' ? readForgePr(pr, maintainers) : readGhPr(pr, maintainers);
-}
-
-function readGhPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFacts {
-  const [owner, name] = pr.repo.path.split('/');
-  const repository = graphql(pr.repo.host, PR_QUERY, { owner: owner ?? '', name: name ?? '', number: pr.number });
-  const row = record(repository.pullRequest);
-  const defaultBranch = record(repository.defaultBranchRef)?.name;
-  if (row === undefined || typeof row.headRefOid !== 'string' || typeof defaultBranch !== 'string') {
-    throw new Error(`${pr.repo.path} has no pull request ${String(pr.number)}`);
-  }
-  const commit = record(record((record(row.commits)?.nodes as unknown[] | undefined)?.[0])?.commit);
-  if (commit?.oid !== row.headRefOid) throw new Error(`the checks read for ${String(row.url)} are not on its head`);
-  const threads = record(row.reviewThreads);
-  const threadNodes = Array.isArray(threads?.nodes) ? threads.nodes.map(node => record(node)) : [];
-  if (typeof threads?.totalCount === 'number' && threads.totalCount > threadNodes.length) {
-    throw new Error(`${String(row.url)} has ${String(threads.totalCount)} review threads; the gate reads at most 100`);
-  }
-  const unresolved = threadNodes.filter(thread => thread?.isResolved !== true);
-  const verdict = trustedReview(ghIssueComments(pr), maintainers);
-  const { default_head, behind } = readBehind(pr.repo, row.headRefOid);
-  const state = String(row.state).toLowerCase();
-  return {
-    pr,
-    url: String(row.url),
-    title: String(row.title),
-    state: state === 'merged' || state === 'closed' ? state : 'open',
-    is_draft: row.isDraft === true,
-    base: String(row.baseRefName),
-    default_branch: defaultBranch,
-    default_head,
-    behind,
-    head: String(row.headRefName),
-    head_revision: row.headRefOid,
-    merge_commit: typeof record(row.mergeCommit)?.oid === 'string' ? String(record(row.mergeCommit)?.oid) : null,
-    mergeable: row.mergeable === 'MERGEABLE' ? 'clean' : row.mergeable === 'CONFLICTING' ? 'conflict' : 'unknown',
-    checks: checksOf(commit.statusCheckRollup),
-    threads: {
-      unresolved: unresolved.length,
-      urls: unresolved.map(thread => String(record((record(thread?.comments)?.nodes as unknown[] | undefined)?.[0])?.url ?? '')),
-    },
-    verdict,
-  };
-}
-
-/**
- * The forge's check units on one commit, read as `checksOf` reads the gh rollup: only
- * a green unit passes, so a gated or unknown one is failing.
- */
-function checksOfUnits(units: unknown): Checks {
+function checksOf(units: unknown): Checks {
   if (!Array.isArray(units)) throw new Error('forge returned no check units');
   const failing: string[] = [];
   const pending: string[] = [];
@@ -468,16 +330,8 @@ function checksOfUnits(units: unknown): Checks {
   return { state, failing, pending };
 }
 
-function readForgeBase(repo: QualifiedPr['repo']): BaseFacts {
-  const value = invokeForge('checks.commit', { repo, at: { kind: 'default_branch' } });
-  if (typeof value?.branch !== 'string' || typeof value.revision !== 'string') {
-    throw new Error(`${repo.path} reports no default branch`);
-  }
-  return { branch: value.branch, head: value.revision, checks: checksOfUnits(value.units) };
-}
-
 /** How far `head` is behind the default branch and whether it merges, read at that head. */
-function readForgeMergeState(ref: QualifiedPr, url: string, head: string) {
+function readMergeState(ref: QualifiedPr, url: string, head: string) {
   const value = invokeForge('pr.merge-state', { ref });
   const mergeable = MERGEABLE.find(state => state === value?.mergeable);
   if (
@@ -500,7 +354,7 @@ function readForgeMergeState(ref: QualifiedPr, url: string, head: string) {
   };
 }
 
-function readForgeThreads(ref: QualifiedPr): PrFacts['threads'] {
+function readThreads(ref: QualifiedPr): PrFacts['threads'] {
   const threads = invokeForge('pr.threads', { ref })?.threads;
   if (!Array.isArray(threads)) throw new Error('forge pr.threads returned no thread list');
   const unresolved = threads.map(record).filter(thread => {
@@ -516,7 +370,7 @@ function readForgeThreads(ref: QualifiedPr): PrFacts['threads'] {
   };
 }
 
-function readForgeComments(ref: QualifiedPr): Comment[] {
+function readComments(ref: QualifiedPr): Comment[] {
   const comments = invokeForge('workitem.comments', { subject: { kind: 'pr', ref } })?.comments;
   if (!Array.isArray(comments)) throw new Error('forge workitem.comments returned no comment list');
   return comments.map(raw => {
@@ -529,13 +383,16 @@ function readForgeComments(ref: QualifiedPr): Comment[] {
   });
 }
 
-/** The same snapshot through the forge contract: each read that names a commit must name the head. */
-function readForgePr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFacts {
+/**
+ * One snapshot of everything the gate and the sweep read about a pull request. Each
+ * read that names a commit must name the head.
+ */
+export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFacts {
   const ref = { repo: pr.repo, number: pr.number };
-  const view = viewPr(ref, 'forge');
+  const view = viewPr(ref);
   const { url, head_revision: head } = view.pr;
   if (head === null) throw new Error(`${url} reports no head commit`);
-  const mergeState = readForgeMergeState(ref, url, head);
+  const mergeState = readMergeState(ref, url, head);
   const checks = invokeForge('checks.state', { ref });
   if (checks?.revision !== head) throw new Error(`the checks read for ${url} are not on its head`);
   return {
@@ -548,9 +405,9 @@ function readForgePr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFacts
     head: view.pr.head,
     head_revision: head,
     ...mergeState,
-    checks: checksOfUnits(checks.units),
-    threads: readForgeThreads(ref),
-    verdict: trustedReview(readForgeComments(ref), maintainers),
+    checks: checksOf(checks.units),
+    threads: readThreads(ref),
+    verdict: trustedReview(readComments(ref), maintainers),
   };
 }
 
@@ -593,15 +450,11 @@ export function gateRefusals(facts: PrFacts, head: string, base: { readonly head
 
 /**
  * Merge at exactly `head`; the forge refuses when the head has moved since it was read.
- * On `forge` a merge the plugin cannot verify throws its outcome, which fails the gate
- * with nothing read back.
+ * A merge the plugin cannot verify throws its outcome, which fails the gate with
+ * nothing read back.
  */
 export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): void {
-  if (forgeSource() === 'forge') {
-    invokeForge('pr.merge', { ref: { repo: pr.repo, number: pr.number }, method, conditions: { head } });
-    return;
-  }
-  gh('pr', 'merge', String(pr.number), '--repo', `${pr.repo.host}/${pr.repo.path}`, `--${method}`, '--match-head-commit', head);
+  invokeForge('pr.merge', { ref: { repo: pr.repo, number: pr.number }, method, conditions: { head } });
 }
 
 /** The merge commit of a pull request that reads back merged at `head`; null otherwise. */
