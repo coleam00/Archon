@@ -133,6 +133,25 @@ test('attention waits carry their form, options and pause identity when they hav
   });
 });
 
+test('an attention notice carries the recommendation and what options do, never their value', () => {
+  const recommendation = { option: 'use-main', why: 'Main has the fix.' };
+  const projected = chatAttentionNotice(
+    notice('attention', 'paused', {
+      wait: {
+        ...wait,
+        pauseId: 'p3',
+        form: 'select',
+        options: [{ id: 'use-main', does: 'Rebases onto main.', value: { base: 'main' } }],
+        recommendation,
+      },
+    })
+  );
+  expect(projected).toMatchObject({ recommendation });
+  expect(projected.type === 'attention' && projected.options).toEqual([
+    { id: 'use-main', does: 'Rebases onto main.' },
+  ]);
+});
+
 test('terminal notices carry status, authored outcome and cost', () => {
   expect(
     chatAttentionNotice(notice('terminal', 'failed', { total_cost_usd: 0.25 }, 'failed'))

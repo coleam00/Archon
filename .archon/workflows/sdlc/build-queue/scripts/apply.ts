@@ -25,7 +25,7 @@ import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
-import { attentionOptions, checkAttention, type DecisionEntry, renderAttention, withOther } from '../../.shared/queue.ts';
+import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
@@ -188,6 +188,7 @@ function main(): void {
       summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
       attention: '',
       options: [],
+      recommendation: null,
       class: '',
       asked: null,
     });
@@ -205,10 +206,10 @@ function main(): void {
   const decision = decide(path, route, answer);
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
-  const attention =
+  const wait =
     asking === null
-      ? ''
-      : renderAttention(`Build queue, issue ${String(item.number)}: ${asking.by} decision`, asking.attention);
+      ? null
+      : attentionWait(`Build queue, issue ${String(item.number)}: ${asking.by} decision`, asking.attention);
   const links = [
     ...(round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '')),
     ...(asking?.attention.links ?? []),
@@ -216,8 +217,7 @@ function main(): void {
   const result = {
     decision: decision.kind satisfies ApplyDecision,
     summary: summaryOf(item, decision),
-    attention,
-    options: asking === null ? [] : attentionOptions(asking.attention),
+    ...askFields(wait),
     class: asking?.by ?? '',
     asked:
       asking === null ? null : { attention: asking.attention, brief: asking.brief, by: asking.by },

@@ -258,6 +258,7 @@ nodes:
         summary: { type: string }
         # The attention message; empty when nothing is asked.
         attention: { type: string }
+        # Each choice as a wait option; its value is the choice the answer returns.
         options:
           type: array
           items:
@@ -265,12 +266,16 @@ nodes:
             properties:
               id: { type: string }
               label: { type: string }
-            required: [id, label]
+              does: { type: string }
+              value: { type: object }
+            required: [id, label, does, value]
+        # The wait's recommendation; null when nothing is asked.
+        recommendation: { type: [object, 'null'] }
         class: { type: string, enum: ['', route, stop, scope] }
         # What the answer node needs: the attention item, the brief a continue choice
         # launches and which decision asked; null when nothing is asked.
         asked: { type: [object, 'null'] }
-      required: [decision, summary, attention, options, class, asked]
+      required: [decision, summary, attention, options, recommendation, class, asked]
 
   # A paused run gives its resource slot back, so the next scheduled run can work
   # another item while this one waits.
@@ -281,6 +286,7 @@ nodes:
       attention: "$apply.output.attention"
       form: select
       options: "$apply.output.options"
+      recommendation: "$apply.output.recommendation"
       labels:
         build: "$apply.output.class"
 
@@ -291,7 +297,7 @@ nodes:
     with:
       item: { from: "$facts.output.item" }
       asked: { from: "$apply.output.asked" }
-      choice: "$ask.output.decision"
+      choice: { from: "$ask.output.value" }
       text: "$ask.output.text"
     output_format:
       type: object

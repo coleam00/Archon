@@ -25,6 +25,7 @@ import {
   attentionLabelKeySchema,
   attentionLabelsSchema,
   attentionOptionSchema,
+  attentionRecommendationSchema,
   type AttentionLabels,
 } from './schemas/wait-node';
 import {
@@ -113,6 +114,7 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     message: z.string(),
     form: attentionFormSchema,
     options: z.array(attentionOptionSchema),
+    recommendation: attentionRecommendationSchema.optional(),
   }),
   z.object({
     kind: z.literal('awaiting_response'),
@@ -226,6 +228,9 @@ export function toAttentionQueueItem(
         message: attention.message,
         form: attention.form,
         options: attention.options,
+        ...(attention.recommendation !== undefined
+          ? { recommendation: attention.recommendation }
+          : {}),
       };
     case 'awaiting_response':
       return {

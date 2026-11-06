@@ -24,6 +24,7 @@ record:
   summary: "stub: merged PR 42"
   attention: ""
   options: []
+  recommendation: null
   class: ""
   asked: null
 retriage:

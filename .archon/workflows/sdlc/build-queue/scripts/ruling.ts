@@ -1,8 +1,8 @@
 /**
  * Act on a person's answer to the build queue's attention item.
  *
- * The answer is one of the declared choices, so its effect is read from the choice,
- * never from the answer's text. The choice's ruling and the person's words are written
+ * The answer is one of the declared choices, and the wait returns that choice as the
+ * answer's value, so its effect is read from the choice, never from the answer's text. The choice's ruling and the person's words are written
  * into the issue body as one dated "Current scope" section and read back, so the next
  * run and its review read the ruling as the contract. Then the answer is recorded on the
  * work item as the item's next owner, and the claim is released: `continue` keeps it in
@@ -11,8 +11,8 @@
  * at once, on the run config and input selections this run started with; if that
  * launch fails, the item waits for the next queue run as before.
  *
- * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE
- * and INPUTS_TEXT, the attention answer; INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT,
+ * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE,
+ * the chosen choice (the answer's value), and INPUTS_TEXT, the answer's text; INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT,
  * the workflow's inputs.
  */
 
@@ -21,7 +21,7 @@ import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { chosen, rulingHeading } from '../../.shared/queue.ts';
+import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 
 interface Asked {
@@ -55,7 +55,8 @@ function main(): void {
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const asked = nullableJson(process.env.INPUTS_ASKED) as Asked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const choice = chosen(asked.attention, trimmed(process.env.INPUTS_CHOICE));
+  const choice = nullableJson(process.env.INPUTS_CHOICE) as Choice<BuildEffect> | null;
+  if (choice === null) throw new Error(PRE_VALUE_ANSWER);
   const words = trimmed(process.env.INPUTS_TEXT);
   const at = new Date().toISOString();
   const selections: BuildQueueSelections = {

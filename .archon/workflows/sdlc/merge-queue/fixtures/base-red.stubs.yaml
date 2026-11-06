@@ -34,7 +34,9 @@ record:
   merged: []
   summary: "stub: dev is red; merged nothing"
   attention: "stub: the attention message"
-  options: [{ id: hold, label: "stub: hold merges" }]
+  options:
+    - { id: hold, label: "stub: hold merges", does: "stub: holds merges", value: { id: hold, label: "stub: hold merges", does: "stub: holds merges", effect: hold, ruling: "" } }
+  recommendation: { option: hold, why: "stub: why", confidence: high }
   class: base
   asked: { by: base, attention: {} }
 ask: { decision: hold, text: "" }

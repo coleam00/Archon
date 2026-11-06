@@ -1,8 +1,8 @@
 /**
  * Act on a person's answer to the merge queue's attention item.
  *
- * The answer is one of the declared choices, so its effect is read from the choice,
- * never from the answer's text. On a pull request: `merge` records the approval pinned
+ * The answer is one of the declared choices, and the wait returns that choice as the
+ * answer's value, so its effect is read from the choice, never from the answer's text. On a pull request: `merge` records the approval pinned
  * to the head that was asked about, and the next sweep merges it once the gate passes
  * at that head; `return` hands the item back to the build queue with the brief the
  * sweep wrote; `park` stops working it until renewed build readiness or, for an
@@ -17,8 +17,8 @@
  * this run's config and the build queue's own input defaults; if that launch fails, the
  * next queue run picks the item up as before.
  *
- * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE and INPUTS_TEXT, the
- * attention answer; INPUTS_LIMIT, INPUTS_MERGE_METHOD and INPUTS_RETRIAGE_AS, the workflow's inputs.
+ * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE, the chosen choice (the
+ * answer's value), and INPUTS_TEXT, the answer's text; INPUTS_LIMIT, INPUTS_MERGE_METHOD and INPUTS_RETRIAGE_AS, the workflow's inputs.
  */
 
 import { withBuild } from '../../.shared/build.ts';
@@ -27,7 +27,7 @@ import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/i
 import { launchDetached, type MergeQueueSelections } from '../../.shared/launch.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
-import { chosen, rulingHeading } from '../../.shared/queue.ts';
+import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
 const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<
@@ -70,10 +70,10 @@ function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, a
 function main(): void {
   const asked = nullableJson(process.env.INPUTS_ASKED) as MergeAsked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const id = trimmed(process.env.INPUTS_CHOICE);
+  const answered = nullableJson(process.env.INPUTS_CHOICE) as Choice<string> | null;
+  if (answered === null) throw new Error(PRE_VALUE_ANSWER);
   const words = trimmed(process.env.INPUTS_TEXT);
   if (asked.by === 'base') {
-    chosen(asked.attention, id);
     emit({
       decision: 'hold',
       section: '',
@@ -84,7 +84,7 @@ function main(): void {
 
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-  const choice = chosen(asked.attention, id);
+  const choice = answered as MergeAttention['choices'][number];
   const at = new Date().toISOString();
   const selections: MergeQueueSelections = {
     limit: text(process.env.INPUTS_LIMIT),

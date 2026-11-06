@@ -12,11 +12,12 @@
 import type { QualifiedPr } from './forge.ts';
 import {
   type Attention,
-  attentionOptions,
+  type AttentionWait,
+  attentionWait,
   checkAttention,
-  chosen,
+  type Choice,
+  PRE_VALUE_ANSWER,
   type Recommendation,
-  renderAttention,
 } from './queue.ts';
 
 /**
@@ -61,7 +62,9 @@ export interface Settled {
   readonly outcome: unknown;
   /** The attention message; empty when nothing is asked. */
   readonly message: string;
-  readonly options: readonly { id: string; label: string }[];
+  readonly options: AttentionWait<StageEffect>['options'];
+  /** The wait's recommendation; null when nothing is asked. */
+  readonly recommendation: AttentionWait<StageEffect>['recommendation'] | null;
   readonly asked: Asked | null;
   /**
    * What the stage's next pass starts from if the person answers `rerun`; the entry
@@ -92,12 +95,10 @@ export function previousAnswer(
   if (settled.asked === null) {
     throw new Error('the previous pass recorded an answer but raised no attention item');
   }
-  const { decision } = JSON.parse(answer) as { decision: string };
-  return {
-    asked: settled.asked,
-    choice: chosen(settled.asked.attention, decision).effect,
-    outcome: settled.outcome,
-  };
+  // The wait returns the chosen choice as the answer's value.
+  const { value } = JSON.parse(answer) as { value?: Choice<StageEffect> };
+  if (value === undefined) throw new Error(PRE_VALUE_ANSWER);
+  return { asked: settled.asked, choice: value.effect, outcome: settled.outcome };
 }
 
 /**
@@ -110,7 +111,7 @@ export function previousAnswer(
 export function settle(stage: string, outcome: unknown, decision: StageDecision): Settled {
   if (decision.decision === 'done') {
     if (decision.attention !== null) throw new Error('a done decision carries an attention item');
-    return { done: true, outcome, message: '', options: [], asked: null, brief: '' };
+    return { done: true, outcome, message: '', options: [], recommendation: null, asked: null, brief: '' };
   }
   if (decision.attention === null) throw new Error('an ask decision carries no attention item');
   const attention: Attention<StageEffect> = {
@@ -123,18 +124,25 @@ export function settle(stage: string, outcome: unknown, decision: StageDecision)
   if (offered.includes('ready') && decision.pull_request === null) {
     throw new Error('the attention item offers `ready` but names no pull request');
   }
-  const message = renderAttention(`${stage}: a person decides how this run continues`, attention);
+  const { message, options, recommendation } = attentionWait(
+    `${stage}: a person decides how this run continues`,
+    attention
+  );
   return {
     done: false,
     outcome,
     message,
-    options: attentionOptions(attention),
+    options,
+    recommendation,
     asked: { attention, pull_request: decision.pull_request },
     brief: [
       '',
       'This run already stopped once at this stage and asked a person:',
       '',
       message,
+      // The wait shows these beside the message; the next pass reads them here.
+      `Recommended: \`${attention.recommendation.choice}\` (${attention.recommendation.confidence} confidence). ${attention.recommendation.why}`,
+      ...attention.choices.map(choice => `- \`${choice.id}\` (${choice.label}): ${choice.does}`),
       '',
       'They chose `rerun`: run this stage again. Their note follows, and where it conflicts with the work above, the note decides (empty when they wrote none):',
       '',

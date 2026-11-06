@@ -886,7 +886,8 @@ to a different pause in the meantime. If the diagnostic read succeeds and the ru
 awaiting another answer, the refusal names the current occurrence. Otherwise, fetch the
 current item again before retrying.
 For an attention wait, the output carries `attention.kind: "attention"`, the authored
-message, the paused node id, the `form` and the `options` an answer may choose from.
+message, the paused node id, the `form`, the `options` an answer may choose from (with
+each option's `does` when the wait declares it), and the `recommendation` when there is one.
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
 <run-id>` if the run should not continue.
 
@@ -941,7 +942,9 @@ the host the run recorded and says when it is not this one. The console applies 
   merely still running wakes nobody.
 - `attention`: a `wait: attention` needs an answer to `message`, in its `form`
   (`message`, `approval`, `select` or `multi_select`). `options` lists the ids an answer may
-  choose (none for `message`, `approve` and `reject` for `approval`), and `occurrence`
+  choose (none for `message`, `approve` and `reject` for `approval`), each with its `does`
+  text and `value` when the wait declares them; `recommendation` is the option the wait
+  recommends, when it declares one; and `occurrence`
   identifies this pause. A wait paused before attention waits took answers reports a
   `legacy:<node>` occurrence and the `message` form; it takes no answer and continues
   with `workflow resume <run-id>`.

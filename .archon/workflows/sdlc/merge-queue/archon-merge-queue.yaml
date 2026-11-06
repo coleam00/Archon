@@ -180,6 +180,7 @@ nodes:
         summary: { type: string }
         # The attention message; empty when nothing is asked.
         attention: { type: string }
+        # Each choice as a wait option; its value is the choice the answer returns.
         options:
           type: array
           items:
@@ -187,11 +188,15 @@ nodes:
             properties:
               id: { type: string }
               label: { type: string }
-            required: [id, label]
+              does: { type: string }
+              value: { type: object }
+            required: [id, label, does, value]
+        # The wait's recommendation; null when nothing is asked.
+        recommendation: { type: [object, 'null'] }
         class: { type: string, enum: ['', pr, base] }
         # What the ruling node needs to act on the answer; null when nothing is asked.
         asked: { type: [object, 'null'] }
-      required: [merged, summary, attention, options, class, asked]
+      required: [merged, summary, attention, options, recommendation, class, asked]
 
   # An issue its merged pull request left open (`Refs #N`) goes back to intake, the
   # judge of whether the work is delivered. Writes nothing on the work item.
@@ -219,6 +224,7 @@ nodes:
       attention: "$record.output.attention"
       form: select
       options: "$record.output.options"
+      recommendation: "$record.output.recommendation"
       labels:
         merge: "$record.output.class"
 
@@ -228,7 +234,7 @@ nodes:
     depends_on: [record, ask]
     with:
       asked: { from: "$record.output.asked" }
-      choice: "$ask.output.decision"
+      choice: { from: "$ask.output.value" }
       text: "$ask.output.text"
     output_format:
       type: object
