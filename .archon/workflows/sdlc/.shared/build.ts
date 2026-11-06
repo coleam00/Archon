@@ -93,7 +93,7 @@ export interface BuildRecord {
 
 // Rounds, decisions and their prose are capped so the record keeps the work item well
 // under the state store's 64 KiB limit. `archon state log` keeps every revision.
-const KEPT_ROUNDS = 10;
+export const KEPT_ROUNDS = 10;
 const KEPT_DECISIONS = 20;
 const KEPT_TEXT = 1500;
 

@@ -6,6 +6,7 @@ import { expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
+import { reviewRoundRecords } from '../../workflows/sdlc/.shared/review-rounds';
 import { judgeSlots, scoreCalibration, testValueRecords } from '../../workflows/sdlc/.shared/test-value';
 
 const PR = 'https://github.example.com/acme/widgets/pull/1';
@@ -34,6 +35,7 @@ function emitted(): Map<string, { kind: unknown; calibrates: unknown }> {
   const labeled = { pr: PR, tests: [{ file: 'a.test.ts', name: 'logs the probe', protects: false }] };
   const records: { name?: unknown; kind?: unknown; calibrates?: unknown }[] = [
     ...prMetricRecords(prs, runsByUrl),
+    ...reviewRoundRecords(prs, runsByUrl, new Set(), () => ({ ok: true, verdicts: [{ at: AT, ready: true }] })).metrics,
     ...testValueRecords(judged, 'judge:abc').metrics,
     ...scoreCalibration(judgeSlots([labeled], [{ tests: [verdict] }]), 'judge:abc').metrics,
   ];

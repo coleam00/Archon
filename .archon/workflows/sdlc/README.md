@@ -992,6 +992,51 @@ The pack installs no binding. A native schedule refreshes the records daily:
 }
 ```
 
+### Review rounds
+
+`archon-metrics-prs` also records, for each merged factory pull request, how many review
+rounds it took to reach Ready, at its merge time and attributed to the build-queue runs
+that built it:
+
+| Metric | Kind | Unit | One record per merged pull request |
+|---|---|---|---|
+| `sdlc.review_rounds` | score | `rounds` | its review rounds to Ready; the value is the mean |
+| `sdlc.review_one_round` | score | `ratio` | 1 when it was Ready after one round, else 0 |
+| `sdlc.review_five_plus_rounds` | score | `ratio` | 1 when it needed five rounds or more, else 0 |
+
+A review round is one verdict a delivery round's review published on the pull request:
+the `review-report` output of the deliver loop's `review` node, or of its `rereview`
+node, which reviews what simplify's reshape changed. Every build run that carried the
+pull request counts, oldest verdict first; the engine keeps each verdict in that run's
+artifacts, which its build round on the work item names. Rounds to Ready counts up to the
+verdict from which every later verdict is ready, so a Ready review that a later review
+overturned does not end the count. A pull request Ready on its first review and on every
+review after it, such as the light review after a CI fix, took one round.
+
+Only merged pull requests are measured: an open one can take another round, and a record
+cannot be withdrawn. The node's `review_rounds_distribution` output gives the number of
+pull requests per round count. A merged pull request is listed in
+`review_rounds_skipped`, with the reason, and counts in none of these when a build run's
+artifacts are gone (`archon workflow cleanup` removes them), when its work item dropped
+the build rounds that may have carried it, or when it merged without a Ready review on
+record.
+
+Two metrics of the review set are reported in the node's `not_available` output instead
+of recorded, because no record carries them yet: the share of merged pull requests later
+reverted or fixed by a follow-up (the merge record keeps no landed commit, the forge
+contract has no read that finds a revert, and a follow-up names what it fixes only in
+prose), and the share of blocking findings on code the change did not modify (findings
+carry no typed origin). Neither is estimated from prose.
+
+The console's overview cards count only `count` metrics, so these scores appear on the
+Details screen, not as cards. Compare them across a pack change, or by the model that ran
+the review's code lens:
+
+```bash
+archon metrics sdlc.review_rounds --compare <when this checkout picked up a pack change>
+archon metrics sdlc.review_one_round --by-model ship__deliver__rounds.review__code
+```
+
 ### Test value
 
 [`archon-metrics-test-value`](metrics-test-value/archon-metrics-test-value.yaml) judges
