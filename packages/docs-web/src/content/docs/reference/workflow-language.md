@@ -3123,7 +3123,7 @@ nodes:
     model: ['@review-seams', '@reviewer', medium]
 ```
 
-A list is how a bundled workflow names the concern each node serves without requiring you to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-5.5`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-5.5`. A run binding of an alias that no config defines must name its provider.
+A list is how a bundled workflow names the concern each node serves without requiring you to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-6.1-sol`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-6.1-sol`. A run binding of an alias that no config defines must name its provider.
 
 Tier and alias refs resolve to a provider, model and optional `effort`. If a workflow or node sets `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
 

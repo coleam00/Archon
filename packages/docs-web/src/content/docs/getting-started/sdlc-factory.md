@@ -75,8 +75,8 @@ Each stage picks its model from a concern alias, falling back to the tier it has
 | `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs` or `simplify` | `@reviewer`, then the lens's tier |
 
 ```bash
-archon ai alias set @reviewer codex gpt-5.5                                   # every run
-archon workflow run archon-build-queue --model @reviewer=codex/gpt-5.5 ...    # one run
+archon ai alias set @reviewer codex gpt-6.1-sol                                   # every run
+archon workflow run archon-build-queue --model @reviewer=codex/gpt-6.1-sol ...    # one run
 ```
 
 ## 4. Write an issue the factory can build

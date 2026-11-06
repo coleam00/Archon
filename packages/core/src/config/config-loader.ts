@@ -189,7 +189,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #   claude:
 #     model: sonnet
 #   codex:
-#     model: gpt-5.6-sol
+#     model: gpt-6.1-sol
 #     modelReasoningEffort: medium
 #     webSearchMode: disabled
 #     additionalDirectories:
@@ -198,7 +198,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Model tier presets (usable as model: small / medium / large)
 # tiers:
 #   large: { provider: claude, model: opus }
-#   medium: { provider: codex, model: gpt-5.6-terra, effort: high }
+#   medium: { provider: codex, model: gpt-6.1-terra, effort: high }
 #   small: { provider: pi, model: minimax-m3 }
 
 # Streaming mode per platform (stream or batch)

@@ -196,7 +196,7 @@ export function AliasesPanel(): ReactElement {
                   onChange={v => {
                     setRow(i, { model: v });
                   }}
-                  placeholder="model (e.g. opus, gpt-5.6-terra)"
+                  placeholder="model (e.g. opus, gpt-6.1-terra)"
                   ariaLabel="Model"
                   className="min-w-[140px] flex-1"
                   agents={keyData?.agents}
