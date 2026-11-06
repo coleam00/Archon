@@ -33,7 +33,7 @@ describe('lens-outcomes', () => {
     });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
-      seams: 'completed', code: 'failed', tests: 'skipped', errors: 'unreadable', docs: 'unreadable',
+      seams: 'completed', code: 'failed', tests: 'skipped', errors: 'unreadable', docs: 'unreadable', ux: 'unreadable',
     });
   });
 });
