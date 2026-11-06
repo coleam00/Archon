@@ -398,7 +398,7 @@ curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
   -H "Content-Type: application/json" \
   -d '{"message":"fix #2481","conversationId":"conv-123",
        "tiers":{"large":"openai/gpt-5.6"},
-       "aliases":{"@reviewer":"codex/gpt-5.6-sol"}}'
+       "aliases":{"@reviewer":"codex/gpt-6.1-sol"}}'
 
 # multipart: each map is one JSON-encoded form field
 curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
