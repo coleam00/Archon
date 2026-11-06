@@ -14,7 +14,7 @@ import {
   WorktreeRemovalInProgressError,
 } from '@archon/isolation/types';
 import { createMockLogger } from '../../test/mocks/logger';
-import { toBranchName } from '@archon/git';
+import { GitFailure, toBranchName } from '@archon/git';
 import type {
   ContainerBackend,
   IIsolationProvider,
@@ -177,6 +177,7 @@ export const mockGetLastCommitDate = mock<typeof Git.getLastCommitDate>();
 export const mockIsRevCoveredBy = mock<typeof Git.isRevCoveredBy>();
 export const mockCountCommitsMissingFromRemotes = mock<typeof Git.countCommitsMissingFromRemotes>();
 mock.module('@archon/git', () => ({
+  GitFailure,
   getGitCheckoutIdentity: async () => ({
     gitDir: '/workspace/repo',
     commonGitDir: '/workspace/repo',

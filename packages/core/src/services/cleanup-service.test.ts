@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { clearPlatformPolicies } from '../platforms/registry';
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { GitFailure } from '@archon/git';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import type { Conversation } from '../types';
 import {
@@ -614,25 +615,35 @@ describe('runScheduledCleanup', () => {
     expect(report.removed).toEqual(['env-closed-associated (stale)']);
   });
 
-  test('scheduled coverage failures disclose no fetch details and never reach stale cleanup', async () => {
-    scheduledSweepFinds(sweptWorktreeEnv('coverage-failure', { created_at: daysAgo(30) }));
-    mockWorktreeExists.mockResolvedValue(true);
-    mockGetPrState.mockResolvedValue(prAt('MERGED'));
-    mockIsRevCoveredBy.mockRejectedValue(
-      new Error('fetch https://user:secret@github.com/repo failed', { cause: new Error('secret') })
-    );
-    mockLogger.error.mockClear();
-    const report = await runScheduledCleanup();
-    expect(report.errors).toEqual([
-      { id: 'env-coverage-failure', error: 'PR coverage check failed' },
-    ]);
-    expect(report.removed).toEqual([]);
-    expect(mockGetLastCommitDate).not.toHaveBeenCalled();
-    const logs = JSON.stringify(mockLogger.error.mock.calls, (_key, value: unknown) =>
-      value instanceof Error ? { message: value.message, cause: value.cause } : value
-    );
-    expect(logs).not.toContain('secret');
-  });
+  test.each(['coverage_fetch', 'coverage_ancestry'] as const)(
+    'scheduled %s failures retain safe diagnostics and never reach stale cleanup',
+    async kind => {
+      scheduledSweepFinds(sweptWorktreeEnv('coverage-failure', { created_at: daysAgo(30) }));
+      mockWorktreeExists.mockResolvedValue(true);
+      mockGetPrState.mockResolvedValue(prAt('MERGED'));
+      mockIsRevCoveredBy.mockRejectedValue(
+        new GitFailure(
+          kind,
+          'https://user:secret@github.com/repo',
+          Object.assign(new Error('secret'), { code: 128 })
+        )
+      );
+      mockLogger.error.mockClear();
+      const report = await runScheduledCleanup();
+      expect(report.errors).toEqual([
+        {
+          id: 'env-coverage-failure',
+          error: `PR coverage check failed during ${kind === 'coverage_fetch' ? 'fetch' : 'ancestry inspection'} (exit code 128)`,
+        },
+      ]);
+      expect(report.removed).toEqual([]);
+      expect(mockGetLastCommitDate).not.toHaveBeenCalled();
+      const logs = JSON.stringify(mockLogger.error.mock.calls, (_key, value: unknown) =>
+        value instanceof Error ? { message: value.message, cause: value.cause } : value
+      );
+      expect(logs).not.toContain('secret');
+    }
+  );
 
   test('still stale-sweeps an environment git confirms is unmerged', async () => {
     scheduledSweepFinds(sweptWorktreeEnv('stale-unmerged', { created_at: daysAgo(30) }));

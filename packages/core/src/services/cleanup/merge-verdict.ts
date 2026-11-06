@@ -2,6 +2,7 @@ import { getPrState, getPrsForCommit } from '@archon/isolation';
 import type { PrLookup } from '@archon/isolation';
 import {
   execFileAsync,
+  GitFailure,
   getDefaultBranch,
   isRevCoveredBy,
   localBranchExists,
@@ -128,10 +129,17 @@ async function mergedCandidateCovers(
   if (candidate.state !== 'MERGED') return false;
   try {
     return await prCoversTips(input, tips, candidate.headSha);
-  } catch {
+  } catch (error) {
     // A later PR may prove coverage independently; an unresolved failure must not
     // fall through to the scheduled age sweep as ordinary unmerged work.
-    errors.push(new Error('PR coverage check failed'));
+    let diagnostic = 'PR coverage check failed';
+    if (error instanceof GitFailure) {
+      if (error.kind === 'coverage_fetch') diagnostic += ' during fetch';
+      else if (error.kind === 'coverage_ancestry') diagnostic += ' during ancestry inspection';
+      if (typeof error.code === 'number' && Number.isSafeInteger(error.code))
+        diagnostic += ` (exit code ${error.code})`;
+    }
+    errors.push(new Error(diagnostic));
     return false;
   }
 }

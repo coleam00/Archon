@@ -1,5 +1,6 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeEach } from 'bun:test';
+import { GitFailure } from '@archon/git';
 import type * as Isolation from '@archon/isolation';
 import { cleanupStaleWorktrees } from '../cleanup-service';
 import { cleanupMergedWorktrees, type CleanupOperationResult } from './merged-sweep';
@@ -433,6 +434,33 @@ describe('commit-associated PR cleanup', () => {
       expect(logs).not.toContain('secret');
     }
   );
+
+  test.each(
+    (['branch', 'commit'] as const).flatMap(source =>
+      (['coverage_fetch', 'coverage_ancestry'] as const).flatMap(kind =>
+        [128, 'secret'].map(code => ({ source, kind, code }))
+      )
+    )
+  )('reports safe $source $kind diagnostics with code $code', async ({ source, kind, code }) => {
+    if (source === 'branch') mockGetPrState.mockResolvedValue(prAt('MERGED'));
+    const cause = Object.assign(new Error('https://user:secret@github.com/repo'), { code });
+    mockIsRevCoveredBy.mockRejectedValue(new GitFailure(kind, 'secret', cause));
+    mockLogger.warn.mockClear();
+    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+    const stage = kind === 'coverage_fetch' ? 'fetch' : 'ancestry inspection';
+    expect(result.errors).toEqual([
+      {
+        branchName: 'local-feature',
+        error: `merge check failed: PR coverage check failed during ${stage}${typeof code === 'number' ? ' (exit code 128)' : ''}`,
+      },
+    ]);
+    expect(result.removed).toEqual([]);
+    const logs = JSON.stringify(mockLogger.warn.mock.calls, (_key, value: unknown) =>
+      value instanceof Error ? { message: value.message, cause: value.cause } : value
+    );
+    expect(logs).toContain(stage);
+    expect(logs).not.toContain('secret');
+  });
 
   test('preserves a failed comparison when later candidates do not prove coverage', async () => {
     mockGetPrsForCommit.mockResolvedValue({
