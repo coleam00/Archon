@@ -19,6 +19,8 @@ export function forgeAccessRead(repo: QualifiedPr['repo']) {
 
 export const REQUIRED_FORGE_OPERATIONS = [
   'pr.view',
+  // The build queue looks up a dead round's pull request in any state when it releases the claim.
+  'pr.view:any-state',
   'pr.create',
   'pr.edit-body',
   'pr.ready',
@@ -68,7 +70,7 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
   if (missing.length)
     throw new Error(
       `the SDLC pack needs a forge plugin with every delivery operation; missing: ${missing.join(', ')}. ` +
-        `The GitHub plugin has every one from v0.13.0: \`archon plugin update ${GITHUB_FORGE_PLUGIN}\`.`
+        `The GitHub plugin has every one in releases after v0.13.2: \`archon plugin update ${GITHUB_FORGE_PLUGIN}\`.`
     );
 }
 

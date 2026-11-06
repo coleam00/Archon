@@ -114,14 +114,15 @@ holds a merge only for a thread that raises a defect in code the pull request ch
 or makes reachable. Delivery reads, answers and resolves review threads through
 `pr.threads`, `pr.thread.reply` and `pr.thread.resolve`.
 
-Some reads have no forge operation yet, and the nodes that need them refuse, naming
-the missing operation:
+The build queue finds a dead round's pull request through `pr.view` by head in any
+state, which the plugin advertises as `pr.view:any-state`; the forge check requires it.
+The metrics workflows read each pull request through `pr.view` and need the
+`timestamps` it reports; the test-value judge reads `pr.files` and `repo.file`. A
+plugin that omits the timestamps or lacks those operations makes them refuse, naming
+what is missing.
 
-- Own-PR enrollment lists a maintainer's open pull requests by author.
-- `archon-metrics-prs` and `archon-metrics-test-value` need each pull request's
-  creation, merge and close times.
-- `archon-metrics-test-value-judge` needs a pull request's changed files and a file's
-  text at a revision.
+Own-PR enrollment lists a maintainer's open pull requests by author, which has no forge
+operation yet, so it refuses, naming the missing operation.
 
 Agents read CI job logs with the tools the run has, since the contract has no operation
 for them. A red default branch is always raised as a `merge: base` item: `checks.rerun`
@@ -337,9 +338,9 @@ always used. A user who sets nothing gets the same models as before.
 Review's lens router stays on `small`, and the queue, attention and delivery judges
 keep their tiers. Moving those means rebinding the tier.
 
-Set an alias for every run with `archon ai alias set @reviewer codex gpt-5.5`, or in
+Set an alias for every run with `archon ai alias set @reviewer codex gpt-6.1-sol`, or in
 `aliases:` in `.archon/config.yaml`. Set it for one run with
-`archon workflow run ... --model @reviewer=codex/gpt-5.5`. A lens alias overrides only
+`archon workflow run ... --model @reviewer=codex/gpt-6.1-sol`. A lens alias overrides only
 its lens: with `@reviewer` on Codex and `@review-seams` on Claude, seams runs on
 Claude and every other lens on Codex.
 
@@ -532,8 +533,8 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   after publishing still records its pull request. A round that continues none opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused, and facts records
   that branch on the claim. When a pickup releases the claim of a run that ended before
-  recording its round, the open pull request from that branch is recorded as the
-  run's round with reason `ended_undecided`, and the next round sees it as its
+  recording its round, the newest pull request from that branch, open, closed or
+  merged, is recorded as the run's round with reason `ended_undecided`, and the next round sees it as its
   candidate. A closed or
   merged pull request, or one from a fork, is asked about; a round launched anyway
   never continues it, since ship gets `none` for it too.
@@ -919,8 +920,9 @@ merging, so the abandoned count is low and the merge rate high:
   only, so it can land in a later cohort with a lower cost.
 
 The workflow holds no state and reads every pull request again on each run; a re-run
-replaces the earlier records. It needs pull request timestamps, which no forge operation
-reports yet, so it refuses today, naming the missing operation. Run it on demand:
+replaces the earlier records. It reads each pull request by number through `pr.view`,
+whose `timestamps` give the creation, merge and close times; a plugin that does not
+report them makes it refuse. Run it on demand:
 
 ```bash
 archon workflow run archon-metrics-prs
@@ -968,6 +970,11 @@ scores such omissions as disagreements. Both are attributed to the build-queue r
 built the pull request, at its merge time, like the PR metrics. A pull request whose
 judge run failed has no record and is listed in the node's `skipped` output. Each pull
 request costs one judge run on the `large` tier, so the window sets the cost.
+
+The judge reads the pull request's changed files through `pr.files`, and each changed
+test file's text at the head that list was read at through `repo.file`. A test file the
+forge does not return as text, such as one over 1 MB on GitHub, fails that pull
+request's judge run, so the pull request is listed in `skipped`.
 
 The judge applies the review pack's test lens
 ([`review/commands/review-tests.md`](review/commands/review-tests.md)), read when it runs,

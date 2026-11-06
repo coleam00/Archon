@@ -293,8 +293,8 @@ function answer(op, request) {
     case 'pr.view': {
       const selector = request.selector;
       if (selector.kind === 'head') {
-        const open = exists && pr.state === 'OPEN' && pr.headRefName === selector.head;
-        return done(open ? { pr: record(selector.repo), title: pr.title, body: pr.body } : null);
+        const found = exists && (selector.state === 'any' || pr.state === 'OPEN') && pr.headRefName === selector.head;
+        return done(found ? { pr: record(selector.repo), title: pr.title, body: pr.body } : null);
       }
       return done({ pr: record(selector.ref.repo), title: pr.title, body: pr.body });
     }

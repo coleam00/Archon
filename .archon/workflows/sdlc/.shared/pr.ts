@@ -88,11 +88,13 @@ export function findOpenPrByHead(
 }
 
 /**
- * The open pull request whose head is `head` in `repo` itself. The forge's head
- * selector reads open pull requests only, so a closed one is not found.
+ * The newest pull request, open, closed or merged, whose head is `head` in `repo`
+ * itself, or undefined when the branch never had one. Asking for any state needs the
+ * plugin's `pr.view:any-state` capability, which the delivery preflight requires.
  */
 export function findPrByHead(repo: QualifiedPr['repo'], head: string): PrRecord | undefined {
-  return findOpenPrByHead(repo, repo, head)?.pr;
+  const value = invokeForge('pr.view', { selector: { kind: 'head', repo, headRepo: repo, head, state: 'any' } });
+  return value === null ? undefined : forgePrView(value).pr;
 }
 
 export function viewPr(ref: QualifiedPr): PrView {

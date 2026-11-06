@@ -432,6 +432,13 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.facts.build?.rounds).toEqual([
       expect.objectContaining({ run_id: 'run-1', delivered: false, reason: 'ended_undecided', pr_url: 'https://ghe.example.com/example/repo/pull/42' }),
     ]);
+    // The run's pull request was closed before the release; it is still the run's round.
+    seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
+    const picked = ok(run(at, 'facts', cancelled, { pr: { state: 'CLOSED', headRefName: branch } }));
+    expect(stored(at).value?.facts.build?.rounds).toEqual([
+      expect.objectContaining({ run_id: 'run-1', reason: 'ended_undecided', pr_url: 'https://ghe.example.com/example/repo/pull/42' }),
+    ]);
+    expect(picked).toMatchObject({ pull_request: { number: 42 }, continues: null, branch: 'build/7-an-issue-run-2' });
     // A run whose branch opened no pull request leaves no round.
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
     expect(ok(run(at, 'facts', cancelled))).toMatchObject({ pull_request: null, continues: null });
