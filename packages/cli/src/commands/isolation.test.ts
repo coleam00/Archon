@@ -164,7 +164,6 @@ const mockCleanupMergedEnvironments = mock<typeof IsolationOperations.cleanupMer
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-      baseRef: toBranchName('origin/dev'),
     })
 );
 
@@ -1262,7 +1261,6 @@ describe('isolationCleanupMergedCommand', () => {
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-      baseRef: toBranchName('origin/dev'),
     });
   });
 
@@ -1278,7 +1276,6 @@ describe('isolationCleanupMergedCommand', () => {
         removed: ['done'],
         warnings: [],
         releasedFailedRuns: [],
-        baseRef: toBranchName('origin/dev'),
         skipped: failed ? [] : [{ branchName: 'kept', reason: 'has uncommitted changes' }],
         errors: failed ? [{ branchName: 'kept', error: 'registration changed' }] : [],
       });
@@ -1322,8 +1319,6 @@ describe('isolationCleanupMergedCommand', () => {
     expect(mockCleanupMergedEnvironments).toHaveBeenCalledWith('cb-1', '/test/repo', {});
   });
 
-  // The command used to claim "merged into main" while comparing against the repo's
-  // configured base branch (#3471).
   it('names each failed run whose lock the sweep released', async () => {
     mockCleanupMergedEnvironments.mockResolvedValueOnce({
       removed: ['settled'],
@@ -1331,7 +1326,6 @@ describe('isolationCleanupMergedCommand', () => {
       warnings: [],
       errors: [],
       releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'merged' }],
-      baseRef: toBranchName('origin/dev'),
     });
 
     await isolationCleanupMergedCommand({ includeClosed: true });
@@ -1346,20 +1340,11 @@ describe('isolationCleanupMergedCommand', () => {
       errors: [],
       releasedFailedRuns: [],
       warnings: [{ branchName: 'settled', message: "Remote branch retained 'settled'" }],
-      baseRef: toBranchName('origin/dev'),
     });
     await isolationCleanupMergedCommand();
     expect(consoleLogSpy).toHaveBeenCalledWith(
       "  Warning: settled: Remote branch retained 'settled'"
     );
-  });
-
-  it('names the base ref the sweep compared against, never a hardcoded main', async () => {
-    await isolationCleanupMergedCommand();
-
-    expect(consoleLogSpy).toHaveBeenCalledWith('  Base: origin/dev');
-    const printed = consoleLogSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
-    expect(printed).not.toContain('merged into main');
   });
 });
 

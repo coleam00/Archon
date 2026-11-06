@@ -51,9 +51,7 @@ export async function getPrState(
   cache?: Map<string, PrLookup>,
   remote = 'origin'
 ): Promise<PrLookup> {
-  // Keyed by repository as well as branch: the same branch name in two repositories
-  // is two different PRs, and the scheduled cleanup sweep spans every registered repo.
-  const cacheKey = `${repoPath}\u0000${branch}`;
+  const cacheKey = `${repoPath}\u0000${remote}\u0000${branch}`;
   const cached = cache?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
@@ -182,12 +180,14 @@ function parseCommitPr(pr: unknown, repository: string): Extract<PrLookup, { hea
 }
 
 function parseCommitPrs(stdout: string, repository: string): CommitPrLookup {
-  const pages: unknown = JSON.parse(stdout);
-  if (!Array.isArray(pages) || pages.length === 0) throw new Error('Missing PR pages');
-  const prs = pages.flatMap((page: unknown) => {
-    if (!Array.isArray(page)) throw new Error('Invalid PR page');
-    return page.map((pr: unknown) => parseCommitPr(pr, repository));
-  });
+  const prs = stdout
+    .trim()
+    .split('\n')
+    .flatMap(line => {
+      const page: unknown = JSON.parse(line);
+      if (!Array.isArray(page)) throw new Error('Invalid PR page');
+      return page.map((pr: unknown) => parseCommitPr(pr, repository));
+    });
   return prs.length ? { state: 'FOUND', prs } : { state: 'NONE' };
 }
 
@@ -230,7 +230,8 @@ export async function getPrsForCommit(
         'github.com',
         `repos/${repository.nameWithOwner}/commits/${sha}/pulls?per_page=100`,
         '--paginate',
-        '--slurp',
+        '--jq',
+        'map({state, merged_at, head: {sha: .head.sha}, base: {repo: {full_name: .base.repo.full_name}}})',
       ],
       { timeout: 15000, cwd: repoPath }
     );

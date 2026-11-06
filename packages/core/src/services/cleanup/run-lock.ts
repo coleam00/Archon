@@ -74,7 +74,7 @@ const RELEASE_REASONS: Record<CleanupSettlement['kind'], FailedRunReleaseReason>
  * Removal force-deletes a branch Archon created, so age alone never removes an
  * environment whose worktree HEAD or branch holds a commit on no remote, whether
  * or not a run owns it: that work stays until an operator removes it explicitly.
- * The merged verdict already proved the PR head or the base covers both.
+ * The merged verdict already proved one merged PR head covers both.
  */
 export async function getCleanupRunLock(
   env: { id: string; working_path: string; branch_name: string | null },

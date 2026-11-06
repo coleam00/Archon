@@ -58,6 +58,13 @@ const { assessCompletedRunWorktree, reclaimRunWorktree, releaseCompletedRunWorkt
   await import('./run-worktree');
 const codebaseDb = await import('../../db/codebases');
 
+function ghJsonOutput(command: string, payload: unknown): string {
+  if (command === 'api' && Array.isArray(payload)) {
+    return payload.map(page => JSON.stringify(page)).join('\n');
+  }
+  return JSON.stringify(payload);
+}
+
 async function git(path: string, ...args: string[]): Promise<string> {
   const proc = Bun.spawn(['git', '-C', path, ...args], {
     stdout: 'pipe',
@@ -1012,7 +1019,10 @@ test.each([
                     },
                   ],
                 ];
-      return { stdout: JSON.stringify(payload), stderr: '' };
+      return {
+        stdout: ghJsonOutput(args[0], payload),
+        stderr: '',
+      };
     }
     return originalExec(file, args, options);
   });
@@ -1052,7 +1062,10 @@ test.each([false, true])(
               : args[0] === 'repo'
                 ? { nameWithOwner: 'test/repo' }
                 : [[]];
-          return { stdout: JSON.stringify(payload), stderr: '' };
+          return {
+            stdout: ghJsonOutput(args[0], payload),
+            stderr: '',
+          };
         }
         return originalExec(file, args, options);
       }

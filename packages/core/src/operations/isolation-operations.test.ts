@@ -1,7 +1,6 @@
 // @archon-test-isolated
 import { setPlatformPolicies } from '../platforms/registry';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
-import { toBranchName } from '@archon/git';
 import type * as IsolationDb from '../db/isolation-environments';
 import type * as MergedSweep from '../services/cleanup/merged-sweep';
 import type * as CleanupRunLock from '../services/cleanup/run-lock';
@@ -31,7 +30,6 @@ mock.module('../db/isolation-environments', () => ({
   markWorktreeDestroyed: mockMarkWorktreeDestroyed,
 }));
 
-const MERGED_BASE_REF = toBranchName('origin/main');
 const mockCleanupMerged = mock<typeof MergedSweep.cleanupMergedWorktrees>(() =>
   Promise.resolve({
     removed: [],
@@ -39,7 +37,6 @@ const mockCleanupMerged = mock<typeof MergedSweep.cleanupMergedWorktrees>(() =>
     errors: [],
     releasedFailedRuns: [],
     warnings: [],
-    baseRef: MERGED_BASE_REF,
   })
 );
 const mockGetLiveRunBlocker = mock<typeof CleanupRunLock.getLiveRunBlocker>(() =>
@@ -268,7 +265,6 @@ describe('cleanupMergedEnvironments', () => {
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-      baseRef: MERGED_BASE_REF,
     });
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
@@ -284,7 +280,6 @@ describe('cleanupMergedEnvironments', () => {
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-      baseRef: MERGED_BASE_REF,
     });
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
@@ -299,7 +294,6 @@ describe('cleanupMergedEnvironments', () => {
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-      baseRef: MERGED_BASE_REF,
     });
 
     await cleanupMergedEnvironments('cb-1', '/main', { includeClosed: true });

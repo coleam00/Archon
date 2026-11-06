@@ -41,7 +41,7 @@ export interface CleanupReport {
 /** State one scheduled cycle shares across every environment it sweeps. */
 export interface ScheduledSweep {
   staleDays: number;
-  /** Keyed by repo + branch (see getPrState); the cycle spans every registered repo. */
+  /** Invocation cache shared across every registered repository. */
   prStateCache: Map<string, PrLookup>;
   report: CleanupReport;
 }

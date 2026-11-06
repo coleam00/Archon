@@ -32,7 +32,7 @@ import { getCleanupRunLock, getLiveRunBlocker } from '@archon/core/services/clea
 import {
   listEnvironments,
   cleanupMergedEnvironments,
-  type MergedCleanupResult,
+  type CleanupOperationResult,
 } from '@archon/core/operations/isolation-operations';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -261,9 +261,7 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
   return counts.failed > 0 || containerReport.errors.length > 0 ? 1 : 0;
 }
 
-function printMergedCleanupResult(result: MergedCleanupResult): void {
-  console.log(`  Base: ${result.baseRef}`);
-
+function printCleanupOperationResult(result: CleanupOperationResult): void {
   for (const branch of result.removed) {
     console.log(`  Cleaned: ${branch}`);
   }
@@ -312,7 +310,7 @@ export async function isolationCleanupMergedCommand(
         options
       );
 
-      printMergedCleanupResult(result);
+      printCleanupOperationResult(result);
       totalFailed += result.errors.length;
       totalCleaned += result.removed.length;
       totalSkipped += result.skipped.length;

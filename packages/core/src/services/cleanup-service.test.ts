@@ -602,6 +602,38 @@ describe('runScheduledCleanup', () => {
     expect(mockDestroy).not.toHaveBeenCalled();
   });
 
+  test('closed commit evidence permits the existing stale checks with a missing branch ref', async () => {
+    scheduledSweepFinds(sweptWorktreeEnv('closed-associated', { created_at: daysAgo(30) }));
+    mockWorktreeExists.mockResolvedValue(true);
+    mockLocalBranchExists.mockResolvedValue(false);
+    mockGetPrsForCommit.mockResolvedValue({
+      state: 'FOUND',
+      prs: [{ state: 'CLOSED', headSha: PR_HEAD_SHA }],
+    });
+    const report = await runScheduledCleanup();
+    expect(report.removed).toEqual(['env-closed-associated (stale)']);
+  });
+
+  test('scheduled coverage failures disclose no fetch details and never reach stale cleanup', async () => {
+    scheduledSweepFinds(sweptWorktreeEnv('coverage-failure', { created_at: daysAgo(30) }));
+    mockWorktreeExists.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
+    mockIsRevCoveredBy.mockRejectedValue(
+      new Error('fetch https://user:secret@github.com/repo failed', { cause: new Error('secret') })
+    );
+    mockLogger.error.mockClear();
+    const report = await runScheduledCleanup();
+    expect(report.errors).toEqual([
+      { id: 'env-coverage-failure', error: 'PR coverage check failed' },
+    ]);
+    expect(report.removed).toEqual([]);
+    expect(mockGetLastCommitDate).not.toHaveBeenCalled();
+    const logs = JSON.stringify(mockLogger.error.mock.calls, (_key, value: unknown) =>
+      value instanceof Error ? { message: value.message, cause: value.cause } : value
+    );
+    expect(logs).not.toContain('secret');
+  });
+
   test('still stale-sweeps an environment git confirms is unmerged', async () => {
     scheduledSweepFinds(sweptWorktreeEnv('stale-unmerged', { created_at: daysAgo(30) }));
     mockWorktreeExists.mockResolvedValue(true);

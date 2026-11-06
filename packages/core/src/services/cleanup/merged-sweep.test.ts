@@ -1,9 +1,8 @@
 // @archon-test-isolated
 import { describe, test, expect, beforeEach } from 'bun:test';
-import { toBranchName } from '@archon/git';
 import type * as Isolation from '@archon/isolation';
 import { cleanupStaleWorktrees } from '../cleanup-service';
-import { cleanupMergedWorktrees, type MergedCleanupResult } from './merged-sweep';
+import { cleanupMergedWorktrees, type CleanupOperationResult } from './merged-sweep';
 import {
   NO_PR,
   prAt,
@@ -24,6 +23,7 @@ import {
   mockGetById,
   mockListByCodebaseWithAge,
   mockLoadRepoConfig,
+  mockLogger,
   mergedSweepFinds,
   resetCleanupMocks,
 } from './test-harness';
@@ -122,13 +122,13 @@ describe('cleanupMergedWorktrees', () => {
     );
   });
 
-  test('threads worktree.remote from repo config to getDefaultBranch and getPrState', async () => {
+  test('threads worktree.remote from repo config to PR lookup', async () => {
     mockLoadRepoConfig.mockResolvedValue({ worktree: { remote: 'upstream' } });
     mergedSweepFinds(worktreeEnv('feature-branch'));
 
     await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
 
-    expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo', 'upstream');
+    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
     expect(mockGetPrState).toHaveBeenCalledWith(
       'feature-branch',
       '/workspace/repo',
@@ -194,7 +194,7 @@ describe('cleanupMergedWorktrees', () => {
     expect(result.errors).toEqual([
       {
         branchName: 'head-missing',
-        error: expect.stringContaining('merge check failed: Failed to fetch PR head'),
+        error: 'merge check failed: PR coverage check failed',
       },
     ]);
     expect(mockGetById).not.toHaveBeenCalled();
@@ -216,7 +216,7 @@ describe('cleanupMergedWorktrees', () => {
     pr: Isolation.PrLookup;
     includeClosed: boolean;
     removed: string[];
-    skipped: MergedCleanupResult['skipped'];
+    skipped: CleanupOperationResult['skipped'];
   }>([
     { pr: prAt('MERGED'), includeClosed: false, removed: ['pr-branch'], skipped: [] },
     {
@@ -290,14 +290,39 @@ describe('cleanupMergedWorktrees', () => {
     ]);
   });
 
-  test('reports the base ref it compared against, from worktree.baseBranch', async () => {
-    mockLoadRepoConfig.mockResolvedValue({ worktree: { baseBranch: 'dev' } });
-
+  test('merged cleanup does not require default-branch discovery', async () => {
+    mergedSweepFinds(worktreeEnv('covered'));
+    mockGetPrState.mockResolvedValue(prAt('MERGED'));
+    mockGetDefaultBranch.mockRejectedValue(new Error('remote does not advertise HEAD'));
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
-
-    expect(result.baseRef).toBe(toBranchName('origin/dev'));
+    expect(result.removed).toEqual(['covered']);
     expect(mockGetDefaultBranch).not.toHaveBeenCalled();
   });
+
+  test.each(['CLOSED', 'MERGED'] as const)(
+    'preserves associated %s evidence when the branch ref is gone',
+    async state => {
+      mergedSweepFinds(worktreeEnv('ref-gone'));
+      mockLocalBranchExists.mockResolvedValue(false);
+      mockWorktreeExists.mockResolvedValue(true);
+      mockIsRevCoveredBy.mockResolvedValue(false);
+      mockGetPrsForCommit.mockResolvedValue({
+        state: 'FOUND',
+        prs: [{ state, headSha: 'candidate-head' }],
+      });
+      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+      expect(result.removed).toEqual([]);
+      expect(result.skipped).toEqual([
+        {
+          branchName: 'ref-gone',
+          reason:
+            state === 'CLOSED'
+              ? 'no merged PR covers all local tips'
+              : 'branch ref is gone and no PR was found — merge state unverifiable',
+        },
+      ]);
+    }
+  );
 
   // An unhonourable `assistants.*` value stops the sweep before any worktree
   // is inspected or removed.
@@ -387,6 +412,28 @@ describe('commit-associated PR cleanup', () => {
     }
   );
 
+  test.each(['branch', 'commit'] as const)(
+    'omits sensitive %s coverage failures from output and logs',
+    async source => {
+      mockLogger.warn.mockClear();
+      if (source === 'branch') mockGetPrState.mockResolvedValue(prAt('MERGED'));
+      mockIsRevCoveredBy.mockRejectedValue(
+        new Error('fetch https://user:secret@github.com/owner/repo failed', {
+          cause: new Error('secret'),
+        })
+      );
+      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+      expect(result.removed).toEqual([]);
+      expect(result.errors).toEqual([
+        { branchName: 'local-feature', error: 'merge check failed: PR coverage check failed' },
+      ]);
+      const logs = JSON.stringify(mockLogger.warn.mock.calls, (_key, value: unknown) =>
+        value instanceof Error ? { message: value.message, cause: value.cause } : value
+      );
+      expect(logs).not.toContain('secret');
+    }
+  );
+
   test('preserves a failed comparison when later candidates do not prove coverage', async () => {
     mockGetPrsForCommit.mockResolvedValue({
       state: 'FOUND',
@@ -402,7 +449,7 @@ describe('commit-associated PR cleanup', () => {
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
     expect(result.removed).toEqual([]);
     expect(result.errors).toEqual([
-      { branchName: 'local-feature', error: 'merge check failed: cannot fetch missing head' },
+      { branchName: 'local-feature', error: 'merge check failed: PR coverage check failed' },
     ]);
     expect(mockIsRevCoveredBy).toHaveBeenCalledWith(
       '/workspace/repo/worktrees/local-feature',
@@ -535,7 +582,10 @@ describe('commit-associated PR cleanup', () => {
       else mockIsRevCoveredBy.mockRejectedValue(new Error('cannot inspect'));
       const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
       expect(result.errors).toEqual([
-        { branchName: 'local-feature', error: 'merge check failed: cannot inspect' },
+        {
+          branchName: 'local-feature',
+          error: `merge check failed: ${failure === 'coverage' ? 'PR coverage check failed' : 'cannot inspect'}`,
+        },
       ]);
       expect(mockDestroy).not.toHaveBeenCalled();
     }

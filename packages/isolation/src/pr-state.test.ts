@@ -199,6 +199,24 @@ describe('getPrState', () => {
     expect(mockExecFileAsync.mock.calls.length).toBe(callsAfterFirst);
   });
 
+  test('does not reuse cached evidence across selected remotes', async () => {
+    const cache = new Map<string, PrLookup>();
+    setupGhResponse(
+      'https://github.com/owner/repo.git',
+      '[{"state":"MERGED","headRefOid":"abc123"}]'
+    );
+    expect(await getPrState(BRANCH, REPO, cache)).toEqual({ state: 'MERGED', headSha: 'abc123' });
+    setupGhResponse(
+      'https://github.com/owner/upstream.git',
+      '[{"state":"OPEN","headRefOid":"def456"}]'
+    );
+    expect(await getPrState(BRANCH, REPO, cache, 'upstream')).toEqual({
+      state: 'OPEN',
+      headSha: 'def456',
+    });
+    expect(await getPrState(BRANCH, REPO, cache)).toEqual({ state: 'MERGED', headSha: 'abc123' });
+  });
+
   // The scheduled cleanup sweep shares one cache across every registered repository,
   // where the same branch name is two different PRs.
   test('does not serve one repository a cached state from another', async () => {
@@ -270,7 +288,9 @@ function setupCommitResponse(
             ? JSON.stringify({ nameWithOwner: 'owner/repo' })
             : typeof payload === 'string'
               ? payload
-              : JSON.stringify(payload),
+              : Array.isArray(payload)
+                ? payload.map(page => JSON.stringify(page)).join('\n')
+                : JSON.stringify(payload),
       stderr: '',
     };
   });
@@ -311,7 +331,8 @@ describe('getPrsForCommit', () => {
         'github.com',
         `repos/owner/repo/commits/${COMMIT}/pulls?per_page=100`,
         '--paginate',
-        '--slurp',
+        '--jq',
+        'map({state, merged_at, head: {sha: .head.sha}, base: {repo: {full_name: .base.repo.full_name}}})',
       ],
       expect.any(Object)
     );

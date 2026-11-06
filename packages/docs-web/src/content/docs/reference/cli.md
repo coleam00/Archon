@@ -1583,9 +1583,10 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 Remove eligible worktrees by inactivity and eligible containers by age since the container
 environment was created. The threshold is `[days]` (default 7). Recent activity does not
 reset a container environment's creation age; containers a running, pending, or paused run
-can claim remain protected. With `--merged`, remove environments whose branch or PR has
-merged instead. Worktree cleanup only handles worktree records. Container cleanup removes
-eligible containers and their volumes through the container backend,
+can claim remain protected. With `--merged`, remove worktrees whose existing local
+tips are covered by one merged PR head instead. Worktree cleanup only handles
+worktree records. Container cleanup removes eligible containers and their volumes
+through the container backend,
 including when no stale worktrees exist. A missing host folder does not make a container
 destroyed. To clean eligible containers without waiting for the default age threshold,
 run `archon isolation cleanup 0`; containers owned by resumable runs remain protected.
@@ -1674,9 +1675,12 @@ Manual `--merged` cleanup reports ordinary retained work as
 reported as `merge state unverifiable`. The scheduled sweep uses the same merged
 judgment and keeps unavailable or failed inspections out of its stale sweep.
 Ordinary unmerged work can still reach scheduled stale cleanup, subject to its age
-and unpushed-commit checks. Output includes the repository's configured base ref
-(`worktree.baseBranch`, or its git-detected default) for context; coverage is checked
-against PR heads.
+and unpushed-commit checks. Merged cleanup checks coverage against PR heads and
+does not require default-branch discovery.
+
+Cleanup does not coordinate with direct Git commits or other operator edits. Do not
+modify a worktree or its branch while cleanup runs; a commit after inspection can
+otherwise lose its checkout and branch reference.
 
 A running, pending, or paused run keeps its environment in both modes, regardless of
 age or merge state. The scheduled sweep and chat `/worktree cleanup` apply the same
