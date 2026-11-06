@@ -4,9 +4,13 @@ import { EmptyState } from '../../components/EmptyState';
 import type { MetricViews, MetricsReport } from '../../skills/metrics';
 import {
   buildCard,
+  calibrationSentence,
+  cardMetric,
   formatNumber,
   formatShare,
   formatUsd,
+  metricAnchor,
+  plainNames,
   type Calibrations,
   type Calibration,
   type CardModel,
@@ -16,7 +20,8 @@ import {
 } from './model';
 
 interface MetricsOverviewProps {
-  report: MetricsReport;
+  /** `undefined` before any window has loaded: the cards show their titles over skeletons. */
+  report: MetricsReport | undefined;
   calibrations: Calibrations;
   views: MetricViews;
   detailsPath: string;
@@ -30,9 +35,10 @@ export function MetricsOverview({
   detailsPath,
 }: MetricsOverviewProps): ReactElement {
   const packs = views.packs.filter(pack => pack.cards.length > 0);
+  const names = plainNames(views);
   return (
     <div className="flex flex-col gap-4">
-      {report.refused.length > 0 ? (
+      {report !== undefined && report.refused.length > 0 ? (
         <Alert>
           {report.refused.length.toString()} metric output
           {report.refused.length === 1 ? '' : 's'} refused ·{' '}
@@ -65,7 +71,19 @@ export function MetricsOverview({
             ) : null}
             <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               {pack.cards.map((view, i) => (
-                <Card key={i} card={buildCard(view, report, calibrations)} />
+                <Link
+                  key={i}
+                  to={`${detailsPath}#${metricAnchor(cardMetric(view))}`}
+                  className="flex flex-col gap-2 rounded-[12px] border border-border px-5 py-4 transition-colors hover:border-border-bright"
+                  data-card={view.shape}
+                >
+                  <h3 className="text-[12px] font-medium text-text-secondary">{view.title}</h3>
+                  {report === undefined ? (
+                    SKELETON
+                  ) : (
+                    <CardBody card={buildCard(view, report, calibrations)} names={names} />
+                  )}
+                </Link>
               ))}
             </div>
           </div>
@@ -86,18 +104,23 @@ function Alert({ children }: { children: ReactNode }): ReactElement {
   );
 }
 
-function Card({ card }: { card: CardModel }): ReactElement {
-  return (
-    <article
-      className="flex flex-col gap-2 rounded-[12px] border border-border px-5 py-4"
-      data-card={card.shape}
-    >
-      <h3 className="text-[12px] font-medium text-text-secondary">{card.title}</h3>
-      {card.shape === 'count' ? <CountBody card={card} /> : null}
-      {card.shape === 'ratio' ? <RatioBody card={card} /> : null}
-      {card.shape === 'cost_per' ? <CostPerBody card={card} /> : null}
-    </article>
-  );
+const SKELETON = (
+  <div aria-hidden className="flex animate-pulse flex-col gap-2">
+    <div className="h-[34px] w-20 rounded bg-surface-inset" />
+    <div className="h-3 w-40 rounded bg-surface-inset" />
+  </div>
+);
+
+function CardBody({
+  card,
+  names,
+}: {
+  card: CardModel;
+  names: ReadonlyMap<string, string>;
+}): ReactElement {
+  if (card.shape === 'count') return <CountBody card={card} names={names} />;
+  if (card.shape === 'ratio') return <RatioBody card={card} />;
+  return <CostPerBody card={card} />;
 }
 
 function Figure({ children }: { children: ReactNode }): ReactElement {
@@ -112,14 +135,23 @@ function Line({ children }: { children: ReactNode }): ReactElement {
   return <div className="text-[12px] text-text-tertiary">{children}</div>;
 }
 
+// "not recorded" read as a broken instrument; an empty window is what the records show.
+const NO_RECORDS = 'no records in this window';
+
 const NOT_RECORDED = (
   <>
     <Figure>—</Figure>
-    <Line>not recorded</Line>
+    <Line>{NO_RECORDS}</Line>
   </>
 );
 
-function CountBody({ card }: { card: CountCard }): ReactElement {
+function CountBody({
+  card,
+  names,
+}: {
+  card: CountCard;
+  names: ReadonlyMap<string, string>;
+}): ReactElement {
   if (card.state === 'not_recorded') return NOT_RECORDED;
   return (
     <>
@@ -127,8 +159,10 @@ function CountBody({ card }: { card: CountCard }): ReactElement {
       {card.breakdown.length > 0 ? (
         <Line>
           {card.breakdown
-            .map(({ label, value }) =>
-              value === null ? `${label} not recorded` : `${formatNumber(value)} ${label}`
+            .map(({ metric, label, value }) =>
+              value === null
+                ? `no records of ${names.get(metric) ?? label}`
+                : `${formatNumber(value)} ${label}`
             )
             .join(' · ')}
         </Line>
@@ -167,7 +201,9 @@ function RatioBody({ card }: { card: RatioCard }): ReactElement {
 }
 
 function CalibrationPill({ calibration }: { calibration: Calibration }): ReactElement | null {
-  if (calibration.state === 'calibrated') return calibration.rough ? <Pill>rough</Pill> : null;
+  if (calibration.state === 'calibrated') {
+    return calibration.rough ? <Pill title={calibrationSentence(calibration)}>rough</Pill> : null;
+  }
   if (calibration.state === 'not_calibrated') return <Pill>not calibrated</Pill>;
   if (calibration.state === 'loading') return <Pill>calibration loading</Pill>;
   return <Pill title={calibration.message}>calibration unavailable</Pill>;
@@ -184,18 +220,21 @@ function Pill({ children, title }: { children: ReactNode; title?: string }): Rea
   );
 }
 
-const COST_LINES: Record<Exclude<CostPerCard['state'], 'value'>, string> = {
-  not_recorded: 'not recorded',
-  nothing_counted: 'nothing counted',
-  cost_unrecorded: 'most runs record no cost',
-};
-
 function CostPerBody({ card }: { card: CostPerCard }): ReactElement {
-  if (card.state === 'value') return <Figure>{formatUsd(card.usd)}</Figure>;
+  if (card.state === 'not_recorded') return NOT_RECORDED;
+  if (card.state === 'nothing_counted') {
+    return (
+      <>
+        <Figure>—</Figure>
+        <Line>nothing counted</Line>
+      </>
+    );
+  }
+  const coverage = `${card.runsWithCost.toString()} of ${card.runs.toString()} runs record cost`;
   return (
     <>
-      <Figure>—</Figure>
-      <Line>{COST_LINES[card.state]}</Line>
+      <Figure>{card.state === 'value' ? formatUsd(card.usd) : '—'}</Figure>
+      <Line>{coverage}</Line>
     </>
   );
 }

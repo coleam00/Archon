@@ -110,7 +110,12 @@ export const formatUsd = (usd: number): string => `≥ $${formatNumber(usd)}`;
 
 export type CountCard = { shape: 'count'; title: string } & (
   | { state: 'not_recorded' }
-  | { state: 'value'; value: number; breakdown: { label: string; value: number | null }[] }
+  | {
+      state: 'value';
+      value: number;
+      /** `value` is `null` when `metric` has no records at the main figure's identity. */
+      breakdown: { metric: string; label: string; value: number | null }[];
+    }
 );
 
 /** The year of calibration records loads apart from the window, so cards that need none never wait. */
@@ -120,7 +125,14 @@ export type Calibrations =
   | { state: 'loaded'; report: MetricsReport };
 
 export type Calibration =
-  | { state: 'calibrated'; label: string; caught: number; of: number; rough: boolean }
+  | {
+      state: 'calibrated';
+      label: string;
+      caught: number;
+      of: number;
+      rough: boolean;
+      roughBelow: number;
+    }
   | { state: 'not_calibrated' }
   | { state: 'loading' }
   | { state: 'unavailable'; message: string };
@@ -142,9 +154,15 @@ export type CostPerCard = { shape: 'cost_per'; title: string } & (
   | { state: 'not_recorded' }
   | { state: 'nothing_counted' }
   /** Most of the producing runs recorded no cost, so a per-item figure would mislead. */
-  | { state: 'cost_unrecorded' }
-  | { state: 'value'; usd: number }
+  | ({ state: 'cost_unrecorded' } & CostCoverage)
+  | ({ state: 'value'; usd: number } & CostCoverage)
 );
+
+/** How many of the producing runs recorded a cost, so the reader sees how far off the floor is. */
+interface CostCoverage {
+  runs: number;
+  runsWithCost: number;
+}
 
 export type CardModel = CountCard | RatioCard | CostPerCard;
 
@@ -163,6 +181,7 @@ export function countCard(view: ViewOf<'count'>, report: MetricsReport): CountCa
   const main = metric === undefined ? undefined : headlineOf(metric);
   if (main === undefined) return { shape: 'count', title: view.title, state: 'not_recorded' };
   const breakdown = (view.breakdown ?? []).map(({ metric: name, label }) => ({
+    metric: name,
     label,
     value: instrumentAt(findCount(report, name), main)?.value ?? null,
   }));
@@ -222,7 +241,40 @@ function calibrationOf(
     caught: Math.round(score.value * score.n),
     of: score.n,
     rough: score.value < declared.rough_below,
+    roughBelow: declared.rough_below,
   };
+}
+
+/**
+ * The calibration a pack declares for `metric`'s share, at `identity`, for the Details box
+ * that explains it. `undefined` when no declared ratio calibrates `metric`.
+ */
+export function declaredCalibration(
+  views: MetricViews,
+  metric: string,
+  identity: Identity,
+  calibrations: MetricsReport
+): Calibration | undefined {
+  for (const pack of views.packs) {
+    for (const view of pack.cards) {
+      if (view.shape === 'ratio' && view.numerator === metric && view.calibration !== undefined) {
+        return calibrationOf(metric, view.calibration, identity, {
+          state: 'loaded',
+          report: calibrations,
+        });
+      }
+    }
+  }
+  return undefined;
+}
+
+/** What "rough" means, from the declared threshold: the pill's title and the Details box say it. */
+export function calibrationSentence(
+  calibration: Extract<Calibration, { state: 'calibrated' }>
+): string {
+  const { label, caught, of, roughBelow } = calibration;
+  const sentence = `${label} ${caught.toString()} of ${of.toString()} labelled cases (${formatShare(caught / of)}); below ${formatShare(roughBelow)} the share is rough.`;
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }
 
 export function costPerCard(view: ViewOf<'cost_per'>, report: MetricsReport): CostPerCard {
@@ -235,10 +287,36 @@ export function costPerCard(view: ViewOf<'cost_per'>, report: MetricsReport): Co
   if (costed === undefined) return { ...base, state: 'not_recorded' };
   if (counted.value === 0) return { ...base, state: 'nothing_counted' };
   const { usd, runs, runs_without_cost } = costed.cost;
-  if (usd === null || (runs - runs_without_cost) * 2 <= runs) {
-    return { ...base, state: 'cost_unrecorded' };
+  const coverage = { runs, runsWithCost: runs - runs_without_cost };
+  if (usd === null || coverage.runsWithCost * 2 <= runs) {
+    return { ...base, state: 'cost_unrecorded', ...coverage };
   }
-  return { ...base, state: 'value', usd: usd / counted.value };
+  return { ...base, state: 'value', usd: usd / counted.value, ...coverage };
+}
+
+/** The metric a card's Details link lands on. */
+export function cardMetric(view: MetricView): string {
+  return view.shape === 'ratio' ? view.numerator : view.metric;
+}
+
+/** The Details row id for a metric; a card links to `#` this. */
+export const metricAnchor = (metric: string): string => `metric-${metric}`;
+
+/**
+ * Every metric a card reads, in declaration order. Details lists each one, so a card's
+ * "no records" leads to a row that says the same. Calibrations show in their own boxes.
+ */
+export function declaredMetrics(views: MetricViews): string[] {
+  const names = views.packs.flatMap(pack =>
+    pack.cards.flatMap(view => {
+      if (view.shape === 'count') {
+        return [view.metric, ...(view.breakdown ?? []).map(({ metric }) => metric)];
+      }
+      if (view.shape === 'ratio') return [view.numerator, view.denominator];
+      return view.cost_of === undefined ? [view.metric] : [view.metric, view.cost_of];
+    })
+  );
+  return [...new Set(names)];
 }
 
 /** Plain names for metrics; the first pack in listing order that names a metric wins. */
@@ -255,3 +333,25 @@ export function plainNames(views: MetricViews): ReadonlyMap<string, string> {
 /** Two significant digits, so a small nonzero share never shows as 0%. */
 export const formatShare = (share: number): string =>
   share.toLocaleString('en-US', { style: 'percent', maximumSignificantDigits: 2 });
+
+/** A value in its unit's terms: a `ratio` is a percentage, anything else a plain number. */
+export const formatFigure = (value: number, unit: string): string =>
+  unit === 'ratio' ? formatShare(value) : formatNumber(value);
+
+/** `prs` is the guide's own example unit; other units read with their underscores as spaces. */
+const UNIT_WORDS: Readonly<Record<string, string>> = { prs: 'PRs' };
+
+/** A value with its unit in words: "99%", "2 PRs", "14 pull requests". */
+export function formatValue(value: number, unit: string): string {
+  if (unit === 'ratio') return formatShare(value);
+  return `${formatNumber(value)} ${UNIT_WORDS[unit] ?? unit.replaceAll('_', ' ')}`;
+}
+
+const DAY_FORMAT: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+
+/** "Oct 30 – Nov 6": the dates the report actually covers. */
+export function windowDates(window: MetricsReport['window']): string {
+  const since = new Date(window.since).toLocaleDateString('en-US', DAY_FORMAT);
+  const until = new Date(window.until).toLocaleDateString('en-US', DAY_FORMAT);
+  return `${since} – ${until}`;
+}

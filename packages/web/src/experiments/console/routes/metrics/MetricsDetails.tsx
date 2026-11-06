@@ -1,15 +1,21 @@
-import type { ReactElement } from 'react';
-import { Link } from 'react-router';
+import { useEffect, type ReactElement } from 'react';
+import { Link, useLocation } from 'react-router';
 import { EmptyState } from '../../components/EmptyState';
 import { runDetailPath } from '../../primitives/run';
 import type { MetricViews, MetricsReport } from '../../skills/metrics';
 import type { Scope } from '../../store/keys';
 import {
+  calibrationSentence,
+  declaredCalibration,
+  declaredMetrics,
+  formatFigure,
   formatNumber,
   formatUsd,
+  formatValue,
   headlineIdentity,
   headlineOf,
   identityLabel,
+  metricAnchor,
   plainNames,
   sameIdentity,
   type InstrumentReport,
@@ -28,18 +34,29 @@ interface MetricsDetailsProps {
   scope: Scope;
 }
 
-interface Row {
-  metric: MetricReport;
-  headline: InstrumentReport;
-}
+/** `empty` is a metric a card reads that has no records in the window. */
+type Row =
+  | { state: 'measured'; name: string; metric: MetricReport; headline: InstrumentReport }
+  | { state: 'empty'; name: string };
 
-/** One row per measurement. Calibrations show in the boxes under the table, not as rows. */
-function buildRows(report: MetricsReport): Row[] {
-  return report.metrics.flatMap(metric => {
+/**
+ * One row per measurement, and one per metric a card reads that has none, so a card saying
+ * "no records" leads to a row saying the same. Calibrations show in the boxes under the
+ * table, not as rows.
+ */
+function buildRows(report: MetricsReport, views: MetricViews): Row[] {
+  const measured = report.metrics.flatMap((metric): Row[] => {
     if (metric.calibrates !== null) return [];
     const headline = headlineOf(metric);
-    return headline === undefined ? [] : [{ metric, headline }];
+    return headline === undefined
+      ? []
+      : [{ state: 'measured', name: metric.name, metric, headline }];
   });
+  const recorded = new Set(report.metrics.map(metric => metric.name));
+  const empty = declaredMetrics(views)
+    .filter(name => !recorded.has(name))
+    .map((name): Row => ({ state: 'empty', name }));
+  return [...measured, ...empty].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function MetricsDetails({
@@ -51,7 +68,12 @@ export function MetricsDetails({
 }: MetricsDetailsProps): ReactElement {
   const names = plainNames(views);
   const nameOf = (metric: string): string => names.get(metric) ?? metric;
-  const rows = buildRows(report);
+  const rows = buildRows(report, views);
+  const { hash } = useLocation();
+  // A card links here at its metric's row; the router does not scroll to a hash itself.
+  useEffect(() => {
+    if (hash !== '') document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView();
+  }, [hash]);
   // A calibrated metric absent from this window still gets its box, from the year's records.
   const calibrated = [...report.metrics, ...calibrations.metrics].filter(
     (metric, i, all) =>
@@ -64,13 +86,20 @@ export function MetricsDetails({
       {rows.length === 0 ? (
         <EmptyState title={`No measurements in the last ${days.toString()} days.`} />
       ) : (
-        <MetricsTable rows={rows} report={report} days={days} nameOf={nameOf} />
+        <MetricsTable
+          rows={rows}
+          report={report}
+          days={days}
+          nameOf={nameOf}
+          target={decodeURIComponent(hash.slice(1))}
+        />
       )}
       {calibrated.map(metric => (
         <MeasuredBox
           key={metric.name}
           metric={metric}
           calibrations={calibrations}
+          views={views}
           nameOf={nameOf}
         />
       ))}
@@ -134,35 +163,45 @@ function MetricsTable({
   report,
   days,
   nameOf,
+  target,
 }: {
   rows: Row[];
   report: MetricsReport;
   days: WindowDays;
   nameOf: (metric: string) => string;
+  /** The row id the URL's hash names, highlighted when a card linked here. */
+  target: string;
 }): ReactElement {
   return (
-    <div className="overflow-x-auto rounded-[12px] border border-border">
-      <table className="w-full border-collapse text-[12.5px]">
-        <thead className="bg-surface-inset/60 text-text-tertiary">
-          <tr>
-            <th className={HEADER_CELL}>What</th>
-            <th className={HEADER_CELL}>Last {days.toString()} days</th>
-            <th className={HEADER_CELL}>Based on</th>
-            <th className={HEADER_CELL}>Known cost</th>
-            <th className={HEADER_CELL}>Latest</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(row => (
-            <MetricRow
-              key={row.metric.name}
-              row={row}
-              window={report.window}
-              name={nameOf(row.metric.name)}
-            />
-          ))}
-        </tbody>
-      </table>
+    <div className="flex flex-col gap-1.5">
+      <div className="overflow-x-auto rounded-[12px] border border-border">
+        <table className="w-full border-collapse text-[12.5px]">
+          <thead className="bg-surface-inset/60 text-text-tertiary">
+            <tr>
+              <th className={HEADER_CELL}>What</th>
+              <th className={HEADER_CELL}>Last {days.toString()} days</th>
+              <th className={HEADER_CELL}>Based on</th>
+              <th className={HEADER_CELL}>Known cost</th>
+              <th className={HEADER_CELL}>Latest</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <MetricRow
+                key={row.name}
+                row={row}
+                window={report.window}
+                name={nameOf(row.name)}
+                targeted={target === metricAnchor(row.name)}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className={SMALL}>
+        Known cost is the cost of the runs that produced a metric's records. Metrics recorded by the
+        same runs show the same cost, so the column does not add up.
+      </p>
     </div>
   );
 }
@@ -173,18 +212,42 @@ function MetricRow({
   row,
   window,
   name,
+  targeted,
 }: {
   row: Row;
   window: MetricsReport['window'];
   name: string;
+  targeted: boolean;
 }): ReactElement {
+  const rowProps = {
+    id: metricAnchor(row.name),
+    'data-metric': row.name,
+    className: `scroll-mt-4 border-t border-border align-top text-text-secondary ${
+      targeted ? 'bg-accent-bright/10' : ''
+    }`,
+  };
+  const what = (
+    <>
+      <div className="text-text-primary">{name}</div>
+      <div className={`font-mono ${SMALL}`}>{row.name}</div>
+    </>
+  );
+  if (row.state === 'empty') {
+    return (
+      <tr {...rowProps}>
+        <td className="px-3 py-2">{what}</td>
+        <td colSpan={4} className={`px-3 py-2 ${SMALL}`}>
+          no records in this window
+        </td>
+      </tr>
+    );
+  }
   const { metric, headline } = row;
   const hidden = metric.instruments.filter(instrument => !sameIdentity(instrument, headline));
   return (
-    <tr className="border-t border-border align-top text-text-secondary" data-metric={metric.name}>
+    <tr {...rowProps}>
       <td className="px-3 py-2">
-        <div className="text-text-primary">{name}</div>
-        <div className={`font-mono ${SMALL}`}>{metric.name}</div>
+        {what}
         {headline.instrument === null ? null : (
           <div className={SMALL}>{identityLabel(headline)}</div>
         )}
@@ -196,11 +259,12 @@ function MetricRow({
       </td>
       <td className="px-3 py-2">
         <div className="font-mono tabular-nums text-text-primary">
-          {formatNumber(headline.value)} {metric.unit}
+          {formatValue(headline.value, metric.unit)}
         </div>
         {headline.interval === null ? null : (
           <div className={`font-mono tabular-nums ${SMALL}`}>
-            95%: {formatNumber(headline.interval.low)} – {formatNumber(headline.interval.high)}
+            95%: {formatFigure(headline.interval.low, metric.unit)} –{' '}
+            {formatFigure(headline.interval.high, metric.unit)}
           </div>
         )}
         <Sparkline series={headline.series} window={window} />
@@ -212,7 +276,7 @@ function MetricRow({
         <CostCell cost={headline.cost} />
       </td>
       <td className="px-3 py-2 font-mono tabular-nums" title={headline.latest.subject ?? undefined}>
-        {formatNumber(headline.latest.value)}
+        {formatFigure(headline.latest.value, metric.unit)}
         <div className={SMALL}>{headline.latest.at.slice(0, 10)}</div>
       </td>
     </tr>
@@ -253,13 +317,16 @@ function CostCell({ cost }: { cost: InstrumentReport['cost'] }): ReactElement {
 function MeasuredBox({
   metric,
   calibrations,
+  views,
   nameOf,
 }: {
   metric: MetricReport;
   calibrations: MetricsReport;
+  views: MetricViews;
   nameOf: (metric: string) => string;
 }): ReactElement {
   const identity = headlineIdentity(metric);
+  const declared = declaredCalibration(views, metric.name, identity, calibrations);
   const calibrators = calibrations.metrics.filter(other => other.calibrates === metric.name);
   const hidden = metric.instruments.filter(instrument => !sameIdentity(instrument, identity));
   return (
@@ -279,11 +346,12 @@ function MeasuredBox({
               {nameOf(calibrator.name)}:{' '}
               {score === undefined
                 ? 'not calibrated for this version'
-                : `${formatNumber(score.value)} from ${score.n.toString()} records`}
+                : `${formatFigure(score.value, calibrator.unit)} from ${score.n.toString()} records`}
             </li>
           );
         })}
       </ul>
+      {declared?.state === 'calibrated' ? <p>{calibrationSentence(declared)}</p> : null}
       {hidden.length > 0 ? (
         <p className={SMALL}>Hidden older versions: {hidden.map(identityLabel).join('; ')}</p>
       ) : null}
@@ -367,7 +435,7 @@ function UnmatchedCalibrations({ report }: { report: MetricsReport }): ReactElem
             window
             {score === undefined
               ? '.'
-              : `: ${formatNumber(score.value)} from ${score.n.toString()} records.`}
+              : `: ${formatFigure(score.value, metric.unit)} from ${score.n.toString()} records.`}
           </li>
         );
       })}

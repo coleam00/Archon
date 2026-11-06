@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { MetricsPage } from './MetricsPage';
 import {
+  calibrationSentence,
   costPerCard,
   countCard,
   metricsRequests,
@@ -96,7 +97,11 @@ const VIEWS: MetricViews = {
     {
       pack: 'demo',
       source: 'project',
-      names: { 'demo.items_shipped': 'Items shipped', 'demo.items_flagged': 'Flagged items' },
+      names: {
+        'demo.items_shipped': 'Items shipped',
+        'demo.items_flagged': 'Flagged items',
+        'demo.items_checked': 'Checked items',
+      },
       cards: [
         {
           shape: 'count',
@@ -175,7 +180,7 @@ describe('overview', () => {
     expect(html).toContain('3 of 12 checked items');
     expect(html).toContain('calibration loading');
     expect(html).not.toContain('Loading…');
-    expect(render('/console/metrics/details', data)).toContain('Loading…');
+    expect(render('/console/metrics/details', data)).toContain('Loading last 7 days…');
   });
 
   test('with no declared cards, says so; a declaration error is named', () => {
@@ -187,6 +192,14 @@ describe('overview', () => {
     });
     expect(html).toContain('No pack declares overview cards.');
     expect(html).toContain('The global pack demo declares cards that could not be read');
+  });
+
+  test('a card links to its metric on Details; an empty breakdown names what has no records', () => {
+    const html = render('/console/metrics', { report: report({ metrics: [shipped] }) });
+    expect(html).toContain('href="/console/metrics/details?window=7d#metric-demo.items_shipped"');
+    expect(html).toContain('href="/console/metrics/details?window=7d#metric-demo.items_flagged"');
+    expect(html).toContain('no records of Checked items');
+    expect(html).not.toContain('not recorded');
   });
 });
 
@@ -206,7 +219,7 @@ describe('cards', () => {
       title: 'Shipped',
       state: 'value',
       value: 12,
-      breakdown: [{ label: 'lost', value: null }],
+      breakdown: [{ metric: 'demo.none', label: 'lost', value: null }],
     });
     const missing = countCard({ shape: 'count', title: 'Shipped', metric: 'demo.none' }, report());
     expect(missing.state).toBe('not_recorded');
@@ -219,19 +232,27 @@ describe('cards', () => {
     ).toBe('not_recorded');
   });
 
-  test('a calibration below the declared threshold makes the share rough', () => {
+  test('a calibration below the declared threshold makes the share rough, and says the threshold', () => {
+    if (RATIO.calibration === undefined) throw new Error('fixture');
+    const view = { ...RATIO, calibration: { ...RATIO.calibration, rough_below: 0.6 } };
     const card = ratioCard(
-      RATIO,
+      view,
       report({ metrics: [flagged, checked] }),
       loaded(report({ metrics: [catchRate([JUDGE], 0.5)] }))
     );
-    expect(card.state === 'value' && card.calibration).toEqual({
+    const calibration = card.state === 'value' ? card.calibration : null;
+    expect(calibration).toEqual({
       state: 'calibrated',
       label: 'judge catches',
       caught: 5,
       of: 10,
       rough: true,
+      roughBelow: 0.6,
     });
+    if (calibration?.state !== 'calibrated') throw new Error('calibrated');
+    expect(calibrationSentence(calibration)).toBe(
+      'Judge catches 5 of 10 labelled cases (50%); below 60% the share is rough.'
+    );
   });
 
   test('a calibration mean outside 0-1 breaks the 0/1 contract and is not calibrated', () => {
@@ -328,12 +349,20 @@ describe('cards', () => {
         ],
       });
     };
-    expect(costPerCard(view, withCost(2)).state).toBe('cost_unrecorded');
+    expect(costPerCard(view, withCost(2))).toEqual({
+      shape: 'cost_per',
+      title: 'Cost',
+      state: 'cost_unrecorded',
+      runs: 3,
+      runsWithCost: 1,
+    });
     expect(costPerCard(view, withCost(1))).toEqual({
       shape: 'cost_per',
       title: 'Cost',
       state: 'value',
       usd: 0.5,
+      runs: 3,
+      runsWithCost: 2,
     });
   });
   test('cost_of takes the cost from another count at the same identity', () => {
@@ -352,6 +381,8 @@ describe('cards', () => {
       title: 'Cost',
       state: 'value',
       usd: 2,
+      runs: 3,
+      runsWithCost: 2,
     });
     expect(costPerCard(view, report({ metrics: [shipped, started(JUDGE)] })).state).toBe(
       'not_recorded'
@@ -369,6 +400,24 @@ describe('details', () => {
     expect(row).toContain('≥ $1.5');
     expect(row).toContain('1 without cost');
     expect(html).toContain('Last 30 days');
+  });
+
+  test('a metric a card reads with no records in the window is a row saying so', () => {
+    const html = details({ report: report({ metrics: [shipped] }) });
+    const rows = [...html.matchAll(/data-metric="([^"]*)"/g)].map(match => match[1]);
+    expect(rows).toEqual(['demo.items_checked', 'demo.items_flagged', 'demo.items_shipped']);
+    const empty = html.slice(html.indexOf('data-metric="demo.items_checked"'));
+    expect(empty.slice(0, empty.indexOf('</tr>'))).toContain('no records in this window');
+    // The calibration a ratio declares is explained in its box, never a row.
+    expect(html).not.toContain('data-metric="demo.items_flagged_catch_rate"');
+  });
+
+  test('a ratio reads as a percentage', () => {
+    const rate = metric('demo.ship_rate', [instrument(0.99, NONE)], score);
+    const html = details({ report: report({ metrics: [rate] }) });
+    const row = html.slice(html.indexOf('data-metric="demo.ship_rate"'));
+    expect(row).toContain('99%');
+    expect(row).not.toContain('ratio');
   });
 
   // R4: a sub-cent cost is a floor above zero, not "$0.00".
@@ -426,7 +475,10 @@ describe('details', () => {
     const box = html.slice(html.indexOf('data-measured="demo.items_flagged"'));
     expect(box).toContain('How Flagged items is measured');
     expect(box).toContain('Measured by judge-v2 on claude/model-a@high');
-    expect(box).toContain('demo.items_flagged_catch_rate: 0.9 from 10 records');
+    expect(box).toContain('demo.items_flagged_catch_rate: 90% from 10 records');
+    expect(box).toContain(
+      'Judge catches 9 of 10 labelled cases (90%); below 80% the share is rough.'
+    );
   });
 
   test('a calibration from another version is named as not calibrated', () => {
@@ -435,12 +487,12 @@ describe('details', () => {
       calibrations: report({ metrics: [catchRate([{ ...JUDGE, instrument: 'judge-v1' }])] }),
     });
     expect(html).toContain('demo.items_flagged_catch_rate: not calibrated for this version');
-    expect(html).not.toContain('0.9 from');
+    expect(html).not.toContain('90% from');
   });
 
   test('a calibration whose metric has no records anywhere still shows its score', () => {
     const html = details({ report: report({ metrics: [catchRate([JUDGE])] }) });
-    expect(html).toContain('which has no records in this window: 0.9 from 10 records.');
+    expect(html).toContain('which has no records in this window: 90% from 10 records.');
   });
 
   test('older instruments are named as hidden', () => {
