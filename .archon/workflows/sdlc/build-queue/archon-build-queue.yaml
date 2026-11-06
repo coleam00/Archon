@@ -30,6 +30,14 @@ inputs:
       The issue to build. Empty claims the waiting item that sorts first. A number
       claims that item, and refuses the run with the reason when it cannot: it has no
       work item, another run holds it, or it does not wait for the build queue.
+  orders_only:
+    default: "false"
+    description: >-
+      "true" claims only items that are members of an open work order (a
+      `work-order/<id>` state document; see the SDLC pack README, "Work orders"), and
+      nothing when no order is open. It first marks done each open order whose members
+      have all merged. A named item is claimed either way. Anything else picks from
+      every waiting item.
   retriage_as:
     default: ""
     description: >-
