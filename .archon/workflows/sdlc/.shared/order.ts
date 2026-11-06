@@ -11,20 +11,22 @@
 import { note } from './io.ts';
 import { record } from './forge.ts';
 import { type Stored, stateDocuments, statePut } from './state.ts';
-import { read } from './workitem.ts';
+import { read, type WorkItem } from './workitem.ts';
 
 export const ORDER_PREFIX = 'work-order/';
 
-export interface WorkOrder {
+/** `done_at` is when the build queue found every member finished. */
+export type OrderStatus =
+  | { readonly status: 'open'; readonly done_at: null }
+  | { readonly status: 'done'; readonly done_at: string };
+
+export type WorkOrder = OrderStatus & {
   readonly version: 1;
   /** Issue numbers whose work items (`work/<number>`) the order holds, in the operator's rough order. */
   readonly members: readonly number[];
   /** Who approved the order for the factory, and when. */
   readonly approved: { readonly by: string; readonly at: string };
-  readonly status: 'open' | 'done';
-  /** When the build queue found every member merged; null while open. */
-  readonly done_at: string | null;
-}
+};
 
 /** A stored order, checked as far as the pickup reads it. */
 export function parseWorkOrder(value: unknown): WorkOrder {
@@ -38,8 +40,7 @@ export function parseWorkOrder(value: unknown): WorkOrder {
     typeof approved?.by !== 'string' ||
     approved.by === '' ||
     typeof approved.at !== 'string' ||
-    (doc.status !== 'open' && doc.status !== 'done') ||
-    !(doc.done_at === null || typeof doc.done_at === 'string')
+    !((doc.status === 'open' && doc.done_at === null) || (doc.status === 'done' && typeof doc.done_at === 'string'))
   ) {
     throw new Error('not a version 1 work order');
   }
@@ -47,14 +48,22 @@ export function parseWorkOrder(value: unknown): WorkOrder {
 }
 
 /**
- * The issue numbers whose work items record a merge: the merge queue's record is the one
- * fact the pack keeps that an item landed.
+ * Whether the item's latest decision is a merge: the merge queue's record is the one fact
+ * the pack keeps that an item landed. A build or re-triage after it means the item is
+ * being worked again, so an earlier merge no longer finishes it.
  */
-function mergedNumbers(): Set<number> {
+function finished(doc: WorkItem): boolean {
+  const merge = doc.facts.merge;
+  return (
+    merge?.status === 'merged' && merge.at >= (doc.facts.build?.at ?? '') && merge.at >= (doc.facts.triage?.at ?? '')
+  );
+}
+
+function finishedNumbers(): Set<number> {
   const numbers = new Set<number>();
   for (const stored of stateDocuments('work/')) {
     const item = read(stored.name, stored);
-    if (item?.doc.facts.merge?.status === 'merged') numbers.add(item.doc.subject.number);
+    if (item !== undefined && finished(item.doc)) numbers.add(item.doc.subject.number);
   }
   return numbers;
 }
@@ -74,7 +83,7 @@ function storedOrder(stored: Stored & { readonly name: string }): WorkOrder {
 
 /**
  * The issue numbers of every open order's members, after marking done each open order
- * whose members have all merged. A lost write leaves the order open for the next pickup
+ * whose members have all finished. A lost write leaves the order open for the next pickup
  * to mark.
  */
 export function openOrderMembers(at: string): Set<number> {
@@ -82,10 +91,10 @@ export function openOrderMembers(at: string): Set<number> {
     .map(stored => ({ stored, order: storedOrder(stored) }))
     .filter(({ order }) => order.status === 'open');
   if (open.length === 0) return new Set();
-  const merged = mergedNumbers();
+  const finishedItems = finishedNumbers();
   const members = new Set<number>();
   for (const { stored, order } of open) {
-    if (order.members.every(number => merged.has(number))) {
+    if (order.members.every(number => finishedItems.has(number))) {
       const done: WorkOrder = { ...order, status: 'done', done_at: at };
       if (statePut(stored.name, done, stored.revision) === 'ok') note(`${stored.name} is done: every member merged`);
     } else {

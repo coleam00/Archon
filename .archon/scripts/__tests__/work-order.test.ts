@@ -44,7 +44,8 @@ function merged(number: number): WorkItem {
 }
 
 function order(members: number[], status: WorkOrder['status'] = 'open'): WorkOrder {
-  return { version: 1, members, approved: { by: 'maintainer', at: AT }, status, done_at: status === 'done' ? AT : null };
+  const base = { version: 1, members, approved: { by: 'maintainer', at: AT } } as const;
+  return status === 'done' ? { ...base, status, done_at: AT } : { ...base, status, done_at: null };
 }
 
 /** A scratch state store with these documents in it; the real CLI writes them. */
@@ -133,5 +134,18 @@ describe('build-queue pickup with work orders', () => {
     const env = store({ 'work/7': merged(7), 'work/9': waiting(9), 'work-order/next': order([7, 9]) });
     expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1', 9))).toBe(9);
     expect(inStore(env, () => stateGet('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
+  }, 60_000);
+
+  test('a member re-triaged after its merge is not finished: the order stays open and the member builds again', () => {
+    const rebuilt = merged(7);
+    const retriaged = { ...rebuilt, facts: { ...rebuilt.facts, triage: { ...TRIAGE, at: '2026-11-06T01:00:00.000Z' } } };
+    const env = store({ 'work/7': retriaged, 'work/8': merged(8), 'work-order/next': order([7, 8]) });
+    expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1', 7))).toBe(7);
+    expect(inStore(env, () => stateGet('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
+  }, 60_000);
+
+  test('on, a named item is claimed though no open order holds it, so its follow-up rounds still start', () => {
+    const env = store({ 'work/7': waiting(7) });
+    expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true', INPUTS_NUMBER: '7' }, 'run-1', 7))).toBe(7);
   }, 60_000);
 });
