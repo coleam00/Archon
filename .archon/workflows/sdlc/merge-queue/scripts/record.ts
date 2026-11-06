@@ -303,6 +303,7 @@ function main(): void {
       summary: idleSummary('No pull request waits for the merge queue.', stuckItems(text(process.env.WORKFLOW_ID))),
       attention: '',
       options: [],
+      recommendation: null,
       class: '',
       asked: null,
     });

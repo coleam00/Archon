@@ -188,6 +188,7 @@ function main(): void {
       summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
       attention: '',
       options: [],
+      recommendation: null,
       class: '',
       asked: null,
     });
