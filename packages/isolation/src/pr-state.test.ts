@@ -100,11 +100,11 @@ describe('getPrState', () => {
       expect(await getPrState(BRANCH, REPO)).toEqual({
         state: stage === 'remote' || stage === 'unsupported' ? 'NONE' : 'UNAVAILABLE',
       });
-      const logs = [...mockLogger.debug.mock.calls, ...mockLogger.warn.mock.calls];
+      const logs: unknown[] = [...mockLogger.debug.mock.calls, ...mockLogger.warn.mock.calls];
       expect(logs.length).toBeGreaterThan(0);
       expect(
         JSON.stringify(logs, (_key, value: unknown) =>
-          value instanceof Error ? { message: value.message, ...value } : value
+          value instanceof Error ? { ...value, message: value.message } : value
         )
       ).not.toContain('secret');
       if (stage === 'remote' || stage === 'query') {
