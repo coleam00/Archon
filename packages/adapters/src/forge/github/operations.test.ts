@@ -72,6 +72,7 @@ describe('GitHub outbound producer', () => {
         'repo.labels.list',
         'repo.label.ensure',
         'pr.view',
+        'pr.view:any-state',
         'pr.create',
         'pr.edit-body',
         'pr.ready',

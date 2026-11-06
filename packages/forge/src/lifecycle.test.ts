@@ -227,6 +227,23 @@ test('a head selector accepts only an open pull request', async () => {
   });
 });
 
+test('a head selector for any state accepts a closed pull request from a plugin that declares it', async () => {
+  const anyState = {
+    operationId: 'head-any',
+    op: 'pr.view',
+    selector: { kind: 'head', repo: ref.repo, headRepo: ref.repo, head: 'feature', state: 'any' },
+  } satisfies ForgeRequest;
+  expect((await dispatch(anyState, 'closed')).response).toMatchObject({
+    ok: true,
+    result: { value: { pr: { state: 'closed' } } },
+  });
+  // A plugin that does not declare it would answer for the open pull request only.
+  expect((await dispatch(anyState, 'no-any-state')).response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+  });
+});
+
 test('a pull request that a head selector did not find audits as an absence', () => {
   const response: ForgeResponse = {
     operationId: 'none',

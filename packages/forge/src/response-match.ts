@@ -246,9 +246,10 @@ function matchesPrView(request: OpRequest<'pr.view'>, value: OpValue<'pr.view'>)
   // Only a head selector may find nothing; an explicit number must resolve.
   if (!value) return selector.kind === 'head';
   if (selector.kind === 'number') return sameRef(value.pr, selector.ref);
-  // A head selector asks for the branch's open pull request, never a closed one.
+  // A head selector asks for the branch's open pull request, never a closed one,
+  // unless it asked for any state.
   return (
-    value.pr.state === 'open' &&
+    (selector.state === 'any' || value.pr.state === 'open') &&
     sameRepo(value.pr.repo, selector.repo) &&
     value.pr.head === selector.head &&
     value.pr.head_repo !== null &&

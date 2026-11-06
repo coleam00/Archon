@@ -52,7 +52,7 @@ if (command === 'metadata') {
       version: '1.0.0',
       forge: 'test',
       hosts: ['forge.example'],
-      capabilities: OPS,
+      capabilities: mode === 'no-any-state' ? OPS : [...OPS, 'pr.view:any-state'],
       mutationConditions: mode === 'no-conditions' ? undefined : { 'pr.merge': ['head'] },
       token_env: [],
     })

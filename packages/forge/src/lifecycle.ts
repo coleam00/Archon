@@ -46,9 +46,11 @@ export const workItemViewRequestSchema = requestBase.extend({
   ref: workItemRefSchema,
 });
 /**
- * A pull request by number, or the one open pull request for a qualified head.
- * The head form answers "does this branch already have a pull request", so it
- * resolves to nothing rather than to a pull request that was closed earlier.
+ * A pull request by number, or the pull request for a qualified head.
+ * The head form answers "does this branch already have a pull request", so by
+ * default it resolves only the open one, never one closed earlier. `state: "any"`
+ * asks instead for the newest pull request on that head in any state, which a
+ * plugin must declare it supports with `PR_VIEW_ANY_STATE`.
  */
 export const prViewRequestSchema = requestBase.extend({
   op: z.literal('pr.view'),
@@ -60,9 +62,16 @@ export const prViewRequestSchema = requestBase.extend({
       headRepo: repoRefSchema,
       head: text,
       base: text.optional(),
+      state: z.enum(['open', 'any']).optional(),
     }),
   ]),
 });
+/**
+ * The capability a plugin advertises when it answers a `pr.view` head selector
+ * with `state: "any"`. An older plugin would ignore the field and answer for the
+ * open pull request only, so the host refuses the request without it.
+ */
+export const PR_VIEW_ANY_STATE = 'pr.view:any-state';
 export const prCreateRequestSchema = requestBase.extend({
   op: z.literal('pr.create'),
   repo: repoRefSchema,

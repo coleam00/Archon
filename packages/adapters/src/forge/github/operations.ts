@@ -1,4 +1,5 @@
 import {
+  PR_VIEW_ANY_STATE,
   type ForgeError,
   type ForgeMutationRequest,
   type ForgeRequest,
@@ -45,6 +46,7 @@ export const githubPluginMetadata = {
     'repo.labels.list',
     'repo.label.ensure',
     'pr.view',
+    PR_VIEW_ANY_STATE,
     'pr.create',
     'pr.edit-body',
     'pr.ready',
