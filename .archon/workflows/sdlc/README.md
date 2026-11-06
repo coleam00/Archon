@@ -972,7 +972,8 @@ judge run failed has no record and is listed in the node's `skipped` output. Eac
 request costs one judge run on the `large` tier, so the window sets the cost.
 
 The judge reads the pull request's changed files through `pr.files`, and each changed
-test file's text at the head that list was read at through `repo.file`. A test file the
+test file's text at the head that list was read at through `repo.file`. The `prs` node
+refuses before any judge runs when the plugin lacks either. A test file the
 forge does not return as text, such as one over 1 MB on GitHub, fails that pull
 request's judge run, so the pull request is listed in `skipped`.
 

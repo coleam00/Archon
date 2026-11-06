@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { record } from './forge.ts';
+import { invokeForge, record, REMEDY } from './forge.ts';
 
 /** The judge workflow's directory: every file in it is part of the judge. */
 export const JUDGE_DIR = join(import.meta.dir, '..', 'metrics-test-value-judge');
@@ -20,6 +20,25 @@ export const JUDGE_DIR = join(import.meta.dir, '..', 'metrics-test-value-judge')
 const CRITERIA_FILE = join(import.meta.dir, '..', 'review', 'commands', 'review-tests.md');
 /** The node that judges, in the judge workflow and in the fan-out that launches it. */
 export const JUDGE_NODE = 'judge';
+
+/** The forge operations the test-value metric reads through: each pull request, then each judge's files. */
+export const TEST_VALUE_FORGE_OPERATIONS = ['pr.view', 'pr.files', 'repo.file'] as const;
+
+/**
+ * Refuse before any judge runs when a host's plugin lacks one of them. Each judge run
+ * would otherwise fail on its own, and the metric would record nothing, with every
+ * pull request listed as skipped.
+ */
+export function requireTestValueSource(hosts: Iterable<string>): void {
+  for (const host of new Set(hosts)) {
+    const capabilities = invokeForge('metadata', { host })?.capabilities;
+    if (!Array.isArray(capabilities)) throw new Error('forge metadata returned no operation capabilities');
+    const missing = TEST_VALUE_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
+    if (missing.length > 0) {
+      throw new Error(`the forge plugin for ${host} lacks the test-value metric's ${missing.join(', ')}. ${REMEDY.unsupported_op}`);
+    }
+  }
+}
 
 /** The project's calibration labels, relative to the checkout the calibration runs in. */
 export const CASES_PATH = '.archon/sdlc/metrics/test-value-cases.json';

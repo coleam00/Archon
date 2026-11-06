@@ -9,7 +9,7 @@ import {
   packScriptRunner,
   type ScriptOptions,
 } from './deliver-checks-harness';
-import { REQUIRED_FORGE_OPERATIONS } from '../../workflows/sdlc/.shared/forge-check';
+import { REQUIRED_FORGE_CAPABILITIES, REQUIRED_FORGE_OPERATIONS } from '../../workflows/sdlc/.shared/forge-check';
 
 const { runPackScript } = packScriptRunner();
 const trackTempRoot = trackTempRoots();
@@ -33,7 +33,7 @@ function check(
     mirror,
     remoteUrl,
     entry = 'deliver',
-    capabilities = REQUIRED_FORGE_OPERATIONS,
+    capabilities = [...REQUIRED_FORGE_OPERATIONS, ...REQUIRED_FORGE_CAPABILITIES],
     ...rest
   } = options;
   if (rest.forge?.kind === 'fake' && rest.forge.response) {
@@ -65,7 +65,7 @@ describe('forge-check refuses a run whose forge plugin cannot act', () => {
     const plugin = `
       if (process.argv.includes('metadata')) {
         console.log(JSON.stringify({protocol: 1, name: 'github', version: 'test', forge: 'github',
-          hosts: ['ghe.example.com'], capabilities: ${JSON.stringify(REQUIRED_FORGE_OPERATIONS)}, token_env: ['GH_TOKEN']}));
+          hosts: ['ghe.example.com'], capabilities: ${JSON.stringify([...REQUIRED_FORGE_OPERATIONS, ...REQUIRED_FORGE_CAPABILITIES])}, token_env: ['GH_TOKEN']}));
       } else {
         const request = await Bun.stdin.json();
         if (request.op !== 'pr.view' || process.env.ARCHON_FORGE_TOKEN !== 'accepted') throw new Error('invalid preflight read');
