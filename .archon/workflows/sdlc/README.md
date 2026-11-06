@@ -313,6 +313,9 @@ synthesis name `rulings.md`, the answers a project's maintainers have already gi
 read before either stops to ask. The build queue's agents name `build.md`, what
 the queue may decide on its own, and its route and answer agents `rulings.md` too. The
 merge queue's sweep names `merge.md`, which pull requests merge on their own.
+Review's code lens names `ui-check.md`, how it starts the project's app to use a
+user-facing change in a browser through the playwright-cli skill, which its prompt
+names rather than a `skills:` entry for the reason the build queue's route does.
 Agents interpret
 them; anything that must be exact, such as label names, stays typed configuration.
 
