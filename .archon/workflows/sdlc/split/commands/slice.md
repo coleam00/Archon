@@ -20,6 +20,8 @@ Judge the item yourself against the triage policy's section on splitting, as a c
 
 When building it whole would work, do not split it: declare `{ "kind": "whole", "route" }`, with `route` `deliver` when the item is already an implementation-ready work order and `plan` when material implementation decisions remain. List no issues and no existing issues, and say in `summary` why one work item works, answering triage's reason. The item goes to the build queue as one work item.
 
+The exception is an item an earlier split already filed issues from: those pieces may already be in flight, so the split stands. List them again under their keys.
+
 ## Decide what the item is
 
 When you split, declare what the item is:
@@ -35,7 +37,7 @@ Declare which one you find, and why, in `summary`.
 At most twelve, in filing order. Each one is a single change a run can deliver and a reviewer can read.
 
 - **An epic is split along what each piece needs merged first.** Each piece is one reviewable change that leaves the product working; order them so the earliest pieces unblock the most, and link each to the pieces it genuinely needs.
-- **A PRD plans for learning.** The first issue puts the hypothesis in front of real data as soon as possible: the smallest change that lets the signal be measured on real use. When the signal has no data source yet, or its command does not exist, the first issue adds that measurement, so the command prints the signal. The issues after it build what the hypothesis is about, each one moving the signal or making it readable. In a product that already runs, no issue rebuilds what already exists or sets the product up again: build on what is there.
+- **A PRD plans for learning.** The first issue puts the hypothesis in front of real data as soon as possible: the smallest change that lets the signal be measured on real use. When the signal has no data source yet, or its command does not exist, the first issue adds that measurement, so the command prints the signal. The issues after it build what the hypothesis is about, each one moving the signal or making it readable. No issue judges the hypothesis: the verdict comes from real use over the window after release, and the PRD stays open for it. In a product that already runs, no issue rebuilds what already exists or sets the product up again: build on what is there.
 - **A bundle is split as written.** One issue per task the item lists, in the item's order, with the task's own scope. Do not merge, widen or reinterpret the tasks; a task that is already done gets no issue.
 - **An open issue that already owns a piece is listed, not filed again.** When an open issue in this repository already tracks part of the outcome, declare it in `existing` with one line on why the outcome depends on it, and file no issue for that piece. The item's outcome waits on it as much as on the issues you file. A piece already done gets neither.
 

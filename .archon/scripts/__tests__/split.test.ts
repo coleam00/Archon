@@ -220,6 +220,19 @@ describe('split publish', () => {
     expect(stored(at).stage).toBe('split');
   });
 
+  test('an item an earlier split filed issues from cannot be built whole', () => {
+    const at = install();
+    seed(at);
+    const first = publish(at, PRD);
+    ok(first);
+    seed(at);
+    const run = publish(at, { kind: 'whole', route: 'plan' }, first.createdIssues, [], []);
+    expect(run.code).not.toBe(0);
+    expect(run.stderr).toContain('the item is already split into #100, #101, so it cannot be built whole');
+    expect(run.comments).toEqual([]);
+    expect(stored(at).stage).toBe('split');
+  });
+
   test('a closed issue listed as an existing dependency files nothing', () => {
     const at = install();
     seed(at);

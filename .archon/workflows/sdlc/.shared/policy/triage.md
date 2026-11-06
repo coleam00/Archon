@@ -41,6 +41,8 @@ after it, and where the two conflict, the project's line wins.
   exist yet is acceptable when the PRD says what it must print; the work then builds
   the measurement first. A PRD missing any of the three needs contract work, and the
   proposed edits name the missing piece and what would fill it from the PRD's own
-  content. The bar holds whether the PRD is split or built whole. A list of tasks
+  content. The bar holds whether the PRD is split or built whole. The verdict, judged
+  on real use over the window after release, is not a piece of work: the PRD stays
+  open for it either way, so it is never on its own a reason to split. A list of tasks
   under a PRD title, with no hypothesis, is not a PRD: it is judged as an epic or a
   bundle, and needs contract work when it was meant to be a PRD.

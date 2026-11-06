@@ -19,6 +19,7 @@
  * When the agent judged the item one work item after all, nothing is filed: the item
  * gets the same marked comment with why, its route label in place of `archon-split`,
  * and the last write moves it to that build route, where the build queue picks it up.
+ * An item an earlier split already filed issues from refuses that answer.
  *
  * On `idle` this reports what is stuck; on `closed` it records that the item's issue
  * was closed before a split finished, files nothing, and releases the claim.
@@ -229,6 +230,12 @@ function main(): void {
     throw new Error(`the ${path} path reached publish with no split`);
   if (split.kind === 'whole') {
     if (planned.length > 0 || existing.length > 0) throw new Error('nothing was filed: an item built whole lists no issues');
+    // Pieces an earlier split filed may already be in flight; dropping them is a maintainer's call.
+    const filed = filedOn(readWorkItem(item.number));
+    if (filed.length > 0) {
+      const numbers = filed.map(entry => `#${String(entry.number)}`).join(', ');
+      throw new Error(`the item is already split into ${numbers}, so it cannot be built whole`);
+    }
     buildWhole(item, runId, split.route, text(process.env.INPUTS_SUMMARY));
     return;
   }

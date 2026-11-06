@@ -692,7 +692,8 @@ the gap.
 - **Build whole.** On a `whole` answer, the item gets the same marked comment with the
   agent's reason, its route label in place of `archon-split`, and the last write moves
   its stage to that route, where the build queue picks it up as one work item.
-  Triage reads that comment on a later re-triage.
+  Triage reads that comment on a later re-triage. An item an earlier split already
+  filed issues from refuses a `whole` answer, since those pieces may be in flight.
 - **Record.** The work item's `facts.split` holds the status (`filing`, `done`,
   `whole` or `closed`), whether the item is a `prd`, an `epic` or a `bundle`, every
   issue filed from it by key, the existing issues it adopted with why, and a PRD's
