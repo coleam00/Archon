@@ -510,7 +510,9 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   waits for the build queue. Every listed item records the revisit.
 - **Route.** The `route` agent checks that the issue body is a contract (the six
   elements, with its dated "Current scope" sections), proves a bug's symptom before
-  its first round, and writes the brief `archon-ship` starts from. A bug that needs a
+  its first round, and writes the brief `archon-ship` starts from. A bug also needs
+  evidence that it happened in real use, such as a user's report or a failing CI run;
+  without it the route asks, recommending `park`. A bug that needs a
   browser is reproduced with the playwright-cli skill, which the prompt names rather
   than a `skills:` entry, because a provider that cannot load named skills refuses a
   whole run that declares one.
@@ -541,10 +543,14 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   candidate. A closed or
   merged pull request, or one from a fork, is asked about; a round launched anyway
   never continues it, since ship gets `none` for it too.
-- **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
+- **Round cap.** When a round ends wanting another and `round_limit` rounds (default 2)
   have run since the item's scope last changed, by a re-triage or a maintainer's
-  answer, the `answer` agent also compares their reviews. Each round finding new
-  defects asks the scope question instead of running another round.
+  answer, the `answer` agent also compares their reviews. A latest review with any
+  blocking finding the review before it did not have asks the scope question instead
+  of running another round.
+- **Size budget.** Every `continue` also compares the change's lines, counted from the
+  merge base, with the budget `build.md` gives for triage's size. Past twice the budget
+  the `answer` agent asks whether to narrow the work or accept the larger size.
 - **Writes.** The `apply` script refuses an attention item without the choice it
   recommends, pushes the declared commits (never forcing, and reading the remote head
   back), then records the decision on the work item and releases the claim, in one

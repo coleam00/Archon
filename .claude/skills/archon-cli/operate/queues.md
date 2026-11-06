@@ -64,7 +64,7 @@ Optional inputs, with their defaults in each workflow's YAML:
 - `archon-build-queue`: `number` (the issue to build; empty claims the first in
   order), `retriage_as` (a maintainer login; set, a run that names no item also
   re-triages blocked items that no longer look blocked) and `round_limit` (default
-  `3`), the rounds after which a run that wants another also judges whether the rounds
+  `2`), the rounds after which a run that wants another also judges whether the rounds
   converge.
 - `archon-merge-queue`: `limit` (default `10` items claimed), `merge_method`
   (`squash` or `merge`) and `retriage_as` (a maintainer login; set, an issue still
