@@ -10,7 +10,8 @@ description: |
   `archon isolation cleanup --merged`, so a worktree with uncommitted changes,
   a run that can still claim it, or commits the merge does not cover stays.
   The legacy include_closed input has no effect on removal authorization;
-  closed but unmerged worktrees stay.
+  a closed but unmerged PR does not itself authorize removal. Another merged PR
+  can still authorize removal if its head covers every existing local tip.
 
   Use when: a schedule binding the operator installed starts it (see the SDLC
   pack README, "Worktree cleanup"), or an operator runs it by hand. The pack
@@ -23,8 +24,9 @@ inputs:
     default: "false"
     description: >-
       Legacy input, accepted as true or false but with no effect on removal
-      authorization. Closed but unmerged worktrees stay. Any other value refuses
-      the run.
+      authorization. A closed but unmerged PR does not itself authorize removal;
+      another merged PR can still authorize removal if its head covers every
+      existing local tip. Any other value refuses the run.
 
 # Cleanup runs against the registered projects, not a checkout of its own.
 worktree:

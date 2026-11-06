@@ -1096,7 +1096,9 @@ GitHub remove merged pull requests' branches automatically.
 A worktree with uncommitted changes, a run
 that can still claim it, or a commit the merge does not cover stays and is reported.
 The legacy `include_closed` input accepts `"true"` or `"false"` but has no effect on removal
-authorization; closed but unmerged worktrees stay. Other values refuse the run.
+authorization. A closed but unmerged PR does not itself authorize removal; another
+merged PR can still authorize removal if its head covers every existing local tip.
+Other values refuse the run.
 It runs in place and creates no worktree of its own.
 
 Who removes each checkout:
