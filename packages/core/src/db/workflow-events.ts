@@ -275,22 +275,32 @@ interface NodeLifecycleEventRow extends NodeLifecycleEvent {
   workflow_run_id: string;
 }
 
+/**
+ * `columns` of the rows of `runCount` runs (`$1..`) with one of `typeCount` event types
+ * (the following parameters), each run's rows in durable event order. Served by
+ * idx_workflow_events_run_type, which reads only the requested types of each run.
+ */
+export function runEventsSql(columns: string, runCount: number, typeCount: number): string {
+  const placeholders = (count: number, offset: number): string =>
+    Array.from({ length: count }, (_, index) => `$${String(offset + index + 1)}`).join(', ');
+  return `SELECT ${columns} FROM remote_agent_workflow_events
+     WHERE workflow_run_id IN (${placeholders(runCount, 0)})
+       AND event_type IN (${placeholders(typeCount, runCount)})
+     ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC`;
+}
+
 export async function listActiveWorkflowNodeIds(
   workflowRunIds: readonly string[]
 ): Promise<Map<string, string[]>> {
   if (workflowRunIds.length === 0) return new Map();
 
   const activeByRun = new Map(workflowRunIds.map(id => [id, new Set<string>()]));
-  const runPlaceholders = workflowRunIds.map((_, index) => `$${String(index + 1)}`);
-  const eventPlaceholders = NODE_LIFECYCLE_EVENT_TYPES.map(
-    (_, index) => `$${String(workflowRunIds.length + index + 1)}`
-  );
   const result = await pool.query<NodeLifecycleEventRow>(
-    `SELECT workflow_run_id, step_name, event_type
-     FROM remote_agent_workflow_events
-     WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
-       AND event_type IN (${eventPlaceholders.join(', ')})
-     ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC`,
+    runEventsSql(
+      'workflow_run_id, step_name, event_type',
+      workflowRunIds.length,
+      NODE_LIFECYCLE_EVENT_TYPES.length
+    ),
     [...workflowRunIds, ...NODE_LIFECYCLE_EVENT_TYPES]
   );
 
@@ -317,16 +327,9 @@ export async function listEventsForRuns(
   const byRun = new Map<string, WorkflowEventRow[]>(workflowRunIds.map(id => [id, []]));
   if (workflowRunIds.length === 0 || eventTypes.length === 0) return byRun;
 
-  const runPlaceholders = workflowRunIds.map((_, index) => `$${String(index + 1)}`);
-  const eventPlaceholders = eventTypes.map(
-    (_, index) => `$${String(workflowRunIds.length + index + 1)}`
-  );
   try {
     const result = await pool.query<WorkflowEventRow>(
-      `SELECT * FROM remote_agent_workflow_events
-       WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
-         AND event_type IN (${eventPlaceholders.join(', ')})
-       ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC`,
+      runEventsSql('*', workflowRunIds.length, eventTypes.length),
       [...workflowRunIds, ...eventTypes]
     );
     for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));
