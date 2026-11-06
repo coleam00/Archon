@@ -1,4 +1,5 @@
 import {
+  PR_VIEW_ANY_STATE,
   type ForgeError,
   type ForgeMutationRequest,
   type ForgeRequest,
@@ -11,6 +12,7 @@ import {
 import { githubErrorDetail, parseRemote, type Fetch } from './api';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
 import { handleGithubWorkItemComments } from './comments';
+import { handleGithubPrFiles, handleGithubRepoFile } from './files';
 import { handleGithubPrMergeState } from './merge-state';
 import { handleGithubMutation } from './lifecycle';
 import { handleGithubPrReviews, handleGithubPrView } from './pull-requests';
@@ -44,6 +46,7 @@ export const githubPluginMetadata = {
     'repo.labels.list',
     'repo.label.ensure',
     'pr.view',
+    PR_VIEW_ANY_STATE,
     'pr.create',
     'pr.edit-body',
     'pr.ready',
@@ -54,6 +57,8 @@ export const githubPluginMetadata = {
     'pr.reviews',
     'pr.threads',
     'pr.merge-state',
+    'pr.files',
+    'repo.file',
     'pr.thread.reply',
     'pr.thread.resolve',
   ],
@@ -86,6 +91,8 @@ const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'pr.reviews': handleGithubPrReviews,
   'pr.threads': handleGithubPrThreads,
   'pr.merge-state': handleGithubPrMergeState,
+  'pr.files': handleGithubPrFiles,
+  'repo.file': handleGithubRepoFile,
   'checks.state': handleGithubChecksState,
   'checks.commit': handleGithubChecksCommit,
 };

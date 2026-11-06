@@ -28,6 +28,8 @@ const forgeOperationDescriptions = {
   'pr.threads': 'Read every review thread with its comments and resolution',
   'pr.merge-state':
     'Read how far a pull request is behind the default branch and whether it merges',
+  'pr.files': 'Read every file a pull request changes, with its patch',
+  'repo.file': "Read one file's text at a commit",
   'pr.thread.reply': 'Reply on one review thread and verify the reply',
   'pr.thread.resolve': 'Resolve one review thread and verify the result',
   'comment.upsert': 'Write the one marked comment on a pull request',
