@@ -4070,6 +4070,127 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/codebases/{id}/extra-sources': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List a project's extra workflow sources and the commit each was last synced to */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Configured extra workflow sources */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ExtraWorkflowSourcesResponse'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/codebases/{id}/sync': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Refresh a project's extra workflow sources from their git refs */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Extra workflow sources after the sync */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ExtraWorkflowSourcesResponse'];
+          };
+        };
+        /** @description The project has no git repository to sync from */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Sync failed */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/codebases/{id}/environments': {
     parameters: {
       query?: never;
@@ -7783,6 +7904,20 @@ export interface components {
         label: string;
       }[];
     };
+    ExtraWorkflowSourcesResponse: {
+      sources: components['schemas']['ExtraWorkflowSourceStatus'][];
+    };
+    ExtraWorkflowSourceStatus: {
+      ref: string;
+      path: string;
+      snapshot: components['schemas']['ExtraWorkflowSourceSnapshot'];
+    };
+    ExtraWorkflowSourceSnapshot: {
+      commit: string;
+      /** Format: date-time */
+      synced_at: string;
+      fetched: boolean;
+    } | null;
     CodebaseEnvironmentsResponse: {
       environments: components['schemas']['IsolationEnvironment'][];
     };

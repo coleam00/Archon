@@ -24,6 +24,7 @@ export {
   workflowTestCommand,
   workflowWaitCommand,
 } from './workflow-query';
+export { workflowSyncCommand } from './workflow-sync';
 export { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
 export {
   workflowAbandonCommand,

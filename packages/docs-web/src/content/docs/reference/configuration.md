@@ -457,6 +457,39 @@ recommendedWorkflows:
 
 **Worktree path behavior:** By default, every repo's worktrees live under `~/.archon/workspaces/<owner>/<repo>/worktrees/<branch>` — outside the repo, invisible to the IDE. Set `worktree.path` to opt in to a **repo-local** layout instead: worktrees are created at `<repoRoot>/<worktree.path>/<branch>` so they show up in the file tree and editor workspace. A common choice is `.worktrees`. Because worktrees now live inside the repository tree, you should add the directory to your `.gitignore` (Archon does not modify user-owned files). The configured path must be relative to the repo root; absolute paths and paths containing `..` segments fail loudly at worktree creation rather than silently falling back.
 
+### Workflows from a git ref (`extraWorkflowSources`)
+
+A project can load workflows from a git ref of its own repository, such as a `plans`
+branch that holds implementation plans and the workflows that execute them. The ref is
+never checked out: `archon workflow sync` writes its files to a snapshot under
+`ARCHON_HOME/extra-sources/`, and discovery reads the snapshot.
+
+```yaml
+extraWorkflowSources:
+  - ref: plans
+    path: .
+```
+
+- `ref` is a branch or tag. `path` is the directory in the ref that holds a `workflows/`
+  folder, relative to the repository root. It defaults to `.`. Commands and scripts are
+  not read from a ref; a workflow's command and script nodes resolve from the project,
+  global and bundled scopes as usual.
+- Extra-source workflows are project workflows. They load after the global scope and before the
+  project's own `.archon/workflows/`, so a project file of the same name wins. With several
+  entries, a later one overrides an earlier one.
+- Nothing refreshes a snapshot in the background. `archon workflow sync` fetches each ref
+  from `worktree.remote` (default `origin`) and replaces its snapshot. A repository with no
+  such remote reads the ref locally; the command reports which it did. A fetch that fails
+  is an error, never a quiet use of the old snapshot.
+- A configured source that was never synced is a workflow load error and fails run capture,
+  with a message that names `archon workflow sync`. A run does not fetch: it uses the last
+  snapshot, freezes it into its capture like every other source, and records the commit in
+  the capture's `extra/<n>/source.json`. A later sync never changes a run that already
+  started, including after a resume.
+- A ref may not hold symlinks or binary files. The key is read from the project's
+  `.archon/config.yaml` only, on the default checkout, so a ref cannot change its own
+  configuration.
+
 ### Container isolation (folder projects)
 
 **Folder projects** run in place by default. Opt into overlay-isolated Docker execution — writes land in an overlay upper layer, not the live root — with the `--container` CLI flag, the `container.enabled` config key, or a workflow's `container.enabled` policy. Valid on both global and repo `.archon/config.yaml` (repo overrides global per-field):

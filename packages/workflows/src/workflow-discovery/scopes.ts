@@ -11,6 +11,12 @@ import {
   type BundledWorkflowOwner,
 } from '../defaults/bundled-defaults';
 import { collectInstalledBundleSources, readBundleContent } from '../defaults/bundle-inventory';
+import { EXTRA_SCOPE_DIR, workflowSourceConfigForRoots } from '../workflow-source/roots';
+import {
+  EXTRA_WORKFLOWS_DIR,
+  ExtraSourceNotSyncedError,
+  readExtraSourceSnapshot,
+} from '../workflow-source/extra-sources';
 import { parseWorkflow } from '../loader';
 import { qualifyWorkflowResources } from '../packaged-workflow';
 import type { DiscoveryContext } from './context';
@@ -210,6 +216,48 @@ export async function loadGlobalScope(context: DiscoveryContext, files: ScopeFil
     } else {
       getLog().debug({ homeWorkflowPath }, 'home_workflows_not_found');
     }
+  }
+}
+
+/**
+ * Workflows from git refs of the project's own repository (`extra_sources` in the source
+ * config), read from their synced snapshots. They load before the project's own folder,
+ * so a project file of the same name wins. A source that was never synced is a load
+ * error that names the fix; it is not skipped quietly.
+ */
+export async function loadExtraScope(context: DiscoveryContext, files: ScopeFiles): Promise<void> {
+  const { roots } = context;
+  const sources = workflowSourceConfigForRoots(roots).extra_sources ?? [];
+  for (const [index, source] of sources.entries()) {
+    let workflowsDir: string;
+    if (roots.kind === 'captured') {
+      workflowsDir = join(
+        roots.anchor.root,
+        EXTRA_SCOPE_DIR,
+        String(index),
+        'tree',
+        EXTRA_WORKFLOWS_DIR
+      );
+    } else {
+      // No checkout, no ref to read: a listing before any project exists has no extras.
+      if (roots.project === null) return;
+      const snapshot = await readExtraSourceSnapshot(roots.project, source);
+      if (!snapshot) {
+        context.allErrors.push({
+          filename: `extra:${source.ref}`,
+          error: new ExtraSourceNotSyncedError(source).message,
+          errorType: 'read_error',
+        });
+        continue;
+      }
+      workflowsDir = snapshot.workflowsDir;
+    }
+    const result = await loadScopeDirectory(context, workflowsDir, workflowsDir, 'project');
+    for (const [filename, parsed] of result.workflows) {
+      files.set(filename, { ...parsed, source: 'project' });
+    }
+    context.allErrors.push(...result.errors);
+    getLog().info({ ref: source.ref, count: result.workflows.size }, 'extra_workflows_loaded');
   }
 }
 

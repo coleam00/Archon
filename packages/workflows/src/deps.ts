@@ -1,5 +1,6 @@
 import type { SETTING_SOURCES } from '@archon/paths/skills';
 import type { ResolvedWorkflowPolicy } from './schemas/run-config';
+import type { ExtraWorkflowSource } from './schemas/run-metadata';
 /**
  * Workflow dependency injection types.
  *
@@ -220,6 +221,8 @@ export interface WorkflowConfig {
   aliases?: RawAliasesConfig;
   tiers?: RawTiersConfig;
   commands: { folder?: string };
+  /** Workflows read from git refs of the project's own repository; see `extraWorkflowSourceSchema`. */
+  extraWorkflowSources?: readonly ExtraWorkflowSource[];
   workflows?: ResolvedWorkflowPolicy;
   defaults?: {
     loadDefaultWorkflows?: boolean;

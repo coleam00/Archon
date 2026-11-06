@@ -7,6 +7,7 @@ import { installedPluginRecordSchema } from './installed-packs';
 import { WorkflowSourceIntegrityError, isSystemError, sourceReadError } from './integrity';
 import {
   BUNDLED_SCOPE_DIR,
+  EXTRA_SCOPE_DIR,
   GLOBAL_SCOPE_DIR,
   INSTALLED_SCOPE_DIR,
   PROJECT_SCOPE_DIR,
@@ -40,7 +41,13 @@ const manifestFields = {
   file_count: z.number(),
   byte_count: z.number(),
   scopes: z.array(
-    z.enum([PROJECT_SCOPE_DIR, GLOBAL_SCOPE_DIR, BUNDLED_SCOPE_DIR, INSTALLED_SCOPE_DIR])
+    z.enum([
+      PROJECT_SCOPE_DIR,
+      GLOBAL_SCOPE_DIR,
+      BUNDLED_SCOPE_DIR,
+      INSTALLED_SCOPE_DIR,
+      EXTRA_SCOPE_DIR,
+    ])
   ),
   source_config: workflowSourceConfigSchema,
   /** Absent until the caller has selected which workflow this run executes. */

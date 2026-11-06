@@ -218,6 +218,17 @@ The command exits 0 when every fixture passes, including when none are declared.
 
 Fixtures with `exec-code: true` receive the same environment as [executable dry runs](#deterministic-dry-run): inherited process values, file-configured `env`, then registered-project environment values, with later sources winning. Environment lookup happens only for executable fixtures. If lookup fails, that fixture fails with the lookup error; independent stub fixtures still run and workflow-load errors remain in the report.
 
+### `workflow sync`
+
+Refresh the project's [`extraWorkflowSources`](/reference/configuration/#workflows-from-a-git-ref-extraworkflowsources): fetch each configured git ref and replace its snapshot.
+
+```bash
+archon workflow sync
+archon workflow sync --json
+```
+
+Prints one line per source with the commit it now holds, whether the ref was fetched or read locally (no remote), and the number of files. With `--json`, prints `{ ok, sources: [{ ref, path, commit, fetched, files }] }`. A project with no `extraWorkflowSources` prints a notice and exits 0. A run never syncs for you; it uses the last snapshot.
+
 ### `workflow run <name> [message]`
 
 Run a workflow with an optional user message, which the workflow reads as `$ARGUMENTS`.

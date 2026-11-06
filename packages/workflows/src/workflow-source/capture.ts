@@ -17,6 +17,7 @@ import {
 import {
   BUNDLED_SCOPE_DIR,
   DEFAULT_WORKFLOW_SOURCE_CONFIG,
+  EXTRA_SCOPE_DIR,
   GLOBAL_SCOPE_DIR,
   INSTALLED_SCOPE_DIR,
   PROJECT_SCOPE_DIR,
@@ -24,6 +25,7 @@ import {
   type InstalledPacksRoot,
 } from './roots';
 import { copyListing, isDirectory, listTree, projectSourceDirs } from './tree';
+import { ExtraSourceNotSyncedError, readExtraSourceSnapshot } from './extra-sources';
 import { getLog } from './log';
 
 /**
@@ -34,7 +36,7 @@ import { getLog } from './log';
  */
 const CAPTURE_WARN_BYTES = 64 * 1024 * 1024;
 
-type CapturedScope = 'project' | 'global' | 'bundled' | 'installed';
+type CapturedScope = 'project' | 'global' | 'bundled' | 'installed' | 'extra';
 
 /** One MUTABLE directory worth copying: its capture-relative destination and its origin. */
 interface CaptureJob {
@@ -83,6 +85,7 @@ export async function captureWorkflowSource(opts: {
   // The bundled scope is not among the jobs: it is this build's own, read once into a
   // {@link BundledScope} and written from there.
   const jobs = await mutableScopeJobs(sourceRoot, commandFolder);
+  jobs.push(...(await extraSourceJobs(sourceRoot, sourceConfig)));
   const installed = await installedCapture(
     opts.installedFrom ?? liveSourceRoots(sourceRoot).installed
   );
@@ -134,6 +137,25 @@ async function mutableScopeJobs(
   ] as const) {
     if (await isDirectory(from))
       jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
+  }
+  return jobs;
+}
+
+/**
+ * One job per configured extra source, copying its whole snapshot (the tree and the
+ * `source.json` that records the commit). A source that was never synced fails the
+ * capture: the capture is the run's only source, and a run must not start without a
+ * source the project's own configuration asks for.
+ */
+async function extraSourceJobs(
+  sourceRoot: string,
+  sourceConfig: WorkflowSourceConfig
+): Promise<CaptureJob[]> {
+  const jobs: CaptureJob[] = [];
+  for (const [index, source] of (sourceConfig.extra_sources ?? []).entries()) {
+    const snapshot = await readExtraSourceSnapshot(sourceRoot, source);
+    if (!snapshot) throw new ExtraSourceNotSyncedError(source);
+    jobs.push({ dest: join(EXTRA_SCOPE_DIR, String(index)), from: snapshot.dir, scope: 'extra' });
   }
   return jobs;
 }

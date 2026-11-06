@@ -25,6 +25,7 @@ export const K = {
   countsGlobal: 'counts:global' as const,
   pendingRuns: 'pendingRuns' as const,
   envVars: (projectId: string): string => `envVars:${projectId}`,
+  extraSources: (projectId: string): string => `extraSources:${projectId}`,
   artifacts: (runId: string): string => `artifacts:${runId}`,
   // Installation-wide settings surfaces (static keys — one row each).
   config: 'config' as const,

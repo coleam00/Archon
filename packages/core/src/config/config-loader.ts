@@ -37,6 +37,7 @@ import {
   validateAssistantDefaults,
   validateGlobalConfigBlocks,
   validateModelBindingConfig,
+  validateExtraWorkflowSources,
   validateWorkflowContinuationConfig,
 } from './config-validation';
 import {
@@ -327,6 +328,7 @@ async function readRepoConfig(configPath: string): Promise<RepoConfig> {
   if (content === undefined) return {};
   const raw = parseConfigMapping(content, configPath, 'Project config');
   validateWorkflowContinuationConfig(raw, configPath);
+  validateExtraWorkflowSources(raw, configPath);
   validateModelBindingConfig(raw, configPath);
   const parsed = raw as RepoConfig;
   const recommendedWorkflows = sanitizeRecommendedWorkflows(

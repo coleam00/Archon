@@ -45,6 +45,10 @@ const keyClassifications = {
   workflows: { kind: 'runtime' },
   docs: { kind: 'runtime' },
   env: { kind: 'runtime' },
+  extraWorkflowSources: {
+    kind: 'unavailable',
+    reason: 'workflow discovery already ran before run dispatch',
+  },
   commands: {
     kind: 'unavailable',
     reason: 'workflow and command discovery already ran before run dispatch',

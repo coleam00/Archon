@@ -105,6 +105,14 @@ export async function runWorkflowList(route: WorkflowRoute): Promise<number> {
   return 0;
 }
 
+export async function runWorkflowSync(route: WorkflowRoute): Promise<number> {
+  const { positionals, json, effectiveCwd, commands } = route;
+  if (positionals[2] !== undefined) {
+    return await fail(json, 'Usage: archon workflow sync [--json]');
+  }
+  return await commands.workflowSyncCommand(effectiveCwd, { json });
+}
+
 export async function runWorkflowStatus(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   if (positionals[2] !== undefined) {
@@ -505,6 +513,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
+    `${problem}\nAvailable: list, run, test, sync, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
   );
 }

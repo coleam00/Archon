@@ -19,6 +19,7 @@ interface ProjectRowProps {
   onRemove?: () => Promise<void>;
   onRename?: (name: string) => Promise<void>;
   onEditEnv?: () => void;
+  onEditSources?: () => void;
 }
 
 function KeyIcon({ size = 16 }: { size?: number }): ReactElement {
@@ -35,6 +36,24 @@ function KeyIcon({ size = 16 }: { size?: number }): ReactElement {
       aria-hidden
     >
       <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4" />
+    </svg>
+  );
+}
+
+function SyncIcon({ size = 16 }: { size?: number }): ReactElement {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M21 12a9 9 0 0 1-15.5 6.2L3 16m0 0v5m0-5h5M3 12a9 9 0 0 1 15.5-6.2L21 8m0 0V3m0 5h-5" />
     </svg>
   );
 }
@@ -236,6 +255,7 @@ interface RowActionsProps {
   busy: boolean;
   setMenuOpen: Dispatch<SetStateAction<boolean>>;
   onEditEnv?: () => void;
+  onEditSources?: () => void;
   onStartRename?: () => void;
   onRemove?: () => void;
 }
@@ -249,6 +269,7 @@ function RowActions({
   busy,
   setMenuOpen,
   onEditEnv,
+  onEditSources,
   onStartRename,
   onRemove,
 }: RowActionsProps): ReactElement {
@@ -274,6 +295,20 @@ function RowActions({
           className="flex h-[29px] w-[29px] items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
         >
           <KeyIcon />
+        </button>
+      ) : null}
+      {onEditSources !== undefined ? (
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation();
+            onEditSources();
+          }}
+          title="Workflow sources"
+          aria-label="Workflow sources"
+          className="flex h-[29px] w-[29px] items-center justify-center rounded-lg text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+        >
+          <SyncIcon />
         </button>
       ) : null}
       {hasMenu ? (
@@ -409,6 +444,7 @@ export function ProjectRow({
   onRemove,
   onRename,
   onEditEnv,
+  onEditSources,
 }: ProjectRowProps): ReactElement {
   const label = rowLabel(project.name);
   const hasMenu = onRemove !== undefined || onRename !== undefined;
@@ -552,6 +588,7 @@ export function ProjectRow({
         busy={busy}
         setMenuOpen={setMenuOpen}
         onEditEnv={onEditEnv}
+        onEditSources={onEditSources}
         onStartRename={startRename}
         onRemove={onRemove === undefined ? undefined : () => void requestRemoval()}
       />

@@ -24,6 +24,13 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'sync',
+      spec: 'workflow sync [--json]',
+      description:
+        "Refresh the project's extraWorkflowSources from their git refs\nRuns only when asked; a run uses the last synced commit",
+    },
+    {
+      command: 'workflow',
       subcommand: 'status',
       spec: 'workflow status',
       description: 'Show running/paused workflows for this project',

@@ -223,6 +223,8 @@ Commands:
                              List compact workflow descriptions
                              Use <name> --full for one exact description
   workflow run <name> [msg]  Run a workflow with optional message
+  workflow sync [--json]     Refresh the project's extraWorkflowSources from their git refs
+                             Runs only when asked; a run uses the last synced commit
   workflow status            Show running/paused workflows for this project
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
