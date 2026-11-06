@@ -1,11 +1,10 @@
 /**
  * The PR metrics' attribution and outcome mapping: which pull requests count, which
- * runs each is attributed to, and which records its state makes.
+ * runs each is attributed to, which records its state makes, and the forge view they
+ * are read from.
  */
 import { describe, expect, it } from 'bun:test';
-import type { BuildRound } from '../../workflows/sdlc/.shared/build';
-import { factoryPrRuns, factoryPrs, prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
-import { newWorkItem, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
+import { factoryPrs, prFacts, prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
 
 const REPO = { host: 'github.example.com', path: 'acme/widgets' };
 const RUN_A = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -14,15 +13,6 @@ const RUN_C = 'cccccccc-0000-4000-8000-000000000003';
 
 function url(number: number): string {
   return `https://${REPO.host}/${REPO.path}/pull/${String(number)}`;
-}
-
-function round(run_id: string, pr_url: string): BuildRound {
-  return { run_id, at: '2026-10-01T00:00:00Z', delivered: pr_url !== '', reason: '', pr_url, summary: '', artifacts: '' };
-}
-
-function item(number: number, rounds: BuildRound[]): WorkItem {
-  const doc = newWorkItem({ repo: REPO, number }, '2026-10-01T00:00:00Z');
-  return { ...doc, facts: { build: { status: 'ready', brief: '', rounds, decisions: [], at: '2026-10-02T00:00:00Z' } } };
 }
 
 function pr(number: number, facts: Partial<PrFacts> = {}): PrFacts {
@@ -38,16 +28,32 @@ function pr(number: number, facts: Partial<PrFacts> = {}): PrFacts {
   };
 }
 
-describe('factoryPrRuns', () => {
-  it('skips rounds without a pull request and gathers every round run under its pull request', () => {
-    const runs = factoryPrRuns([
-      item(1, [round(RUN_A, ''), round(RUN_B, url(10)), round(RUN_C, url(10))]),
-      item(2, [round(RUN_A, url(20))]),
-    ]);
-    expect([...runs]).toEqual([
-      [url(10), [RUN_B, RUN_C]],
-      [url(20), [RUN_A]],
-    ]);
+describe('prFacts', () => {
+  const view = (pr: Record<string, unknown>, timestamps?: Record<string, unknown>) => ({
+    pr: {
+      schemaVersion: 1, repo: REPO, number: 10, url: url(10), head: 'build/10-widget-aaaaaaaa', base: 'dev',
+      is_draft: false, state: 'merged', head_repo: REPO, head_revision: 'abc', base_revision: null,
+      maintainer_can_modify: null, ...pr,
+    },
+    title: 'A title',
+    body: '',
+    ...(timestamps === undefined ? {} : { timestamps }),
+  });
+  const times = { created_at: '2026-10-03T10:00:00Z', merged_at: '2026-10-05T12:00:00Z', closed_at: '2026-10-05T12:00:05Z' };
+
+  it('maps a pr.view to the facts the records read, with a fork head as cross-repository', () => {
+    expect(prFacts(url(10), view({}, times))).toEqual(
+      pr(10, { state: 'MERGED', mergedAt: times.merged_at, closedAt: times.closed_at })
+    );
+    const closed = view({ state: 'closed' }, { ...times, merged_at: null });
+    expect(prFacts(url(10), closed)).toEqual(pr(10, { state: 'CLOSED', mergedAt: null, closedAt: times.closed_at }));
+    const fork = view({ state: 'open', head_repo: { host: REPO.host, path: 'someone/widgets' } }, { ...times, merged_at: null, closed_at: null });
+    expect(prFacts(url(10), fork)).toMatchObject({ state: 'OPEN', isCrossRepository: true });
+  });
+
+  it('refuses a view without timestamps, naming them, and a view of no pull request', () => {
+    expect(() => prFacts(url(10), view({}))).toThrow(`forge pr.view reported no timestamps for ${url(10)}`);
+    expect(() => prFacts(url(10), null)).toThrow(`forge pr.view reported no pull request for ${url(10)}`);
   });
 });
 

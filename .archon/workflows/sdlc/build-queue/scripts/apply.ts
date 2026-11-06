@@ -8,24 +8,30 @@
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
  * its claim until the ruling node records the answer. A continue then starts the item's
- * next round at once, on the run config and input selections this run started with; if
- * that launch fails, the item waits for the next queue run.
+ * next round at once through the operator's build-queue binding; if it does not start,
+ * the item waits for the next queue run.
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
- * INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
-import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
-import { withBuild } from '../../.shared/build.ts';
-import { forgeSource, parseQualifiedPr, type ForgeSource, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
+import {
+  type ApplyDecision,
+  type AskedBy,
+  type BuildAttention,
+  type BuildRound,
+  type BuildStatus,
+  nextRound,
+  withBuild,
+} from '../../.shared/build.ts';
+import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
-import { attentionOptions, checkAttention, type DecisionEntry, renderAttention, withOther } from '../../.shared/queue.ts';
+import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
@@ -95,7 +101,7 @@ function decide(
 
 /** Push the checkout's commits to the pull request's head; git refuses anything but a fast-forward. */
 function pushTo(pr: QualifiedPr): string {
-  const view = viewPr(pr, forgeSource());
+  const view = viewPr(pr);
   if (view.pr.state !== 'open') throw new Error(`${view.pr.url} is ${view.pr.state}; nothing is pushed to it`);
   if (view.pr.head_revision === gitOrThrow('rev-parse', 'HEAD')) return 'its head already holds the checkout';
   const pushed = pushHead({ repo: pr.repo, head_repo: view.pr.head_repo, head: view.pr.head });
@@ -106,18 +112,18 @@ function observedPr(pr: PrRecord): string {
   return `observed ${pr.state}, draft=${String(pr.is_draft)} at ${String(pr.head_revision)}`;
 }
 
-function rejectChangedHead(after: PrRecord, head: string, source: ForgeSource): never {
+function rejectChangedHead(after: PrRecord, head: string): never {
   const mismatch = `${after.url}: route judged ${head}; ready read-back ${observedPr(after)}`;
   if (after.is_draft) throw new Error(mismatch);
   const ref = { repo: after.repo, number: after.number };
   let corrected: PrRecord;
   try {
-    corrected = setPrDraft(ref, true, source);
+    corrected = setPrDraft(ref, true);
   } catch (error) {
     const correctionError = error instanceof Error ? error.message : String(error);
     let latest: string;
     try {
-      latest = observedPr(viewPr(ref, source).pr);
+      latest = observedPr(viewPr(ref).pr);
     } catch (readError) {
       latest = `final state unknown: ${readError instanceof Error ? readError.message : String(readError)}`;
     }
@@ -136,13 +142,12 @@ function rejectChangedHead(after: PrRecord, head: string, source: ForgeSource): 
 function markReady(pr: PrRecord | null, head: string | null | undefined): string {
   if (pr === null) throw new Error('route declared ready with no pull request');
   if (typeof head !== 'string' || head === '') throw new Error('route declared ready without the head it judged');
-  const source = forgeSource();
   const ref = { repo: pr.repo, number: pr.number };
-  const now = viewPr(ref, source).pr;
+  const now = viewPr(ref).pr;
   if (now.state !== 'open' || now.head_revision !== head)
     throw new Error(`${now.url} is ${now.state} at ${String(now.head_revision)}; route judged it at ${head}`);
-  const after = setPrDraft(ref, false, source);
-  if (after.head_revision !== head) rejectChangedHead(after, head, source);
+  const after = setPrDraft(ref, false);
+  if (after.head_revision !== head) rejectChangedHead(after, head);
   if (after.is_draft)
     throw new Error(`${after.url} reads back draft=${String(after.is_draft)} at ${String(after.head_revision)}`);
   return `${after.url} marked ready at ${head}`;
@@ -168,16 +173,9 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
 }
 
 /** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
-function afterWrite(
-  summary: string,
-  wrote: string | null,
-  decision: Decision,
-  item: QualifiedPr,
-  runId: string,
-  selections: BuildQueueSelections
-): string {
+function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
   const written = wrote === null ? summary : `${summary} (${wrote})`;
-  return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId, selections)}` : written;
+  return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
 }
 
 function main(): void {
@@ -188,6 +186,7 @@ function main(): void {
       summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
       attention: '',
       options: [],
+      recommendation: null,
       class: '',
       asked: null,
     });
@@ -205,10 +204,10 @@ function main(): void {
   const decision = decide(path, route, answer);
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
-  const attention =
+  const wait =
     asking === null
-      ? ''
-      : renderAttention(`Build queue, issue ${String(item.number)}: ${asking.by} decision`, asking.attention);
+      ? null
+      : attentionWait(`Build queue, issue ${String(item.number)}: ${asking.by} decision`, asking.attention);
   const links = [
     ...(round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '')),
     ...(asking?.attention.links ?? []),
@@ -216,8 +215,7 @@ function main(): void {
   const result = {
     decision: decision.kind satisfies ApplyDecision,
     summary: summaryOf(item, decision),
-    attention,
-    options: asking === null ? [] : attentionOptions(asking.attention),
+    ...askFields(wait),
     class: asking?.by ?? '',
     asked:
       asking === null ? null : { attention: asking.attention, brief: asking.brief, by: asking.by },
@@ -244,11 +242,7 @@ function main(): void {
       release: asking === null,
     })
   );
-  const selections: BuildQueueSelections = {
-    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
-    round_limit: text(process.env.INPUTS_ROUND_LIMIT),
-  };
-  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId, selections) });
+  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
 }
 
 try {

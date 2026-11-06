@@ -50,7 +50,7 @@ import {
   type LoopRun,
   type LoopState,
 } from './loop-state';
-import { runLoopIteration } from './iteration';
+import { completeLoop, runLoopIteration } from './iteration';
 
 /**
  * Narrow the token usage a loop gate persisted in its approval context (#2333).
@@ -220,7 +220,7 @@ export async function executeLoopNode(
     if (result !== undefined) return result;
   }
 
-  return failOnIterationLimit(run, state);
+  return endAtIterationLimit(run, state);
 }
 
 function initialLoopState(
@@ -357,9 +357,19 @@ async function resolveCommandPromptTemplate(
   return resolveIncludeOutputAliases(node, promptResult.content);
 }
 
-async function failOnIterationLimit(run: LoopRun, state: LoopState): Promise<NodeExecutionResult> {
+/** A loop that ran out of iterations unmet: it fails, or completes under `on_exhausted: complete`. */
+async function endAtIterationLimit(run: LoopRun, state: LoopState): Promise<NodeExecutionResult> {
   const { ctx, node, resume } = run;
   const { startIteration, iterationLimit } = resume;
+  // A bare approve past the cap resumes beyond iterationLimit and runs nothing.
+  const iterations = Math.max(iterationLimit, startIteration - 1);
+  if (node.loop.on_exhausted === 'complete') {
+    getLog().info(
+      { nodeId: node.id, maxIterations: iterationLimit },
+      'loop_node.max_iterations_reached_completed'
+    );
+    return completeLoop(run, state, iterations, iterationLimit);
+  }
   const errorMsg = `Loop node '${node.id}' exceeded max iterations (${String(iterationLimit)}) ${describeUnmetCompletion(node.loop)}`;
   getLog().warn(
     { nodeId: node.id, maxIterations: iterationLimit, signal: node.loop.until },
@@ -370,8 +380,7 @@ async function failOnIterationLimit(run: LoopRun, state: LoopState): Promise<Nod
     failureKind: 'max_iterations',
     output: state.lastOutput,
     ...loopSpend(state),
-    // A bare approve past the cap resumes beyond iterationLimit and runs nothing.
-    loopIterations: Math.max(iterationLimit, startIteration - 1),
+    loopIterations: iterations,
     data: { maxIterations: iterationLimit },
   });
 }

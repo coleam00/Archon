@@ -100,6 +100,32 @@ export interface ResourceStartRunMetadata {
   bindingId: string;
 }
 
+/** The receipt that requested this run's start, from its `resource_start` metadata. */
+export function readResourceStartReceiptId(
+  metadata: Readonly<Record<string, unknown>> | undefined
+): string | undefined {
+  const origin = metadata?.[RESOURCE_START_METADATA_KEY];
+  if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) return undefined;
+  const receiptId = (origin as Record<string, unknown>).receiptId;
+  return typeof receiptId === 'string' ? receiptId : undefined;
+}
+
+/**
+ * `sourceActor.source` of a receipt that `archon trigger fire` accepted from inside a
+ * run: `id` is that run and `display` the node path. Provenance only; the started run
+ * still acts as its binding's run-as user.
+ */
+export const RUN_SOURCE_ACTOR = 'archon-run';
+
+/** The run and node that requested a start, or null when the source was not a run. */
+export function requestingRun(
+  actor: SourceReceiptInput['sourceActor']
+): { runId: string; nodePath: string | null } | null {
+  return actor?.source === RUN_SOURCE_ACTOR
+    ? { runId: actor.id, nodePath: actor.display ?? null }
+    : null;
+}
+
 /**
  * Resource keys under this prefix are provider-attempt slots owned by core provider
  * admission. An operator-named resource cannot use it, so a trigger resource never

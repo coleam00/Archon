@@ -15,6 +15,12 @@ export const operatorHelp: HelpGroup = {
       description: 'List registered projects (id, kind, name, key, path)',
     },
     {
+      command: 'project',
+      subcommand: 'config',
+      spec: 'project config <id|name>',
+      description: "Show a project's merged config with secrets removed (env key names only)",
+    },
+    {
       command: 'trigger',
       spec: 'trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>',
       description: 'Start configured workflows and inspect durable resource admission',

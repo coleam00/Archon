@@ -26,7 +26,7 @@ import {
   isApprovalContext,
   isNodeContextResume,
 } from '../../../schemas';
-import { writeNodeArtifactsListing } from '../../../artifacts-index';
+import { writeInvocationListings } from '../../../invocation-listings';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { detectCompletionSignal, stripCompletionTags } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
@@ -526,7 +526,7 @@ async function resumedUntilBash(
   const { ctx, node } = run;
   const { workflowRun, artifactsDir } = ctx;
   // Fresh observation for this resumed iteration's condition.
-  const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
+  const listings = await writeInvocationListings(ctx);
   const resumedScope = new Map([...ctx.nodeOutputs, ...currentBodyOutputs]);
   const { prompt: resumedSubstitutedBash } = substituteWorkflowVariables(
     untilBash,
@@ -542,7 +542,7 @@ async function resumedUntilBash(
     {
       shellSafe: true,
       stateDir: ctx.stateDir,
-      typedArtifactsFile,
+      ...listings,
       references: nodeTemplateReferences(
         untilBash,
         {
@@ -573,7 +573,7 @@ async function resumedUntilBash(
       loopGroupIterationOutput(run.bodyNodes, previousBodyOutputs)?.output ?? '',
       node.loop_group.until
     ),
-    typedArtifactsFile,
+    listings,
   });
 }
 

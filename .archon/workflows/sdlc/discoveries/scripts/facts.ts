@@ -5,9 +5,9 @@
  * A run's records become final when the run reaches a terminal status, so only
  * terminal runs are queued, oldest first. A record is settled once its run's
  * `discoveries/runs/<id>` document lists it as decided. Every run document is read in
- * one call. Each queued run is claimed with a conditional write on its document, so two
- * passes never decide the same run; a claim is released only when the claiming run is
- * terminal.
+ * one call. Each queued run is claimed with a conditional write on its document that
+ * takes the document's engine lease, so two passes never decide the same run; a claim is
+ * taken over only when the engine reports the claiming run's lease ended.
  *
  * Writes `$ARTIFACTS_DIR/drain/queue.json`: the queued records, each run with the
  * questions earlier passes asked about it, for the agent and the outcome.
@@ -24,17 +24,9 @@ import {
   runName,
 } from '../../.shared/discoveries.ts';
 import { artifactsDir, emit, note, refuse, trimmed } from '../../.shared/io.ts';
-import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { fetchDefaultBranch } from '../../.shared/remote.ts';
 import { latestVerdictOf, relayedDiscoveries } from '../../.shared/report.ts';
-import {
-  claimDisposition,
-  listRuns,
-  runStatus,
-  stateDocuments,
-  stateGet,
-  statePut,
-} from '../../.shared/state.ts';
+import { claimEnded, listRuns, stateDocuments, stateGet, statePut } from '../../.shared/state.ts';
 
 /** The CLI lists at most this many runs, newest first. */
 const LISTING = 1000;
@@ -75,15 +67,12 @@ function claimRun(runId: string, self: string, at: string): RunDocument | null {
   const stored = stateGet(name);
   const current = parseRunDocument(name, stored.value);
   const held = current?.claim ?? null;
-  if (held !== null && held.run_id !== self) {
-    const status = runStatus(held.run_id);
-    if (claimDisposition(status) === 'hold') {
-      if (status === null) note(`${name} stays claimed: the engine reports no status for run ${held.run_id}`);
-      return null;
-    }
+  if (held !== null && held.run_id !== self && !claimEnded(held.run_id, stored)) {
+    if (stored.lease?.runId !== held.run_id) note(`${name} stays claimed: run ${held.run_id} holds no engine lease on it`);
+    return null;
   }
   const claimed: RunDocument = { ...(current ?? { version: 1 }), claim: { run_id: self, at } };
-  return statePut(name, claimed, stored.revision) === 'ok' ? claimed : null;
+  return statePut(name, claimed, stored.revision, 'take') === 'ok' ? claimed : null;
 }
 
 /** The run's undecided records and its questions, from the document this pass decides against. */
@@ -181,7 +170,6 @@ function main(): void {
   emit({
     path: queue.length === 0 ? 'idle' : 'decide',
     base,
-    policy_defaults: POLICY_DEFAULTS,
   });
 }
 

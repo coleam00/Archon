@@ -731,8 +731,47 @@
             "options": {
               "type": "array",
               "items": {
-                "$ref": "#/$defs/ChatApprovalDecision"
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "does": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ]
               }
+            },
+            "recommendation": {
+              "type": "object",
+              "properties": {
+                "option": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "why": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                }
+              },
+              "required": [
+                "option",
+                "why"
+              ]
             }
           },
           "required": [

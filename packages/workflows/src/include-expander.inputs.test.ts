@@ -612,7 +612,11 @@ describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
 // A raw `INPUTS_<NAME>` read of one of the block's own pack settings would otherwise get
 // the including run's value, so it fails the load like the `$INPUTS.<name>` form.
 describe("expandWorkflowIncludes — an included block's raw reads of its pack settings", () => {
-  const betaPack = { key: 'beta', settings: { tone: { type: 'string' as const } } };
+  const betaPack = {
+    key: 'beta',
+    source: 'project' as const,
+    settings: { tone: { type: 'string' as const } },
+  };
   const block = (nodes: unknown[]): ReturnType<typeof wf> =>
     wf('beta-block', nodes, { pack: betaPack });
   const expand = (

@@ -288,6 +288,7 @@ test('resumed completion preserves enclosing previous-output scopes', async () =
       bodyNodes: [body, check],
       ctx: {
         ...options,
+        workflowPack: undefined,
         providerLimitDeadline: createProviderLimitDeadlineResolver(),
         toolAttention: createRunToolCallAttention({ store, runId: 'run' }),
         workflowName: 'scope',

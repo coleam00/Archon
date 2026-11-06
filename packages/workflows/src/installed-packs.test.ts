@@ -253,6 +253,7 @@ nodes:
     const review = workflows.find(entry => entry.workflow.name === REVIEW);
     const expected: WorkflowPack = {
       key: 'acme.review-kit',
+      source: 'installed',
       settings: { depth: { type: 'string', default: 'shallow' } },
     };
     expect(review?.workflow.pack).toEqual(expected);

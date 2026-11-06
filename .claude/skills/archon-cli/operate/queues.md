@@ -21,7 +21,8 @@ reference covers launching and tending the queues by hand.
 ## Before the first run
 
 - `archon workflow run archon-forge-check` must pass in the checkout. It proves the
-  pack can read the repository through its forge source (`gh` by default).
+  pack can read the repository through the forge plugin
+  (`archon plugin add coleam00/Archon/plugins/forge-github`).
 - `.archon/sdlc/policy/maintainers.json` on the default branch lists the forge logins
   whose issues are triaged and whose review comments count. An entry can be an object,
   `{ "login": "<login>", "merge_queue": "own-prs" }`, which also sends that

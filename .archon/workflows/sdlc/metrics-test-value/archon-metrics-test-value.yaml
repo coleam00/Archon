@@ -6,7 +6,8 @@ description: |
   attributed to the build-queue runs that built its pull request; both counts
   name the judge's identity, so agreement from
   `archon-metrics-test-value-calibrate` is read for the same judge. Re-runs
-  replace earlier records.
+  replace earlier records. It needs a forge plugin whose pr.view reports pull
+  request timestamps and that provides pr.files and repo.file.
 
   Use when: an operator wants to see whether factory pull requests carry tests
   that protect nothing, or a schedule binding the operator installed starts it

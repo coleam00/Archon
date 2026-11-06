@@ -159,7 +159,7 @@ The delivery tail, in capped rounds: implement the work with focused checks on w
 archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in .archon/plans/csv-export.md"
 ```
 
-**What it produces**: A PR marked ready for review, with one canonical review comment (on the `gh` source, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one while the listing lags; the next upsert then refuses).
+**What it produces**: A PR marked ready for review, with one canonical review comment.
 
 ### Review and validation
 
@@ -182,7 +182,7 @@ archon workflow run archon-review --input scope=<PR-URL> --branch <fresh-review-
 
 Use the fork's actual clone URL, head ref and full head SHA, and choose a review branch absent locally, on the configured remote and from existing worktrees. `--from` only applies to a new branch; `--branch` alone cannot resolve a fork-only ref and would create it from the base. If the checkout commit differs from the PR head, the run stops before routing or any review lens and returns the exact rerun command, including the fetch prerequisite for a fork.
 
-**What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review (on the `gh` source, a write that landed but returned a retryable response (5xx, or a rate limit) or no response can leave a second one while the listing lags; the next upsert then refuses). Empty `scope` selects the current branch's open PR first, otherwise the working diff. A Ready verdict on a draft PR pauses the run as one attention item: `ready` takes the PR out of draft, and `finish` leaves it a draft.
+**What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Empty `scope` selects the current branch's open PR first, otherwise the working diff. A Ready verdict on a draft PR pauses the run as one attention item: `ready` takes the PR out of draft, and `finish` leaves it a draft.
 
 #### `archon-validate`
 
@@ -212,7 +212,7 @@ archon workflow run archon-upkeep "Address the undici advisory"
 
 #### `archon-metrics-prs`
 
-Records the outcomes of the pull requests the build queue opened as metrics: `sdlc.prs_opened`, `sdlc.prs_merged`, `sdlc.prs_abandoned` and `sdlc.pr_merge_rate`. Each record is attributed to the build-queue runs that built its pull request, so `archon metrics --compare` splits pull requests by when those runs started. Pull requests a round only continued count in no metric.
+Records the outcomes of the pull requests the build queue opened as metrics: `sdlc.prs_opened`, `sdlc.prs_merged`, `sdlc.prs_abandoned` and `sdlc.pr_merge_rate`. Each record is attributed to the build-queue runs that built its pull request, so `archon metrics --compare` splits pull requests by when those runs started. Pull requests a round only continued count in no metric. It reads each pull request through the forge plugin's `pr.view`, and refuses with a plugin whose `pr.view` reports no timestamps.
 
 **When to use it**: You want current factory PR counts and merge rate, or to compare them before and after a pack change. Run it on demand, or add the schedule binding the SDLC pack README's "Metrics" section shows; the pack installs none.
 
@@ -225,7 +225,7 @@ archon metrics sdlc.pr_merge_rate --since 2026-10-01
 
 #### `archon-metrics-test-value`
 
-Judges the tests in each factory pull request merged since a date, one `archon-metrics-test-value-judge` run per pull request, and records `sdlc.tests_added` and `sdlc.tests_unprotective`: how many tests it added or changed, and how many of them no plausible regression would fail. Both counts name the judge's identity.
+Judges the tests in each factory pull request merged since a date, one `archon-metrics-test-value-judge` run per pull request, and records `sdlc.tests_added` and `sdlc.tests_unprotective`: how many tests it added or changed, and how many of them no plausible regression would fail. Both counts name the judge's identity. The judge reads each pull request's changed files and test file text through the forge plugin's `pr.files` and `repo.file`; a pull request whose files the plugin cannot read is skipped.
 
 **When to use it**: You want to see whether factory pull requests carry tests that protect nothing. Calibrate the judge first with `archon-metrics-test-value-calibrate`, which scores it against hand-labeled pull requests as `sdlc.tests_unprotective_judge_agreement` and `sdlc.tests_unprotective_judge_catch_rate`.
 

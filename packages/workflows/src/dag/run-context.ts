@@ -9,6 +9,7 @@ import type { NodeExecutionRecord, NodeInvocation } from '../schemas/node-execut
 import type { CheckoutObservation } from '../schemas/checkout-observation';
 import type { createRunToolCallAttention } from '../tool-call-attention';
 import type { WorkflowSourceRoots } from '../workflow-source';
+import type { WorkflowPack } from '../schemas/pack-settings';
 import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from '../deps';
 import type {
   DagNode,
@@ -133,6 +134,12 @@ export interface RunDerived {
   execContext: ExecutionContext;
   /** Workflow name — used for persist_session keying + telemetry. */
   workflowName: string;
+  /**
+   * The pack the run's workflow was loaded from, undefined outside a pack. A node
+   * authored in that file reads it as `$PACK_DIR`; an included node reads its own
+   * block's pack from its composition record instead.
+   */
+  workflowPack: Pick<WorkflowPack, 'source' | 'key'> | undefined;
   workflowLevelOptions: WorkflowLevelOptions;
   /** Cross-run session persistence for this run, or undefined to skip. */
   persistScope: PersistScope | undefined;

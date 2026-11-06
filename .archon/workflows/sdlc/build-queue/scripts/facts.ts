@@ -2,7 +2,8 @@
  * Claim the build queue's next item and write the issue the deciding agents read.
  *
  * It claims the waiting item that sorts first with intake's claim and order, or the
- * item the `number` input names, and writes only that claim. A named item that cannot
+ * item the `number` input names, and writes only that claim. With `orders_only` on it
+ * first marks done each open work order whose members all finished. A named item that cannot
  * be claimed refuses the run with the reason. A closed issue goes to `closed`, which
  * apply parks without an agent.
  *
@@ -22,12 +23,12 @@ import {
   countedRounds,
   itemPullRequest,
 } from '../../.shared/build.ts';
-import { forgeSource, type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
+import { type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
-import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
+import { openOrderMembers } from '../../.shared/order.ts';
 import { viewPr } from '../../.shared/pr.ts';
-import { claimNext, updateClaimed, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
+import { claimNext, type Pickup, updateClaimed, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
 
 function positive(name: string, value: string): number {
   const parsed = Number(value);
@@ -63,7 +64,7 @@ function resolvePr(
   runId: string
 ): ItemPr {
   const ref = itemPullRequest(rounds, doc?.facts.triage, subject.repo);
-  const pr = ref === null ? null : viewPr(ref, forgeSource()).pr;
+  const pr = ref === null ? null : viewPr(ref).pr;
   const branch = buildBranch(subject.number, title, runId);
   if (pr !== null && pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.head_repo, subject.repo)) {
     return { pull_request: pr, continues: pr.number, branch };
@@ -88,9 +89,18 @@ function emitItem(
     brief: doc?.facts.build?.brief ?? '',
     rounds,
     at_cap: atCap,
-    policy_defaults: POLICY_DEFAULTS,
     ...itemPr,
   });
+}
+
+/**
+ * With `orders_only` on, an item waits only while it is a member of an open work order,
+ * so no open order claims nothing. A named item is claimed either way.
+ */
+function pickup(): Pickup {
+  if (trimmed(process.env.INPUTS_ORDERS_ONLY) !== 'true') return BUILD_PICKUP;
+  const members = openOrderMembers(new Date().toISOString());
+  return { ...BUILD_PICKUP, waits: doc => members.has(doc.subject.number) && BUILD_PICKUP.waits(doc) };
 }
 
 function main(): void {
@@ -106,7 +116,7 @@ function main(): void {
   const number = trimmed(process.env.INPUTS_NUMBER);
   const doc =
     number === ''
-      ? claimNext(new Date().toISOString(), runId, BUILD_PICKUP)
+      ? claimNext(new Date().toISOString(), runId, pickup())
       : claimNamed(positive('number', number), new Date().toISOString(), runId);
   if (doc === null) {
     emit({
@@ -117,7 +127,6 @@ function main(): void {
       brief: '',
       rounds: [],
       at_cap: false,
-      policy_defaults: POLICY_DEFAULTS,
       ...NO_ITEM_PR,
     });
     return;

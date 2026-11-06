@@ -8,6 +8,7 @@
  * comma-separated text.
  */
 import { z } from 'zod';
+import type { WorkflowSource } from './workflow';
 
 const settingBase = {
   description: z.string().optional(),
@@ -56,9 +57,13 @@ export type PackSettingSpec =
  *
  * `key` names the pack's settings: the scope folder name for a project, home or bundled
  * pack, and `<owner>.<manifest name>` for an installed one (never its install path).
+ * `source` is the scope it was loaded from. Together they locate the pack's directory
+ * under whichever source roots a run reads (`packDirectory`); the path itself is not
+ * stored, because a run's capture moves after discovery reads it.
  * `settings` is the pack's declaration, absent when the pack declares none.
  */
 export interface WorkflowPack {
   readonly key: string;
+  readonly source: WorkflowSource;
   readonly settings?: Readonly<Record<string, PackSettingSpec>>;
 }

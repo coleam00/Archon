@@ -3,6 +3,7 @@ import type { RunActor } from '../operations/run-authorization';
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import {
+  attentionChoiceSummary,
   attentionLabels,
   attentionRevision,
   isApprovalContext,
@@ -360,8 +361,7 @@ function formatRunAttention(run: WorkflowRun): string[] {
   if (attention?.kind === 'attention') {
     parts.push(`needs attention: ${attention.message.slice(0, 300)}`);
     parts.push(`form: ${attention.form}`);
-    if (attention.options.length > 0)
-      parts.push(`options: ${attention.options.map(option => option.id).join(', ')}`);
+    parts.push(...attentionChoiceSummary(attention));
     const wait = pausedAttentionWait(run);
     if (wait !== undefined) {
       const labels = Object.entries(attentionLabels(wait));

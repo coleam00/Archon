@@ -97,7 +97,7 @@ describe('parsePackDeclaration', () => {
 });
 
 describe('readProjectPackSettings', () => {
-  const pack = { key: 'alpha', settings: SPECS };
+  const pack = { key: 'alpha', source: 'project' as const, settings: SPECS };
   const projectFile = (): string => join(cwd, '.archon', 'packs', 'alpha.yaml');
 
   async function writeProject(yaml: string): Promise<void> {
@@ -113,6 +113,7 @@ describe('readProjectPackSettings', () => {
     await writeProject('settings:\n  forge: glab\n  strict: false\n');
     const declared = {
       key: 'alpha',
+      source: 'project',
       settings: { ...SPECS, label: { type: 'string', default: 'd' } },
     } as const;
     expect(await readProjectPackSettings(cwd, declared)).toEqual({
@@ -135,7 +136,7 @@ describe('readProjectPackSettings', () => {
 
   it('refuses any setting for a pack that declares none', async () => {
     await writeProject('settings:\n  forge: gh\n');
-    await expect(readProjectPackSettings(cwd, { key: 'alpha' })).rejects.toThrow(
+    await expect(readProjectPackSettings(cwd, { key: 'alpha', source: 'project' })).rejects.toThrow(
       "pack 'alpha' declares no settings"
     );
   });
@@ -170,6 +171,7 @@ describe('discovery carries the pack', () => {
     const byName = new Map(workflows.map(w => [w.workflow.name, w.workflow]));
     expect(byName.get('packed')?.pack).toEqual({
       key: 'alpha',
+      source: 'project',
       settings: { tone: { type: 'string', default: 'calm' } },
     });
     // A `pack:` key in YAML cannot claim a pack: only discovery sets it.
@@ -226,7 +228,7 @@ describe('--input may set a pack setting for one run', () => {
   const workflow = {
     name: 'packed',
     inputs: { own: { default: 'x' } },
-    pack: { key: 'alpha', settings: SPECS },
+    pack: { key: 'alpha', source: 'project' as const, settings: SPECS },
   };
 
   it('accepts a pack setting of the right type', () => {

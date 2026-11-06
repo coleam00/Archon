@@ -5,7 +5,7 @@
  * `describe` blocks are visible.
  */
 
-import { forgeSource, ghApi, record } from '../../.shared/forge.ts';
+import { invokeForge } from '../../.shared/forge.ts';
 import { refuse, report, trimmed } from '../../.shared/io.ts';
 import { prFromUrl } from '../../.shared/merge.ts';
 import { readCriteria } from '../../.shared/test-value.ts';
@@ -14,42 +14,38 @@ import { readCriteria } from '../../.shared/test-value.ts';
 const MAX_FULL_TEXT = 120_000;
 const TEST_PATH = /(^|\/)(__tests__|tests?|spec)\/|(\.|_)(test|spec)\.[a-z]+$|(^|\/)test_[^/]+$/;
 
+interface ChangedFile {
+  readonly path: string;
+  readonly status: string;
+  readonly patch: string | null;
+}
+
+function changedFiles(value: Record<string, unknown> | null): { head: string; files: ChangedFile[] } {
+  const head = value?.head_revision;
+  if (typeof head !== 'string' || !Array.isArray(value?.files)) throw new Error('forge pr.files returned no file list');
+  const files = value.files.map(row => {
+    const file = row as Record<string, unknown>;
+    if (typeof file.path !== 'string' || typeof file.status !== 'string') throw new Error('forge pr.files returned an invalid file');
+    return { path: file.path, status: file.status, patch: typeof file.patch === 'string' ? file.patch : null };
+  });
+  return { head, files };
+}
+
 const url = trimmed(process.env.INPUTS_PR);
 
 try {
-  if (forgeSource() === 'forge') {
-    throw new Error('the test-value judge reads pull request files through the GitHub CLI; run it with ARCHON_SDLC_FORGE=gh');
-  }
   const pr = prFromUrl(url);
-  const base = `repos/${pr.repo.path}/pulls/${String(pr.number)}`;
-  const host = ['--hostname', pr.repo.host];
-  const head = record(record(JSON.parse(ghApi('read the pull request', [...host, base])))?.head)?.sha;
-  if (typeof head !== 'string') throw new Error(`GitHub reported no head for ${url}`);
-
-  const files: { path: string; status: string; patch: string }[] = [];
-  for (let page = 1; ; page++) {
-    const rows: unknown = JSON.parse(ghApi('list the pull request files', [...host, `${base}/files?per_page=100&page=${String(page)}`]));
-    if (!Array.isArray(rows)) throw new Error('GitHub did not report a file list');
-    for (const row of rows.map(record)) {
-      if (typeof row?.filename !== 'string') continue;
-      files.push({
-        path: row.filename,
-        status: typeof row.status === 'string' ? row.status : '',
-        patch: typeof row.patch === 'string' ? row.patch : '(no patch: binary or too large)',
-      });
-    }
-    if (rows.length < 100) break;
-  }
+  // Text is read at the head the file list was read at, so it matches the patches.
+  const { head, files } = changedFiles(invokeForge('pr.files', { ref: { repo: pr.repo, number: pr.number } }));
 
   const sections = files.map(file => {
-    const parts = [`<patch>\n${file.patch}\n</patch>`];
+    const parts = [`<patch>\n${file.patch ?? '(no patch: binary or too large)'}\n</patch>`];
     if (TEST_PATH.test(file.path) && file.status !== 'removed') {
-      const text = ghApi('read a test file', [
-        ...host,
-        '-H',
-        'Accept: application/vnd.github.raw',
-        `repos/${pr.repo.path}/contents/${file.path.split('/').map(encodeURIComponent).join('/')}?ref=${head}`,
-      ]);
+      // repo.file refuses a file over 1 MB or not UTF-8 with the same error kind as a
+      // transient failure, so this pull request's judge refuses rather than inlining a
+      // placeholder: the run reports it as skipped instead of judging it on a guess.
+      const text = invokeForge('repo.file', { repo: pr.repo, path: file.path, revision: head })?.text;
+      if (typeof text !== 'string') throw new Error(`forge repo.file returned no text for ${file.path}`);
       parts.push(text.length <= MAX_FULL_TEXT ? `<full_text>\n${text}\n</full_text>` : '<full_text>(too large to inline)</full_text>');
     }
     return `<file path="${file.path}" status="${file.status}">\n${parts.join('\n')}\n</file>`;

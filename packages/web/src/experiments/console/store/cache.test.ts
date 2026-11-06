@@ -516,3 +516,30 @@ describe('invalidation during a subscribed load', () => {
     }
   );
 });
+
+describe('subscribeKey — revalidateOnSubscribe', () => {
+  test('a warm key reloads on its first resubscribe, keeping the old value until the new lands', async () => {
+    const key = 'test:revalidate-on-subscribe';
+    let release: (value: string) => void = () => {};
+    const values = ['v1', 'v2'];
+    let loads = 0;
+    const loader = (): Promise<string> => {
+      const value = values[loads] ?? 'unexpected';
+      loads += 1;
+      return loads === 1 ? Promise.resolve(value) : new Promise(resolve => (release = resolve));
+    };
+    subscribeKey(key, () => {}, loader, { revalidateOnSubscribe: true })();
+    await flush();
+    expect(get(key)).toBe('v1');
+
+    const first = subscribeKey(key, () => {}, loader, { revalidateOnSubscribe: true });
+    const second = subscribeKey(key, () => {}, loader, { revalidateOnSubscribe: true });
+    expect(loads).toBe(2); // the second, concurrent subscriber starts no load of its own
+    expect(get(key)).toBe('v1');
+    release('v2');
+    await flush();
+    expect(get(key)).toBe('v2');
+    first();
+    second();
+  });
+});

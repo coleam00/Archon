@@ -49,7 +49,9 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
 
 - A body missing one of the six elements that the issue's own comments cannot supply.
 - A bug it cannot reproduce and has no other concrete evidence for.
-- A bug with no evidence that it happened in real use.
+- A bug with no evidence that it happened in real use. Recommend parking it unless the
+  failure, if it happened, would be costly, such as lost data, a security hole or a false
+  success.
 - A change past twice its size budget.
 - A stop that asks to relax a constraint the maintainer stated, add scope the contract
   does not name, or choose between designs the documents do not settle.

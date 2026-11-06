@@ -61,6 +61,7 @@ export {
 export {
   installedWorkflowName,
   listInstalledPacks,
+  packDirectory,
   packagedWorkflowDirectory,
   type InstalledPack,
 } from './workflow-source/installed-packs';

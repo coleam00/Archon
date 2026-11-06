@@ -187,9 +187,9 @@ function createMockStore(): IWorkflowStore {
     listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
       throw new Error('Not used by this test');
     }),
-    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
+    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(
+      async runIds => new Map(runIds.map(runId => [runId, []]))
+    ),
     listMetricRecords: mock<IWorkflowStore['listMetricRecords']>(async () => []),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {

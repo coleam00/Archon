@@ -2,6 +2,7 @@
 import {
   assertPatchSurvivesInterleavedWrites,
   assertStateProcessRaces,
+  sqlStateLeaseRuns,
 } from './state-documents.process-contract';
 import { afterAll, beforeAll, describe, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
@@ -30,6 +31,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL state documents', () => {
       db,
       url: url.toString(),
       store: createSqlStateDocumentStore(() => db),
+      runs: sqlStateLeaseRuns(db),
       backdate: async (scope: StateScope, document: string): Promise<void> => {
         await db.query(
           'UPDATE remote_agent_state_revisions SET created_at = $3 WHERE project_key = $1 AND name = $2',

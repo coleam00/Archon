@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { getMetrics } from './metrics';
+import { getMetricViews, getMetrics } from './metrics';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -23,4 +23,11 @@ test('getMetrics sends the window, and the project only when scoped', async () =
   await getMetrics({ since: '7d' });
   await getMetrics({ since: '30d', codebaseId: 'cb-1' });
   expect(urls).toEqual(['/api/metrics?since=7d', '/api/metrics?since=30d&codebaseId=cb-1']);
+});
+
+test('getMetricViews sends the project only when scoped', async () => {
+  const urls = captureUrls();
+  await getMetricViews({});
+  await getMetricViews({ codebaseId: 'cb-1' });
+  expect(urls).toEqual(['/api/metric-views', '/api/metric-views?codebaseId=cb-1']);
 });

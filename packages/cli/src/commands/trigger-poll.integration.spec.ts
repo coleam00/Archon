@@ -130,8 +130,11 @@ async function fireAndExecute(
   options: Parameters<typeof triggerCommand>[3]
 ): Promise<void> {
   const admitted: string[] = [];
-  await triggerCommand(host, 'fire', [], options, async id => {
-    admitted.push(id);
+  await triggerCommand(host, 'fire', [], options, {
+    dispatch: async id => {
+      admitted.push(id);
+    },
+    env: {},
   });
   for (const requestId of admitted) {
     const result = await startAdmittedResourceStart({

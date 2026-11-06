@@ -30,6 +30,8 @@ import type {
   RawTiersConfig,
 } from './config-types';
 import {
+  ConfigParseError,
+  type ConfigFileLabel,
   InvalidConfigError,
   isConfigRecord,
   validateAssistantDefaults,
@@ -146,17 +148,23 @@ function parseYaml(content: string): unknown {
  * Parse a config file into its top-level map of settings; an empty file is `{}`.
  * Bun's YAML error names neither the file nor the line, so the message adds the file.
  */
-function parseConfigMapping(content: string, configPath: string): Record<string, unknown> {
+function parseConfigMapping(
+  content: string,
+  configPath: string,
+  label: ConfigFileLabel
+): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = parseYaml(content);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`'${configPath}' is not valid YAML (${reason}).`, { cause: error });
+    throw new ConfigParseError(label, configPath, `is not valid YAML (${reason}).`, {
+      cause: error,
+    });
   }
   if (parsed === null || parsed === undefined) return {};
   if (!isConfigRecord(parsed)) {
-    throw new Error(`'${configPath}' is not a map of settings at its top level.`);
+    throw new ConfigParseError(label, configPath, 'is not a map of settings at its top level.');
   }
   return parsed;
 }
@@ -181,7 +189,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 #   claude:
 #     model: sonnet
 #   codex:
-#     model: gpt-5.6-sol
+#     model: gpt-6.1-sol
 #     modelReasoningEffort: medium
 #     webSearchMode: disabled
 #     additionalDirectories:
@@ -190,7 +198,7 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Model tier presets (usable as model: small / medium / large)
 # tiers:
 #   large: { provider: claude, model: opus }
-#   medium: { provider: codex, model: gpt-5.6-terra, effort: high }
+#   medium: { provider: codex, model: gpt-6.1-terra, effort: high }
 #   small: { provider: pi, model: minimax-m3 }
 
 # Streaming mode per platform (stream or batch)
@@ -240,37 +248,51 @@ async function readConfigFileIfPresent(configPath: string): Promise<string | und
 }
 
 /**
- * Read ~/.archon/config.yaml. A missing file is created from the documented
- * template and loads as empty. Every other failure throws, naming the file:
+ * Read ~/.archon/config.yaml. A missing file loads as empty and, unless
+ * `readOnly`, is created from the documented template. Every other failure throws, naming the file:
  * permissions, YAML syntax, a top level that is not a mapping, or a rejected `tiers`/`aliases`, `streaming`,
  * `attentionNotices`, `concurrency` or `workflows` block.
  */
-async function readGlobalConfig(configPath: string): Promise<GlobalConfig> {
+async function readGlobalConfig(configPath: string, readOnly: boolean): Promise<GlobalConfig> {
   const content = await readConfigFileIfPresent(configPath);
   if (content === undefined) {
-    await createDefaultConfig(configPath);
+    if (!readOnly) await createDefaultConfig(configPath);
     return {};
   }
-  const parsed = parseConfigMapping(content, configPath);
+  const parsed = parseConfigMapping(content, configPath, 'Global config');
   validateGlobalConfigBlocks(parsed, configPath);
   return parsed as GlobalConfig;
 }
 
+/** Options for config reads. */
+export interface LoadConfigOptions {
+  /**
+   * Leave a missing ~/.archon/config.yaml missing instead of creating it from
+   * the template, so the read writes nothing. The result is not cached, so a
+   * later default load still creates the file.
+   */
+  readOnly?: boolean;
+}
+
 /**
  * Load global config from ~/.archon/config.yaml, creating it from the template
- * when missing.
+ * when missing unless `readOnly` is set.
  *
  * Throws when the file cannot be read or parsed, or when any block, including
  * `assistants.*`, names a value Archon cannot honour.
  */
-export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfig> {
+export async function loadGlobalConfig(
+  forceReload = false,
+  { readOnly = false }: LoadConfigOptions = {}
+): Promise<GlobalConfig> {
   if (cachedGlobalConfig && !forceReload) {
     return cachedGlobalConfig;
   }
 
   const configPath = getArchonConfigPath();
-  const parsed = await readGlobalConfig(configPath);
+  const parsed = await readGlobalConfig(configPath, readOnly);
   validateAssistantDefaults(parsed, configPath);
+  if (readOnly) return parsed;
   cachedGlobalConfig = parsed;
   return cachedGlobalConfig;
 }
@@ -303,7 +325,7 @@ function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[
 async function readRepoConfig(configPath: string): Promise<RepoConfig> {
   const content = await readConfigFileIfPresent(configPath);
   if (content === undefined) return {};
-  const raw = parseConfigMapping(content, configPath);
+  const raw = parseConfigMapping(content, configPath, 'Project config');
   validateWorkflowContinuationConfig(raw, configPath);
   validateModelBindingConfig(raw, configPath);
   const parsed = raw as RepoConfig;
@@ -324,12 +346,21 @@ async function readRepoConfig(configPath: string): Promise<RepoConfig> {
  *
  * Every other failure throws, naming the file: an unreadable file, invalid
  * YAML, a top level that is not a mapping, or a refused `workflows`, `tiers`,
- * `aliases`, `assistants.*` or `worktree.postCreate` value.
+ * `aliases`, `assistants.*`, `worktree.postCreate` or `env` value.
  */
 export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
   const configPath = join(repoPath, '.archon', 'config.yaml');
   const parsed = await readRepoConfig(configPath);
-  validateWorktreePostCreate(parsed.worktree);
+  try {
+    validateWorktreePostCreate(parsed.worktree);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new InvalidConfigError('Invalid worktree config', configPath, detail, { cause: error });
+  }
+  // A list or scalar would spread into envVars as keys '0', '1', ...
+  if (parsed.env !== undefined && !isConfigRecord(parsed.env)) {
+    throw new InvalidConfigError('Invalid env config', configPath, 'env must be a map of names');
+  }
   validateAssistantDefaults(parsed, configPath);
   return parsed;
 }
@@ -338,14 +369,18 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
  * Load fully merged configuration
  *
  * @param repoPath - Optional repository path for repo-level config
+ * @param options - `readOnly` reads without creating a missing global config
  * @returns Merged configuration with all overrides applied
  */
-export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
+export async function loadConfig(
+  repoPath?: string,
+  options: LoadConfigOptions = {}
+): Promise<MergedConfig> {
   // 1. Start with defaults
   let config = getDefaults();
 
   // 2. Apply global config
-  const globalConfig = await loadGlobalConfig();
+  const globalConfig = await loadGlobalConfig(false, options);
   config = mergeGlobalConfig(config, globalConfig);
 
   // 3. Apply repo config if path provided
@@ -393,7 +428,7 @@ export function logConfig(config: MergedConfig): void {
 async function readGlobalConfigForUpdate(configPath: string): Promise<GlobalConfig> {
   const content = await readConfigFileIfPresent(configPath);
   if (content === undefined) return {};
-  return parseConfigMapping(content, configPath) as GlobalConfig;
+  return parseConfigMapping(content, configPath, 'Global config') as GlobalConfig;
 }
 
 /**

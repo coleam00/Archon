@@ -1959,7 +1959,7 @@ describe('CodexProvider', () => {
       expect(result.failure?.evidence).toContain(
         'Model "gpt-5.3-codex" is not available for your account'
       );
-      expect(result.failure?.evidence).toContain('model: gpt-5.6-sol');
+      expect(result.failure?.evidence).toContain('model: gpt-6.1-sol');
       expect(result.failure?.evidence).toContain('403 Forbidden: model not available');
     });
 
