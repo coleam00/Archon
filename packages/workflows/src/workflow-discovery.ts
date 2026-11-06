@@ -21,11 +21,13 @@
  */
 import { type ProviderRegistry } from '@archon/provider-contract';
 import type { WorkflowLoadResult } from './schemas';
+import type { ExtraWorkflowSource } from './schemas/run-metadata';
 import * as archonPaths from '@archon/paths';
 import {
   WorkflowSourceUnavailableError,
   assertCapturedFilesPresent,
   isSourceReadFailure,
+  DEFAULT_WORKFLOW_SOURCE_CONFIG,
   liveSourceRoots,
   loadWorkflowSource,
   workflowSourceConfigForRoots,
@@ -83,9 +85,16 @@ export async function discoverWorkflows(
      * config.
      */
     envVarNames?: readonly string[];
+    /** Extra workflow sources of the live project; a captured source carries its own. */
+    extraSources?: readonly ExtraWorkflowSource[];
   }
 ): Promise<WorkflowLoadResult> {
-  const roots = options.sourceRoots ?? liveSourceRoots(cwd);
+  const roots =
+    options.sourceRoots ??
+    liveSourceRoots(cwd, {
+      ...DEFAULT_WORKFLOW_SOURCE_CONFIG,
+      ...(options.extraSources?.length ? { extra_sources: [...options.extraSources] } : {}),
+    });
   const context: DiscoveryContext = {
     cwd,
     roots,
@@ -188,6 +197,7 @@ export async function discoverWorkflowsWithConfig(
     defaults?: { loadDefaultWorkflows?: boolean; loadDefaultCommands?: boolean };
     commands?: { folder?: string };
     envVars?: Record<string, string>;
+    extraWorkflowSources?: readonly ExtraWorkflowSource[];
   }>,
   providers: ProviderRegistry,
   /**
@@ -211,12 +221,14 @@ export async function discoverWorkflowsWithConfig(
   // A frozen capture already recorded config.yaml's env: names (see workflow-source/roots.ts'
   // workflowSourceConfigFrom); only the live branch below still needs to read them.
   let envVarNames: readonly string[] | undefined = sourceConfig?.env_var_names;
+  let extraSources: readonly ExtraWorkflowSource[] | undefined;
   if (cwd !== null && sourceConfig === undefined) {
     const cfg = await loadConfig(cwd);
     loadDefaults = cfg.defaults?.loadDefaultWorkflows ?? true;
     commandFolder = cfg.commands?.folder;
     loadDefaultCommands = cfg.defaults?.loadDefaultCommands;
     envVarNames = cfg.envVars && Object.keys(cfg.envVars);
+    extraSources = cfg.extraWorkflowSources;
   }
   return discoverWorkflows(cwd, {
     providers,
@@ -224,6 +236,7 @@ export async function discoverWorkflowsWithConfig(
     commandFolder,
     loadDefaultCommands,
     envVarNames,
+    extraSources,
     sourceRoots,
   });
 }
