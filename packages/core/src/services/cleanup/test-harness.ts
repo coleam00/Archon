@@ -14,7 +14,7 @@ import {
   WorktreeRemovalInProgressError,
 } from '@archon/isolation/types';
 import { createMockLogger } from '../../test/mocks/logger';
-import { toBranchName } from '@archon/git';
+import { GitFailure, toBranchName } from '@archon/git';
 import type {
   ContainerBackend,
   IIsolationProvider,
@@ -166,6 +166,7 @@ mock.module('@archon/paths', () => ({
 
 // Every mock's default is installed by the top-level beforeEach, so no test sees
 // another's leftovers.
+export const mockExecFileAsync = mock<typeof Git.execFileAsync>();
 export const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChangesStrict>();
 export const mockWorktreeExists = mock<typeof Git.worktreeExists>();
 export const mockGetDefaultBranch = mock<typeof Git.getDefaultBranch>();
@@ -176,13 +177,14 @@ export const mockGetLastCommitDate = mock<typeof Git.getLastCommitDate>();
 export const mockIsRevCoveredBy = mock<typeof Git.isRevCoveredBy>();
 export const mockCountCommitsMissingFromRemotes = mock<typeof Git.countCommitsMissingFromRemotes>();
 mock.module('@archon/git', () => ({
+  GitFailure,
   getGitCheckoutIdentity: async () => ({
     gitDir: '/workspace/repo',
     commonGitDir: '/workspace/repo',
     linkedWorktree: false,
   }),
   countCommitsMissingFromRemotes: mockCountCommitsMissingFromRemotes,
-  execFileAsync: mock(() => Promise.resolve({ stdout: '', stderr: '' })),
+  execFileAsync: mockExecFileAsync,
   hasUncommittedChangesStrict: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
   getDefaultBranch: mockGetDefaultBranch,
@@ -197,6 +199,7 @@ mock.module('@archon/git', () => ({
 }));
 
 export const mockDestroy = mock<IIsolationProvider['destroy']>();
+export const mockGetPrsForCommit = mock<typeof Isolation.getPrsForCommit>();
 export const mockGetPrState = mock<typeof Isolation.getPrState>();
 export const mockContainerDestroy = mock<ContainerBackend['destroy']>();
 export const mockContainerOptions =
@@ -231,6 +234,7 @@ mock.module('@archon/isolation', () => ({
     destroy: mockDestroy,
   }),
   getPrState: mockGetPrState,
+  getPrsForCommit: mockGetPrsForCommit,
   ContainerBackend: MockContainerBackend,
 }));
 
@@ -332,6 +336,8 @@ export function resetCleanupMocks(): void {
     directoryClean: true,
     warnings: [],
   });
+  mockExecFileAsync.mockReset().mockResolvedValue({ stdout: 'a'.repeat(40), stderr: '' });
+  mockGetPrsForCommit.mockReset().mockResolvedValue({ state: 'NONE' });
   mockGetPrState.mockReset().mockResolvedValue(NO_PR);
   mockContainerDestroy.mockReset().mockResolvedValue(undefined);
   mockContainerOptions.mockReset();

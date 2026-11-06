@@ -34,6 +34,7 @@ import {
   worktreeRegistrationMetadata,
 } from '@archon/isolation';
 import type { IsolationEnvironmentRow, IIsolationStore } from '@archon/isolation';
+import * as isolationModule from '@archon/isolation';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { setLogLevel } from '@archon/paths';
 
@@ -56,6 +57,13 @@ const { removeEnvironment } = await import('./remove-environment');
 const { assessCompletedRunWorktree, reclaimRunWorktree, releaseCompletedRunWorktree } =
   await import('./run-worktree');
 const codebaseDb = await import('../../db/codebases');
+
+function ghJsonOutput(command: string, payload: unknown): string {
+  if (command === 'api' && Array.isArray(payload)) {
+    return payload.map(page => JSON.stringify(page)).join('\n');
+  }
+  return JSON.stringify(payload);
+}
 
 async function git(path: string, ...args: string[]): Promise<string> {
   const proc = Bun.spawn(['git', '-C', path, ...args], {
@@ -937,6 +945,219 @@ test.each(['worktreeRemoved', 'directoryClean'] as const)(
   }
 );
 
+test.each([
+  'covered',
+  'head-base',
+  'branch-base',
+  'head-ahead',
+  'branch-ahead',
+  'dirty',
+  'paused',
+] as const)('commit-associated squash merge with a different published name: %s', async mode => {
+  await git(repo, 'remote', 'rename', 'upstream', 'origin');
+  await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+  for (const value of ['first', 'second', 'third']) {
+    await writeFile(join(env.working_path, 'feature'), value);
+    await git(env.working_path, 'add', 'feature');
+    await git(env.working_path, 'commit', '-qm', value);
+  }
+  const prHead = await git(env.working_path, 'rev-parse', 'HEAD');
+  await git(env.working_path, 'push', '-q', 'origin', 'HEAD:refs/heads/published-feature');
+  await git(repo, 'merge', '--squash', env.branch_name);
+  await git(repo, 'commit', '-qm', 'squashed feature');
+  await git(repo, 'push', '-q', 'origin', 'main');
+  await git(env.working_path, 'reset', '--hard', 'HEAD~1');
+  if (mode === 'head-ahead' || mode === 'branch-ahead') {
+    await git(env.working_path, 'reset', '--hard', prHead);
+    if (mode === 'head-ahead') await git(env.working_path, 'checkout', '--detach', prHead);
+    await git(env.working_path, 'commit', '--allow-empty', '-qm', 'unpublished work');
+    if (mode === 'branch-ahead') await git(env.working_path, 'checkout', '--detach', prHead);
+  }
+  if (mode === 'head-base') await git(env.working_path, 'checkout', '--detach', `${prHead}~3`);
+  if (mode === 'branch-base') {
+    await git(env.working_path, 'checkout', '--detach', 'HEAD');
+    await git(repo, 'branch', '-f', env.branch_name, `${prHead}~3`);
+  }
+  const baseCommit = await git(repo, 'rev-parse', `${prHead}~3`);
+  const reclaimed = ['covered', 'head-base', 'branch-base'].includes(mode);
+  if (mode === 'dirty') await writeFile(join(env.working_path, 'feature'), 'operator edits');
+  if (mode === 'paused') await seedRunAt(env.working_path, 'paused');
+  expect(
+    await gitModule.isBranchMerged(
+      toRepoPath(repo),
+      toBranchName(env.branch_name),
+      toBranchName('origin/main')
+    )
+  ).toBe(mode === 'branch-base');
+  expect(
+    await gitModule.isPatchEquivalent(
+      toRepoPath(repo),
+      toBranchName(env.branch_name),
+      toBranchName('origin/main')
+    )
+  ).toBe(mode === 'branch-base');
+
+  const originalExec = gitModule.execFileAsync;
+  const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(async (file, args, options) => {
+    if (file === 'git' && args.includes('get-url'))
+      return { stdout: 'https://github.com/test/repo.git', stderr: '' };
+    if (file === 'gh') {
+      const payload =
+        args[0] === 'pr'
+          ? []
+          : args[0] === 'repo'
+            ? { nameWithOwner: 'test/repo' }
+            : args.some(arg => arg.includes(`/commits/${baseCommit}/`))
+              ? [[]]
+              : [
+                  [
+                    {
+                      state: 'closed',
+                      merged_at: '2026-01-01T00:00:00Z',
+                      head: { sha: prHead },
+                      base: { repo: { full_name: 'test/repo' } },
+                    },
+                  ],
+                ];
+      return {
+        stdout: ghJsonOutput(args[0], payload),
+        stderr: '',
+      };
+    }
+    return originalExec(file, args, options);
+  });
+  try {
+    const result = await cleanupMergedWorktrees(codebaseId, repo);
+    expect(result.errors).toEqual([]);
+    expect(result.removed).toEqual(reclaimed ? [env.branch_name] : []);
+    expect(existsSync(env.working_path)).toBe(!reclaimed);
+    expect(await status()).toBe(reclaimed ? 'destroyed' : 'active');
+    if (!reclaimed) expect(result.skipped).toHaveLength(1);
+  } finally {
+    exec.mockRestore();
+  }
+});
+
+test.each([
+  'remote',
+  'branch-response',
+  'missing-gh',
+  'commit-repository',
+  'commit-pulls',
+] as const)('cleanup retains and reports failed PR inspection: %s', async failure => {
+  await git(repo, 'remote', 'rename', 'upstream', 'origin');
+  const tip = await git(env.working_path, 'rev-parse', 'HEAD');
+  await db.query(
+    "UPDATE remote_agent_isolation_environments SET created_at = '2020-01-01' WHERE id = $1",
+    [env.id]
+  );
+  const failedGhCommand = {
+    remote: undefined,
+    'branch-response': undefined,
+    'missing-gh': 'pr',
+    'commit-repository': 'repo',
+    'commit-pulls': 'api',
+  }[failure];
+  const ghOutput: Record<string, string> = {
+    pr: failure === 'branch-response' ? '{}' : '[]',
+    repo: '{"nameWithOwner":"test/repo"}',
+    api: '[]',
+  };
+  const originalExec = gitModule.execFileAsync;
+  const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(async (file, args, options) => {
+    if (file === 'git' && args.includes('get-url')) {
+      if (failure === 'remote') throw new Error('remote inspection failed');
+      return { stdout: 'https://github.com/test/repo.git', stderr: '' };
+    }
+    if (file === 'gh') {
+      if (args[0] === failedGhCommand)
+        throw Object.assign(new Error('missing gh'), { code: 'ENOENT' });
+      return {
+        stdout: ghOutput[args[0]],
+        stderr: '',
+      };
+    }
+    return originalExec(file, args, options);
+  });
+  const selected = (await isolationDb.listAllActiveWithCodebase()).filter(row => row.id === env.id);
+  const selection = spyOn(isolationDb, 'listAllActiveWithCodebase').mockResolvedValue(selected);
+  const lastCommit = spyOn(gitModule, 'getLastCommitDate');
+  try {
+    const manual = await cleanupMergedWorktrees(codebaseId, repo);
+    expect(manual.errors).toEqual([]);
+    expect(manual.removed).toEqual([]);
+    expect(manual.skipped).toEqual([
+      { branchName: env.branch_name, reason: 'PR state lookup failed — merge state unverifiable' },
+    ]);
+    const scheduled = await runScheduledCleanup();
+    expect(scheduled.errors).toEqual([]);
+    expect(scheduled.removed).toEqual([]);
+    expect(lastCommit).not.toHaveBeenCalled();
+    expect(scheduled.skipped).toContainEqual({
+      id: env.id,
+      reason: 'PR state lookup failed — merge state unverifiable',
+    });
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+    expect(await git(repo, 'rev-parse', env.branch_name)).toBe(tip);
+  } finally {
+    exec.mockRestore();
+    selection.mockRestore();
+    lastCommit.mockRestore();
+  }
+});
+
+test.each([false, true])(
+  'merged cleanup uses the configured repository despite GH_REPO (configured PR merged=%s)',
+  async merged => {
+    await git(repo, 'remote', 'rename', 'upstream', 'origin');
+    await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    const sharedTip = await git(env.working_path, 'rev-parse', 'HEAD');
+    const remoteUrl = 'git@github.com:test/repo.git';
+    const originalGhRepo = process.env.GH_REPO;
+    process.env.GH_REPO = 'other/repo';
+    const originalExec = gitModule.execFileAsync;
+    const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+      async (file, args, options) => {
+        if (file === 'git' && args.includes('get-url')) return { stdout: remoteUrl, stderr: '' };
+        if (file === 'gh') {
+          const repoFlag = args.indexOf('--repo');
+          const selectedRepo = repoFlag === -1 ? process.env.GH_REPO : args[repoFlag + 1];
+          const payload =
+            args[0] === 'pr'
+              ? selectedRepo === remoteUrl && !merged
+                ? []
+                : [{ state: 'MERGED', headRefOid: sharedTip }]
+              : args[0] === 'repo'
+                ? { nameWithOwner: 'test/repo' }
+                : [[]];
+          return {
+            stdout: ghJsonOutput(args[0], payload),
+            stderr: '',
+          };
+        }
+        return originalExec(file, args, options);
+      }
+    );
+    try {
+      const result = await cleanupMergedWorktrees(codebaseId, repo);
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual(merged ? [env.branch_name] : []);
+      expect(existsSync(env.working_path)).toBe(!merged);
+      expect(await status()).toBe(merged ? 'destroyed' : 'active');
+      if (!merged) {
+        expect(result.skipped).toEqual([
+          { branchName: env.branch_name, reason: 'no merged PR covers all local tips' },
+        ]);
+      }
+    } finally {
+      exec.mockRestore();
+      if (originalGhRepo === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = originalGhRepo;
+    }
+  }
+);
+
 test('merged cleanup retires locally and reports the retained published branch', async () => {
   await git(repo, 'remote', 'rename', 'upstream', 'origin');
   await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
@@ -944,17 +1165,25 @@ test('merged cleanup retires locally and reports the retained published branch',
   const ref = `refs/heads/${env.branch_name}`;
   const published = await git(repo, 'ls-remote', 'origin', ref);
   expect(published).toContain(ref);
-  const result = await cleanupMergedWorktrees(codebaseId, repo);
-  expect(result.removed).toEqual([env.branch_name]);
-  expect(result.warnings).toEqual([
-    {
-      branchName: env.branch_name,
-      message: expect.stringContaining('Remote branch retained'),
-    },
-  ]);
-  expect(await status()).toBe('destroyed');
-  expect(existsSync(env.working_path)).toBe(false);
-  expect(await git(repo, 'ls-remote', 'origin', ref)).toBe(published);
+  const pr = spyOn(isolationModule, 'getPrState').mockResolvedValue({
+    state: 'MERGED',
+    headSha: await git(env.working_path, 'rev-parse', 'HEAD'),
+  });
+  try {
+    const result = await cleanupMergedWorktrees(codebaseId, repo);
+    expect(result.removed).toEqual([env.branch_name]);
+    expect(result.warnings).toEqual([
+      {
+        branchName: env.branch_name,
+        message: expect.stringContaining('Remote branch retained'),
+      },
+    ]);
+    expect(await status()).toBe('destroyed');
+    expect(existsSync(env.working_path)).toBe(false);
+    expect(await git(repo, 'ls-remote', 'origin', ref)).toBe(published);
+  } finally {
+    pr.mockRestore();
+  }
 });
 
 test.each([false, true].flatMap(force => [false, true].map(split => ({ force, split }))))(

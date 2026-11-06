@@ -19,15 +19,15 @@ export const worktreeHelp: HelpGroup = {
       command: 'isolation',
       subcommand: 'cleanup',
       spec: 'isolation cleanup --merged',
-      description: 'Remove environments with branches merged into the base branch',
+      description: 'Remove environments whose local tips are covered by a merged PR',
       scopedFlags: [
         {
           spec: '--merged',
-          description: 'Remove environments with branches merged into the base branch',
+          description: 'Remove environments whose local tips are covered by a merged PR',
         },
         {
           spec: '--include-closed',
-          description: 'Also remove environments whose PRs were closed without merging',
+          description: 'Deprecated: accepted but closed PRs no longer authorize removal',
         },
       ],
     },

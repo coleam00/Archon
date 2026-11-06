@@ -1583,9 +1583,10 @@ resumable: a resume reuses the child's recorded worktree and fails if it has bee
 Remove eligible worktrees by inactivity and eligible containers by age since the container
 environment was created. The threshold is `[days]` (default 7). Recent activity does not
 reset a container environment's creation age; containers a running, pending, or paused run
-can claim remain protected. With `--merged`, remove environments whose branch or PR has
-merged instead. Worktree cleanup only handles worktree records. Container cleanup removes
-eligible containers and their volumes through the container backend,
+can claim remain protected. With `--merged`, remove worktrees whose existing local
+tips are covered by one merged PR head instead. Worktree cleanup only handles
+worktree records. Container cleanup removes eligible containers and their volumes
+through the container backend,
 including when no stale worktrees exist. A missing host folder does not make a container
 destroyed. To clean eligible containers without waiting for the default age threshold,
 run `archon isolation cleanup 0`; containers owned by resumable runs remain protected.
@@ -1619,9 +1620,8 @@ and keeps the environment active; inspect that path before removing it manually.
 
 Ordinary age-based cleanup deletes an environment's local branch only when Archon
 created that branch. It keeps pre-existing local branches and branches on legacy
-records that lack branch-creation tracking. Merged cleanup (`--merged`, including
-`--include-closed`) and `archon complete` can delete those local branches after
-their checks. Completion with `--force` bypasses commit-safety checks, so it can
+records that lack branch-creation tracking. Merged cleanup (`--merged`) and
+`archon complete` can delete those local branches after their checks. Completion with `--force` bypasses commit-safety checks, so it can
 delete a branch with unmerged commits. Merged cleanup and completion retain
 remote branches and warn after local removal. A remote commit ID cannot prove which
 registration owns a branch: a replacement may publish the same commit after the
@@ -1645,35 +1645,42 @@ archon isolation cleanup
 # Custom threshold
 archon isolation cleanup 14
 
-# Remove environments with branches merged into the base branch (retains remote refs for operator inspection)
+# Remove environments covered by a merged PR (retains remote refs for operator inspection)
 archon isolation cleanup --merged
-
-# Also remove environments whose PRs were closed without merging
-archon isolation cleanup --merged --include-closed
 ```
 
-Merge detection uses three signals in order: git branch ancestry (fast-forward / merge commit),
-patch equivalence (single-commit squash-merge via `git cherry`), and GitHub PR state via the
-`gh` CLI. A squash merge of more than one commit is invisible to git here, so PR state is what
-recognises it. A merged or closed PR counts only while neither the worktree's HEAD nor the
-local branch has anything past the PR's head commit: run branch names get reused, and new
-commits on a reused branch or a detached HEAD are not covered by the old PR, so that
-environment is kept. The same goes for a merge git detects: the worktree's HEAD must be
-merged into the base too, not just the branch. A PR head commit pushed from somewhere
-else is fetched from the remote before that comparison; if the fetch fails, the environment is
-kept and reported as a failed merge check. The `gh` CLI is optional; without it, only git
-signals are used. If `gh` is installed but the lookup fails (auth, rate limit), the environment
-is kept and reported as `PR state lookup failed`. The scheduled
-sweep uses the same three signals, so both paths agree on what counts as merged. Each
-codebase's output names the base ref the comparison used: the configured
-`worktree.baseBranch`, or the git-detected default branch when that is unset.
+Merged cleanup requires one merged PR head to cover every existing local tip: the
+worktree's HEAD and its recorded branch ref must each equal that head or be an
+ancestor of it. Git ancestry into the base branch and patch equivalence alone do
+not authorize removal. A closed but unmerged PR also does not authorize removal;
+the legacy `--include-closed` flag remains accepted but has no effect.
 
-Both git signals read the local branch ref. When that ref is gone but the worktree remains,
-the PR decides, checked against the worktree's HEAD; if no PR answers for the branch either, the environment is kept and reported
-as `merge state unverifiable` rather than removed on an unverified guess.
+Cleanup first checks the PR found by the local branch name. If it cannot prove
+coverage, cleanup discovers PRs associated with the worktree's HEAD, then the local
+branch tip when it is different. This also finds work published under another name.
+An open branch PR does not suppress an independently covering merged PR. When no
+merged candidate proves coverage, an open PR keeps the environment as active review.
+Coverage from different PR heads is never combined. With no local tips remaining,
+a merged branch PR can settle the registration on its own.
 
-By default, branches with a **CLOSED** PR are skipped. Pass `--include-closed` to clean
-those up as well. Branches with an **OPEN** PR are always skipped.
+Missing PR heads are fetched by SHA from the configured remote. A failed comparison
+does not prevent checking later candidates; if none proves coverage, the error is
+reported and the environment stays. A failed PR lookup (auth, rate limit, unknown
+commit, or unreadable response) keeps the environment and reports
+`PR state lookup failed`. The optional `gh` CLI currently supplies GitHub PR evidence;
+without it, or on unsupported remotes, merged cleanup retains unproven environments.
+
+Manual `--merged` cleanup reports ordinary retained work as
+`no merged PR covers all local tips`. A missing branch ref with no discovered PR is
+reported as `merge state unverifiable`. The scheduled sweep uses the same merged
+judgment and keeps unavailable or failed inspections out of its stale sweep.
+Ordinary unmerged work can still reach scheduled stale cleanup, subject to its age
+and unpushed-commit checks. Merged cleanup checks coverage against PR heads and
+does not require default-branch discovery.
+
+Cleanup does not coordinate with direct Git commits or other operator edits. Do not
+modify a worktree or its branch while cleanup runs; a commit after inspection can
+otherwise lose its checkout and branch reference.
 
 A running, pending, or paused run keeps its environment in both modes, regardless of
 age or merge state. The scheduled sweep and chat `/worktree cleanup` apply the same
@@ -1682,13 +1689,13 @@ the run lock is what keeps them on disk.
 
 A **failed** run keeps its environment only until its outcome is settled:
 
-- `--merged` (and the server's scheduled cleanup) removes it once its branch is merged
-  or its PR is merged. `--include-closed` also removes it once its PR is closed.
+- `--merged` (and the server's scheduled merged cleanup) removes it once one merged
+  PR covers both existing local tips.
 - The stale sweep removes it once the run has been inactive since it failed for longer
   than the stale window (`[days]` here; `STALE_THRESHOLD_DAYS` for the server and chat).
 
 The output names each failed run whose environment it removed, with the reason:
-`merged`, `PR closed`, or `stale`. Removal leaves the run's status unchanged. Resuming
+`merged` or `stale`. Removal leaves the run's status unchanged. Resuming
 it afterwards fails with `the working path from the run no longer exists`; start a
 fresh run. To discard a failed run sooner, use `workflow abandon`.
 
@@ -1707,12 +1714,11 @@ branch, so the run can still be adopted. Otherwise the worktree stays, the run p
 warning naming the path and what removing it would lose, and the run's
 `terminal_record.worktree_disposition` records the reason (see
 [`workflow get`](#workflow-get)). A worktree launched with `--branch` is never removed
-when its run ends: `--merged` removes it after its branch merges (or its pull request closes, with
-`--include-closed`). Nor is a worktree that belongs to a chat conversation, an issue or a
-pull request rather than to one run; the merged and age-based cleanups remove it. A
+when its run ends: `--merged` removes it once a merged PR covers its local tips.
+Nor is a worktree that belongs to a chat conversation, an issue or a pull request rather than to one run; the merged and age-based cleanups remove it. A
 workflow launched from the Web UI runs in its own per-run worktree on a generated branch,
-and completion removes it the same way. A failed run keeps its worktree so it
-can resume.
+and completion removes it the same way. A failed run keeps its worktree for resume
+until merged or stale cleanup removes it under the rules above.
 
 #### Recovering remote branch cleanup
 

@@ -408,9 +408,10 @@ export async function isRevCoveredBy(
         timeout: 60000,
       });
     } catch (error) {
-      throw new Error(
+      throw new GitFailure(
+        'coverage_fetch',
         `Failed to fetch PR head ${headSha} from ${remote}: ${(error as Error).message}`,
-        { cause: error }
+        error
       );
     }
   }
@@ -454,9 +455,10 @@ async function isCommitAncestor(
   } catch (error) {
     const err = error as Error & { code?: number | string };
     if (err.code === 1 || err.code === '1') return false;
-    throw new Error(
+    throw new GitFailure(
+      'coverage_ancestry',
       `Failed to check whether ${ancestor} is an ancestor of ${descendant} at ${repoPath}: ${err.message}`,
-      { cause: error }
+      error
     );
   }
 }

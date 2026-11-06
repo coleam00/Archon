@@ -1,15 +1,17 @@
 name: archon-worktree-cleanup
 description: |
   Remove merged worktrees, and their local branches, across every project
-  registered on this install. A branch counts as merged when Git shows it in
-  the base branch (ancestry or patch-equivalent commits) or its pull request
-  merged; a branch without a pull request can qualify. The local branch goes
+  registered on this install. Removal requires one merged pull request head
+  covering every existing local tip (worktree HEAD and branch ref). Cleanup can
+  discover that pull request by local commits even if its published branch name
+  differs. The local branch goes
   even when the worktree adopted an existing branch rather than creating one.
   Remote branches always stay, with a warning. It runs the host CLI's
   `archon isolation cleanup --merged`, so a worktree with uncommitted changes,
   a run that can still claim it, or commits the merge does not cover stays.
-  With include_closed true, worktrees whose pull request was closed without
-  merging go too.
+  The legacy include_closed input has no effect on removal authorization;
+  a closed but unmerged PR does not itself authorize removal. Another merged PR
+  can still authorize removal if its head covers every existing local tip.
 
   Use when: a schedule binding the operator installed starts it (see the SDLC
   pack README, "Worktree cleanup"), or an operator runs it by hand. The pack
@@ -21,8 +23,10 @@ inputs:
   include_closed:
     default: "false"
     description: >-
-      true or false. True also removes worktrees whose pull request was closed
-      without merging. Any other value refuses the run.
+      Legacy input, accepted as true or false but with no effect on removal
+      authorization. A closed but unmerged PR does not itself authorize removal;
+      another merged PR can still authorize removal if its head covers every
+      existing local tip. Any other value refuses the run.
 
 # Cleanup runs against the registered projects, not a checkout of its own.
 worktree:

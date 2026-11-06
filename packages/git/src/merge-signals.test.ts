@@ -32,6 +32,7 @@ import {
   isPatchEquivalent,
   localBranchExists,
 } from './branch';
+import { GitFailure } from './errors';
 import { toBranchName, toRepoPath, toWorktreePath } from './types';
 
 const trackTempRoot = trackTempRoots();
@@ -170,9 +171,24 @@ describe('merge signals against real git', () => {
     const { local } = cloneWithRemoteFeature();
     const unknown = '0123456789abcdef0123456789abcdef01234567';
 
-    await expect(
-      isRevCoveredBy(toRepoPath(local), 'refs/heads/feature', unknown, 'origin')
-    ).rejects.toThrow(`Failed to fetch PR head ${unknown} from origin`);
+    const failure = await isRevCoveredBy(
+      toRepoPath(local),
+      'refs/heads/feature',
+      unknown,
+      'origin'
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(GitFailure);
+    expect(failure).toMatchObject({ kind: 'coverage_fetch', code: 128 });
+  });
+
+  test('isRevCoveredBy identifies ancestry inspection failures', async () => {
+    const repo = toRepoPath(repoOnMain());
+    const head = git(repo, 'rev-parse', 'HEAD');
+    const failure = await isRevCoveredBy(repo, 'refs/heads/missing', head, 'origin').catch(
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(GitFailure);
+    expect(failure).toMatchObject({ kind: 'coverage_ancestry', code: 128 });
   });
 
   test('countCommitsMissingFromRemotes counts only commits no remote-tracking ref reaches', async () => {
