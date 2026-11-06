@@ -9,92 +9,15 @@ import { type JsonValue } from '../../../output-ref';
 import type { IncludeCommandContent } from '../../../compiled-command';
 import { instantiateResolvedInclude } from '../../../include/inline';
 import { buildInstanceSnapshots, type FanOutInstanceSnapshot } from '../../../fan-out-identity';
-import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { getLog } from '../../log';
 import { type RunLayersContext } from '../../run-context';
-import {
-  resolveRunInputs,
-  nodeTemplateReferences,
-  type ShellInputContext,
-  resolveWorkflowValue,
-} from '../../references';
+import { resolveFanOutStaticInputs } from '../fan-out-shared';
 
 /** A composed fan-out failure: the persisted error, its kind, and the platform notice. */
 export interface ComposeFanOutFailure {
   error: string;
   failureKind: NodeFailureKind;
   notice: string;
-}
-
-/** The node's current item list, resolved from `fan_out.items`. */
-export function resolveComposeItems(
-  node: ComposeFanOutNode,
-  ctx: RunLayersContext,
-  fanOut: ComposeFanOutNode['fan_out']
-): { items: JsonValue[] } | { error: string } {
-  const parentRun = ctx.workflowRun;
-  try {
-    const { prompt: itemsResolved } = substituteWorkflowVariables(
-      fanOut.items,
-      parentRun.id,
-      parentRun.user_message ?? '',
-      ctx.artifactsDir,
-      ctx.baseBranch,
-      ctx.docsDir,
-      ctx.issueContext,
-      undefined,
-      undefined,
-      undefined,
-      { references: nodeTemplateReferences(fanOut.items, ctx) }
-    );
-    const parsed: unknown = JSON.parse(itemsResolved);
-    if (!Array.isArray(parsed)) {
-      return {
-        error:
-          `fan_out.items on '${node.id}' resolved to ${typeof parsed}, not a JSON array. ` +
-          `'${fanOut.items}' must reference a node output that produces a JSON array.`,
-      };
-    }
-    return { items: parsed };
-  } catch (err) {
-    return {
-      error: `fan_out.items on '${node.id}' could not be resolved to a JSON array: ${(err as Error).message}`,
-    };
-  }
-}
-
-function resolveComposeStaticInputs(
-  node: ComposeFanOutNode,
-  ctx: RunLayersContext
-): { inputs: Record<string, JsonValue> } | { error: string } {
-  const parentRun = ctx.workflowRun;
-  let inputs: Record<string, JsonValue> = {};
-  const parentInputs = resolveRunInputs(parentRun);
-  try {
-    if (node.with !== undefined) {
-      const resolutionCtx: ShellInputContext = {
-        workflowRun: parentRun,
-        artifactsDir: ctx.artifactsDir,
-        stateDir: ctx.stateDir,
-        baseBranch: ctx.baseBranch,
-        docsDir: ctx.docsDir,
-        issueContext: ctx.issueContext,
-        nodeOutputs: ctx.nodeOutputs,
-        loopBodyScopes: ctx.loopBodyScopes,
-      };
-      inputs = Object.fromEntries(
-        Object.entries(node.with).map(([name, rawValue]) => [
-          name,
-          resolveWorkflowValue(rawValue, resolutionCtx, parentInputs, false),
-        ])
-      );
-    }
-  } catch (err) {
-    return {
-      error: `fan_out 'with:' on '${node.id}' could not be resolved: ${(err as Error).message}`,
-    };
-  }
-  return { inputs };
 }
 
 function snapshotsDiffer(
@@ -145,7 +68,7 @@ export async function planComposeInstances(
     return { snapshots: persistedSnapshots };
   }
 
-  const staticInputs = resolveComposeStaticInputs(node, ctx);
+  const staticInputs = resolveFanOutStaticInputs(node, ctx);
   if ('error' in staticInputs) {
     return {
       error: staticInputs.error,
