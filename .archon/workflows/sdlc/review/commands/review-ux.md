@@ -21,7 +21,7 @@ Rules:
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/ux.md`: each finding begins with `sources: [ux]`, then what the user meets and what it costs them, the screenshot, the `file:line` that produces it, and the smallest fix. Never assign a severity: synthesis labels every finding. Then list what you exercised and found clear. In light mode, scope.md names the prior report: give a verdict per prior `ux` finding (still open / fixed / disproved, with evidence), then judge the delta.
+Write `$ARTIFACTS_DIR/review/ux.md`: each finding begins with `sources: [ux]`, then what the user meets and what it costs them, the screenshot, the `file:line` that produces it, and the smallest fix. Never assign a severity: synthesis labels every finding. Then list what you exercised and found clear. On a continuation round, scope.md names the prior report: give a verdict per prior `ux` finding (still open / fixed / disproved, with evidence), then judge the delta.
 
 A UX problem you meet that the change did not cause is a discovery: write `$ARTIFACTS_DIR/discoveries/review-ux.json` as a JSON array of records with `title`, `claim`, `evidence`, `relation` (`unrelated` or `scope_conflict`) and `source_node` (`ux`). Write no file for no discovery.
 

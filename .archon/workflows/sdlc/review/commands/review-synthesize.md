@@ -69,7 +69,7 @@ A finding is **blocking** when merging would leave something wrong, untrue, undo
 
 Unneeded and doubly owned block only when the smaller shape preserves behavior and the evidence proves it; one nobody could falsify is a note.
 
-A UX finding blocks only when a person can't complete the task or would be misled by what the page shows; otherwise it is a note.
+A finding only the `ux` lens raised blocks only when a person can't complete the task or would be misled by what the page shows; otherwise it is a note.
 
 Weigh the fix against the defect. When the smallest fix for a wrong or unproved finding adds machinery, state, a lock or protocol, or a runtime dependency that costs more than the defect it prevents, the finding names the subtractive option first — remove the cause, or document the behavior — and blocks only on that option; when no subtractive option exists, it is a note. A fix that changes an operator or API surface the contract does not name is `ask`, not a correction. Proportionality changes which fix is proposed and whether it blocks, never whether the defect is recorded.
 
