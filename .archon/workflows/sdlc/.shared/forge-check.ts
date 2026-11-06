@@ -40,11 +40,6 @@ export const REQUIRED_FORGE_OPERATIONS = [
   'pr.thread.resolve',
 ] as const;
 
-/**
- * Capabilities the pack needs beyond an operation's name: the build queue looks up a
- * dead round's pull request by head in any state when it releases the claim.
- */
-export const REQUIRED_FORGE_CAPABILITIES = ['pr.view:any-state'] as const;
 
 export interface ForgeProbe {
   (
@@ -70,13 +65,11 @@ function requirePackOperations(metadata: Record<string, unknown> | null): void {
   const capabilities = metadata?.capabilities;
   if (!Array.isArray(capabilities) || !capabilities.every(op => typeof op === 'string'))
     throw new Error('forge metadata returned no operation capabilities');
-  const missing = [...REQUIRED_FORGE_OPERATIONS, ...REQUIRED_FORGE_CAPABILITIES].filter(
-    op => !capabilities.includes(op)
-  );
+  const missing = REQUIRED_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
   if (missing.length)
     throw new Error(
       `the SDLC pack needs a forge plugin with every delivery operation; missing: ${missing.join(', ')}. ` +
-        `The GitHub plugin has every one in releases after v0.13.2: \`archon plugin update ${GITHUB_FORGE_PLUGIN}\`.`
+        `The GitHub plugin has every one from v0.13.0: \`archon plugin update ${GITHUB_FORGE_PLUGIN}\`.`
     );
 }
 

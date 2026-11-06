@@ -39,12 +39,14 @@ describe('prFacts', () => {
     body: '',
     ...(timestamps === undefined ? {} : { timestamps }),
   });
-  const times = { created_at: '2026-10-03T10:00:00Z', merged_at: '2026-10-05T12:00:00Z', closed_at: '2026-10-05T12:00:00Z' };
+  const times = { created_at: '2026-10-03T10:00:00Z', merged_at: '2026-10-05T12:00:00Z', closed_at: '2026-10-05T12:00:05Z' };
 
   it('maps a pr.view to the facts the records read, with a fork head as cross-repository', () => {
     expect(prFacts(url(10), view({}, times))).toEqual(
       pr(10, { state: 'MERGED', mergedAt: times.merged_at, closedAt: times.closed_at })
     );
+    const closed = view({ state: 'closed' }, { ...times, merged_at: null });
+    expect(prFacts(url(10), closed)).toEqual(pr(10, { state: 'CLOSED', mergedAt: null, closedAt: times.closed_at }));
     const fork = view({ state: 'open', head_repo: { host: REPO.host, path: 'someone/widgets' } }, { ...times, merged_at: null, closed_at: null });
     expect(prFacts(url(10), fork)).toMatchObject({ state: 'OPEN', isCrossRepository: true });
   });

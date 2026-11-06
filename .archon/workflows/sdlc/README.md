@@ -115,7 +115,9 @@ or makes reachable. Delivery reads, answers and resolves review threads through
 `pr.threads`, `pr.thread.reply` and `pr.thread.resolve`.
 
 The build queue finds a dead round's pull request through `pr.view` by head in any
-state, which the plugin advertises as `pr.view:any-state`; the forge check requires it.
+state, which the plugin advertises as `pr.view:any-state`. The build queue has no forge
+check, so on a plugin without it the queue refuses, naming that capability, when it
+releases a dead claim that recorded a branch.
 The metrics workflows read each pull request through `pr.view` and need the
 `timestamps` it reports; the test-value judge reads `pr.files` and `repo.file`. A
 plugin that omits the timestamps or lacks those operations makes them refuse, naming

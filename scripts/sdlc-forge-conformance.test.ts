@@ -18,7 +18,6 @@ import {
   closeReasonSchema,
   type ForgePrRecord,
   forgePrRecordSchema,
-  PR_VIEW_ANY_STATE,
 } from '../packages/forge/src/lifecycle';
 import {
   type ForgeMutationFailure,
@@ -43,10 +42,7 @@ import {
   REMEDY,
   type ReviewsResult,
 } from '../.archon/workflows/sdlc/.shared/forge';
-import {
-  REQUIRED_FORGE_CAPABILITIES,
-  REQUIRED_FORGE_OPERATIONS,
-} from '../.archon/workflows/sdlc/.shared/forge-check';
+import { REQUIRED_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/forge-check';
 import { MERGE_QUEUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/merge';
 import { TEST_VALUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/test-value';
 import { CLOSE_REASONS } from '../.archon/workflows/sdlc/.shared/issue';
@@ -171,21 +167,15 @@ test('preflight capabilities cover the forge operations the pack calls', () => {
       )
     );
   expect(used).toContain('checks.state');
+  // Typed as operation names, so a capability token such as `pr.view:any-state` cannot
+  // enter a preflight list. The build queue's any-state lookup runs no preflight: the
+  // host refuses it on a plugin without the capability, naming it.
   const preflighted = new Set<ForgeRequest['op']>([
     ...REQUIRED_FORGE_OPERATIONS,
     ...MERGE_QUEUE_FORGE_OPERATIONS,
     ...TEST_VALUE_FORGE_OPERATIONS,
   ]);
   expect(used.sort()).toEqual([...preflighted].sort());
-
-  // A capability token gates a request shape rather than an operation: `pr.view` by head
-  // with `state: "any"` needs `pr.view:any-state`.
-  const capabilities: (typeof PR_VIEW_ANY_STATE)[] = sources.some(text =>
-    text.includes("state: 'any'")
-  )
-    ? [PR_VIEW_ANY_STATE]
-    : [];
-  expect([...REQUIRED_FORGE_CAPABILITIES]).toEqual(capabilities);
 });
 
 test('the pack reads host responses with credential attribution and metadata intact', () => {
@@ -235,9 +225,7 @@ test("forge-check's metadata request conforms to the CLI host input", () => {
     forge: {
       kind: 'fake',
       response: [
-        forgeOperation('metadata', {
-          capabilities: [...REQUIRED_FORGE_OPERATIONS, ...REQUIRED_FORGE_CAPABILITIES],
-        }),
+        forgeOperation('metadata', { capabilities: REQUIRED_FORGE_OPERATIONS }),
         forgeOperation('pr.view', null),
       ],
     },
