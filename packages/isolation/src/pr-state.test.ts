@@ -47,6 +47,23 @@ function setupGhResponse(remoteUrl: string, ghStdout: string | Error): void {
 }
 
 describe('getPrState', () => {
+  test.each(['{}', 'null', '"text"', '[null]', '[{}]', '[{"state":"MERGED","headRefOid":42}]'])(
+    'returns UNAVAILABLE for unreadable branch response %s',
+    async payload => {
+      setupGhResponse('https://github.com/owner/repo.git', payload);
+      expect(await getPrState(BRANCH, REPO)).toEqual({ state: 'UNAVAILABLE' });
+    }
+  );
+
+  test('caches remote inspection failure as unavailable', async () => {
+    setupGhResponse('https://github.com/owner/repo.git', '[]');
+    mockExecFileAsync.mockRejectedValue(new Error('remote inspection failed'));
+    const cache = new Map<string, PrLookup>();
+    expect(await getPrState(BRANCH, REPO, cache)).toEqual({ state: 'UNAVAILABLE' });
+    expect(await getPrState(BRANCH, REPO, cache)).toEqual({ state: 'UNAVAILABLE' });
+    expect(mockExecFileAsync).toHaveBeenCalledTimes(1);
+  });
+
   test.each(['https://github.com/owner/repo.git', 'git@github.com:owner/repo.git'])(
     'returns MERGED from the explicit remote %s',
     async remoteUrl => {
@@ -98,7 +115,7 @@ describe('getPrState', () => {
       );
       if (stage === 'remote') mockExecFileAsync.mockRejectedValue(error);
       expect(await getPrState(BRANCH, REPO)).toEqual({
-        state: stage === 'remote' || stage === 'unsupported' ? 'NONE' : 'UNAVAILABLE',
+        state: stage === 'unsupported' ? 'NONE' : 'UNAVAILABLE',
       });
       const logs: unknown[] = [...mockLogger.debug.mock.calls, ...mockLogger.warn.mock.calls];
       expect(logs.length).toBeGreaterThan(0);
@@ -147,11 +164,11 @@ describe('getPrState', () => {
     expect(result).toEqual({ state: 'NONE' });
   });
 
-  test('returns NONE when gh CLI is not installed (ENOENT)', async () => {
+  test('returns UNAVAILABLE when gh CLI is not installed (ENOENT)', async () => {
     const enoent = Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
     setupGhResponse('https://github.com/owner/repo.git', enoent);
     const result = await getPrState(BRANCH, REPO);
-    expect(result).toEqual({ state: 'NONE' });
+    expect(result).toEqual({ state: 'UNAVAILABLE' });
   });
 
   test.each(['https://gitlab.com/owner/repo.git', 'https://github.com.example.org/owner/repo'])(
@@ -297,6 +314,41 @@ function setupCommitResponse(
 }
 
 describe('getPrsForCommit', () => {
+  test('the subprocess projection feeds the parser for every PR state', async () => {
+    setupCommitResponse();
+    await getPrsForCommit(COMMIT, REPO);
+    const args = mockExecFileAsync.mock.calls.find(([, args]) => args[0] === 'api')?.[1];
+    if (!args) throw new Error('Missing commit lookup');
+    const projection = args[args.indexOf('--jq') + 1];
+    const proc = Bun.spawn(['jq', '-c', projection], {
+      stdin: new Blob([
+        JSON.stringify([
+          { ...mergedPr, body: 'discarded', merged_at: null },
+          { ...mergedPr, body: 'discarded', state: 'open', merged_at: null },
+          { ...mergedPr, body: 'discarded' },
+        ]),
+      ]),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+    expect(stdout).not.toContain('discarded');
+    setupCommitResponse(stdout);
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+      state: 'FOUND',
+      prs: [
+        { state: 'CLOSED', headSha: HEAD },
+        { state: 'OPEN', headSha: HEAD },
+        { state: 'MERGED', headSha: HEAD },
+      ],
+    });
+  });
+
   test('reads all pages and normalizes REST merge state in the selected remote repository', async () => {
     setupCommitResponse([
       [
@@ -417,13 +469,9 @@ describe('getPrsForCommit', () => {
     );
   });
 
-  test('missing gh is optional', async () => {
-    setupCommitResponse(
-      undefined,
-      'repository',
-      Object.assign(new Error('missing'), { code: 'ENOENT' })
-    );
-    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'NONE' });
+  test.each(['repository', 'pulls'] as const)('missing gh at %s is unavailable', async stage => {
+    setupCommitResponse(undefined, stage, Object.assign(new Error('missing'), { code: 'ENOENT' }));
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
   });
 
   test.each(['https://gitlab.com/owner/repo', 'https://github.com.example.org/owner/repo'])(

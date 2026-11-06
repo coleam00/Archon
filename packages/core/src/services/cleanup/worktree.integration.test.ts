@@ -1038,6 +1038,75 @@ test.each([
   }
 });
 
+test.each([
+  'remote',
+  'branch-response',
+  'missing-gh',
+  'commit-repository',
+  'commit-pulls',
+] as const)('cleanup retains and reports failed PR inspection: %s', async failure => {
+  await git(repo, 'remote', 'rename', 'upstream', 'origin');
+  const tip = await git(env.working_path, 'rev-parse', 'HEAD');
+  await db.query(
+    "UPDATE remote_agent_isolation_environments SET created_at = '2020-01-01' WHERE id = $1",
+    [env.id]
+  );
+  const failedGhCommand = {
+    remote: undefined,
+    'branch-response': undefined,
+    'missing-gh': 'pr',
+    'commit-repository': 'repo',
+    'commit-pulls': 'api',
+  }[failure];
+  const ghOutput: Record<string, string> = {
+    pr: failure === 'branch-response' ? '{}' : '[]',
+    repo: '{"nameWithOwner":"test/repo"}',
+    api: '[]',
+  };
+  const originalExec = gitModule.execFileAsync;
+  const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(async (file, args, options) => {
+    if (file === 'git' && args.includes('get-url')) {
+      if (failure === 'remote') throw new Error('remote inspection failed');
+      return { stdout: 'https://github.com/test/repo.git', stderr: '' };
+    }
+    if (file === 'gh') {
+      if (args[0] === failedGhCommand)
+        throw Object.assign(new Error('missing gh'), { code: 'ENOENT' });
+      return {
+        stdout: ghOutput[args[0]],
+        stderr: '',
+      };
+    }
+    return originalExec(file, args, options);
+  });
+  const selected = (await isolationDb.listAllActiveWithCodebase()).filter(row => row.id === env.id);
+  const selection = spyOn(isolationDb, 'listAllActiveWithCodebase').mockResolvedValue(selected);
+  const lastCommit = spyOn(gitModule, 'getLastCommitDate');
+  try {
+    const manual = await cleanupMergedWorktrees(codebaseId, repo);
+    expect(manual.errors).toEqual([]);
+    expect(manual.removed).toEqual([]);
+    expect(manual.skipped).toEqual([
+      { branchName: env.branch_name, reason: 'PR state lookup failed — merge state unverifiable' },
+    ]);
+    const scheduled = await runScheduledCleanup();
+    expect(scheduled.errors).toEqual([]);
+    expect(scheduled.removed).toEqual([]);
+    expect(lastCommit).not.toHaveBeenCalled();
+    expect(scheduled.skipped).toContainEqual({
+      id: env.id,
+      reason: 'PR state lookup failed — merge state unverifiable',
+    });
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
+    expect(await git(repo, 'rev-parse', env.branch_name)).toBe(tip);
+  } finally {
+    exec.mockRestore();
+    selection.mockRestore();
+    lastCommit.mockRestore();
+  }
+});
+
 test.each([false, true])(
   'merged cleanup uses the configured repository despite GH_REPO (configured PR merged=%s)',
   async merged => {

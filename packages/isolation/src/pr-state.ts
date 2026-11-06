@@ -1,9 +1,9 @@
 /**
  * PR state lookup via the `gh` CLI.
  *
- * The `gh` CLI is a soft dependency: when it is not installed or the remote is
- * not GitHub, lookups return 'NONE'. A failed query returns 'UNAVAILABLE', which
- * callers must not read as "no PR". Merged cleanup requires a merged PR head
+ * Non-GitHub remotes return 'NONE'. Failed inspection, including a missing
+ * `gh` CLI, returns 'UNAVAILABLE', which callers must not read as "no PR".
+ * Merged cleanup requires a merged PR head
  * covering every existing local tip before removal. Scheduled stale cleanup
  * follows its separate age and unpushed-commit policy.
  */
@@ -39,8 +39,8 @@ const UNAVAILABLE: PrLookup = { state: 'UNAVAILABLE' };
  *
  * Returns:
  *   - MERGED / CLOSED / OPEN with the PR's head commit if a PR exists with that head branch
- *   - NONE if no PR exists, gh is not installed, or the remote is not GitHub
- *   - UNAVAILABLE if gh failed or its output could not be read
+ *   - NONE if no PR exists or the remote is not GitHub
+ *   - UNAVAILABLE if remote inspection or gh failed, or its output could not be read
  *
  * The optional `cache` map dedupes lookups within a single cleanup invocation.
  * The optional `remote` selects which git remote to inspect (default: 'origin').
@@ -65,12 +65,12 @@ export async function getPrState(
     });
     remoteUrl = stdout.trim();
   } catch (error) {
-    getLog().debug(
+    getLog().warn(
       { repoPath, branch, stage: 'remote', code: errorCode(error) },
       'isolation.pr_state_remote_lookup_failed'
     );
-    cache?.set(cacheKey, NO_PR);
-    return NO_PR;
+    cache?.set(cacheKey, UNAVAILABLE);
+    return UNAVAILABLE;
   }
 
   const selector = githubRemoteSelector(remoteUrl);
@@ -100,26 +100,28 @@ export async function getPrState(
       ],
       { timeout: 15000, cwd: repoPath }
     );
-    const parsed = JSON.parse(stdout) as { state?: string; headRefOid?: string }[];
-    const first = parsed[0];
-    const state = first?.state;
-    const headSha = first?.headRefOid;
-    if (!first) {
+    const parsed: unknown = JSON.parse(stdout);
+    if (!Array.isArray(parsed)) throw new Error('Invalid branch PR response');
+    const first: unknown = parsed[0];
+    if (parsed.length === 0) {
       result = NO_PR;
-    } else if ((state === 'MERGED' || state === 'CLOSED' || state === 'OPEN') && headSha) {
-      result = { state, headSha };
+    } else if (
+      isRecord(first) &&
+      (first.state === 'MERGED' || first.state === 'CLOSED' || first.state === 'OPEN') &&
+      typeof first.headRefOid === 'string' &&
+      first.headRefOid.length > 0
+    ) {
+      result = { state: first.state, headSha: first.headRefOid };
     } else {
       getLog().warn({ branch, repoPath }, 'isolation.pr_state_unreadable');
       result = UNAVAILABLE;
     }
   } catch (error) {
-    const code = errorCode(error);
-    if (code === 'ENOENT') {
-      getLog().debug({ branch, repoPath }, 'isolation.pr_state_gh_not_installed');
-    } else {
-      getLog().warn({ branch, repoPath, stage: 'query', code }, 'isolation.pr_state_lookup_failed');
-      result = UNAVAILABLE;
-    }
+    getLog().warn(
+      { branch, repoPath, stage: 'query', code: errorCode(error) },
+      'isolation.pr_state_lookup_failed'
+    );
+    result = UNAVAILABLE;
   }
 
   cache?.set(cacheKey, result);
@@ -238,7 +240,6 @@ export async function getPrsForCommit(
     return parseCommitPrs(stdout, repository.nameWithOwner);
   } catch (error) {
     const code = errorCode(error);
-    if (stage !== 'remote' && code === 'ENOENT') return { state: 'NONE' };
     // Exec errors can embed remote credentials and response bodies; log only the stage and code.
     getLog().warn(
       {
