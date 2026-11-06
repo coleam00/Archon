@@ -383,6 +383,38 @@ export function readRunDispatchMetadata(
  */
 export const WORKFLOW_SOURCE_METADATA_KEY = 'workflow_source';
 
+/**
+ * Workflows read from a git ref of the project's own repository, such as a `plans`
+ * branch. `path` is the directory in the ref that holds the `workflows/` folder.
+ */
+export const extraWorkflowSourceSchema = z
+  .object({
+    ref: z
+      .string()
+      .trim()
+      .min(1)
+      .refine(
+        ref => !ref.startsWith('-') && !/\s/.test(ref),
+        'ref must not start with "-" or contain whitespace'
+      ),
+    path: z
+      .string()
+      .trim()
+      .min(1)
+      .default('.')
+      .refine(
+        path =>
+          !path.startsWith('/') &&
+          !path.includes('\\') &&
+          !/^[A-Za-z]:/.test(path) &&
+          !path.split('/').includes('..'),
+        'path must be relative to the repository root and stay inside it'
+      ),
+  })
+  .strict();
+
+export type ExtraWorkflowSource = z.infer<typeof extraWorkflowSourceSchema>;
+
 /** Source-side settings that decide which executable files a workflow resolves. */
 export const workflowSourceConfigSchema = z.object({
   load_default_workflows: z.boolean(),
@@ -394,6 +426,8 @@ export const workflowSourceConfigSchema = z.object({
    * child run, which discovers against the frozen capture rather than live config.
    */
   env_var_names: z.array(z.string()).optional(),
+  /** Extra workflow sources, in load order; a later one overrides an earlier one. */
+  extra_sources: z.array(extraWorkflowSourceSchema).optional(),
 });
 
 export type WorkflowSourceConfig = Readonly<z.infer<typeof workflowSourceConfigSchema>>;

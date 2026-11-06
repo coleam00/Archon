@@ -295,6 +295,8 @@ export function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedC
 
 /** Commands, default-loading and per-project env vars from repo config. */
 function mergeRepoProjectSettings(result: MergedConfig, repo: RepoConfig): void {
+  if (repo.extraWorkflowSources) result.extraWorkflowSources = repo.extraWorkflowSources;
+
   // Commands config
   if (repo.commands) {
     result.commands = {

@@ -105,6 +105,14 @@ export async function runWorkflowList(route: WorkflowRoute): Promise<number> {
   return 0;
 }
 
+export async function runWorkflowSync(route: WorkflowRoute): Promise<number> {
+  const { positionals, json, effectiveCwd, commands } = route;
+  if (positionals[2] !== undefined) {
+    return await fail(json, 'Usage: archon workflow sync [--json]');
+  }
+  return await commands.workflowSyncCommand(effectiveCwd, { json });
+}
+
 export async function runWorkflowStatus(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   if (positionals[2] !== undefined) {

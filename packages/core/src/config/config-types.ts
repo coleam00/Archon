@@ -1,6 +1,7 @@
 import type { WorktreeCreateConfig } from '@archon/isolation';
 import type { WorkflowStoreKind } from '@archon/workflows/store';
 import type { ResolvedWorkflowPolicy } from '@archon/workflows/schemas/run-config';
+import type { ExtraWorkflowSource } from '@archon/workflows/schemas/run-metadata';
 /**
  * Configuration types for Archon YAML config files
  *
@@ -241,6 +242,12 @@ export interface RepoConfig {
   workflows?: WorkflowContinuationConfig;
 
   /**
+   * Workflows read from git refs of this repository, such as a `plans` branch. Project
+   * config only: a ref names a branch of one repository, so a global value has no meaning.
+   */
+  extraWorkflowSources?: ExtraWorkflowSource[];
+
+  /**
    * Commands configuration
    */
   commands?: {
@@ -338,6 +345,8 @@ export interface MergedConfig {
     maxConversations: number;
   };
   workflows: ResolvedWorkflowPolicy;
+  /** From the repo config; see {@link RepoConfig.extraWorkflowSources}. */
+  extraWorkflowSources?: ExtraWorkflowSource[];
   commands: {
     /**
      * Additional command folder to search (relative to repo root)

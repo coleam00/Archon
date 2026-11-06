@@ -36,6 +36,7 @@ import { expandScope } from './workflow-discovery/expand-scope';
 import { discoverInstalled } from './workflow-discovery/installed';
 import {
   loadBundledScope,
+  loadExtraScope,
   loadGlobalScope,
   loadProjectScope,
   type ScopeFiles,
@@ -116,6 +117,7 @@ export async function discoverWorkflows(
   // Skipped when cwd is null — surfaces bundled + home scopes only, which is the right answer
   // for callers without a project context (e.g. UI listing workflows before any codebase is registered).
   if (cwd === null) return finishDiscovery(context, workflowsByFile, 'no_project_context');
+  await loadExtraScope(context, workflowsByFile);
   await loadProjectScope(context, cwd, workflowsByFile);
   return finishDiscovery(context, workflowsByFile);
 }

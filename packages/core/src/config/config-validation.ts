@@ -1,6 +1,8 @@
 // Validators for config file content. Each refuses a value Archon cannot honour by
 // throwing InvalidConfigError, naming the file and the key.
 import { deprecatedQuotaPolicyWarning } from '@archon/workflows/schemas/run-config';
+import { z } from 'zod';
+import { extraWorkflowSourceSchema } from '@archon/workflows/schemas/run-metadata';
 import {
   getRegistration,
   InvalidProviderRunConfigError,
@@ -75,6 +77,22 @@ export function validateWorkflowContinuationConfig(parsed: unknown, configPath: 
     getLog().warn({ configPath, warning }, 'config.workflows_quota_keys_deprecated');
   }
   config.workflows = result.data;
+}
+
+/** `extraWorkflowSources` is a list of `{ ref, path }`; a malformed entry fails the load. */
+export function validateExtraWorkflowSources(parsed: unknown, configPath: string): void {
+  if (typeof parsed !== 'object' || parsed === null || !('extraWorkflowSources' in parsed)) return;
+  const config = parsed as { extraWorkflowSources?: unknown };
+  if (config.extraWorkflowSources === undefined) return;
+  const result = z.array(extraWorkflowSourceSchema).safeParse(config.extraWorkflowSources);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid extraWorkflowSources config', configPath, issues);
+  }
+  // Store the parsed form so the `path` default is applied.
+  config.extraWorkflowSources = result.data;
 }
 
 export function isConfigRecord(value: unknown): value is Record<string, unknown> {

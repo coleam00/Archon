@@ -7,6 +7,7 @@ export const PROJECT_SCOPE_DIR = 'project';
 export const GLOBAL_SCOPE_DIR = 'global';
 export const BUNDLED_SCOPE_DIR = 'bundled';
 export const INSTALLED_SCOPE_DIR = 'installed';
+export const EXTRA_SCOPE_DIR = 'extra';
 
 /**
  * The roots every source lookup resolves under.
@@ -83,6 +84,9 @@ export function workflowSourceConfigFrom(config: WorkflowConfig): WorkflowSource
     load_default_commands: config.defaults?.loadDefaultCommands ?? true,
     ...(config.commands?.folder !== undefined ? { command_folder: config.commands.folder } : {}),
     ...(config.envVars !== undefined ? { env_var_names: Object.keys(config.envVars) } : {}),
+    ...(config.extraWorkflowSources?.length
+      ? { extra_sources: [...config.extraWorkflowSources] }
+      : {}),
   };
 }
 
