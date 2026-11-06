@@ -22,6 +22,12 @@ export class GitHubError extends Error {
   }
 }
 
+/**
+ * A failure that says nothing about the request itself: GitHub answered 5xx, or
+ * nothing answered at all. Repeating a read that hit one may succeed.
+ */
+export class TransientGitHubError extends GitHubError {}
+
 export function repositoryPath(path: string): { owner: string; repo: string } | null {
   const parts = path.replace(/^\/+|\/+$/g, '').split('/');
   if (parts.length !== 2) return null;
@@ -96,9 +102,11 @@ export async function githubRequest(
       },
     });
   } catch (cause) {
-    throw new GitHubError({ kind: 'forge_error', message: 'GitHub API request failed' }, false, {
-      cause,
-    });
+    throw new TransientGitHubError(
+      { kind: 'forge_error', message: 'GitHub API request failed' },
+      false,
+      { cause }
+    );
   }
   if (!response.ok) {
     throw githubResponseError(response);
@@ -246,7 +254,7 @@ export function githubErrorDetail(cause: unknown): ForgeError {
 }
 
 function githubResponseError(response: Response): GitHubError {
-  return new GitHubError(
+  return new (response.status >= 500 ? TransientGitHubError : GitHubError)(
     {
       kind:
         response.status === 404

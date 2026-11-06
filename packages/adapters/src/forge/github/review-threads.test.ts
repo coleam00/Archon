@@ -132,6 +132,51 @@ describe('pr.threads', () => {
     expect(github.calls.filter(call => call.query?.includes('reviewThreads'))).toHaveLength(2);
   });
 
+  test('a read that GitHub answers 502 is repeated, and one it refuses is not', async () => {
+    const page = {
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [thread('t1', [comment('c1', 'first')])],
+            },
+          },
+        },
+      },
+    };
+    const waits: number[] = [];
+    const sleep = async (ms: number): Promise<void> => {
+      waits.push(ms);
+    };
+    const answers = [json({}, 502), json({}, 502), json(page)];
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      {
+        token: 'token',
+        fetch: async () => answers.shift() ?? json({ message: 'unexpected call' }, 500),
+        sleep,
+      }
+    );
+    expect(response).toMatchObject({ ok: true, result: { value: { threads: [{ id: 't1' }] } } });
+    expect(waits).toEqual([1_000, 2_000]);
+
+    let calls = 0;
+    const refused = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      {
+        token: 'token',
+        fetch: async () => {
+          calls++;
+          return json({}, 403);
+        },
+        sleep,
+      }
+    );
+    expect(refused).toMatchObject({ ok: false, error: { kind: 'authorization', status: 403 } });
+    expect(calls).toBe(1);
+  });
+
   test('a GraphQL errors document is a failure, not an empty list', async () => {
     const github = fakeGitHub(() => ({
       errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a PullRequest' }],
