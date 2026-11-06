@@ -46,13 +46,13 @@ The pack is a set of queues joined by labels on the forge. Triage labels an inco
 
 Each queue is a standing workflow that a trigger starts. Its work item is a state document: it links the runs that worked on the item, and a run claims the item with a conditional write, so two runs never take the same one. The implement-review-fix loop stays one composed run; queues sit between stages, never inside that loop.
 
-Label names are pack configuration, and the project owns them.
+Label names are fixed by the pack: one typed table, `.shared/labels.ts`, declares each, and every stage reads them from there. A project doesn't rename them.
 
 ## 11. A new failure pauses; a recurring one gets a handler
 
-A failure the pack has no answer for doesn't end the run. The run pauses as an attention item labelled with the failure's class, such as `ci: other` or `merge: conflict`.
+A failure the pack has no answer for doesn't end the run. The run pauses as an attention item labelled with the stage and the class of stop, such as `build: scope` or `merge: base`.
 
-When a class recurs, write a small handler workflow for it. A trigger on the class label starts the handler, and the handler answers the pause through the normal answer channel. A class with no handler waits for any answerer. The count of attention items per label shows which handler to build next.
+When a class recurs, write a small handler workflow for it. A binding starts the handler, which finds its paused items by their class label and answers each through the normal answer channel. A class with no handler waits for any answerer. The count of attention items per label shows which handler to build next.
 
 Adding a handler changes neither the pack's main path nor the engine.
 
