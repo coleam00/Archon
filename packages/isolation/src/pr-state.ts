@@ -3,8 +3,9 @@
  *
  * The `gh` CLI is a soft dependency: when it is not installed or the remote is
  * not GitHub, lookups return 'NONE'. A failed query returns 'UNAVAILABLE', which
- * callers must not read as "no PR". Cleanup requires a merged PR head covering
- * every existing local tip before removal.
+ * callers must not read as "no PR". Merged cleanup requires a merged PR head
+ * covering every existing local tip before removal. Scheduled stale cleanup
+ * follows its separate age and unpushed-commit policy.
  */
 import { execFileAsync } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
