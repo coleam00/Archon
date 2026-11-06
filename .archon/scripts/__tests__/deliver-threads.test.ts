@@ -82,6 +82,7 @@ describe("deliver's review threads", () => {
       inputs: { INPUTS_ANSWERS: 'null' },
     });
     expect(ok(result).open).toBe(1);
+    expect(listing(result)).toContain('- id: `T1`');
     expect(result.forge.map(argv => argv.split(' ')[1])).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
   });
 

@@ -137,8 +137,8 @@ test('re-triage replaces a changed type and removes a retired size label', () =>
     ['repo.label.ensure', 'archon-size-s'],
     ['workitem.label.add', 'archon-size-s'],
     ['workitem.label.add', 'archon-type-feature'],
-    ['workitem.label.remove', 'archon-risky'],
     ['workitem.label.remove', 'archon-type-bug'],
+    ['workitem.label.remove', 'archon-risky'],
   ]);
   expect(JSON.parse(run.stdout).labels).toEqual(['archon-ready', 'archon-size-s', 'archon-type-feature']);
 });
