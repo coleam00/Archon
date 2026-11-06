@@ -73,7 +73,7 @@ Each stage picks its model from a concern alias, falling back to the tier it has
 | `@investigator` | investigate | `medium` |
 | `@implementer` | implement | `large` |
 | `@reviewer` | every review agent and simplify | each node's tier |
-| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs` or `simplify` | `@reviewer`, then the lens's tier |
+| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier |
 
 ```bash
 archon ai alias set @reviewer codex gpt-6.1-sol                                   # every run

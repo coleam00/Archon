@@ -322,12 +322,12 @@ A quick route agent picks which specialist lenses the change earns, and `archon-
 │   ┌─────────────────────────────────────────────────────────────────┐  │
 │   │ Step 2: PARALLEL LENSES (each in a fresh session)               │  │
 │   │                                                                 │  │
-│   │   ┌──────────────┐  ┌──────────────┐                           │  │
-│   │   │ code         │  │ seams        │                           │  │
-│   │   │              │  │              │                           │  │
-│   │   │ Bugs,        │  │ Contracts    │                           │  │
-│   │   │ correctness  │  │ that drift   │                           │  │
-│   │   └──────────────┘  └──────────────┘                           │  │
+│   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │  │
+│   │   │ code         │  │ seams        │  │ ux           │         │  │
+│   │   │              │  │              │  │ (when a UI   │         │  │
+│   │   │ Bugs,        │  │ Contracts    │  │  changes)    │         │  │
+│   │   │ correctness  │  │ that drift   │  │ Clear, honest│         │  │
+│   │   └──────────────┘  └──────────────┘  └──────────────┘         │  │
 │   │                                                                 │  │
 │   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │  │
 │   │   │ tests        │  │ errors       │  │ docs         │         │  │

@@ -289,8 +289,8 @@ synthesis name `rulings.md`, the answers a project's maintainers have already gi
 read before either stops to ask. The build queue's agents name `build.md`, what
 the queue may decide on its own, and its route and answer agents `rulings.md` too. The
 merge queue's sweep names `merge.md`, which pull requests merge on their own.
-Review's code lens names `ui-check.md`, how it starts the project's app to use a
-user-facing change in a browser through the playwright-cli skill, which its prompt
+Review's code and ux lenses name `ui-check.md`, how they start the project's app to use a
+user-facing change in a browser through the playwright-cli skill, which their prompts
 names rather than a `skills:` entry for the reason the build queue's route does.
 Agents interpret
 them; anything that must be exact, such as label names, stays typed configuration.
@@ -336,7 +336,7 @@ always used. A user who sets nothing gets the same models as before.
 | `@investigator` | investigate | `medium` |
 | `@implementer` | implement, including delivery's reshape | `large` |
 | `@reviewer` | every agent node of review (scope, lenses, synthesis) and simplify | each node's tier |
-| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code`, `medium` for the rest) |
+| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code` and `ux`, `medium` for the rest) |
 
 Review's lens router stays on `small`, and the queue, attention and delivery judges
 keep their tiers. Moving those means rebinding the tier.
