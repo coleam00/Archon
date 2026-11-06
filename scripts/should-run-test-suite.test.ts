@@ -10,7 +10,10 @@ import {
 import {
   changedFilesBetween,
   diffRange,
+  dispatchDecision,
+  packRunnerInputs,
   proofFromPullRequestRun,
+  shouldRunPackTests,
   shouldRunTestSuite,
   shouldRunWorkspaceTests,
   workspaceTestInputs,
@@ -527,6 +530,123 @@ describe('workspace test selection', () => {
 
     expect(decide('scripts/tool.ts')).toBe('false');
     expect(decide('scripts/shared.ts')).toBe('true');
+  });
+});
+
+describe('pack test selection', () => {
+  const track = trackTempRoots();
+  const REPO_ROOT = resolve(import.meta.dir, '..');
+  const runner = packRunnerInputs(REPO_ROOT);
+
+  test('derives the root scripts that run the pack shard', () => {
+    for (const file of [
+      'scripts/validate.ts',
+      'scripts/repo-tests.ts',
+      'scripts/bun-test-command.ts',
+    ]) {
+      expect(runner.has(file)).toBe(true);
+    }
+    expect(runner.has('scripts/should-run-test-suite.ts')).toBe(false);
+  });
+
+  test.each([
+    '.archon/workflows/sdlc/intake/intake.yaml',
+    '.archon/workflows/sdlc/.shared/merge.ts',
+    '.archon/scripts/__tests__/merge-queue.test.ts',
+    '.archon/sdlc/policy/maintainers.json',
+    '.archon/config.yaml',
+    'packages/cli/src/commands/state.ts',
+    'packages/workflows/src/executor.ts',
+    'packages/forge/src/index.ts',
+    'scripts/bun-test-command.ts',
+    '.github/workflows/test.yml',
+    'bun.lock',
+  ])('runs for %s', file => {
+    expect(shouldRunPackTests(['README.md', file], runner)).toBe(true);
+  });
+
+  test.each([
+    'packages/core/src/index.ts',
+    'packages/web/src/App.tsx',
+    'scripts/should-run-test-suite.ts',
+    '.archon/scripts/NOTES.md',
+    '.archon/commands/NOTES.md',
+    '.archon/sdlc/NOTES.md',
+  ])('skips for %s', file => {
+    expect(shouldRunPackTests([file], runner)).toBe(false);
+  });
+
+  test('the script decides a pull request from its diff', () => {
+    const repo = track(mkdtempSync(join(tmpdir(), 'pack-decision-')));
+    gitIn(repo, 'init', '-q', '-b', 'main');
+    gitIn(repo, 'config', 'user.email', 'test@example.com');
+    gitIn(repo, 'config', 'user.name', 'Test');
+    mkdirSync(join(repo, '.archon/scripts'), { recursive: true });
+    mkdirSync(join(repo, 'packages/core'), { recursive: true });
+    writeFileSync(join(repo, '.archon/scripts/queue.ts'), '');
+    writeFileSync(join(repo, 'packages/core/db.ts'), '');
+    gitIn(repo, 'add', '.');
+    gitIn(repo, 'commit', '-q', '-m', 'seed');
+    const base = gitIn(repo, 'rev-parse', 'HEAD');
+
+    const decide = (file: string, mode: string): string => {
+      gitIn(repo, 'checkout', '-q', '-B', 'change', base);
+      writeFileSync(join(repo, file), 'changed\n');
+      gitIn(repo, 'commit', '-q', '-am', `change ${file}`);
+      const head = gitIn(repo, 'rev-parse', 'HEAD');
+      const result = runDecision(
+        track,
+        'pull_request',
+        { pull_request: { base: { sha: base }, head: { sha: head } } },
+        repo,
+        [mode]
+      );
+      expect(result.exitCode).toBe(0);
+      return result.stdout;
+    };
+
+    for (const mode of ['--pack-tests', '--pack-fixtures']) {
+      expect(decide('.archon/scripts/queue.ts', mode)).toBe('true');
+      expect(decide('packages/core/db.ts', mode)).toBe('false');
+    }
+  });
+
+  test.each([
+    ['--pack-tests', { 'pack-tests': 'true', 'pack-fixtures': 'false' }, 'true'],
+    ['--pack-tests', { 'pack-tests': 'false', 'pack-fixtures': 'true' }, 'false'],
+    ['--pack-fixtures', { 'pack-tests': 'false', 'pack-fixtures': 'true' }, 'true'],
+    ['--pack-fixtures', {}, 'false'],
+    [undefined, { 'pack-tests': 'false' }, 'true'],
+    ['--workspace-tests', { 'pack-tests': 'false' }, 'true'],
+  ])('a dispatch with %s and inputs %j decides %s', (mode, inputs, expected) => {
+    const result = runDecision(
+      track,
+      'workflow_dispatch',
+      { inputs },
+      process.cwd(),
+      mode ? [mode] : []
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(expected);
+  });
+
+  test('a dispatch input that is not a boolean is fatal', () => {
+    expect(() => dispatchDecision('pack-tests', { inputs: { 'pack-tests': 'yes' } })).toThrow(
+      'not a boolean'
+    );
+    expect(dispatchDecision('pack-tests', { inputs: { 'pack-tests': true } })).toBe(true);
+  });
+
+  test('every pack mode has the boolean dispatch input of its name in test.yml', () => {
+    const workflow = Bun.YAML.parse(
+      readFileSync(resolve(REPO_ROOT, '.github/workflows/test.yml'), 'utf8')
+    ) as { on: { workflow_dispatch: { inputs: Record<string, unknown> } } };
+    for (const mode of ['pack-tests', 'pack-fixtures']) {
+      expect(workflow.on.workflow_dispatch.inputs[mode]).toMatchObject({
+        type: 'boolean',
+        default: false,
+      });
+    }
   });
 });
 

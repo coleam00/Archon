@@ -115,14 +115,27 @@ export function workspaceTestInputs(
   extraCandidates: Iterable<string> = []
 ): Set<string> {
   const tracked = trackedFiles(repo, 'packages', 'scripts');
-  const candidates = new Set(
-    [...tracked, ...extraCandidates].filter(file => file.startsWith(ROOT_SCRIPTS))
-  );
-
+  const candidates = rootScriptCandidates(tracked, extraCandidates);
   const named = namedWorkspaceInputs(repo, tracked, candidates);
+  return withStaticImports(repo, tracked, candidates, [...named, ...WORKSPACE_RUNNER_ENTRY_POINTS]);
+}
 
+function rootScriptCandidates(
+  tracked: readonly string[],
+  extraCandidates: Iterable<string>
+): Set<string> {
+  return new Set([...tracked, ...extraCandidates].filter(file => file.startsWith(ROOT_SCRIPTS)));
+}
+
+/** `roots` plus every candidate they reach through relative static imports. */
+function withStaticImports(
+  repo: string,
+  tracked: readonly string[],
+  candidates: ReadonlySet<string>,
+  roots: Iterable<string>
+): Set<string> {
   const inputs = new Set<string>();
-  const queue = [...named, ...WORKSPACE_RUNNER_ENTRY_POINTS];
+  const queue = [...roots];
   const transpiler = new Bun.Transpiler({ loader: 'tsx' });
   for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
     if (inputs.has(file)) continue;
@@ -179,6 +192,62 @@ export function shouldRunWorkspaceTests(
     if (!shouldRunTestSuite([file])) continue;
     if (file.startsWith(ROOT_SCRIPTS) && !inputs.has(file)) continue;
     return true;
+  }
+  return false;
+}
+
+/**
+ * What the pack shard (`.archon/scripts/` tests) and the workflow fixtures exercise, besides the
+ * root scripts that run them (`packRunnerInputs`). An entry ending in `/` matches a directory.
+ *   - The pack itself: its workflows, prompts, scripts and their tests, policy files, and the repo
+ *     config the fixtures load. `.archon/commands/` is absent: it holds only Markdown prompts for
+ *     workflows that have no fixtures, which the suite treats as prose.
+ *   - The contracts the pack is written against: `@archon/cli` (the `state`, `workflow` and
+ *     `forge` commands the pack shells to through `ARCHON_CLI_COMMAND`, which pack tests run for
+ *     real), `@archon/workflows` (the workflow language, the script-node environment, and the dry
+ *     run the fixtures use), and `@archon/forge` (the plugin protocol behind `archon forge`). The
+ *     packages below them are implementation those contracts hide, and their own tests guard it.
+ *   - The gate and the install: `test.yml`, the root manifest and the lockfile.
+ */
+const PACK_INPUTS = [
+  '.archon/workflows/',
+  '.archon/scripts/',
+  '.archon/sdlc/',
+  '.archon/config.yaml',
+  'packages/cli/',
+  'packages/workflows/',
+  'packages/forge/',
+  '.github/workflows/test.yml',
+  'package.json',
+  'bun.lock',
+];
+
+/** The root `scripts/` files that run the pack shard and the fixtures: the runner and its imports. */
+export function packRunnerInputs(
+  repo: string,
+  extraCandidates: Iterable<string> = []
+): Set<string> {
+  const tracked = trackedFiles(repo, 'scripts');
+  const candidates = rootScriptCandidates(tracked, extraCandidates);
+  return withStaticImports(repo, tracked, candidates, WORKSPACE_RUNNER_ENTRY_POINTS);
+}
+
+/**
+ * Whether the pack shard and the workflow fixtures must run. Only a file the suite runs for can
+ * count, so pack prose skips them, and a run that asks for them always has the job that holds them.
+ */
+export function shouldRunPackTests(
+  files: Iterable<string>,
+  runnerInputs: ReadonlySet<string>
+): boolean {
+  for (const file of files) {
+    if (!shouldRunTestSuite([file])) continue;
+    if (runnerInputs.has(file)) return true;
+    if (
+      PACK_INPUTS.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry))
+    ) {
+      return true;
+    }
   }
   return false;
 }
@@ -242,6 +311,7 @@ export interface EventPayload {
   before?: unknown;
   after?: unknown;
   pull_request?: { base?: { sha?: unknown }; head?: { sha?: unknown } } | null;
+  inputs?: Record<string, unknown> | null;
 }
 
 /** The commits to compare, or `null` when there is nothing to compare and the suite runs. */
@@ -459,8 +529,28 @@ function githubApi(env: NodeJS.ProcessEnv = process.env): GitHubGet {
   };
 }
 
-const MODES = { '--workspace-tests': 'workspace' } as const;
-type Mode = 'suite' | (typeof MODES)[keyof typeof MODES];
+const MODES = {
+  '--workspace-tests': 'workspace',
+  '--pack-tests': 'pack-tests',
+  '--pack-fixtures': 'pack-fixtures',
+} as const;
+export type Mode = 'suite' | (typeof MODES)[keyof typeof MODES];
+
+/** The pack modes, each named after the `test.yml` dispatch input that opts into it. */
+const OPT_IN_MODES: ReadonlySet<Mode> = new Set(['pack-tests', 'pack-fixtures']);
+
+/**
+ * A manual dispatch runs the suite, and the pack checks only when its input asks. The event file
+ * carries a boolean input as `true` or the string `"true"`; any other value but `false`, `"false"`
+ * or an absent input is a wiring bug, so it throws rather than publish a guess.
+ */
+export function dispatchDecision(mode: Mode, event: EventPayload): boolean {
+  if (!OPT_IN_MODES.has(mode)) return true;
+  const value = event.inputs?.[mode];
+  if (value === true || value === 'true') return true;
+  if (value === undefined || value === false || value === 'false') return false;
+  throw new Error(`The dispatch input ${mode} is ${JSON.stringify(value)}, not a boolean`);
+}
 
 function readMode(args: readonly string[]): Mode {
   if (args.length === 0) return 'suite';
@@ -480,7 +570,14 @@ const PREDICATES: Record<Mode, (files: Iterable<string>) => boolean> = {
     const changed = [...files];
     return shouldRunWorkspaceTests(changed, workspaceTestInputs(process.cwd(), changed));
   },
+  'pack-tests': packPredicate,
+  'pack-fixtures': packPredicate,
 };
+
+function packPredicate(files: Iterable<string>): boolean {
+  const changed = [...files];
+  return shouldRunPackTests(changed, packRunnerInputs(process.cwd(), changed));
+}
 
 /** Reads the event GitHub Actions names in `GITHUB_EVENT_NAME` and `GITHUB_EVENT_PATH`. */
 async function main(): Promise<void> {
@@ -491,6 +588,10 @@ async function main(): Promise<void> {
     throw new Error('GITHUB_EVENT_NAME and GITHUB_EVENT_PATH must both be set');
   }
   const event: EventPayload = JSON.parse(readFileSync(eventPath, 'utf8'));
+  if (eventName === 'workflow_dispatch') {
+    console.log(dispatchDecision(mode, event));
+    return;
+  }
   const range = diffRange(eventName, event);
   if (range === null) {
     console.log(true);

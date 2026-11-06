@@ -143,6 +143,9 @@ describe('CI wiring', () => {
     expect(record(jobs.test).if).toBe("needs.changes.outputs.run-workspace-tests == 'true'");
     expect(record(jobs['test-scripts']).needs).toBe('changes');
     expect(record(jobs['test-scripts']).if).toBe("needs.changes.outputs.run-tests == 'true'");
+    // Gating the pack job on its own decision would skip it on every pull request that leaves
+    // the pack alone, and a skipped job keeps that run from proving its merge.
+    expect(record(jobs['test-pack']).if).toBe("needs.changes.outputs.run-tests == 'true'");
   });
 
   test('publishes the workspace decision from the deciding step', () => {
