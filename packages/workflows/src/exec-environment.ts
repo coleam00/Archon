@@ -28,6 +28,8 @@ export interface ExecNodeEnvironmentContext {
    * so a container that mounts it reads the same bytes at the same path.
    */
   typedArtifactsFile: string;
+  /** This invocation's node-outcome listing, required for the same reason. */
+  nodeOutcomesFile: string;
   /**
    * The execution this process belongs to: identity plus the invocation's and this
    * attempt's checkout starts (#3375). Carries manifest pointers and digests, never
@@ -61,6 +63,7 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
     // The listing path, delivered like the other engine-reserved keys: configured
     // project env and node bindings spread before this bag, so neither can shadow it.
     TYPED_ARTIFACTS_FILE: context.typedArtifactsFile,
+    NODE_OUTCOMES_FILE: context.nodeOutcomesFile,
     ARCHON_RUN_ENV_KEYS: '',
     ARCHON_NODE_EXECUTION:
       context.nodeExecution === null ? '' : nodeExecutionEnvValue(context.nodeExecution),
@@ -109,6 +112,7 @@ export const EXEC_NODE_ENVIRONMENT_NAMES: ReadonlySet<string> = new Set(
       loopPrevOutput: '',
       rejectionReason: '',
       typedArtifactsFile: '',
+      nodeOutcomesFile: '',
       nodeExecution: null,
       inputEnvKeys: [],
     })

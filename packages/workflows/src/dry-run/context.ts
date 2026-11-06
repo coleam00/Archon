@@ -165,13 +165,14 @@ export function resolveText(
     undefined,
     undefined,
     loopPrevOutput,
-    // A dry run never writes typed artifacts, so it has no listing to point at. Pass
-    // an explicit empty value: the preview substitutes '' rather than throwing the way
-    // a real invocation that forgot to materialize a listing does.
+    // A dry run never writes typed artifacts or node state, so it has no listing to
+    // point at. Pass explicit empty values: the preview substitutes '' rather than
+    // throwing the way a real invocation that forgot to materialize a listing does.
     {
       shellSafe: surface !== 'prompt',
       stateDir: ctx.stateDir,
       typedArtifactsFile: '',
+      nodeOutcomesFile: '',
       ...(inputs ? { inputs } : {}),
       references: nodeTemplateReferences(
         text,

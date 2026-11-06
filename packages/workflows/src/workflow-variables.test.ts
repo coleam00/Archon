@@ -55,6 +55,7 @@ describe('user-controlled runtime variable delivery', () => {
         rejectionReason: values.rejectionReason ?? '',
         loopPrevOutput: values.loopPrevOutput ?? '',
         typedArtifactsFile: '/listing.json',
+        nodeOutcomesFile: '/outcomes.json',
         nodeExecution: null,
         inputEnvKeys: [],
       });
@@ -103,6 +104,7 @@ describe('user-controlled runtime variable delivery', () => {
         EXTERNAL_CONTEXT: value('issue'),
         ISSUE_CONTEXT: value('issue'),
         TYPED_ARTIFACTS_FILE: '/listing.json',
+        NODE_OUTCOMES_FILE: '/outcomes.json',
         ARCHON_NODE_EXECUTION: '',
         ARCHON_RUN_ENV_KEYS: JSON.stringify([...EXEC_NODE_ENVIRONMENT_NAMES]),
       });
@@ -299,6 +301,41 @@ describe('substituteWorkflowVariables', () => {
         'docs/'
       )
     ).toThrow(/has no typed-artifact listing/);
+  });
+
+  it("replaces $NODE_OUTCOMES_FILE with this invocation's listing", () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read $NODE_OUTCOMES_FILE',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { nodeOutcomesFile: '/tmp/artifacts/.archon/node-outcomes/o.json' }
+    );
+    expect(prompt).toBe('Read /tmp/artifacts/.archon/node-outcomes/o.json');
+  });
+
+  it('throws when $NODE_OUTCOMES_FILE is referenced without a materialized listing', () => {
+    expect(() =>
+      substituteWorkflowVariables(
+        'Read $NODE_OUTCOMES_FILE',
+        'run-1',
+        'msg',
+        '/tmp/artifacts',
+        'main',
+        'docs/',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { typedArtifactsFile: '/listing.json' }
+      )
+    ).toThrow(/has no node-outcome listing/);
   });
 
   it('treats an explicit empty listing as a caller stating it has none (dry run)', () => {

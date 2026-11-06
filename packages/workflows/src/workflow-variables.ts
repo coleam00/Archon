@@ -96,6 +96,8 @@ export interface TemplateReferences {
  *   referenced without an adoption active.
  * - $TYPED_ARTIFACTS_FILE - The consumer's typed-artifact observation (JSON). Throws
  *   if referenced by a context that never materialized one (see below).
+ * - $NODE_OUTCOMES_FILE - The consumer's node-outcome observation (JSON), delivered with
+ *   the typed-artifact listing and throwing under the same rule.
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
@@ -139,6 +141,8 @@ export function substituteWorkflowVariables(
      * listing — the dry-run preview — and substitutes empty without throwing.
      */
     typedArtifactsFile?: string;
+    /** The consumer's node-outcome observation path, under the same rule as `typedArtifactsFile`. */
+    nodeOutcomesFile?: string;
     references?: TemplateReferences;
   }
 ): { prompt: string; contextSubstituted: boolean } {
@@ -195,6 +199,18 @@ export function substituteWorkflowVariables(
         );
       }
       return options.typedArtifactsFile;
+    }),
+    // Delivered beside $TYPED_ARTIFACTS_FILE by the same invocation contexts, and absent
+    // from the same ones, so it fails loudly for the same reason.
+    variable('NODE_OUTCOMES_FILE', () => {
+      if (options?.nodeOutcomesFile === undefined) {
+        throw new Error(
+          '$NODE_OUTCOMES_FILE is referenced but this invocation has no node-outcome listing. ' +
+            'It is available inside bash, script, agent, loop, and approval-rework nodes; ' +
+            'if you are seeing this from one of those, please report it as a bug.'
+        );
+      }
+      return options.nodeOutcomesFile;
     }),
     variable('BASE_BRANCH', () => {
       if (!baseBranch) {
@@ -275,7 +291,8 @@ export function substituteWorkflowVariables(
  * @param issueContext - Optional GitHub issue/PR context to substitute or append
  * @param logLabel - Human-readable label for logging (e.g., 'workflow step prompt')
  * @param options - Forwarded to {@link substituteWorkflowVariables}; carries `stateDir`
- *   for `$STATE_DIR` and `typedArtifactsFile` for `$TYPED_ARTIFACTS_FILE`, each of
+ *   for `$STATE_DIR`, `typedArtifactsFile` for `$TYPED_ARTIFACTS_FILE` and
+ *   `nodeOutcomesFile` for `$NODE_OUTCOMES_FILE`, each of
  *   which throws when referenced without one, `rejectionReason` for
  *   `$REJECTION_REASON`, and the `references` resolved in the same pass.
  * @returns The final prompt with variables substituted and context optionally appended
@@ -294,6 +311,7 @@ export function buildPromptWithContext(
     stateDir?: string;
     inputs?: Record<string, JsonValue>;
     typedArtifactsFile?: string;
+    nodeOutcomesFile?: string;
     rejectionReason?: string;
     references?: TemplateReferences;
   }
