@@ -192,6 +192,7 @@ function instanceRunContext(
     workflowProvider: ctx.workflowProvider,
     workflowModel: ctx.workflowModel,
     workflowLevelOptions: ctx.workflowLevelOptions,
+    workflowPack: ctx.workflowPack,
     aiProfile: ctx.aiProfile,
     workflowPreset: ctx.workflowPreset,
     artifactsDir: ctx.artifactsDir,

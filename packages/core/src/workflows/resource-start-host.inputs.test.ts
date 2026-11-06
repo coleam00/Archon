@@ -8,6 +8,7 @@ import { resolveBindingInputs } from './resource-start-host';
 
 const pack: WorkflowPack = {
   key: 'alpha',
+  source: 'project',
   settings: { strict: { type: 'bool' }, forge: { type: 'enum', values: ['gh', 'glab'] } },
 };
 const binding = (inputs: Record<string, unknown>) =>

@@ -27,7 +27,6 @@ publish: &published_verdict
   contract_left: []
 result: *published_verdict
 prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
-policy: { defaults: "fixture-policy-defaults" }
 fixture:
   expect: completed
   reached: [route, seams, code, docs, synthesize, publish, result]

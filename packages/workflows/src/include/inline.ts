@@ -67,6 +67,7 @@ function cloneBoundaries(boundaries: ComposedBlockBoundary[]): ComposedBlockBoun
 function bodyComposedMeta(patch: ComposedNodeMeta): ComposedNodeMeta {
   return {
     origin: patch.origin,
+    ...(patch.pack !== undefined ? { pack: patch.pack } : {}),
     ...(patch.inputs !== undefined ? { inputs: patch.inputs } : {}),
     ...(patch.boundaries !== undefined ? { boundaries: patch.boundaries.map(bodyBoundary) } : {}),
   };
@@ -239,8 +240,10 @@ function inlineChildNode(scope: InlineScope, cn: DagNode): DagNode {
 
 function composedMeta(scope: InlineScope, cn: DagNode, wasEntry: boolean): ComposedNodeMeta {
   const { resolvedInputs } = scope;
+  const pack = scope.child.pack;
   return {
     origin: scope.child.name,
+    ...(pack !== undefined ? { pack: { source: pack.source, key: pack.key } } : {}),
     ...(Object.keys(resolvedInputs).length > 0 ? { inputs: { ...resolvedInputs } } : {}),
     ...(wasEntry ? { blockEntry: true as const } : {}),
     ...(scope.hasActivationBoundary ? { boundaries: [blockBoundary(scope, cn, wasEntry)] } : {}),

@@ -24,7 +24,6 @@ import {
   runName,
 } from '../../.shared/discoveries.ts';
 import { artifactsDir, emit, note, refuse, trimmed } from '../../.shared/io.ts';
-import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { fetchDefaultBranch } from '../../.shared/remote.ts';
 import { latestVerdictOf, relayedDiscoveries } from '../../.shared/report.ts';
 import {
@@ -181,7 +180,6 @@ function main(): void {
   emit({
     path: queue.length === 0 ? 'idle' : 'decide',
     base,
-    policy_defaults: POLICY_DEFAULTS,
   });
 }
 

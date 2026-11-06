@@ -61,8 +61,7 @@ nodes:
         settled: { type: array, items: { type: object } }
         # The gate command the sweep runs to merge.
         gate: { type: string }
-        policy_defaults: { type: string }
-      required: [path, base, base_error, items, settled, gate, policy_defaults]
+      required: [path, base, base_error, items, settled, gate]
 
   - id: sweep
     command: sweep
@@ -70,7 +69,6 @@ nodes:
     when: "$facts.output.path == 'sweep'"
     model: large
     with:
-      policy_defaults: "$facts.output.policy_defaults"
       base: { from: "$facts.output.base" }
       items: { from: "$facts.output.items" }
       gate: "$facts.output.gate"

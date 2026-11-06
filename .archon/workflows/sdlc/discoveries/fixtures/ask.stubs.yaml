@@ -3,7 +3,6 @@
 facts:
   path: decide
   base: { branch: dev, sha: "stub-sha" }
-  policy_defaults: "/stub/policy"
 decide:
   decisions:
     - outcome: ask

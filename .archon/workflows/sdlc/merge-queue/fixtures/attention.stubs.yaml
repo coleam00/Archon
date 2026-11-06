@@ -14,7 +14,6 @@ facts:
       record: null
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
-  policy_defaults: "/stub/policy"
 sweep:
   decisions:
     - number: 42

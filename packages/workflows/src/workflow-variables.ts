@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { packDirOrThrow, type PackDirScope } from './pack-dir';
 import { createLogger } from '@archon/paths';
 import {
   USER_CONTROLLED_VARIABLES,
@@ -40,6 +41,26 @@ export function currentAdoptedRunDir(): string | undefined {
   return adoptedRunDirContext.getStore();
 }
 
+/**
+ * Scope holding `$PACK_DIR`: the directory, inside the run's source roots, of the pack
+ * whose workflow file authored the executing node. Scoped like the adopted run dir, for
+ * the same reason, but entered per node at dispatch (`nodePackDir`), so an included
+ * block reads its own pack, never its includer's. `undefined` is a node outside any pack.
+ */
+const packDirContext = new AsyncLocalStorage<PackDirScope>();
+
+export function runWithPackDir<T>(scope: PackDirScope, fn: () => Promise<T>): Promise<T> {
+  return packDirContext.run(scope, fn);
+}
+
+/** The executing node's `$PACK_DIR` scope; undefined outside node dispatch. */
+export function currentPackDir(): PackDirScope | undefined {
+  return packDirContext.getStore();
+}
+
+/** Matches what the substitution below replaces as `$PACK_DIR`. */
+export const PACK_DIR_REFERENCE = /\$PACK_DIR/;
+
 const contextVariables = USER_CONTROLLED_VARIABLES.filter(group => group.kind === 'context').map(
   group => ({ ...group, pattern: `\\$(?:${group.names.join('|')})(?![A-Za-z0-9_])` })
 );
@@ -68,6 +89,8 @@ export interface TemplateReferences {
  * - $STATE_DIR - External per-PROJECT cross-run state directory (shared by every
  *   workflow in the project; pre-created by the executor). Throws if referenced
  *   without a resolved value.
+ * - $PACK_DIR - The directory of the pack that authored the node, in the run's source
+ *   roots (see {@link runWithPackDir}). Throws when that workflow is not in a pack.
  * - $ADOPTED_RUN_DIR (#2747) - The adopted run's artifact directory, resolved
  *   through its persisted `output_root`. Read-only by contract; throws if
  *   referenced without an adoption active.
@@ -154,6 +177,9 @@ export function substituteWorkflowVariables(
       }
       return options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '';
     }),
+    // Engine-controlled like $ARTIFACTS_DIR, so substituted under shellSafe too. A node
+    // with no pack directory fails: an empty path would point a read at the checkout.
+    variable('PACK_DIR', () => packDirOrThrow(currentPackDir())),
     // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
     // script, agent prompt, loop attempt), and to exec subprocesses as TYPED_ARTIFACTS_FILE.
     // A context that never supplied one must fail loudly: substituting '' would read as

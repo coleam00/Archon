@@ -33,7 +33,6 @@ import {
   UNREADABLE,
   withMerge,
 } from '../../.shared/merge.ts';
-import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
 import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
 import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
@@ -175,7 +174,6 @@ function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: r
     items,
     settled,
     gate,
-    policy_defaults: POLICY_DEFAULTS,
   });
 }
 

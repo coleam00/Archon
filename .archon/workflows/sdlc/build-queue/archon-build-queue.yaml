@@ -76,7 +76,6 @@ nodes:
         rounds: { type: array, items: { type: object } }
         # Whether this run's round reaches round_limit rounds since the scope changed.
         at_cap: { type: boolean }
-        policy_defaults: { type: string }
         # The item's pull request as the forge reports it now: the latest round's that
         # recorded one, or the one triage routed it to continue; else null.
         pull_request: { type: [object, 'null'] }
@@ -87,7 +86,7 @@ nodes:
         # The branch the round opens its pull request from when route continues none: a
         # new build/<issue>-<slug>-<run>. Empty with no item.
         branch: { type: string }
-      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch]
+      required: [path, item, url, record, brief, rounds, at_cap, pull_request, continues, branch]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -100,7 +99,6 @@ nodes:
     model: large
     mutates_checkout: false
     with:
-      policy_defaults: "$facts.output.policy_defaults"
       url: "$facts.output.url"
       record: { from: "$facts.output.record" }
       brief: "$facts.output.brief"
@@ -204,7 +202,6 @@ nodes:
     model: large
     mutates_checkout: false
     with:
-      policy_defaults: "$facts.output.policy_defaults"
       url: "$facts.output.url"
       record: { from: "$facts.output.record" }
       rounds: { from: "$facts.output.rounds" }

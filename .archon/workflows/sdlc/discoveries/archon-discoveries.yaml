@@ -54,8 +54,7 @@ nodes:
             branch: { type: string }
             sha: { type: string }
           required: [branch, sha]
-        policy_defaults: { type: string }
-      required: [path, base, policy_defaults]
+      required: [path, base]
 
   # Reads code at the base commit with git show and git grep; the checkout stays as
   # it was. The engine fails this node if the agent modifies it.
@@ -66,7 +65,6 @@ nodes:
     model: large
     mutates_checkout: false
     with:
-      policy_defaults: "$facts.output.policy_defaults"
       base_sha: "$facts.output.base.sha"
       repo_host: "$INPUTS.repo_host"
       repo_path: "$INPUTS.repo_path"

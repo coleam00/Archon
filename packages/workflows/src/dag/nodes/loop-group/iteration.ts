@@ -284,6 +284,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     // enclosing tier and preset in place would run the group's model, attribute it to
     // the workflow's tier, and apply the workflow preset's effort to it.
     workflowLevelOptions: { ...ctx.workflowLevelOptions, workflowTier: run.workflowTier },
+    workflowPack: ctx.workflowPack,
     aiProfile: ctx.aiProfile,
     workflowPreset: run.workflowPreset,
     artifactsDir: ctx.artifactsDir,
