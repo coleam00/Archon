@@ -8,18 +8,39 @@ import type { DagNode, NodeOutput } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 
 /**
- * `true` when two structured-output payloads are semantically equal for the
- * purposes of cache invalidation. JSON.stringify is the comparison because
- * structured outputs are persisted as JSONB — they are guaranteed JSON-shaped
- * (objects/arrays/primitives, no cycles, no functions). `undefined` is treated
- * as the absent payload; an explicit `null` is a real value and is distinct
- * from absent.
+ * A copy of a JSON value with every object's keys in sorted order, so two values
+ * that differ only in key order serialize identically.
  */
-function structuredOutputsEqual(a: unknown, b: unknown): boolean {
+function withSortedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withSortedKeys);
+  if (value !== null && typeof value === 'object') {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      sorted[key] = withSortedKeys((value as Record<string, unknown>)[key]);
+    }
+    return sorted;
+  }
+  return value;
+}
+
+/**
+ * `true` when two structured-output payloads are semantically equal for the
+ * purposes of cache invalidation. Structured outputs are persisted as JSONB, so
+ * they are guaranteed JSON-shaped (objects/arrays/primitives, no cycles, no
+ * functions) — but PostgreSQL JSONB does not keep object key order (it stores
+ * keys sorted by length, then bytes). A prior output read back from the store
+ * therefore has a different key order from the same value just produced in
+ * memory, and a plain JSON.stringify comparison reported every resumed
+ * `always_run` producer as changed, invalidating its consumers and re-rendering
+ * answered attention waits. Compare with keys sorted instead. `undefined` is
+ * treated as the absent payload; an explicit `null` is a real value and is
+ * distinct from absent.
+ */
+export function structuredOutputsEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a === undefined || b === undefined) return false;
   try {
-    return JSON.stringify(a) === JSON.stringify(b);
+    return JSON.stringify(withSortedKeys(a)) === JSON.stringify(withSortedKeys(b));
   } catch {
     return false;
   }
