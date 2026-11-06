@@ -513,6 +513,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
+    `${problem}\nAvailable: list, run, test, sync, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
   );
 }
