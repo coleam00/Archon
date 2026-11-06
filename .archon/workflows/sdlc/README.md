@@ -541,10 +541,11 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   head commit and no check no round can run is still outstanding (a dated scope section records such a check as met; otherwise it asks for it once), `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. Before any `continue`, it compares the whole change with the contract's shape, and asks when a correction would add machinery the contract does not name. It never continues a pull request that changed nothing material since its last review, no commits or only cosmetic edits; that round ends as done or ask by the same rules. A Ready, green pull request whose only remaining check no round can run is asked about once rather than continued. It declares the pull request when the round left commits unpushed.
-  A `continue` starts the item's next round at once, a detached `archon-build-queue
-  --input number=<n>` on the run config and the `retriage_as` and
-  `round_limit` this run started with; if that launch fails, the item waits for the
-  next queue run.
+  A `continue` starts the item's next round at once by firing the operator's
+  build-queue binding (`build_queue_binding`) with the item's `number`, keyed so one
+  run starts at most one next round per item. The binding's resource, capacity and
+  overlap policy apply, as for a scheduled pass; when the round is skipped, or no
+  binding is set, the item waits for the next queue run.
   Facts reports the open pull request in the item's repository as the candidate, and
   the `route` agent declares whether the round continues it: unless a dated scope
   section or a recorded answer supersedes it. A continued pull request goes to
@@ -589,13 +590,12 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   a decision. The `ruling` script writes the
   choice's ruling and the person's words into the issue body as one dated "Current
   scope" section, reads it back, and records the answer: a `continue` choice starts
-  the item's next round at once, a detached `archon-build-queue --input number=<n>`
-  run on the run config (`--config-from-run`) and the `retriage_as` and
-  `round_limit` the answered run started with. A `ready` choice hands the pull
+  the item's next round at once through the build-queue binding, as a `continue`
+  decision does. A `ready` choice hands the pull
   request to the merge queue as it stands, as after a maintainer finished it by hand;
   the merge gate still checks it, and an item with no pull request refuses the answer.
-  A `park` choice stops working the item until a re-triage. If a continue's launch
-  fails, the item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
+  A `park` choice stops working the item until a re-triage. If a continue's next round
+  does not start, the item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
   re-triage starts it over.
 - **Record.** The work item's `facts.build` holds the item's status, which says who
   owns it: the build queue (`next`, `asking`), the merge queue (`ready`), or no queue
@@ -622,13 +622,22 @@ changes its checkout, so every run needs its own worktree:
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-build-queue",
-      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "inputs": {
+        "repo_host": "github.com",
+        "repo_path": "acme/widgets",
+        "build_queue_binding": "/srv/archon/bindings/widgets-build-queue.json"
+      },
       "isolation": { "kind": "worktree" }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
 }
 ```
+
+`build_queue_binding` names this file, so a run's follow-up rounds start through the
+same binding: one run of the queue holds a slot of the resource while it fires its
+follow-up, so the follow-up needs a free slot, or waits in line under `"overlap":
+"queue"`. Without the input, follow-ups wait for the next scheduled run.
 
 To start a run as soon as intake routes an item, add a label binding on the same
 resource, with intake's label selector narrowed to the route labels intake writes
@@ -764,12 +773,11 @@ then the project's file, whose lines win where the two conflict.
   the ruling. Without a brief, `other` records the text and parks until the build
   queue readies the item again; no build round starts. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
-  a sweep the answer starts at once (on the answered run's config and its
-  `limit`, `merge_method` and `retriage_as`) merges it once the
-  gate passes there; `return` writes the choice's
-  ruling into the issue body as a dated "Current scope" section and hands the item
-  back to the build queue, whose next round starts at once on the build queue's own
-  input defaults; `park` stops working it until the build queue readies it
+  a sweep the answer starts at once through the merge-queue binding
+  (`merge_queue_binding`) merges it once the gate passes there; `return` writes the
+  choice's ruling into the issue body as a dated "Current scope" section and hands the
+  item back to the build queue, whose next round starts at once through the
+  build-queue binding (`build_queue_binding`); `park` stops working it until the build queue readies it
   again. For an own PR, both `park` and `other` stop queue work until a later sweep
   observes a different head from the one asked about. The `other` answer stays on
   the work item as its ruling; it writes no issue body and starts no build round.
@@ -791,16 +799,31 @@ checkout, and the claim keeps two runs off the same item:
     "runAsUserId": "<archon user id>",
     "resource": "forge:github.com/acme/widgets:merge",
     "capacity": 1,
-    "overlap": "skip",
+    "overlap": "queue",
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-merge-queue",
-      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" }
+      "inputs": {
+        "repo_host": "github.com",
+        "repo_path": "acme/widgets",
+        "merge_queue_binding": "/srv/archon/bindings/widgets-merge-queue.json",
+        "build_queue_binding": "/srv/archon/bindings/widgets-build-queue.json"
+      }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
 }
 ```
+
+`merge_queue_binding` names this file and `build_queue_binding` the build queue's, so
+an answer's follow-up starts through the operator's own binding. The answering run
+still holds the merge queue's only slot when it fires the sweep, so the binding uses
+`"overlap": "queue"`: the sweep a "merge" answer fires waits in line and starts as soon
+as the answering run ends, at the host's next drain (a server drains every few seconds;
+a CLI-only host needs `archon trigger drain` scheduled). A scheduled tick that finds a
+sweep running also waits in line instead of being dropped. With `"overlap": "skip"`
+the answer's sweep would be skipped and the next scheduled sweep would merge the pull
+request. Without the inputs, follow-ups wait for the next scheduled run.
 
 ## Discoveries
 

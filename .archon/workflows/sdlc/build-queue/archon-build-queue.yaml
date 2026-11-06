@@ -42,6 +42,14 @@ inputs:
     description: >-
       After this many rounds since the item's scope last changed, the answer to a round
       that ends wanting another also judges whether the rounds converge.
+  build_queue_binding:
+    default: ""
+    description: >-
+      The absolute path of the operator's timer-binding config for this repository's
+      build queue. A decision that wants the item's next round now fires it with
+      `archon trigger fire`, so the round is admitted under that binding's resource,
+      capacity and overlap policy, at most once per decision. Empty starts no
+      follow-up; the next queue run picks the item up.
 
 returns: apply
 

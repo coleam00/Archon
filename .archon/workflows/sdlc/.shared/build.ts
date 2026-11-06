@@ -8,7 +8,8 @@
  */
 
 import { forgeSource, type QualifiedPr, sameRepo } from './forge.ts';
-import { note } from './io.ts';
+import { followUp } from './follow-up.ts';
+import { note, text } from './io.ts';
 import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
@@ -273,6 +274,20 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
 
 /** The reason of a round recorded at release: its run ended before it decided the round. */
 export const ENDED_UNDECIDED = 'ended_undecided';
+
+/**
+ * Start the item's next build-queue round now, through the operator's build-queue
+ * binding (`build_queue_binding`). One run starts at most one next round per item.
+ */
+export function nextRound(item: QualifiedPr, runId: string): string {
+  const { host, path } = item.repo;
+  return followUp(
+    text(process.env.INPUTS_BUILD_QUEUE_BINDING),
+    `build-round:${host}/${path}#${String(item.number)}:${runId}`,
+    { repo_host: host, repo_path: path, number: String(item.number) },
+    'its next round'
+  );
+}
 
 /**
  * The work item with the round a released build claim's run left: the pull request
