@@ -37,7 +37,7 @@ The implement-review-fix loop is one composed run; queues sit between stages, ne
 
 An unanswerable stop pauses as an attention item labelled with its stage and class, such as `build: scope` or `merge: base`.
 
-- Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by` shows which classes recur.
+- Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by label:build` shows which build classes recur.
 - Direction: a recurring class gets a small handler workflow that answers its items through the normal answer channel, without changing the main path or the engine.
 
 ## Smaller is the default
