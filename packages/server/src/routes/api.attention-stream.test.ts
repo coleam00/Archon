@@ -16,7 +16,11 @@ import type { AttentionWatchOptions } from '@archon/workflows/engine-port';
 import { attentionSseIds, registerAttentionStreamRoute } from './api.run-attention';
 
 // No registered codebases: `?project=` resolves only a project key.
-mock.module('@archon/core/db/codebases', () => ({ listCodebases: async () => [] }));
+const realCodebaseDb = { ...(await import('@archon/core/db/codebases')) };
+mock.module('@archon/core/db/codebases', () => ({
+  ...realCodebaseDb,
+  listCodebases: async () => [],
+}));
 
 const roots = trackTempRoots();
 
