@@ -150,9 +150,9 @@ export const MANAGED_CHATGPT_TOKEN_REJECTED =
 // Maps slugs that ChatGPT-plan accounts now reject (previously shipped as Archon
 // suggestions/defaults) to a current, plan-accepted slug to suggest instead.
 const CODEX_MODEL_FALLBACKS: Record<string, string> = {
-  'gpt-5.3-codex': 'gpt-5.6-sol',
-  'gpt-5.2-codex': 'gpt-5.6-sol',
-  'gpt-5.2': 'gpt-5.6-sol',
+  'gpt-5.3-codex': 'gpt-6.1-sol',
+  'gpt-5.2-codex': 'gpt-6.1-sol',
+  'gpt-5.2': 'gpt-6.1-sol',
 };
 
 // A display-only heuristic over vendor text: it decides whether the operator sees

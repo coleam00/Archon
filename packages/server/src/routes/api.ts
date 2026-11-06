@@ -2,7 +2,10 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
 import { loadConfig, type CloneOptions, type ConversationLockManager } from '@archon/core';
 import { webPushPayloadSchema } from '@archon/core/schemas/web-push';
-import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
+import {
+  createSqlWorkflowHost,
+  createSqlWorkflowOperations,
+} from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as codebaseDb from '@archon/core/db/codebases';
 import type { WebAdapter } from '../adapters/web';
@@ -23,7 +26,7 @@ import { registerMessageRoutes } from './api.messages';
 import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
 import { registerProviderKeyRoutes } from './api.provider-keys';
 import { registerProviderRoutes } from './api.providers';
-import { registerRunAttentionRoutes } from './api.run-attention';
+import { registerAttentionStreamRoute, registerRunAttentionRoutes } from './api.run-attention';
 import { registerRunCleanupRoutes, registerRunControlRoutes } from './api.run-control';
 import { registerRunGateRoutes } from './api.run-gates';
 import { registerUserAiPrefsRoutes } from './api.user-ai-prefs';
@@ -101,6 +104,10 @@ export function registerApiRoutes(
   registerWorkflowListRoute(app);
   registerWorkflowRunLaunchRoute(app, { webAdapter, dispatchToOrchestrator });
   registerRunAttentionRoutes(app, operations);
+  // A host per stream keeps registration free of I/O; the API-types generator registers too.
+  registerAttentionStreamRoute(app, (listener, options) =>
+    createSqlWorkflowHost().engine.watchAttention(listener, options)
+  );
   registerDashboardRunsRoute(app);
   registerConversationProcessingRoute(app, { lockManager });
   registerRunControlRoutes(app, { operations, dispatchToOrchestrator });

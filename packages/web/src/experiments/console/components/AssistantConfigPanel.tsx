@@ -323,7 +323,7 @@ export function AssistantConfigPanel(): ReactElement {
                   onChange={v => {
                     setModel(p.id, v);
                   }}
-                  placeholder="model (e.g. sonnet, gpt-5.6-sol) — blank = inherit"
+                  placeholder="model (e.g. sonnet, gpt-6.1-sol) — blank = inherit"
                   selectEmptyLabel="inherit"
                   ariaLabel={`${p.displayName} default model`}
                   className="w-full"

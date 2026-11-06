@@ -109,11 +109,13 @@ prose change's test-visible effects are checked on `dev`.
 
 CI runs the merge-sweep conformance test through `merge-sweep-contract`. The remaining
 tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-do not run on pull requests or pushes. Run them with `bun run test --plan pack` and
-`bun run validate --only workflow-fixtures` when you change `.archon/workflows/` or
-`.archon/scripts/`; a single test file runs with
-`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI, dispatch the
-Test Suite workflow with `pack-tests` or `pack-fixtures` set:
+run in the `test-pack` job when a pull request or an unproven push changes the pack or a
+contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
+those paths. Run them locally with `bun run test --plan pack` and
+`bun run validate --only workflow-fixtures`; a single test file runs with
+`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI on a branch
+without a pull request, dispatch the Test Suite workflow with `pack-tests` or
+`pack-fixtures` set:
 `gh workflow run test.yml --ref <branch> -f pack-tests=true -f pack-fixtures=true`.
 
 Local validation has no fixed duration: tests and typed analysis dominate, and machine

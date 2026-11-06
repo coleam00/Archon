@@ -16,6 +16,7 @@ import {
   attentionQueueCountsSchema,
   attentionQueueItemSchema,
 } from '@archon/workflows/attention-queue';
+import { attentionStreamLineSchema } from '@archon/workflows/attention-watch';
 import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
 import {
   workflowDefinitionSchema as engineWorkflowDefinitionSchema,
@@ -369,6 +370,17 @@ export const attentionQueueQuerySchema = z.object({
   sort: z.string().optional(),
   countBy: z.string().optional(),
 });
+
+/** GET /api/runs/attention/stream query: the list query without its ordering and counting. */
+export const attentionStreamQuerySchema = attentionQueueQuerySchema.pick({
+  project: true,
+  all: true,
+  label: true,
+});
+
+/** One GET /api/runs/attention/stream event's data: the `--watch --json` line. */
+export const attentionStreamLineResponseSchema =
+  attentionStreamLineSchema.openapi('AttentionStreamLine');
 
 /**
  * GET /api/runs/attention list response. `items` is the queue; `runs` holds the same runs

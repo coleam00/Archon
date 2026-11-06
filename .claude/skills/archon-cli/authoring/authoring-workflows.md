@@ -182,7 +182,7 @@ checked by outcome, through dry-run fixtures (`archon workflow test`) and real r
 never by a test that pins a prompt's wording, the YAML's shape or the route a run
 takes. Do not retest what the engine owns (`when:`, includes, loops, output
 validation). In an Archon checkout, `.archon/workflow-language-constitution.md` and
-`.archon/workflows/sdlc/CONSTITUTION.md` (sections 1 to 5 and 13) state these rules
+`.archon/workflows/sdlc/CONSTITUTION.md` (its sections on agents, scripts and tests) state these rules
 in full.
 
 ## Start simple, then adapt to what runs teach

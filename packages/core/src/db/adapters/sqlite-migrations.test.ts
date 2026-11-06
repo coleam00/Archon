@@ -8,6 +8,7 @@ import { mkdtemp } from 'fs/promises';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { LEGACY_VENDOR_ALIASES } from '@archon/providers/credential-catalog';
 import { getSchemaSQL } from '../bundled-schema';
+import { runEventsSql } from '../run-events-sql';
 import { metricRecordsSql } from '../workflow-metrics';
 import { SqliteAdapter, sqliteDialect } from './sqlite';
 import { isSqliteSchemaCurrent } from './sqlite-schema-state';
@@ -537,5 +538,27 @@ describe('idx_workflow_events_metrics', () => {
       detail: string;
     }[];
     expect(plan.map(row => row.detail).join('\n')).toContain('idx_workflow_events_metrics');
+  });
+});
+
+describe('idx_workflow_events_run_type', () => {
+  test('is created on an existing database and serves per-run event reads', async () => {
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
+    try {
+      raw.run('DROP INDEX idx_workflow_events_run_type');
+    } finally {
+      raw.close();
+    }
+    expect(raw_indexes(path)).not.toContain('idx_workflow_events_run_type');
+
+    await new SqliteAdapter(path).close();
+
+    expect(raw_indexes(path)).toContain('idx_workflow_events_run_type');
+    const plan = raw_query(path, `EXPLAIN QUERY PLAN ${runEventsSql('*', 2, 2)}`) as {
+      detail: string;
+    }[];
+    expect(plan.map(row => row.detail).join('\n')).toContain('idx_workflow_events_run_type');
   });
 });

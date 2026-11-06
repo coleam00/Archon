@@ -32,7 +32,12 @@ export interface RunStepIndex {
   treeSteps(runId: string): RunStep[];
 }
 
-const RUN_CHUNK = 500;
+/**
+ * A SQLite store answers each call synchronously, and a server answers nothing else until
+ * the call returns. Small chunks with a yield between them keep that wait short: the
+ * terminal events of a few hundred runs take seconds to read from a cold disk.
+ */
+const RUN_CHUNK = 20;
 const CHILD_PAGE = 500;
 
 /**
@@ -48,6 +53,7 @@ export async function readTerminalEvents(
 ): Promise<TerminalEvents> {
   const missing = [...new Set(runIds)].filter(id => !known.has(id));
   for (let start = 0; start < missing.length; start += RUN_CHUNK) {
+    await new Promise(resolve => setImmediate(resolve));
     const chunk = missing.slice(start, start + RUN_CHUNK);
     const byRun = await store.listEventsForRuns(chunk, ['node_completed', 'node_failed']);
     for (const id of chunk) known.set(id, latestPerPosition(byRun.get(id) ?? []));

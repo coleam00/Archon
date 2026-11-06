@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
@@ -51,6 +51,45 @@ describe('a bun test process never inherits the operator database', () => {
         expect(existsSync(join(operatorHome, 'archon.db'))).toBe(false);
       } finally {
         await removeTempTree(operatorHome);
+      }
+    },
+    testTimeout(30_000)
+  );
+});
+
+describe('a bun test process never reads the operator git config', () => {
+  it(
+    'gives git a private global config, whatever the shell exports',
+    async () => {
+      const operatorRoot = mkdtempSync(join(tmpdir(), 'archon-operator-gitconfig-'));
+      const operatorConfig = join(operatorRoot, '.gitconfig');
+      let privateConfig = '';
+      try {
+        const child = Bun.spawn(
+          bunTestCommand([join(import.meta.dir, 'fixtures', 'git-global-config.fixture.ts')]),
+          {
+            cwd: join(repoRoot, 'packages', 'core'),
+            env: bunTestEnv({ ...process.env, GIT_CONFIG_GLOBAL: operatorConfig }),
+            stdout: 'pipe',
+            stderr: 'pipe',
+          }
+        );
+        const [stdout, stderr, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        expect({ code, stderr }).toMatchObject({ code: 0 });
+        const report = stdout.split('\n').find(line => line.includes('gitGlobalConfig'));
+        expect(report).toBeDefined();
+        const { gitGlobalConfig } = JSON.parse(report ?? '{}') as { gitGlobalConfig: string };
+        expect(gitGlobalConfig).not.toBe(operatorConfig);
+        expect(existsSync(operatorConfig)).toBe(false);
+        privateConfig = gitGlobalConfig;
+      } finally {
+        await removeTempTree(operatorRoot);
+        // The child's exit does not run its cleanup hook under `bun test`.
+        if (privateConfig) rmSync(privateConfig, { force: true });
       }
     },
     testTimeout(30_000)
