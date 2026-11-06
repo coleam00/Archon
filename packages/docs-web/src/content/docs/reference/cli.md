@@ -1655,25 +1655,33 @@ archon isolation cleanup --merged --include-closed
 Merge detection uses three signals in order: git branch ancestry (fast-forward / merge commit),
 patch equivalence (single-commit squash-merge via `git cherry`), and GitHub PR state via the
 `gh` CLI. A squash merge of more than one commit is invisible to git here, so PR state is what
-recognises it. A merged or closed PR counts only while neither the worktree's HEAD nor the
-local branch has anything past the PR's head commit: run branch names get reused, and new
+recognises it. When the branch-name lookup finds no PR or a terminal PR that cannot
+establish reclamation, cleanup discovers PRs associated with a local commit, including
+work published under a different branch name.
+One merged PR head must cover every existing local tip; coverage from different PRs
+is never combined. A merged or closed branch PR counts only while neither the worktree's
+HEAD nor the local branch has anything past the PR's head commit: run branch names get reused, and new
 commits on a reused branch or a detached HEAD are not covered by the old PR, so that
 environment is kept. The same goes for a merge git detects: the worktree's HEAD must be
 merged into the base too, not just the branch. A PR head commit pushed from somewhere
 else is fetched from the remote before that comparison; if the fetch fails, the environment is
 kept and reported as a failed merge check. The `gh` CLI is optional; without it, only git
-signals are used. If `gh` is installed but the lookup fails (auth, rate limit), the environment
-is kept and reported as `PR state lookup failed`. The scheduled
+signals are used. If `gh` is installed but the lookup fails (auth, rate limit, unknown
+commit, or unreadable response), the environment is kept and reported as `PR state lookup failed`. The scheduled
 sweep uses the same three signals, so both paths agree on what counts as merged. Each
 codebase's output names the base ref the comparison used: the configured
 `worktree.baseBranch`, or the git-detected default branch when that is unset.
 
 Both git signals read the local branch ref. When that ref is gone but the worktree remains,
-the PR decides, checked against the worktree's HEAD; if no PR answers for the branch either, the environment is kept and reported
-as `merge state unverifiable` rather than removed on an unverified guess.
+the PR decides, checked against the worktree's HEAD; if neither branch nor commit discovery
+finds a PR, the environment is kept and reported as `merge state unverifiable` rather than removed on an unverified guess.
 
-By default, branches with a **CLOSED** PR are skipped. Pass `--include-closed` to clean
-those up as well. Branches with an **OPEN** PR are always skipped.
+By default, a **CLOSED** PR does not authorize removal. Pass `--include-closed` to
+allow it. This option applies to the branch-name lookup, not closed PRs
+associated only through a commit. Branches with an **OPEN** PR are always skipped.
+Manual `--merged` cleanup also reports ordinary unmerged environments as
+`no merged PR or git proof covers all local tips`; scheduled stale cleanup retains
+its existing age and unpushed-commit checks.
 
 A running, pending, or paused run keeps its environment in both modes, regardless of
 age or merge state. The scheduled sweep and chat `/worktree cleanup` apply the same

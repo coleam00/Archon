@@ -166,6 +166,7 @@ mock.module('@archon/paths', () => ({
 
 // Every mock's default is installed by the top-level beforeEach, so no test sees
 // another's leftovers.
+export const mockExecFileAsync = mock<typeof Git.execFileAsync>();
 export const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChangesStrict>();
 export const mockWorktreeExists = mock<typeof Git.worktreeExists>();
 export const mockGetDefaultBranch = mock<typeof Git.getDefaultBranch>();
@@ -182,7 +183,7 @@ mock.module('@archon/git', () => ({
     linkedWorktree: false,
   }),
   countCommitsMissingFromRemotes: mockCountCommitsMissingFromRemotes,
-  execFileAsync: mock(() => Promise.resolve({ stdout: '', stderr: '' })),
+  execFileAsync: mockExecFileAsync,
   hasUncommittedChangesStrict: mockHasUncommittedChanges,
   worktreeExists: mockWorktreeExists,
   getDefaultBranch: mockGetDefaultBranch,
@@ -197,6 +198,7 @@ mock.module('@archon/git', () => ({
 }));
 
 export const mockDestroy = mock<IIsolationProvider['destroy']>();
+export const mockGetPrsForCommit = mock<typeof Isolation.getPrsForCommit>();
 export const mockGetPrState = mock<typeof Isolation.getPrState>();
 export const mockContainerDestroy = mock<ContainerBackend['destroy']>();
 export const mockContainerOptions =
@@ -231,6 +233,7 @@ mock.module('@archon/isolation', () => ({
     destroy: mockDestroy,
   }),
   getPrState: mockGetPrState,
+  getPrsForCommit: mockGetPrsForCommit,
   ContainerBackend: MockContainerBackend,
 }));
 
@@ -332,6 +335,8 @@ export function resetCleanupMocks(): void {
     directoryClean: true,
     warnings: [],
   });
+  mockExecFileAsync.mockReset().mockResolvedValue({ stdout: 'a'.repeat(40), stderr: '' });
+  mockGetPrsForCommit.mockReset().mockResolvedValue({ state: 'NONE' });
   mockGetPrState.mockReset().mockResolvedValue(NO_PR);
   mockContainerDestroy.mockReset().mockResolvedValue(undefined);
   mockContainerOptions.mockReset();

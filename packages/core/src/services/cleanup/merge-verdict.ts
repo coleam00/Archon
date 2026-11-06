@@ -1,6 +1,7 @@
-import { getPrState } from '@archon/isolation';
+import { getPrState, getPrsForCommit } from '@archon/isolation';
 import type { PrLookup } from '@archon/isolation';
 import {
+  execFileAsync,
   getDefaultBranch,
   isBranchMerged,
   isPatchEquivalent,
@@ -118,25 +119,55 @@ async function gitProvesMerged(input: MergeJudgmentInput, tips: LocalTips): Prom
 }
 
 async function judgeByPr(input: MergeJudgmentInput, tips: LocalTips): Promise<MergeVerdict> {
-  const { repoPath, branchName, prStateCache, includeClosed, remote, worktreePath } = input;
+  const { repoPath, branchName, prStateCache, includeClosed, remote } = input;
   const pr = await getPrState(branchName, repoPath, prStateCache, remote);
   if (pr.state === 'UNAVAILABLE') return 'pr-unavailable';
-  if (pr.state === 'NONE') return tips.refExists ? 'unmerged' : 'unjudgeable';
   if (pr.state === 'OPEN') return 'open-pr';
-  if (pr.state === 'CLOSED' && !includeClosed) return 'unmerged';
-  // isRevCoveredBy fetches the PR head when it was pushed from elsewhere, and throws
-  // when that fetch or the comparison fails; the callers report it as a failed merge
-  // check and keep the worktree.
-  if (tips.hasWorktree && !(await isRevCoveredBy(worktreePath, 'HEAD', pr.headSha, remote))) {
-    return 'unmerged';
-  }
   if (
-    tips.refExists &&
-    !(await isRevCoveredBy(repoPath, `refs/heads/${branchName}`, pr.headSha, remote))
+    (pr.state === 'MERGED' || (pr.state === 'CLOSED' && includeClosed)) &&
+    (await prCoversTips(input, tips, pr.headSha))
   ) {
-    return 'unmerged';
+    return pr.state === 'CLOSED' ? 'pr-closed' : 'merged';
   }
-  return pr.state === 'CLOSED' ? 'pr-closed' : 'merged';
+  const commitVerdict = await judgeByCommit(input, tips);
+  return commitVerdict ?? (pr.state !== 'NONE' || tips.refExists ? 'unmerged' : 'unjudgeable');
+}
+
+async function judgeByCommit(
+  input: MergeJudgmentInput,
+  tips: LocalTips
+): Promise<MergeVerdict | null> {
+  if (!tips.hasWorktree && !tips.refExists) return null;
+  const { repoPath, branchName, remote, worktreePath } = input;
+  const path = tips.hasWorktree ? worktreePath : repoPath;
+  const rev = tips.hasWorktree ? 'HEAD' : `refs/heads/${branchName}`;
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', path, 'rev-parse', '--verify', `${rev}^{commit}`],
+    { timeout: 10000 }
+  );
+  const candidates = await getPrsForCommit(stdout.trim(), repoPath, remote);
+  if (candidates.state === 'UNAVAILABLE') return 'pr-unavailable';
+  if (candidates.state === 'NONE') return null;
+  for (const candidate of candidates.prs) {
+    if (candidate.state === 'MERGED' && (await prCoversTips(input, tips, candidate.headSha)))
+      return 'merged';
+  }
+  return candidates.prs.some(candidate => candidate.state === 'OPEN') ? 'open-pr' : null;
+}
+
+async function prCoversTips(
+  input: MergeJudgmentInput,
+  tips: LocalTips,
+  headSha: string
+): Promise<boolean> {
+  const { repoPath, branchName, remote, worktreePath } = input;
+  // Fetch/comparison failures throw: an unanswered inspection must keep the environment.
+  if (tips.hasWorktree && !(await isRevCoveredBy(worktreePath, 'HEAD', headSha, remote)))
+    return false;
+  return (
+    !tips.refExists || (await isRevCoveredBy(repoPath, `refs/heads/${branchName}`, headSha, remote))
+  );
 }
 
 /** The operator-facing reason a kept environment is worth reporting, or null when it is ordinary unmerged work. */

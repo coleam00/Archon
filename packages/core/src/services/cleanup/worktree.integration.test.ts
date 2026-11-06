@@ -937,6 +937,83 @@ test.each(['worktreeRemoved', 'directoryClean'] as const)(
   }
 );
 
+test.each(['covered', 'head-ahead', 'branch-ahead', 'dirty', 'paused'] as const)(
+  'commit-associated squash merge with a different published name: %s',
+  async mode => {
+    await git(repo, 'remote', 'rename', 'upstream', 'origin');
+    await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    for (const value of ['first', 'second', 'third']) {
+      await writeFile(join(env.working_path, 'feature'), value);
+      await git(env.working_path, 'add', 'feature');
+      await git(env.working_path, 'commit', '-qm', value);
+    }
+    const prHead = await git(env.working_path, 'rev-parse', 'HEAD');
+    await git(env.working_path, 'push', '-q', 'origin', 'HEAD:refs/heads/published-feature');
+    await git(repo, 'merge', '--squash', env.branch_name);
+    await git(repo, 'commit', '-qm', 'squashed feature');
+    await git(repo, 'push', '-q', 'origin', 'main');
+    await git(env.working_path, 'reset', '--hard', 'HEAD~1');
+    if (mode === 'head-ahead' || mode === 'branch-ahead') {
+      await git(env.working_path, 'reset', '--hard', prHead);
+      await git(env.working_path, 'commit', '--allow-empty', '-qm', 'unpublished work');
+      if (mode === 'branch-ahead') await git(env.working_path, 'checkout', '--detach', prHead);
+    }
+    if (mode === 'dirty') await writeFile(join(env.working_path, 'feature'), 'operator edits');
+    if (mode === 'paused') await seedRunAt(env.working_path, 'paused');
+    expect(
+      await gitModule.isBranchMerged(
+        toRepoPath(repo),
+        toBranchName(env.branch_name),
+        toBranchName('origin/main')
+      )
+    ).toBe(false);
+    expect(
+      await gitModule.isPatchEquivalent(
+        toRepoPath(repo),
+        toBranchName(env.branch_name),
+        toBranchName('origin/main')
+      )
+    ).toBe(false);
+
+    const originalExec = gitModule.execFileAsync;
+    const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+      async (file, args, options) => {
+        if (file === 'git' && args.includes('get-url'))
+          return { stdout: 'https://github.com/test/repo.git', stderr: '' };
+        if (file === 'gh') {
+          const payload =
+            args[0] === 'pr'
+              ? []
+              : args[0] === 'repo'
+                ? { nameWithOwner: 'test/repo' }
+                : [
+                    [
+                      {
+                        state: 'closed',
+                        merged_at: '2026-01-01T00:00:00Z',
+                        head: { sha: prHead },
+                        base: { repo: { full_name: 'test/repo' } },
+                      },
+                    ],
+                  ];
+          return { stdout: JSON.stringify(payload), stderr: '' };
+        }
+        return originalExec(file, args, options);
+      }
+    );
+    try {
+      const result = await cleanupMergedWorktrees(codebaseId, repo);
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual(mode === 'covered' ? [env.branch_name] : []);
+      expect(existsSync(env.working_path)).toBe(mode !== 'covered');
+      expect(await status()).toBe(mode === 'covered' ? 'destroyed' : 'active');
+      if (mode !== 'covered') expect(result.skipped).toHaveLength(1);
+    } finally {
+      exec.mockRestore();
+    }
+  }
+);
+
 test('merged cleanup retires locally and reports the retained published branch', async () => {
   await git(repo, 'remote', 'rename', 'upstream', 'origin');
   await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');

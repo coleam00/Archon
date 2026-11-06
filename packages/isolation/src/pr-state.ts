@@ -130,3 +130,114 @@ export async function getPrState(
   cache?.set(cacheKey, result);
   return result;
 }
+
+export type CommitPrLookup =
+  | Extract<PrLookup, { state: 'NONE' | 'UNAVAILABLE' }>
+  | { state: 'FOUND'; prs: readonly Extract<PrLookup, { headSha: string }>[] };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isGitHubRemote(remoteUrl: string): boolean {
+  if (/^(?:[^@/]+@)?github\.com:/i.test(remoteUrl)) return true;
+  try {
+    return new URL(remoteUrl).hostname.toLowerCase() === 'github.com';
+  } catch {
+    return false;
+  }
+}
+
+function parseCommitPr(pr: unknown, repository: string): Extract<PrLookup, { headSha: string }> {
+  if (
+    !isRecord(pr) ||
+    (pr.state !== 'open' && pr.state !== 'closed') ||
+    !(
+      pr.merged_at === null ||
+      (typeof pr.merged_at === 'string' && Number.isFinite(Date.parse(pr.merged_at)))
+    ) ||
+    (pr.state === 'open' && pr.merged_at !== null) ||
+    !isRecord(pr.head) ||
+    typeof pr.head.sha !== 'string' ||
+    !/^[a-f0-9]{40}$/i.test(pr.head.sha) ||
+    !isRecord(pr.base) ||
+    !isRecord(pr.base.repo) ||
+    typeof pr.base.repo.full_name !== 'string' ||
+    pr.base.repo.full_name.toLowerCase() !== repository.toLowerCase()
+  ) {
+    throw new Error('Invalid commit-associated PR');
+  }
+  return {
+    state: pr.merged_at !== null ? 'MERGED' : pr.state === 'closed' ? 'CLOSED' : 'OPEN',
+    headSha: pr.head.sha,
+  };
+}
+
+function parseCommitPrs(stdout: string, repository: string): CommitPrLookup {
+  const pages: unknown = JSON.parse(stdout);
+  if (!Array.isArray(pages) || pages.length === 0) throw new Error('Missing PR pages');
+  const prs = pages.flatMap((page: unknown) => {
+    if (!Array.isArray(page)) throw new Error('Invalid PR page');
+    return page.map((pr: unknown) => parseCommitPr(pr, repository));
+  });
+  return prs.length ? { state: 'FOUND', prs } : { state: 'NONE' };
+}
+
+/** Associations are candidates only; callers must prove local tips against a candidate head. */
+export async function getPrsForCommit(
+  sha: string,
+  repoPath: RepoPath,
+  remote = 'origin'
+): Promise<CommitPrLookup> {
+  let stage: 'remote' | 'repository' | 'pulls' = 'remote';
+  try {
+    const { stdout: remoteOutput } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'remote', 'get-url', remote],
+      { timeout: 10000 }
+    );
+    const remoteUrl = remoteOutput.trim();
+    if (!isGitHubRemote(remoteUrl)) return { state: 'NONE' };
+    stage = 'repository';
+    const { stdout: repositoryOutput } = await execFileAsync(
+      'gh',
+      ['repo', 'view', remoteUrl, '--json', 'nameWithOwner'],
+      { timeout: 15000, cwd: repoPath }
+    );
+    const repository: unknown = JSON.parse(repositoryOutput);
+    if (
+      !isRecord(repository) ||
+      typeof repository.nameWithOwner !== 'string' ||
+      !/^[\w.-]+\/[\w.-]+$/.test(repository.nameWithOwner)
+    ) {
+      throw new Error('Invalid repository identity');
+    }
+    stage = 'pulls';
+    const { stdout } = await execFileAsync(
+      'gh',
+      [
+        'api',
+        '--hostname',
+        'github.com',
+        `repos/${repository.nameWithOwner}/commits/${sha}/pulls?per_page=100`,
+        '--paginate',
+        '--slurp',
+      ],
+      { timeout: 15000, cwd: repoPath }
+    );
+    return parseCommitPrs(stdout, repository.nameWithOwner);
+  } catch (error) {
+    const code = isRecord(error) ? error.code : undefined;
+    if (stage !== 'remote' && code === 'ENOENT') return { state: 'NONE' };
+    // Exec errors can embed remote credentials and response bodies; log only the stage and code.
+    getLog().warn(
+      {
+        repoPath,
+        stage,
+        code: typeof code === 'string' || typeof code === 'number' ? code : undefined,
+      },
+      'isolation.commit_pr_lookup_failed'
+    );
+    return { state: 'UNAVAILABLE' };
+  }
+}

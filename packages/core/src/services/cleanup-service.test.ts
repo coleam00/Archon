@@ -43,6 +43,8 @@ import {
   mockCountCommitsMissingFromRemotes,
   mockDestroy,
   mockGetPrState,
+  mockGetPrsForCommit,
+  mockExecFileAsync,
   mockContainerDestroy,
   mockListAllActiveWithCodebase,
   mockMarkWorktreeDestroyed,
@@ -414,6 +416,46 @@ describe('runScheduledCleanup', () => {
       'origin'
     );
   });
+
+  test('scheduled cleanup uses commit discovery when published under another name', async () => {
+    scheduledSweepFinds(sweptWorktreeEnv('different-name'));
+    mockWorktreeExists.mockResolvedValue(true);
+    mockGetPrsForCommit.mockResolvedValue({
+      state: 'FOUND',
+      prs: [{ state: 'MERGED', headSha: PR_HEAD_SHA }],
+    });
+    const report = await runScheduledCleanup();
+    expect(report.removed).toEqual(['env-different-name (merged)']);
+    expect(mockGetPrsForCommit).toHaveBeenCalledWith('a'.repeat(40), '/workspace/repo', 'origin');
+  });
+
+  test.each(['unavailable', 'resolution', 'coverage'] as const)(
+    'scheduled fallback %s never reaches stale deletion',
+    async failure => {
+      scheduledSweepFinds(sweptWorktreeEnv('old-fallback', { created_at: daysAgo(30) }));
+      mockWorktreeExists.mockResolvedValue(true);
+      if (failure === 'unavailable')
+        mockGetPrsForCommit.mockResolvedValue({ state: 'UNAVAILABLE' });
+      else if (failure === 'resolution')
+        mockExecFileAsync.mockRejectedValue(new Error('cannot resolve'));
+      else {
+        mockGetPrsForCommit.mockResolvedValue({
+          state: 'FOUND',
+          prs: [{ state: 'MERGED', headSha: PR_HEAD_SHA }],
+        });
+        mockIsRevCoveredBy.mockRejectedValue(new Error('cannot compare'));
+      }
+      const report = await runScheduledCleanup();
+      expect(report.removed).toEqual([]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockGetLastCommitDate).not.toHaveBeenCalled();
+      if (failure === 'unavailable')
+        expect(report.skipped).toEqual([
+          { id: 'env-old-fallback', reason: 'PR state lookup failed — merge state unverifiable' },
+        ]);
+      else expect(report.errors).toHaveLength(1);
+    }
+  );
 
   // Run branch names come from the run identifier, so a re-run reuses the name of a
   // branch whose earlier PR already merged. The merged PR does not cover commits the

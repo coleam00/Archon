@@ -107,7 +107,10 @@ export async function cleanupMergedWorktrees(
     if (verdict === 'merged' || verdict === 'pr-closed') {
       await removeMergedEnvironment(env, verdict, sweep);
     } else if (verdict) {
-      const skipReason = skipReasonFor(verdict);
+      const skipReason =
+        verdict === 'unmerged'
+          ? 'no merged PR or git proof covers all local tips'
+          : skipReasonFor(verdict);
       if (skipReason)
         sweep.result.skipped.push({ branchName: env.branch_name, reason: skipReason });
     }
