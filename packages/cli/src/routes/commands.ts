@@ -93,6 +93,8 @@ export async function runState({
       ...(values.install === true ? { install: true } : {}),
       ...(values.raw === true ? { raw: true } : {}),
       ...(values.values === true ? { values: true } : {}),
+      ...(values.lease === true ? { lease: true } : {}),
+      ...(values['release-lease'] === true ? { releaseLease: true } : {}),
     },
     { storeKind }
   );
@@ -145,7 +147,7 @@ export async function runTrigger({
       limit: typeof values.limit === 'string' ? values.limit : undefined,
       yes: values.yes === true,
     },
-    (requestId, hostId) => spawnAdmitted(host, requestId, hostId)
+    { dispatch: (requestId, hostId) => spawnAdmitted(host, requestId, hostId) }
   );
   return 0;
 }
@@ -228,7 +230,9 @@ export async function runSetup({
 
 export async function runProject({ positionals, json }: CliRouteContext): Promise<number> {
   const { projectCommand } = await loadRoute(() => import('../commands/project'), {
-    providers: false,
+    // `project config` validates assistant settings and resolves tier defaults
+    // against the provider registry, as the server does.
+    ...(positionals[1] === 'config' ? {} : { providers: false as const }),
     database: await usesDatabaseStore(),
   });
   return await projectCommand(positionals.slice(1), json);

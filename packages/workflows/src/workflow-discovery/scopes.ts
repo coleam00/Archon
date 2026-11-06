@@ -97,7 +97,7 @@ export async function loadBundledScope(
  * pack has a key and no settings: its project settings file may set nothing.
  */
 function bundledPack(owner: BundledWorkflowOwner | undefined): WorkflowPack | undefined {
-  return owner === undefined ? undefined : { key: owner.pack };
+  return owner === undefined ? undefined : { key: owner.pack, source: 'bundled' };
 }
 
 /**

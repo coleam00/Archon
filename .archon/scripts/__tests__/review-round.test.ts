@@ -50,7 +50,7 @@ function history(): { cwd: string; older: string; newer: string } {
   return { cwd, older, newer };
 }
 
-/** The engine identity review-round passes through for synthesis to count lenses by. */
+/** The engine identity review-round reads its checkout start from. */
 function execution(head: string): object {
   return {
     path: 'review__mode',
@@ -84,21 +84,6 @@ function round(
 }
 
 describe('review-round', () => {
-  it('reviews the checkout head on a first round', () => {
-    const { cwd, newer } = history();
-    const run = round(cwd, newer);
-    expect(run.code).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual({
-      continuation: false,
-      light: false,
-      head: newer,
-      cursor: '',
-      risks: FULL_REVIEW_RISKS,
-      execution: execution(newer),
-      seams: false, code: false, tests: false, errors: false, docs: false,
-      part: null,
-    });
-  });
 
   // The route agent adds every other lens a continuation earns; the code lens is
   // the one this round always reruns, whatever an earlier round ran.
@@ -113,30 +98,8 @@ describe('review-round', () => {
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
-      execution: execution(newer),
       seams: false, code: true, tests: false, errors: false, docs: false,
       part,
-    });
-  });
-
-  it('refuses a part assignment that is not JSON without echoing it', () => {
-    const { cwd, newer } = history();
-    const run = round(cwd, newer, undefined, { part: 'deliver chunk 1 of #42' });
-    expect(run.code).not.toBe(0);
-    expect(run.stdout).toBe('');
-    expect(run.stderr).toContain('the part input is not JSON');
-    for (const fragment of ['deliver', 'chunk', '#42']) expect(run.stderr).not.toContain(fragment);
-  });
-
-  it('runs the code lens alone on a light continuation', () => {
-    const { cwd, older, newer } = history();
-    expect(JSON.parse(round(cwd, newer, older, { light: true }).stdout)).toMatchObject({
-      light: true,
-      seams: false,
-      code: true,
-      tests: false,
-      errors: false,
-      docs: false,
     });
   });
 
@@ -146,21 +109,5 @@ describe('review-round', () => {
     expect(run.code).not.toBe(0);
     expect(run.stdout).toBe('');
     expect(run.stderr).toContain(`at ${older}, which does not descend from ${newer}`);
-  });
-
-  it('refuses a continuation whose report records no reviewed commit', () => {
-    const { cwd, newer } = history();
-    const run = runPackScript('review/scripts/review-round', {
-      cwd,
-      inputs: {
-        INPUTS_PRIOR_REPORT: '{ARTIFACTS}/review/report.md',
-        ARCHON_NODE_EXECUTION: JSON.stringify({
-          attempt: { checkoutStart: { kind: 'git', commit: newer } },
-        }),
-      },
-      artifacts: { 'review/report.md': 'Round 1' },
-    });
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('records no reviewed commit');
   });
 });

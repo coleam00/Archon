@@ -77,6 +77,8 @@ export const cliArgOptions: CliArgOptions = {
   install: { type: 'boolean' },
   raw: { type: 'boolean' },
   values: { type: 'boolean' },
+  lease: { type: 'boolean' },
+  'release-lease': { type: 'boolean' },
   timeout: { type: 'string' },
   follow: { type: 'boolean' },
   format: { type: 'string' },

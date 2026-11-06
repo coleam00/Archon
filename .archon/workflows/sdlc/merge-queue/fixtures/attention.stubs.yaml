@@ -14,7 +14,6 @@ facts:
       record: null
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
-  policy_defaults: "/stub/policy"
 sweep:
   decisions:
     - number: 42
@@ -39,7 +38,10 @@ record:
   merged: []
   summary: "stub: asked about PR 42"
   attention: "stub: the attention message"
-  options: [{ id: merge, label: "stub: merge it" }, { id: park, label: "stub: park it" }]
+  options:
+    - { id: merge, label: "stub: merge it", does: "stub: merges it", value: { id: merge, label: "stub: merge it", does: "stub: merges it", effect: merge, ruling: "" } }
+    - { id: park, label: "stub: park it", does: "stub: parks it", value: { id: park, label: "stub: park it", does: "stub: parks it", effect: park, ruling: "" } }
+  recommendation: { option: merge, why: "stub: why", confidence: medium }
   class: pr
   asked: { by: pr, attention: {} }
 ask: { decision: merge, text: "" }

@@ -15,7 +15,6 @@ facts:
       record: null
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
-  policy_defaults: "/stub/policy"
 sweep:
   decisions:
     - { number: 42, action: wait, class: clear, head: "1111111", reran: false, reason: "stub: dev is red, so nothing merges", brief: "", attention: null }
@@ -35,7 +34,9 @@ record:
   merged: []
   summary: "stub: dev is red; merged nothing"
   attention: "stub: the attention message"
-  options: [{ id: hold, label: "stub: hold merges" }]
+  options:
+    - { id: hold, label: "stub: hold merges", does: "stub: holds merges", value: { id: hold, label: "stub: hold merges", does: "stub: holds merges", effect: hold, ruling: "" } }
+  recommendation: { option: hold, why: "stub: why", confidence: high }
   class: base
   asked: { by: base, attention: {} }
 ask: { decision: hold, text: "" }

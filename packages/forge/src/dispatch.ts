@@ -7,6 +7,7 @@ import {
   isMutationRequest,
   mutationTarget,
   mutationAttempt,
+  PR_VIEW_ANY_STATE,
   type ForgeError,
   type ForgeRequest,
   type ForgeResponse,
@@ -258,6 +259,17 @@ function refuseBeforeRun(request: ForgeRequest, metadata: PluginMetadata): Forge
     return {
       kind: 'unsupported_op',
       message: `plugin ${metadata.name} does not support ${request.op}`,
+    };
+  }
+  if (
+    request.op === 'pr.view' &&
+    request.selector.kind === 'head' &&
+    request.selector.state === 'any' &&
+    !metadata.capabilities.includes(PR_VIEW_ANY_STATE)
+  ) {
+    return {
+      kind: 'unsupported_op',
+      message: `plugin ${metadata.name} does not support pr.view of a head in any state`,
     };
   }
   if (request.op !== 'pr.merge') return undefined;

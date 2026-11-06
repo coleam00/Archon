@@ -32,12 +32,13 @@ import {
   wantedLabels,
 } from './labels.ts';
 import {
-  claimDisposition,
-  runStatus,
+  claimEnded,
+  type Lease,
   stateAppend,
   stateDocuments,
   stateGet,
   statePut,
+  statePutClaimed,
 } from './state.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
@@ -595,12 +596,13 @@ export interface Read {
   readonly name: string;
   readonly revision: number;
   readonly doc: WorkItem;
+  readonly lease: Lease | null;
 }
 
 export function read(name: string, stored = stateGet(name)): Read | undefined {
   if (stored.value === null) return undefined;
   try {
-    return { name, revision: stored.revision, doc: parseWorkItem(stored.value) };
+    return { name, revision: stored.revision, doc: parseWorkItem(stored.value), lease: stored.lease };
   } catch (error) {
     note(`pickup skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
@@ -628,26 +630,23 @@ export function readWorkItem(number: number): WorkItem | null {
 }
 
 /**
- * Release a claim whose run the engine reports terminal; any other answer holds it.
- * A run that finishes clears its own claim, so a terminal run still holding one
- * stopped before its labels were written, and its requests wait again. A build round
- * that opened a pull request before it stopped is recorded as a round.
+ * Release a claim whose run's lease the engine reports ended; any other claim holds. A
+ * run that finishes clears its own claim, so an ended run still holding one stopped
+ * before its labels were written, and its requests wait again. A build round that
+ * opened a pull request before it stopped is recorded as a round.
  */
 export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
   // A pickup that claims several items sees its own claims on its next pass.
   if (claim === null || claim.run_id === runId) return item;
-  const status = runStatus(claim.run_id);
-  if (claimDisposition(status) === 'hold') {
-    if (status === null) {
-      note(
-        `${pickup.stage} leaves ${item.name} claimed: the engine reports no status for run ${claim.run_id}`
-      );
+  if (!claimEnded(claim.run_id, item)) {
+    if (item.lease?.runId !== claim.run_id) {
+      note(`${pickup.stage} leaves ${item.name} claimed: run ${claim.run_id} holds no engine lease on it`);
     }
     return item;
   }
   const doc: WorkItem = {
-    ...withReleasedRound(item.doc, claim, String(status), at),
+    ...withReleasedRound(item.doc, claim, at),
     claim: null,
     requests: queued([...claim.requests, ...item.doc.requests]),
     history: newest([
@@ -657,12 +656,12 @@ export function releaseIfTerminal(item: Read, at: string, runId: string, pickup:
         stage: pickup.stage,
         run_id: runId,
         outcome: 'released',
-        summary: `released the claim of run ${claim.run_id}, which ended ${String(status)} without finishing its outcome; its requests wait again`,
+        summary: `released the claim of run ${claim.run_id}, which ended without finishing its outcome; its requests wait again`,
       },
     ]),
   };
-  return statePut(item.name, doc, item.revision) === 'ok'
-    ? { ...item, revision: item.revision + 1, doc }
+  return statePut(item.name, doc, item.revision, 'release') === 'ok'
+    ? { ...item, revision: item.revision + 1, doc, lease: null }
     : item;
 }
 
@@ -727,17 +726,17 @@ export function claimItem(
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
   const doc = claimed(candidate, at, runId, pickup);
-  if (statePut(candidate.name, doc, candidate.revision) === 'ok') return doc;
+  if (statePut(candidate.name, doc, candidate.revision, 'take') === 'ok') return doc;
   const fresh = read(candidate.name);
   if (!claimable(fresh, pickup)) return null;
   const retried = claimed(fresh, at, runId, pickup);
-  return statePut(fresh.name, retried, fresh.revision) === 'ok' ? retried : null;
+  return statePut(fresh.name, retried, fresh.revision, 'take') === 'ok' ? retried : null;
 }
 
 /**
  * Replace the document of the item this run holds, re-reading on a conflict. Refuses
- * when the claim is no longer this run's, for example after a failed run's claim was
- * released and the run was then resumed.
+ * when the claim is no longer this run's. A change that clears the claim gives back the
+ * run's lease in the same write.
  */
 export function updateClaimed(
   subject: QualifiedPr,
@@ -752,7 +751,7 @@ export function updateClaimed(
     if (doc.claim?.run_id !== runId) throw new Error(`${name} is no longer claimed by this run`);
     const changed = change(doc);
     const next = { ...changed, requests: queued(changed.requests) };
-    if (statePut(name, next, stored.revision) === 'ok') return next;
+    if (statePutClaimed(name, next, stored.revision) === 'ok') return next;
   }
   throw new Error(`${name} kept changing: three conditional writes conflicted`);
 }

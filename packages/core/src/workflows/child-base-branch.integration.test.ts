@@ -14,6 +14,10 @@ import { configureIsolation } from '@archon/isolation';
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { SqliteAdapter, sqliteDialect } from '../db/adapters/sqlite';
 
+import { stubVerificationImageRelease } from '../test/stub-verification-image-release';
+
+stubVerificationImageRelease();
+
 const db = new SqliteAdapter(':memory:');
 mock.module('../db/connection', () => ({
   pool: db,

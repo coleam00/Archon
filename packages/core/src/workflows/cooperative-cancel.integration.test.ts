@@ -12,6 +12,10 @@ import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { startRunLiveOwner } from '../services/run-live-owner';
 import { createFileWorkflowHost } from './file-host';
 
+import { stubVerificationImageRelease } from '../test/stub-verification-image-release';
+
+stubVerificationImageRelease();
+
 const roots = trackTempRoots();
 const posix = process.platform === 'win32' ? test.skip : test;
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {

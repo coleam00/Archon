@@ -203,6 +203,33 @@ describe('dry-run gates and waits', () => {
     ).toMatchObject({ outcome: 'failed', reason: expect.stringContaining('at most once') });
   });
 
+  test("a stub answer to a select wait carries the chosen option's value, as the real wait returns", async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'attention-value',
+        nodes: [
+          {
+            id: 'ask',
+            wait: {
+              attention: 'Merge it?',
+              form: 'select',
+              options: [{ id: 'merge', value: { effect: 'merge' } }, { id: 'hold' }],
+              recommendation: { option: 'merge', why: 'Review is ready.' },
+            },
+          },
+        ],
+      }),
+      stubs: { ask: { decision: 'merge', text: '' } },
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(JSON.parse(String(result.trace[0]?.output))).toEqual({
+      decision: 'merge',
+      text: '',
+      value: { effect: 'merge' },
+    });
+  });
+
   test('validates stub answers against options from simulated upstream output', async () => {
     const run = (options: DryRunStubValue, decision: string) =>
       dryRunWorkflow({

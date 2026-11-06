@@ -20,7 +20,7 @@ import type { NodeExecutionRecord } from '../../../schemas/node-execution';
 import { isApprovalContext } from '../../../schemas';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { requireTerminalStatusWrite } from '../../../terminal-status-write';
-import { writeNodeArtifactsListing } from '../../../artifacts-index';
+import { writeInvocationListings } from '../../../invocation-listings';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { beginExecution, type RunLayersContext } from '../../run-context';
@@ -39,7 +39,7 @@ export async function executeApprovalNode(
 ): Promise<NodeExecutionResult> {
   const { stepNamePrefix } = ctx;
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
-  const { workflowRun, deps, platform, conversationId, artifactsDir, nodeOutputs } = ctx;
+  const { workflowRun, deps, platform, conversationId, nodeOutputs } = ctx;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
   const stepName = stepNamePrefix + node.id;
@@ -92,10 +92,11 @@ export async function executeApprovalNode(
       return { state: 'completed' as const, output: '' };
     }
 
-    // Materialize the listing before substitution so a rework prompt may reference
-    // $TYPED_ARTIFACTS_FILE. Fresh per rework attempt: the approval's rework node is an
-    // ordinary agent invocation, so it observes artifacts published before this attempt.
-    const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
+    // Materialize the listings before substitution so a rework prompt may reference
+    // $TYPED_ARTIFACTS_FILE and $NODE_OUTCOMES_FILE. Fresh per rework attempt: the
+    // approval's rework node is an ordinary agent invocation, so it observes what was
+    // recorded before this attempt.
+    const listings = await writeInvocationListings(ctx);
 
     // Build a synthetic PromptNode to reuse executeAgentNode.
     // Use a distinct ID so the node_completed event written by executeAgentNode
@@ -143,7 +144,7 @@ export async function executeApprovalNode(
         stepNamePrefix,
         iteration,
         undefined, // synthetic on_reject node never carries a session checkpoint
-        typedArtifactsFile,
+        listings,
         'ordinary',
         rejectionReason
       )

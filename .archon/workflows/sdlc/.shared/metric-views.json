@@ -1,0 +1,41 @@
+{
+  "names": {
+    "sdlc.prs_opened": "PRs opened",
+    "sdlc.prs_merged": "PRs merged",
+    "sdlc.prs_abandoned": "PRs abandoned",
+    "sdlc.pr_merge_rate": "PR merge rate",
+    "sdlc.tests_added": "New tests",
+    "sdlc.tests_unprotective": "Useless tests",
+    "sdlc.tests_unprotective_judge_agreement": "Judge agreement with hand labels",
+    "sdlc.tests_unprotective_judge_catch_rate": "Judge catch rate on hand-labelled useless tests"
+  },
+  "cards": [
+    {
+      "shape": "count",
+      "title": "PRs merged",
+      "metric": "sdlc.prs_merged",
+      "breakdown": [
+        { "metric": "sdlc.prs_opened", "label": "opened" },
+        { "metric": "sdlc.prs_abandoned", "label": "abandoned" }
+      ]
+    },
+    {
+      "shape": "ratio",
+      "title": "Useless tests",
+      "numerator": "sdlc.tests_unprotective",
+      "denominator": "sdlc.tests_added",
+      "denominator_label": "new tests",
+      "calibration": {
+        "metric": "sdlc.tests_unprotective_judge_catch_rate",
+        "label": "judge catches",
+        "rough_below": 0.8
+      }
+    },
+    {
+      "shape": "cost_per",
+      "title": "Cost per PR",
+      "metric": "sdlc.prs_merged",
+      "cost_of": "sdlc.prs_opened"
+    }
+  ]
+}

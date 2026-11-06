@@ -3,6 +3,9 @@ import { readFile, readdir, access, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import type { WorkflowDefinition, WorkflowLoadError, WorkflowSource } from '../schemas';
+import { isIncludeDirective } from '../schemas';
+import { visitNodeTemplateSlots } from '../template-walker';
+import { PACK_DIR_REFERENCE } from '../workflow-variables';
 import type { WorkflowPack } from '../schemas/pack-settings';
 import { loadPackDeclaration, PackSettingsError } from '../pack-settings';
 import { MAX_DISCOVERY_DEPTH } from '../command-validation';
@@ -220,6 +223,15 @@ async function loadDirEntry(
     into.errors.push(result.error);
     return;
   }
+  const packDirReader = findPackDirReference(result.workflow.nodes);
+  if (packDirReader !== undefined) {
+    into.errors.push({
+      filename: entry,
+      error: `Node '${packDirReader}' references $PACK_DIR, but this workflow is not in a pack. $PACK_DIR names the pack folder of a packaged workflow (.archon/workflows/<pack>/<workflow>/<workflow>.yaml); move the workflow into one.`,
+      errorType: 'validation_error',
+    });
+    return;
+  }
   into.workflows.set(entry, {
     workflow: result.workflow,
     parseWarnings: result.warnings,
@@ -252,7 +264,11 @@ export async function loadPackWorkflows(
   let workflowPack: WorkflowPack | PackSettingsError;
   try {
     const settings = await loadPackDeclaration(packPath, pack.label);
-    workflowPack = { key: pack.pack, ...(settings !== undefined ? { settings } : {}) };
+    workflowPack = {
+      key: pack.pack,
+      source: pack.source,
+      ...(settings !== undefined ? { settings } : {}),
+    };
   } catch (error) {
     if (!(error instanceof PackSettingsError)) throw error;
     getLog().warn({ err: error, packPath }, 'pack_declaration_invalid');
@@ -424,4 +440,20 @@ async function loadScopePack(
     };
   }
   return loadPackWorkflows(pack, packPath);
+}
+
+/**
+ * The id of the first node whose YAML text references `$PACK_DIR`. Only a flat or grouped
+ * workflow is checked: it has no pack, so the reference could never resolve at run time.
+ */
+function findPackDirReference(nodes: WorkflowDefinition['nodes']): string | undefined {
+  for (const node of nodes) {
+    if (isIncludeDirective(node)) continue;
+    let found = false;
+    visitNodeTemplateSlots(node, slot => {
+      if (PACK_DIR_REFERENCE.test(slot.value)) found = true;
+    });
+    if (found) return node.id;
+  }
+  return undefined;
 }

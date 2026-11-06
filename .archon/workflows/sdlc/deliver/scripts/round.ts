@@ -1,8 +1,7 @@
 /**
- * One delivery round's typed result, and whether the round loop is done.
- *
- * A loop_group that exhausts max_iterations fails the run instead of ending it with
- * a reason, so this node counts rounds itself and declares the run done at ROUND_CAP.
+ * One delivery round's typed result, and whether the round loop is done. The loop's
+ * `max_iterations` is the round cap: a round that would repeat at the cap leaves `done`
+ * false and the loop completes with it, which `outcome` reports as `round_cap`.
  * Everything else is read from the round's own typed outputs; nothing here judges.
  * It also says whether the next round's review is light: after a CI fix, the
  * general code reviewer alone on the delta; otherwise the code lens and the lenses
@@ -28,9 +27,7 @@
 
 import { artifactsDir, emit, nullableJson, text } from '../../.shared/io.ts';
 
-const ROUND_CAP = 4;
-
-/** Why a round ended; `round_cap` is added only when the cap stops a round that would repeat. */
+/** Why a round ended. */
 type Ended =
   | 'delivered'
   | 'implement_blocked'
@@ -82,13 +79,12 @@ function decide(): { reason: Ended; again: boolean; summary: string | undefined 
 }
 
 const { reason, again, summary } = decide();
-const capped = again && round >= ROUND_CAP;
 
 emit({
   round,
-  done: !again || capped,
+  done: !again,
   ready: reason === 'delivered',
-  reason: capped ? 'round_cap' : reason,
+  reason,
   // A round whose implementer stopped opens no pull request; an earlier round's stands.
   pr_url: prUrl === 'null' ? text(process.env.INPUTS_PREVIOUS_PR_URL) : prUrl,
   // The next round's review continues from the last published report, if any.
@@ -99,5 +95,5 @@ emit({
     reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
   // The latest review's open contract items; null until a review has judged coverage.
   contract_left: contractLeft ?? nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT),
-  summary: `Round ${round}: ${capped ? `${reason} at the ${ROUND_CAP}-round cap` : reason}. ${text(summary)}`,
+  summary: `Round ${round}: ${reason}. ${text(summary)}`,
 });

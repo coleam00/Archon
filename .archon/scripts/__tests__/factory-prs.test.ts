@@ -3,9 +3,7 @@
  * runs each is attributed to, and which records its state makes.
  */
 import { describe, expect, it } from 'bun:test';
-import type { BuildRound } from '../../workflows/sdlc/.shared/build';
-import { factoryPrRuns, factoryPrs, prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
-import { newWorkItem, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
+import { factoryPrs, prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
 
 const REPO = { host: 'github.example.com', path: 'acme/widgets' };
 const RUN_A = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -14,15 +12,6 @@ const RUN_C = 'cccccccc-0000-4000-8000-000000000003';
 
 function url(number: number): string {
   return `https://${REPO.host}/${REPO.path}/pull/${String(number)}`;
-}
-
-function round(run_id: string, pr_url: string): BuildRound {
-  return { run_id, at: '2026-10-01T00:00:00Z', delivered: pr_url !== '', reason: '', pr_url, summary: '', artifacts: '' };
-}
-
-function item(number: number, rounds: BuildRound[]): WorkItem {
-  const doc = newWorkItem({ repo: REPO, number }, '2026-10-01T00:00:00Z');
-  return { ...doc, facts: { build: { status: 'ready', brief: '', rounds, decisions: [], at: '2026-10-02T00:00:00Z' } } };
 }
 
 function pr(number: number, facts: Partial<PrFacts> = {}): PrFacts {
@@ -37,19 +26,6 @@ function pr(number: number, facts: Partial<PrFacts> = {}): PrFacts {
     ...facts,
   };
 }
-
-describe('factoryPrRuns', () => {
-  it('skips rounds without a pull request and gathers every round run under its pull request', () => {
-    const runs = factoryPrRuns([
-      item(1, [round(RUN_A, ''), round(RUN_B, url(10)), round(RUN_C, url(10))]),
-      item(2, [round(RUN_A, url(20))]),
-    ]);
-    expect([...runs]).toEqual([
-      [url(10), [RUN_B, RUN_C]],
-      [url(20), [RUN_A]],
-    ]);
-  });
-});
 
 describe('factoryPrs', () => {
   it('leaves continued pull requests out and reports them as skipped', () => {

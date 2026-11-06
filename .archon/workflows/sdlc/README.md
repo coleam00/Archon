@@ -228,9 +228,11 @@ before them.
 Every `script:` node here is TypeScript on Bun, under its own component's
 `scripts/` directory. Logic more than one of them needs lives once in
 [`.shared/`](.shared), imported by relative path with the extension written
-(`../../.shared/report.ts`). That directory is reserved for modules and for the
-pack's default policy documents under `.shared/policy/`: nothing in it is a workflow
-or a named script target, and a node that names one fails at load.
+(`../../.shared/report.ts`). That directory is reserved for modules, for the
+pack's default policy documents under `.shared/policy/`, and for `metric-views.json`, the
+overview cards the console metrics page shows (see the
+[metrics guide](https://archon.diy/guides/metrics/#overview-cards-a-pack-declares)): nothing
+in it is a workflow or a named script target, and a node that names one fails at load.
 
 The repository validates them where they live. `.archon/workflows/tsconfig.json`
 is the owning configuration — `bun run type-check` compiles that project. Lint
@@ -316,14 +318,10 @@ merge queue's sweep names `merge.md`, which pull requests merge on their own.
 Agents interpret
 them; anything that must be exact, such as label names, stays typed configuration.
 
-A node reaches the defaults through a script node of its workflow: its `policy` node,
-or the build or merge queue's `facts`. A run
-captures its source before it starts, from a binary's embedded bundle as from a
-source checkout, and runs its scripts from that capture, so
-[`.shared/policy-defaults.ts`](.shared/policy-defaults.ts) finds `.shared/policy/`
-from its own location and the node binds that directory into the prompt with `with:`. The script hands over
-the directory only; the agent reads the default and the project's file, and no
-script opens either. The default is a file rather than text in the prompt, so a node
+A node's prompt names the defaults as `$PACK_DIR/.shared/policy/`: the engine's
+`$PACK_DIR` is this pack's directory in the run's captured source, the same from a
+binary's embedded bundle as from a source checkout. The agent reads the default and
+the project's file, and no script opens either. The default is a file rather than text in the prompt, so a node
 whose decision names no policy carries none of it.
 
 ## A stage pauses where nothing takes it forward
@@ -427,12 +425,17 @@ request, never the state.
   open, edit or
   reopen adds no request while another one waits, since the pickup reads the live
   issue; label requests keep the newest 50. A run clears its
-  claim only after the item's labels are written. The next pickup releases a claim
-  whose run the engine reports completed, failed or cancelled and queues that run's
-  requests again; the item then sorts after every other waiting item until an
-  attempt finishes, so one item that cannot be read or labelled never starves the
-  rest. A claim whose run is pending, running, paused or unknown is never released,
-  and there is no age timeout.
+  claim only after the item's labels are written. A claim takes the work item's
+  engine lease (`archon state put --lease`), and the next pickup releases a claim whose
+  lease the engine reports ended: its run completed, was cancelled or abandoned, or was
+  deleted. It queues that run's requests again; the item then sorts after every other
+  waiting item until an attempt finishes, so one item that cannot be read or labelled
+  never starves the rest. A claim whose run is pending, running, paused or failed is
+  never released, because a failed run can resume; abandon the run to free its claim.
+  A claim with no lease of its run, written before claims took one, is held and named
+  by an idle pass; abandoning its run does not free it, so a person clears it by
+  writing the document back with `claim` set to `null` through a conditional
+  `archon state put <name> --if-revision <n>`. There is no age timeout.
 - **Closing.** When triage's verdict is `NO_ACTION`, the item is a duplicate of
   another open issue or a merged change already delivered it, and the triage policy
   lets it close without a person. Before writing anything, the outcome checks a
@@ -540,10 +543,11 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   head commit and no check no round can run is still outstanding (a dated scope section records such a check as met; otherwise it asks for it once), `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
   step), or `ask`. Before any `continue`, it compares the whole change with the contract's shape, and asks when a correction would add machinery the contract does not name. It never continues a pull request that changed nothing material since its last review, no commits or only cosmetic edits; that round ends as done or ask by the same rules. A Ready, green pull request whose only remaining check no round can run is asked about once rather than continued. It declares the pull request when the round left commits unpushed.
-  A `continue` starts the item's next round at once, a detached `archon-build-queue
-  --input number=<n>` on the run config and the `retriage_as` and
-  `round_limit` this run started with; if that launch fails, the item waits for the
-  next queue run.
+  A `continue` starts the item's next round at once by firing the operator's
+  build-queue binding (`build_queue_binding`) with the item's `number`, keyed so one
+  run starts at most one next round per item. The binding's resource, capacity and
+  overlap policy apply, as for a scheduled pass; when the round is skipped, or no
+  binding is set, the item waits for the next queue run.
   Facts reports the open pull request in the item's repository as the candidate, and
   the `route` agent declares whether the round continues it: unless a dated scope
   section or a recorded answer supersedes it. A continued pull request goes to
@@ -588,13 +592,12 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   a decision. The `ruling` script writes the
   choice's ruling and the person's words into the issue body as one dated "Current
   scope" section, reads it back, and records the answer: a `continue` choice starts
-  the item's next round at once, a detached `archon-build-queue --input number=<n>`
-  run on the run config (`--config-from-run`) and the `retriage_as` and
-  `round_limit` the answered run started with. A `ready` choice hands the pull
+  the item's next round at once through the build-queue binding, as a `continue`
+  decision does. A `ready` choice hands the pull
   request to the merge queue as it stands, as after a maintainer finished it by hand;
   the merge gate still checks it, and an item with no pull request refuses the answer.
-  A `park` choice stops working the item until a re-triage. If a continue's launch
-  fails, the item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
+  A `park` choice stops working the item until a re-triage. If a continue's next round
+  does not start, the item waits for the next queue run. A run cancelled while it waits leaves the item asking, and only a
   re-triage starts it over.
 - **Record.** The work item's `facts.build` holds the item's status, which says who
   owns it: the build queue (`next`, `asking`), the merge queue (`ready`), or no queue
@@ -621,13 +624,22 @@ changes its checkout, so every run needs its own worktree:
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-build-queue",
-      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "inputs": {
+        "repo_host": "github.com",
+        "repo_path": "acme/widgets",
+        "build_queue_binding": "/srv/archon/bindings/widgets-build-queue.json"
+      },
       "isolation": { "kind": "worktree" }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
 }
 ```
+
+`build_queue_binding` names this file, so a run's follow-up rounds start through the
+same binding: one run of the queue holds a slot of the resource while it fires its
+follow-up, so the follow-up needs a free slot, or waits in line under `"overlap":
+"queue"`. Without the input, follow-ups wait for the next scheduled run.
 
 To start a run as soon as intake routes an item, add a label binding on the same
 resource, with intake's label selector narrowed to the route labels intake writes
@@ -717,7 +729,8 @@ then the project's file, whose lines win where the two conflict.
   independent bookkeeping completes before the run fails with the read diagnostic.
 - **Record.** When the default branch could not be read, `record` writes the independent
   settlements, releasing only claims it still owns. Open companions remain unchanged;
-  the next pickup releases their claims after the run fails. It makes no further forge
+  the next pickup releases their claims once the run ends: a failed run keeps them
+  until it is resumed and finishes, or is abandoned. It makes no further forge
   reads and fails with the original diagnostic and any settlement write failures.
   Otherwise, the `record` script skips and reports a decision for a pull request this
   run did not claim, because that item belongs to another run. It refuses a
@@ -762,12 +775,11 @@ then the project's file, whose lines win where the two conflict.
   the ruling. Without a brief, `other` records the text and parks until the build
   queue readies the item again; no build round starts. A red default branch is only
   ever held, so its item offers `hold` alone. On a pull request, `merge` approves it at the head that was asked about, and
-  a sweep the answer starts at once (on the answered run's config and its
-  `limit`, `merge_method` and `retriage_as`) merges it once the
-  gate passes there; `return` writes the choice's
-  ruling into the issue body as a dated "Current scope" section and hands the item
-  back to the build queue, whose next round starts at once on the build queue's own
-  input defaults; `park` stops working it until the build queue readies it
+  a sweep the answer starts at once through the merge-queue binding
+  (`merge_queue_binding`) merges it once the gate passes there; `return` writes the
+  choice's ruling into the issue body as a dated "Current scope" section and hands the
+  item back to the build queue, whose next round starts at once through the
+  build-queue binding (`build_queue_binding`); `park` stops working it until the build queue readies it
   again. For an own PR, both `park` and `other` stop queue work until a later sweep
   observes a different head from the one asked about. The `other` answer stays on
   the work item as its ruling; it writes no issue body and starts no build round.
@@ -789,16 +801,31 @@ checkout, and the claim keeps two runs off the same item:
     "runAsUserId": "<archon user id>",
     "resource": "forge:github.com/acme/widgets:merge",
     "capacity": 1,
-    "overlap": "skip",
+    "overlap": "queue",
     "launch": {
       "cwd": "/srv/archon/widgets",
       "workflowName": "archon-merge-queue",
-      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" }
+      "inputs": {
+        "repo_host": "github.com",
+        "repo_path": "acme/widgets",
+        "merge_queue_binding": "/srv/archon/bindings/widgets-merge-queue.json",
+        "build_queue_binding": "/srv/archon/bindings/widgets-build-queue.json"
+      }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
 }
 ```
+
+`merge_queue_binding` names this file and `build_queue_binding` the build queue's, so
+an answer's follow-up starts through the operator's own binding. The answering run
+still holds the merge queue's only slot when it fires the sweep, so the binding uses
+`"overlap": "queue"`: the sweep a "merge" answer fires waits in line and starts as soon
+as the answering run ends, at the host's next drain (a server drains every few seconds;
+a CLI-only host needs `archon trigger drain` scheduled). A scheduled tick that finds a
+sweep running also waits in line instead of being dropped. With `"overlap": "skip"`
+the answer's sweep would be skipped and the next scheduled sweep would merge the pull
+request. Without the inputs, follow-ups wait for the next scheduled run.
 
 ## Discoveries
 
@@ -814,8 +841,10 @@ terminal report lists.
   `discoveries/runs/<run-id>` is its memory and its work item: the refs a pass decided
   for it, the questions a pass asked about it with their answers, and the claim of the
   pass working it. A record is decided once its run's document lists it. Every run
-  document is read in one call. A claim is released only when the claiming run is
-  completed, failed or cancelled, never on age. A run whose records cannot be read is
+  document is read in one call. A claim takes the document's engine lease and is
+  taken over only when the engine reports that lease ended (the claiming run
+  completed, was cancelled or abandoned, or was deleted), never on age. A failed pass
+  keeps its claims, since it can resume. A run whose records cannot be read is
   left queued and named on the pass's stderr.
 - **Decisions.** One agent decides every queued record, under the project's direction
   document and the policy files `discoveries.md`, `triage.md` and `rulings.md`. It
@@ -904,7 +933,7 @@ around the cut is mixed in.
 Cost per merged pull request is the cost `archon metrics sdlc.prs_opened` reports
 (`cost.usd` with `--json`), divided by the `sdlc.prs_merged` value over the same window.
 It covers the build-queue runs that built a pull request; queue runs that built none are
-not attributed to any. It is a floor: runs on a provider that reports no cost add nothing
+not attributed to any. The console metrics page's Cost per PR card shows this figure. It is a floor: runs on a provider that reports no cost add nothing
 and are counted instead.
 
 Two kinds of factory pull request are missed, and both are mostly ones closed without

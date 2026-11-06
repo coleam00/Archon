@@ -34,6 +34,7 @@ import {
 } from '../test-support/workflow-store';
 import { registerFolder } from '@archon/core/handlers/clone';
 import { triggerCommand } from './trigger';
+import { workflowGetCommand } from './workflow-query';
 import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
 
 const tempRoots = trackTempRoots();
@@ -543,7 +544,7 @@ test('receipt preparation and real engine execution use supplied ports without S
         schedule: { intervalSeconds: 60, runAtLoad: false },
       })
     );
-    await triggerCommand(host, 'fire', [], { config: configPath });
+    await triggerCommand(host, 'fire', [], { config: configPath }, { env: NO_RUN });
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\nexecuted\nexecuted\n');
     expect(accesses).toBe(0);
   } finally {
@@ -725,6 +726,8 @@ async function fireFixture(fileStore = false): Promise<{
 }
 
 const noDispatch = async (): Promise<void> => {};
+/** An environment with no calling node, whatever the shell running the tests exports. */
+const NO_RUN: NodeJS.ProcessEnv = {};
 
 test('fire reports why preparation refused while the receipt keeps only the stage', async () => {
   const { host, configPath, inputsPath, restore } = await fireFixture();
@@ -735,7 +738,7 @@ test('fire reports why preparation refused while the receipt keeps only the stag
       'fire',
       [],
       { config: configPath, inputs: inputsPath },
-      noDispatch
+      { dispatch: noDispatch, env: NO_RUN }
     ).then(
       () => undefined,
       (error: unknown) => error as Error
@@ -767,7 +770,7 @@ test('fire redacts credential values from the refusal it prints', async () => {
       'fire',
       [],
       { config: configPath, inputs: inputsPath },
-      noDispatch
+      { dispatch: noDispatch, env: NO_RUN }
     ).then(
       () => undefined,
       (error: unknown) => error as Error
@@ -815,7 +818,13 @@ test("fire does not blame its receipt for another binding's preparation failure"
   }) as typeof process.stdout.write);
   try {
     // The fired binding prepares and admits; only the other one fails.
-    await triggerCommand(host, 'fire', [], { config: configPath }, noDispatch);
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath },
+      { dispatch: noDispatch, env: NO_RUN }
+    );
     const written = stderr.mock.calls.map(call => String(call[0])).join('');
     expect(written).toContain("cannot pass event-mapped input 'order_id'");
     const receipts = await host.deps.store.listStartReceipts(10);
@@ -854,7 +863,13 @@ test.each([true, false])(
       return true;
     }) as typeof process.stdout.write);
     try {
-      await triggerCommand(host, 'fire', [], { config: configPath }, noDispatch);
+      await triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        { dispatch: noDispatch, env: NO_RUN }
+      );
       const [older] = await store.listStartReceipts(10);
       if (!older) throw new Error('Expected older receipt');
       const [request] = await store.listQueuedResourceStartsForHost('host');
@@ -877,9 +892,18 @@ test.each([true, false])(
       await writeFile(configPath, JSON.stringify(config));
       stdout.mockClear();
       const started: string[] = [];
-      await triggerCommand(host, 'fire', [], { config: configPath }, async requestId => {
-        started.push(requestId);
-      });
+      await triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        {
+          dispatch: async requestId => {
+            started.push(requestId);
+          },
+          env: NO_RUN,
+        }
+      );
       expect(started).toHaveLength(1);
       expect(await store.getWorkflowRun(started[0]!)).toMatchObject({ status: 'pending' });
       const output = stdout.mock.calls
@@ -892,9 +916,9 @@ test.each([true, false])(
       expect(stderr.mock.calls.map(call => String(call[0])).join('')).toContain(
         `Queued request '${request.id}' is invalid`
       );
-      await expect(triggerCommand(host, 'drain', [], { host: 'host' }, noDispatch)).rejects.toThrow(
-        'resource start operation'
-      );
+      await expect(
+        triggerCommand(host, 'drain', [], { host: 'host' }, { dispatch: noDispatch })
+      ).rejects.toThrow('resource start operation');
     } finally {
       stderr.mockRestore();
       stdout.mockRestore();
@@ -972,7 +996,13 @@ test('keyed replays fail for every receipt queued on a resource whose drain fail
   try {
     const deliveries = ['first', 'second'];
     for (const deliveryId of deliveries)
-      await triggerCommand(host, 'fire', [], { config: configPath, deliveryId }, noDispatch);
+      await triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath, deliveryId },
+        { dispatch: noDispatch, env: NO_RUN }
+      );
     const queued = await store.listQueuedResourceStartsForHost('host');
     expect(queued).toHaveLength(2);
     const receipts = await store.listStartReceipts(10);
@@ -989,7 +1019,13 @@ test('keyed replays fail for every receipt queued on a resource whose drain fail
     stdout.mockClear();
     for (const deliveryId of deliveries)
       await expect(
-        triggerCommand(host, 'fire', [], { config: configPath, deliveryId }, noDispatch)
+        triggerCommand(
+          host,
+          'fire',
+          [],
+          { config: configPath, deliveryId },
+          { dispatch: noDispatch, env: NO_RUN }
+        )
       ).rejects.toThrow("Resource 'portable' drain failed");
     const failure = await drainResourceStartHost({
       ...host,
@@ -1203,5 +1239,70 @@ test('a triggered run pauses at a gate and an attention wait and continues after
   } finally {
     if (previousHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = previousHome;
+  }
+});
+
+test('a fire from inside a run records that run, and the started run and its request show it', async () => {
+  const { host, configPath, restore } = await fireFixture();
+  const requester = await host.deps.store.createWorkflowRun({
+    workflow_name: 'requester',
+    user_message: '',
+  });
+  const node = (runId: string): NodeJS.ProcessEnv => ({
+    WORKFLOW_ID: runId,
+    ARCHON_NODE_EXECUTION: JSON.stringify({ runId, path: 'follow-up' }),
+  });
+  const output: string[] = [];
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: unknown,
+    callback?: () => void
+  ) => {
+    output.push(String(chunk));
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    // A node identity the store does not know is refused before any receipt is written.
+    await expect(
+      triggerCommand(
+        host,
+        'fire',
+        [],
+        { config: configPath },
+        { dispatch: noDispatch, env: node(randomUUID()) }
+      )
+    ).rejects.toThrow('does not know WORKFLOW_ID');
+    expect(await host.deps.store.listStartReceipts(10)).toEqual([]);
+
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath },
+      { dispatch: noDispatch, env: node(requester.id) }
+    );
+    const [receipt] = await host.deps.store.listStartReceipts(10);
+    const stored = await host.deps.store.getStartReceipt(receipt.id);
+    expect(stored?.sourceActor).toEqual({
+      source: 'archon-run',
+      id: requester.id,
+      display: 'follow-up',
+    });
+    const disposition = stored?.bindings[0]?.disposition;
+    if (disposition?.status !== 'admitted') throw new Error('Expected the start to be admitted');
+
+    const origin = { runId: requester.id, nodePath: 'follow-up' };
+    output.length = 0;
+    await triggerCommand(host, 'inspect', [disposition.requestId], {});
+    expect(JSON.parse(output.join(''))).toMatchObject({ requestedBy: origin });
+    output.length = 0;
+    expect(await workflowGetCommand(host, disposition.runId, true)).toBe(0);
+    expect(JSON.parse(output.join(''))).toMatchObject({
+      id: disposition.runId,
+      requested_by: origin,
+    });
+  } finally {
+    stdout.mockRestore();
+    restore();
   }
 });

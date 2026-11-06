@@ -24,7 +24,7 @@ test('dereferences a linked workflow directory instead of silently omitting its 
   ]);
 });
 
-test('the index selects exact runtime files and shared documents, preserving authored paths and excluding fixtures and unindexed packs', async () => {
+test('the index selects exact runtime files, shared documents and metric views, preserving authored paths and excluding fixtures and unindexed packs', async () => {
   const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-index-')));
   const authored: Record<string, string> = {
     'workflows/selected/flow/main.yml': 'name: main\r\n',
@@ -34,6 +34,7 @@ test('the index selects exact runtime files and shared documents, preserving aut
     'workflows/selected/.shared/nested/helper.js': 'export const value = 1;\n',
     'workflows/selected/.shared/__init__.py': '',
     'workflows/selected/.shared/policy/rule.md': 'Rule.\r\n',
+    'workflows/selected/.shared/metric-views.json': '{"cards":[]}\n',
     'workflows/selected/flow/fixtures/clean.stubs.yaml': 'fixture: true\n',
     'workflows/selected/flow/README.md': 'documentation',
     'workflows/selected/flow/scripts/helpers/deeper/ignored.ts': 'ignored',
@@ -54,6 +55,7 @@ test('the index selects exact runtime files and shared documents, preserving aut
   );
   expect(selected.map(file => file.relativePath).sort()).toEqual([
     'workflows/selected/.shared/__init__.py',
+    'workflows/selected/.shared/metric-views.json',
     'workflows/selected/.shared/nested/helper.js',
     'workflows/selected/.shared/policy/rule.md',
     'workflows/selected/flow/commands/check.md',
