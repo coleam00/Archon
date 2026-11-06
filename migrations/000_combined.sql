@@ -860,6 +860,10 @@ CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id
   ON remote_agent_workflow_events(workflow_run_id);
 CREATE INDEX IF NOT EXISTS idx_workflow_events_type
   ON remote_agent_workflow_events(event_type);
+-- Per-run reads of chosen event types (runEventsSql), without reading the
+-- high-volume provider_event rows of each run.
+CREATE INDEX IF NOT EXISTS idx_workflow_events_run_type
+  ON remote_agent_workflow_events(workflow_run_id, event_type);
 -- Global created_at index. No cross-run created_at reader remains; it stays
 -- because shipped schema is additive-only.
 CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at
