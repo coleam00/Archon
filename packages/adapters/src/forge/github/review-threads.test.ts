@@ -177,6 +177,51 @@ describe('pr.threads', () => {
     expect(calls).toBe(1);
   });
 
+  test('a read is repeated three times at most, and a dropped connection counts as transient', async () => {
+    const waits: number[] = [];
+    const sleep = async (ms: number): Promise<void> => {
+      waits.push(ms);
+    };
+    let calls = 0;
+    const down = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      {
+        token: 'token',
+        fetch: async () => {
+          calls++;
+          return json({}, 502);
+        },
+        sleep,
+      }
+    );
+    expect(down).toMatchObject({ ok: false });
+    expect(calls).toBe(4);
+    expect(waits).toEqual([1_000, 2_000, 4_000]);
+
+    const page = {
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          },
+        },
+      },
+    };
+    let drops = 2;
+    const recovered = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      {
+        token: 'token',
+        fetch: async () => {
+          if (drops-- > 0) throw new TypeError('socket hang up');
+          return json(page);
+        },
+        sleep,
+      }
+    );
+    expect(recovered).toMatchObject({ ok: true, result: { value: { threads: [] } } });
+  });
+
   test('a GraphQL errors document is a failure, not an empty list', async () => {
     const github = fakeGitHub(() => ({
       errors: [{ type: 'NOT_FOUND', message: 'Could not resolve to a PullRequest' }],

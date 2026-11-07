@@ -853,3 +853,23 @@ describe('GitHub draft conversion', () => {
     expect(JSON.stringify(response)).not.toContain('secret-token');
   });
 });
+
+test('a mutation GitHub answers 502 is sent once, never repeated', async () => {
+  const github = fakeGitHub({
+    status: (_url: string, method: string) => (method === 'PATCH' ? 502 : undefined),
+  });
+  const waits: number[] = [];
+  const response = await handleGithubOperation(
+    { operationId: 'edit', op: 'pr.edit-body', ref, body: 'next' },
+    {
+      token: 'token',
+      fetch: github.fetch,
+      sleep: async ms => {
+        waits.push(ms);
+      },
+    }
+  );
+  expect(response).toMatchObject({ ok: false, mutation: { outcome: 'outcome_unknown' } });
+  expect(github.calls.filter(call => call.method === 'PATCH')).toHaveLength(1);
+  expect(waits).toEqual([]);
+});
