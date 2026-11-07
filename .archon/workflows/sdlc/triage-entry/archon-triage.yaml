@@ -1,0 +1,41 @@
+name: archon-triage
+description: |
+  Ground one work item against the current repository before deciding what kind
+  of work it needs, judge whether it is a contract a run can start from, then route
+  it to investigate, plan, deliver, continue an open PR, split, or no action
+  (archon-triage-block). Advisory: it leaves the checkout unchanged, and writes
+  labels only when asked to publish.
+
+  Use when: an issue, plan, report, or request may be stale or may prescribe an
+  unverified solution — "triage this issue", "what does this need next", "is
+  this ready to build".
+  NOT for: performing the investigation, writing the plan, or delivering work.
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to triage — an issue, document, plan, report, or free-form request.
+      When empty, the run's trigger message is the target. One item per run.
+  publish:
+    default: "false"
+    description: >-
+      Write the derived labels to the tracker item — true or false. Off by
+      default; the run then records the labels it would apply.
+
+returns: triage
+outcome_field: ready
+
+# Read-only: runs in the launch checkout beside any other run, and creates no
+# worktree. These are run settings, which an included workflow cannot carry, so
+# this file exists to hold them; composers include archon-triage-block.
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+  - id: triage
+    include: archon-triage-block
+    with:
+      target: "$INPUTS.target"
+      publish: "$INPUTS.publish"

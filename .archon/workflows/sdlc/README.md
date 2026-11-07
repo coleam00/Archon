@@ -318,7 +318,10 @@ whose decision names no policy carries none of it.
 Each stage a person runs, `archon-deliver`, `archon-plan`, `archon-triage`,
 `archon-review` and `archon-ship`, is one workflow under that name, and the workflows
 that compose a stage include the same file: the queues, intake, upkeep, the review
-eval, and `archon-ship` and `archon-deliver` themselves. A stage never pauses for a
+eval, and `archon-ship` and `archon-deliver` themselves. Triage is the one exception:
+`archon-triage` runs read-only in the launch checkout, and since an included workflow
+cannot carry run settings, it is a one-node include of `archon-triage-block`, which
+ship and intake include. A stage never pauses for a
 person. A run started by hand ends with the stage's typed outcome as the run's result:
 `ready` (`delivered` for ship) says whether the stage got there, and the report says
 why not. A stage that fails fails the run at the failed node.

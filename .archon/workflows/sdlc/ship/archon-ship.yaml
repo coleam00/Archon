@@ -65,7 +65,7 @@ nodes:
   # The source is history, not a work order. Triage checks it against current
   # code and direction before deciding which kind of reasoning is still owed.
   - id: triage
-    include: archon-triage
+    include: archon-triage-block
     depends_on: [forge]
     with:
       target: "$INPUTS.target"

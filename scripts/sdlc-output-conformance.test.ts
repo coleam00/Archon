@@ -148,7 +148,7 @@ test('blocked pickup emits identified items admitted by its workflow schema', ()
 });
 
 describe('triage', () => {
-  const TRIAGE = 'triage/archon-triage.yaml';
+  const TRIAGE = 'triage/archon-triage-block.yaml';
   const DELIVERED: Closure = {
     kind: 'delivered',
     url: 'https://ghe.example.com/example/repo/pull/5',
