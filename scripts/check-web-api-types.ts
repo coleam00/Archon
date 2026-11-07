@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, posix, resolve } from 'node:path';
 import ts from 'typescript';
 import { gitOutput } from './check-test-cleanup-drift';
 
@@ -61,7 +61,7 @@ export function checkSources(sources: ReadonlyMap<string, string>, root = ROOT):
         const module = statement.moduleSpecifier.text;
         const target = module.startsWith('@/')
           ? `packages/web/src/${module.slice(2)}`
-          : resolve(dirname(file), module).slice(resolve('.').length + 1);
+          : posix.join(posix.dirname(file), module);
         const name = ts.isImportSpecifier(declaration)
           ? (declaration.propertyName ?? declaration.name).text
           : member;
@@ -87,6 +87,8 @@ export function checkSources(sources: ReadonlyMap<string, string>, root = ROOT):
     ): boolean {
       if (ts.isQualifiedName(name))
         return ts.isIdentifier(name.left) && importedRoot(name.left, name.right.text);
+      if (ts.isPropertyAccessExpression(name))
+        return ts.isIdentifier(name.expression) && importedRoot(name.expression, name.name.text);
       if (!ts.isIdentifier(name)) return false;
       if (importedRoot(name)) return true;
       if (standard(name)) {

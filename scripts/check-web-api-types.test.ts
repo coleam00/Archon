@@ -29,6 +29,11 @@ for (const declaration of [
   `import type { TierEntry } from '../primitives/settings'; type Independent = TierEntry;`,
   `import type { components as Other } from './api.generated'; type Independent = Other['schemas']['TierEntry'];`,
   `import type { components as Other } from '@/lib/api'; type Independent = Other['schemas']['TierEntry'];`,
+  `import type * as API from '@/lib/api.generated'; interface Independent extends API.unrelated {}`,
+  `import type * as API from './api.generated'; interface Independent extends API.components {}`,
+  `import type * as API from '../primitives/settings'; interface Independent extends API.TierEntry {}`,
+  `import type * as API from '@/lib/api.generated'; interface Independent extends API.components.schemas {}`,
+  `import type * as API from '@/lib/api.generated'; namespace Inner { namespace API { export interface components { invented: string } } interface Independent extends API.components {} }`,
 ]) {
   test(`rejects independent declarations: ${declaration}`, () => {
     const name = declaration === 'type A = B; type B = A;' ? 'A' : 'Independent';
@@ -52,6 +57,9 @@ for (const declaration of [
   `import type * as API from '../../../lib/api.generated'; type Entry = API.components['schemas']['TierEntry'];`,
   `import type { QueryParams as Query } from '../lib/api-types'; type Fields = Query<'/api/metrics', 'get'>;`,
   `import type * as API from '../lib/api-types'; type Fields = API.QueryParams<'/api/metrics', 'get'>;`,
+  `import type * as API from '@/lib/api.generated'; interface Fields extends API.components {}`,
+  `import type * as API from '../../../lib/api.generated'; interface Fields extends API.paths {}`,
+  `import type * as API from '../lib/api-types'; interface Fields extends API.QueryParams<'/api/metrics', 'get'> {}`,
   `export type { components } from '@/lib/api.generated';`,
 ]) {
   test(`accepts generated derivation: ${declaration}`, () => {
@@ -76,6 +84,25 @@ test('covers nested sources, tests, TSX and http, while leaving UI owners outsid
 });
 
 const trackTempRoot = trackTempRoots();
+test('accepts relative generated and helper imports in a separate repository root', () => {
+  const root = join(tmpdir(), 'web-api-type-imports');
+  expect(
+    checkSources(
+      new Map([
+        [
+          file,
+          `import type { components } from '../../../lib/api.generated'; type Entry = components['schemas']['TierEntry'];`,
+        ],
+        [
+          'packages/web/src/experiments/console/skills/nested/probe.ts',
+          `import type { QueryParams } from '../../lib/api-types'; type Query = QueryParams<'/api/metrics', 'get'>;`,
+        ],
+      ]),
+      root
+    )
+  ).toEqual([]);
+});
+
 test('finds untracked nonignored scoped sources before staging', () => {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'web-api-type-git-')));
   gitOutput(['init', '--quiet'], root);
