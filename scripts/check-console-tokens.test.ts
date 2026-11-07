@@ -96,6 +96,146 @@ describe('console token utility boundary', () => {
   });
 });
 
+const coveredUtilities = [
+  'text',
+  'rounded',
+  ...['t', 'r', 'b', 'l', 's', 'e', 'tl', 'tr', 'br', 'bl', 'ss', 'se', 'es', 'ee'].map(
+    side => `rounded-${side}`
+  ),
+  'tracking',
+  ...['p', 'm'].flatMap(prefix =>
+    ['', 'x', 'y', 't', 'r', 'b', 'l', 's', 'e'].map(side => prefix + side)
+  ),
+  'gap',
+  'gap-x',
+  'gap-y',
+  'space-x',
+  'space-y',
+  ...['', 'min-', 'max-'].flatMap(prefix => ['w', 'h'].map(axis => prefix + axis)),
+  'size',
+  'inset',
+  'inset-x',
+  'inset-y',
+  'inset-s',
+  'inset-e',
+  'top',
+  'right',
+  'bottom',
+  'left',
+  'start',
+  'end',
+  'grid-cols',
+  'grid-rows',
+  'translate',
+  'translate-x',
+  'translate-y',
+  'translate-z',
+];
+const coveredProperties = [
+  'font-size',
+  'letter-spacing',
+  'border-radius',
+  ...[
+    'top-left',
+    'top-right',
+    'bottom-left',
+    'bottom-right',
+    'start-start',
+    'start-end',
+    'end-start',
+    'end-end',
+  ].map(corner => `border-${corner}-radius`),
+  ...['padding', 'margin'].flatMap(property =>
+    [
+      '',
+      '-top',
+      '-right',
+      '-bottom',
+      '-left',
+      '-block',
+      '-inline',
+      '-block-start',
+      '-block-end',
+      '-inline-start',
+      '-inline-end',
+    ].map(side => property + side)
+  ),
+  'gap',
+  'row-gap',
+  'column-gap',
+  ...['', 'min-', 'max-'].flatMap(prefix =>
+    ['width', 'height', 'inline-size', 'block-size'].map(axis => prefix + axis)
+  ),
+  ...['', '-block', '-inline', '-block-start', '-block-end', '-inline-start', '-inline-end'].map(
+    side => `inset${side}`
+  ),
+  'top',
+  'right',
+  'bottom',
+  'left',
+  'grid-template-columns',
+  'grid-template-rows',
+  'translate',
+];
+
+describe('arbitrary properties', () => {
+  test('handles case-insensitive CSS names and relative units', () => {
+    for (const utility of ['[FONT-SIZE:0.8rem]', '[padding-inline:0.1em]']) {
+      expect(check(`const C = '${utility}';`)).toEqual([
+        expect.stringContaining(`${utility}: use a design token`),
+      ]);
+    }
+  });
+  test.each(coveredProperties)('checks %s through source and CSS entry points', property => {
+    const utility = `md:[${property}:3px]!`;
+    expect(check(`const C = '${utility}';`)).toEqual([
+      expect.stringContaining(`${utility}: use a design token`),
+    ]);
+    expect(checkSource('theme.css', `.a { @apply ${utility}; }`)).toHaveLength(1);
+    expect(
+      check(`// console-token-exception ${utility} -- Local layout.\nconst C = '${utility}';`)
+    ).toEqual([]);
+  });
+  test.each(['color', 'background-color', 'line-height', 'box-shadow', '--custom'])(
+    'permits out-of-scope %s',
+    property => {
+      expect(check(`const C = '[${property}:3px]';`)).toEqual([]);
+    }
+  );
+});
+
+describe('JavaScript whitespace escapes', () => {
+  const separators = ['\\n', '\\r', '\\t', '\\f', '\\v', '\\u0020', '\\u{20}', '\\x20'];
+  test.each(coveredUtilities)('rejects %s in every literal representation', name => {
+    const utility = `${name}-[99px]`;
+    for (const separator of separators) {
+      for (const literal of [
+        `'${utility}${separator}font-bold'`,
+        `"${utility}${separator}font-bold"`,
+        `\`${utility}${separator}font-bold\``,
+        `\`${utility}${separator}\${other} font-bold\``,
+        `\`font-bold \${other}${utility}${separator}\` `,
+      ]) {
+        expect(check(`const C = ${literal};`)).toEqual([
+          expect.stringContaining(`fixture.tsx:1: ${utility}: use a design token`),
+        ]);
+      }
+    }
+  });
+  test('retains physical exception positions and respects escaped backslashes', () => {
+    expect(
+      check(
+        '// console-token-exception text-[12px] -- Local layout.\nconst C = "escaped\\ntext-[12px]";'
+      )
+    ).toEqual([]);
+    expect(check('const C = "text-[12px]\\\\nfont-bold";')).toEqual([]);
+    expect(check('const C = "text-[12px]\\\nfont-bold";')).toEqual([]);
+    expect(check('const C = `font-bold\ntext-[12px]`;')[0]).toContain(
+      'fixture.tsx:2: text-[12px]: use a design token'
+    );
+  });
+});
+
 describe('exact adjacent exceptions', () => {
   const directive = '// console-token-exception md:w-[calc(50%-4px)] -- Local segment width.';
   const literal = "const C = 'md:w-[calc(50%-4px)]';";
@@ -119,11 +259,6 @@ describe('exact adjacent exceptions', () => {
   });
   test('reports stale directives and preserves physical positions through escaped strings', () => {
     expect(check(`${directive}\nconst C = 'w-12';`)[0]).toContain('unmatched');
-    expect(
-      check(
-        '// console-token-exception text-[12px] -- Fixture.\nconst C = "escaped\\ntext-[12px]";'
-      ).length
-    ).toBeGreaterThan(0);
     expect(
       check('// console-token-exception text-[12px] -- Fixture.\nconst C = `\ntext-[12px]`;').some(
         failure => failure.includes('fixture.tsx:3:')

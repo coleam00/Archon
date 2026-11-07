@@ -27,13 +27,44 @@ export function needsToken(candidate: string): boolean {
     /^(text|rounded(?:-[a-z]+)?|tracking|[pm][xytbrlse]?|gap(?:-[xy])?|space-[xy]|(?:min-|max-)?[wh]|size|inset(?:-[xyse])?|top|bottom|left|right|start|end|grid-cols|grid-rows|translate(?:-[xyz])?)-\[(.*)\](?:\/[^\s]+)?$/.exec(
       base
     );
+  const property = /^\[([a-z-]+):(.*)\]$/i.exec(base);
+  if (property) {
+    return (
+      /^(font-size|letter-spacing|border(?:-(?:top-left|top-right|bottom-left|bottom-right|start-start|start-end|end-start|end-end))?-radius|(?:padding|margin)(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?|(?:row-|column-)?gap|(?:(?:min|max)-)?(?:width|height|inline-size|block-size)|inset(?:-(?:block|inline)(?:-(?:start|end))?)?|top|right|bottom|left|grid-template-(?:columns|rows)|translate)$/i.test(
+        property[1]
+      ) && hasLength(property[2])
+    );
+  }
   if (!match || (match[1] === 'text' && match[2].startsWith('color:'))) return false;
-  return /(?:\d*\.)?\d+(?:px|rem|em)(?![a-z])/i.test(match[2]);
+  return hasLength(match[2]);
+}
+
+function hasLength(value: string): boolean {
+  return /(?:\d*\.)?\d+(?:px|rem|em)(?![a-z])/i.test(value);
 }
 
 interface Segment {
   text: string;
-  offset: number;
+  positions: number[];
+}
+
+function literalSegment(raw: string, offset: number, decode: boolean): Segment {
+  let text = '';
+  const positions: number[] = [];
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false);
+  for (const match of raw.matchAll(
+    /\\(?:u\{[\da-f]+\}|u[\da-f]{4}|x[\da-f]{2}|\r\n|[\s\S])|[\s\S]/gi
+  )) {
+    let value = match[0];
+    if (decode && value.startsWith('\\')) {
+      scanner.setText(`"${value}"`);
+      scanner.scan();
+      value = scanner.getTokenValue();
+    }
+    text += value;
+    positions.push(...Array.from({ length: value.length }, () => offset + match.index));
+  }
+  return { text, positions };
 }
 
 function sourceParts(source: ts.SourceFile): { segments: Segment[]; comments: ts.CommentRange[] } {
@@ -53,7 +84,9 @@ function sourceParts(source: ts.SourceFile): { segments: Segment[]; comments: ts
         (node.kind === ts.SyntaxKind.TemplateHead || node.kind === ts.SyntaxKind.TemplateMiddle
           ? 2
           : 1);
-      segments.push({ text: text.slice(offset, end), offset });
+      segments.push(
+        literalSegment(text.slice(offset, end), offset, !ts.isJsxAttribute(node.parent))
+      );
     }
     ts.forEachChild(node, visit);
   }
@@ -62,7 +95,7 @@ function sourceParts(source: ts.SourceFile): { segments: Segment[]; comments: ts
       /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[\s\S]*?\*\/|@apply\s+([^;]+);/g
     )) {
       if (match[1] !== undefined) {
-        segments.push({ text: match[1], offset: match.index + match[0].indexOf(match[1]) });
+        segments.push(literalSegment(match[1], match.index + match[0].indexOf(match[1]), false));
       } else if (match[0].startsWith('/*')) {
         comments.set(match.index, {
           pos: match.index,
@@ -114,7 +147,7 @@ export function checkSource(file: string, text: string): string[] {
     for (const match of segment.text.matchAll(/\S+/g)) {
       const utility = match[0];
       if (!needsToken(utility)) continue;
-      const line = lineAt(segment.offset + match.index);
+      const line = lineAt(segment.positions[match.index]);
       const exception = exceptions.find(
         entry => entry.line === line - 1 && entry.utility === utility
       );
