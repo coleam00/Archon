@@ -1098,11 +1098,12 @@ built the pull request, at its merge time, like the PR metrics. A pull request w
 judge run failed has no record and is listed in the node's `skipped` output. Each pull
 request costs one judge run on the `large` tier, so the window sets the cost.
 
-The judge reads the pull request's changed files through `pr.files`, and each changed
-test file's text at the head that list was read at through `repo.file`. The `prs` node
-refuses before any judge runs when the plugin lacks either. A test file the
-forge does not return as text, such as one over 1 MB on GitHub, fails that pull
-request's judge run, so the pull request is listed in `skipped`.
+The judge reads the pull request's changed files through `pr.files`, and the text of
+each changed file that holds test code at the head that list was read at through
+`repo.file`. The `prs` node refuses before any judge runs when the plugin lacks either.
+A file holding test code that the forge does not return as text, such as one over 1 MB
+on GitHub, fails that pull request's judge run, so the pull request is listed in
+`skipped`.
 
 The judge applies the review pack's test lens
 ([`review/commands/review-tests.md`](review/commands/review-tests.md)), read when it runs,
