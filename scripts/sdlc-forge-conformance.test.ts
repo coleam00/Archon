@@ -159,7 +159,7 @@ test('preflight capabilities cover the forge operations the pack calls', () => {
   const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
     .filter(file => file !== '.shared/forge-check.ts' && file !== '.shared/merge.ts')
     .map(file => readFileSync(join(root, file), 'utf8'));
-  const used = forgeRequestSchema.options
+  const used: ForgeRequest['op'][] = forgeRequestSchema.options
     .map(schema => schema.shape.op.value)
     .filter(op =>
       sources.some(text =>
