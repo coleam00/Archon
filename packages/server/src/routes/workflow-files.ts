@@ -3,12 +3,12 @@ import { join, basename, resolve } from 'path';
 import { getBundledWorkflowsPath } from '@archon/paths';
 import { providerRegistry } from '@archon/providers';
 import {
+  loadErrorToError,
   readPackWorkflowFolders,
   readScopePacks,
   type PackWorkflowFolder,
   type PackWorkflowLocation,
 } from '@archon/workflows/pack-layout';
-import type { WorkflowLoadError } from '@archon/workflows/schemas/workflow';
 import { parseWorkflow, parseYaml } from '@archon/workflows/loader';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
 
@@ -64,11 +64,6 @@ export function authoredForm(content: string): Record<string, unknown> | undefin
 /** A by-name lookup matched a packaged workflow folder that discovery reports as a load error. */
 export class PackagedWorkflowFolderError extends Error {}
 
-/** A directory that cannot be listed fails the lookup instead of hiding the workflow. */
-function readFailure({ error, cause }: WorkflowLoadError): Error {
-  return new Error(error, { cause });
-}
-
 /** The one YAML file of a packaged workflow folder, read and parsed; null when it vanished. */
 async function readPackagedFile(
   pack: string,
@@ -117,7 +112,7 @@ function folderErrorFor(
   name: string
 ): PackagedWorkflowFolderError | undefined {
   // An unreadable folder may hold the named workflow; its YAML stems are unknown.
-  if (entry.error.errorType === 'read_error') throw readFailure(entry.error);
+  if (entry.error.errorType === 'read_error') throw loadErrorToError(entry.error);
   const answers = entry.folder === name || entry.yamlFiles.some(file => yamlStem(file) === name);
   return answers ? new PackagedWorkflowFolderError(entry.error.error) : undefined;
 }
@@ -129,7 +124,7 @@ async function collectPackMatches(
   matches: PackagedMatches
 ): Promise<void> {
   const listing = await readPackWorkflowFolders(packPath, pack);
-  if ('error' in listing) throw readFailure(listing.error);
+  if ('error' in listing) throw loadErrorToError(listing.error);
   for (const entry of listing.folders) {
     if (entry.kind === 'empty') continue;
     if (entry.kind === 'error') {
@@ -155,7 +150,7 @@ export async function findPackagedWorkflowAt(
 ): Promise<RawWorkflowFile | null> {
   const { packs, errors } = await readScopePacks(workflowsRoot);
   const unreadable = errors.find(error => error.errorType === 'read_error');
-  if (unreadable !== undefined) throw readFailure(unreadable);
+  if (unreadable !== undefined) throw loadErrorToError(unreadable);
 
   const matches: PackagedMatches = { files: [], folderErrors: [] };
   for (const pack of packs) await collectPackMatches(pack.name, pack.path, name, matches);

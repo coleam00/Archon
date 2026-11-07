@@ -9,10 +9,10 @@ import {
   type WorkflowResourceOwner,
 } from '../packaged-workflow';
 import {
+  loadErrorToError,
   readPackWorkflowFolders,
   type PackWorkflowLocation,
 } from '../workflow-discovery/pack-layout';
-import type { WorkflowLoadError } from '../schemas';
 import { METRIC_VIEWS_FILE } from '../schemas/metric-view';
 import type { BundledScriptPack } from './bundled-script-pack';
 
@@ -174,9 +174,9 @@ async function collectPack(workflowsRoot: string, pack: string, add: AddSource):
   const scope: PackScope = { workflowsRoot, pack, packRoot, add };
   await collectSharedFiles(scope);
   const listing = await readPackWorkflowFolders(packRoot, pack);
-  if ('error' in listing) throw loadError(listing.error);
+  if ('error' in listing) throw loadErrorToError(listing.error);
   for (const entry of listing.folders) {
-    if (entry.kind === 'error') throw loadError(entry.error);
+    if (entry.kind === 'error') throw loadErrorToError(entry.error);
     // Discovery skips a folder with no YAML; a selected bundled pack must not, or a
     // renamed or deleted YAML would ship a binary silently missing that workflow.
     if (entry.kind === 'empty') {
@@ -186,10 +186,6 @@ async function collectPack(workflowsRoot: string, pack: string, add: AddSource):
     }
     await collectWorkflow(scope, entry);
   }
-}
-
-function loadError({ error, cause }: WorkflowLoadError): Error {
-  return new Error(error, { cause });
 }
 
 async function collectSharedFiles({ pack, packRoot, add }: PackScope): Promise<void> {

@@ -31,6 +31,11 @@ export function fileSystemError(
   };
 }
 
+/** A load error as a thrown `Error`, for a reader that fails instead of listing it. */
+export function loadErrorToError({ error, cause }: WorkflowLoadError): Error {
+  return new Error(error, { cause });
+}
+
 /** A failed `stat` of a packaged path: a vanished path is skipped, anything else reported. */
 export function pathReadError(
   filename: string,
