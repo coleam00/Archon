@@ -86,24 +86,41 @@ function finish(doc: WorkItem, record: SplitRecord, runId: string, outcome: stri
   };
 }
 
-function comment(kind: SplitKind, issues: readonly SplitIssue[], adopted: readonly AdoptedIssue[], later: readonly Later[]): string {
+/**
+ * `issues` holds every issue filed from the item; only those under a key the agent
+ * listed for this phase are the current piece, the rest came from earlier phases.
+ * `listed` holds the adoptions this run read as open; earlier adoptions are not
+ * re-read, so they never claim the current piece.
+ */
+function comment(
+  kind: SplitKind,
+  issues: readonly SplitIssue[],
+  keys: readonly string[],
+  adopted: readonly AdoptedIssue[],
+  listed: readonly AdoptedIssue[],
+  later: readonly Later[]
+): string {
   const { piece, is, then } = KIND[kind];
-  const listed = issues.map(entry => `- #${String(entry.number)}${entry.title === undefined ? '' : ` ${entry.title}`}`);
+  const line = (entry: SplitIssue): string => `- #${String(entry.number)}${entry.title === undefined ? '' : ` ${entry.title}`}`;
+  const current = issues.filter(entry => keys.includes(entry.key)).map(line);
+  const earlier = issues.filter(entry => !keys.includes(entry.key)).map(line);
   const tracked = adopted.map(entry => `- #${String(entry.number)} ${entry.why}`);
   const planned = later.map(entry => `- ${entry.title}. Filed once the earlier work shows: ${entry.signal}`);
-  // Say only what is true: issues filed from the item, issues it adopted, or neither.
+  const owned = adopted.some(entry => listed.some(next => next.number === entry.number));
+  // Say only what is true: issues filed for this piece, open issues that own it, or neither.
   const lead =
-    listed.length > 0
+    current.length > 0
       ? `${piece} ${is} filed as these issues. ${then}`
-      : tracked.length > 0
+      : owned
         ? `${piece} ${is} owned by existing open issues, so nothing new is filed. ${then}`
         : `Nothing is filed for it now. ${then}`;
   return [
     COMMENT_MARKER,
     lead,
-    listed.join('\n'),
+    current.join('\n'),
+    earlier.length > 0 ? `Filed by earlier phases:\n${earlier.join('\n')}` : '',
     tracked.length > 0
-      ? `${listed.length > 0 ? 'It also depends on these open issues, which already own part of it' : 'The existing issues'}:\n${tracked.join('\n')}`
+      ? `${current.length > 0 ? 'It also depends on these issues, which already own part of it' : 'The existing issues'}:\n${tracked.join('\n')}`
       : '',
     planned.length > 0 ? `Later phases, not filed yet:\n${planned.join('\n')}` : '',
   ]
@@ -160,7 +177,7 @@ function publish(
   }
 
   const adopted = adoptedBeside(issues);
-  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(kind, issues, adopted, later));
+  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(kind, issues, keys, adopted, listed, later));
   if (kind === 'prd') writeLabels(item, ['archon-prd'], []);
   if (kind === 'bundle') closeIssue(item, 'completed');
 

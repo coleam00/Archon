@@ -161,6 +161,21 @@ describe('split publish', () => {
     expect(body).not.toContain('owns the phase');
   });
 
+  test("a later phase owned by an existing issue does not claim an earlier phase's filing", () => {
+    const at = install();
+    seed(at, doc => ({
+      ...doc,
+      facts: {
+        ...doc.facts,
+        split: { status: 'done', kind: 'prd', issues: [{ key: 'measure', number: 100, url: 'u', title: 'Measure' }], adopted: [], at: AT, run_id: 'old-run' },
+      },
+    }));
+    const owner: TrackerIssue = { number: 200, title: 'The next phase', body: 'Owned elsewhere.', state: 'OPEN' };
+    const run = publish(at, { kind: 'prd' }, { issues: [owner], existing: [{ number: 200, why: 'owns the next phase' }], planned: [] });
+    ok(run);
+    expect(run.comments[0]?.body).toContain("This PRD's current phase is owned by existing open issues, so nothing new is filed.");
+  });
+
   test('an issue filed before a stop, but not recorded, is recovered by its marker', () => {
     const at = install();
     seed(at);
