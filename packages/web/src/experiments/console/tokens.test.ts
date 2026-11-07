@@ -54,11 +54,11 @@ test('the real console stylesheet resolves body and heading tracking tokens', as
   const consoleCss = readFileSync(new URL('./theme.css', import.meta.url), 'utf8');
   const compiler = await compile(`${source}\n${consoleCss}`, {
     async loadStylesheet(id) {
-      if (id.startsWith('https://')) return { content: '', base: '' };
+      if (id.startsWith('https://')) return { path: id, content: '', base: '' };
       const path = fileURLToPath(
         import.meta.resolve(id === 'tailwindcss' ? 'tailwindcss/index.css' : id)
       );
-      return { content: readFileSync(path, 'utf8'), base: dirname(path) };
+      return { path, content: readFileSync(path, 'utf8'), base: dirname(path) };
     },
   });
   const css = compiler.build([]);
