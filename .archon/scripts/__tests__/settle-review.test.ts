@@ -74,11 +74,13 @@ describe('settle-review', () => {
     expect(settled.read('review/report.md')).toBe('Not ready.\n');
   });
 
-  it('stays not ready on a coverage gap when every blocker is demoted', () => {
+  // The demoted blocker was the only reason to ask; the failed lens only needs the next round.
+  it('stays not ready on a coverage gap when every blocker is demoted, without the demoted blocker\'s ask', () => {
     const { verdict, findings } = settle(
-      [blocker('R1', ['code'])],
+      [blocker('R1', ['code'], 'ask')],
       { 1: [vote('R1', false, true)], 2: [vote('R1', false, true)] },
-      ['the tests lens failed']
+      ['the tests lens failed'],
+      'ask'
     );
     expect(findings[0]).toMatchObject({ severity: 'note', status: 'disproved' });
     expect(verdict).toMatchObject({ ready: false, action: 'correct' });
@@ -95,9 +97,14 @@ describe('settle-review', () => {
     expect(verdict).toMatchObject({ ready: false, action: 'correct', discoveries: [] });
   });
 
-  it('refuses a finding record outside the vocabulary rather than settling around it', () => {
-    const malformed = run([blocker('R1', ['code']), { ...blocker('R2', ['code']), severity: 'Blocking' }], { 1: [], 2: [] }, [], 'correct');
-    expect(malformed.code).not.toBe(0);
-    expect(malformed.stderr).toContain('outside its vocabulary');
+  it('refuses findings it cannot settle soundly rather than settling around them', () => {
+    const misspelled = run([blocker('R1', ['code']), { ...blocker('R2', ['code']), severity: 'Blocking' }], {}, [], 'correct');
+    expect(misspelled.code).not.toBe(0);
+    expect(misspelled.stderr).toContain('is not a list of findings');
+    const { action: _, ...unacted } = blocker('R2', ['code']);
+    const rejectAll = { 1: [vote('R1', false, true)], 2: [vote('R1', false, true)] };
+    const noAction = run([blocker('R1', ['code']), unacted], rejectAll, [], 'ask');
+    expect(noAction.code).not.toBe(0);
+    expect(noAction.stderr).toContain('R2 carry no action');
   });
 });

@@ -17,9 +17,11 @@
  *
  * Readiness is decided again only from typed facts: the verdict is ready when no
  * blocking finding stays open and synthesis declared no coverage gap. Otherwise
- * the action is the most severe `action` the remaining open blockers carry, so a
- * demoted blocker that alone needed `ask` or `replan` no longer stops delivery; a
- * record without one keeps synthesis's action. The report
+ * the action is the most severe of the remaining open blockers' own `action`s and
+ * of what the coverage gaps need, so a demoted blocker that alone needed `ask` or
+ * `replan` no longer stops delivery. The gaps need synthesis's action when it is
+ * more severe than any blocker it saw, which only a gap explains; otherwise
+ * `correct`, the next round being the retry. The report
  * and its round copy get a short verification section at the top, so the published
  * report says why its verdict differs from the synthesizer's text below it.
  *
@@ -33,15 +35,14 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { artifactsDir, emit, note, refuse, text } from '../../.shared/io.ts';
+import { FINDING_VALUES, type Finding, readFindings } from '../../.shared/review-item.ts';
 import { isObject } from '../../.shared/typed.ts';
 
 /** The verifier nodes' numbers; each writes review/verify-<n>.json. */
 const VOTERS = [1, 2, 3] as const;
 const DEMOTE_AT = 2;
-const SEVERITIES = ['blocking', 'note'];
-const STATUSES = ['open', 'fixed', 'declined', 'disproved'];
-/** Blocker actions from least to most severe. */
-const ACTIONS = ['correct', 'replan', 'ask'];
+type Action = (typeof FINDING_VALUES.action)[number];
+const rank = (action: string): number => FINDING_VALUES.action.findIndex(value => value === action);
 
 interface Vote {
   readonly id: string;
@@ -110,60 +111,55 @@ try {
   } else {
     const dir = join(artifactsDir(), 'review');
     const findingsFile = join(dir, 'findings.json');
-    const findings: unknown = JSON.parse(readFileSync(findingsFile, 'utf8'));
-    if (!Array.isArray(findings) || !findings.every(isObject)) {
-      throw new Error(`${findingsFile} is not a JSON array of finding records`);
-    }
-    // A record outside the vocabulary could hide an open blocker from the readiness check.
-    for (const finding of findings) {
-      if (
-        typeof finding.id !== 'string' ||
-        !SEVERITIES.includes(String(finding.severity)) ||
-        !STATUSES.includes(String(finding.status))
-      ) {
-        throw new Error(`${findingsFile} holds a record outside its vocabulary: ${JSON.stringify(finding)}`);
-      }
-    }
+    const synthesized = readFindings(artifactsDir());
+    const isOpenBlocker = (finding: Finding): boolean => finding.severity === 'blocking' && finding.status === 'open';
     const votes = VOTERS.map(voter => votesOf(dir, voter));
     const disproved: string[] = [];
     const preExisting: string[] = [];
     const rejected: string[] = [];
-    for (const finding of findings) {
-      if (finding.severity !== 'blocking' || finding.status !== 'open') continue;
-      const sources = Array.isArray(finding.sources) ? finding.sources : [];
-      if (sources.includes('contract')) continue;
-      const id = String(finding.id);
+    const findings = synthesized.map((finding): Finding => {
+      if (!isOpenBlocker(finding) || finding.sources.includes('contract')) return finding;
       const against = votes
-        .map(list => list.find(vote => vote.id === id))
+        .map(list => list.find(vote => vote.id === finding.id))
         .filter((vote): vote is Vote => vote !== undefined && !(vote.real && vote.belongs));
-      if (against.length < DEMOTE_AT) continue;
+      if (against.length < DEMOTE_AT) return finding;
       const reasons = against.map(vote => vote.reason);
-      finding.severity = 'note';
-      finding.verify = { against: against.length, reasons };
+      const demoted: Finding = { ...finding, severity: 'note', verify: { against: against.length, reasons } };
       if (against.filter(vote => !vote.real).length >= DEMOTE_AT) {
-        finding.status = 'disproved';
-        disproved.push(id);
-      } else if (against.filter(vote => vote.real).length < DEMOTE_AT) {
-        rejected.push(id);
-      } else {
-        preExisting.push(id);
-        verdict.discoveries.push({
-          title: `${id} predates this change`,
-          claim: String(finding.claim),
-          evidence: reasons.length > 0 ? reasons : [`verifiers judged ${id} outside this change`],
-          relation: 'unrelated',
-          source_nodes: [...sources.map(String), 'verify'],
-        });
+        disproved.push(finding.id);
+        return { ...demoted, status: 'disproved' };
       }
-    }
+      if (against.filter(vote => vote.real).length < DEMOTE_AT) {
+        rejected.push(finding.id);
+        return demoted;
+      }
+      preExisting.push(finding.id);
+      verdict.discoveries.push({
+        title: `${finding.id} predates this change`,
+        claim: finding.claim,
+        evidence: reasons.length > 0 ? reasons : [`verifiers judged ${finding.id} outside this change`],
+        relation: 'unrelated',
+        source_nodes: [...finding.sources, 'verify'],
+      });
+      return demoted;
+    });
     if (disproved.length + preExisting.length + rejected.length > 0) {
-      writeFileSync(findingsFile, `${JSON.stringify(findings, null, 2)}\n`);
-      const open = findings.filter(finding => finding.severity === 'blocking' && finding.status === 'open');
-      verdict.ready = open.length === 0 && gaps.length === 0;
-      if (verdict.ready) verdict.action = 'none';
-      else if (open.length > 0 && open.every(finding => ACTIONS.includes(String(finding.action)))) {
-        verdict.action = ACTIONS[Math.max(...open.map(finding => ACTIONS.indexOf(String(finding.action))))] ?? verdict.action;
+      const before = synthesized.filter(isOpenBlocker);
+      const missing = before.filter(finding => finding.action === undefined).map(finding => finding.id);
+      if (missing.length > 0) {
+        throw new Error(`open blockers ${missing.join(', ')} carry no action, so the verdict cannot be settled`);
       }
+      const open = findings.filter(isOpenBlocker);
+      verdict.ready = open.length === 0 && gaps.length === 0;
+      if (verdict.ready) {
+        verdict.action = 'none';
+      } else {
+        const blockerMax = Math.max(-1, ...before.map(finding => rank(finding.action ?? 'correct')));
+        const needs: Action[] = open.map(finding => finding.action ?? 'correct');
+        if (gaps.length > 0) needs.push(rank(verdict.action) > blockerMax ? (verdict.action as Action) : 'correct');
+        verdict.action = FINDING_VALUES.action[Math.max(...needs.map(rank))] ?? verdict.action;
+      }
+      writeFileSync(findingsFile, `${JSON.stringify(findings, null, 2)}\n`);
       const parts = [
         disproved.length > 0 ? `${disproved.join(', ')} disproved` : '',
         preExisting.length > 0 ? `${preExisting.join(', ')} predate this change and are now discoveries` : '',
