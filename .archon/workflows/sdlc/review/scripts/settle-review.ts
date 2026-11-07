@@ -11,11 +11,15 @@
  * vote upholds: a missing verifier can never turn a blocker into a note. A finding
  * that carries `contract` is never demoted: contract coverage is synthesis's own
  * judgment of what the accepted contract requires. A demoted finding becomes a
- * note: `disproved` when two votes say it is not real, otherwise a pre-existing
- * defect, which is added to the discoveries so it is relayed rather than dropped.
+ * note: `disproved` when two votes say it is not real; a pre-existing defect when
+ * two votes say it is real but outside the change, added to the discoveries so it
+ * is relayed rather than dropped; otherwise an open note, with no claim about why.
  *
  * Readiness is decided again only from typed facts: the verdict is ready when no
- * blocking finding stays open and synthesis declared no coverage gap. The report
+ * blocking finding stays open and synthesis declared no coverage gap. Otherwise
+ * the action is the most severe `action` the remaining open blockers carry, so a
+ * demoted blocker that alone needed `ask` or `replan` no longer stops delivery; a
+ * record without one keeps synthesis's action. The report
  * and its round copy get a short verification section at the top, so the published
  * report says why its verdict differs from the synthesizer's text below it.
  *
@@ -34,6 +38,10 @@ import { isObject } from '../../.shared/typed.ts';
 /** The verifier nodes' numbers; each writes review/verify-<n>.json. */
 const VOTERS = [1, 2, 3] as const;
 const DEMOTE_AT = 2;
+const SEVERITIES = ['blocking', 'note'];
+const STATUSES = ['open', 'fixed', 'declined', 'disproved'];
+/** Blocker actions from least to most severe. */
+const ACTIONS = ['correct', 'replan', 'ask'];
 
 interface Vote {
   readonly id: string;
@@ -106,9 +114,20 @@ try {
     if (!Array.isArray(findings) || !findings.every(isObject)) {
       throw new Error(`${findingsFile} is not a JSON array of finding records`);
     }
+    // A record outside the vocabulary could hide an open blocker from the readiness check.
+    for (const finding of findings) {
+      if (
+        typeof finding.id !== 'string' ||
+        !SEVERITIES.includes(String(finding.severity)) ||
+        !STATUSES.includes(String(finding.status))
+      ) {
+        throw new Error(`${findingsFile} holds a record outside its vocabulary: ${JSON.stringify(finding)}`);
+      }
+    }
     const votes = VOTERS.map(voter => votesOf(dir, voter));
     const disproved: string[] = [];
     const preExisting: string[] = [];
+    const rejected: string[] = [];
     for (const finding of findings) {
       if (finding.severity !== 'blocking' || finding.status !== 'open') continue;
       const sources = Array.isArray(finding.sources) ? finding.sources : [];
@@ -124,6 +143,8 @@ try {
       if (against.filter(vote => !vote.real).length >= DEMOTE_AT) {
         finding.status = 'disproved';
         disproved.push(id);
+      } else if (against.filter(vote => vote.real).length < DEMOTE_AT) {
+        rejected.push(id);
       } else {
         preExisting.push(id);
         verdict.discoveries.push({
@@ -135,14 +156,18 @@ try {
         });
       }
     }
-    if (disproved.length + preExisting.length > 0) {
+    if (disproved.length + preExisting.length + rejected.length > 0) {
       writeFileSync(findingsFile, `${JSON.stringify(findings, null, 2)}\n`);
-      const open = findings.some(finding => finding.severity === 'blocking' && finding.status === 'open');
-      verdict.ready = !open && gaps.length === 0;
+      const open = findings.filter(finding => finding.severity === 'blocking' && finding.status === 'open');
+      verdict.ready = open.length === 0 && gaps.length === 0;
       if (verdict.ready) verdict.action = 'none';
+      else if (open.length > 0 && open.every(finding => ACTIONS.includes(String(finding.action)))) {
+        verdict.action = ACTIONS[Math.max(...open.map(finding => ACTIONS.indexOf(String(finding.action))))] ?? verdict.action;
+      }
       const parts = [
         disproved.length > 0 ? `${disproved.join(', ')} disproved` : '',
         preExisting.length > 0 ? `${preExisting.join(', ')} predate this change and are now discoveries` : '',
+        rejected.length > 0 ? `${rejected.join(', ')} rejected` : '',
       ].filter(part => part !== '');
       const outcome = verdict.ready
         ? 'With that, the verdict is Ready (action `none`).'

@@ -12,21 +12,21 @@ const { runPackScript } = packScriptRunner();
 
 const REPORT = { type: 'archon_artifact', run_id: 'run', path: 'review/report.md' };
 
-interface Finding { id: string; severity: string; sources: string[]; claim: string; status: string; round: number }
-const blocker = (id: string, sources: string[]): Finding => ({ id, severity: 'blocking', sources, claim: `${id} is wrong`, status: 'open', round: 1 });
+interface Finding { id: string; severity: string; sources: string[]; claim: string; status: string; round: number; action?: string }
+const blocker = (id: string, sources: string[], action = 'correct'): Finding => ({ id, severity: 'blocking', sources, claim: `${id} is wrong`, status: 'open', round: 1, action });
 const vote = (id: string, real: boolean, belongs: boolean) => ({ id, real, belongs, reason: `${id} at a.ts:1` });
 
-function settle(findings: Finding[], votes: Record<number, unknown[]>, gaps: string[] = []) {
+function run(findings: unknown[], votes: Record<number, unknown[]>, gaps: string[], action: string) {
   const artifacts: Record<string, string> = {
     'review/findings.json': JSON.stringify(findings),
     'review/report.md': 'Not ready.\n',
     'review/report-round-1.md': 'Not ready.\n',
   };
   for (const [voter, list] of Object.entries(votes)) artifacts[`review/verify-${voter}.json`] = JSON.stringify(list);
-  const run = runPackScript('review/scripts/settle-review', {
+  return runPackScript('review/scripts/settle-review', {
     inputs: {
       INPUTS_READY: 'false',
-      INPUTS_ACTION: 'correct',
+      INPUTS_ACTION: action,
       INPUTS_SUMMARY: 'Review report: report.md.',
       INPUTS_REPORT_POINTER: JSON.stringify(REPORT),
       INPUTS_DISCOVERIES: '[]',
@@ -35,9 +35,13 @@ function settle(findings: Finding[], votes: Record<number, unknown[]>, gaps: str
     },
     artifacts,
   });
-  expect(run.code).toBe(0);
-  const read = (name: string) => readFileSync(join(run.artifacts, name), 'utf8');
-  return { verdict: JSON.parse(run.stdout), findings: JSON.parse(read('review/findings.json')) as Finding[], read };
+}
+
+function settle(findings: Finding[], votes: Record<number, unknown[]>, gaps: string[] = [], action = 'correct') {
+  const settled = run(findings, votes, gaps, action);
+  expect(settled.code).toBe(0);
+  const read = (name: string) => readFileSync(join(settled.artifacts, name), 'utf8');
+  return { verdict: JSON.parse(settled.stdout), findings: JSON.parse(read('review/findings.json')) as Finding[], read };
 }
 
 describe('settle-review', () => {
@@ -78,5 +82,22 @@ describe('settle-review', () => {
     );
     expect(findings[0]).toMatchObject({ severity: 'note', status: 'disproved' });
     expect(verdict).toMatchObject({ ready: false, action: 'correct' });
+  });
+
+  it('demotes a mixed rejection without a provenance claim, and takes the action the remaining blocker needs', () => {
+    const { verdict, findings } = settle(
+      [blocker('R1', ['seams'], 'ask'), blocker('R2', ['code'])],
+      { 1: [vote('R1', false, true)], 2: [vote('R1', true, false)] },
+      [],
+      'ask'
+    );
+    expect(findings[0]).toMatchObject({ severity: 'note', status: 'open' });
+    expect(verdict).toMatchObject({ ready: false, action: 'correct', discoveries: [] });
+  });
+
+  it('refuses a finding record outside the vocabulary rather than settling around it', () => {
+    const malformed = run([blocker('R1', ['code']), { ...blocker('R2', ['code']), severity: 'Blocking' }], { 1: [], 2: [] }, [], 'correct');
+    expect(malformed.code).not.toBe(0);
+    expect(malformed.stderr).toContain('outside its vocabulary');
   });
 });
