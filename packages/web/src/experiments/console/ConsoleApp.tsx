@@ -20,6 +20,9 @@ import { useRunAttentionAlerts } from './lib/attention-alerts';
 import { SHORTCUTS } from './lib/shortcuts';
 import './theme.css';
 
+// console-token-exception max-w-[calc(100vw-3rem)] -- Leave a dismissible strip beside the mobile navigation rail.
+const MOBILE_RAIL = 'fixed inset-y-0 left-0 z-30 flex max-w-[calc(100vw-3rem)] shadow-xl';
+
 export function ConsoleApp(): ReactElement {
   const [addOpen, setAddOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -95,7 +98,7 @@ export function ConsoleApp(): ReactElement {
         ) : null}
         <div
           id="project-navigation"
-          className={`${railOpen ? 'fixed inset-y-0 left-0 z-30 flex max-w-[calc(100vw-3rem)] shadow-xl' : 'hidden'} md:static md:z-auto md:flex md:max-w-none md:shadow-none`}
+          className={`${railOpen ? MOBILE_RAIL : 'hidden'} md:static md:z-auto md:flex md:max-w-none md:shadow-none`}
         >
           <ProjectRail
             onAddProject={() => {

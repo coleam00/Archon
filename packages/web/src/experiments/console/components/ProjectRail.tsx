@@ -78,7 +78,7 @@ function writeRailWidth(w: number): void {
 }
 
 const RAIL_NAV_LINK_CLASS =
-  'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium transition-colors hover:bg-surface-hover hover:text-text-primary';
+  'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-console-13 font-medium transition-colors hover:bg-surface-hover hover:text-text-primary';
 
 /** A destination in the console navigation. */
 function RailNavLink({
@@ -106,7 +106,7 @@ function RailNavLink({
       <Icon aria-hidden className="h-3.5 w-3.5 shrink-0" />
       <span className="truncate">{label}</span>
       {badge !== undefined ? (
-        <span className="shrink-0 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-tertiary">
+        <span className="shrink-0 rounded-full border border-border px-2 py-0.5 font-mono text-console-10 uppercase tracking-widest text-text-tertiary">
           {badge}
         </span>
       ) : null}
@@ -227,23 +227,23 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
             draggable={false}
           />
           <span className="brand-text text-base font-semibold tracking-tight">Archon</span>
-          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-tertiary">
+          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-console-10 uppercase tracking-widest text-text-tertiary">
             console
           </span>
         </div>
         <div className="flex items-center gap-2 px-1 pb-3">
-          <span className="font-mono text-[11px] font-bold uppercase tracking-[0.14em] text-text-tertiary">
+          <span className="font-mono text-console-11 font-bold uppercase tracking-console-label text-text-tertiary">
             Projects
           </span>
-          <span className="rounded-full border border-border bg-surface-elevated px-2 py-px font-mono text-[10.5px] font-bold text-text-secondary">
+          <span className="rounded-full border border-border bg-surface-elevated px-2 py-px font-mono text-console-11 font-bold text-text-secondary">
             {(projects ?? []).length}
           </span>
         </div>
         <div
-          className="flex h-[34px] items-center gap-2 rounded-[9px] border bg-surface px-2.5 text-text-tertiary transition-colors focus-within:text-text-secondary"
+          className="flex h-8.5 items-center gap-2 rounded-lg border bg-surface px-2.5 text-text-tertiary transition-colors focus-within:text-text-secondary"
           style={{ borderColor: 'var(--border)' }}
         >
-          <span aria-hidden className="font-mono text-[12px] leading-none">
+          <span aria-hidden className="font-mono text-console-12 leading-none">
             ⌕
           </span>
           <input
@@ -254,7 +254,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
             aria-label="Filter projects"
             placeholder="Filter projects…"
             spellCheck={false}
-            className="min-w-0 flex-1 bg-transparent text-[13px] text-text-primary outline-none placeholder:text-text-tertiary"
+            className="min-w-0 flex-1 bg-transparent text-console-13 text-text-primary outline-none placeholder:text-text-tertiary"
           />
           {query.length > 0 ? (
             <button
@@ -266,7 +266,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
               aria-label="Clear filter"
               className="rounded p-0.5 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
             >
-              <span aria-hidden className="text-[11px] leading-none">
+              <span aria-hidden className="text-console-11 leading-none">
                 ✕
               </span>
             </button>
@@ -284,7 +284,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
           title="All projects"
           aria-label="All projects"
           aria-pressed={allSelected}
-          className={`relative flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium transition-colors ${
+          className={`relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-console-13 font-medium transition-colors ${
             allSelected
               ? 'bg-surface-elevated text-text-primary'
               : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
@@ -293,7 +293,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
           {allSelected ? (
             <span
               aria-hidden
-              className="brand-bar pointer-events-none absolute -left-px bottom-[9px] top-[9px] w-[3px] rounded-r-[3px]"
+              className="brand-bar pointer-events-none absolute -left-px bottom-2.25 top-2.25 w-0.75 rounded-r"
             />
           ) : null}
           <span>All projects</span>
@@ -305,7 +305,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
         {error !== undefined ? (
           <span
             title={error.message}
-            className="mx-2 rounded border border-error/40 bg-error/10 px-2 py-1 font-mono text-[10px] text-error"
+            className="mx-2 rounded border border-error/40 bg-error/10 px-2 py-1 font-mono text-console-10 text-error"
           >
             {error.message}
           </span>
@@ -313,7 +313,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
         {groups.map(g => (
           <div key={g.owner} className="mb-2">
             <div className="flex items-center gap-2 px-2 pb-1 pt-2">
-              <span className="max-w-[70%] truncate font-mono text-[10.5px] font-semibold tracking-[0.05em] text-text-tertiary">
+              <span className="max-w-[70%] truncate font-mono text-console-11 font-semibold tracking-wider text-text-tertiary">
                 {g.owner}
               </span>
               <span aria-hidden className="h-px flex-1 bg-border/60" />
@@ -336,7 +336,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
           </div>
         ))}
         {groups.length === 0 && error === undefined ? (
-          <div className="px-3 py-6 text-center text-[12.5px] text-text-tertiary">
+          <div className="px-3 py-6 text-center text-console-13 text-text-tertiary">
             {query.trim() === ''
               ? 'No projects yet. Add one to get started.'
               : `No projects match “${query}”.`}
@@ -351,7 +351,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
           onClick={onAddProject}
           title="Add project"
           aria-label="Add project"
-          className="flex w-full items-center gap-2.5 rounded-[10px] border border-border bg-surface px-3 py-2.5 text-left text-[13px] font-semibold text-text-secondary transition-colors hover:border-accent-bright/50 hover:bg-surface-hover hover:text-text-primary"
+          className="flex w-full items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-console-13 font-semibold text-text-secondary transition-colors hover:border-accent-bright/50 hover:bg-surface-hover hover:text-text-primary"
         >
           <span aria-hidden="true" className="text-base leading-none text-accent-bright">
             +
@@ -387,11 +387,11 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
         aria-label="Resize sidebar"
         title="Drag to resize"
         onPointerDown={startResize}
-        className="group absolute -right-1 top-0 z-10 flex h-full w-[9px] cursor-col-resize items-center justify-center"
+        className="group absolute -right-1 top-0 z-10 flex h-full w-2.25 cursor-col-resize items-center justify-center"
       >
         <span
           aria-hidden
-          className={`w-[2px] rounded-sm transition-all ${
+          className={`w-0.5 rounded-sm transition-all ${
             resizing
               ? 'h-full bg-accent-bright'
               : 'h-9 bg-transparent group-hover:h-14 group-hover:bg-accent-bright/60'

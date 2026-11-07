@@ -140,14 +140,14 @@ export function BuilderConnected(): ReactElement {
       {listFetchError !== undefined ? (
         <div
           title={listFetchError.message}
-          className="border-b border-error/30 bg-error/10 px-4 py-1.5 font-mono text-[11px] text-error"
+          className="border-b border-error/30 bg-error/10 px-4 py-1.5 font-mono text-console-11 text-error"
         >
           Failed to load: {listFetchError.message}
         </div>
       ) : null}
 
       {workflowOpen && readOnly ? (
-        <div className="border-b border-border bg-warning/10 px-4 py-1.5 text-[11.5px] text-text-secondary">
+        <div className="border-b border-border bg-warning/10 px-4 py-1.5 text-console-12 text-text-secondary">
           Bundled workflow — read-only. <span className="font-semibold">Save as</span> writes a
           project override that shadows the bundled default.
         </div>

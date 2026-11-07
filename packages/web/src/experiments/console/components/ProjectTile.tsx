@@ -43,7 +43,7 @@ export function ProjectTile({
       title={`${name} · right-click to remove`}
       aria-label={name}
       aria-pressed={selected}
-      className={`relative aspect-square w-11 rounded-md flex items-center justify-center text-[13px] font-semibold leading-none text-white/95 transition-[transform,box-shadow] hover:-translate-y-[1px] active:translate-y-0 ${ring}`}
+      className={`relative aspect-square w-11 rounded-md flex items-center justify-center text-console-13 font-semibold leading-none text-white/95 transition-[transform,box-shadow] hover:-translate-y-px active:translate-y-0 ${ring}`}
       style={style}
     >
       <span className="pointer-events-none select-none tracking-tight">

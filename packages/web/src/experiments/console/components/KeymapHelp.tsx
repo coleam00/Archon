@@ -53,12 +53,12 @@ export function KeymapHelp({ open, onClose, groups }: KeymapHelpProps): ReactEle
       >
         <header className="flex items-baseline justify-between border-b border-border px-4 py-2">
           <h2 className="text-sm font-semibold text-text-primary">Keyboard shortcuts</h2>
-          <span className="font-mono text-[10px] text-text-tertiary">esc · ?</span>
+          <span className="font-mono text-console-10 text-text-tertiary">esc · ?</span>
         </header>
         <div className="max-h-[70vh] overflow-y-auto">
           {groups.map(group => (
             <section key={group.title} className="border-b border-border last:border-b-0">
-              <h3 className="px-4 pt-3 pb-1 font-mono text-[10px] uppercase tracking-[0.14em] text-text-tertiary">
+              <h3 className="px-4 pt-3 pb-1 font-mono text-console-10 uppercase tracking-console-label text-text-tertiary">
                 {group.title}
               </h3>
               <ul className="pb-2">
@@ -67,8 +67,8 @@ export function KeymapHelp({ open, onClose, groups }: KeymapHelpProps): ReactEle
                     key={`${group.title}:${e.keys.join('+')}:${e.label}`}
                     className="flex items-baseline justify-between gap-4 px-4 py-1.5"
                   >
-                    <span className="text-[13px] text-text-secondary">{e.label}</span>
-                    <kbd className="shrink-0 rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-text-primary">
+                    <span className="text-console-13 text-text-secondary">{e.label}</span>
+                    <kbd className="shrink-0 rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-console-11 text-text-primary">
                       {formatChord(e.keys)}
                     </kbd>
                   </li>

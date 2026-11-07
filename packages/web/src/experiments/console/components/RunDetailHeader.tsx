@@ -58,7 +58,7 @@ export function RunDetailHeader({
       />
 
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 font-mono text-[12px]">
+      <div className="flex items-center gap-2 font-mono text-console-12">
         <Link
           to={projectId === undefined ? '/console' : `/console/p/${projectId}`}
           className="text-text-tertiary transition-colors hover:text-text-primary"
@@ -75,7 +75,7 @@ export function RunDetailHeader({
           title="Copy full run id"
         >
           <span className="brand-text">{shortRunId(run.id)}</span>
-          <span aria-hidden className="font-mono text-[10px] text-text-tertiary">
+          <span aria-hidden className="font-mono text-console-10 text-text-tertiary">
             ⧉
           </span>
         </button>
@@ -87,7 +87,7 @@ export function RunDetailHeader({
       <div className="flex items-center gap-2">
         <RunStatusDot run={run} live={isLive} />
         <span
-          className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${statusTextClass[run.status]}`}
+          className={`text-console-11 font-semibold uppercase tracking-console-label ${statusTextClass[run.status]}`}
         >
           {runStatusLabel(run)}
         </span>
@@ -106,13 +106,13 @@ export function RunDetailHeader({
       <div className="ml-auto flex items-center gap-3">
         {typeof run.costUsd === 'number' ? (
           <span
-            className="font-mono text-[12px] tabular-nums text-text-secondary"
+            className="font-mono text-console-12 tabular-nums text-text-secondary"
             title="Reported agent cost; may be partial"
           >
             {`Reported cost ${formatCost(run.costUsd)} (may be partial)`}
           </span>
         ) : null}
-        <span className="font-mono text-[12px] tabular-nums text-text-tertiary">
+        <span className="font-mono text-console-12 tabular-nums text-text-tertiary">
           {runElapsedLabel(run, elapsed)}
         </span>
         {canOpenIde && run.workingPath !== null ? (
@@ -125,7 +125,7 @@ export function RunDetailHeader({
             aria-label="Open in IDE"
             className="rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
           >
-            <span aria-hidden className="font-mono text-[12px] leading-none">
+            <span aria-hidden className="font-mono text-console-12 leading-none">
               ↗
             </span>
           </button>
@@ -139,7 +139,7 @@ export function RunDetailHeader({
           TODO(#1882): add a "from chat →" link back to the originating
           conversation once the console chat route supports deep-linking. */}
       {run.userMessage !== '' ? (
-        <div className="flex w-full min-w-0 items-baseline gap-2 text-[12px]">
+        <div className="flex w-full min-w-0 items-baseline gap-2 text-console-12">
           <span className="shrink-0 font-mono text-text-tertiary">input</span>
           <span className="truncate font-mono text-text-secondary" title={run.userMessage}>
             {run.userMessage}

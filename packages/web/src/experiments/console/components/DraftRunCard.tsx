@@ -337,11 +337,11 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             }
             aria-label="Attach files"
           >
-            <span aria-hidden className="text-[12px]">
+            <span aria-hidden className="text-console-12">
               📎
             </span>
           </button>
-          <span className="flex items-center gap-3.5 font-mono text-[11px] text-text-tertiary">
+          <span className="flex items-center gap-3.5 font-mono text-console-11 text-text-tertiary">
             <span>
               <span className="rounded border border-border px-1.5 py-px text-text-secondary">
                 ↵
@@ -369,10 +369,10 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
           title={
             missingRequired.length > 0 ? `Fill in ${missingRequired.join(', ')} first` : undefined
           }
-          className="brand-bar flex items-center gap-1.5 rounded-[9px] px-[15px] py-[9px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
+          className="brand-bar flex items-center gap-1.5 rounded-lg px-3.75 py-2.25 text-console-13 font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
         >
           {submitting ? 'Starting…' : 'Start run'}
-          <span aria-hidden className="text-[10px] leading-none opacity-80">
+          <span aria-hidden className="text-console-10 leading-none opacity-80">
             ▶
           </span>
         </button>
@@ -381,12 +381,12 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
       {/* Say WHY the button is disabled — a dead control with no reason is the
               failure mode this replaces. */}
       {error === null && missingRequired.length > 0 ? (
-        <p className="mt-1 font-mono text-[11px] text-text-tertiary">
+        <p className="mt-1 font-mono text-console-11 text-text-tertiary">
           needs {missingRequired.join(', ')}
         </p>
       ) : null}
 
-      {error !== null ? <p className="mt-1 font-mono text-[11px] text-error">{error}</p> : null}
+      {error !== null ? <p className="mt-1 font-mono text-console-11 text-error">{error}</p> : null}
     </>
   );
 
@@ -397,18 +397,18 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         onClick={() => {
           setMode('expanded');
         }}
-        className="group flex w-full items-center gap-[11px] rounded-[12px] border border-dashed border-border bg-surface px-[18px] py-[15px] text-left transition-colors hover:border-accent-bright/50 hover:bg-surface-elevated"
+        className="group flex w-full items-center gap-2.75 rounded-console-12 border border-dashed border-border bg-surface px-4.5 py-3.75 text-left transition-colors hover:border-accent-bright/50 hover:bg-surface-elevated"
         title="Start a new run — press N"
       >
         <span aria-hidden className="flex text-accent-bright">
           +
         </span>
-        <span className="text-[14px] font-semibold text-text-secondary transition-colors group-hover:text-text-primary">
+        <span className="text-console-14 font-semibold text-text-secondary transition-colors group-hover:text-text-primary">
           Start a new run
         </span>
         <span
           aria-hidden
-          className="ml-auto rounded border border-border px-1.5 py-0.5 font-mono text-[10.5px] tabular-nums text-text-secondary"
+          className="ml-auto rounded border border-border px-1.5 py-0.5 font-mono text-console-11 tabular-nums text-text-secondary"
         >
           N
         </span>
@@ -418,7 +418,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
 
   return (
     <article
-      className="relative rounded-[12px] border bg-surface-elevated"
+      className="relative rounded-console-12 border bg-surface-elevated"
       style={{
         // Soft-magenta hairline border on all four sides; the brand-gradient
         // strip is painted as an absolute child so the card can keep
@@ -433,14 +433,14 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
     >
       <span
         aria-hidden
-        className="brand-bar pointer-events-none absolute bottom-0 left-0 top-0 w-[3px] rounded-l-[12px]"
+        className="brand-bar pointer-events-none absolute bottom-0 left-0 top-0 w-0.75 rounded-l-console-12"
       />
       {dragOver ? (
         <div
           aria-hidden
           className="brand-bar-soft pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded"
         >
-          <span className="rounded border border-[color:var(--brand-magenta)] bg-surface px-3 py-1.5 font-mono text-[11px] text-[color:var(--brand-magenta)]">
+          <span className="rounded border border-[color:var(--brand-magenta)] bg-surface px-3 py-1.5 font-mono text-console-11 text-[color:var(--brand-magenta)]">
             drop files to attach
           </span>
         </div>
@@ -449,7 +449,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         {/* Header: status dot + DRAFT label + workflow picker + close */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-full bg-accent-bright" />
-          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-bright">
+          <span className="shrink-0 text-console-10 font-semibold uppercase tracking-console-label text-accent-bright">
             Draft
           </span>
           <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
@@ -473,7 +473,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             aria-label="Cancel draft"
             title="Cancel (Esc)"
           >
-            <span aria-hidden className="text-[12px]">
+            <span aria-hidden className="text-console-12">
               ✕
             </span>
           </button>
@@ -483,13 +483,13 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             Values are validated server-side against the same contract a composing
             `with:` map goes through, before any worktree, clone, or AI cost. */}
         {declaredInputs.length > 0 ? (
-          <div className="mt-3 space-y-2.5 rounded-[10px] border border-border bg-surface-inset px-3 py-2.5">
-            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-tertiary">
+          <div className="mt-3 space-y-2.5 rounded-lg border border-border bg-surface-inset px-3 py-2.5">
+            <p className="font-mono text-console-10 uppercase tracking-console-label text-text-tertiary">
               Inputs
             </p>
             {declaredInputs.map(declared => (
               <label key={declared.name} className="block">
-                <span className="flex items-baseline gap-1.5 font-mono text-[11px] text-text-secondary">
+                <span className="flex items-baseline gap-1.5 font-mono text-console-11 text-text-secondary">
                   {declared.name}
                   {declared.required ? (
                     <span className="text-[color:var(--brand-magenta)]" title="Required">
@@ -498,7 +498,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                   ) : null}
                 </span>
                 {declared.description !== null ? (
-                  <span className="mt-0.5 block text-[11px] leading-snug text-text-tertiary">
+                  <span className="mt-0.5 block text-console-11 leading-snug text-text-tertiary">
                     {declared.description}
                   </span>
                 ) : null}
@@ -512,20 +512,20 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                   }}
                   placeholder={declared.default ?? (declared.required ? 'required' : 'optional')}
                   disabled={submitting}
-                  className="mt-1 w-full rounded-[8px] border border-border bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:ring-[3px] focus:ring-accent-bright/10 disabled:opacity-50"
+                  className="mt-1 w-full rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-console-12 text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:ring-[3px] focus:ring-accent-bright/10 disabled:opacity-50"
                 />
               </label>
             ))}
           </div>
         ) : null}
 
-        <div className="mt-3 rounded-[10px] border border-border bg-surface-inset px-3 py-2.5">
+        <div className="mt-3 rounded-lg border border-border bg-surface-inset px-3 py-2.5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-text-tertiary">
+              <p className="font-mono text-console-10 uppercase tracking-console-label text-text-tertiary">
                 Model bindings
               </p>
-              <p className="mt-0.5 text-[11px] text-text-tertiary">
+              <p className="mt-0.5 text-console-11 text-text-tertiary">
                 {modelOverrideRows.length === 0
                   ? 'As authored'
                   : 'Only the named tiers and aliases change for this run.'}
@@ -539,7 +539,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                 setModelOverrideRows(prev => [...prev, { id, name: '', spec: '' }]);
               }}
               disabled={submitting}
-              className="shrink-0 rounded border border-border px-2.5 py-1 font-mono text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40"
+              className="shrink-0 rounded border border-border px-2.5 py-1 font-mono text-console-11 text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40"
             >
               + binding
             </button>
@@ -562,9 +562,9 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                     placeholder="large or @planner"
                     aria-label="Tier or alias"
                     disabled={submitting}
-                    className="w-[150px] rounded-[8px] border border-border bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
+                    className="w-37.5 rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-console-12 text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
                   />
-                  <span className="font-mono text-[11px] text-text-tertiary">=</span>
+                  <span className="font-mono text-console-11 text-text-tertiary">=</span>
                   <input
                     value={row.spec}
                     onChange={e => {
@@ -579,7 +579,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
                     placeholder="openai/gpt-5.6"
                     aria-label="Model spec"
                     disabled={submitting}
-                    className="min-w-0 flex-1 rounded-[8px] border border-border bg-surface px-2.5 py-1.5 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
+                    className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2.5 py-1.5 font-mono text-console-12 text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none disabled:opacity-50"
                   />
                   <button
                     type="button"
@@ -618,7 +618,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             }
             rows={2}
             disabled={submitting}
-            className="min-h-[74px] w-full resize-none rounded-[10px] border border-border bg-surface px-3.5 py-[13px] text-[14px] leading-normal text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:ring-[3px] focus:ring-accent-bright/10 disabled:opacity-50"
+            className="min-h-18.5 w-full resize-none rounded-lg border border-border bg-surface px-3.5 py-3.25 text-console-14 leading-normal text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:ring-[3px] focus:ring-accent-bright/10 disabled:opacity-50"
           />
 
           {files.length > 0 ? (
@@ -626,10 +626,10 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
               {files.map((f, idx) => (
                 <li
                   key={`${f.name}:${idx.toString()}`}
-                  className="flex items-center gap-1.5 rounded border border-border bg-surface-inset px-2 py-1 font-mono text-[11px] text-text-secondary"
+                  className="flex items-center gap-1.5 rounded border border-border bg-surface-inset px-2 py-1 font-mono text-console-11 text-text-secondary"
                 >
                   <span aria-hidden>📎</span>
-                  <span className="max-w-[160px] truncate">{f.name}</span>
+                  <span className="max-w-40 truncate">{f.name}</span>
                   <span className="text-text-tertiary">{formatBytes(f.size)}</span>
                   <button
                     type="button"
